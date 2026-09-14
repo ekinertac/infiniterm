@@ -4,7 +4,9 @@ The native port of [infiniterm](https://github.com/ekinertac/infiniterm): termin
 
 Why a port: the Tauri app runs xterm.js in a webview, and a browser card there is either an iframe that cannot log in anywhere or a native view nothing can paint over or scale. The port draws every card itself. Its browser card is Chromium with the Claude in Chrome extension loaded, painted as a texture, so Claude Code can drive a browser that lives inside the canvas.
 
-Status, 2026-09-15: the stack is decided and measured; the port itself has not started. `spikes/` holds the five spikes with their numbers (a CEF frame in a gpui window costs about 1 ms; 25 terminals hold 120 fps under a continuous zoom; the extension runs and Google sign-in passes). `HANDOVER.md` is the plan.
+Status, 2026-09-15: Phase 0 is complete. The root workspace has four crates, with the viewport module in `infiniterm-core` and placeholders for the terminal, browser, and UI. All 12 viewport tests pass with `cargo test --offline`. The workspace has no external dependencies yet. Phase 1 starts with the pure geometry modules; `HANDOVER.md` is the plan.
+
+`spikes/` holds the five standalone spikes and their measurements. A CEF frame in a gpui window costs about 1 ms; 25 terminals hold 120 fps under continuous zoom. The extension runs and Google sign-in passes. The spikes stay outside the root workspace.
 
 Single binary plus the CEF framework, no Electron, no account, no telemetry. macOS first; Linux and Windows are kept possible, not promised.
 

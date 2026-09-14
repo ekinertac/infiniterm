@@ -1,0 +1,8 @@
+# Browser host boundary for the native port, consumed by infiniterm-ui.
+# src/lib.rs is a placeholder until the browser phase.
+# Defer CEF dependencies and build costs; see ../HANDOVER.md.
+[package]
+name = "infiniterm-browser"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true

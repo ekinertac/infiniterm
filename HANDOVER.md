@@ -42,7 +42,7 @@ Every spike is a standalone cargo package (its own `[workspace]`) because the CE
 | 2 | `spikes/cef-frame` | `f98843d`, `9d08d05` | can a CEF frame be a gpui texture, zoomed, clicked, with the extension alive? | yes: `on_paint` BGRA to `RenderImage` is a memcpy, 0.7 to 1.5 ms per 1024x768. Click at zoom 1.56 hits the right link. Google sign-in passes with the moat |
 | 3 | `spikes/term-zoom` | `9c4f7d1` | 25 `alacritty_terminal` grids under a continuous zoom, idle and flooding? | 85 to 120 fps idle, 118 to 120 flooding at 256 KiB parsed per frame; 5 to 11 ms paint for ~1000 visible lines. alacritty's own event loop gave 1 fps first |
 | 4 | (inside 2) | `9d08d05` | Google "not secure" | one CDP UA-metadata override plus one document-start script, sent before the first navigation. Ekin signed in with a 32-character pasted password |
-| 5 | `spikes/canvas` | `e08867e` | 12 terminals + 3 browsers in one world, the app's `Cmd+1` / `Cmd+2` / `Cmd+=` / `Cmd+-` / `Cmd+0`, `Cmd+scroll`, `Cmd+drag` | works; Ekin: "it works perfectly". `src/viewport.rs` is `zoomActions.ts` + `zoomAnimation.ts` ported with 11 tests and is the first file of `infiniterm-core` |
+| 5 | `spikes/canvas` | `e08867e` | 12 terminals + 3 browsers in one world, the app's `Cmd+1` / `Cmd+2` / `Cmd+=` / `Cmd+-` / `Cmd+0`, `Cmd+scroll`, `Cmd+drag` | works; Ekin: "it works perfectly". `src/viewport.rs` is `zoomActions.ts` + `zoomAnimation.ts` ported with 12 tests and is the first file of `infiniterm-core` |
 
 What the canvas spike settled beyond the numbers: the Tauri app's viewport maths port as pure functions with no change (`fit_rect` with FIT_PADDING 48, MAX_FIT_SCALE 1, MIN 0.05, MAX 4; `fit_frame` interpolates the centre linearly and the scale geometrically under ease-out-cubic; FIT 240 ms, ZOOM 130 ms; `anchored_viewport` for wheel zoom at the cursor); Cmd+drag is pending until `DRAG_SLOP` 4 px; every card body is one `paint(bounds, scale)` call, which is the trait the mapping asks for.
 
@@ -93,6 +93,10 @@ Ten phases. Each names the reference files (line counts from 2026-09-15), the ta
 
 Create the four crates at the repo root, `cargo test` green on nothing. Move `spikes/canvas/src/viewport.rs` into `infiniterm-core` as the first module. The spikes stay untouched as reference until the code that replaces each is in a crate. `Cargo.toml` at the root is the workspace; the spikes keep their own `[workspace]` and are not members (CEF build time) until `infiniterm-browser` exists.
 
+Completed 2026-09-15. The root workspace contains `infiniterm-core/`, `infiniterm-term/`, `infiniterm-browser/`, and `infiniterm-ui/`. The empty workspace passed first; with the viewport module, `cargo test --offline` passes all 12 existing tests. The earlier count of 11 was incorrect. The viewport implementation and tests retain the spike's behavior, with formatting and header changes only. The canvas spike keeps its copy until the full canvas has a replacement. All spikes remain separate workspaces. The browser, terminal, and UI crates are placeholders with no external dependencies. This phase has no app window to check; screen checks begin when the UI exists.
+
+Phase 1 must complete the viewport comparison against the reference source and its 20 test cases. Known gaps: optional fit padding, `PAN_DURATION_MS`, and the separate near/far centering case. Keep these in Phase 1, alongside the geometry modules.
+
 ### Phase 1: `infiniterm-core`, the pure modules
 
 Every pure TS module becomes `core/src/<name>.rs` with the same test cases in `#[cfg(test)]`. 498 cases across 48 test files today. Order: geometry first, because everything else is tested against it. Read every source file; the notes column is only what the mapping and the spikes add.
@@ -109,7 +113,7 @@ Every pure TS module becomes `core/src/<name>.rs` with the same test cases in `#
 | `multiSelect.ts` (61) | 4 | `multi_select.rs` | extend and reverse |
 | `groups.ts` (162) | 20 | `groups.rs` | frame derived from `groupId`; aggregate state, `working` outranks `idle` |
 | `workspaces.ts` (96) | 11 | `workspaces.rs` | `cardsOn(workspace)` stays an argument, never a global |
-| `zoomActions.ts` (65), `zoomAnimation.ts` (90), `momentum.ts` (54) | 10, 10, 10 | `viewport.rs` (from the spike) + `momentum.rs` | the spike's 11 tests cover most of the first two; port the originals' cases too and diff |
+| `zoomActions.ts` (65), `zoomAnimation.ts` (90), `momentum.ts` (54) | 10, 10, 10 | `viewport.rs` (from the spike) + `momentum.rs` | the spike's 12 tests cover most of the first two; port the originals' cases too and diff |
 | `panMode.ts` (18) | 4 | `pan_mode.rs` | the one predicate both sides ask |
 | `chrome.ts` (94) | 15 | `chrome.rs` | screen-px sizing divided by zoom; smaller natively but the tests stay |
 | `formatZoom.ts` (11) | 3 | `format_zoom.rs` | never "0%" |
@@ -232,4 +236,4 @@ Consolidated from the four NOTES files; each is the short form.
 - `~/Code/infiniterm`: `master` at `67f360f` plus the other session's uncommitted work (browser card as WKWebView, browserKeys, sidebar). The mapping spec there is untracked; the copy at `docs/port-mapping.md` here is the committed one. Its `CLAUDE.md` has a paragraph on the port pointing here.
 - The canvas spike app may still be running on the Mac: `pkill -9 -f "MacOS/canvas"`, then remove `spikes/cef-extension/profile/Singleton*` before the next CEF launch.
 
-Next action: Phase 0. Create the workspace, move `viewport.rs` into `infiniterm-core`, run its 11 tests, commit.
+Next action: Phase 1. Read the reference `src/lib/grid.ts` and `grid.test.ts`, then port the tests into `infiniterm-core/src/grid.rs` before the implementation.

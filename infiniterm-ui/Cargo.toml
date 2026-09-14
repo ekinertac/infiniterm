@@ -1,0 +1,8 @@
+# Native UI boundary that will compose the core, terminal, and browser crates.
+# src/lib.rs is a placeholder until the canvas phase adds the app entry point.
+# Confine gpui to this crate when introduced; see ../HANDOVER.md.
+[package]
+name = "infiniterm-ui"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true

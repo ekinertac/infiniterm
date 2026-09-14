@@ -1,0 +1,17 @@
+# Native port workspace, used by root-level Cargo commands.
+# Keep the crates separate so UI dependencies cannot leak into the core.
+# The standalone spikes remain references; see HANDOVER.md for the phase plan.
+[workspace]
+members = [
+    "infiniterm-core",
+    "infiniterm-term",
+    "infiniterm-browser",
+    "infiniterm-ui",
+]
+exclude = ["spikes/canvas", "spikes/cef-frame", "spikes/term-zoom"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
