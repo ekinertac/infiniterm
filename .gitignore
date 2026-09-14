@@ -8,3 +8,5 @@ spikes/cef-extension/NOTES.html
 *.html
 spikes/cef-frame/target/
 spikes/cef-frame/run.log
+spikes/term-zoom/target/
+spikes/term-zoom/run.log

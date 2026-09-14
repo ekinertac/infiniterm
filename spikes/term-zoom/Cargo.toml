@@ -1,0 +1,12 @@
+[package]
+name = "term-zoom"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Spike: 25 alacritty_terminal grids drawn by gpui while the zoom animates.
+[workspace]
+
+[dependencies]
+gpui = "0.2.2"
+alacritty_terminal = "0.26"
