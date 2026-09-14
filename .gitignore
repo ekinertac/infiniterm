@@ -1,0 +1,8 @@
+spikes/cef-extension/cef_binary_*
+spikes/cef-extension/extension/
+spikes/cef-extension/profile/
+target/
+
+# mkdown artifacts (auto-managed)
+spikes/cef-extension/NOTES.html
+*.html
