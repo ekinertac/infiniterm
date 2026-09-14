@@ -15,6 +15,8 @@
 //! (`src/bin/helper.rs`) is every non-browser process.
 //!
 //! Not the browser crate. Measurements and traps go to NOTES.md.
+mod chrome_moat;
+
 use cef::{args::Args, *};
 // gpui is imported by name: both crates glob-export `App`, `Window`, `Point`
 // and `MouseEvent`, and the CEF ones are the ones the wrap_* macros expect.
@@ -35,6 +37,9 @@ use std::{
 };
 
 const URL: &str = "https://en.wikipedia.org/wiki/Terminal_emulator";
+const JS_BRANDS: &str = "document.body.style.font='28px monospace';document.body.innerText='brands: '+JSON.stringify(navigator.userAgentData.brands)+'\\nsecure: '+isSecureContext;navigator.userAgentData.getHighEntropyValues(['fullVersionList']).then(r=>document.body.innerText+='\\nfull: '+JSON.stringify(r.fullVersionList))";
+/// What Google's client-side check reads, printed big enough to screenshot.
+const JS_PROBE: &str = "data:text/html,<body style='font:28px monospace;padding:40px'><script>document.write('brands: '+JSON.stringify(navigator.userAgentData&&navigator.userAgentData.brands)+'<br><br>chrome.app: '+typeof chrome.app+'<br>chrome.csi: '+typeof chrome.csi+'<br>chrome.loadTimes: '+typeof chrome.loadTimes+'<br>webdriver: '+navigator.webdriver+'<br><br>UA: '+navigator.userAgent);navigator.userAgentData.getHighEntropyValues(['fullVersionList']).then(r=>document.write('<br><br>full: '+JSON.stringify(r.fullVersionList)))</script>";
 /// Browser size in logical px; the img is this times the zoom.
 const VIEW_W: i32 = 1024;
 const VIEW_H: i32 = 768;
@@ -171,6 +176,70 @@ impl BrowserView {
         self.browser.host()
     }
 
+    /// Enough of a keyboard for a login form: printable keys as CHAR
+    /// events, the editing keys as a RAWKEYDOWN/KEYUP pair with the
+    /// Windows virtual key code CEF wants on every platform. Not a key
+    /// map; the real card needs the full one (modifiers, IME, dead keys).
+    fn forward_key(&self, k: &gpui::Keystroke) {
+        let Some(host) = self.host() else { return };
+        let vk = match k.key.as_str() {
+            "enter" => 0x0D,
+            "backspace" => 0x08,
+            "tab" => 0x09,
+            "escape" => 0x1B,
+            "space" => 0x20,
+            "left" => 0x25,
+            "up" => 0x26,
+            "right" => 0x27,
+            "down" => 0x28,
+            "delete" => 0x2E,
+            _ => 0,
+        };
+        let mut modifiers = 0u32;
+        if k.modifiers.shift {
+            modifiers |= sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0 as u32;
+        }
+        if vk != 0 {
+            for type_ in [KeyEventType::RAWKEYDOWN, KeyEventType::KEYUP] {
+                let ev = KeyEvent {
+                    type_,
+                    modifiers,
+                    windows_key_code: vk,
+                    native_key_code: 0,
+                    character: if vk == 0x20 { b' ' as u16 } else { 0 },
+                    unmodified_character: if vk == 0x20 { b' ' as u16 } else { 0 },
+                    ..Default::default()
+                };
+                host.send_key_event(Some(&ev));
+            }
+            if vk == 0x20 || vk == 0x0D {
+                let ch = if vk == 0x20 { b' ' } else { b'\r' } as u16;
+                let ev = KeyEvent {
+                    type_: KeyEventType::CHAR,
+                    modifiers,
+                    windows_key_code: vk,
+                    character: ch,
+                    unmodified_character: ch,
+                    ..Default::default()
+                };
+                host.send_key_event(Some(&ev));
+            }
+            return;
+        }
+        let Some(text) = k.key_char.as_deref() else { return };
+        for ch in text.encode_utf16() {
+            let ev = KeyEvent {
+                type_: KeyEventType::CHAR,
+                modifiers,
+                windows_key_code: ch as i32,
+                character: ch,
+                unmodified_character: ch,
+                ..Default::default()
+            };
+            host.send_key_event(Some(&ev));
+        }
+    }
+
     fn mouse_event(&self, position: gpui::Point<Pixels>, modifiers: &Modifiers) -> MouseEvent {
         // Window px -> page px: the img is at the window origin, scaled by zoom.
         let mut flags = 0u32;
@@ -225,10 +294,41 @@ impl Render for BrowserView {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 eprintln!("[spike] key {:?}", e.keystroke);
+                // Spike commands sit behind Cmd; everything else is typed
+                // into the page, since Google's form needs an email typed.
+                if !e.keystroke.modifiers.platform {
+                    this.forward_key(&e.keystroke);
+                    return;
+                }
+                // cmd+h / j / g / k: the moat's checks, headers, JS, Google sign-in, brands.
+                let go = |url: &str| {
+                    if let Some(frame) = this.browser.main_frame() {
+                        frame.load_url(Some(&url.into()));
+                    }
+                };
+                // Edit chords go to the page's frame: CEF has them as verbs.
+                if let Some(frame) = this.browser.main_frame() {
+                    match e.keystroke.key.as_str() {
+                        "v" => return frame.paste(),
+                        "c" => return frame.copy(),
+                        "x" => return frame.cut(),
+                        "a" => return frame.select_all(),
+                        "z" => return frame.undo(),
+                        _ => {}
+                    }
+                }
                 match e.keystroke.key.as_str() {
                     "=" | "+" => this.zoom *= 1.25,
                     "-" => this.zoom /= 1.25,
                     "0" => this.zoom = 1.0,
+                    "h" => go("https://httpbin.org/headers"),
+                    "j" => go(JS_PROBE),
+                    "g" => go("https://accounts.google.com/signin"),
+                    "k" => {
+                        if let Some(frame) = this.browser.main_frame() {
+                            frame.execute_java_script(Some(&JS_BRANDS.into()), None, 0);
+                        }
+                    }
                     _ => return,
                 }
                 cx.notify();
@@ -399,15 +499,23 @@ fn main() {
                         windowless_frame_rate: 60,
                         ..Default::default()
                     };
+                    // Created blank so the moat's DevTools overrides are in
+                    // place before the first real navigation.
                     let browser = browser_host_create_browser_sync(
                         Some(&window_info),
                         Some(&mut ClientBuilder::new(RenderHandlerBuilder::new(handler))),
-                        Some(&URL.into()),
+                        Some(&"about:blank".into()),
                         Some(&browser_settings),
                         None,
                         None,
                     )
                     .expect("browser");
+                    if let Some(host) = browser.host() {
+                        chrome_moat::apply(&host);
+                    }
+                    if let Some(frame) = browser.main_frame() {
+                        frame.load_url(Some(&URL.into()));
+                    }
                     cx.new(|cx| BrowserView {
                         shared: shared.clone(),
                         browser,

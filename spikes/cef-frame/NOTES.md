@@ -9,6 +9,15 @@ Question: can a CEF off-screen browser be drawn as a texture inside a gpui windo
 3. A click on the "Talk" link at zoom 1.56 opened the Talk page: window position divided by zoom is the page position CEF wants. Scroll wheel is wired the same way but not exercised (no tool to send wheel events remotely).
 4. The extension loads (`--load-extension`, same profile as `cef-extension`), Claude Code lists the window as a connected browser and drove a tab in it. That tab appeared as a separate native window, because a browser the extension creates goes through CEF's default life-span handling; the real card has to take `on_before_popup` and the `chrome.windows` path and give each a card.
 
+## Google sign-in (the moat, 2026-09-14)
+
+Google refuses embedded Chromium ("This browser or app may not be secure"). Ekin found the two tells in ~/Code/glass by diffing against Edge, and `src/chrome_moat.rs` is that fix for CEF, verified end to end: he signed in to his Google account inside this window and landed on the account page.
+
+1. The `Sec-CH-UA` headers and `navigator.userAgentData` lacked the `Google Chrome` brand. One DevTools message, `Emulation.setUserAgentOverride` with `userAgentMetadata`, fixes both sides at once, since Chromium reads the same metadata for the headers and for the JS object. Checked on httpbin.org/headers and with a probe run on that page: `"Google Chrome";v="152"` in the header, in `brands` and in `fullVersionList`.
+2. `window.chrome` lacked `app`, `csi`, `loadTimes`. glass's document-start script, copied verbatim, goes in through `Page.addScriptToEvaluateOnNewDocument` after `Page.enable`.
+
+Both are sent before the first navigation, so the browser is created on `about:blank` and then told to load. `userAgentData` only exists in secure contexts, which is why the probe runs on an https page and not a `data:` URL. Cmd+V had to be forwarded (`frame.paste()`) before a 32-character password could go in; typed keys are forwarded as CHAR events, the editing keys as RAWKEYDOWN/KEYUP with Windows virtual key codes.
+
 ## Traps
 
 - `isHandlingSendEvent`: CEF requires NSApplication to implement CefAppProtocol and aborts with "unrecognized selector" about ten seconds in (when the extension opened its window). gpui owns the NSApplication subclass, so `cef_app_protocol::install` adds the two methods at runtime with the objc crate. It does not yet wrap `sendEvent:` to set the flag the way cefsimple does; if nested-run-loop bugs show up (modal dialogs, drag and drop), that is the first thing to add.
