@@ -1,0 +1,29 @@
+[package]
+name = "canvas"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Spike: the three earlier spikes on one canvas. Terminal cards and browser
+# cards in a world with a viewport, the Tauri app's zoom commands on the
+# same keys. Standalone package like the others (CEF build time).
+[workspace]
+
+[[bin]]
+name = "canvas"
+path = "src/main.rs"
+
+[[bin]]
+name = "canvas-helper"
+path = "src/bin/helper.rs"
+
+[package.metadata.cef.bundle]
+helper_name = "canvas-helper"
+
+[dependencies]
+cef = "152.3.0"
+gpui = "0.2.2"
+alacritty_terminal = "0.26"
+image = "0.25"
+smallvec = "1"
+objc = "0.2"
