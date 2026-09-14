@@ -6,3 +6,5 @@ target/
 # mkdown artifacts (auto-managed)
 spikes/cef-extension/NOTES.html
 *.html
+spikes/cef-frame/target/
+spikes/cef-frame/run.log
