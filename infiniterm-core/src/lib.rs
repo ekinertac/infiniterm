@@ -40,8 +40,11 @@ pub mod chrome;
 
 pub mod format_zoom;
 
+pub mod browser_keys;
 pub mod card_label;
+pub mod commands;
 pub mod config;
+pub mod editor_keys;
 pub mod editor_theme;
 pub mod fuzzy;
 pub mod ift;
@@ -50,6 +53,7 @@ pub mod jsonc;
 pub mod links;
 pub mod palette;
 pub mod palette_usage;
+pub mod prompt;
 pub mod saved_layout;
 pub mod settings_doc;
 pub mod transcript;
