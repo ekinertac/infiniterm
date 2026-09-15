@@ -215,8 +215,16 @@ impl Render for AppView {
                         canvas(
                             |_, _, _| (),
                             move |bounds, _, window, cx| {
-                                entity.update(cx, |this, cx| this.frame(bounds, window, cx));
-                                window.request_animation_frame();
+                                let more = entity.update(cx, |this, cx| {
+                                    this.frame(bounds, window, cx);
+                                    this.needs_frame()
+                                });
+                                // Only while something moves or arrives; an idle
+                                // canvas draws nothing until the poll task or an
+                                // event wakes it.
+                                if more {
+                                    window.request_animation_frame();
+                                }
                             },
                         )
                         .size_full(),

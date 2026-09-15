@@ -55,6 +55,9 @@ impl AppView {
             fps: 0.,
             themes_dir: PathBuf::new(),
             scale_factor,
+            scheduler: Default::default(),
+            ledger: Default::default(),
+            palette: infiniterm_term::palette::Palette::default_palette(),
         }
     }
 
@@ -85,6 +88,7 @@ impl AppView {
                     return;
                 }
                 self.chrome.apply_theme(&theme);
+                self.refresh_palette();
                 self.model.theme_current = Some(name.to_string());
                 // With hundreds of schemes installed, the name is the only way
                 // to know which one you just landed on.
@@ -92,6 +96,43 @@ impl AppView {
             }
             Err(e) => eprintln!("[infiniterm] could not load theme \"{name}\": {e}"),
         }
+    }
+
+    /// The terminal palette: the theme with the editor's selection colours,
+    /// so terminals and editors select alike.
+    pub fn refresh_palette(&mut self) {
+        let hex3 = |s: &str| {
+            crate::chrome::hex(s).map(|_| {
+                let h = s.trim_start_matches('#');
+                let v = u32::from_str_radix(h, 16).unwrap_or(0);
+                [(v >> 16) as u8, (v >> 8) as u8, v as u8]
+            })
+        };
+        self.palette = match &self.chrome.theme {
+            Some(theme) => infiniterm_term::palette::Palette::from_theme(
+                theme,
+                hex3(&self.model.config.editor.selection_color),
+                hex3(&self.model.config.editor.selection_text_color),
+            ),
+            None => infiniterm_term::palette::Palette::default_palette(),
+        };
+    }
+
+    pub fn terminal_for_pane(
+        &mut self,
+        pane: infiniterm_core::backend::PaneId,
+    ) -> Option<&mut crate::terminal_body::TerminalBody> {
+        let id = self
+            .model
+            .cards
+            .iter()
+            .find(|c| c.pane_id == Some(pane))?
+            .id
+            .clone();
+        self.bodies
+            .get_mut(&id)?
+            .as_any_mut()
+            .downcast_mut::<crate::terminal_body::TerminalBody>()
     }
 
     fn refresh_themes(&mut self) {
@@ -124,7 +165,11 @@ impl AppView {
                 Effect::CancelAnimation => self.animator.cancel(),
                 Effect::KillPane(pane) => self.backend.pty.kill(pane),
                 Effect::KillAllPanes => self.backend.pty.kill_all(),
-                Effect::ClearPane(_) => {} // the terminal body, Phase 4
+                Effect::ClearPane(pane) => {
+                    if let Some(body) = self.terminal_for_pane(pane) {
+                        body.grid.clear();
+                    }
+                }
                 Effect::WritePane(pane, bytes) => self.backend.pty.write(pane, &bytes),
                 Effect::DraftDelete(id) => {
                     let _ = infiniterm_core::files::draft_delete(&id);
@@ -166,9 +211,28 @@ impl AppView {
         }
     }
 
+    /// Whether anything is moving or arriving: an animation, a gesture, output
+    /// waiting to be parsed, a body with unpainted output. When nothing is,
+    /// no frame is requested and the window idles; the poll task wakes it.
+    pub fn needs_frame(&self) -> bool {
+        self.animator.is_running()
+            || self.pan.is_some()
+            || self.gesture.is_some()
+            || self.scheduler.pending()
+            || !self.glides.is_empty()
+            || self.bodies.values().any(|b| b.wants_frame())
+            || self.model.notice.is_some()
+            || self.model.dirty_layout
+    }
+
     /// Drains the backend's channels into the model, once per frame.
     pub fn drain_backend(&mut self) {
         while let Ok((pane, event)) = self.backend.pane_events.try_recv() {
+            if let infiniterm_core::backend::PaneEvent::Output(bytes)
+            | infiniterm_core::backend::PaneEvent::Replay(bytes) = &event
+            {
+                self.scheduler.enqueue(pane, bytes.clone());
+            }
             self.model.apply_pane_event(pane, &event);
         }
         while let Ok(report) = self.backend.hook_reports.try_recv() {

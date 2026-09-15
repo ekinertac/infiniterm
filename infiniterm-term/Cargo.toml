@@ -1,8 +1,15 @@
-# Terminal engine boundary for the native port, consumed by infiniterm-ui.
-# src/lib.rs is a placeholder until the scheduler and terminal phases.
-# Add engine dependencies when used; see ../HANDOVER.md.
+# The terminal engine boundary: alacritty_terminal's Term and VT parser
+# wrapped as "a grid of styled cells plus a byte sink", the output
+# scheduler, key and mouse encoders, the palette. No gpui here: the ui
+# crate paints the frames this crate hands out. See ../HANDOVER.md.
 [package]
 name = "infiniterm-term"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+
+[dependencies]
+infiniterm-core = { path = "../infiniterm-core" }
+# Term + vte only; its event loop is not used (1 fps under flood, see
+# spikes/term-zoom/NOTES.md). The PTY reader is core's local_pty.rs.
+alacritty_terminal = "0.26"

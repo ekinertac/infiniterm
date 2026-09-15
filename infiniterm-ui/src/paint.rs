@@ -84,6 +84,8 @@ impl AppView {
         self.perform_effects();
         self.start_glides(now);
         self.reconcile_bodies();
+        self.reconcile_terminals(window);
+        self.feed_terminals(now);
         self.paint_world(bounds, now, window, cx);
         self.schedule_save(now);
     }

@@ -18,6 +18,8 @@ mod input;
 mod overlays;
 mod paint;
 mod runtime;
+mod terminal_body;
+mod terminals;
 mod text;
 
 use animator::Animator;
@@ -102,6 +104,9 @@ pub struct AppView {
     pub fps: f32,
     pub themes_dir: std::path::PathBuf,
     pub scale_factor: f32,
+    pub scheduler: infiniterm_term::scheduler::OutputScheduler,
+    pub ledger: infiniterm_term::credit::AckLedger,
+    pub palette: infiniterm_term::palette::Palette,
 }
 
 pub fn now_ms() -> f64 {
@@ -131,6 +136,27 @@ fn main() {
                     app
                 });
                 window.focus(&view.read(cx).focus.clone());
+                // The idle wake-up: every 16 ms, drain what the backend's
+                // threads sent and draw a frame if anything needs one. A
+                // receiver cannot be awaited on gpui's executor, so a short
+                // timer is what stands in for it; it costs nothing when
+                // nothing arrived.
+                let poll = view.clone();
+                cx.spawn(async move |cx: &mut gpui::AsyncApp| loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(16))
+                        .await;
+                    let alive = poll.update(cx, |this, cx| {
+                        this.drain_backend();
+                        if this.needs_frame() {
+                            cx.notify();
+                        }
+                    });
+                    if alive.is_err() {
+                        break;
+                    }
+                })
+                .detach();
                 view
             },
         )

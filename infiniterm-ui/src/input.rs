@@ -193,9 +193,11 @@ impl AppView {
                     if !already {
                         self.model.set_focus(Some(&id));
                     }
-                    if let Some(body) = self.bodies.get_mut(&id) {
-                        body.mouse_down(local, e.button, &e.modifiers, e.click_count);
-                    }
+                    let action = match self.bodies.get_mut(&id) {
+                        Some(body) => body.mouse_down(local, e.button, &e.modifiers, e.click_count),
+                        None => crate::body::BodyAction::None,
+                    };
+                    self.body_action(&id, action);
                 }
             }
         }
@@ -371,6 +373,7 @@ impl AppView {
             if let Some(body) = self.bodies.get_mut(&id) {
                 body.wheel(local, dx / scale, dy / scale, &e.modifiers);
             }
+            self.flush_writes();
         }
     }
 
@@ -435,6 +438,27 @@ impl AppView {
         if let Some(id) = self.model.selection.focused_id.clone() {
             if let Some(body) = self.bodies.get_mut(&id) {
                 body.key(k, cx);
+            }
+            self.flush_writes();
+        }
+    }
+
+    /// What a body asked for from a click: a card beside it, or the system.
+    fn body_action(&mut self, id: &str, action: crate::body::BodyAction) {
+        match action {
+            crate::body::BodyAction::None => {}
+            crate::body::BodyAction::Open(plan) => {
+                self.model.open_in_card(plan, Some(id));
+            }
+            crate::body::BodyAction::OpenExternal { url, path } => {
+                let result = match (url, path) {
+                    (Some(url), _) => infiniterm_core::links_fs::open_url(url.as_str()),
+                    (_, Some((cwd, path))) => infiniterm_core::links_fs::open_path(&cwd, &path),
+                    _ => Ok(()),
+                };
+                if let Err(e) = result {
+                    self.model.notify(format!("could not open: {e}"));
+                }
             }
         }
     }

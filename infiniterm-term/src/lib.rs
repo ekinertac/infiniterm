@@ -1,8 +1,12 @@
-//! Terminal grid, parsing, and output scheduling boundary for infiniterm-ui.
-//!
-//! The UI feeds scheduler output to the parser and returns consumed-byte credit.
-//! The app owns PTY reads; parsing stays budgeted on the UI thread.
-//! See HANDOVER.md and spikes/term-zoom/NOTES.md for that constraint.
+//! The terminal engine boundary for infiniterm-ui: the grid (alacritty's
+//! Term and parser as a byte sink handing out frames), the output scheduler
+//! and the ack ledger (the app's backpressure, ported), the key and mouse
+//! encoders, and the palette. No toolkit types anywhere in here; the ui
+//! paints what `Grid::frame` returns. See HANDOVER.md, Phase 4.
 
 pub mod credit;
+pub mod grid;
+pub mod keys;
+pub mod mouse;
+pub mod palette;
 pub mod scheduler;

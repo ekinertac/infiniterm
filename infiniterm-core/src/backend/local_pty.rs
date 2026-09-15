@@ -154,6 +154,37 @@ impl SessionBackend for LocalPtyBackend {
         cmd: Option<&str>,
         env: Vec<(String, String)>,
     ) -> anyhow::Result<PaneId> {
+        self.spawn_now(cwd, cmd, env)
+    }
+
+    fn write(&self, pane: PaneId, bytes: &[u8]) {
+        self.write_now(pane, bytes)
+    }
+
+    fn resize(&self, pane: PaneId, cols: u16, rows: u16) {
+        self.resize_now(pane, cols, rows)
+    }
+
+    fn kill(&self, pane: PaneId) {
+        self.kill_now(pane)
+    }
+
+    fn ack(&self, pane: PaneId, bytes: usize) {
+        self.ack_now(pane, bytes)
+    }
+}
+
+/// The same operations as inherent, synchronous methods: a local PTY
+/// answers at once, and the ui thread (gpui's, with no executor to block
+/// on) calls these directly. The trait keeps its async shape for v2's tmux
+/// backend; both paths are the one implementation.
+impl LocalPtyBackend {
+    pub fn spawn_now(
+        &self,
+        cwd: &Path,
+        cmd: Option<&str>,
+        env: Vec<(String, String)>,
+    ) -> anyhow::Result<PaneId> {
         let pair = native_pty_system().openpty(PtySize {
             rows: 24,
             cols: 80,
@@ -240,7 +271,7 @@ impl SessionBackend for LocalPtyBackend {
         Ok(id)
     }
 
-    fn write(&self, pane: PaneId, bytes: &[u8]) {
+    pub fn write_now(&self, pane: PaneId, bytes: &[u8]) {
         // Clone the per-pane writer handle and drop the shared map lock
         // before writing. write_all can block indefinitely (a paste into a
         // pane whose child isn't reading stdin), and every other method
@@ -259,7 +290,7 @@ impl SessionBackend for LocalPtyBackend {
         }
     }
 
-    fn resize(&self, pane: PaneId, cols: u16, rows: u16) {
+    pub fn resize_now(&self, pane: PaneId, cols: u16, rows: u16) {
         if let Some(p) = self.panes.lock().unwrap().get(&pane) {
             let _ = p.master.resize(PtySize {
                 rows,
@@ -270,7 +301,7 @@ impl SessionBackend for LocalPtyBackend {
         }
     }
 
-    fn kill(&self, pane: PaneId) {
+    pub fn kill_now(&self, pane: PaneId) {
         // Signal the child directly. Dropping `master` here does NOT stop
         // the child: the reader thread holds its own dup'd fd to the master
         // (from try_clone_reader() in spawn), so the pty never fully closes
@@ -286,7 +317,7 @@ impl SessionBackend for LocalPtyBackend {
         }
     }
 
-    fn ack(&self, pane: PaneId, bytes: usize) {
+    pub fn ack_now(&self, pane: PaneId, bytes: usize) {
         // Cloned out so the map lock is not held while notifying.
         let credit = self
             .panes
