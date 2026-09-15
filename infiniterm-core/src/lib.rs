@@ -50,6 +50,7 @@ pub mod fuzzy;
 pub mod ift;
 pub mod itermcolors;
 pub mod jsonc;
+pub mod keymap;
 pub mod links;
 pub mod palette;
 pub mod palette_usage;
