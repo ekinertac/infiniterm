@@ -40,24 +40,31 @@ pub mod chrome;
 
 pub mod format_zoom;
 
+pub mod backend;
 pub mod browser_keys;
 pub mod card_label;
 pub mod commands;
 pub mod config;
+pub mod config_files;
 pub mod editor_keys;
 pub mod editor_theme;
+pub mod files;
 pub mod fuzzy;
 pub mod ift;
 pub mod itermcolors;
 pub mod jsonc;
 pub mod keymap;
+pub mod layout_file;
 pub mod links;
+pub mod links_fs;
 pub mod palette;
 pub mod palette_usage;
+pub mod paths;
 pub mod prompt;
 pub mod saved_layout;
 pub mod settings_doc;
 pub mod shortcuts;
+pub mod themes_files;
 pub mod transcript;
 
 pub mod sidebar;
