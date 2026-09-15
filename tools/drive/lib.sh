@@ -36,6 +36,15 @@ drive_start() {
     # Activation alone sometimes leaves the window not key; a click on the
     # title bar (never a card) makes it so.
     click 700 20
+    # If something else is still in front, Ekin is using the Mac and every
+    # key below would land in his window (a Cmd+Shift+P once opened Page
+    # Setup in iTerm2 and the rest typed into it). Stop before the first key.
+    FRONT=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true')
+    if [ "$FRONT" != "infiniterm" ]; then
+        echo "abort: $FRONT is frontmost, not infiniterm; someone is using the Mac" >&2
+        drive_stop
+        exit 2
+    fi
 }
 
 _win() {
