@@ -4,7 +4,7 @@ The native port of [infiniterm](https://github.com/ekinertac/infiniterm): termin
 
 Why a port: the Tauri app runs xterm.js in a webview, and a browser card there is either an iframe that cannot log in anywhere or a native view nothing can paint over or scale. The port draws every card itself. Its browser card is Chromium with the Claude in Chrome extension loaded, painted as a texture, so Claude Code can drive a browser that lives inside the canvas.
 
-Status, 2026-09-15: the four-crate workspace exists and every pure module of the Tauri app is ported with its tests (483 of 498 reference cases, plus 18 native checks; `cargo test --offline`). The save file round-trips the real `workspace.json` byte for byte. Nothing draws yet: the backend (Phase 2) and the gpui canvas (Phase 3) are next. `HANDOVER.md` has the plan and the state.
+Status, 2026-09-15: the four-crate workspace exists and every pure module of the Tauri app is ported with its tests (483 of 498 reference cases, plus 18 native checks; `cargo test --offline`). The save file round-trips the real `workspace.json` byte for byte. The backend (PTY, unix socket for `ift` and hooks, process inspection, git, files) runs with no window and answers `ift` in a test. Nothing draws yet: the gpui canvas (Phase 3) is next. `HANDOVER.md` has the plan and the state.
 
 `spikes/` holds the five standalone spikes and their measurements. A CEF frame in a gpui window costs about 1 ms; 25 terminals hold 120 fps under continuous zoom. The extension runs and Google sign-in passes. The spikes stay outside the root workspace.
 

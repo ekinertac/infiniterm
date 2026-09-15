@@ -16,7 +16,8 @@ The rules in the reference's Non-negotiables and Traps that are not about the DO
 HANDOVER.md                 state, decisions, spikes, the ten phases
 docs/port-mapping.md        every reference file and where it lands
 Cargo.toml                 workspace for the four native crates
-infiniterm-core/src/        every pure module of the reference: geometry, layout, save file, config, keymap, palette, labels
+infiniterm-core/src/        every pure module of the reference, and the backend (PTY, socket, git, inspect, files) behind app::Backend
+infiniterm-cli/, infiniterm-hook/   ift and the hook binary, as they were
 infiniterm-term/src/        output scheduler and parsed-byte acknowledgement ledger
 infiniterm-browser/src/     browser crate placeholder; no CEF dependency yet
 infiniterm-ui/src/          UI crate placeholder; no gpui dependency yet
@@ -27,12 +28,12 @@ spikes/canvas/              all of it on one canvas; viewport.rs is core's first
 tools/shot.sh               screenshot one app's window for remote verification
 ```
 
-Phase 0 and Phase 1's pure modules are complete: 483 of the reference's 498 test cases plus 18 native checks (501 tests). `commands/*.ts` ports with the stores in Phase 3. Core depends on serde, serde_json, regex and chrono; the browser and ui crates are still empty. `docs/phase-1-progress.md` has the table. Phase 2 (the backend) is next. The spikes remain untouched until their full replacements exist.
+Phases 0 to 2 are complete: every pure module (483 of 498 reference cases plus 18 native checks) and the whole backend behind `app::Backend`, 581 tests. `commands/*.ts` ports with the stores in Phase 3, which is next: the gpui canvas with blank cards. The browser and ui crates are still empty. `docs/phase-1-progress.md` has the pure-module table. The spikes remain untouched until their full replacements exist.
 
 ## Commands
 
 ```
-cargo test --offline                                  # the workspace; 501 tests
+cargo test --offline                                  # the workspace; 581 tests
 cd spikes/<name> && cargo build --release             # a spike; each is its own workspace
 cargo run --manifest-path ~/Code/cef-rs/Cargo.toml -p cef --bin bundle-cef-app -- <bin> -o target/bundle
 open --stderr "$PWD/run.log" --stdout "$PWD/run.log" target/bundle/<bin>.app
@@ -65,3 +66,4 @@ Short forms; the NOTES files have the accounts.
 - `navigator.userAgentData` exists only in secure contexts; never probe the moat on a `data:` URL.
 - gpui's `Keystroke` has no key code and delivers shifted punctuation as the shifted character with shift cleared; `keymap.rs` un-shifts it. Turkish-Q (Cmd+ğ on the `[` key) is still unchecked on a device.
 - `serde_json` parses floats one ULP off without `float_roundtrip`; the save file needs it on.
+- A test must never bind `/tmp/infiniterm.sock`: the running Tauri app holds it. `hooks::listen` takes the path; tests use a temp one.
