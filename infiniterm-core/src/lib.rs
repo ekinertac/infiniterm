@@ -39,3 +39,12 @@ pub mod pan_mode;
 pub mod chrome;
 
 pub mod format_zoom;
+
+pub mod fuzzy;
+pub mod palette;
+
+pub mod sidebar;
+
+pub mod blame;
+
+pub mod label_colors;
