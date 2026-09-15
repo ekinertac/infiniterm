@@ -19,7 +19,7 @@ SE='tell application "System Events" to tell process "infiniterm"'
 
 drive_start() {
     mkdir -p "$DATA" "$SHOTS"
-    rm -f "$SHOTS"/*.png
+    [ "${KEEP_SHOTS:-}" = 1 ] || rm -f "$SHOTS"/*.png
     # FRESH=1 starts empty, KEEP=1 uses whatever the scenario put in $DATA,
     # the default is a copy of the real canvas.
     if [ "${FRESH:-}" = 1 ]; then rm -f "$DATA/workspace.json"; elif [ "${KEEP:-}" = 1 ]; then :; else
@@ -28,7 +28,8 @@ drive_start() {
     pkill -f "MacOS/infiniterm$" 2>/dev/null || true
     sleep 0.5
     : > "$ROOT/run.log"
-    ( cd "$ROOT" && open --stderr "$PWD/run.log" --stdout "$PWD/run.log" --env INFINITERM_DATA_DIR="$DATA" --env INFINITERM_KEYLOG=1 target/bundle/infiniterm.app )
+    # CONFIG moves ~/.config/infiniterm too, for a scenario that edits settings.
+    ( cd "$ROOT" && open --stderr "$PWD/run.log" --stdout "$PWD/run.log" --env INFINITERM_DATA_DIR="$DATA" --env INFINITERM_KEYLOG=1 ${CONFIG:+--env INFINITERM_CONFIG_DIR="$CONFIG"} target/bundle/infiniterm.app )
     sleep 3
     osascript -e 'tell application "infiniterm" to activate'
     sleep 0.5
@@ -75,6 +76,9 @@ wait_s() { sleep "$1"; }
 drive_log() {
     grep 'cmd \|glide\|warn\|close ' "$ROOT/run.log" | sed 's/\[infiniterm\] //' | cut -c1-110
 }
+
+# Quit through the menu, so the saves flush the way a real quit does.
+quit() { key q "command down"; sleep 1; }
 
 drive_stop() {
     pkill -f "MacOS/infiniterm$" 2>/dev/null || true

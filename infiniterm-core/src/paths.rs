@@ -22,8 +22,17 @@ pub fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// `~/.config/infiniterm`, or `INFINITERM_CONFIG_DIR`: the Tauri app watches
+/// the real one, so a test that edits settings must edit a copy.
 pub fn config_dir() -> PathBuf {
-    home_dir().join(".config").join("infiniterm")
+    config_dir_from(std::env::var_os("INFINITERM_CONFIG_DIR").as_deref())
+}
+
+pub fn config_dir_from(override_: Option<&std::ffi::OsStr>) -> PathBuf {
+    match override_ {
+        Some(dir) => PathBuf::from(dir),
+        None => home_dir().join(".config").join("infiniterm"),
+    }
 }
 
 /// Application Support: the save file and the drafts. `INFINITERM_DATA_DIR`
@@ -100,6 +109,13 @@ mod tests {
             .contains("Application Support"));
         assert!(layout_path().starts_with(app_support_dir()));
         assert!(drafts_dir().starts_with(app_support_dir()));
+    }
+
+    #[test]
+    fn the_config_dir_override_moves_the_settings() {
+        let dir = std::path::Path::new("/tmp/infiniterm-cfg");
+        assert_eq!(config_dir_from(Some(dir.as_os_str())), dir);
+        assert!(config_dir_from(None).ends_with(".config/infiniterm"));
     }
 
     // The config is hand-edited and this is not; they must never collide.

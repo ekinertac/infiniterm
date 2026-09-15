@@ -27,11 +27,11 @@ spikes/term-zoom/           25 alacritty grids under a zoom
 spikes/canvas/              all of it on one canvas; viewport.rs is core's first module
 tools/shot.sh               screenshot one app's window for remote verification
 tools/bundle.sh             wrap the binary in target/bundle/infiniterm.app with the themes
-tools/drive/                the GUI driver: lib.sh (drive_start, cmd, key, type_text, click, drag, shot), scenarios phase3 panel drag phantom terminal select stress
+tools/drive/                the GUI driver: lib.sh (drive_start, cmd, key, type_text, click, drag, shot, quit), scenarios phase3 panel drag phantom terminal select stress idle settings
 Makefile                    run, run-fresh, stop, log, test, check, fmt, clippy, drive*, shot, release
 ```
 
-Phases 0 to 4 are complete: real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links, drag selection with Cmd+C, cursor blink, the inactive scrim, spawn errors, OSC 52, `dev.stress.*`). 26 flooding cards paint at 110 fps and a zoom over 26 idle cards at 55 to 105 (reference 45 to 60 and 60); idle is two frames a second. Open from Phase 4: the Turkish-Q chord check. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
+Phases 0 to 5 are complete (Phase 5's drafts and config pair belong to the editor, Phase 6): real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links, drag selection with Cmd+C, cursor blink, the inactive scrim, spawn errors, OSC 52, `dev.stress.*`). 26 flooding cards paint at 110 fps and a zoom over 26 idle cards at 55 to 105 (reference 45 to 60 and 60); idle is two frames a second. Open from Phase 4: the Turkish-Q chord check. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
 
 Things decided while drawing terminals, not in the reference:
 
@@ -52,6 +52,7 @@ make run                # build, bundle, launch on a scratch copy of the real ca
 make check              # fmt (the three port crates only; cli and hook stay byte-identical to the reference) + clippy + test
 make drive              # scripted GUI run with screenshots (say so before running it); drive-drag, drive-panel; tools/drive/<scenario>.sh for the rest
 make run DATA=/tmp/x    # any data dir; the default is /tmp/infiniterm-dev
+INFINITERM_CONFIG_DIR   # moves ~/.config/infiniterm the same way; tools/drive/settings.sh edits a copy
 cd spikes/<name> && cargo build --release             # a spike; each is its own workspace
 cargo run --manifest-path ~/Code/cef-rs/Cargo.toml -p cef --bin bundle-cef-app -- <bin> -o target/bundle
 open --stderr "$PWD/run.log" --stdout "$PWD/run.log" target/bundle/<bin>.app

@@ -21,13 +21,14 @@ mod runtime;
 mod terminal_body;
 mod terminals;
 mod text;
+mod window_state;
 
 use animator::Animator;
 use body::CardBody;
 use chrome::Chrome;
 use gpui::{
-    point, prelude::*, px, size, App, Application, Bounds, FocusHandle, TitlebarOptions,
-    WindowBounds, WindowOptions,
+    actions, point, prelude::*, px, size, App, Application, Bounds, FocusHandle, KeyBinding, Menu,
+    MenuItem, TitlebarOptions, WindowBounds, WindowOptions,
 };
 use infiniterm_core::app::Backend;
 use infiniterm_core::commands::CommandRegistry;
@@ -106,6 +107,10 @@ pub struct AppView {
     pub fps: f32,
     /// Under `INFINITERM_KEYLOG`: feed ms, paint ms, frames, last report.
     pub timing: (f64, f64, u32, f64),
+    /// The window frame as last seen, and when a changed one is due to be
+    /// written.
+    pub window_seen: Option<window_state::WindowState>,
+    pub window_save_due: Option<f64>,
     pub themes_dir: std::path::PathBuf,
     pub scale_factor: f32,
     pub scheduler: infiniterm_term::scheduler::OutputScheduler,
@@ -120,12 +125,29 @@ pub fn now_ms() -> f64 {
         .unwrap_or(0.)
 }
 
+actions!(infiniterm, [Quit]);
+
 fn main() {
     Application::new().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1600.), px(1000.)), cx);
+        // The app menu with Quit and nothing else for now: AppKit matches
+        // menu keys before the window sees them, so anything put here is
+        // a chord the canvas can never bind (the reference's menu.rs).
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.set_menus(vec![Menu {
+            name: "infiniterm".into(),
+            items: vec![MenuItem::action("Quit infiniterm", Quit)],
+        }]);
+        // Where it was last time, else centred: the reference's window-state
+        // plugin, owned here.
+        let window_bounds = window_state::WindowState::load()
+            .map(|s| s.bounds())
+            .unwrap_or_else(|| {
+                WindowBounds::Windowed(Bounds::centered(None, size(px(1600.), px(1000.)), cx))
+            });
         cx.open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_bounds: Some(window_bounds),
                 titlebar: Some(TitlebarOptions {
                     title: Some("infiniterm".into()),
                     appears_transparent: true,
@@ -156,6 +178,7 @@ fn main() {
                         // layout change with nothing else moving must not
                         // hold the frame loop open for half a second.
                         this.schedule_save(now_ms());
+                        this.schedule_window_save(now_ms());
                         if this.needs_frame() {
                             cx.notify();
                         }
@@ -163,6 +186,14 @@ fn main() {
                     if alive.is_err() {
                         break;
                     }
+                })
+                .detach();
+                // A quit within the save debounce would lose the last half
+                // second of moves; the window's frame goes with it.
+                let quitting = view.clone();
+                cx.on_app_quit(move |cx| {
+                    quitting.update(cx, |this, _| this.flush_save());
+                    async {}
                 })
                 .detach();
                 view

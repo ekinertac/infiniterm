@@ -73,6 +73,7 @@ impl AppView {
             h: f32::from(bounds.size.height) as f64,
         };
         self.model.tick(now);
+        self.note_window(window.window_bounds(), now);
         self.drain_backend();
         self.maybe_sweep(now);
         self.animator

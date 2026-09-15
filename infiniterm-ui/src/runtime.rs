@@ -54,6 +54,8 @@ impl AppView {
             frames: 0,
             fps_window: std::time::Instant::now(),
             timing: (0., 0., 0, 0.),
+            window_seen: None,
+            window_save_due: None,
             fps: 0.,
             themes_dir: PathBuf::new(),
             scale_factor,
@@ -333,6 +335,28 @@ impl AppView {
         }
     }
 
+    /// The frame changed: write it half a second after it stops changing.
+    pub fn note_window(&mut self, bounds: gpui::WindowBounds, now: f64) {
+        let state = crate::window_state::WindowState::of(bounds);
+        if self.window_seen.as_ref() != Some(&state) {
+            let first = self.window_seen.is_none();
+            self.window_seen = Some(state);
+            // The first frame is the restore itself, not a change.
+            if !first {
+                self.window_save_due = Some(now + SAVE_DEBOUNCE_MS);
+            }
+        }
+    }
+
+    pub fn schedule_window_save(&mut self, now: f64) {
+        if self.window_save_due.is_some_and(|due| now >= due) {
+            self.window_save_due = None;
+            if let Some(state) = &self.window_seen {
+                state.save();
+            }
+        }
+    }
+
     fn write_layout(&mut self) {
         if let Some(text) = self.model.save_text() {
             if let Err(e) = infiniterm_core::layout_file::write_layout(&text) {
@@ -346,6 +370,11 @@ impl AppView {
     pub fn flush_save(&mut self) {
         self.save_due = None;
         self.write_layout();
+        if self.window_save_due.take().is_some() {
+            if let Some(state) = &self.window_seen {
+                state.save();
+            }
+        }
     }
 
     pub fn maybe_sweep(&mut self, now: f64) {

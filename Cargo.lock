@@ -2843,6 +2843,7 @@ dependencies = [
  "gpui",
  "infiniterm-core",
  "infiniterm-term",
+ "serde",
  "serde_json",
 ]
 
