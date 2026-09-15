@@ -9,6 +9,15 @@ pub const MIN_BUDGET: usize = 32 * 1024;
 pub const MAX_BUDGET: usize = 1024 * 1024;
 pub const INITIAL_BUDGET: usize = 64 * 1024;
 pub const PANES_PER_FRAME: usize = 4;
+/// A gap this short is scheduling jitter, not a real frame boundary; only
+/// gaps at least this long update the learned display period.
+pub const MIN_PERIOD_SAMPLE_MS: f64 = 4.;
+/// A long frame means the ui thread fell behind: shrink the budget so the
+/// next frame's parse fits in less time.
+pub const BUDGET_SHRINK_FACTOR: f64 = 0.7;
+/// A frame that kept pace grows the budget back, slower than it shrinks so
+/// a single stutter doesn't get amplified by the next several frames.
+pub const BUDGET_GROWTH_FACTOR: f64 = 1.15;
 /// Shares the reader's allocation when one chunk spans multiple frames.
 #[derive(Clone, Debug)]
 pub struct Piece {
@@ -67,13 +76,13 @@ impl OutputScheduler {
     pub fn take(&mut self, now: f64) -> Vec<Piece> {
         if let Some(last) = self.last_tick {
             let dt = now - last;
-            if dt >= 4. {
+            if dt >= MIN_PERIOD_SAMPLE_MS {
                 self.period = self.period.min(dt);
             }
             self.budget = if dt > self.period * LONG_FRAME_FACTOR {
-                (self.budget * 0.7).max(MIN_BUDGET as f64)
+                (self.budget * BUDGET_SHRINK_FACTOR).max(MIN_BUDGET as f64)
             } else {
-                (self.budget * 1.15).min(MAX_BUDGET as f64)
+                (self.budget * BUDGET_GROWTH_FACTOR).min(MAX_BUDGET as f64)
             };
         }
         if self.queues.is_empty() {

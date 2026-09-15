@@ -17,6 +17,13 @@ pub struct Mods {
     pub ctrl: bool,
 }
 
+/// xterm's SGR/X10 mouse-report modifier bits, added to the button code.
+const MOD_SHIFT_BIT: u8 = 4;
+const MOD_ALT_BIT: u8 = 8;
+const MOD_CTRL_BIT: u8 = 16;
+/// Set when the button is held and the pointer moved, rather than pressed.
+const MOTION_BIT: u8 = 32;
+
 fn code(button: MouseButton, mods: Mods, motion: bool) -> u8 {
     let mut c = match button {
         MouseButton::Left => 0,
@@ -26,16 +33,16 @@ fn code(button: MouseButton, mods: Mods, motion: bool) -> u8 {
         MouseButton::WheelDown => 65,
     };
     if mods.shift {
-        c += 4;
+        c += MOD_SHIFT_BIT;
     }
     if mods.alt {
-        c += 8;
+        c += MOD_ALT_BIT;
     }
     if mods.ctrl {
-        c += 16;
+        c += MOD_CTRL_BIT;
     }
     if motion {
-        c += 32;
+        c += MOTION_BIT;
     }
     c
 }

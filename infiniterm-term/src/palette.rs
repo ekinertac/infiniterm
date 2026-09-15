@@ -108,12 +108,30 @@ impl Palette {
         } else if i < 16 {
             self.ansi[i]
         } else if i < 232 {
+            // xterm's 6x6x6 colour cube: each axis is one of 6 levels, 0 or
+            // BASE + level*STEP, so level 0 is pure black on every axis.
+            const CUBE_SIDE: usize = 6;
+            const CUBE_BASE: usize = 55;
+            const CUBE_STEP: usize = 40;
             let i = i - 16;
-            let (r, g, b) = (i / 36, (i / 6) % 6, i % 6);
-            let c = |v: usize| if v == 0 { 0 } else { (55 + v * 40) as u8 };
+            let (r, g, b) = (
+                i / (CUBE_SIDE * CUBE_SIDE),
+                (i / CUBE_SIDE) % CUBE_SIDE,
+                i % CUBE_SIDE,
+            );
+            let c = |v: usize| {
+                if v == 0 {
+                    0
+                } else {
+                    (CUBE_BASE + v * CUBE_STEP) as u8
+                }
+            };
             [c(r), c(g), c(b)]
         } else {
-            let v = (8 + (i.min(255) - 232) * 10) as u8;
+            // xterm's 24-step greyscale ramp, indices 232-255.
+            const GREY_BASE: usize = 8;
+            const GREY_STEP: usize = 10;
+            let v = (GREY_BASE + (i.min(255) - 232) * GREY_STEP) as u8;
             [v, v, v]
         }
     }
@@ -136,11 +154,15 @@ impl Palette {
     }
 }
 
+/// SGR faint: two-thirds brightness, xterm's own dim ratio.
+const DIM_NUMERATOR: u16 = 2;
+const DIM_DENOMINATOR: u16 = 3;
+
 fn dim(c: [u8; 3]) -> [u8; 3] {
     [
-        (c[0] as u16 * 2 / 3) as u8,
-        (c[1] as u16 * 2 / 3) as u8,
-        (c[2] as u16 * 2 / 3) as u8,
+        (c[0] as u16 * DIM_NUMERATOR / DIM_DENOMINATOR) as u8,
+        (c[1] as u16 * DIM_NUMERATOR / DIM_DENOMINATOR) as u8,
+        (c[2] as u16 * DIM_NUMERATOR / DIM_DENOMINATOR) as u8,
     ]
 }
 
