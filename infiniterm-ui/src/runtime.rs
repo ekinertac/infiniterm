@@ -51,6 +51,7 @@ impl AppView {
             last_sweep: now_ms(),
             glides: Default::default(),
             marked: Default::default(),
+            body_sizes: Default::default(),
             frames: 0,
             fps_window: std::time::Instant::now(),
             timing: (0., 0., 0, 0.),

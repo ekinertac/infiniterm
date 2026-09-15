@@ -555,8 +555,9 @@ impl CardBody for TerminalBody {
         self.paint_scrim(bounds, focused, window);
     }
 
-    fn resized(&mut self, world: Size) {
-        self.refit(world);
+    fn resized(&mut self, _world: Size) {
+        // `terminals.rs` refits each frame and resizes the PTY with it; a
+        // refit here would leave the PTY at the old size.
     }
 
     fn key(&mut self, k: &Keystroke, now: f64, cx: &mut App) -> BodyAction {

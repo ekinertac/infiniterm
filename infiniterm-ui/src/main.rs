@@ -109,6 +109,8 @@ pub struct AppView {
     pub glides: HashMap<String, Glide>,
     /// Rects as of the last frame, to notice a MarkSwap'd card moving.
     pub marked: HashMap<String, Rect>,
+    /// Each body's size as last told to it, so `resized` fires on a change.
+    pub body_sizes: HashMap<String, infiniterm_core::grid::Size>,
     pub frames: u32,
     pub fps_window: Instant,
     pub fps: f32,

@@ -122,12 +122,24 @@ impl AppView {
     fn reconcile_bodies(&mut self) {
         let ids: Vec<String> = self.model.cards.iter().map(|c| c.id.clone()).collect();
         self.bodies.retain(|id, _| ids.contains(id));
+        self.body_sizes.retain(|id, _| ids.contains(id));
         for c in &self.model.cards {
             self.bodies.entry(c.id.clone()).or_insert_with(|| {
                 Box::new(crate::body::Blank {
                     color: self.chrome.card_bg,
                 })
             });
+            // A drag, a resize, a split: the body learns its new size once.
+            let size = Size {
+                w: c.rect.w,
+                h: c.rect.h,
+            };
+            if self.body_sizes.get(&c.id) != Some(&size) {
+                self.body_sizes.insert(c.id.clone(), size);
+                if let Some(body) = self.bodies.get_mut(&c.id) {
+                    body.resized(size);
+                }
+            }
         }
     }
 

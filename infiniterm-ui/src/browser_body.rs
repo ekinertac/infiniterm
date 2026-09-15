@@ -172,6 +172,20 @@ impl CardBody for BrowserBody {
         if !focused {
             self.set_focus(false);
         }
+        // Drawn above 100%, the page is asked for more pixels rather than
+        // upscaled: the device scale follows the zoom in half steps, so an
+        // animation settles on one value instead of re-rendering per frame.
+        let device = (self.scale as f64 * scale * 2.).ceil() / 2.;
+        let device = device.clamp(self.scale as f64, 3.) as f32;
+        if let Some(s) = &self.surface {
+            if (s.shared.borrow().scale - device).abs() > 0.01 {
+                s.resize(
+                    self.world.w.round() as i32,
+                    self.world.h.round() as i32,
+                    device,
+                );
+            }
+        }
         window.paint_quad(fill(bounds, self.card_bg));
         match &self.texture {
             Some(img) => {
@@ -215,7 +229,8 @@ impl CardBody for BrowserBody {
     fn resized(&mut self, world: Size) {
         self.world = world;
         if let Some(s) = &self.surface {
-            s.resize(world.w.round() as i32, world.h.round() as i32, self.scale);
+            let device = s.shared.borrow().scale;
+            s.resize(world.w.round() as i32, world.h.round() as i32, device);
         }
         self.dirty = true;
     }
