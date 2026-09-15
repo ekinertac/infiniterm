@@ -53,6 +53,76 @@ const BLINK_MS: f64 = 600.;
 const DISK_POLL_MS: f64 = 2000.;
 const DRAFT_MS: f64 = 500.;
 
+/// Digits reserved in the gutter before it grows past three: line numbers
+/// up to 999 fit without a mid-file resize.
+const MIN_GUTTER_DIGITS: usize = 3;
+/// Breathing room between the gutter's line numbers and the text that
+/// follows; also the margin a line number is right-aligned by.
+const GUTTER_EXTRA_PAD_PX: f64 = 16.;
+/// The offset from the gutter's right edge to its separator line: the same
+/// margin as the padding reserved beyond the line numbers.
+const GUTTER_SEPARATOR_OFFSET_PX: f64 = 8.;
+/// The find-and-replace panel's height in line-heights: two field rows.
+const SEARCH_PANEL_ROWS_REPLACE: f64 = 2.6;
+/// The find-only panel's height in line-heights: one field row.
+const SEARCH_PANEL_ROWS_FIND: f64 = 1.6;
+/// Two spaces per tree depth level, CodeMirror's indent.
+const TREE_INDENT: &str = "  ";
+/// The tree's cursor row tints this faint when the tree isn't focused, so
+/// it marks a position without competing with the focused highlight.
+const TREE_CURSOR_UNFOCUSED_ALPHA: f32 = 0.12;
+/// The search field's label text is smaller than the buffer's, like a
+/// caption next to the value it labels.
+const SEARCH_LABEL_FONT_SCALE: f64 = 0.85;
+/// A search-panel row is taller than a line, so its field has click padding.
+const SEARCH_ROW_HEIGHT_SCALE: f64 = 1.3;
+/// Columns reserved for the "find"/"replace" label plus its gap before the
+/// field box starts.
+const SEARCH_LABEL_COLS: f64 = 9.;
+/// The panel's inset from its own top edge.
+const SEARCH_PANEL_TOP_PAD_PX: f64 = 3.;
+/// A field box sits this far inside its row, top and bottom.
+const FIELD_ROW_INSET_PX: f64 = 2.;
+/// A field box is shorter than its row by both insets combined.
+const FIELD_ROW_INSET_TOTAL_PX: f64 = 4.;
+/// Gap between a field's border and the text or caret inside it.
+const FIELD_TEXT_PAD_PX: f64 = 4.;
+/// The selected-match highlight sits this far inside the field box.
+const SELECTION_BG_INSET_PX: f64 = 1.;
+/// The selected-match highlight is shorter than the field box by both
+/// insets combined.
+const SELECTION_BG_INSET_TOTAL_PX: f64 = 2.;
+/// The caret in a search field sits this far below the field's top.
+const CARET_TOP_INSET_PX: f64 = 3.;
+/// The caret is narrower than a cell: a hairline-and-a-half reads as a
+/// caret rather than a block.
+const CARET_WIDTH_PX: f64 = 1.5;
+/// The caret is shorter than the field box by its top and bottom insets.
+const CARET_HEIGHT_INSET_PX: f64 = 6.;
+/// The block cursor is 0.6 em wide, CodeMirror's ratio.
+const CURSOR_BLOCK_WIDTH_RATIO: f64 = 0.6;
+/// The blinking cursor's alpha when it is on.
+const CURSOR_ALPHA: f32 = 0.85;
+/// The active-line wash is barely-there: a hint, not a highlight.
+const ACTIVE_LINE_ALPHA: f32 = 0.10;
+/// Below the legible threshold a line is drawn as texture bars this
+/// fraction of the line height, like the terminal's unreadable-zoom bars.
+const TEXTURE_BAR_HEIGHT_RATIO: f32 = 0.55;
+const TEXTURE_BAR_ALPHA: f32 = 0.45;
+/// A horizontal wheel gesture below this magnitude is noise from a
+/// vertical scroll, not an intentional side-scroll.
+const WHEEL_HORIZONTAL_THRESHOLD: f64 = 0.5;
+/// Scrolling right to follow the cursor leaves this many columns of margin
+/// past it, so the next character typed is never flush with the edge.
+const CURSOR_SCROLL_MARGIN_COLS: f64 = 2.;
+/// A search field's border is dimmer than its focused text.
+const FIELD_BORDER_ALPHA: f32 = 0.6;
+/// The matching-bracket outline is a soft hint, not a full-strength one.
+const BRACKET_ALPHA: f32 = 0.5;
+/// A search match that isn't the current one is dimmed to this alpha, so
+/// the current match still reads as the one under the caret.
+const MATCH_DIM_ALPHA: f32 = 0.45;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
     Buffer,
@@ -414,7 +484,7 @@ impl EditorBody {
             if col < self.scroll_x {
                 self.scroll_x = col;
             } else if col > self.scroll_x + width - self.metrics.cell_w {
-                self.scroll_x = col - width + self.metrics.cell_w * 2.;
+                self.scroll_x = col - width + self.metrics.cell_w * CURSOR_SCROLL_MARGIN_COLS;
             }
         }
         self.dirty = true;
@@ -491,14 +561,27 @@ impl EditorBody {
     // ----- geometry -----
 
     fn gutter_w(&self) -> f64 {
-        let digits = self.buffer.line_count().max(1).to_string().len().max(3);
-        digits as f64 * self.metrics.cell_w + 16.
+        let digits = self
+            .buffer
+            .line_count()
+            .max(1)
+            .to_string()
+            .len()
+            .max(MIN_GUTTER_DIGITS);
+        digits as f64 * self.metrics.cell_w + GUTTER_EXTRA_PAD_PX
     }
 
     fn panel_h(&self) -> f64 {
         match &self.search {
             None => 0.,
-            Some(s) => self.line_h() * if s.replacing { 2.6 } else { 1.6 },
+            Some(s) => {
+                self.line_h()
+                    * if s.replacing {
+                        SEARCH_PANEL_ROWS_REPLACE
+                    } else {
+                        SEARCH_PANEL_ROWS_FIND
+                    }
+            }
         }
     }
 
@@ -915,7 +998,10 @@ impl EditorBody {
                 window.paint_quad(fill(row_b, sel_bg));
                 color = sel_fg;
             } else if is_cursor {
-                window.paint_quad(fill(row_b, crate::chrome::with_alpha(fg, 0.12)));
+                window.paint_quad(fill(
+                    row_b,
+                    crate::chrome::with_alpha(fg, TREE_CURSOR_UNFOCUSED_ALPHA),
+                ));
             }
             if current.as_deref() == Some(row.entry.path.as_str())
                 && !(is_cursor && self.tree_focused && focused)
@@ -931,26 +1017,32 @@ impl EditorBody {
             } else {
                 "  "
             };
-            let text = format!("{}{}{}", "  ".repeat(row.depth), marker, row.entry.name);
+            let text = format!(
+                "{}{}{}",
+                TREE_INDENT.repeat(row.depth),
+                marker,
+                row.entry.name
+            );
             let line = crate::text::shape(window, &text, font_size, &f, color);
             let _ = line.paint(point(area.origin.x + pad, y), line_h, window, cx);
             y += line_h;
         }
         // A hairline between the tree and the text.
+        let hairline = px(crate::chrome::HAIRLINE_PX as f32);
         let edge = if self.sidebar_top {
             Bounds::new(
-                point(area.origin.x, area.origin.y + area.size.height - px(1.)),
-                size(area.size.width, px(1.)),
+                point(area.origin.x, area.origin.y + area.size.height - hairline),
+                size(area.size.width, hairline),
             )
         } else {
             Bounds::new(
-                point(area.origin.x + area.size.width - px(1.), area.origin.y),
-                size(px(1.), area.size.height),
+                point(area.origin.x + area.size.width - hairline, area.origin.y),
+                size(hairline, area.size.height),
             )
         };
         window.paint_quad(fill(
             edge,
-            crate::chrome::with_alpha(hex(&self.colors.gutter), 0.4),
+            crate::chrome::with_alpha(hex(&self.colors.gutter), crate::chrome::HAIRLINE_ALPHA),
         ));
         if let Some(t) = self.tree.as_mut() {
             t.scroll = scroll;
@@ -967,7 +1059,7 @@ impl EditorBody {
     ) {
         let Some(s) = &self.search else { return };
         let line_h = px((self.line_h() * scale) as f32);
-        let font_size = px((self.metrics.font_px * 0.85 * scale) as f32);
+        let font_size = px((self.metrics.font_px * SEARCH_LABEL_FONT_SCALE * scale) as f32);
         let f = font(self.metrics.family.clone());
         let fg = hex(&self.colors.foreground);
         let dim = hex(&self.colors.gutter);
@@ -975,9 +1067,9 @@ impl EditorBody {
         let sel_fg = hex(&self.colors.selection_text);
         window.paint_quad(fill(area, hex(&self.colors.background)));
         let pad = px((PAD_X * scale) as f32);
-        let row_h = line_h * 1.3;
-        let label_w = px((self.metrics.cell_w * 9. * scale) as f32);
-        let mut y = area.origin.y + px((3. * scale) as f32);
+        let row_h = line_h * SEARCH_ROW_HEIGHT_SCALE as f32;
+        let label_w = px((self.metrics.cell_w * SEARCH_LABEL_COLS * scale) as f32);
+        let mut y = area.origin.y + px((SEARCH_PANEL_TOP_PAD_PX * scale) as f32);
         let rows: Vec<(&str, &Field, Focus)> = if s.replacing {
             vec![
                 ("find", &self.query, Focus::Query),
@@ -991,22 +1083,25 @@ impl EditorBody {
             let _ = l.paint(point(area.origin.x + pad, y), row_h, window, cx);
             let active = self.focus == which && focused;
             let field_b = Bounds::new(
-                point(area.origin.x + pad + label_w, y + px(2.)),
+                point(
+                    area.origin.x + pad + label_w,
+                    y + px(FIELD_ROW_INSET_PX as f32),
+                ),
                 size(
                     area.size.width
                         - pad * 2.
                         - label_w
-                        - px((self.metrics.cell_w * 9. * scale) as f32),
-                    row_h - px(4.),
+                        - px((self.metrics.cell_w * SEARCH_LABEL_COLS * scale) as f32),
+                    row_h - px(FIELD_ROW_INSET_TOTAL_PX as f32),
                 ),
             );
             window.paint_quad(
                 outline(
                     field_b,
-                    crate::chrome::with_alpha(if active { fg } else { dim }, 0.6),
+                    crate::chrome::with_alpha(if active { fg } else { dim }, FIELD_BORDER_ALPHA),
                     gpui::BorderStyle::Solid,
                 )
-                .border_widths(px(1.)),
+                .border_widths(px(crate::chrome::HAIRLINE_PX as f32)),
             );
             let text = if field.text.is_empty() && !active {
                 String::new()
@@ -1018,8 +1113,14 @@ impl EditorBody {
                 let tw = crate::text::shape(window, &text, font_size, &f, fg).width;
                 window.paint_quad(fill(
                     Bounds::new(
-                        point(field_b.origin.x + px(4.), field_b.origin.y + px(1.)),
-                        size(tw, field_b.size.height - px(2.)),
+                        point(
+                            field_b.origin.x + px(FIELD_TEXT_PAD_PX as f32),
+                            field_b.origin.y + px(SELECTION_BG_INSET_PX as f32),
+                        ),
+                        size(
+                            tw,
+                            field_b.size.height - px(SELECTION_BG_INSET_TOTAL_PX as f32),
+                        ),
                     ),
                     sel_bg,
                 ));
@@ -1027,8 +1128,11 @@ impl EditorBody {
             }
             let line = crate::text::shape(window, &text, font_size, &f, runs_color);
             let _ = line.paint(
-                point(field_b.origin.x + px(4.), y + px(2.)),
-                row_h - px(4.),
+                point(
+                    field_b.origin.x + px(FIELD_TEXT_PAD_PX as f32),
+                    y + px(FIELD_ROW_INSET_PX as f32),
+                ),
+                row_h - px(FIELD_ROW_INSET_TOTAL_PX as f32),
                 window,
                 cx,
             );
@@ -1036,10 +1140,13 @@ impl EditorBody {
                 window.paint_quad(fill(
                     Bounds::new(
                         point(
-                            field_b.origin.x + px(4.) + line.width,
-                            field_b.origin.y + px(3.),
+                            field_b.origin.x + px(FIELD_TEXT_PAD_PX as f32) + line.width,
+                            field_b.origin.y + px(CARET_TOP_INSET_PX as f32),
                         ),
-                        size(px(1.5), field_b.size.height - px(6.)),
+                        size(
+                            px(CARET_WIDTH_PX as f32),
+                            field_b.size.height - px(CARET_HEIGHT_INSET_PX as f32),
+                        ),
                     ),
                     fg,
                 ));
@@ -1061,12 +1168,13 @@ impl EditorBody {
             }
             y += row_h;
         }
+        let hairline = px(crate::chrome::HAIRLINE_PX as f32);
         window.paint_quad(fill(
             Bounds::new(
-                point(area.origin.x, area.origin.y + area.size.height - px(1.)),
-                size(area.size.width, px(1.)),
+                point(area.origin.x, area.origin.y + area.size.height - hairline),
+                size(area.size.width, hairline),
             ),
-            crate::chrome::with_alpha(dim, 0.4),
+            crate::chrome::with_alpha(dim, crate::chrome::HAIRLINE_ALPHA),
         ));
     }
 }
@@ -1118,7 +1226,7 @@ impl CardBody for EditorBody {
         let font_size = px((self.metrics.font_px * scale) as f32);
         let line_h = px((self.line_h() * scale) as f32);
         let cell_w = px((self.metrics.cell_w * scale) as f32);
-        let legible = font_size >= px(3.);
+        let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32);
         let s = |v: f64| px((v * scale) as f32);
 
         // The tree, beside or above.
@@ -1177,10 +1285,13 @@ impl CardBody for EditorBody {
         // The gutter's separator.
         window.paint_quad(fill(
             Bounds::new(
-                point(origin.x + gutter_w - s(8.), area.origin.y),
-                size(px(1.), area.size.height),
+                point(
+                    origin.x + gutter_w - s(GUTTER_SEPARATOR_OFFSET_PX),
+                    area.origin.y,
+                ),
+                size(px(crate::chrome::HAIRLINE_PX as f32), area.size.height),
             ),
-            crate::chrome::with_alpha(gutter_fg, 0.4),
+            crate::chrome::with_alpha(gutter_fg, crate::chrome::HAIRLINE_ALPHA),
         ));
         // Byte offsets of the lines shown, for the spans, which are bytes.
         let text = self.buffer.text();
@@ -1212,14 +1323,14 @@ impl CardBody for EditorBody {
             if self.highlight_line && line_no == cursor_line && selection.is_none() {
                 window.paint_quad(fill(
                     Bounds::new(point(origin.x + gutter_w, y), size(area.size.width, line_h)),
-                    crate::chrome::with_alpha(gpui::rgb(0x808080).into(), 0.10),
+                    crate::chrome::with_alpha(gpui::rgb(0x808080).into(), ACTIVE_LINE_ALPHA),
                 ));
             }
             if legible && vrow.a == 0 {
                 let num = (line_no + 1).to_string();
                 let l = crate::text::shape(window, &num, font_size, &base, gutter_fg);
                 let _ = l.paint(
-                    point(origin.x + gutter_w - s(16.) - l.width, y),
+                    point(origin.x + gutter_w - s(GUTTER_EXTRA_PAD_PX) - l.width, y),
                     line_h,
                     window,
                     cx,
@@ -1245,7 +1356,10 @@ impl CardBody for EditorBody {
                     range_quad(
                         *a,
                         *b,
-                        crate::chrome::with_alpha(sel_bg, if strong { 1. } else { 0.45 }),
+                        crate::chrome::with_alpha(
+                            sel_bg,
+                            if strong { 1. } else { MATCH_DIM_ALPHA },
+                        ),
                         window,
                     );
                 }
@@ -1264,10 +1378,10 @@ impl CardBody for EditorBody {
                                     point(text_x + cell_w * (i - row_start) as f32, y),
                                     size(cell_w, line_h),
                                 ),
-                                crate::chrome::with_alpha(fg, 0.5),
+                                crate::chrome::with_alpha(fg, BRACKET_ALPHA),
                                 gpui::BorderStyle::Solid,
                             )
-                            .border_widths(px(1.)),
+                            .border_widths(px(crate::chrome::HAIRLINE_PX as f32)),
                         );
                     }
                 }
@@ -1277,7 +1391,8 @@ impl CardBody for EditorBody {
             }
             if !legible {
                 // Texture in place of glyphs, as the terminal does.
-                let bar_h = (line_h * 0.55).max(px(1.));
+                let bar_h =
+                    (line_h * TEXTURE_BAR_HEIGHT_RATIO).max(px(crate::chrome::HAIRLINE_PX as f32));
                 let by = y + (line_h - bar_h) / 2.;
                 let mut start: Option<usize> = None;
                 let chars: Vec<char> = line_text.chars().skip(vrow.a).take(row_len).collect();
@@ -1290,7 +1405,7 @@ impl CardBody for EditorBody {
                                     point(text_x + cell_w * s as f32, by),
                                     size(cell_w * (i - s) as f32, bar_h),
                                 ),
-                                crate::chrome::with_alpha(fg, 0.45),
+                                crate::chrome::with_alpha(fg, TEXTURE_BAR_ALPHA),
                             ));
                             start = None;
                         }
@@ -1303,7 +1418,7 @@ impl CardBody for EditorBody {
                             point(text_x + cell_w * s as f32, by),
                             size(cell_w * (chars.len() - s) as f32, bar_h),
                         ),
-                        crate::chrome::with_alpha(fg, 0.45),
+                        crate::chrome::with_alpha(fg, TEXTURE_BAR_ALPHA),
                     ));
                 }
                 continue;
@@ -1419,22 +1534,26 @@ impl CardBody for EditorBody {
             let rect = Bounds::new(
                 point(text_x + cell_w * col as f32, y),
                 size(
-                    px((self.metrics.font_px * 0.6 * scale) as f32).max(px(1.)),
+                    px((self.metrics.font_px * CURSOR_BLOCK_WIDTH_RATIO * scale) as f32)
+                        .max(px(crate::chrome::HAIRLINE_PX as f32)),
                     line_h,
                 ),
             );
             if focused && self.focus == Focus::Buffer {
                 if self.painted_phase {
-                    window.paint_quad(fill(rect, crate::chrome::with_alpha(cursor_color, 0.85)));
+                    window.paint_quad(fill(
+                        rect,
+                        crate::chrome::with_alpha(cursor_color, CURSOR_ALPHA),
+                    ));
                 }
             } else {
                 window.paint_quad(
                     outline(
                         rect,
-                        crate::chrome::with_alpha(cursor_color, 0.85),
+                        crate::chrome::with_alpha(cursor_color, CURSOR_ALPHA),
                         gpui::BorderStyle::Solid,
                     )
-                    .border_widths(px((scale as f32).max(1.))),
+                    .border_widths(px((scale as f32).max(crate::chrome::HAIRLINE_PX as f32))),
                 );
             }
         }
@@ -1480,7 +1599,7 @@ impl CardBody for EditorBody {
         let (t_origin, _) = self.text_area(world);
         if self.search.is_some() && local.y < t_origin.y {
             // The panel: the lower row is replace when it shows.
-            let row_h = self.line_h() * 1.3;
+            let row_h = self.line_h() * SEARCH_ROW_HEIGHT_SCALE;
             let in_replace = self.search.as_ref().is_some_and(|s| s.replacing)
                 && local.y - (t_origin.y - self.panel_h()) > row_h;
             self.focus = if in_replace {
@@ -1536,13 +1655,13 @@ impl CardBody for EditorBody {
     }
 
     fn wheel(&mut self, _local: Point, dx: f64, dy: f64, _modifiers: &gpui::Modifiers) {
-        let lines = (dy / self.line_h() * 3.).round() as i64;
+        let lines = (dy / self.line_h() * crate::chrome::WHEEL_LINES_PER_TICK).round() as i64;
         if lines != 0 {
             let max = self.buffer.line_count().saturating_sub(1);
             self.scroll_line = (self.scroll_line as i64 - lines).clamp(0, max as i64) as usize;
             self.dirty = true;
         }
-        if dx.abs() > 0.5 && !self.wrap {
+        if dx.abs() > WHEEL_HORIZONTAL_THRESHOLD && !self.wrap {
             self.scroll_x = (self.scroll_x - dx).max(0.);
             self.dirty = true;
         }

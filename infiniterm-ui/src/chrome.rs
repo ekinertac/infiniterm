@@ -11,6 +11,22 @@
 use gpui::{font, rgb, Font, Hsla, Rgba};
 use infiniterm_core::itermcolors::Theme;
 
+/// A one-device-pixel line: the thinnest gpui draws crisply. Every card
+/// body's hairline dividers and 1px outlines share this so they read as one
+/// weight across the app.
+pub const HAIRLINE_PX: f64 = 1.;
+/// The alpha a gutter or panel hairline is drawn at against its card's
+/// background: visible as a seam, not a border.
+pub const HAIRLINE_ALPHA: f32 = 0.4;
+/// Below this font size a glyph costs more to shape than it is worth
+/// looking at (about 1 microsecond each in gpui); card bodies paint texture
+/// bars instead. Shared by every body that draws text.
+pub const LEGIBLE_FONT_PX: f64 = 3.;
+/// Lines scrolled per wheel tick, shared by every card body with a text
+/// buffer, so the terminal, editor, diff and transcript all feel the same
+/// under the mouse wheel.
+pub const WHEEL_LINES_PER_TICK: f64 = 3.;
+
 #[derive(Clone, Debug)]
 pub struct Chrome {
     pub canvas_bg: Hsla,
