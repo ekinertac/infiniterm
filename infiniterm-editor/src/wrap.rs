@@ -46,6 +46,9 @@ mod tests {
 
     #[test]
     fn a_word_longer_than_the_width_is_cut() {
-        assert_eq!(wrap_line("abcdefghijkl", 5), vec![(0, 5), (5, 10), (10, 12)]);
+        assert_eq!(
+            wrap_line("abcdefghijkl", 5),
+            vec![(0, 5), (5, 10), (10, 12)]
+        );
     }
 }

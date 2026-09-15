@@ -24,7 +24,11 @@ fn try_report() -> Option<()> {
     let payload = payload.trim();
     let payload = if payload.starts_with('{') { payload } else { "{}" };
 
-    let path = std::env::temp_dir().join("infiniterm.sock");
+    let path = match std::env::var_os("INFINITERM_DATA_DIR") {
+        // A side-by-side instance keeps its socket in its own data dir.
+        Some(dir) => std::path::PathBuf::from(dir).join("infiniterm.sock"),
+        None => std::env::temp_dir().join("infiniterm.sock"),
+    };
     let mut stream = UnixStream::connect(path).ok()?;
     stream
         .set_write_timeout(Some(std::time::Duration::from_millis(200)))

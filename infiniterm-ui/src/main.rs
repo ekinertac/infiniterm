@@ -1,3 +1,4 @@
+#![allow(unexpected_cfgs)]
 //! infiniterm, native. The window, the one view that owns the model, and
 //! the frame loop. Port of `App.svelte`'s wiring: startup, the backend's
 //! streams drained each frame, the key handler, the template.
@@ -12,6 +13,8 @@
 //! the person did.
 mod animator;
 mod body;
+mod browser_body;
+mod browsers;
 mod chrome;
 mod diff_body;
 mod editor_body;
@@ -117,6 +120,11 @@ pub struct AppView {
     pub window_save_due: Option<f64>,
     pub themes_dir: std::path::PathBuf,
     pub scale_factor: f32,
+    /// CEF initialised in this process: browser cards can open surfaces.
+    pub cef_running: bool,
+    /// The system's reduced-motion switch, read at launch; it outranks
+    /// `ui.animations`.
+    pub reduce_motion: bool,
     pub scheduler: infiniterm_term::scheduler::OutputScheduler,
     pub ledger: infiniterm_term::credit::AckLedger,
     pub palette: infiniterm_term::palette::Palette,
@@ -129,19 +137,108 @@ pub fn now_ms() -> f64 {
         .unwrap_or(0.)
 }
 
-actions!(infiniterm, [Quit]);
+actions!(
+    infiniterm,
+    [Quit, Hide, HideOthers, ShowAll, Minimize, Zoom]
+);
+
+/// `NSWorkspace.accessibilityDisplayShouldReduceMotion`: the system's
+/// reduced-motion switch, which outranks `ui.animations` in the reference.
+fn system_reduces_motion() -> bool {
+    use objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let ws: *mut objc::runtime::Object = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let reduce: objc::runtime::BOOL = msg_send![ws, accessibilityDisplayShouldReduceMotion];
+        reduce == objc::runtime::YES
+    }
+}
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
-        // The app menu with Quit and nothing else for now: AppKit matches
-        // menu keys before the window sees them, so anything put here is
-        // a chord the canvas can never bind (the reference's menu.rs).
+    // CEF first: a helper invocation runs and exits here; the browser
+    // process loads the framework from the bundle and goes on. Outside a
+    // bundle there is no framework and the app runs without browser cards.
+    let mut cef = match infiniterm_browser::process::early() {
+        Ok(p) => Some(p),
+        Err(infiniterm_browser::process::Unavailable::Helper(code)) => std::process::exit(code),
+        Err(infiniterm_browser::process::Unavailable::NoFramework) => {
+            eprintln!("[infiniterm] CEF framework not beside the executable: no browser cards");
+            None
+        }
+    };
+    if runtime::another_instance_holds_the_socket() {
+        eprintln!("[infiniterm] another infiniterm holds the socket; activating it");
+        let _ = std::process::Command::new("open")
+            .args(["-b", "dev.ekinertac.infiniterm.native"])
+            .status();
+        std::process::exit(0);
+    }
+    Application::new().run(move |cx: &mut App| {
+        let cef_running = match cef.as_mut() {
+            Some(p) => {
+                infiniterm_browser::app_protocol::install();
+                let ok = p.start();
+                if !ok {
+                    eprintln!("[infiniterm] CEF did not initialise: no browser cards");
+                }
+                ok
+            }
+            None => false,
+        };
+        if cef_running {
+            // CEF's message pump, as the spikes ran it: one turn every 4 ms.
+            cx.spawn(async move |cx: &mut gpui::AsyncApp| loop {
+                infiniterm_browser::process::pump();
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(4))
+                    .await;
+            })
+            .detach();
+        }
+        // The app menu, as the reference's menu.rs builds it by hand: no
+        // File menu (its Close Window sat on Cmd+W, the card-close key),
+        // and no Edit menu (a webview needed one for Cmd+C/V, gpui does
+        // not). AppKit matches menu keys before the window sees them, so
+        // Cmd+H, Cmd+Alt+H, Cmd+M and Cmd+Q stay unbindable in the app.
         cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-        cx.set_menus(vec![Menu {
-            name: "infiniterm".into(),
-            items: vec![MenuItem::action("Quit infiniterm", Quit)],
-        }]);
+        cx.on_action(|_: &Hide, cx| cx.hide());
+        cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+        cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
+        // The window items act on the one window there is.
+        cx.on_action(|_: &Minimize, cx| {
+            for w in cx.windows() {
+                let _ = cx.update_window(w, |_, window, _| window.minimize_window());
+            }
+        });
+        cx.on_action(|_: &Zoom, cx| {
+            for w in cx.windows() {
+                let _ = cx.update_window(w, |_, window, _| window.zoom_window());
+            }
+        });
+        cx.bind_keys([
+            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("cmd-h", Hide, None),
+            KeyBinding::new("cmd-alt-h", HideOthers, None),
+            KeyBinding::new("cmd-m", Minimize, None),
+        ]);
+        cx.set_menus(vec![
+            Menu {
+                name: "infiniterm".into(),
+                items: vec![
+                    MenuItem::action("Hide infiniterm", Hide),
+                    MenuItem::action("Hide Others", HideOthers),
+                    MenuItem::action("Show All", ShowAll),
+                    MenuItem::separator(),
+                    MenuItem::action("Quit infiniterm", Quit),
+                ],
+            },
+            Menu {
+                name: "Window".into(),
+                items: vec![
+                    MenuItem::action("Minimize", Minimize),
+                    MenuItem::action("Zoom", Zoom),
+                ],
+            },
+        ]);
         // Where it was last time, else centred: the reference's window-state
         // plugin, owned here.
         let window_bounds = window_state::WindowState::load()
@@ -162,6 +259,8 @@ fn main() {
             |window, cx| {
                 let view = cx.new(|cx| {
                     let mut app = AppView::new(cx.focus_handle(), window.scale_factor());
+                    app.cef_running = cef_running;
+                    app.reduce_motion = system_reduces_motion();
                     runtime::startup(&mut app);
                     app
                 });
@@ -197,7 +296,14 @@ fn main() {
                 // second of moves; the window's frame goes with it.
                 let quitting = view.clone();
                 cx.on_app_quit(move |cx| {
-                    quitting.update(cx, |this, _| this.flush_save());
+                    quitting.update(cx, |this, _| {
+                        this.flush_save();
+                        // The surfaces close before CEF shuts down.
+                        this.bodies.clear();
+                    });
+                    if cef_running {
+                        infiniterm_browser::process::stop();
+                    }
                     async {}
                 })
                 .detach();

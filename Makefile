@@ -18,7 +18,7 @@ help:
 	@echo "make run-fresh  the same on an empty canvas"
 	@echo "make stop       quit the running native app"
 	@echo "make log        follow the app's log (run.log)"
-	@echo "make test       cargo test --offline, the whole workspace"
+	@echo "make test       cargo test, the whole workspace"
 	@echo "make check      fmt + clippy -D warnings + test"
 	@echo "make fmt        cargo fmt on the three port crates (never the cli and hook copies)"
 	@echo "make drive      the scripted GUI run with screenshots (say so first if Ekin is on the Mac)"
@@ -27,7 +27,7 @@ help:
 	@echo "make release    optimised build and bundle"
 
 build:
-	cargo build --offline $(if $(filter release,$(PROFILE)),--release,) -p infiniterm-ui
+	cargo build $(if $(filter release,$(PROFILE)),--release,) -p infiniterm-ui
 
 bundle: build
 	tools/bundle.sh $(PROFILE)
@@ -53,7 +53,7 @@ log:
 	tail -f run.log
 
 test:
-	cargo test --offline
+	cargo test
 
 fmt:
 	cargo fmt $(CRATES)

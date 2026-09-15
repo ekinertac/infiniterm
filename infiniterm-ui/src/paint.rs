@@ -87,6 +87,7 @@ impl AppView {
         self.reconcile_bodies();
         self.reconcile_terminals(window);
         self.reconcile_editors(window);
+        self.reconcile_browsers();
         let t0 = std::time::Instant::now();
         self.feed_terminals(now, cx);
         let t1 = std::time::Instant::now();

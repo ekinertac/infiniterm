@@ -89,7 +89,10 @@ mod tests {
 
     #[test]
     fn lower_case_queries_ignore_case_and_upper_case_ones_do_not() {
-        assert_eq!(find_all("Foo foo FOO", "foo"), vec![(0, 3), (4, 7), (8, 11)]);
+        assert_eq!(
+            find_all("Foo foo FOO", "foo"),
+            vec![(0, 3), (4, 7), (8, 11)]
+        );
         assert_eq!(find_all("Foo foo FOO", "Foo"), vec![(0, 3)]);
         assert!(find_all("abc", "").is_empty());
     }

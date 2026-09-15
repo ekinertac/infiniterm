@@ -40,7 +40,15 @@ drive_start() {
     # If something else is still in front, Ekin is using the Mac and every
     # key below would land in his window (a Cmd+Shift+P once opened Page
     # Setup in iTerm2 and the rest typed into it). Stop before the first key.
-    FRONT=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true')
+    # A launch with CEF takes a few seconds longer to become key: three
+    # tries a second apart before deciding someone else has the Mac.
+    for _try in 1 2 3; do
+        FRONT=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true')
+        [ "$FRONT" = "infiniterm" ] && break
+        sleep 1
+        osascript -e 'tell application "infiniterm" to activate'
+        sleep 0.5
+    done
     if [ "$FRONT" != "infiniterm" ]; then
         echo "abort: $FRONT is frontmost, not infiniterm; someone is using the Mac" >&2
         drive_stop

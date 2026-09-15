@@ -59,6 +59,8 @@ impl AppView {
             fps: 0.,
             themes_dir: PathBuf::new(),
             scale_factor,
+            cef_running: false,
+            reduce_motion: false,
             scheduler: Default::default(),
             ledger: Default::default(),
             palette: infiniterm_term::palette::Palette::default_palette(),
@@ -293,7 +295,8 @@ impl AppView {
             match change.file {
                 ConfigFile::Settings => {
                     self.model.apply_settings_text(&change.contents);
-                    self.animator.animations_on = self.model.config.ui.animations;
+                    self.animator.animations_on =
+                        self.model.config.ui.animations && !self.reduce_motion;
                 }
                 _ => self.model.apply_keymap_text(&change.contents),
             }
@@ -427,7 +430,7 @@ pub fn startup(app: &mut AppView) {
     app.refresh_themes();
     app.model.apply_settings_text(&settings);
     app.model.apply_keymap_text(&keys);
-    app.animator.animations_on = app.model.config.ui.animations;
+    app.animator.animations_on = app.model.config.ui.animations && !app.reduce_motion;
     app.model
         .load_layout(infiniterm_core::layout_file::read_layout().as_deref());
     // Drafts belong to cards; one whose card is gone is a leak, not a backup.
@@ -440,4 +443,13 @@ pub fn startup(app: &mut AppView) {
         app.model
             .notify("could not bind the socket: hooks and ift are off");
     }
+}
+
+/// One instance, as the reference's single-instance plugin enforced it:
+/// the socket path is the lock. A second launch on the same data dir
+/// activates the first through its bundle id and exits before it could
+/// race the first for the save file.
+pub fn another_instance_holds_the_socket() -> bool {
+    let path = infiniterm_core::paths::socket_path();
+    std::os::unix::net::UnixStream::connect(&path).is_ok()
 }

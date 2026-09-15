@@ -1,8 +1,16 @@
-# Browser host boundary for the native port, consumed by infiniterm-ui.
-# src/lib.rs is a placeholder until the browser phase.
-# Defer CEF dependencies and build costs; see ../HANDOVER.md.
+# The browser card's host: CEF (Chrome bootstrap, windowless rendering)
+# with the Claude in Chrome extension loaded, frames handed out as BGRA
+# bytes and input taken in page pixels. No gpui here: the ui crate turns a
+# frame into a texture. From spikes/cef-frame and spikes/canvas, whose
+# NOTES.md hold the measurements and the traps.
 [package]
 name = "infiniterm-browser"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+
+[dependencies]
+infiniterm-core = { path = "../infiniterm-core" }
+cef = "152.3.0"
+# The objc crate gpui itself uses; for patching CefAppProtocol onto its NSApplication.
+objc = "0.2"

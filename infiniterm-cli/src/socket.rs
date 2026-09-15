@@ -22,8 +22,13 @@ pub struct Reply {
 }
 
 fn socket_path() -> std::path::PathBuf {
-    // Must match src-tauri/src/hooks.rs::socket_path. Both run as the same user,
-    // so the per-user TMPDIR macOS hands out resolves identically.
+    // Must match the app's socket_path. Both run as the same user, so the
+    // per-user TMPDIR macOS hands out resolves identically. A side-by-side
+    // instance on INFINITERM_DATA_DIR keeps its socket there, and an `ift`
+    // run with the same variable set talks to that one.
+    if let Some(dir) = std::env::var_os("INFINITERM_DATA_DIR") {
+        return std::path::PathBuf::from(dir).join("infiniterm.sock");
+    }
     std::env::temp_dir().join("infiniterm.sock")
 }
 
