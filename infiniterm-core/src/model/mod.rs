@@ -172,8 +172,9 @@ pub enum Effect {
     ClearPane(PaneId),
     WritePane(PaneId, Vec<u8>),
     DraftDelete(String),
-    /// These cards are about to move; animate the move.
-    MarkSwap(Vec<String>),
+    /// These cards are about to move: their rects as they are now, so the
+    /// ui can glide each from there to wherever the command put it.
+    MarkSwap(Vec<(String, Rect)>),
     OpenUrl(String),
     /// Written into settings.json through `patch_json_text`.
     SaveSetting {
@@ -357,6 +358,15 @@ impl Model {
     pub fn notify(&mut self, text: impl Into<String>) {
         self.notice = Some(text.into());
         self.notice_until = self.now_ms + NOTICE_MS;
+    }
+
+    /// Arms a move animation for `ids`, BEFORE their rects change.
+    pub fn mark_swap(&mut self, ids: &[String]) {
+        let rects: Vec<(String, Rect)> = ids
+            .iter()
+            .filter_map(|id| self.card(id).map(|c| (id.clone(), c.rect)))
+            .collect();
+        self.effects.push(Effect::MarkSwap(rects));
     }
 
     pub fn log(&mut self, line: impl Into<String>) {

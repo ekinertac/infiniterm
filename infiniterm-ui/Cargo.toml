@@ -1,8 +1,19 @@
-# Native UI boundary that will compose the core, terminal, and browser crates.
-# src/lib.rs is a placeholder until the canvas phase adds the app entry point.
-# Confine gpui to this crate when introduced; see ../HANDOVER.md.
+# The app: gpui window, canvas, card frames, palette, panels. Wiring over
+# infiniterm-core's model; every rule with logic in it lives there, tested.
+# gpui is confined to this crate on purpose (see ../HANDOVER.md): if it churns
+# past tolerance this crate is rewritten and nothing else moves.
 [package]
 name = "infiniterm-ui"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+
+[[bin]]
+name = "infiniterm"
+path = "src/main.rs"
+
+[dependencies]
+infiniterm-core = { path = "../infiniterm-core" }
+infiniterm-term = { path = "../infiniterm-term" }
+gpui = "0.2.2"
+serde_json = "1"

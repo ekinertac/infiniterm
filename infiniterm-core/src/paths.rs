@@ -51,7 +51,10 @@ pub fn themes_dir() -> PathBuf {
 /// The unix socket `ift` and the hook binary connect to. Its existence is
 /// the answer to "is infiniterm running", which is what `ift` asks first.
 pub fn socket_path() -> PathBuf {
-    std::env::temp_dir().join("infiniterm.sock")
+    match std::env::var_os("INFINITERM_DATA_DIR") {
+        Some(dir) => PathBuf::from(dir).join("infiniterm.sock"),
+        None => std::env::temp_dir().join("infiniterm.sock"),
+    }
 }
 
 #[cfg(test)]

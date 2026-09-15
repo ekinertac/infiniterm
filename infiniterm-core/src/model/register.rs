@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(h.focused().id, kept_id);
         assert!(effects
             .iter()
-            .any(|e| matches!(e, Effect::MarkSwap(ids) if ids == &vec![kept_id.clone()])));
+            .any(|e| matches!(e, Effect::MarkSwap(ids) if ids.len() == 1 && ids[0].0 == kept_id && ids[0].1 != original)));
         // A soft group of one is nothing.
         assert_eq!(h.m.card(&kept_id).unwrap().soft_group_id, None);
     }
@@ -402,7 +402,7 @@ mod tests {
         assert_eq!(h.focused().id, a);
         assert!(effects
             .iter()
-            .any(|e| matches!(e, Effect::MarkSwap(ids) if ids.len() == 2)));
+            .any(|e| matches!(e, Effect::MarkSwap(ids) if ids.len() == 2 && ids[0].1 == ra)));
     }
 
     // Any canvas-level zoom drops out of maximise.

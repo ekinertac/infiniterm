@@ -109,7 +109,7 @@ impl Model {
                 return;
             };
             // Armed before the rect changes, same as a swap, so the shrink glides.
-            m.effects.push(Effect::MarkSwap(vec![id.clone()]));
+            m.mark_swap(std::slice::from_ref(&id));
             let soft = card.soft_group_id.clone().unwrap_or_else(super::new_id);
             if let Some(c) = m.card_mut(&id) {
                 c.rect = split.kept;
@@ -339,7 +339,7 @@ impl Model {
             if let Some(b) = &swap.b {
                 ids.push(b.id.clone());
             }
-            m.effects.push(Effect::MarkSwap(ids));
+            m.mark_swap(&ids);
             if let Some(c) = m.card_mut(&id) {
                 c.rect = swap.a.rect;
             }

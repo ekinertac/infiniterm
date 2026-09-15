@@ -56,6 +56,15 @@ pub fn parse_hook_line(line: &str) -> Option<HookReport> {
 /// Fails only when the bind does; the app then runs with hooks and `ift`
 /// disabled rather than not at all.
 pub fn listen(path: &Path, reports: Sender<HookReport>, cli: Arc<CliState>) -> Result<(), String> {
+    // A live socket means another infiniterm owns it: a second copy would
+    // steal the path and leave the first unreachable by `ift` and hooks
+    // until restart (the reference enforces one instance for this reason).
+    if std::os::unix::net::UnixStream::connect(path).is_ok() {
+        return Err(format!(
+            "{} is in use: another infiniterm is running",
+            path.display()
+        ));
+    }
     let _ = std::fs::remove_file(path);
     let listener =
         UnixListener::bind(path).map_err(|e| format!("could not bind {}: {e}", path.display()))?;
@@ -94,6 +103,19 @@ pub fn listen(path: &Path, reports: Sender<HookReport>, cli: Arc<CliState>) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A second copy must not steal a live socket from the first.
+    #[test]
+    fn refuses_a_socket_another_instance_holds() {
+        let path =
+            std::env::temp_dir().join(format!("infiniterm-test-live-{}.sock", std::process::id()));
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let cli = Arc::new(CliState::default());
+        listen(&path, tx.clone(), cli.clone()).unwrap();
+        let err = listen(&path, tx, cli).unwrap_err();
+        assert!(err.contains("another infiniterm"), "{err}");
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn parses_a_well_formed_report() {

@@ -95,9 +95,8 @@ impl Model {
             }
         ));
         if !grown.is_empty() {
-            self.effects.push(Effect::MarkSwap(
-                grown.iter().map(|g| g.id.clone()).collect(),
-            ));
+            let grown_ids: Vec<String> = grown.iter().map(|g| g.id.clone()).collect();
+            self.mark_swap(&grown_ids);
         }
         for g in &grown {
             if let Some(sibling) = self.card_mut(&g.id) {
