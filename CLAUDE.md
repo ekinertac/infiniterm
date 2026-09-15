@@ -19,19 +19,20 @@ Cargo.toml                 workspace for the four native crates
 infiniterm-core/src/        every pure module of the reference, and the backend (PTY, socket, git, inspect, files) behind app::Backend
 infiniterm-cli/, infiniterm-hook/   ift and the hook binary, as they were
 infiniterm-term/src/        alacritty grid + frames (grid.rs), palette, key/mouse encoding, output scheduler, ack ledger; no gpui
+infiniterm-editor/src/      the editor's logic, no gpui: buffer (ropey + undo), search, language (15 tree-sitter grammars), highlight, explorer, wrap, diff
 infiniterm-browser/src/     browser crate placeholder; no CEF dependency yet
-infiniterm-ui/src/          the gpui app: main.rs (AppView), runtime.rs (effects, backend drain), paint.rs (one frame), input.rs, overlays.rs (palette, prompt, panel), body.rs (CardBody trait), terminal_body.rs, terminals.rs, field.rs, animator.rs, chrome.rs, text.rs
+infiniterm-ui/src/          the gpui app: main.rs (AppView), runtime.rs (effects, backend drain), paint.rs (one frame), input.rs, overlays.rs (palette, prompt, panel), body.rs (CardBody trait), terminal_body.rs + terminals.rs, editor_body.rs + diff_body.rs + transcript_body.rs + editors.rs, window_state.rs, field.rs, animator.rs, chrome.rs, text.rs
 spikes/cef-extension/       cefclient + Claude in Chrome; the shared profile/ and extension/ (gitignored)
 spikes/cef-frame/           CEF frame as a gpui texture; chrome_moat.rs
 spikes/term-zoom/           25 alacritty grids under a zoom
 spikes/canvas/              all of it on one canvas; viewport.rs is core's first module
 tools/shot.sh               screenshot one app's window for remote verification
 tools/bundle.sh             wrap the binary in target/bundle/infiniterm.app with the themes
-tools/drive/                the GUI driver: lib.sh (drive_start, cmd, key, type_text, click, drag, shot, quit), scenarios phase3 panel drag phantom terminal select stress idle settings
+tools/drive/                the GUI driver: lib.sh (drive_start, cmd, key, type_text, click, drag, shot, quit), scenarios phase3 panel drag phantom terminal select stress idle settings editor diff transcript
 Makefile                    run, run-fresh, stop, log, test, check, fmt, clippy, drive*, shot, release
 ```
 
-Phases 0 to 5 are complete (Phase 5's drafts and config pair belong to the editor, Phase 6): real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links, drag selection with Cmd+C, cursor blink, the inactive scrim, spawn errors, OSC 52, `dev.stress.*`). 26 flooding cards paint at 110 fps and a zoom over 26 idle cards at 55 to 105 (reference 45 to 60 and 60); idle is two frames a second. Open from Phase 4: the Turkish-Q chord check. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
+Phases 0 to 8 are complete; the browser card (Phase 9) and the bundle with `ift` (Phase 10) remain. Editor, diff and transcript cards draw from `infiniterm-editor`; `tools/drive/editor.sh`, `diff.sh`, `transcript.sh` check them. Phase 4: real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links, drag selection with Cmd+C, cursor blink, the inactive scrim, spawn errors, OSC 52, `dev.stress.*`). 26 flooding cards paint at 110 fps and a zoom over 26 idle cards at 55 to 105 (reference 45 to 60 and 60); idle is two frames a second. Open from Phase 4: the Turkish-Q chord check. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
 
 Things decided while drawing terminals, not in the reference:
 
@@ -42,6 +43,8 @@ Things decided while drawing terminals, not in the reference:
 - The shortcuts panel is a centred filterable overlay, not a sidebar.
 - A text selection lives in the grid (alacritty's `Selection`, grid points), so it stays on its text through a scroll; selected cells take the app's selection pair in `Grid::frame`, never the theme's. A body that starts a drag says so (`captures_drag`) and gets the moves and the release wherever the pointer goes (`AppView::body_drag`).
 - The cursor blinks from a clock the body gets at paint (`now`); `wants_frame(now)` reports the next flip so the poll task requests a frame then and not every tick.
+- The editor's logic is a crate without gpui so it tests headless; the body draws visual rows (a prose line wraps to several) and the hit test reads the same row table. Highlighting is a whole-text tree-sitter pass per buffer version, milliseconds for a few thousand lines; a parse longer than a frame would move off the ui thread, not get cleverer.
+- Editor, diff and transcript bodies report back through `EditorEvent` (a notice, a path change) and `editors.rs` copies dirty/language/read-only onto the card each frame; the model never reaches into a body.
 - A body keeps its `Frame` and `Grid::update_frame` rebuilds only the rows alacritty damaged (a selection, scroll, resize or palette change is a full rebuild); links are rescanned for those rows only. Rebuilding every row of 26 cards was 17 ms a frame and trimming them for links another 10. The dev profile optimises dependencies so the driver's numbers are gpui's real ones.
 
 ## Commands

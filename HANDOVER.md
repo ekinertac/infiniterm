@@ -194,13 +194,19 @@ Progress 2026-09-15 (fourth session): most of it was already wired in Phases 2 a
 
 Done: `ift <file>`, `ift <dir>`, Cmd+click on a path, the config pair, and drafts across a quit all behave as the Tauri app.
 
+Progress 2026-09-15 (fourth session): built. `infiniterm-editor/` is the logic crate (no gpui): `buffer.rs` (ropey, one cursor, undo grouped by CodeMirror's 500 ms rule, close-brackets, indent, comment toggle, 14 tests), `search.rs` (literal, smart case), `language.rs` (fifteen tree-sitter grammars compiled in, the reference's alias table, JSON on the JavaScript grammar), `highlight.rs` (tree-sitter-highlight spans over the whole text per version), `explorer.rs` (the lazy tree, keys, tested with a fake filesystem), `wrap.rs` (prose wrapping at the word), `diff.rs` (Phase 7). `infiniterm-ui/src/editor_body.rs` draws it: gutter, syntax runs from the theme's rules, selection, matches, bracket pair, block cursor, the find/replace panel, the tree beside or above; `editors.rs` keeps every body in step with its card, the settings and the theme and copies dirty/language/read-only back for the badges. Model: `card.save` on an untitled editor prompts `Pending::SaveAs`, `editor.goToLine` prompts `Pending::GoToLine` (tests in `register.rs`). Verified through `tools/drive/editor.sh`: highlighting and the gutter on a Rust file, typing and undo, find with the current match, the tree opening a file, save-as, the config pair with read-only defaults, prose wrapping on a README, and a draft coming back after a quit. Not built: fold gutter and selection-match highlighting (CodeMirror's free extras), up/down by visual row in wrapped prose, the sidebar drag handle (the `card.sidebar.*` commands work), `ift <file>` against the port (the cli copy talks to `/tmp/infiniterm.sock`, the Tauri app's; Phase 10).
+
 ### Phase 7: diff and blame
 
 `DiffCard.svelte` (420), `DiffTree.svelte` (208), `blame.ts`, `git.rs`. Unified merge view over `similar` hunks with the collapse rule, read-only, flat changed-files list with counts, blame gutter in fixed columns.
 
+Progress 2026-09-15 (fourth session): built. `infiniterm-editor/src/diff.rs` turns HEAD's text and the working tree's into rows (context, added, deleted, collapsed) with the merge view's rule (margin 3, minSize 4), tested; `infiniterm-ui/src/diff_body.rs` draws them with the theme's green and red washes, the change bar, the collapse markers, syntax runs on the current file's lines, and the blame gutter from `git.rs`/`blame.rs` on Cmd+B; the changed files list with counts sits where the editor's tree does, Cmd+K walks the same three states. Verified through `tools/drive/diff.sh` on this repo's own changes. Bodies paint under a content mask now; a wash reached the next card before.
+
 ### Phase 8: transcript card
 
 `TranscriptCard.svelte` (273), `transcript.ts`, `transcript.rs`. Turns from the agent's session JSONL, re-read on mtime change, cursor stays on the last turn.
+
+Progress 2026-09-15 (fourth session): built, `infiniterm-ui/src/transcript_body.rs`: the turns list (who, preview, time) beside the chosen turn's text wrapped to the width and its tool calls folded behind their summary, Enter unfolds; the file is re-read on mtime every two seconds and the cursor stays on the last turn. Verified through `tools/drive/transcript.sh`, which seeds a card over a real session file since a driver run has no hook events.
 
 ### Phase 9: `infiniterm-browser`, the browser card
 
@@ -256,4 +262,4 @@ Consolidated from the four NOTES files; each is the short form.
 
 Paused 2026-09-15 (first session) at Ekin's request to conserve the usage allowance; resumed the same day in a second session, which finished Phase 1's pure modules (commits from `Palette usage history` to `The shortcut list`). No build, app launch or background task is running for this port. The two pre-existing untracked files, `spikes/cef-extension/cefclient.log` and `console.log`, remain untouched.
 
-Next action: Phases 4 and 5 are complete (Phase 5's drafts and config pair wait for the editor). Phase 6, the editor card, is next: `EditorCard.svelte` and the `editor.*` commands with a text buffer body behind `CardBody`; the Turkish-Q chord check stays open.
+Next action: Phases 0 to 8 are complete. Phase 9, the browser card on CEF, is next: `infiniterm-browser` from `spikes/cef-frame` and `spikes/cef-extension` (the frame as a gpui texture, the moat, the extension profile), behind `CardBody` like the others, with `browser_keys.rs` already in core. Then Phase 10 (bundle, `ift`, install). The Turkish-Q chord check stays open.
