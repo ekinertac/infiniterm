@@ -2,10 +2,18 @@
 //! like in a list, and how a tool call reads as one line. Port of
 //! transcript.ts and its tests.
 //!
-//! The turns themselves come from the backend (`transcript.rs` there, which
-//! walks the session JSONL once and caps every string); this is the
-//! formatting, kept pure so it is tested. The transcript card element is
-//! the wiring around it.
+//! Two halves in one file. The parser (from the Tauri app's transcript.rs)
+//! walks the session JSONL once and returns TURNS: a human prompt, or one
+//! assistant turn holding its text and its tool calls with their results.
+//! Thinking blocks are dropped (most of the bytes, none of the story),
+//! sidechain records (subagents) are skipped, and every string is capped so
+//! a turn that pasted a 2 MB file does not become a 2 MB card; the file
+//! grows to tens of MB over a day and the card must never see it raw. The
+//! formatting half (from transcript.ts) is what the transcript card lists.
+//!
+//! The path comes from the agent's own hook payload (`transcript_path` in
+//! every Claude Code hook event), stored on the card; `hooks.rs` is where
+//! it arrives and `files.rs`'s mtime is how a still-growing file is re-read.
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use serde_json::Value;
 
@@ -119,6 +127,189 @@ pub fn tool_line(tool: &ToolCall) -> String {
     } else {
         format!("{}: {arg}", tool.name)
     }
+}
+
+const TEXT_CAP: usize = 20_000;
+const INPUT_CAP: usize = 400;
+const RESULT_CAP: usize = 4_000;
+
+fn cap(s: &str, n: usize) -> String {
+    if s.len() <= n {
+        return s.to_string();
+    }
+    // Cut on a char boundary, never inside one.
+    let mut end = n;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
+/// The text of a `content` that may be a string or a list of blocks.
+fn text_of(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// A tool_result block's id and text, whichever of the two formats wrote it.
+fn result_parts(block: &Value) -> (&str, String) {
+    let id = block
+        .get("tool_use_id")
+        .or_else(|| block.get("toolCallId"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    (id, text_of(block.get("content").unwrap_or(&Value::Null)))
+}
+
+/// Claude Code writes `type: user|assistant` with the role implied; Pi
+/// writes `type: message` with `message.role` (user, assistant, toolResult),
+/// spells a call `toolCall` with `arguments`, and dates in Unix ms. The
+/// same turns come out of both, which is the point: an agent card is an
+/// agent card whichever harness is in it.
+fn role_of(v: &Value) -> &str {
+    match v.get("type").and_then(Value::as_str).unwrap_or("") {
+        "message" => v
+            .get("message")
+            .and_then(|m| m.get("role"))
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        kind => kind,
+    }
+}
+
+fn time_of(v: &Value) -> String {
+    match v.get("timestamp") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => String::new(),
+    }
+}
+
+pub fn parse_transcript(jsonl: &str) -> Vec<Turn> {
+    let mut turns: Vec<Turn> = Vec::new();
+    for line in jsonl.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let kind = role_of(&v);
+        let at = time_of(&v);
+        let Some(message) = v.get("message") else {
+            continue;
+        };
+        let Some(content) = message.get("content") else {
+            continue;
+        };
+        match kind {
+            // Pi's tool results are their own messages rather than user records.
+            "toolResult" => {
+                let (id, text) = result_parts(message);
+                if let Some(turn) = turns.iter_mut().rev().find(|t| t.role == Role::Assistant) {
+                    if let Some(call) = turn.tools.iter_mut().find(|c| c.id == id) {
+                        call.result = cap(&text, RESULT_CAP);
+                    }
+                }
+            }
+            "user" => {
+                // A user record made of tool results is the harness answering the
+                // assistant, not a person typing; it belongs to the assistant turn.
+                let results: Vec<&Value> = match content {
+                    Value::Array(blocks) => blocks
+                        .iter()
+                        .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                if !results.is_empty() {
+                    if let Some(turn) = turns.iter_mut().rev().find(|t| t.role == Role::Assistant) {
+                        for r in results {
+                            let (id, text) = result_parts(r);
+                            if let Some(call) = turn.tools.iter_mut().find(|c| c.id == id) {
+                                call.result = cap(&text, RESULT_CAP);
+                            }
+                        }
+                    }
+                    continue;
+                }
+                let text = text_of(content);
+                if text.trim().is_empty() {
+                    continue;
+                }
+                turns.push(Turn {
+                    role: Role::User,
+                    at,
+                    text: cap(&text, TEXT_CAP),
+                    tools: Vec::new(),
+                });
+            }
+            "assistant" => {
+                // One assistant turn spans many records (one per content block);
+                // they run together until a person speaks again.
+                if turns.last().map(|t| t.role) != Some(Role::Assistant) {
+                    turns.push(Turn {
+                        role: Role::Assistant,
+                        at: at.clone(),
+                        text: String::new(),
+                        tools: Vec::new(),
+                    });
+                }
+                let turn = turns.last_mut().unwrap();
+                let Value::Array(blocks) = content else {
+                    continue;
+                };
+                for b in blocks {
+                    match b.get("type").and_then(Value::as_str) {
+                        Some("text") => {
+                            let t = b.get("text").and_then(Value::as_str).unwrap_or("");
+                            if !turn.text.is_empty() {
+                                turn.text.push('\n');
+                            }
+                            turn.text.push_str(t);
+                            turn.text = cap(&turn.text, TEXT_CAP);
+                        }
+                        Some("tool_use") | Some("toolCall") => turn.tools.push(ToolCall {
+                            id: b
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string(),
+                            name: b
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("?")
+                                .to_string(),
+                            input: cap(
+                                &b.get("input")
+                                    .or_else(|| b.get("arguments"))
+                                    .map(|i| i.to_string())
+                                    .unwrap_or_default(),
+                                INPUT_CAP,
+                            ),
+                            result: String::new(),
+                        }),
+                        _ => {} // thinking, and whatever comes next
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    turns
+}
+
+pub fn transcript_read(path: &str) -> Result<Vec<Turn>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    Ok(parse_transcript(&text))
 }
 
 #[cfg(test)]
@@ -247,5 +438,85 @@ mod tests {
             turn_time(&nine_oh_five().timestamp_millis().to_string()),
             "09:05"
         );
+    }
+}
+
+#[cfg(test)]
+mod parser_tests {
+    use super::*;
+    use Role::{Assistant, User};
+
+    const SAMPLE: &str = r#"{"type":"custom-title","customTitle":"x"}
+{"type":"user","timestamp":"t1","message":{"role":"user","content":"hello"}}
+{"type":"assistant","timestamp":"t2","message":{"content":[{"type":"thinking","thinking":"hmm"}]}}
+{"type":"assistant","timestamp":"t3","message":{"content":[{"type":"text","text":"Looking."}]}}
+{"type":"assistant","timestamp":"t4","message":{"content":[{"type":"tool_use","id":"tu1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","timestamp":"t5","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":"a.txt\nb.txt"}]}}
+{"type":"assistant","timestamp":"t6","message":{"content":[{"type":"text","text":"Two files."}]}}
+{"type":"user","timestamp":"t7","isSidechain":true,"message":{"content":"subagent prompt"}}
+{"type":"user","timestamp":"t8","message":{"content":[{"type":"text","text":"thanks"}]}}
+not json
+"#;
+
+    #[test]
+    fn groups_records_into_human_and_assistant_turns() {
+        let turns = parse_transcript(SAMPLE);
+        let roles: Vec<Role> = turns.iter().map(|t| t.role).collect();
+        assert_eq!(roles, [User, Assistant, User]);
+        assert_eq!(turns[0].text, "hello");
+        assert_eq!(turns[2].text, "thanks");
+    }
+
+    #[test]
+    fn an_assistant_turn_collects_its_text_and_tools_and_drops_thinking() {
+        let turns = parse_transcript(SAMPLE);
+        let a = &turns[1];
+        assert_eq!(a.at, "t2");
+        assert_eq!(a.text, "Looking.\nTwo files.");
+        assert_eq!(a.tools.len(), 1);
+        assert_eq!(a.tools[0].name, "Bash");
+        assert_eq!(a.tools[0].input, r#"{"command":"ls"}"#);
+    }
+
+    #[test]
+    fn a_tool_result_lands_on_the_call_it_answers() {
+        let turns = parse_transcript(SAMPLE);
+        assert_eq!(turns[1].tools[0].result, "a.txt\nb.txt");
+    }
+
+    #[test]
+    fn sidechain_records_are_skipped() {
+        let turns = parse_transcript(SAMPLE);
+        assert!(turns.iter().all(|t| t.text != "subagent prompt"));
+    }
+
+    const PI: &str = r#"{"type":"session_info","name":"x"}
+{"type":"message","id":"a","timestamp":"2026-09-08T21:51:00.000Z","message":{"role":"user","content":[{"type":"text","text":"list files"}],"timestamp":1788904000000}}
+{"type":"message","id":"b","message":{"role":"assistant","content":[{"type":"thinking","thinking":"..."},{"type":"text","text":"Sure."},{"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"ls"}}],"timestamp":1788904284549}}
+{"type":"message","id":"c","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","content":[{"type":"text","text":"a.txt"}],"isError":false,"timestamp":1788904284600}}
+{"type":"message","id":"d","message":{"role":"assistant","content":[{"type":"text","text":"One file."}],"timestamp":1788904290000}}
+"#;
+
+    #[test]
+    fn reads_a_pi_session_into_the_same_turns() {
+        let turns = parse_transcript(PI);
+        let roles: Vec<Role> = turns.iter().map(|t| t.role).collect();
+        assert_eq!(roles, [User, Assistant]);
+        assert_eq!(turns[0].text, "list files");
+        assert_eq!(turns[0].at, "2026-09-08T21:51:00.000Z");
+        let a = &turns[1];
+        assert_eq!(a.text, "Sure.\nOne file.");
+        assert_eq!(a.tools[0].name, "bash");
+        assert_eq!(a.tools[0].input, r#"{"command":"ls"}"#);
+        assert_eq!(a.tools[0].result, "a.txt");
+    }
+
+    #[test]
+    fn caps_cut_on_a_char_boundary() {
+        let s = "é".repeat(10);
+        let c = cap(&s, 5);
+        assert!(c.starts_with("éé"));
+        assert!(c.ends_with('…'));
+        assert_eq!(cap("short", 10), "short");
     }
 }

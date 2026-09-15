@@ -7,6 +7,8 @@ members = [
     "infiniterm-term",
     "infiniterm-browser",
     "infiniterm-ui",
+    "infiniterm-cli",
+    "infiniterm-hook",
 ]
 exclude = ["spikes/canvas", "spikes/cef-frame", "spikes/term-zoom"]
 resolver = "2"

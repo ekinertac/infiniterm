@@ -187,6 +187,13 @@ name = "infiniterm-browser"
 version = "0.1.0"
 
 [[package]]
+name = "infiniterm-cli"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "infiniterm-core"
 version = "0.1.0"
 dependencies = [
@@ -198,6 +205,10 @@ dependencies = [
  "serde_json",
  "tokio",
 ]
+
+[[package]]
+name = "infiniterm-hook"
+version = "0.1.0"
 
 [[package]]
 name = "infiniterm-term"

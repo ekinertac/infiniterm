@@ -1,0 +1,18 @@
+[package]
+name = "infiniterm-cli"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# `ift`, not `infiniterm-cli`: this is typed dozens of times a day.
+[[bin]]
+name = "ift"
+path = "src/main.rs"
+
+[dependencies]
+# The hook binary has no dependencies and this one has serde_json, deliberately.
+# `install-claude-hooks` edits a file the user owns and did not write for us — it
+# has env, permissions, statusLine and other people's hooks in it — and preserving
+# all of that through a hand-rolled parser is exactly the kind of cleverness that
+# eats somebody's configuration.
+serde_json = "1"

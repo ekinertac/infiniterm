@@ -1,0 +1,412 @@
+//! `ift` — the terminal as a way into the canvas.
+//!
+//! Every card has a terminal in it, and a terminal is the best command interface
+//! anyone has built. Typing a path should be enough to open it; that is what this
+//! is for. It is NOT agent integration — hooks already solved reporting, one-way,
+//! which is the right shape for state.
+//!
+//! Every verb here that performs an action is also a command in the app, so it
+//! shows up in the palette. The reverse is deliberately not true: zoom, fit and
+//! maximise stay palette-only, because nobody zooms a canvas by typing into a
+//! terminal, and a CLI that accepted them would double the surface that has to
+//! keep working in exchange for nothing.
+//!
+//! That is what keeps the verb set FIXED rather than a fuzzy-matched view of the
+//! command registry: no ranking here, no ambiguity to report, and no matcher that
+//! could drift from the palette's.
+//!
+//! Exit codes are API once anything scripts against them: 0 success, 1 infiniterm
+//! is not running, 2 bad usage.
+
+mod claude_hooks;
+mod socket;
+
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+const USAGE: &str = "\
+ift — drive infiniterm from a shell
+
+  ift                        launch infiniterm, or focus it if it is running
+  ift <path>                 open a directory as a terminal card, a file as an
+                             editor card; file:42 or file:42:7 opens at a line
+  ift diff [path]            changes against git HEAD, as a card: a tree of the
+                             changed files under path (the current directory
+                             without one) and each file's diff
+  ift ls                     cards as TSV: id, group, directory, state, remote
+  ift name <text>            name the card this is run from
+  ift group <name>           put this card in a group, creating it if needed
+  ift install                put ift on $PATH (a symlink in ~/.local/bin)
+  ift install-claude-hooks   wire infiniterm into ~/.claude/settings.json
+  ift install-pi-hooks [DIR] install the Pi extension into ~/.pi/agent (or
+                             $PI_CODING_AGENT_DIR, or DIR: a wrapper that
+                             runs Pi against its own agent dir needs its own)
+
+Exit codes: 0 ok, 1 infiniterm not running, 2 bad usage.
+";
+
+/// The bundle id, which is how LaunchServices finds the app wherever it was
+/// put — no path to guess, and a moved .app still launches.
+const BUNDLE_ID: &str = "dev.ekinertac.infiniterm";
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let rest = || args[1..].to_vec();
+
+    match args.first().map(String::as_str) {
+        Some("install-claude-hooks") => install_hooks(args.contains(&"--dry-run".to_string())),
+        Some("install-pi-hooks") => install_pi(
+            args.iter().skip(1).find(|a| !a.starts_with("--")).map(String::as_str),
+            args.contains(&"--dry-run".to_string()),
+        ),
+        Some("install") => install_self(),
+        Some("ls") => send("ls", vec![]),
+        Some("diff") => diff_path(args.get(1).map(String::as_str).unwrap_or(".")),
+        Some("name") => send("name", rest()),
+        Some("group") => send("group", rest()),
+        // Not in USAGE on purpose. Runs a palette command by id, and the app
+        // only answers it in a development build: it exists so the stress
+        // harness can be driven from a script instead of by typing into the
+        // palette, and UI actions are otherwise deliberately NOT ift's.
+        Some("dev-run") => send("dev-run", rest()),
+        Some("-h") | Some("--help") => {
+            print!("{USAGE}");
+            ExitCode::SUCCESS
+        }
+        None => launch(),
+        // A PATH beats a verb. A directory called `ls` in front of you is what you
+        // meant; the verbs are checked first only so the common ones stay short.
+        Some(arg) if Path::new(split_line(arg).0).exists() => open_path(arg),
+        Some(other) => {
+            eprintln!("ift: unknown command `{other}`\n\n{USAGE}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// Bare `ift`: the app, the way typing `code` opens the editor.
+///
+/// Through `open -b`, so it works from anywhere the bundle has been registered
+/// (dropped into /Applications, or simply launched once). A running instance
+/// is focused rather than duplicated: the app is single-instance, and `open`
+/// on a running bundle activates it.
+fn launch() -> ExitCode {
+    let status = std::process::Command::new("open")
+        .args(["-b", BUNDLE_ID])
+        .status();
+    match status {
+        Ok(s) if s.success() => ExitCode::SUCCESS,
+        _ => {
+            eprintln!("ift: infiniterm is not installed (no app with bundle id {BUNDLE_ID})");
+            eprintln!("ift: build it with `npm run tauri build` and put the .app in /Applications");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// `ift install`: a symlink to this very binary in ~/.local/bin.
+///
+/// A symlink, not a copy, so the bundle's copy stays the one that runs and an
+/// updated app updates the command. ~/.local/bin because it needs no sudo and
+/// is on most people's PATH already; it says so when it is not.
+fn install_self() -> ExitCode {
+    let Ok(exe) = std::env::current_exe().and_then(std::fs::canonicalize) else {
+        eprintln!("ift: cannot find my own path");
+        return ExitCode::from(2);
+    };
+    let bin = home().join(".local").join("bin");
+    if let Err(e) = std::fs::create_dir_all(&bin) {
+        eprintln!("ift: cannot create {}: {e}", bin.display());
+        return ExitCode::from(2);
+    }
+    let link = bin.join("ift");
+    if let Ok(target) = std::fs::read_link(&link) {
+        if target == exe {
+            println!("ift: already installed at {}", link.display());
+            return ExitCode::SUCCESS;
+        }
+        let _ = std::fs::remove_file(&link);
+    } else if link.exists() {
+        eprintln!("ift: {} exists and is not a symlink; move it first", link.display());
+        return ExitCode::from(2);
+    }
+    if let Err(e) = std::os::unix::fs::symlink(&exe, &link) {
+        eprintln!("ift: cannot link {}: {e}", link.display());
+        return ExitCode::from(2);
+    }
+    println!("ift: {} -> {}", link.display(), exe.display());
+    let on_path = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d == bin))
+        .unwrap_or(false);
+    if !on_path {
+        println!("ift: {} is not on your PATH; add it to your shell profile", bin.display());
+    }
+    ExitCode::SUCCESS
+}
+
+/// Opens a path, resolved to something absolute the app can spawn a shell in.
+///
+/// The KIND is decided here rather than in the app: `ift` is the process standing
+/// in the directory the path is relative to, and the app is not.
+fn open_path(arg: &str) -> ExitCode {
+    let (path, line) = split_line(arg);
+    let Ok(full) = std::fs::canonicalize(path) else {
+        eprintln!("ift: cannot resolve {path}");
+        return ExitCode::from(2);
+    };
+    let kind = if full.is_dir() { "directory" } else { "file" };
+    let mut args = vec![full.to_string_lossy().into_owned(), kind.to_string()];
+    if let Some(line) = line {
+        args.push(line.to_string());
+    }
+    send("open", args)
+}
+
+/// `ift diff [path]`: the changes under a directory, or of one file.
+fn diff_path(arg: &str) -> ExitCode {
+    let Ok(full) = std::fs::canonicalize(arg) else {
+        eprintln!("ift: cannot resolve {arg}");
+        return ExitCode::from(2);
+    };
+    let kind = if full.is_dir() { "directory" } else { "file" };
+    send("diff", vec![full.to_string_lossy().into_owned(), kind.to_string()])
+}
+
+/// `file:42` and `file:42:7`, the way compilers print a location. Only when
+/// the suffix parses as a number and the bare path is not itself a file, so a
+/// file that really is called `a:1` still opens.
+fn split_line(arg: &str) -> (&str, Option<u32>) {
+    if Path::new(arg).exists() {
+        return (arg, None);
+    }
+    let mut parts = arg.rsplitn(3, ':');
+    let last = parts.next().unwrap_or("");
+    let mid = parts.next();
+    let rest = parts.next();
+    // path:line:col -> the line is in the middle; path:line -> the line is last.
+    if let (Some(mid), Some(rest)) = (mid, rest) {
+        if let (Ok(line), Ok(_col)) = (mid.parse::<u32>(), last.parse::<u32>()) {
+            return (rest, Some(line));
+        }
+    }
+    if let (Some(path), Ok(line)) = (arg.rsplit_once(':').map(|(p, _)| p), last.parse::<u32>()) {
+        return (path, Some(line));
+    }
+    (arg, None)
+}
+
+/// Sends one request and prints the answer.
+fn send(cmd: &str, args: Vec<String>) -> ExitCode {
+    match socket::request(cmd, args) {
+        Ok(reply) if reply.ok => {
+            if !reply.text.is_empty() {
+                println!("{}", reply.text);
+            }
+            ExitCode::SUCCESS
+        }
+        Ok(reply) => {
+            eprintln!("ift: {}", reply.text);
+            ExitCode::from(2)
+        }
+        Err(e) => {
+            eprintln!("ift: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn home() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
+}
+
+/// Where `infiniterm-hook` is, given where `ift` is.
+///
+/// `None` when it cannot be found, which the caller treats very differently from
+/// a guess — see `install_hooks`.
+///
+/// Two places, in order: next to `ift`, which is where an install puts them, and
+/// the sibling crate's release output, which is where they are in a checkout.
+/// Without the second, running this from the repo finds nothing and the wiring is
+/// written by bare name.
+fn hook_binary() -> Option<String> {
+    // Canonical, so a symlinked ift (`ift install`) looks beside the real
+    // binary in the bundle, not beside the link in ~/.local/bin.
+    let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok()?;
+    let dir = exe.parent()?;
+    let candidates = [
+        dir.join("infiniterm-hook"),
+        // crates/infiniterm-cli/target/release/ift -> crates/infiniterm-hook/...
+        dir.join("../../../infiniterm-hook/target/release/infiniterm-hook"),
+    ];
+    candidates
+        .iter()
+        .find(|p| p.exists())
+        .and_then(|p| std::fs::canonicalize(p).ok())
+        .map(|p| p.to_string_lossy().into_owned())
+        .or_else(|| which_on_path("infiniterm-hook"))
+}
+
+/// The first `infiniterm-hook` on `$PATH`, if there is one.
+fn which_on_path(name: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+fn install_hooks(dry_run: bool) -> ExitCode {
+    let path = home().join(".claude").join("settings.json");
+    let existing = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into());
+
+    let mut settings: serde_json::Value = match serde_json::from_str(&existing) {
+        Ok(v) => v,
+        Err(e) => {
+            // Refused rather than replaced. A file that does not parse is one
+            // somebody is mid-edit on, or has a typo in they need to see — and it
+            // is the wrong moment to overwrite their permissions and env.
+            eprintln!("ift: {} does not parse as JSON ({e})", path.display());
+            eprintln!("ift: refusing to rewrite it; fix the file and run again");
+            return ExitCode::from(2);
+        }
+    };
+
+    let Some(binary) = hook_binary() else {
+        // Refusing rather than guessing. An earlier version fell back to the bare
+        // name here, which REWROTE working absolute paths into `infiniterm-hook`
+        // and silently broke a setup that was already correct — the one outcome
+        // this command exists to prevent.
+        eprintln!("ift: cannot find the infiniterm-hook binary");
+        eprintln!("ift: build it first:");
+        eprintln!(
+            "  cargo build --release --manifest-path crates/infiniterm-hook/Cargo.toml"
+        );
+        eprintln!("ift: or put it on $PATH next to ift");
+        return ExitCode::from(2);
+    };
+    let changed = claude_hooks::install(&mut settings, &binary);
+
+    if changed.is_empty() {
+        println!("already wired: {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+
+    if dry_run {
+        println!("would update {} for: {}", path.display(), changed.join(", "));
+        return ExitCode::SUCCESS;
+    }
+
+    if let Some(dir) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("ift: could not create {}: {e}", dir.display());
+            return ExitCode::from(2);
+        }
+    }
+
+    // Write-then-rename, so an interrupted write cannot leave a truncated
+    // settings.json — which would take the user's permissions and env with it.
+    let tmp = path.with_extension("json.ift-tmp");
+    let body = serde_json::to_string_pretty(&settings).unwrap_or_default() + "\n";
+    if let Err(e) = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, &path)) {
+        eprintln!("ift: could not write {}: {e}", path.display());
+        return ExitCode::from(2);
+    }
+
+    println!("updated {}", path.display());
+    println!("  hook: {binary}");
+    println!("  events: {}", changed.join(", "));
+    ExitCode::SUCCESS
+}
+
+/// The Pi adapter, with the hook path filled in. Baked into the binary so
+/// `ift` is the one thing to install; see adapters/pi.ts for what it does.
+const PI_ADAPTER: &str = include_str!("../adapters/pi.ts");
+
+fn pi_adapter_source(hook: &str) -> String {
+    PI_ADAPTER.replace("__INFINITERM_HOOK__", hook)
+}
+
+/// Where Pi loads extensions from: `$PI_CODING_AGENT_DIR`, else ~/.pi/agent.
+fn pi_agent_dir(explicit: Option<&str>) -> std::path::PathBuf {
+    if let Some(dir) = explicit {
+        return expand_home(dir);
+    }
+    if let Some(dir) = std::env::var_os("PI_CODING_AGENT_DIR") {
+        return std::path::PathBuf::from(dir);
+    }
+    home().join(".pi").join("agent")
+}
+
+fn expand_home(path: &str) -> std::path::PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => home().join(rest),
+        None if path == "~" => home(),
+        None => std::path::PathBuf::from(path),
+    }
+}
+
+fn install_pi(dir: Option<&str>, dry_run: bool) -> ExitCode {
+    let Some(binary) = hook_binary() else {
+        eprintln!("ift: cannot find the infiniterm-hook binary");
+        eprintln!("ift: build it first:");
+        eprintln!("  cargo build --release --manifest-path crates/infiniterm-hook/Cargo.toml");
+        eprintln!("ift: or put it on $PATH next to ift");
+        return ExitCode::from(2);
+    };
+    let agent_dir = pi_agent_dir(dir);
+    let path = agent_dir.join("extensions").join("infiniterm.ts");
+    let body = pi_adapter_source(&binary);
+    if std::fs::read_to_string(&path).ok().as_deref() == Some(body.as_str()) {
+        println!("already installed: {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+    if dry_run {
+        println!("would write {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("ift: could not create {}: {e}", parent.display());
+            return ExitCode::from(2);
+        }
+    }
+    let tmp = path.with_extension("ts.ift-tmp");
+    if let Err(e) = std::fs::write(&tmp, &body).and_then(|()| std::fs::rename(&tmp, &path)) {
+        eprintln!("ift: could not write {}: {e}", path.display());
+        return ExitCode::from(2);
+    }
+    println!("installed {}", path.display());
+    println!("  hook: {binary}");
+    println!("  takes effect in the next pi session");
+    ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pi_adapter_gets_the_hook_path_and_nothing_else_changes() {
+        let src = pi_adapter_source("/Applications/x.app/Contents/MacOS/infiniterm-hook");
+        assert!(src.contains("const HOOK = \"/Applications/x.app/Contents/MacOS/infiniterm-hook\";"));
+        assert!(!src.contains("__INFINITERM_HOOK__"));
+        assert!(src.contains("pi.on(\"agent_settled\""));
+    }
+
+    #[test]
+    fn the_pi_agent_dir_prefers_an_explicit_one_then_the_env_then_the_default() {
+        assert_eq!(pi_agent_dir(Some("/tmp/x")), std::path::PathBuf::from("/tmp/x"));
+        assert_eq!(pi_agent_dir(Some("~/.agents-pig")), home().join(".agents-pig"));
+        // The env var and default depend on the machine; only their shape is checked.
+        let d = pi_agent_dir(None);
+        assert!(d.is_absolute());
+    }
+
+    #[test]
+    fn a_line_suffix_is_split_off() {
+        assert_eq!(split_line("/tmp/nope.rs:42"), ("/tmp/nope.rs", Some(42)));
+        assert_eq!(split_line("/tmp/nope.rs:42:7"), ("/tmp/nope.rs", Some(42)));
+        assert_eq!(split_line("/tmp/nope.rs"), ("/tmp/nope.rs", None));
+        assert_eq!(split_line("/tmp/nope:x"), ("/tmp/nope:x", None));
+    }
+}
