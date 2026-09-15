@@ -42,6 +42,7 @@ pub mod format_zoom;
 
 pub mod fuzzy;
 pub mod palette;
+pub mod palette_usage;
 
 pub mod sidebar;
 
