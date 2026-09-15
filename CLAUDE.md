@@ -6,7 +6,7 @@ The native port of infiniterm: Rust + gpui for the app, CEF for the browser card
 
 ## The specification is the other repo
 
-`~/Code/infiniterm` (Tauri 2 + Svelte 5) is the spec for every feature and rule; since 2026-09-16 the installed app is this port and the Tauri bundle is gone. Before porting a file, read its source and its `.test.ts` there, and the paragraph about it in `~/Code/infiniterm/CLAUDE.md`. Port the tests first. When a document here disagrees with that code, the code wins and the document is fixed. Do not write in that repo: another session works there.
+`~/Code/infiniterm` (Tauri 2 + Svelte 5, archived on GitHub as `ekinertac/infiniterm-tauri`) is the spec for every feature and rule; since 2026-09-16 the installed app is this port, the Tauri bundle is gone, and new features go here only. This repo is `ekinertac/infiniterm` on GitHub. Before porting a file, read its source and its `.test.ts` there, and the paragraph about it in `~/Code/infiniterm/CLAUDE.md`. Port the tests first. When a document here disagrees with that code, the code wins and the document is fixed. Do not write in that repo: another session works there.
 
 The rules in the reference's Non-negotiables and Traps that are not about the DOM apply here unchanged. The ones that shaped the port most: `Cmd` owns every app binding except `ctrl`+digit; chords are built from the physical key; positions are permanent; every viewport change is animated; one tagged event stream for all panes; nothing is mouse-only; `core` knows rects and ids, never what a card body draws.
 
