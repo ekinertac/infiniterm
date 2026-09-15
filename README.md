@@ -2,7 +2,7 @@
 
 Terminal cards on an infinite canvas, with the state of every coding agent visible at a glance.
 
-Tabs stop working somewhere around a dozen shells. Run several coding agents and you cannot tell which are still working and which have finished without cycling through them one at a time. infiniterm puts terminals on a 2D canvas so position carries meaning, and colours each card's border from its agent's state.
+It started as a way out of iTerm2: ten to fifteen tabs, two or three splits in each, some panes made full screen, and at that point the trail is lost and finding one particular session among twenty to fifty means opening them one by one. Every session on one infinite canvas, where each keeps a place, is what fixes that. Running coding agents made it worse: you cannot tell which are still working and which have finished without cycling through them, so infiniterm also colours each card's border from its agent's state.
 
 Reading that state is the point. Being interrupted by it is not: nothing flashes, nothing steals focus, nothing sends a notification. You switch agents when you are ready, not when one finishes.
 
