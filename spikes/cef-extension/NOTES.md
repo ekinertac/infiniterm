@@ -23,3 +23,5 @@ Question: can CEF's Chrome bootstrap run the Claude in Chrome extension, in off-
 The browser card is CEF, Chrome bootstrap, Alloy-style windowless browsers, extension loaded with `--load-extension` (or `CefRequestContext` equivalents once we host it ourselves). The app writes the native messaging manifests into its own cache path at startup, copying from Chrome's directory, so a Claude Code update that rewrites the host path is picked up on the next launch.
 
 Not checked: the extension's side panel (Alloy style has no browser UI for it; the MCP tools did not need it), `chrome.debugger` beyond what `computer` uses, several browsers at once, and the frame path out of `OnPaint`, which is the next spike.
+
+The code of this spike was deleted on 2026-09-16 once its replacement was in the crates (`infiniterm-browser`, `infiniterm-term`, `infiniterm-ui`); `git log -- spikes/cef-extension` has it.

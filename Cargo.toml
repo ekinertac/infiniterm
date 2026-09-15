@@ -1,6 +1,7 @@
 # Native port workspace, used by root-level Cargo commands.
 # Keep the crates separate so UI dependencies cannot leak into the core.
-# The standalone spikes remain references; see HANDOVER.md for the phase plan.
+# The spikes' code is gone (their replacements are the crates); spikes/*/NOTES.md
+# keep the measurements. See HANDOVER.md for the phase plan.
 [workspace]
 members = [
     "infiniterm-core",
@@ -11,7 +12,6 @@ members = [
     "infiniterm-cli",
     "infiniterm-hook",
 ]
-exclude = ["spikes/canvas", "spikes/cef-frame", "spikes/term-zoom"]
 resolver = "2"
 
 [workspace.package]

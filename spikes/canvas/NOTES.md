@@ -26,3 +26,5 @@ osascript -e 'tell application "canvas" to activate'
 ```
 
 Shares `../cef-extension/profile` and `../cef-extension/extension`. `run.log` gets the moat messages and an fps line.
+
+The code of this spike was deleted on 2026-09-16 once its replacement was in the crates (`infiniterm-browser`, `infiniterm-term`, `infiniterm-ui`); `git log -- spikes/canvas` has it.

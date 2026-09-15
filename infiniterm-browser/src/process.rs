@@ -43,13 +43,21 @@ fn chrome_extension() -> Option<PathBuf> {
     versions.pop()
 }
 
+/// Regular files and directories only: a profile holds sockets and locks
+/// (`Singleton*`) that must not travel, and a copy that stops at one of
+/// them would leave half a profile.
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)?.flatten() {
-        let target = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with("Singleton") {
+            continue;
+        }
+        let target = to.join(&name);
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
             copy_dir(&entry.path(), &target)?;
-        } else {
+        } else if kind.is_file() {
             std::fs::copy(entry.path(), target)?;
         }
     }
@@ -72,7 +80,24 @@ pub fn seed(data: &Path) -> Option<PathBuf> {
             ),
         }
     }
-    let hosts = data.join("profile").join("NativeMessagingHosts");
+    // The first profile on this Mac is the spike's, which carries the
+    // claude.ai sign-in the extension connects with; without it the
+    // extension has to be signed in again inside a card. One-time, and
+    // only when there is no profile yet.
+    let profile = data.join("profile");
+    if !profile.join("Default").is_dir() {
+        let spike = infiniterm_core::paths::home_dir()
+            .join("Code/infini-rust/spikes/cef-extension/profile");
+        if spike.join("Default").is_dir() {
+            match copy_dir(&spike, &profile) {
+                Ok(()) => {
+                    eprintln!("[infiniterm] browser profile seeded from the spike's (signed-in extension)");
+                }
+                Err(e) => eprintln!("[infiniterm/warn] could not copy the spike's profile: {e}"),
+            }
+        }
+    }
+    let hosts = profile.join("NativeMessagingHosts");
     let _ = std::fs::create_dir_all(&hosts);
     let src = chrome_support().join("NativeMessagingHosts");
     if let Ok(entries) = std::fs::read_dir(&src) {

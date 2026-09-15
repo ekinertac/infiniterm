@@ -36,3 +36,5 @@ open --stderr "$PWD/run.log" --stdout "$PWD/run.log" target/bundle/cef-frame.app
 ```
 
 `bundle-cef-app` lives in the cef-rs repo (dev branch) and builds the `.app` with the framework and the five helper bundles from `[package.metadata.cef.bundle]`. `.cargo/config.toml` points `CEF_PATH` at the shared CEF download (`export-cef-dir`, ~300 MB, in `~/.local/share/cef`).
+
+The code of this spike was deleted on 2026-09-16 once its replacement was in the crates (`infiniterm-browser`, `infiniterm-term`, `infiniterm-ui`); `git log -- spikes/cef-frame` has it.

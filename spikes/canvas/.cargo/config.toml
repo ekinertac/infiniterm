@@ -1,2 +1,0 @@
-[env]
-CEF_PATH = { value = "/Users/ekinertac/.local/share/cef", force = false }

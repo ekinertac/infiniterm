@@ -34,3 +34,5 @@ open --stderr "$PWD/run.log" --stdout "$PWD/run.log" target/term-zoom.app
 ```
 
 Then click into the window: `1` idle, `2` flood, `space` freezes the zoom. `run.log` gets an fps line per second and a breakdown line for any frame over 12 ms.
+
+The code of this spike was deleted on 2026-09-16 once its replacement was in the crates (`infiniterm-browser`, `infiniterm-term`, `infiniterm-ui`); `git log -- spikes/term-zoom` has it.
