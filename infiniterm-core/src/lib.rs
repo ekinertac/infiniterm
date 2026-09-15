@@ -42,6 +42,7 @@ pub mod format_zoom;
 
 pub mod card_label;
 pub mod config;
+pub mod editor_theme;
 pub mod fuzzy;
 pub mod ift;
 pub mod itermcolors;
@@ -51,6 +52,7 @@ pub mod palette;
 pub mod palette_usage;
 pub mod saved_layout;
 pub mod settings_doc;
+pub mod transcript;
 
 pub mod sidebar;
 
