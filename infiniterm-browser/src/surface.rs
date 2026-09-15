@@ -10,6 +10,21 @@ use crate::moat;
 use cef::*;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
+/// A scale below this makes CEF's layout math degenerate; a card zoomed
+/// far out still asks for a real, paintable surface.
+const MIN_DEVICE_SCALE: f32 = 0.5;
+/// CEF's windowless renderer paints at this rate regardless of the app's
+/// own frame pacing.
+const TARGET_FPS: i32 = 60;
+/// Chromium's zoom levels are powers of this base: level = log(factor) /
+/// log(ZOOM_LEVEL_BASE).
+const ZOOM_LEVEL_BASE: f64 = 1.2;
+/// Windows virtual-key codes for space and enter, needed twice: once in
+/// the RAWKEYDOWN/KEYUP table below, once to decide whether a CHAR event
+/// follows it (CEF's text fields want both for these two keys).
+const VK_SPACE: i32 = 0x20;
+const VK_ENTER: i32 = 0x0D;
+
 /// One painted frame: BGRA, `width * height * 4` bytes.
 pub struct Frame {
     pub width: u32,
@@ -189,7 +204,7 @@ impl Surface {
         let shared = Rc::new(RefCell::new(Shared {
             width: width.max(1),
             height: height.max(1),
-            scale: scale.max(0.5),
+            scale: scale.max(MIN_DEVICE_SCALE),
             ..Default::default()
         }));
         let handler = Handler {
@@ -200,7 +215,7 @@ impl Surface {
             ..Default::default()
         };
         let settings = BrowserSettings {
-            windowless_frame_rate: 60,
+            windowless_frame_rate: TARGET_FPS,
             ..Default::default()
         };
         let mut client = ClientBuilder::new(
@@ -400,8 +415,8 @@ impl Surface {
                     ..Default::default()
                 }));
             }
-            if vk == 0x20 || vk == 0x0D {
-                let ch = if vk == 0x20 { b' ' } else { b'\r' } as u16;
+            if vk == VK_SPACE || vk == VK_ENTER {
+                let ch = if vk == VK_SPACE { b' ' } else { b'\r' } as u16;
                 host.send_key_event(Some(&KeyEvent {
                     type_: KeyEventType::CHAR,
                     modifiers,
@@ -429,8 +444,7 @@ impl Surface {
     /// The page's own zoom as a factor (1 is 100%).
     pub fn set_zoom(&self, factor: f64) {
         if let Some(host) = self.host() {
-            // Chromium's zoom levels: level = log(factor) / log(1.2).
-            host.set_zoom_level(factor.ln() / 1.2f64.ln());
+            host.set_zoom_level(factor.ln() / ZOOM_LEVEL_BASE.ln());
         }
     }
 }
@@ -452,11 +466,11 @@ pub enum Button {
 /// Windows virtual key codes for the keys a page handles by name.
 pub fn virtual_key(name: &str) -> i32 {
     match name {
-        "enter" => 0x0D,
+        "enter" => VK_ENTER,
         "backspace" => 0x08,
         "tab" => 0x09,
         "escape" => 0x1B,
-        "space" => 0x20,
+        "space" => VK_SPACE,
         "pageup" => 0x21,
         "pagedown" => 0x22,
         "end" => 0x23,
