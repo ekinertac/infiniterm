@@ -31,7 +31,7 @@ tools/drive/                the GUI driver: lib.sh (drive_start, cmd, key, type_
 Makefile                    run, run-fresh, stop, log, test, check, fmt, clippy, drive*, shot, release
 ```
 
-Phases 0 to 4 are complete: real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links, drag selection with Cmd+C, cursor blink, the inactive scrim, spawn errors, OSC 52, `dev.stress.*`). Open from Phase 4: the flood number (26 cards of `yes` at 8% paint at 22 fps; reference is 45 to 60) and the Turkish-Q chord check. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
+Phases 0 to 4 are complete: real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links, drag selection with Cmd+C, cursor blink, the inactive scrim, spawn errors, OSC 52, `dev.stress.*`). 26 flooding cards paint at 68 fps and a zoom over 26 idle cards at 43 to 96 (reference 45 to 60 and 60). Open from Phase 4: the Turkish-Q chord check. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
 
 Things decided while drawing terminals, not in the reference:
 
@@ -42,6 +42,7 @@ Things decided while drawing terminals, not in the reference:
 - The shortcuts panel is a centred filterable overlay, not a sidebar.
 - A text selection lives in the grid (alacritty's `Selection`, grid points), so it stays on its text through a scroll; selected cells take the app's selection pair in `Grid::frame`, never the theme's. A body that starts a drag says so (`captures_drag`) and gets the moves and the release wherever the pointer goes (`AppView::body_drag`).
 - The cursor blinks from a clock the body gets at paint (`now`); `wants_frame(now)` reports the next flip so the poll task requests a frame then and not every tick.
+- A body keeps its `Frame` and `Grid::update_frame` rebuilds only the rows alacritty damaged (a selection, scroll, resize or palette change is a full rebuild); links are rescanned for those rows only. Rebuilding every row of 26 cards was 17 ms a frame and trimming them for links another 10. The dev profile optimises dependencies so the driver's numbers are gpui's real ones.
 
 ## Commands
 

@@ -85,9 +85,33 @@ impl AppView {
         self.start_glides(now);
         self.reconcile_bodies();
         self.reconcile_terminals(window);
+        let t0 = std::time::Instant::now();
         self.feed_terminals(now, cx);
+        let t1 = std::time::Instant::now();
         self.paint_world(bounds, now, window, cx);
+        let t2 = std::time::Instant::now();
         self.schedule_save(now);
+        // Where a frame goes, once a second, for the stress numbers.
+        if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+            self.timing.0 += (t1 - t0).as_secs_f64() * 1000.;
+            self.timing.1 += (t2 - t1).as_secs_f64() * 1000.;
+            self.timing.2 += 1;
+            if now - self.timing.3 >= 1000. {
+                let n = self.timing.2.max(1) as f64;
+                let b = crate::terminal_body::timing_take();
+                eprintln!(
+                    "[paint] {} frames: feed {:.1} ms, paint {:.1} ms per frame (frame {:.1}, links {:.1}, shape {:.1}, glyphs {:.1})",
+                    self.timing.2,
+                    self.timing.0 / n,
+                    self.timing.1 / n,
+                    b[0] / n,
+                    b[1] / n,
+                    b[2] / n,
+                    b[3] / n
+                );
+                self.timing = (0., 0., 0, now);
+            }
+        }
     }
 
     /// Every card gets a body once; a closed card's body goes with it.

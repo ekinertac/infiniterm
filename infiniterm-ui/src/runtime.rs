@@ -53,6 +53,7 @@ impl AppView {
             marked: Default::default(),
             frames: 0,
             fps_window: std::time::Instant::now(),
+            timing: (0., 0., 0, 0.),
             fps: 0.,
             themes_dir: PathBuf::new(),
             scale_factor,

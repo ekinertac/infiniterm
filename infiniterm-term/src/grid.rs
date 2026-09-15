@@ -14,9 +14,9 @@ use crate::palette::Palette;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point, Side};
-use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::selection::{Selection, SelectionRange, SelectionType};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::{viewport_to_point, Config, Term, TermMode};
+use alacritty_terminal::term::{viewport_to_point, Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -98,22 +98,23 @@ pub struct Run {
     pub dim: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Row {
     pub runs: Vec<Run>,
     /// The row as text, for links and selection.
     pub text: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CursorKind {
     Block,
     Beam,
     Underline,
+    #[default]
     Hidden,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Frame {
     pub rows: Vec<Row>,
     pub cursor: (usize, usize),
@@ -121,6 +122,9 @@ pub struct Frame {
     /// How far up the scrollback the view is; 0 at the bottom.
     pub display_offset: usize,
     pub cols: usize,
+    /// Whether any row carries selection colours, so clearing the
+    /// selection rebuilds them.
+    pub selected: bool,
 }
 
 pub struct Grid {
@@ -128,6 +132,9 @@ pub struct Grid {
     processor: Processor,
     events: Listener,
     size: Size,
+    /// Something outside alacritty's damage tracking changed (the palette,
+    /// a resize): the next frame rebuilds every row.
+    full_dirty: bool,
 }
 
 impl Grid {
@@ -146,6 +153,7 @@ impl Grid {
             processor: Processor::new(),
             events,
             size,
+            full_dirty: true,
         }
     }
 
@@ -172,6 +180,7 @@ impl Grid {
         }
         self.size = size;
         self.term.resize(size);
+        self.full_dirty = true;
         true
     }
 
@@ -223,6 +232,11 @@ impl Grid {
 
     pub fn clear_selection(&mut self) {
         self.term.selection = None;
+    }
+
+    /// The palette changed: every resolved colour is stale.
+    pub fn set_palette_changed(&mut self) {
+        self.full_dirty = true;
     }
 
     /// Scrolls the view by `lines` (positive is up into history).
@@ -278,29 +292,122 @@ impl Grid {
             .advance(&mut self.term, b"\x1b[H\x1b[2J\x1b[3J");
     }
 
-    /// The visible rows with resolved colours. `palette` decides what every
-    /// named and indexed colour paints as; a cell's own RGB stays its own.
-    pub fn frame(&self, palette: &Palette) -> Frame {
-        let content = self.term.renderable_content();
+    /// The visible rows with resolved colours, built from scratch. `palette`
+    /// decides what every named and indexed colour paints as; a cell's own
+    /// RGB stays its own. Tests and one-off callers; the body keeps a
+    /// `Frame` and uses `update_frame`.
+    pub fn frame(&mut self, palette: &Palette) -> Frame {
+        let mut frame = Frame::default();
+        self.update_frame(palette, &mut frame);
+        frame
+    }
+
+    /// Brings `frame` up to date, rebuilding only the rows alacritty marks
+    /// damaged since the last call: a prompt redraw touches one row, and
+    /// twenty-five idle cards under a zoom touch none. A scroll, a resize, a
+    /// selection or a palette change rebuilds everything. Builds from
+    /// scratch when `frame` is another size. Returns the rows rebuilt, so
+    /// the caller's own per-row work (links) can skip the rest too.
+    pub fn update_frame(&mut self, palette: &Palette, frame: &mut Frame) -> Vec<usize> {
         let cols = self.size.cols;
         let rows = self.size.rows;
-        let offset = content.display_offset as i32;
-        let selection = content.selection;
-        let mut out: Vec<Row> = (0..rows)
-            .map(|_| Row {
-                runs: Vec::new(),
-                text: String::with_capacity(cols),
-            })
-            .collect();
-        for cell in content.display_iter {
-            // Grid lines run negative into history; the view starts `offset`
-            // lines up, so the viewport row is the line plus the offset.
-            let row = cell.point.line.0 + offset;
-            if row < 0 || row as usize >= rows {
+        let offset = self.term.grid().display_offset();
+        let (selection, cursor_shape, cursor_point) = {
+            let content = self.term.renderable_content();
+            (
+                content.selection,
+                content.cursor.shape,
+                content.cursor.point,
+            )
+        };
+        let fresh = frame.rows.len() != rows || frame.cols != cols;
+        let full = fresh || self.full_dirty || selection.is_some() || frame.selected;
+        self.full_dirty = false;
+        let damaged: Vec<usize> = if full {
+            (0..rows).collect()
+        } else {
+            match self.term.damage() {
+                TermDamage::Full => (0..rows).collect(),
+                TermDamage::Partial(lines) => lines.map(|l| l.line).filter(|l| *l < rows).collect(),
+            }
+        };
+        self.term.reset_damage();
+        if fresh {
+            frame.rows = (0..rows)
+                .map(|_| Row {
+                    runs: Vec::new(),
+                    text: String::with_capacity(cols),
+                })
+                .collect();
+        }
+        frame.selected = selection.is_some();
+        for &line in &damaged {
+            let mut row = std::mem::take(&mut frame.rows[line]);
+            self.build_row(line, offset, selection.as_ref(), palette, &mut row);
+            frame.rows[line] = row;
+        }
+        frame.cursor_kind = match cursor_shape {
+            CursorShape::Block => CursorKind::Block,
+            CursorShape::Beam => CursorKind::Beam,
+            CursorShape::Underline => CursorKind::Underline,
+            CursorShape::HollowBlock => CursorKind::Block,
+            CursorShape::Hidden => CursorKind::Hidden,
+        };
+        let Point {
+            line: Line(line),
+            column: Column(col),
+        } = cursor_point;
+        frame.cursor = (col, line.max(0) as usize);
+        frame.display_offset = offset;
+        frame.cols = cols;
+        damaged
+    }
+
+    /// One viewport row as runs, into `out` (its buffers reused).
+    fn build_row(
+        &self,
+        line: usize,
+        offset: usize,
+        selection: Option<&SelectionRange>,
+        palette: &Palette,
+        out: &mut Row,
+    ) {
+        out.runs.clear();
+        out.text.clear();
+        let grid_line = Line(line as i32 - offset as i32);
+        let row = &self.term.grid()[grid_line];
+        for col in 0..self.size.cols {
+            let cell = &row[Column(col)];
+            let flags = cell.flags;
+            let point = Point::new(grid_line, Column(col));
+            let selected = selection.is_some_and(|s| s.contains(point));
+            // The common cell is a blank on the default ground: it joins the
+            // run before it, or starts one in the default colour, and
+            // nothing is resolved. Most of a screen is this, and a flood of
+            // short lines is nearly all of it.
+            if cell.c == ' '
+                && flags.is_empty()
+                && !selected
+                && matches!(cell.bg, Color::Named(NamedColor::Background))
+            {
+                out.text.push(' ');
+                match out.runs.last_mut() {
+                    Some(last) if last.bg.is_none() && !last.underline && !last.strikeout => {
+                        last.text.push(' ')
+                    }
+                    _ => out.runs.push(Run {
+                        text: " ".to_string(),
+                        fg: palette.foreground,
+                        bg: None,
+                        bold: false,
+                        italic: false,
+                        underline: false,
+                        strikeout: false,
+                        dim: false,
+                    }),
+                }
                 continue;
             }
-            let row = row as usize;
-            let flags = cell.flags;
             let (mut fg, mut bg) = (cell.fg, cell.bg);
             if flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
@@ -315,7 +422,7 @@ impl Grid {
             // the reference pushes the same pair into every xterm, because a
             // theme's own selection colour is chosen against a prompt and
             // vanishes on a page of anything.
-            if selection.is_some_and(|s| s.contains(cell.point)) {
+            if selected {
                 fg_rgb = palette.selection_text;
                 bg_rgb = Some(palette.selection);
             }
@@ -339,9 +446,8 @@ impl Grid {
             } else {
                 cell.c
             };
-            let r = &mut out[row];
-            r.text.push(ch);
-            match r.runs.last_mut() {
+            out.text.push(ch);
+            match out.runs.last_mut() {
                 Some(last)
                     if last.fg == run.fg
                         && last.bg == run.bg
@@ -356,31 +462,9 @@ impl Grid {
                 _ => {
                     let mut run = run;
                     run.text.push(ch);
-                    r.runs.push(run);
+                    out.runs.push(run);
                 }
             }
-        }
-        let cursor_kind = if self.term.mode().contains(TermMode::SHOW_CURSOR) {
-            match content.cursor.shape {
-                CursorShape::Block => CursorKind::Block,
-                CursorShape::Beam => CursorKind::Beam,
-                CursorShape::Underline => CursorKind::Underline,
-                CursorShape::HollowBlock => CursorKind::Block,
-                CursorShape::Hidden => CursorKind::Hidden,
-            }
-        } else {
-            CursorKind::Hidden
-        };
-        let Point {
-            line: Line(line),
-            column: Column(col),
-        } = content.cursor.point;
-        Frame {
-            rows: out,
-            cursor: (col, line.max(0) as usize),
-            cursor_kind,
-            display_offset: content.display_offset,
-            cols,
         }
     }
 }
@@ -405,7 +489,7 @@ mod tests {
         assert_eq!(text(&f)[..2], ["hello red", "world"]);
         let first = &f.rows[0].runs;
         assert_eq!(first[0].text, "hello ");
-        assert_eq!(first[1].text, "red");
+        assert_eq!(first[1].text.trim_end(), "red"); // the blanks after it join the run
         assert_ne!(first[0].fg, first[1].fg);
         assert_eq!(f.cursor, (5, 1));
     }
@@ -506,6 +590,40 @@ mod tests {
         let f = g.frame(&p);
         assert!(f.rows[1].runs.iter().any(|r| r.bg == Some(p.selection)));
         assert!(!f.rows[0].runs.iter().any(|r| r.bg == Some(p.selection)));
+    }
+
+    #[test]
+    fn update_rebuilds_only_the_damaged_rows() {
+        let p = Palette::default_palette();
+        let mut g = Grid::new(10, 3, 100);
+        g.advance(b"one\r\ntwo\r\nthree\r\nfour\r\nfive");
+        let mut f = g.frame(&p);
+        // Sentinels show which rows the next update leaves alone.
+        for r in &mut f.rows {
+            r.text = "KEPT".into();
+        }
+        g.advance(b"\x1b[1;1HONE"); // overwrite row 0 in place
+        let rebuilt = g.update_frame(&p, &mut f);
+        assert!(rebuilt.contains(&0) && !rebuilt.contains(&1));
+        assert_eq!(f.rows[0].text.trim_end(), "ONEee"); // "three" overwritten in place
+        assert_eq!(f.rows[1].text, "KEPT");
+        // The cursor row (row 0, where it now sits) and the row it left
+        // (row 2) are damaged by alacritty's cursor rule; row 1 is not.
+        g.scroll(1);
+        g.update_frame(&p, &mut f);
+        assert!(
+            f.rows.iter().all(|r| r.text != "KEPT"),
+            "a scroll rebuilds all"
+        );
+        for r in &mut f.rows {
+            r.text = "KEPT".into();
+        }
+        g.set_palette_changed();
+        g.update_frame(&p, &mut f);
+        assert!(
+            f.rows.iter().all(|r| r.text != "KEPT"),
+            "a palette change rebuilds all"
+        );
     }
 
     #[test]

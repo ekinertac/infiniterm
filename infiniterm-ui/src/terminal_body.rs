@@ -39,6 +39,25 @@ use infiniterm_term::palette::Palette;
 /// Inset from the card's edge to the first cell, in world units.
 const PAD: f64 = 6.;
 
+thread_local! {
+    /// Milliseconds spent this second in frame building, link scanning,
+    /// shaping and glyph painting, summed over every body; `paint.rs`
+    /// reports and resets it under `INFINITERM_KEYLOG`.
+    static TIMING: std::cell::Cell<[f64; 4]> = const { std::cell::Cell::new([0.; 4]) };
+}
+
+pub fn timing_take() -> [f64; 4] {
+    TIMING.with(|t| t.replace([0.; 4]))
+}
+
+fn timing_add(slot: usize, since: std::time::Instant) {
+    TIMING.with(|t| {
+        let mut v = t.get();
+        v[slot] += since.elapsed().as_secs_f64() * 1000.;
+        t.set(v);
+    });
+}
+
 /// Half a blink, xterm.js's interval. The cursor is solid for this long
 /// after any key, so it never blinks away while you type.
 const BLINK_MS: f64 = 600.;
@@ -72,6 +91,9 @@ pub struct TerminalBody {
     painted_focused: bool,
     /// A drag selecting text.
     selecting: bool,
+    /// The rows as last built; `Grid::update_frame` touches only the
+    /// damaged ones.
+    frame: Frame,
     /// The last frame's links, per row, with whether the filesystem said yes.
     links: Vec<Vec<(Found, Option<PathKind>)>>,
     link_texts: Vec<String>,
@@ -130,6 +152,7 @@ impl TerminalBody {
             painted_phase: true,
             painted_focused: false,
             selecting: false,
+            frame: Frame::default(),
             links: vec![],
             link_texts: vec![],
             hover: None,
@@ -176,6 +199,8 @@ impl TerminalBody {
 
     pub fn set_palette(&mut self, palette: Palette) {
         self.palette = palette;
+        self.grid.set_palette_changed();
+        self.dirty = true;
     }
 
     /// Metrics changed (a settings edit): the grid is re-counted, which the
@@ -255,20 +280,33 @@ impl TerminalBody {
             .find(|(f, _)| f.start <= byte && byte < f.end)
     }
 
-    /// Re-scans the rows that changed for links and asks the filesystem
-    /// about the paths, so a version number is never underlined.
-    fn refresh_links(&mut self, frame: &Frame) {
-        let texts: Vec<String> = frame
-            .rows
-            .iter()
-            .map(|r| r.text.trim_end().to_string())
-            .collect();
-        if texts == self.link_texts {
-            return;
+    /// Re-scans the rows that were rebuilt for links and asks the
+    /// filesystem about the paths, so a version number is never underlined.
+    /// Only rebuilt rows are looked at: trimming every row of every card
+    /// each frame was 10 ms by itself. A row without a slash or a dot
+    /// cannot hold a link and is not scanned.
+    fn refresh_links(&mut self, frame: &Frame, rebuilt: &[usize]) {
+        self.link_texts.resize(frame.rows.len(), String::new());
+        self.links.resize(frame.rows.len(), vec![]);
+        for &r in rebuilt {
+            let row = &frame.rows[r];
+            let line = row.text.trim_end();
+            if line == self.link_texts[r] {
+                continue;
+            }
+            self.link_texts[r].clear();
+            self.link_texts[r].push_str(line);
+            self.links[r] = if line.contains(['/', '.']) {
+                Self::scan_links(line, &self.cwd)
+            } else {
+                vec![]
+            };
         }
-        self.links = texts
-            .iter()
-            .map(|line| {
+    }
+
+    fn scan_links(line: &str, cwd: &str) -> Vec<(Found, Option<PathKind>)> {
+        {
+            {
                 let found = find_links(line);
                 let paths: Vec<&str> = found
                     .iter()
@@ -278,7 +316,7 @@ impl TerminalBody {
                 let kinds = if paths.is_empty() {
                     vec![]
                 } else {
-                    path_kinds(&self.cwd, &paths)
+                    path_kinds(cwd, &paths)
                 };
                 let mut ki = kinds.into_iter();
                 found
@@ -296,9 +334,8 @@ impl TerminalBody {
                         },
                     })
                     .collect()
-            })
-            .collect();
-        self.link_texts = texts;
+            }
+        }
     }
 
     fn resolve_against(&self, path: &str, home: &str) -> String {
@@ -385,8 +422,13 @@ impl CardBody for TerminalBody {
             self.paint_error(&error, bounds, scale, window, cx);
             return;
         }
-        let frame = self.grid.frame(&self.palette);
-        self.refresh_links(&frame);
+        let t = std::time::Instant::now();
+        let mut frame = std::mem::take(&mut self.frame);
+        let rebuilt = self.grid.update_frame(&self.palette, &mut frame);
+        timing_add(0, t);
+        let t = std::time::Instant::now();
+        self.refresh_links(&frame, &rebuilt);
+        timing_add(1, t);
         window.paint_quad(fill(bounds, rgb(self.palette.background)));
         let font_size = px((self.font_px * scale) as f32);
         let line_h = px((self.font_px * self.line_height * scale) as f32);
@@ -426,6 +468,7 @@ impl CardBody for TerminalBody {
             }
         }
         if !legible {
+            self.frame = frame;
             self.paint_scrim(bounds, focused, window);
             return;
         }
@@ -492,9 +535,12 @@ impl CardBody for TerminalBody {
                 self.shaped.resize(r + 1, (0, vec![]));
             }
             if self.shaped[r].0 != key {
+                let t = std::time::Instant::now();
                 let chunks = shape_row(row, &base, font_size, window);
                 self.shaped[r] = (key, chunks);
+                timing_add(2, t);
             }
+            let t = std::time::Instant::now();
             for (col, line) in &self.shaped[r].1 {
                 let _ = line.paint(
                     point(origin.x + cell_w * *col as f32, y),
@@ -503,7 +549,9 @@ impl CardBody for TerminalBody {
                     cx,
                 );
             }
+            timing_add(3, t);
         }
+        self.frame = frame;
         self.paint_scrim(bounds, focused, window);
     }
 

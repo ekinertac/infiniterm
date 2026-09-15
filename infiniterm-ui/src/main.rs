@@ -104,6 +104,8 @@ pub struct AppView {
     pub frames: u32,
     pub fps_window: Instant,
     pub fps: f32,
+    /// Under `INFINITERM_KEYLOG`: feed ms, paint ms, frames, last report.
+    pub timing: (f64, f64, u32, f64),
     pub themes_dir: std::path::PathBuf,
     pub scale_factor: f32,
     pub scheduler: infiniterm_term::scheduler::OutputScheduler,

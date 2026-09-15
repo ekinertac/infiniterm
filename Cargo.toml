@@ -17,3 +17,10 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 publish = false
+
+# The debug build is what the driver measures, and the reference's numbers
+# come from a Vite dev build whose JavaScript is JIT-compiled all the same.
+# Optimising the dependencies (gpui's glyph paint, alacritty's parser) keeps
+# the comparison honest while the port's own crates still build in seconds.
+[profile.dev.package."*"]
+opt-level = 3
