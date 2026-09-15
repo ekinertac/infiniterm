@@ -13,4 +13,6 @@ publish.workspace = true
 serde = { version = "1", features = ["derive"] }
 # preserve_order: the defaults file and the save file are rendered from
 # values and must keep the reference's key order, not alphabetical.
-serde_json = { version = "1", features = ["preserve_order"] }
+# float_roundtrip: without it serde_json parses -2308.9849719816602 one ULP
+# off, and the save file would drift by a bit on every load/save cycle.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }

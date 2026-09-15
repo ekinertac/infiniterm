@@ -46,6 +46,7 @@ pub mod itermcolors;
 pub mod jsonc;
 pub mod palette;
 pub mod palette_usage;
+pub mod saved_layout;
 pub mod settings_doc;
 
 pub mod sidebar;
