@@ -35,12 +35,12 @@ pub mod workspaces_cmd;
 
 use crate::agent_state::AgentState;
 use crate::backend::PaneId;
-use crate::cards::{default_size, GUTTER, TYPICAL_CARDS};
+use crate::cards::{default_size, GUTTER};
 use crate::config::{default_config, Config};
 use crate::grid::{Point, Rect, Size, HALF_CELL};
 use crate::groups::{group_bounds, GROUP_PAD, UNGROUPED};
 use crate::keymap::{default_keymap, Keymap};
-use crate::layout::{best_cols, first_free_slot, slot_index};
+use crate::layout::nearest_free_slot;
 use crate::palette_usage::Usage;
 use crate::saved_layout::CardKind;
 use crate::slots::Slot;
@@ -449,22 +449,11 @@ impl Model {
         )
     }
 
-    fn cols(&self, size: Size) -> usize {
-        best_cols(
-            TYPICAL_CARDS,
-            size.w,
-            size.h,
-            GUTTER,
-            self.view_size.w,
-            self.view_size.h,
-        )
-    }
-
-    /// The first free slot in reading order, not the next index. `origin`
-    /// moves where the scan starts (a card joining a group starts from its
-    /// siblings); `after` starts one past the active card, so the new one
-    /// opens beside it, the tab habit. Only cards on the SAME canvas are in
-    /// the way.
+    /// The free slot nearest the active card (`after`), so a new card opens
+    /// beside the one it came from wherever that is; the window's shape
+    /// decides when a row ends (`layout::nearest_free_slot`). `origin`
+    /// moves the grid's anchor (a card joining a group starts from its
+    /// siblings). Only cards on the SAME canvas are in the way.
     fn next_slot(
         &self,
         origin: Option<Point>,
@@ -477,7 +466,6 @@ impl Model {
             x: HALF_CELL,
             y: HALF_CELL,
         });
-        let cols = self.cols(size);
         let mut taken: Vec<Rect> = self
             .cards
             .iter()
@@ -485,10 +473,12 @@ impl Model {
             .map(|c| c.rect)
             .collect();
         taken.extend_from_slice(avoid);
-        let from = after.map_or(0, |a| {
-            slot_index(Point { x: a.x, y: a.y }, size, origin, GUTTER, cols) + 1
-        });
-        first_free_slot(&taken, size, origin, GUTTER, cols, 10_000, from)
+        let aspect = if self.view_size.h > 0. {
+            self.view_size.w / self.view_size.h
+        } else {
+            1.8
+        };
+        nearest_free_slot(&taken, size, origin, GUTTER, after, aspect)
     }
 
     pub fn add_card(&mut self, cwd: &str, opts: NewCard) -> String {
