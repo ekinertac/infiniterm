@@ -26,6 +26,38 @@ use infiniterm_core::viewport::{ease_out_cubic, Viewport};
 /// names them.
 const MID_ZOOM_MAX: f64 = 0.6;
 
+/// A grid line snaps to the middle of its pixel, so a 1px stroke sits on a
+/// pixel rather than straddling two.
+const GRID_LINE_SNAP_OFFSET: f32 = 0.5;
+/// A group's name tab is taller than its text, for a little air above the
+/// frame it labels.
+const GROUP_LABEL_TAB_HEIGHT_RATIO: f32 = 1.6;
+/// A selected-but-unfocused card's ring is half as strong as the focused
+/// one's, so the focused card still reads as THE one.
+const SELECTED_UNFOCUSED_RING_ALPHA_SCALE: f32 = 0.5;
+/// A slot-pick hint (the letter you press) is big enough to read from
+/// across the canvas, not just up close.
+const SLOT_HINT_FONT_PX: f32 = 48.;
+/// A label centred vertically on a point sits in a box twice its font
+/// size tall, half above the point and half below.
+const CENTERED_LABEL_HEIGHT_SCALE: f32 = 2.;
+/// The slot hint's badge is also widened to twice its text, for a click
+/// target bigger than the letter itself.
+const HINT_BOX_WIDTH_PAD_SCALE: f32 = 2.;
+/// An alignment guide is a hint, not a border: visible but not shouting.
+const ALIGNMENT_GUIDE_ALPHA: f32 = 0.8;
+/// A phantom's key label is larger than the corner labels, since it is the
+/// one thing on an empty slot to read.
+const PHANTOM_LABEL_SCALE: f32 = 1.4;
+/// The corner labels (name, kind badges, remote) read small at the
+/// setting's literal size; 1.2x is Ekin's ask.
+const CORNER_LABEL_SCALE: f32 = 1.2;
+/// A corner label's badge is taller than its text, for click room.
+const LABEL_BADGE_HEIGHT_RATIO: f32 = 1.5;
+/// Below `MID_ZOOM_MAX` the corner label is unreadable, so the mid-zoom
+/// label is drawn twice as large again.
+const MID_ZOOM_LABEL_SCALE: f32 = 2.4;
+
 pub fn screen_rect(rect: Rect, vp: Viewport) -> Bounds<Pixels> {
     Bounds::new(
         point(
@@ -167,17 +199,18 @@ impl AppView {
         // The grid, one line per world coordinate, +0.5 so a 1 px stroke sits
         // on a pixel rather than straddling two.
         if is_grid_visible(vp.scale) {
+            let hairline = px(crate::chrome::HAIRLINE_PX as f32);
             for x in grid_line_offsets(vp.x, view.w, vp.scale) {
-                let sx = origin.x + px(x.round() as f32 + 0.5);
+                let sx = origin.x + px(x.round() as f32 + GRID_LINE_SNAP_OFFSET);
                 window.paint_quad(fill(
-                    Bounds::new(point(sx, origin.y), size(px(1.), bounds.size.height)),
+                    Bounds::new(point(sx, origin.y), size(hairline, bounds.size.height)),
                     chrome.grid_line,
                 ));
             }
             for y in grid_line_offsets(vp.y, view.h, vp.scale) {
-                let sy = origin.y + px(y.round() as f32 + 0.5);
+                let sy = origin.y + px(y.round() as f32 + GRID_LINE_SNAP_OFFSET);
                 window.paint_quad(fill(
-                    Bounds::new(point(origin.x, sy), size(bounds.size.width, px(1.))),
+                    Bounds::new(point(origin.x, sy), size(bounds.size.width, hairline)),
                     chrome.grid_line,
                 ));
             }
@@ -223,7 +256,7 @@ impl AppView {
                 &chrome.ui_font,
                 chrome.group_label_fg,
             );
-            let h = label_px * 1.6;
+            let h = label_px * GROUP_LABEL_TAB_HEIGHT_RATIO;
             let tab = Bounds::new(
                 point(b.origin.x, b.origin.y - h),
                 size(line.width + label_px, h),
@@ -313,7 +346,12 @@ impl AppView {
             // The ring sits OUTSIDE the border so the border stays free for agent state.
             if focused || selected {
                 let ring = px(focus_ring_screen_px(vp.scale) as f32);
-                let alpha = focus_ring_alpha(vp.scale) as f32 * if focused { 1. } else { 0.5 };
+                let alpha = focus_ring_alpha(vp.scale) as f32
+                    * if focused {
+                        1.
+                    } else {
+                        SELECTED_UNFOCUSED_RING_ALPHA_SCALE
+                    };
                 let rb = Bounds::new(
                     point(b.origin.x - ring, b.origin.y - ring),
                     size(b.size.width + ring * 2., b.size.height + ring * 2.),
@@ -335,7 +373,7 @@ impl AppView {
             if let Some(hint) = sel.hints.get(&card.id) {
                 // Big enough to read from across the canvas, over the body
                 // rather than in a corner.
-                let hp = px(48. * inv * vp.scale as f32);
+                let hp = px(SLOT_HINT_FONT_PX * inv * vp.scale as f32);
                 let line = crate::text::shape(
                     window,
                     &hint.to_string(),
@@ -348,7 +386,10 @@ impl AppView {
                         b.origin.x + b.size.width / 2. - line.width,
                         b.origin.y + b.size.height / 2. - hp,
                     ),
-                    size(line.width * 2., hp * 2.),
+                    size(
+                        line.width * HINT_BOX_WIDTH_PAD_SCALE,
+                        hp * CENTERED_LABEL_HEIGHT_SCALE,
+                    ),
                 );
                 window.paint_quad(fill(hb, chrome.sel_bg));
                 crate::text::paint_in(window, cx, &line, hb, line.width / 2.);
@@ -364,22 +405,23 @@ impl AppView {
                 .filter(|c| !moving.contains(&c.id))
                 .map(|c| c.rect)
                 .collect();
+            let hairline = px(crate::chrome::HAIRLINE_PX as f32);
             for g in infiniterm_core::alignment::guides(first.rect, &others) {
                 let sx = |x: f64| origin.x + px(((x - vp.x) * vp.scale) as f32);
                 let sy = |y: f64| origin.y + px(((y - vp.y) * vp.scale) as f32);
                 let line = match g.axis {
                     infiniterm_core::alignment::Axis::Vertical => Bounds::new(
                         point(sx(g.at), sy(g.from)),
-                        size(px(1.), sy(g.to) - sy(g.from)),
+                        size(hairline, sy(g.to) - sy(g.from)),
                     ),
                     infiniterm_core::alignment::Axis::Horizontal => Bounds::new(
                         point(sx(g.from), sy(g.at)),
-                        size(sx(g.to) - sx(g.from), px(1.)),
+                        size(sx(g.to) - sx(g.from), hairline),
                     ),
                 };
                 window.paint_quad(fill(
                     line,
-                    crate::chrome::with_alpha(chrome.focus_ring, 0.8),
+                    crate::chrome::with_alpha(chrome.focus_ring, ALIGNMENT_GUIDE_ALPHA),
                 ));
             }
         }
@@ -409,14 +451,17 @@ impl AppView {
             Some(k) => k.to_string(),
             None => "+ New card".to_string(),
         };
-        let fp = px(self.model.config.ui.card_label_size as f32 * 1.4 * inv * scale as f32);
+        let fp = px(self.model.config.ui.card_label_size as f32
+            * PHANTOM_LABEL_SCALE
+            * inv
+            * scale as f32);
         let line = crate::text::shape(window, &text, fp, &chrome.mono_font, color);
         let tb = Bounds::new(
             point(
                 b.origin.x + b.size.width / 2. - line.width / 2.,
                 b.origin.y + b.size.height / 2. - fp,
             ),
-            size(line.width, fp * 2.),
+            size(line.width, fp * CENTERED_LABEL_HEIGHT_SCALE),
         );
         crate::text::paint_in(window, cx, &line, tb, px(0.));
     }
@@ -434,8 +479,10 @@ impl AppView {
     ) {
         let chrome = &self.chrome;
         let inv = inverse_scale(scale, self.model.ui_scale) as f32;
-        // 1.2x the setting: at Ekin's ask, the corner labels read small.
-        let label_px = px(self.model.config.ui.card_label_size as f32 * 1.2 * inv * scale as f32);
+        let label_px = px(self.model.config.ui.card_label_size as f32
+            * CORNER_LABEL_SCALE
+            * inv
+            * scale as f32);
         let border = px(CARD_BORDER_SCREEN_PX as f32);
         let label = self.model.label_of(card);
         let identity = label_color(&card.id, chrome.theme.as_ref()).and_then(crate::chrome::hex);
@@ -446,7 +493,7 @@ impl AppView {
             ),
             _ => (chrome.control_bg, chrome.card_label_fg),
         };
-        let h = label_px * 1.5;
+        let h = label_px * LABEL_BADGE_HEIGHT_RATIO;
         let mut right = b.origin.x + b.size.width - border;
         if !label.is_empty() {
             // The head ellipsises from the left, the tail never does: the last
@@ -515,14 +562,17 @@ impl AppView {
             crate::text::paint_in(window, cx, &line, rb, label_px / 2.);
         }
         if mid && !label.is_empty() {
-            let big = px(self.model.config.ui.card_label_size as f32 * 2.4 * inv * scale as f32);
+            let big = px(self.model.config.ui.card_label_size as f32
+                * MID_ZOOM_LABEL_SCALE
+                * inv
+                * scale as f32);
             let line = crate::text::shape(window, &label, big, &chrome.ui_font, chrome.text_bright);
             let mb = Bounds::new(
                 point(
                     b.origin.x + b.size.width / 2. - line.width / 2.,
                     b.origin.y + b.size.height / 2. - big,
                 ),
-                size(line.width, big * 2.),
+                size(line.width, big * CENTERED_LABEL_HEIGHT_SCALE),
             );
             crate::text::paint_in(window, cx, &line, mb, px(0.));
         }
