@@ -23,6 +23,45 @@ use infiniterm_core::workspaces::{waiting_count, working_count};
 /// Rows the palette shows at once; the selection is kept inside the window.
 const PALETTE_ROWS: usize = 14;
 
+/// The workspace tabs' label size, shared by the "+" new-tab control.
+const TAB_LABEL_FONT_PX: f32 = 12.;
+/// A workspace's waiting/working dot: a hint, not a badge.
+const TAB_DOT_PX: f32 = 6.;
+/// The working dot is dimmer than the waiting one, so a card still running
+/// doesn't visually shout as loud as one already asking for you.
+const TAB_WORKING_DOT_ALPHA: f32 = 0.6;
+/// The title bar's tabs start clear of the traffic lights.
+const TITLE_BAR_TRAFFIC_LIGHT_INSET_PX: f32 = 84.;
+/// Below this the status bar's fps reads as a stall, not a frame rate.
+const LOW_FPS_THRESHOLD: f32 = 50.;
+/// A palette section heading ("recent", and so on).
+const PALETTE_SECTION_FONT_PX: f32 = 10.;
+/// The small text inside a keycap badge, in a palette hint or the
+/// shortcuts panel.
+const KEY_CAP_FONT_PX: f32 = 10.;
+/// A secondary caption below an overlay's title: the prompt's label, and
+/// the shortcuts panel's section and gesture headings.
+const CAPTION_FONT_PX: f32 = 11.;
+/// An overlay's body text: the palette's rows, the prompt's field, the
+/// shortcuts list.
+const OVERLAY_BODY_FONT_PX: f32 = 13.;
+/// The palette and shortcuts panel sit this far from the top, clear of the
+/// title bar.
+const OVERLAY_TOP_PAD_PX: f32 = 80.;
+const PALETTE_WIDTH_PX: f32 = 640.;
+/// The prompt sits lower than the palette: it interrupts one action, not a
+/// search.
+const PROMPT_TOP_PAD_PX: f32 = 120.;
+const PROMPT_WIDTH_PX: f32 = 480.;
+/// The shortcuts list scrolls past this height rather than growing the
+/// window to fit every command.
+const SHORTCUTS_LIST_MAX_H_PX: f32 = 720.;
+/// A shortcuts or gestures row's vertical padding.
+const SHORTCUTS_ROW_PAD_PX: f32 = 4.;
+const SHORTCUTS_WIDTH_PX: f32 = 680.;
+/// The shortcuts panel's own title, larger than its rows: read first.
+const PANEL_TITLE_FONT_PX: f32 = 15.;
+
 impl AppView {
     fn command_labels(&self) -> Vec<(String, String)> {
         self.registry
@@ -257,7 +296,7 @@ impl AppView {
                 .px_2()
                 .py_1()
                 .rounded_sm()
-                .text_size(px(12.))
+                .text_size(px(TAB_LABEL_FONT_PX))
                 .text_color(if is_active {
                     chrome.text_bright
                 } else {
@@ -276,20 +315,16 @@ impl AppView {
             if waiting > 0 {
                 tab = tab.child(
                     div()
-                        .w(px(6.))
-                        .h(px(6.))
+                        .w(px(TAB_DOT_PX))
+                        .h(px(TAB_DOT_PX))
                         .rounded_full()
                         .bg(gpui::rgb(0x5dcd97)),
                 );
             }
             if working > 0 {
-                tab = tab.child(
-                    div()
-                        .w(px(6.))
-                        .h(px(6.))
-                        .rounded_full()
-                        .bg(crate::chrome::with_alpha(chrome.agent_working, 0.6)),
-                );
+                tab = tab.child(div().w(px(TAB_DOT_PX)).h(px(TAB_DOT_PX)).rounded_full().bg(
+                    crate::chrome::with_alpha(chrome.agent_working, TAB_WORKING_DOT_ALPHA),
+                ));
             }
             tabs = tabs.child(tab);
         }
@@ -298,7 +333,7 @@ impl AppView {
                 .id("tab-new")
                 .px_2()
                 .py_1()
-                .text_size(px(12.))
+                .text_size(px(TAB_LABEL_FONT_PX))
                 .text_color(chrome.text_faint)
                 .on_mouse_down(
                     MouseButton::Left,
@@ -314,7 +349,7 @@ impl AppView {
             .w_full()
             .flex()
             .items_center()
-            .pl(px(84.)) // past the traffic lights
+            .pl(px(TITLE_BAR_TRAFFIC_LIGHT_INSET_PX))
             .pr_2()
             .bg(chrome.bar_bg)
             .border_b_1()
@@ -345,7 +380,7 @@ impl AppView {
         } else {
             String::new()
         };
-        let fps_color = if self.fps < 50. && self.fps > 0. {
+        let fps_color = if self.fps < LOW_FPS_THRESHOLD && self.fps > 0. {
             chrome.agent_idle
         } else {
             chrome.text_faint
@@ -396,7 +431,7 @@ impl AppView {
                         .px_3()
                         .pt_2()
                         .pb_1()
-                        .text_size(px(10.))
+                        .text_size(px(PALETTE_SECTION_FONT_PX))
                         .text_color(chrome.text_faint)
                         .child(title.clone()),
                 );
@@ -440,7 +475,7 @@ impl AppView {
                             .bg(chrome.control_bg)
                             .border_1()
                             .border_color(chrome.control_border)
-                            .text_size(px(10.))
+                            .text_size(px(KEY_CAP_FONT_PX))
                             .text_color(chrome.text_mid)
                             .child(key.to_string()),
                     );
@@ -467,39 +502,44 @@ impl AppView {
             .size_full()
             .flex()
             .justify_center()
-            .pt(px(80.))
+            .pt(px(OVERLAY_TOP_PAD_PX))
             .bg(chrome.overlay_backdrop)
             .child(
-                div().w(px(640.)).h(px(0.)).flex().flex_col().child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .bg(chrome.bar_bg)
-                        .border_1()
-                        .border_color(chrome.control_border)
-                        .rounded_md()
-                        .font_family("Menlo")
-                        .text_size(px(13.))
-                        .text_color(chrome.text)
-                        .child(
-                            div()
-                                .px_3()
-                                .py_2()
-                                .border_b_1()
-                                .border_color(chrome.control_border)
-                                .text_color(if query.is_empty() {
-                                    chrome.text_faint
-                                } else {
-                                    chrome.text_bright
-                                })
-                                .child(if query.is_empty() {
-                                    source.placeholder().to_string()
-                                } else {
-                                    format!("{query}▏")
-                                }),
-                        )
-                        .child(list),
-                ),
+                div()
+                    .w(px(PALETTE_WIDTH_PX))
+                    .h(px(0.))
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .bg(chrome.bar_bg)
+                            .border_1()
+                            .border_color(chrome.control_border)
+                            .rounded_md()
+                            .font_family("Menlo")
+                            .text_size(px(OVERLAY_BODY_FONT_PX))
+                            .text_color(chrome.text)
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .border_b_1()
+                                    .border_color(chrome.control_border)
+                                    .text_color(if query.is_empty() {
+                                        chrome.text_faint
+                                    } else {
+                                        chrome.text_bright
+                                    })
+                                    .child(if query.is_empty() {
+                                        source.placeholder().to_string()
+                                    } else {
+                                        format!("{query}▏")
+                                    }),
+                            )
+                            .child(list),
+                    ),
             )
     }
 
@@ -521,9 +561,9 @@ impl AppView {
             .size_full()
             .flex()
             .justify_center()
-            .pt(px(120.))
+            .pt(px(PROMPT_TOP_PAD_PX))
             .child(
-                div().w(px(480.)).h(px(0.)).child(
+                div().w(px(PROMPT_WIDTH_PX)).h(px(0.)).child(
                     div()
                         .flex()
                         .flex_col()
@@ -534,11 +574,11 @@ impl AppView {
                         .border_color(chrome.control_border)
                         .rounded_md()
                         .font_family("Menlo")
-                        .text_size(px(13.))
+                        .text_size(px(OVERLAY_BODY_FONT_PX))
                         .child(
                             div()
                                 .text_color(chrome.text_muted)
-                                .text_size(px(11.))
+                                .text_size(px(CAPTION_FONT_PX))
                                 .child(p.label.clone()),
                         )
                         .child(
@@ -580,7 +620,7 @@ impl AppView {
                 .bg(chrome.control_bg)
                 .border_1()
                 .border_color(chrome.control_border)
-                .text_size(px(10.))
+                .text_size(px(KEY_CAP_FONT_PX))
                 .text_color(chrome.text_mid)
                 .child(key.to_string())
         };
@@ -589,7 +629,7 @@ impl AppView {
             .flex()
             .flex_col()
             .overflow_y_scroll()
-            .max_h(px(720.))
+            .max_h(px(SHORTCUTS_LIST_MAX_H_PX))
             .pb_2();
         for s in sections {
             list = list.child(
@@ -597,7 +637,7 @@ impl AppView {
                     .px_4()
                     .pt_3()
                     .pb_1()
-                    .text_size(px(11.))
+                    .text_size(px(CAPTION_FONT_PX))
                     .text_color(chrome.agent_idle)
                     .child(s.title.to_uppercase()),
             );
@@ -615,7 +655,7 @@ impl AppView {
                         .flex()
                         .justify_between()
                         .px_4()
-                        .py(px(4.))
+                        .py(px(SHORTCUTS_ROW_PAD_PX))
                         .child(div().text_color(chrome.text).child(sc.label))
                         .child(keys),
                 );
@@ -637,7 +677,7 @@ impl AppView {
                     .px_4()
                     .pt_3()
                     .pb_1()
-                    .text_size(px(11.))
+                    .text_size(px(CAPTION_FONT_PX))
                     .text_color(chrome.agent_idle)
                     .child("GESTURES"),
             );
@@ -647,7 +687,7 @@ impl AppView {
                         .flex()
                         .justify_between()
                         .px_4()
-                        .py(px(4.))
+                        .py(px(SHORTCUTS_ROW_PAD_PX))
                         .child(div().text_color(chrome.text).child(*label))
                         .child(div().text_color(chrome.text_mid).child(*keys)),
                 );
@@ -660,10 +700,10 @@ impl AppView {
             .size_full()
             .flex()
             .justify_center()
-            .pt(px(80.))
+            .pt(px(OVERLAY_TOP_PAD_PX))
             .bg(chrome.overlay_backdrop)
             .child(
-                div().w(px(680.)).h(px(0.)).child(
+                div().w(px(SHORTCUTS_WIDTH_PX)).h(px(0.)).child(
                     div()
                         .flex()
                         .flex_col()
@@ -672,14 +712,14 @@ impl AppView {
                         .border_color(chrome.card_border)
                         .rounded_md()
                         .font_family("Menlo")
-                        .text_size(px(13.))
+                        .text_size(px(OVERLAY_BODY_FONT_PX))
                         .child(
                             div()
                                 .px_4()
                                 .py_3()
                                 .border_b_1()
                                 .border_color(chrome.card_border)
-                                .text_size(px(15.))
+                                .text_size(px(PANEL_TITLE_FONT_PX))
                                 .text_color(if query.is_empty() {
                                     chrome.text_faint
                                 } else {
