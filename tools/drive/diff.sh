@@ -8,7 +8,7 @@
 FRESH=1
 drive_start
 cmd_shift p; type_text "open a file"; key_code 36
-type_text "$HOME/Code/infini-rust/infiniterm-core/src/model/cards_cmd.rs"; key_code 36
+type_text "$HOME/Code/infiniterm/infiniterm-core/src/model/cards_cmd.rs"; key_code 36
 wait_s 1
 cmd_shift p; type_text "against git HEAD"; key_code 36
 cmd 1;                          shot 01-diff 1.5

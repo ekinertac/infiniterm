@@ -6,7 +6,7 @@
 FRESH=1
 drive_start
 cmd_shift p; type_text "open a file"; key_code 36
-type_text "$HOME/Code/infini-rust/infiniterm-editor/src/search.rs"; key_code 36
+type_text "$HOME/Code/infiniterm/infiniterm-editor/src/search.rs"; key_code 36
                                 shot 01-file-opened 1.2
 cmd 1;                          shot 02-fit 0.8
 key_code 125; key_code 125; key_code 125; type_text "// typed here"
@@ -25,7 +25,7 @@ cmd s; type_text "/tmp/infiniterm-drive/saved.txt"; key_code 36
 echo "saved.txt: $(cat /tmp/infiniterm-drive/saved.txt 2>/dev/null)"
 # Prose wraps: a README with one-line paragraphs.
 cmd_shift p; type_text "open a file"; key_code 36
-type_text "$HOME/Code/infini-rust/README.md"; key_code 36
+type_text "$HOME/Code/infiniterm/README.md"; key_code 36
 cmd 1;                          shot 12b-prose-wrapped 1.0
 # The config pair: two editors, the defaults read-only.
 cmd_shift p; type_text "open settings"; key_code 36

@@ -82,7 +82,7 @@ impl AppView {
         if in_bundle.is_dir() {
             return Some(in_bundle);
         }
-        let dev = home_dir().join("Code/infiniterm/src-tauri/resources/themes");
+        let dev = home_dir().join("Code/infiniterm-tauri/src-tauri/resources/themes");
         dev.is_dir().then_some(dev)
     }
 

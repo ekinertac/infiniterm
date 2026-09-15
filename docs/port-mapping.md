@@ -1,6 +1,6 @@
 # infiniterm native port: feature and file mapping
 
-Written 2026-09-14 against `master` at `e43d786` plus the uncommitted browser-card spike. Numbers are `wc -l` on that tree. Nothing here has been prototyped; every "verify" is a thing to check with a 50-line spike before committing to it. **Status 2026-09-15: the stack is decided and the four spikes at the bottom (plus a combined canvas one) have run and passed; their numbers are in `~/Code/infini-rust/spikes/*/NOTES.md` and the handover is `~/Code/infini-rust/HANDOVER.md`. Rows marked *overturned* below were changed by a spike result.** Since this was written the reference app gained transcript cards (`transcript.ts`, `transcript.rs`, `TranscriptCard.svelte`), the sidebar (`sidebar.ts`, `SidebarHandle.svelte`), keyboard move/resize (`cardActions.ts`), browser page-zoom keys (`browserKeys.ts`) and a Pi hook adapter; the handover's inventory is the current one.
+Written 2026-09-14 against `master` at `e43d786` plus the uncommitted browser-card spike. Numbers are `wc -l` on that tree. Nothing here has been prototyped; every "verify" is a thing to check with a 50-line spike before committing to it. **Status 2026-09-15: the stack is decided and the four spikes at the bottom (plus a combined canvas one) have run and passed; their numbers are in `~/Code/infiniterm/spikes/*/NOTES.md` and the handover is `~/Code/infiniterm/HANDOVER.md`. Rows marked *overturned* below were changed by a spike result.** Since this was written the reference app gained transcript cards (`transcript.ts`, `transcript.rs`, `TranscriptCard.svelte`), the sidebar (`sidebar.ts`, `SidebarHandle.svelte`), keyboard move/resize (`cardActions.ts`), browser page-zoom keys (`browserKeys.ts`) and a Pi hook adapter; the handover's inventory is the current one.
 
 ## Recommendation
 
@@ -248,7 +248,7 @@ About 3 months to parity with route 2, 3.5 with CEF. Steps 1 to 3 give a usable 
 
 ## Spikes before committing (each under a day)
 
-All run 2026-09-14, results in `~/Code/infini-rust/spikes/*/NOTES.md`: 1 passed (120 fps), 3 dropped (WKWebView is not the route), 4 passed (~1 ms per frame, ~200 MB bundle). **2 was never run** and is the first thing the terminal element phase must check.
+All run 2026-09-14, results in `~/Code/infiniterm/spikes/*/NOTES.md`: 1 passed (120 fps), 3 dropped (WKWebView is not the route), 4 passed (~1 ms per frame, ~200 MB bundle). **2 was never run** and is the first thing the terminal element phase must check.
 
 1. gpui window with one `alacritty_terminal` element at 3 zoom levels: does reshaping hold 60 fps with 25 cards of `yes`?
 2. `Keystroke` for Option+J and Cmd+Shift+= on the Turkish-Q layout: does the physical key come through?

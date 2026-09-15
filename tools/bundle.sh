@@ -26,7 +26,7 @@ fi
 # symlinks and `ift install-claude-hooks` points the hooks at.
 cargo build $( [ "$profile" = release ] && echo --release ) -p infiniterm-cli -p infiniterm-hook
 cp "target/$profile/ift" "target/$profile/infiniterm-hook" "$app/Contents/MacOS/"
-themes="$HOME/Code/infiniterm/src-tauri/resources/themes"
+themes="$HOME/Code/infiniterm-tauri/src-tauri/resources/themes"
 mkdir -p "$app/Contents/Resources/themes"
 [ -d "$themes" ] && ditto "$themes" "$app/Contents/Resources/themes"
 plist="$app/Contents/Info.plist"

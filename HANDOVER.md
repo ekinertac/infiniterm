@@ -4,13 +4,13 @@ Written 2026-09-15 at the end of the spike sessions. This is the file to give a 
 
 ## The rule above every other rule
 
-**`~/Code/infiniterm` is the specification. Read its code, always, for every rule.** No document, this one included, holds the logic; the Tauri app does. Before porting any file: read the source file, read its `.test.ts` beside it, read the paragraph about it in `~/Code/infiniterm/CLAUDE.md` (Non-negotiables and Traps already hit are ~90 rules, and every one that is not about the DOM applies to the port). Port the tests first, then make them pass. If the source and this file disagree, the source wins and this file gets fixed. Do not ask Ekin things the source answers.
+**`~/Code/infiniterm-tauri` is the specification. Read its code, always, for every rule.** No document, this one included, holds the logic; the Tauri app does. Before porting any file: read the source file, read its `.test.ts` beside it, read the paragraph about it in `~/Code/infiniterm-tauri/CLAUDE.md` (Non-negotiables and Traps already hit are ~90 rules, and every one that is not about the DOM applies to the port). Port the tests first, then make them pass. If the source and this file disagree, the source wins and this file gets fixed. Do not ask Ekin things the source answers.
 
 Read order for a new session:
 
 1. this file
-2. `~/Code/infiniterm/CLAUDE.md` (the reference app's working notes)
-3. `docs/port-mapping.md` (file-by-file map; the same text lives at `~/Code/infiniterm/docs/superpowers/specs/2026-09-14-native-port-mapping.md`)
+2. `~/Code/infiniterm-tauri/CLAUDE.md` (the reference app's working notes)
+3. `docs/port-mapping.md` (file-by-file map; the same text lives at `~/Code/infiniterm-tauri/docs/superpowers/specs/2026-09-14-native-port-mapping.md`)
 4. `spikes/*/NOTES.md`
 5. `CLAUDE.md` in this repo (short standing rules, loaded every session)
 
@@ -235,7 +235,7 @@ Progress 2026-09-15 (fourth session): `tools/bundle.sh` now goes through cef-rs'
 ## Standing rules while porting
 
 - Stage by file name, never `git add -A`; commit messages say why; no attribution trailers of any kind. Both from the reference repo and the global rules.
-- Another Claude session works in `~/Code/infiniterm`. Read there, do not write there. The mapping copy in this repo is the one to edit.
+- Another Claude session works in `~/Code/infiniterm-tauri`. Read there, do not write there. The mapping copy in this repo is the one to edit.
 - Every file starts with a header block: responsibility, where it fits, what calls it, related files, constraints.
 - Anything with real logic is a pure function in its own file with tests; the gpui elements are wiring. The reference's "where does X live" rule.
 - Keep the spikes as they are until their replacement is in a crate; then delete the spike in the same commit.
@@ -260,8 +260,8 @@ Consolidated from the four NOTES files; each is the short form.
 
 ## State of the repos at handover
 
-- `~/Code/infini-rust`: branch `master`, no remote, commits `a3631de` `f98843d` `9c4f7d1` `9d08d05` `e08867e` plus this handover. No crates yet; `spikes/` only.
-- `~/Code/infiniterm`: `master` at `67f360f` plus the other session's uncommitted work (browser card as WKWebView, browserKeys, sidebar). The mapping spec there is untracked; the copy at `docs/port-mapping.md` here is the committed one. Its `CLAUDE.md` has a paragraph on the port pointing here.
+- `~/Code/infiniterm`: branch `master`, no remote, commits `a3631de` `f98843d` `9c4f7d1` `9d08d05` `e08867e` plus this handover. No crates yet; `spikes/` only.
+- `~/Code/infiniterm-tauri`: `master` at `67f360f` plus the other session's uncommitted work (browser card as WKWebView, browserKeys, sidebar). The mapping spec there is untracked; the copy at `docs/port-mapping.md` here is the committed one. Its `CLAUDE.md` has a paragraph on the port pointing here.
 - The canvas spike app may still be running on the Mac: `pkill -9 -f "MacOS/canvas"`, then remove `spikes/cef-extension/profile/Singleton*` before the next CEF launch.
 
 Paused 2026-09-15 (first session) at Ekin's request to conserve the usage allowance; resumed the same day in a second session, which finished Phase 1's pure modules (commits from `Palette usage history` to `The shortcut list`). No build, app launch or background task is running for this port. The two pre-existing untracked files, `spikes/cef-extension/cefclient.log` and `console.log`, remain untouched.

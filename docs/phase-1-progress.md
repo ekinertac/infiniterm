@@ -5,11 +5,11 @@ Phase 1's pure modules are complete as of 2026-09-15: every reference test file 
 
 What Phase 1's table listed and is NOT here: `commands/*.ts` (1852 lines, ~70 registrations, no tests of their own). Those are the app model's methods: every one reads and mutates the runes stores (cards, selection, viewport, groups, workspaces, palette state, notices) and calls IPC, the editor registry and the pane registry. They are wiring over the stores and port with the stores in Phase 3, not before; porting them against stand-in state now would mean porting them twice. `commands.rs` (the registry they register into) is here and generic over the app context for exactly that reason.
 
-The reference is the live `~/Code/infiniterm` worktree; its source wins over comments and planning documents. Nothing there and nothing under `spikes/` was changed.
+The reference is the live `~/Code/infiniterm-tauri` worktree; its source wins over comments and planning documents. Nothing there and nothing under `spikes/` was changed.
 
 ## Coverage
 
-Reference test paths are relative to `~/Code/infiniterm/src/lib/`. Rust modules are under `infiniterm-core/src/` unless a crate path is shown.
+Reference test paths are relative to `~/Code/infiniterm-tauri/src/lib/`. Rust modules are under `infiniterm-core/src/` unless a crate path is shown.
 
 | Reference tests | Rust module | Reference cases | Native checks |
 |---|---|---:|---:|

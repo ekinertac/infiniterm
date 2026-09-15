@@ -1,4 +1,4 @@
-# infini-rust
+# infiniterm
 
 infiniterm: terminal, editor, diff and browser cards on an infinite zoomable canvas, with agent state from Claude Code hooks. Rust, gpui for the window, CEF for the browser card, `alacritty_terminal` for the grid.
 

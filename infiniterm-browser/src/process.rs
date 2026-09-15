@@ -87,7 +87,7 @@ pub fn seed(data: &Path) -> Option<PathBuf> {
     let profile = data.join("profile");
     if !profile.join("Default").is_dir() {
         let spike = infiniterm_core::paths::home_dir()
-            .join("Code/infini-rust/spikes/cef-extension/profile");
+            .join("Code/infiniterm/spikes/cef-extension/profile");
         if spike.join("Default").is_dir() {
             match copy_dir(&spike, &profile) {
                 Ok(()) => {

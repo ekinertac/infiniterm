@@ -182,7 +182,9 @@ mod tests {
     fn this_repository_answers() {
         let here = env!("CARGO_MANIFEST_DIR");
         let changes = git_changes(here).unwrap();
-        assert!(changes.repo.ends_with("infini-rust"));
+        // The workspace root, whatever the checkout is called.
+        assert!(std::path::Path::new(&changes.repo).join("Cargo.toml").is_file());
+        assert!(here.starts_with(&changes.repo));
         // HEAD has a Cargo.toml; a file that never existed does not.
         assert!(git_show_head(&changes.repo, "infiniterm-core/Cargo.toml")
             .unwrap()
