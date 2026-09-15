@@ -15,8 +15,9 @@ set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 DATA=${INFINITERM_DATA_DIR:-/tmp/infiniterm-drive}
 SHOTS=${SHOTS:-/tmp/infiniterm-drive/shots}
-# The Tauri app is also named infiniterm; the process is addressed by bundle id.
-SE='tell application "System Events" to tell (first process whose bundle identifier is "dev.ekinertac.infiniterm.native")'
+# The installed app is also named infiniterm and shares the bundle id; the
+# process under test is addressed by its pid (`_pid`), never by name or id.
+_se() { echo "tell application \"System Events\" to tell (first process whose unix id is $(_pid))"; }
 
 drive_start() {
     # gpui does not draw behind the lock screen and nothing can be activated
@@ -40,7 +41,7 @@ drive_start() {
     # CONFIG moves ~/.config/infiniterm too, for a scenario that edits settings.
     ( cd "$ROOT" && open --stderr "$PWD/run.log" --stdout "$PWD/run.log" --env INFINITERM_DATA_DIR="$DATA" --env INFINITERM_KEYLOG=1 ${CONFIG:+--env INFINITERM_CONFIG_DIR="$CONFIG"} target/bundle/infiniterm.app )
     sleep 3
-    osascript -e 'tell application id "dev.ekinertac.infiniterm.native" to activate'
+    _activate
     sleep 0.5
     _win
     # Activation alone sometimes leaves the window not key; a click on the
@@ -51,24 +52,25 @@ drive_start() {
     # Setup in iTerm2 and the rest typed into it). Stop before the first key.
     # A launch with CEF takes a few seconds longer to become key: three
     # tries a second apart before deciding someone else has the Mac.
-    # By bundle id, not name: the Tauri app is also called infiniterm, and
-    # keys typed into it land in Ekin's real canvas.
+    # By pid, not name or bundle id: the installed app is also infiniterm
+    # with the same id, and keys typed into it land in Ekin's real canvas.
     for _try in 1 2 3; do
-        FRONT=$(osascript -e 'tell application "System Events" to get bundle identifier of first application process whose frontmost is true')
-        [ "$FRONT" = "dev.ekinertac.infiniterm.native" ] && break
+        FRONT=$(osascript -e 'tell application "System Events" to get unix id of first application process whose frontmost is true')
+        [ "$FRONT" = "$(_pid)" ] && break
         sleep 1
-        osascript -e 'tell application id "dev.ekinertac.infiniterm.native" to activate'
+        _activate
         sleep 0.5
     done
-    if [ "$FRONT" != "dev.ekinertac.infiniterm.native" ]; then
+    if [ "$FRONT" != "$(_pid)" ]; then
         echo "abort: $FRONT is frontmost, not infiniterm; someone is using the Mac" >&2
         drive_stop
         exit 2
     fi
 }
 
-# The port's own process, never the Tauri app's (same name).
+# The process under test, never the installed app's (same name, same id).
 _pid() { pgrep -f "$ROOT/target/bundle/infiniterm.app/Contents/MacOS/infiniterm$" | head -1; }
+_activate() { osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is $(_pid)) to true"; }
 
 _win() {
     B=$("$ROOT/tools/winid" --pid "$(_pid)" | head -1)
@@ -81,9 +83,9 @@ _win() {
 # "command down, shift down". key_code <n> for named keys (36 return, 53
 # escape, 123-126 left right down up, 51 delete).
 _using() { if [ -n "$1" ]; then printf ' using {%s}' "$1"; fi; }
-key() { osascript -e "$SE to keystroke \"$1\"$(_using "$2")"; sleep 0.25; }
-key_code() { osascript -e "$SE to key code $1$(_using "$2")"; sleep 0.25; }
-type_text() { osascript -e "$SE to keystroke \"$1\""; sleep 0.25; }
+key() { osascript -e "$(_se) to keystroke \"$1\"$(_using "$2")"; sleep 0.25; }
+key_code() { osascript -e "$(_se) to key code $1$(_using "$2")"; sleep 0.25; }
+type_text() { osascript -e "$(_se) to keystroke \"$1\""; sleep 0.25; }
 cmd() { key "$1" "command down"; }
 cmd_shift() { key "$1" "command down, shift down"; }
 cmd_alt() { key_code "$1" "command down, option down"; }

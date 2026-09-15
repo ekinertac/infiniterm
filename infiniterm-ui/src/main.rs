@@ -170,7 +170,7 @@ fn main() {
     if runtime::another_instance_holds_the_socket() {
         eprintln!("[infiniterm] another infiniterm holds the socket; activating it");
         let _ = std::process::Command::new("open")
-            .args(["-b", "dev.ekinertac.infiniterm.native"])
+            .args(["-b", "dev.ekinertac.infiniterm"])
             .status();
         std::process::exit(0);
     }

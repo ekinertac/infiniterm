@@ -6,7 +6,7 @@ The native port of infiniterm: Rust + gpui for the app, CEF for the browser card
 
 ## The specification is the other repo
 
-`~/Code/infiniterm` (Tauri 2 + Svelte 5) is the shipping app and the spec for every feature and rule. Before porting a file, read its source and its `.test.ts` there, and the paragraph about it in `~/Code/infiniterm/CLAUDE.md`. Port the tests first. When a document here disagrees with that code, the code wins and the document is fixed. Do not write in that repo: another session works there.
+`~/Code/infiniterm` (Tauri 2 + Svelte 5) is the spec for every feature and rule; since 2026-09-16 the installed app is this port and the Tauri bundle is gone. Before porting a file, read its source and its `.test.ts` there, and the paragraph about it in `~/Code/infiniterm/CLAUDE.md`. Port the tests first. When a document here disagrees with that code, the code wins and the document is fixed. Do not write in that repo: another session works there.
 
 The rules in the reference's Non-negotiables and Traps that are not about the DOM apply here unchanged. The ones that shaped the port most: `Cmd` owns every app binding except `ctrl`+digit; chords are built from the physical key; positions are permanent; every viewport change is animated; one tagged event stream for all panes; nothing is mouse-only; `core` knows rects and ids, never what a card body draws.
 
@@ -69,7 +69,7 @@ tools/shot.sh <app-name> out.png
 - Tests always, unless Ekin says "skip the tests".
 - Stage by file name; commit per phase at least; messages say why; no attribution trailers of any kind.
 - Verify on screen before calling something done, with `tools/drive/`. Announce before sending any input to the Mac and wait for a go: Ekin may be on it. The driver refuses a locked Mac and a Mac where another app stays frontmost; `tools/drive/ift.sh` is the check that needs no screen. Keys through System Events, never cliclick (see HANDOVER.md). gpui does not draw while the Mac is locked.
-- Never run the native app without `INFINITERM_DATA_DIR` while the Tauri app is the shipping one: it would save over the real canvas (it did once).
+- The installed `/Applications/infiniterm.app` is this port (since 2026-09-16) and runs on the real data dir. Never run a second copy without `INFINITERM_DATA_DIR`: the socket lock makes it exit, but a scratch data dir is the only safe way to test, and the driver addresses its instance by pid because the two share a name and a bundle id.
 - A spike stays as it is until its replacement is in a crate, then the spike is deleted in the same commit.
 - Style for anything a human reads is in `~/.claude/CLAUDE.md`: plain, specific, no em-dashes, say less.
 

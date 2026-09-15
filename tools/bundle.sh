@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 profile=${1:-debug}
 app=target/bundle/infiniterm.app
 cargo run -q --manifest-path "$HOME/Code/cef-rs/Cargo.toml" -p cef --bin bundle-cef-app -- \
-    infiniterm -o target/bundle --identifier dev.ekinertac.infiniterm.native --display-name infiniterm >/dev/null
+    infiniterm -o target/bundle --identifier dev.ekinertac.infiniterm --display-name infiniterm >/dev/null
 if [ "$profile" = release ]; then
     # The bundler only knows debug; the release binaries go in over them.
     cargo build --release -p infiniterm-ui

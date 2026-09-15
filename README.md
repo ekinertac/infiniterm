@@ -10,4 +10,4 @@ Status, 2026-09-15: the four-crate workspace exists and every pure module of the
 
 Single binary plus the CEF framework, no Electron, no account, no telemetry. macOS first; Linux and Windows are kept possible, not promised.
 
-Private, unreleased.
+Installed on Ekin's Mac as `/Applications/infiniterm.app` since 2026-09-16, replacing the Tauri build. Private, unreleased.
