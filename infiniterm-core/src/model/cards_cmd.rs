@@ -7,7 +7,9 @@ use super::{Card, EditorAction, Effect, Model, NewCard, Pending};
 use crate::card_label::{card_label, Labelled};
 use crate::cards::GUTTER;
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
+use crate::grid::{snap_rect, Rect};
 use crate::ift::{diff_plan, open_plan, transcript_plan, PathKind};
+use crate::layout::rects_overlap;
 use crate::navigate::{nearest_to, Direction};
 use crate::resize::{moved_by, resized_by, MOVE_STEP, RESIZE_STEP};
 use crate::saved_layout::CardKind;
@@ -287,6 +289,71 @@ impl Model {
                 }
             }
         }
+    }
+
+    /// The end of a drag or a resize. A card dropped over another goes back
+    /// where it started: a card behind a card is a card you cannot see, and
+    /// the placement rules already keep every card on its own ground. Other
+    /// groups' frames count too, as they do for placement. Returns whether
+    /// the move stood.
+    pub fn end_gesture(&mut self, ids: &[String], start: &[(String, Rect)]) -> bool {
+        let ws = self.active_workspace.clone().unwrap_or_default();
+        let group = ids
+            .first()
+            .and_then(|id| self.card(id))
+            .and_then(|c| c.group_id.clone());
+        let mut occupied: Vec<Rect> = self
+            .cards
+            .iter()
+            .filter(|c| c.workspace_id == ws && !ids.contains(&c.id))
+            .map(|c| c.rect)
+            .collect();
+        occupied.extend(self.other_frames(group.as_deref(), &ws));
+        let moved: Vec<Rect> = ids
+            .iter()
+            .filter_map(|id| self.card(id))
+            .map(|c| snap_rect(c.rect))
+            .collect();
+        if moved
+            .iter()
+            .any(|m| occupied.iter().any(|o| rects_overlap(*m, *o)))
+        {
+            for (id, rect) in start {
+                if let Some(c) = self.card_mut(id) {
+                    c.rect = *rect;
+                }
+            }
+            self.notify("cards cannot overlap");
+            self.dirty_layout = true;
+            return false;
+        }
+        // Backstop: realigns a card whose stored rect was off-grid before the drag.
+        for id in ids {
+            if let Some(c) = self.card_mut(id) {
+                c.rect = snap_rect(c.rect);
+            }
+        }
+        self.dirty_layout = true;
+        true
+    }
+
+    /// While a gesture is live: whether the moving cards overlap anything.
+    pub fn gesture_overlaps(&self, ids: &[String]) -> bool {
+        let ws = self.active_workspace.clone().unwrap_or_default();
+        let group = ids
+            .first()
+            .and_then(|id| self.card(id))
+            .and_then(|c| c.group_id.clone());
+        let mut occupied: Vec<Rect> = self
+            .cards
+            .iter()
+            .filter(|c| c.workspace_id == ws && !ids.contains(&c.id))
+            .map(|c| c.rect)
+            .collect();
+        occupied.extend(self.other_frames(group.as_deref(), &ws));
+        ids.iter()
+            .filter_map(|id| self.card(id))
+            .any(|c| occupied.iter().any(|o| rects_overlap(c.rect, *o)))
     }
 
     fn page_zoom(&self, card: &Card) -> f64 {

@@ -5,11 +5,12 @@
 #   tools/shot.sh canvas out.png      # first window owned by "canvas"
 # Needs tools/winid built once: swiftc -O tools/winid.swift -o tools/winid
 # (the binary is gitignored). Screen Recording permission for the terminal
-# that runs it, or the capture comes out black.
+# that runs it, or the capture comes out black. -o drops the window shadow,
+# so a pixel in the image is the same pixel in window coordinates.
 set -e
 cd "$(dirname "$0")/.."
 [ -x tools/winid ] || swiftc -O tools/winid.swift -o tools/winid
 id=$(tools/winid "$1" | head -1 | cut -f1)
 [ -n "$id" ] || { echo "no window owned by $1" >&2; exit 1; }
-screencapture -x -l "$id" "$2"
+screencapture -x -o -l "$id" "$2"
 echo "$2"

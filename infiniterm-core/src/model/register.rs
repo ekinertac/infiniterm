@@ -564,6 +564,41 @@ mod tests {
             .all(|e| !matches!(e, Effect::AnimateZoom { .. })));
     }
 
+    // A card dropped over another goes back where it was: nothing may end
+    // up behind anything.
+    #[test]
+    fn a_drag_that_ends_on_another_card_is_put_back() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        let (ra, rb) = (h.m.card(&a).unwrap().rect, h.m.card(&b).unwrap().rect);
+        h.m.card_mut(&b).unwrap().rect = ra;
+        assert!(h.m.gesture_overlaps(std::slice::from_ref(&b)));
+        assert!(!h
+            .m
+            .end_gesture(std::slice::from_ref(&b), &[(b.clone(), rb)]));
+        assert_eq!(h.m.card(&b).unwrap().rect, rb);
+        assert_eq!(h.m.notice.as_deref(), Some("cards cannot overlap"));
+        // Clear ground, and an off-grid rect, snap and stand.
+        h.m.card_mut(&b).unwrap().rect = crate::grid::Rect {
+            x: rb.x + 3000.3,
+            y: rb.y,
+            w: rb.w,
+            h: rb.h,
+        };
+        assert!(h
+            .m
+            .end_gesture(std::slice::from_ref(&b), &[(b.clone(), rb)]));
+        assert_eq!(
+            h.m.card(&b).unwrap().rect,
+            crate::grid::snap_rect(crate::grid::Rect {
+                x: rb.x + 3000.3,
+                ..rb
+            })
+        );
+    }
+
     // A notice says why a command declined, and expires.
     #[test]
     fn a_refused_command_leaves_a_notice_that_expires() {

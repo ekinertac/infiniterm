@@ -220,15 +220,31 @@ impl AppView {
             self.paint_phantom(at(p.rect), border_w, key, true, inv, vp.scale, window, cx);
         }
 
-        let cards: Vec<_> = self
+        // A live drag or resize: the cards moving, whether they overlap, and
+        // the lines they align with.
+        let moving: Vec<String> = match &self.gesture {
+            Some(g) => match &g.kind {
+                crate::GestureKind::MoveGroup(_) => {
+                    g.start_rects.iter().map(|(id, _)| id.clone()).collect()
+                }
+                _ => vec![g.card.clone()],
+            },
+            None => vec![],
+        };
+        let overlapping = !moving.is_empty() && self.model.gesture_overlaps(&moving);
+
+        // The cards being dragged paint LAST, over everything: a card behind
+        // another while you move it is the thing the drop rule exists for.
+        let mut cards: Vec<_> = self
             .model
             .cards
             .iter()
             .filter(|c| c.workspace_id == ws)
             .cloned()
             .collect();
+        cards.sort_by_key(|c| moving.contains(&c.id));
         let visible = Bounds::new(origin, bounds.size);
-        for card in cards {
+        for card in &cards {
             let rect = self.drawn_rect(&card.id, card.rect, now);
             let b = at(rect);
             if !visible.intersects(&b) {
@@ -241,6 +257,7 @@ impl AppView {
             }
             // The state border: agent state, else the card's resting colour.
             let state_color = match card.agent {
+                _ if overlapping && moving.contains(&card.id) => chrome.remote_bg,
                 AgentState::Working => chrome.agent_working,
                 AgentState::Idle => chrome.agent_idle,
                 AgentState::None => chrome.card_border,
@@ -264,7 +281,7 @@ impl AppView {
                 );
             }
             let mid = vp.scale >= MID_ZOOM_MIN && vp.scale < MID_ZOOM_MAX;
-            self.paint_labels(&card, b, vp.scale, mid, window, cx);
+            self.paint_labels(card, b, vp.scale, mid, window, cx);
             if let Some(hint) = sel.hints.get(&card.id) {
                 // Big enough to read from across the canvas, over the body
                 // rather than in a corner.
@@ -285,6 +302,35 @@ impl AppView {
                 );
                 window.paint_quad(fill(hb, chrome.sel_bg));
                 crate::text::paint_in(window, cx, &line, hb, line.width / 2.);
+            }
+        }
+
+        // Alignment guides, over everything: one screen pixel, the focus
+        // ring's colour, where a moving edge or centre lines up with another
+        // card's.
+        if let Some(first) = moving.first().and_then(|id| self.model.card(id)) {
+            let others: Vec<Rect> = cards
+                .iter()
+                .filter(|c| !moving.contains(&c.id))
+                .map(|c| c.rect)
+                .collect();
+            for g in infiniterm_core::alignment::guides(first.rect, &others) {
+                let sx = |x: f64| origin.x + px(((x - vp.x) * vp.scale) as f32);
+                let sy = |y: f64| origin.y + px(((y - vp.y) * vp.scale) as f32);
+                let line = match g.axis {
+                    infiniterm_core::alignment::Axis::Vertical => Bounds::new(
+                        point(sx(g.at), sy(g.from)),
+                        size(px(1.), sy(g.to) - sy(g.from)),
+                    ),
+                    infiniterm_core::alignment::Axis::Horizontal => Bounds::new(
+                        point(sx(g.from), sy(g.at)),
+                        size(sx(g.to) - sx(g.from), px(1.)),
+                    ),
+                };
+                window.paint_quad(fill(
+                    line,
+                    crate::chrome::with_alpha(chrome.focus_ring, 0.8),
+                ));
             }
         }
     }

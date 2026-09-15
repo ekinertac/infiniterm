@@ -14,7 +14,7 @@ use gpui::{
     KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ScrollDelta, ScrollWheelEvent,
 };
-use infiniterm_core::grid::{snap, snap_rect, Point, Rect};
+use infiniterm_core::grid::{snap, Point, Rect};
 use infiniterm_core::keymap::{chord_for, KeyPress};
 use infiniterm_core::model::focus_cmd::BareKey;
 use infiniterm_core::model::register::handle_chord;
@@ -63,6 +63,9 @@ impl AppView {
             };
             if !inside(band / 2.) {
                 continue;
+            }
+            if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                eprintln!("[hit] screen={screen:?} world={world:?} r={r:?} band={band} vp={vp:?}");
             }
             let n = world.y < r.y + band;
             let s = world.y > r.y + r.h - band;
@@ -169,6 +172,9 @@ impl AppView {
                     None => GestureKind::Move,
                     Some(edge) => GestureKind::Resize(edge),
                 };
+                if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                    eprintln!("[gesture] down edge={edge:?} start_rect={start_rect:?}");
+                }
                 self.gesture = Some(Gesture {
                     card: id,
                     kind,
@@ -224,6 +230,12 @@ impl AppView {
             None => {}
         }
         if let Some(g) = &self.gesture {
+            if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                eprintln!(
+                    "[gesture] move p={:?} start={:?} scale={}",
+                    p, g.start_px, self.model.viewport.scale
+                );
+            }
             // Screen delta / scale = world delta, snapped so the card steps
             // from grid line to grid line while you drag.
             let scale = self.model.viewport.scale;
@@ -239,6 +251,9 @@ impl AppView {
                     };
                     if let Some(c) = self.model.card_mut(&card) {
                         c.rect = r;
+                        if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                            eprintln!("[gesture] rect now {:?} (dx {dx} dy {dy})", c.rect);
+                        }
                     }
                 }
                 GestureKind::Resize(edge) => {
@@ -313,19 +328,15 @@ impl AppView {
             return;
         }
         if let Some(g) = self.gesture.take() {
-            // Backstop: realigns a card whose stored rect was off-grid before the drag.
-            let ids: Vec<String> = match &g.kind {
-                GestureKind::MoveGroup(_) => {
-                    g.start_rects.iter().map(|(id, _)| id.clone()).collect()
-                }
-                _ => vec![g.card.clone()],
+            // The drop: snapped, or put back if it landed on another card.
+            let (ids, start): (Vec<String>, Vec<(String, Rect)>) = match &g.kind {
+                GestureKind::MoveGroup(_) => (
+                    g.start_rects.iter().map(|(id, _)| id.clone()).collect(),
+                    g.start_rects.clone(),
+                ),
+                _ => (vec![g.card.clone()], vec![(g.card.clone(), g.start_rect)]),
             };
-            for id in ids {
-                if let Some(c) = self.model.card_mut(&id) {
-                    c.rect = snap_rect(c.rect);
-                }
-            }
-            self.model.dirty_layout = true;
+            self.model.end_gesture(&ids, &start);
             return;
         }
         if let Hit::CardBody { id, local } = self.hit(p) {
