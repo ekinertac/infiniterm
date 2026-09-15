@@ -18,19 +18,28 @@ docs/port-mapping.md        every reference file and where it lands
 Cargo.toml                 workspace for the four native crates
 infiniterm-core/src/        every pure module of the reference, and the backend (PTY, socket, git, inspect, files) behind app::Backend
 infiniterm-cli/, infiniterm-hook/   ift and the hook binary, as they were
-infiniterm-term/src/        output scheduler and parsed-byte acknowledgement ledger
+infiniterm-term/src/        alacritty grid + frames (grid.rs), palette, key/mouse encoding, output scheduler, ack ledger; no gpui
 infiniterm-browser/src/     browser crate placeholder; no CEF dependency yet
-infiniterm-ui/src/          UI crate placeholder; no gpui dependency yet
+infiniterm-ui/src/          the gpui app: main.rs (AppView), runtime.rs (effects, backend drain), paint.rs (one frame), input.rs, overlays.rs (palette, prompt, panel), body.rs (CardBody trait), terminal_body.rs, terminals.rs, field.rs, animator.rs, chrome.rs, text.rs
 spikes/cef-extension/       cefclient + Claude in Chrome; the shared profile/ and extension/ (gitignored)
 spikes/cef-frame/           CEF frame as a gpui texture; chrome_moat.rs
 spikes/term-zoom/           25 alacritty grids under a zoom
 spikes/canvas/              all of it on one canvas; viewport.rs is core's first module
 tools/shot.sh               screenshot one app's window for remote verification
 tools/bundle.sh             wrap the binary in target/bundle/infiniterm.app with the themes
-tools/drive/                the GUI driver: phase3.sh runs a scripted session on a scratch data dir
+tools/drive/                the GUI driver: lib.sh (drive_start, cmd, key, type_text, click, drag, shot), scenarios phase3 panel drag phantom terminal stress
+Makefile                    run, run-fresh, stop, log, test, check, fmt, clippy, drive*, shot, release
 ```
 
-Phases 0 to 2 are complete and Phase 3 is nearly so: the model (every store and command) is in core with 29 tests, the gpui canvas with blank card bodies runs on Ekin's real canvas. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
+Phases 0 to 3 are complete and Phase 4 is half done: real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links). Left in Phase 4: text selection and Cmd+C, cursor blink, inactive dim, bell flash, spawn errors, OSC 52, `dev.stress.zoom` / `dev.stress.dims`, and the flood number (26 cards of `yes` at 8% paint at 22 fps; reference is 45 to 60). The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
+
+Things decided while drawing terminals, not in the reference:
+
+- Frames are painted on demand, not every tick. `needs_frame()` (animation, gesture, pending output, dirty bodies, notice) gates `request_animation_frame`; a 16 ms poll task drains the backend channels. The status bar fps is a stale number while idle.
+- The cell width is the advance of `M` at the font size; `letterSpacing` is ignored (a negative one made the cell narrower than the glyph and rows overlapped). Wide characters put `SPACER` in their second cell.
+- Rows are shaped in 24-cell chunks positioned at the cell's x and cached per row by hash; one shaped line per row drifted on long rows. Glyphs cost about 1 µs each in gpui and are skipped under a 3 px font.
+- Free drag and resize stay, with alignment guides (`alignment.rs`, exact matches only) and a no-overlap rule on release (`Model::end_gesture`); the moving card paints last with a red outline while it overlaps. The reference app mirrored both on 2026-09-15.
+- The shortcuts panel is a centred filterable overlay, not a sidebar.
 
 ## Commands
 
@@ -38,7 +47,8 @@ Phases 0 to 2 are complete and Phase 3 is nearly so: the model (every store and 
 make                    # lists the targets
 make run                # build, bundle, launch on a scratch copy of the real canvas (never the real data dir)
 make check              # fmt (the three port crates only; cli and hook stay byte-identical to the reference) + clippy + test
-make drive              # scripted GUI run with screenshots (say so before running it)
+make drive              # scripted GUI run with screenshots (say so before running it); drive-drag, drive-panel; tools/drive/<scenario>.sh for the rest
+make run DATA=/tmp/x    # any data dir; the default is /tmp/infiniterm-dev
 cd spikes/<name> && cargo build --release             # a spike; each is its own workspace
 cargo run --manifest-path ~/Code/cef-rs/Cargo.toml -p cef --bin bundle-cef-app -- <bin> -o target/bundle
 open --stderr "$PWD/run.log" --stdout "$PWD/run.log" target/bundle/<bin>.app
@@ -73,3 +83,9 @@ Short forms; the NOTES files have the accounts.
 - gpui's `Keystroke` has no key code and delivers shifted punctuation as the shifted character with shift cleared; `keymap.rs` un-shifts it. Turkish-Q (Cmd+ğ on the `[` key) is still unchecked on a device.
 - `serde_json` parses floats one ULP off without `float_roundtrip`; the save file needs it on.
 - A test must never bind `/tmp/infiniterm.sock`: the running Tauri app holds it. `hooks::listen` takes the path; tests use a temp one.
+- `cargo fmt` reformats a file under an edit made from a stale copy, and a text patch then silently matches nothing. Three edits were lost this way, one of them the `INFINITERM_DATA_DIR` override, which is how the real canvas got overwritten. Re-read after fmt, and `cargo fmt --all` is never run: it touches the cli and hook crates.
+- cliclick keys never arrive as gpui keystrokes (typed characters carry the fn flag and no `key_char`; Return and Escape are swallowed by the input context). System Events `keystroke` / `key code` work. `screencapture -o` drops the window shadow, which offset every click by ~58 px.
+- An effect that needs state from before the command (swap animation's old rects) must carry it; reading the model after the command sees the new positions.
+- `serde_json::Number` 14 and 14.0 are not equal; compare parsed `Config` values, not raw JSON.
+- gpui's `Pixels.0` is private; `AppContext` must be imported for `cx.new`.
+- The palette matches "stress flood" to the calm command first; the driver types "run yes".
