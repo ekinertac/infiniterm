@@ -16,7 +16,7 @@ The rules in the reference's Non-negotiables and Traps that are not about the DO
 HANDOVER.md                 state, decisions, spikes, the ten phases
 docs/port-mapping.md        every reference file and where it lands
 Cargo.toml                 workspace for the four native crates
-infiniterm-core/src/        pure geometry, navigation, palette, and formatting modules
+infiniterm-core/src/        every pure module of the reference: geometry, layout, save file, config, keymap, palette, labels
 infiniterm-term/src/        output scheduler and parsed-byte acknowledgement ledger
 infiniterm-browser/src/     browser crate placeholder; no CEF dependency yet
 infiniterm-ui/src/          UI crate placeholder; no gpui dependency yet
@@ -27,12 +27,12 @@ spikes/canvas/              all of it on one canvas; viewport.rs is core's first
 tools/shot.sh               screenshot one app's window for remote verification
 ```
 
-Phase 0 is complete and Phase 1 is in progress. Geometry, viewport, activity, terminal output scheduling, palette ranking, and several formatters are ported: 273 reference cases plus 8 native checks pass. The four crates still have no external dependencies. `HANDOVER.md` records the remaining modules. The spikes remain untouched until their full replacements exist.
+Phase 0 and Phase 1's pure modules are complete: 483 of the reference's 498 test cases plus 18 native checks (501 tests). `commands/*.ts` ports with the stores in Phase 3. Core depends on serde, serde_json, regex and chrono; the browser and ui crates are still empty. `docs/phase-1-progress.md` has the table. Phase 2 (the backend) is next. The spikes remain untouched until their full replacements exist.
 
 ## Commands
 
 ```
-cargo test --offline                                  # the workspace; 281 tests
+cargo test --offline                                  # the workspace; 501 tests
 cd spikes/<name> && cargo build --release             # a spike; each is its own workspace
 cargo run --manifest-path ~/Code/cef-rs/Cargo.toml -p cef --bin bundle-cef-app -- <bin> -o target/bundle
 open --stderr "$PWD/run.log" --stdout "$PWD/run.log" target/bundle/<bin>.app
@@ -63,4 +63,5 @@ Short forms; the NOTES files have the accounts.
 - CEF reads native-messaging manifests from `<cache-path>/NativeMessagingHosts/` only.
 - `--use-alloy-style` is required with `--off-screen-rendering-enabled`, or the extension's tabs crash.
 - `navigator.userAgentData` exists only in secure contexts; never probe the moat on a `data:` URL.
-- The Turkish-Q / Option+J physical-key check for gpui's `Keystroke` has not been done. Do it before porting the keymap.
+- gpui's `Keystroke` has no key code and delivers shifted punctuation as the shifted character with shift cleared; `keymap.rs` un-shifts it. Turkish-Q (Cmd+ğ on the `[` key) is still unchecked on a device.
+- `serde_json` parses floats one ULP off without `float_roundtrip`; the save file needs it on.
