@@ -24,6 +24,7 @@ mod runtime;
 mod terminal_body;
 mod terminals;
 mod text;
+mod transcript_body;
 mod window_state;
 
 use animator::Animator;

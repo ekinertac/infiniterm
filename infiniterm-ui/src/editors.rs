@@ -10,6 +10,7 @@
 use crate::diff_body::DiffBody;
 use crate::editor_body::{EditorBody, EditorEvent};
 use crate::terminals::family_of;
+use crate::transcript_body::{TranscriptBody, TranscriptColors};
 use crate::AppView;
 use gpui::Window;
 use infiniterm_core::config::Wrap;
@@ -41,6 +42,7 @@ impl AppView {
 
     pub fn reconcile_editors(&mut self, window: &Window) {
         self.reconcile_diffs(window);
+        self.reconcile_transcripts(window);
         let metrics = self.metrics(window);
         let cfg = self.model.config.clone();
         let chrome = EditorChrome {
@@ -143,6 +145,82 @@ impl AppView {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// One `TranscriptBody` per transcript card. Its colours are the
+    /// chrome's, with the theme's yellow and blue for who spoke.
+    fn reconcile_transcripts(&mut self, window: &Window) {
+        let metrics = self.metrics(window);
+        let theme_hex = |k: &str| {
+            self.chrome
+                .theme
+                .as_ref()
+                .and_then(|t| t.get(k))
+                .and_then(|s| crate::chrome::hex(s))
+        };
+        let colors = TranscriptColors {
+            background: self.chrome.card_bg,
+            foreground: self.chrome.card_fg,
+            faint: self.chrome.text_faint,
+            user: theme_hex("yellow").unwrap_or(self.chrome.text_mid),
+            assistant: theme_hex("blue").unwrap_or(self.chrome.text_mid),
+            sel_bg: self.chrome.sel_bg,
+            sel_fg: self.chrome.sel_fg,
+        };
+        let inactive_dim = self.model.config.ui.inactive_dim;
+        let cards: Vec<_> = self
+            .model
+            .cards
+            .iter()
+            .filter(|c| c.kind == CardKind::Transcript)
+            .cloned()
+            .collect();
+        for card in cards {
+            let world = Size {
+                w: card.rect.w,
+                h: card.rect.h,
+            };
+            let exists = self
+                .bodies
+                .get_mut(&card.id)
+                .and_then(|b| b.as_any_mut().downcast_mut::<TranscriptBody>())
+                .is_some();
+            if !exists {
+                let mut body = TranscriptBody::new(card.path.clone(), &metrics, world);
+                body.idle(crate::now_ms());
+                self.bodies.insert(card.id.clone(), Box::new(body));
+            }
+            let Some(body) = self
+                .bodies
+                .get_mut(&card.id)
+                .and_then(|b| b.as_any_mut().downcast_mut::<TranscriptBody>())
+            else {
+                continue;
+            };
+            if body.metrics.font_px != metrics.font_px
+                || body.metrics.cell_w != metrics.cell_w
+                || body.metrics.family != metrics.family
+            {
+                body.metrics = crate::terminal_body::Metrics {
+                    family: metrics.family.clone(),
+                    font_px: metrics.font_px,
+                    line_height: metrics.line_height,
+                    cell_w: metrics.cell_w,
+                };
+                body.mark_dirty();
+            }
+            if body.colors != colors {
+                body.colors = colors.clone();
+                body.mark_dirty();
+            }
+            body.inactive_dim = inactive_dim;
+            body.sidebar_top = card.sidebar_top;
+            body.sidebar_w = sidebar_width(card.sidebar, sidebar_extent(world, card.sidebar_top));
+            if body.path != card.path {
+                body.path = card.path.clone();
+                body.idle(crate::now_ms() + 1e9);
             }
         }
     }
@@ -322,6 +400,8 @@ impl AppView {
                 e.idle(now);
             } else if let Some(d) = body.as_any_mut().downcast_mut::<DiffBody>() {
                 d.idle(now);
+            } else if let Some(t) = body.as_any_mut().downcast_mut::<TranscriptBody>() {
+                t.idle(now);
             }
         }
     }
