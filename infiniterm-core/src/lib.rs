@@ -62,6 +62,7 @@ pub mod keymap;
 pub mod layout_file;
 pub mod links;
 pub mod links_fs;
+pub mod model;
 pub mod palette;
 pub mod palette_usage;
 pub mod paths;

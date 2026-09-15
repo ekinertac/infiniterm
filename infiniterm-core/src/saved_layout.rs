@@ -93,12 +93,8 @@ pub struct SavedGroup {
     pub name: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct SavedWorkspace {
-    pub id: String,
-    pub name: String,
-    pub viewport: Viewport,
-}
+/// The same shape the live model uses; nothing about a workspace is runtime-only.
+pub type SavedWorkspace = crate::workspaces::Workspace;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SavedLayout {
