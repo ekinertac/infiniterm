@@ -39,6 +39,7 @@ impl AppView {
             focus,
             pan: None,
             gesture: None,
+            body_drag: None,
             prompt_field: Default::default(),
             query_field: Default::default(),
             shortcuts_field: Default::default(),
@@ -207,6 +208,27 @@ impl AppView {
                     std::process::exit(0);
                 }
                 Effect::RunCommand(id) => self.run_command(&id),
+                Effect::LogFps(n) => eprintln!("[infiniterm] stress zoom {n}: {:.0} fps", self.fps),
+                Effect::LogDims => {
+                    for (id, body) in self.bodies.iter_mut() {
+                        if let Some(t) = body
+                            .as_any_mut()
+                            .downcast_mut::<crate::terminal_body::TerminalBody>()
+                        {
+                            eprintln!(
+                                "[infiniterm] pane {:?} card {} grid {}x{} cell {:.2}x{:.2} font {} {}px",
+                                t.pane,
+                                &id[..id.len().min(8)],
+                                t.cols(),
+                                t.rows(),
+                                t.cell_w,
+                                t.font_px * t.line_height,
+                                t.font_family,
+                                t.font_px
+                            );
+                        }
+                    }
+                }
             }
         }
     }
@@ -220,7 +242,10 @@ impl AppView {
             || self.gesture.is_some()
             || self.scheduler.pending()
             || !self.glides.is_empty()
-            || self.bodies.values().any(|b| b.wants_frame())
+            || {
+                let now = crate::now_ms();
+                self.bodies.values().any(|b| b.wants_frame(now))
+            }
             || self.model.notice.is_some()
             || self.model.dirty_layout
     }

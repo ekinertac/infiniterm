@@ -17,22 +17,26 @@ pub enum BodyAction {
         url: Option<String>,
         path: Option<(String, String)>,
     },
+    /// A click on a spawn error: start the shell again.
+    Retry,
 }
 
 pub trait CardBody {
     /// `bounds` is the card's screen rect at `scale` (world units times zoom).
+    /// `now` is the frame's clock in ms, for anything that blinks.
     fn paint(
         &mut self,
         bounds: Bounds<Pixels>,
         scale: f64,
         focused: bool,
+        now: f64,
         window: &mut Window,
         cx: &mut App,
     );
     /// The card's rect in world units changed (a drag, a resize, a restore).
     fn resized(&mut self, _world: Size) {}
     /// A key the app did not claim (no Cmd chord bound to it).
-    fn key(&mut self, _keystroke: &Keystroke, _cx: &mut App) {}
+    fn key(&mut self, _keystroke: &Keystroke, _now: f64, _cx: &mut App) {}
     /// A click in the body, in card pixels (the zoom undone).
     fn mouse_down(
         &mut self,
@@ -53,8 +57,15 @@ pub trait CardBody {
     fn mouse_move(&mut self, _local: Point, _modifiers: &gpui::Modifiers) {}
     /// A bare scroll over the body: the terminal's scrollback, the page's scroll.
     fn wheel(&mut self, _local: Point, _dx: f64, _dy: f64, _modifiers: &gpui::Modifiers) {}
-    /// The body no longer needs to paint every frame (nothing arrived).
-    fn wants_frame(&self) -> bool {
+    /// Whether the next frame would paint differently: output arrived, or a
+    /// blink is due at `now`. Frames are painted only on demand.
+    fn wants_frame(&self, _now: f64) -> bool {
+        false
+    }
+    /// A press started something that follows the pointer (a text
+    /// selection, a drag a program is watching): moves and the release go
+    /// to this body even after the pointer leaves the card.
+    fn captures_drag(&self) -> bool {
         false
     }
     /// For the ui to reach a concrete body (the terminal, to feed it).
@@ -72,6 +83,7 @@ impl CardBody for Blank {
         bounds: Bounds<Pixels>,
         _scale: f64,
         _focused: bool,
+        _now: f64,
         window: &mut Window,
         _cx: &mut App,
     ) {

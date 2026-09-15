@@ -14,23 +14,34 @@
 //! Size follows the card's rect in world units at scale 1: the grid is
 //! however many cells fit, and the PTY is told, so programs reflow. Zooming
 //! changes nothing about the grid, only the pixel size it is drawn at.
+//!
+//! A drag selects text (two clicks a word, three a line) and Cmd+C copies
+//! it; the selection lives in the grid, on the text, so it survives a
+//! scroll. The cursor blinks only in the focused card and only when the
+//! settings say so; an unfocused card shows a hollow cursor under a scrim
+//! the colour of its ground, which is the reference's dimming. A shell that
+//! could not start leaves the card showing why, and a click on that retries.
 use crate::body::{BodyAction, CardBody};
 use gpui::{
-    fill, font, point, px, size, App, Bounds, FontStyle, FontWeight, Hsla, Keystroke, Pixels,
-    SharedString, TextRun, UnderlineStyle, Window,
+    fill, font, outline, point, px, size, App, Bounds, ClipboardItem, FontStyle, FontWeight, Hsla,
+    Keystroke, Pixels, SharedString, TextRun, UnderlineStyle, Window,
 };
 use infiniterm_core::backend::PaneId;
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::ift::{open_plan, url_plan, PathKind};
 use infiniterm_core::links::{find_links, Found, LinkKind};
 use infiniterm_core::links_fs::path_kinds;
-use infiniterm_term::grid::{CursorKind, Frame, Grid, TermEvent};
+use infiniterm_term::grid::{CursorKind, Frame, Grid, SelectKind, TermEvent};
 use infiniterm_term::keys::{encode, paste, Key};
 use infiniterm_term::mouse::{self, Mods, MouseButton};
 use infiniterm_term::palette::Palette;
 
 /// Inset from the card's edge to the first cell, in world units.
 const PAD: f64 = 6.;
+
+/// Half a blink, xterm.js's interval. The cursor is solid for this long
+/// after any key, so it never blinks away while you type.
+const BLINK_MS: f64 = 600.;
 
 pub struct TerminalBody {
     pub pane: Option<PaneId>,
@@ -46,11 +57,21 @@ pub struct TerminalBody {
     pub error: Option<String>,
     /// Bytes to write to the pty: the ui drains them after each event.
     pub outgoing: Vec<Vec<u8>>,
-    /// Bell rang since the last frame; the frame flashes the border.
-    pub bell: bool,
     /// Output arrived since the last paint.
     pub dirty: bool,
     pub title: Option<String>,
+    /// OSC 52: text a program put on the clipboard, taken by the ui.
+    pub clipboard_out: Option<String>,
+    /// `terminal.cursorBlink`, `ui.inactiveDim`; the ui keeps them current.
+    pub blink: bool,
+    pub inactive_dim: f64,
+    /// When the blink clock last restarted (a key), and the phase and focus
+    /// of the last paint, so `wants_frame` can say when the next flip is due.
+    blink_epoch: f64,
+    painted_phase: bool,
+    painted_focused: bool,
+    /// A drag selecting text.
+    selecting: bool,
     /// The last frame's links, per row, with whether the filesystem said yes.
     links: Vec<Vec<(Found, Option<PathKind>)>>,
     link_texts: Vec<String>,
@@ -100,9 +121,15 @@ impl TerminalBody {
             cwd,
             error: None,
             outgoing: vec![],
-            bell: false,
             dirty: true,
             title: None,
+            clipboard_out: None,
+            blink: true,
+            inactive_dim: 0.45,
+            blink_epoch: 0.,
+            painted_phase: true,
+            painted_focused: false,
+            selecting: false,
             links: vec![],
             link_texts: vec![],
             hover: None,
@@ -140,8 +167,9 @@ impl TerminalBody {
             match event {
                 TermEvent::Write(s) => self.outgoing.push(s.into_bytes()),
                 TermEvent::Title(t) => self.title = Some(t),
-                TermEvent::Bell => self.bell = true,
-                TermEvent::Clipboard(_) => {} // OSC 52 into the system clipboard: Phase 10
+                // The reference does nothing on a bell either.
+                TermEvent::Bell => {}
+                TermEvent::Clipboard(text) => self.clipboard_out = Some(text),
             }
         }
     }
@@ -184,6 +212,17 @@ impl TerminalBody {
 
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+
+    /// Whether the cursor is on at `now`: always, unless it blinks.
+    fn blink_on(&self, now: f64) -> bool {
+        !self.blink || (((now - self.blink_epoch) / BLINK_MS) as u64).is_multiple_of(2)
+    }
+
+    /// The pointer is in the right half of its cell: a drag ending there
+    /// takes the character.
+    fn right_half(&self, local: Point) -> bool {
+        ((local.x - PAD) / self.cell_w).fract() > 0.5
     }
 
     fn cell_at(&self, local: Point) -> (usize, usize) {
@@ -276,6 +315,54 @@ impl TerminalBody {
     }
 }
 
+impl TerminalBody {
+    /// The reference's `.scrim`: the card's ground over the text at the
+    /// dim amount, so an unfocused card reads as further away.
+    fn paint_scrim(&self, bounds: Bounds<Pixels>, focused: bool, window: &mut Window) {
+        if focused || self.inactive_dim <= 0. {
+            return;
+        }
+        window.paint_quad(fill(
+            bounds,
+            crate::chrome::with_alpha(rgb(self.palette.background), self.inactive_dim as f32),
+        ));
+    }
+
+    /// "could not start a shell in <cwd>", the error, and that a click
+    /// retries: the reference's `.spawn-error` block and its button.
+    fn paint_error(
+        &self,
+        error: &str,
+        bounds: Bounds<Pixels>,
+        scale: f64,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        window.paint_quad(fill(bounds, gpui::rgb(0x1a0f0f)));
+        let size_px = px((12. * scale) as f32);
+        if size_px < px(3.) {
+            return;
+        }
+        let pad = px((16. * scale) as f32);
+        let line_h = size_px * 1.5;
+        let f = font(self.font_family.clone());
+        let mut y = bounds.origin.y + pad;
+        let lines = [
+            (format!("could not start a shell in {}", self.cwd), 0xfca5a5),
+            (error.to_string(), 0xf87171),
+            ("click to retry".to_string(), 0xfca5a5),
+        ];
+        for (text, color) in lines {
+            for part in text.split('\n') {
+                let line = crate::text::shape(window, part, size_px, &f, gpui::rgb(color).into());
+                let _ = line.paint(point(bounds.origin.x + pad, y), line_h, window, cx);
+                y += line_h;
+            }
+            y += line_h / 2.;
+        }
+    }
+}
+
 fn rgb(c: [u8; 3]) -> Hsla {
     gpui::rgb(((c[0] as u32) << 16) | ((c[1] as u32) << 8) | c[2] as u32).into()
 }
@@ -285,12 +372,19 @@ impl CardBody for TerminalBody {
         &mut self,
         bounds: Bounds<Pixels>,
         scale: f64,
-        _focused: bool,
+        focused: bool,
+        now: f64,
         window: &mut Window,
         cx: &mut App,
     ) {
         self.scale = scale;
         self.dirty = false;
+        self.painted_focused = focused;
+        self.painted_phase = self.blink_on(now);
+        if let Some(error) = self.error.clone() {
+            self.paint_error(&error, bounds, scale, window, cx);
+            return;
+        }
         let frame = self.grid.frame(&self.palette);
         self.refresh_links(&frame);
         window.paint_quad(fill(bounds, rgb(self.palette.background)));
@@ -303,8 +397,12 @@ impl CardBody for TerminalBody {
         // Too small to read: skip the glyphs, keep the ground. The mid-zoom
         // label names the card instead.
         let legible = font_size >= px(3.);
-        // The cursor under the text.
-        if frame.cursor_kind != CursorKind::Hidden && frame.display_offset == 0 {
+        // The cursor under the text: solid when focused and on, hollow when
+        // the card is not focused, nothing while scrolled into history.
+        if frame.cursor_kind != CursorKind::Hidden
+            && frame.display_offset == 0
+            && (!focused || self.painted_phase)
+        {
             let (col, row) = frame.cursor;
             let x = origin.x + cell_w * col as f32;
             let y = origin.y + line_h * row as f32;
@@ -317,9 +415,18 @@ impl CardBody for TerminalBody {
                 }
                 _ => Bounds::new(point(x, y), size(cell_w, line_h)),
             };
-            window.paint_quad(fill(rect, rgb(self.palette.cursor)));
+            let color = rgb(self.palette.cursor);
+            if focused || frame.cursor_kind != CursorKind::Block {
+                window.paint_quad(fill(rect, color));
+            } else {
+                window.paint_quad(
+                    outline(rect, color, gpui::BorderStyle::Solid)
+                        .border_widths(px((scale as f32).max(1.))),
+                );
+            }
         }
         if !legible {
+            self.paint_scrim(bounds, focused, window);
             return;
         }
         let hover = self.hover;
@@ -397,16 +504,23 @@ impl CardBody for TerminalBody {
                 );
             }
         }
+        self.paint_scrim(bounds, focused, window);
     }
 
     fn resized(&mut self, world: Size) {
         self.refit(world);
     }
 
-    fn key(&mut self, k: &Keystroke, cx: &mut App) {
+    fn key(&mut self, k: &Keystroke, now: f64, cx: &mut App) {
         let m = &k.modifiers;
-        // The app owns Cmd; the two Cmd keys a terminal answers are paste and
-        // the line-movement arrows the encoder knows.
+        // The app owns Cmd; the Cmd keys a terminal answers are copy, paste
+        // and the line-movement arrows the encoder knows.
+        if m.platform && k.key == "c" {
+            if let Some(text) = self.grid.selection_text() {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            return;
+        }
         if m.platform && k.key == "v" {
             if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
                 let bracketed = self.grid.bracketed_paste();
@@ -424,6 +538,11 @@ impl CardBody for TerminalBody {
         };
         if let Some(bytes) = encode(&key, self.grid.app_cursor()) {
             self.grid.scroll_to_bottom();
+            // Typing is where the selection stops mattering and where a
+            // blinking cursor must be visible.
+            self.grid.clear_selection();
+            self.blink_epoch = now;
+            self.dirty = true;
             self.write(bytes);
         }
     }
@@ -433,8 +552,11 @@ impl CardBody for TerminalBody {
         local: Point,
         button: gpui::MouseButton,
         modifiers: &gpui::Modifiers,
-        _clicks: usize,
+        clicks: usize,
     ) -> BodyAction {
+        if self.error.is_some() {
+            return BodyAction::Retry;
+        }
         let (col, row) = self.cell_at(local);
         let b = match button {
             gpui::MouseButton::Left => MouseButton::Left,
@@ -477,11 +599,34 @@ impl CardBody for TerminalBody {
             let sgr = self.grid.sgr_mouse();
             self.write(mouse::press(b, col, row, Self::mods(modifiers), sgr));
             self.dragging = Some(b);
+            return BodyAction::None;
+        }
+        // A plain press: the start of a text selection. Shift over a mouse
+        // program gets here too, the override every terminal gives it.
+        if b == MouseButton::Left {
+            let kind = match clicks {
+                1 => SelectKind::Cells,
+                2 => SelectKind::Words,
+                _ => SelectKind::Lines,
+            };
+            self.grid.start_selection(col, row, kind);
+            self.selecting = true;
+            self.dirty = true;
         }
         BodyAction::None
     }
 
     fn mouse_up(&mut self, local: Point, button: gpui::MouseButton, modifiers: &gpui::Modifiers) {
+        if self.selecting {
+            self.selecting = false;
+            // A click that did not move selects nothing, and a lone click
+            // must leave no one-cell selection behind for Cmd+C to copy.
+            if !self.grid.has_selection() {
+                self.grid.clear_selection();
+                self.dirty = true;
+            }
+            return;
+        }
         let Some(b) = self.dragging.take() else {
             return;
         };
@@ -494,6 +639,11 @@ impl CardBody for TerminalBody {
     fn mouse_move(&mut self, local: Point, modifiers: &gpui::Modifiers) {
         let (col, row) = self.cell_at(local);
         self.hover = modifiers.platform.then_some((col, row));
+        if self.selecting {
+            self.grid.update_selection(col, row, self.right_half(local));
+            self.dirty = true;
+            return;
+        }
         if let Some(b) = self.dragging {
             if self.grid.mouse_drag() {
                 let sgr = self.grid.sgr_mouse();
@@ -540,8 +690,16 @@ impl CardBody for TerminalBody {
         }
     }
 
-    fn wants_frame(&self) -> bool {
+    fn wants_frame(&self, now: f64) -> bool {
         self.dirty
+            || (self.painted_focused
+                && self.blink
+                && self.error.is_none()
+                && self.blink_on(now) != self.painted_phase)
+    }
+
+    fn captures_drag(&self) -> bool {
+        self.selecting || self.dragging.is_some()
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

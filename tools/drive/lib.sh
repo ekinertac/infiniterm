@@ -20,7 +20,9 @@ SE='tell application "System Events" to tell process "infiniterm"'
 drive_start() {
     mkdir -p "$DATA" "$SHOTS"
     rm -f "$SHOTS"/*.png
-    if [ "${FRESH:-}" = 1 ]; then rm -f "$DATA/workspace.json"; else
+    # FRESH=1 starts empty, KEEP=1 uses whatever the scenario put in $DATA,
+    # the default is a copy of the real canvas.
+    if [ "${FRESH:-}" = 1 ]; then rm -f "$DATA/workspace.json"; elif [ "${KEEP:-}" = 1 ]; then :; else
         cp "$HOME/Library/Application Support/dev.ekinertac.infiniterm/workspace.json" "$DATA/workspace.json" 2>/dev/null || true
     fi
     pkill -f "MacOS/infiniterm$" 2>/dev/null || true

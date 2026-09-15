@@ -27,11 +27,11 @@ spikes/term-zoom/           25 alacritty grids under a zoom
 spikes/canvas/              all of it on one canvas; viewport.rs is core's first module
 tools/shot.sh               screenshot one app's window for remote verification
 tools/bundle.sh             wrap the binary in target/bundle/infiniterm.app with the themes
-tools/drive/                the GUI driver: lib.sh (drive_start, cmd, key, type_text, click, drag, shot), scenarios phase3 panel drag phantom terminal stress
+tools/drive/                the GUI driver: lib.sh (drive_start, cmd, key, type_text, click, drag, shot), scenarios phase3 panel drag phantom terminal select stress
 Makefile                    run, run-fresh, stop, log, test, check, fmt, clippy, drive*, shot, release
 ```
 
-Phases 0 to 3 are complete and Phase 4 is half done: real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links). Left in Phase 4: text selection and Cmd+C, cursor blink, inactive dim, bell flash, spawn errors, OSC 52, `dev.stress.zoom` / `dev.stress.dims`, and the flood number (26 cards of `yes` at 8% paint at 22 fps; reference is 45 to 60). The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
+Phases 0 to 4 are complete: real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links, drag selection with Cmd+C, cursor blink, the inactive scrim, spawn errors, OSC 52, `dev.stress.*`). Open from Phase 4: the flood number (26 cards of `yes` at 8% paint at 22 fps; reference is 45 to 60) and the Turkish-Q chord check. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
 
 Things decided while drawing terminals, not in the reference:
 
@@ -40,6 +40,8 @@ Things decided while drawing terminals, not in the reference:
 - Rows are shaped in 24-cell chunks positioned at the cell's x and cached per row by hash; one shaped line per row drifted on long rows. Glyphs cost about 1 µs each in gpui and are skipped under a 3 px font.
 - Free drag and resize stay, with alignment guides (`alignment.rs`, exact matches only) and a no-overlap rule on release (`Model::end_gesture`); the moving card paints last with a red outline while it overlaps. The reference app mirrored both on 2026-09-15.
 - The shortcuts panel is a centred filterable overlay, not a sidebar.
+- A text selection lives in the grid (alacritty's `Selection`, grid points), so it stays on its text through a scroll; selected cells take the app's selection pair in `Grid::frame`, never the theme's. A body that starts a drag says so (`captures_drag`) and gets the moves and the release wherever the pointer goes (`AppView::body_drag`).
+- The cursor blinks from a clock the body gets at paint (`now`); `wants_frame(now)` reports the next flip so the poll task requests a frame then and not every tick.
 
 ## Commands
 

@@ -85,6 +85,8 @@ pub struct AppView {
     pub focus: FocusHandle,
     pub pan: Option<Pan>,
     pub gesture: Option<Gesture>,
+    /// The card whose body is following a drag (a text selection).
+    pub body_drag: Option<String>,
     /// The prompt's field, opened with the suggestion selected; the palette's query.
     pub prompt_field: field::Field,
     pub query_field: field::Field,

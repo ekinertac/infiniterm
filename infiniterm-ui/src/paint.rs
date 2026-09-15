@@ -85,7 +85,7 @@ impl AppView {
         self.start_glides(now);
         self.reconcile_bodies();
         self.reconcile_terminals(window);
-        self.feed_terminals(now);
+        self.feed_terminals(now, cx);
         self.paint_world(bounds, now, window, cx);
         self.schedule_save(now);
     }
@@ -117,7 +117,7 @@ impl AppView {
             };
             let focused = true;
             if let Some(body) = self.bodies.get_mut(&card.id) {
-                body.paint(bounds, 1., focused, window, cx);
+                body.paint(bounds, 1., focused, now, window, cx);
             }
             self.paint_labels(&card, bounds, 1., false, window, cx);
             return;
@@ -255,7 +255,7 @@ impl AppView {
             let focused = sel.focused_id.as_deref() == Some(&card.id);
             let selected = sel.extra.contains(&card.id);
             if let Some(body) = self.bodies.get_mut(&card.id) {
-                body.paint(b, vp.scale, focused, window, cx);
+                body.paint(b, vp.scale, focused, now, window, cx);
             }
             // The state border: agent state, else the card's resting colour.
             let state_color = match card.agent {

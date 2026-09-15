@@ -193,10 +193,16 @@ impl AppView {
                     if !already {
                         self.model.set_focus(Some(&id));
                     }
-                    let action = match self.bodies.get_mut(&id) {
-                        Some(body) => body.mouse_down(local, e.button, &e.modifiers, e.click_count),
-                        None => crate::body::BodyAction::None,
+                    let (action, captures) = match self.bodies.get_mut(&id) {
+                        Some(body) => (
+                            body.mouse_down(local, e.button, &e.modifiers, e.click_count),
+                            body.captures_drag(),
+                        ),
+                        None => (crate::body::BodyAction::None, false),
                     };
+                    if captures {
+                        self.body_drag = Some(id.clone());
+                    }
                     self.body_action(&id, action);
                 }
             }
@@ -289,11 +295,30 @@ impl AppView {
             self.model.dirty_layout = true;
             return;
         }
+        // A selection or a program's drag follows the pointer past the card.
+        if let Some(id) = self.body_drag.clone() {
+            if let Some(local) = self.local_in(&id, p) {
+                if let Some(body) = self.bodies.get_mut(&id) {
+                    body.mouse_move(local, &e.modifiers);
+                }
+            }
+            return;
+        }
         if let Hit::CardBody { id, local } = self.hit(p) {
             if let Some(body) = self.bodies.get_mut(&id) {
                 body.mouse_move(local, &e.modifiers);
             }
         }
+    }
+
+    /// `screen` as card pixels of `id`, wherever the pointer is.
+    fn local_in(&self, id: &str, screen: Point) -> Option<Point> {
+        let r = self.model.card(id)?.rect;
+        let world = world_pos_of(screen, self.model.viewport);
+        Some(Point {
+            x: world.x - r.x,
+            y: world.y - r.y,
+        })
     }
 
     fn drag_pan(&mut self, p: Point) {
@@ -339,6 +364,14 @@ impl AppView {
                 _ => (vec![g.card.clone()], vec![(g.card.clone(), g.start_rect)]),
             };
             self.model.end_gesture(&ids, &start);
+            return;
+        }
+        if let Some(id) = self.body_drag.take() {
+            if let Some(local) = self.local_in(&id, p) {
+                if let Some(body) = self.bodies.get_mut(&id) {
+                    body.mouse_up(local, e.button, &e.modifiers);
+                }
+            }
             return;
         }
         if let Hit::CardBody { id, local } = self.hit(p) {
@@ -437,7 +470,7 @@ impl AppView {
         }
         if let Some(id) = self.model.selection.focused_id.clone() {
             if let Some(body) = self.bodies.get_mut(&id) {
-                body.key(k, cx);
+                body.key(k, now_ms(), cx);
             }
             self.flush_writes();
         }
@@ -447,6 +480,19 @@ impl AppView {
     fn body_action(&mut self, id: &str, action: crate::body::BodyAction) {
         match action {
             crate::body::BodyAction::None => {}
+            crate::body::BodyAction::Retry => {
+                // Clearing the error is what makes the reconcile spawn again.
+                if let Some(t) = self.bodies.get_mut(id).and_then(|b| {
+                    b.as_any_mut()
+                        .downcast_mut::<crate::terminal_body::TerminalBody>()
+                }) {
+                    t.error = None;
+                    t.mark_dirty();
+                }
+                if let Some(c) = self.model.card_mut(id) {
+                    c.error = None;
+                }
+            }
             crate::body::BodyAction::Open(plan) => {
                 self.model.open_in_card(plan, Some(id));
             }

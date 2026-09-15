@@ -65,6 +65,8 @@ impl AppView {
         let scrollback = self.model.config.terminal.scrollback as usize;
         let shell = Some(self.model.config.terminal.shell.clone()).filter(|s| !s.is_empty());
         let palette = self.palette.clone();
+        let blink = self.model.config.terminal.cursor_blink;
+        let inactive_dim = self.model.config.ui.inactive_dim;
         let cards: Vec<_> = self
             .model
             .cards
@@ -104,6 +106,8 @@ impl AppView {
             if body.palette != palette {
                 body.set_palette(palette.clone());
             }
+            body.blink = blink;
+            body.inactive_dim = inactive_dim;
             let metrics_changed = body.font_family != metrics.family
                 || body.font_px != metrics.font_px
                 || body.line_height != metrics.line_height
@@ -150,13 +154,18 @@ impl AppView {
     }
 
     /// One budget of output across the panes, then the acks and the replies.
-    pub fn feed_terminals(&mut self, now: f64) {
+    pub fn feed_terminals(&mut self, now: f64, cx: &mut gpui::App) {
         let pieces = self.scheduler.take(now);
         for piece in pieces {
             let pane = piece.pane;
             let n = piece.data().len();
             if let Some(body) = self.terminal_for_pane(pane) {
                 body.feed(piece.data());
+                // OSC 52: a program (tmux, a remote vim) put text on the
+                // clipboard through the terminal.
+                if let Some(text) = body.clipboard_out.take() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                }
             }
             let owed = self.ledger.note(pane, n);
             if owed > 0 {

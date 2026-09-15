@@ -13,9 +13,10 @@
 use crate::palette::Palette;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line, Point};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::term::{viewport_to_point, Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -74,6 +75,15 @@ impl Dimensions for Size {
 
 /// The second cell of a wide character, in `Row::text`: one char per cell.
 pub const SPACER: char = '\u{200b}';
+
+/// What a click starts: one click drags over cells, two take words, three
+/// take lines. The same three as xterm.js and every Mac terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectKind {
+    Cells,
+    Words,
+    Lines,
+}
 
 /// One run of cells sharing colours and flags.
 #[derive(Clone, Debug, PartialEq)]
@@ -169,6 +179,52 @@ impl Grid {
         std::mem::take(&mut *self.events.0.borrow_mut())
     }
 
+    /// A viewport cell as a grid point, which is what a selection is made of:
+    /// the grid point stays on its text when the view scrolls, a viewport
+    /// cell does not.
+    fn point_at(&self, col: usize, row: usize) -> Point {
+        let offset = self.term.grid().display_offset();
+        viewport_to_point(
+            offset,
+            Point::new(
+                row.min(self.size.rows - 1),
+                Column(col.min(self.size.cols - 1)),
+            ),
+        )
+    }
+
+    pub fn start_selection(&mut self, col: usize, row: usize, kind: SelectKind) {
+        let ty = match kind {
+            SelectKind::Cells => SelectionType::Simple,
+            SelectKind::Words => SelectionType::Semantic,
+            SelectKind::Lines => SelectionType::Lines,
+        };
+        self.term.selection = Some(Selection::new(ty, self.point_at(col, row), Side::Left));
+    }
+
+    /// The drag end. `right` when the pointer is in the right half of the
+    /// cell, so a drag that ends on a character takes it.
+    pub fn update_selection(&mut self, col: usize, row: usize, right: bool) {
+        let point = self.point_at(col, row);
+        if let Some(sel) = self.term.selection.as_mut() {
+            sel.update(point, if right { Side::Right } else { Side::Left });
+        }
+    }
+
+    /// The selection as text, `None` when nothing is selected. Trailing
+    /// spaces of each line are dropped, as alacritty and xterm do.
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.selection_to_string().filter(|s| !s.is_empty())
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.term.selection.as_ref().is_some_and(|s| !s.is_empty())
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.term.selection = None;
+    }
+
     /// Scrolls the view by `lines` (positive is up into history).
     pub fn scroll(&mut self, lines: i32) {
         self.term.scroll_display(Scroll::Delta(lines));
@@ -228,6 +284,8 @@ impl Grid {
         let content = self.term.renderable_content();
         let cols = self.size.cols;
         let rows = self.size.rows;
+        let offset = content.display_offset as i32;
+        let selection = content.selection;
         let mut out: Vec<Row> = (0..rows)
             .map(|_| Row {
                 runs: Vec::new(),
@@ -235,21 +293,32 @@ impl Grid {
             })
             .collect();
         for cell in content.display_iter {
-            let row = cell.point.line.0 as usize;
-            if row >= rows {
+            // Grid lines run negative into history; the view starts `offset`
+            // lines up, so the viewport row is the line plus the offset.
+            let row = cell.point.line.0 + offset;
+            if row < 0 || row as usize >= rows {
                 continue;
             }
+            let row = row as usize;
             let flags = cell.flags;
             let (mut fg, mut bg) = (cell.fg, cell.bg);
             if flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
             }
             let bold = flags.intersects(Flags::BOLD);
-            let fg_rgb = palette.resolve(fg, bold);
-            let bg_rgb = match bg {
+            let mut fg_rgb = palette.resolve(fg, bold);
+            let mut bg_rgb = match bg {
                 Color::Named(NamedColor::Background) if !flags.contains(Flags::INVERSE) => None,
                 other => Some(palette.resolve(other, false)),
             };
+            // Selected cells take the app's selection pair, not the theme's:
+            // the reference pushes the same pair into every xterm, because a
+            // theme's own selection colour is chosen against a prompt and
+            // vanishes on a page of anything.
+            if selection.is_some_and(|s| s.contains(cell.point)) {
+                fg_rgb = palette.selection_text;
+                bg_rgb = Some(palette.selection);
+            }
             let run = Run {
                 text: String::new(),
                 fg: fg_rgb,
@@ -366,6 +435,77 @@ mod tests {
         assert!(text(&g.frame(&Palette::default_palette()))
             .iter()
             .all(|r| r.is_empty()));
+    }
+
+    #[test]
+    fn scrolling_up_shows_the_history_in_order() {
+        let mut g = Grid::new(10, 2, 100);
+        g.advance(b"one\r\ntwo\r\nthree\r\nfour");
+        g.scroll(2);
+        let f = g.frame(&Palette::default_palette());
+        assert_eq!(f.display_offset, 2);
+        assert_eq!(text(&f), ["one", "two"]);
+        g.scroll_to_bottom();
+        assert_eq!(
+            text(&g.frame(&Palette::default_palette())),
+            ["three", "four"]
+        );
+    }
+
+    #[test]
+    fn a_drag_selects_cells_and_reads_back_as_text() {
+        let mut g = Grid::new(20, 3, 100);
+        g.advance(b"hello world\r\nsecond");
+        assert!(!g.has_selection());
+        g.start_selection(6, 0, SelectKind::Cells);
+        g.update_selection(2, 1, true);
+        assert!(g.has_selection());
+        assert_eq!(g.selection_text().as_deref(), Some("world\nsec"));
+        let p = Palette::default_palette();
+        let f = g.frame(&p);
+        let selected: Vec<&Run> = f.rows[0]
+            .runs
+            .iter()
+            .filter(|r| r.bg == Some(p.selection))
+            .collect();
+        assert_eq!(selected.len(), 1);
+        // The tail of the first row is selected through to the wrap.
+        assert_eq!(selected[0].text.trim_end(), "world");
+        assert_eq!(selected[0].fg, p.selection_text);
+        g.clear_selection();
+        assert!(g.selection_text().is_none());
+    }
+
+    #[test]
+    fn two_clicks_take_the_word_and_three_the_line() {
+        let mut g = Grid::new(20, 3, 100);
+        g.advance(b"hello world here");
+        g.start_selection(7, 0, SelectKind::Words);
+        assert_eq!(g.selection_text().as_deref(), Some("world"));
+        g.start_selection(7, 0, SelectKind::Lines);
+        // A line selection carries its newline, as a copied line should.
+        assert_eq!(g.selection_text().as_deref(), Some("hello world here\n"));
+    }
+
+    #[test]
+    fn a_selection_follows_its_text_when_the_view_scrolls() {
+        let mut g = Grid::new(10, 2, 100);
+        g.advance(b"one\r\ntwo\r\nthree");
+        g.start_selection(0, 1, SelectKind::Words); // "three"
+        g.scroll(1);
+        assert_eq!(g.selection_text().as_deref(), Some("three"));
+        let p = Palette::default_palette();
+        let f = g.frame(&p);
+        // Scrolled up, the view shows one, two and the selection is off-screen.
+        assert_eq!(text(&f), ["one", "two"]);
+        assert!(!f
+            .rows
+            .iter()
+            .any(|r| r.runs.iter().any(|r| r.bg == Some(p.selection))));
+        g.scroll_to_bottom();
+        let f = g.frame(&p);
+        assert!(f.rows[1].runs.iter().any(|r| r.bg == Some(p.selection)));
+        assert!(!f.rows[0].runs.iter().any(|r| r.bg == Some(p.selection)));
     }
 
     #[test]

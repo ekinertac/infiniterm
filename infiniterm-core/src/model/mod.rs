@@ -194,6 +194,10 @@ pub enum Effect {
     /// A palette entry or an ift verb that runs a registered command: the
     /// registry lives outside the model, so the ui runs it.
     RunCommand(String),
+    /// `dev.stress.zoom` step `n` began: the ui logs its frame rate.
+    LogFps(u32),
+    /// `dev.stress.dims`: the ui logs every terminal's grid and cell size.
+    LogDims,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -272,6 +276,9 @@ pub struct Model {
     pub config_pairs: Vec<ConfigPair>,
     /// Closing a dirty editor takes two presses; the first says why.
     discard_armed: Option<(String, f64)>,
+    /// `dev.stress.zoom` in progress: the step taken so far and when the
+    /// next is due. Steps run from `tick`, which is the model's only clock.
+    pub stress_zoom: Option<(u32, f64)>,
     pub now_ms: f64,
     pub effects: Vec<Effect>,
 }
@@ -326,6 +333,7 @@ impl Model {
             dev_build: cfg!(debug_assertions),
             config_pairs: vec![],
             discard_armed: None,
+            stress_zoom: None,
             now_ms: 0.,
             effects: vec![],
         }
@@ -344,6 +352,11 @@ impl Model {
             .is_some_and(|(_, until)| now_ms >= *until)
         {
             self.discard_armed = None;
+        }
+        if let Some((n, due)) = self.stress_zoom {
+            if now_ms >= due {
+                self.stress_zoom_step(n, now_ms);
+            }
         }
     }
 
