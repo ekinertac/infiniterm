@@ -62,9 +62,6 @@ fn timing_add(slot: usize, since: std::time::Instant) {
 /// after any key, so it never blinks away while you type.
 const BLINK_MS: f64 = 600.;
 
-/// `ui.inactiveDim`'s default, before a settings read overwrites it: how
-/// much an unfocused card's scrim dims its text.
-const INACTIVE_DIM_DEFAULT: f64 = 0.45;
 /// The spawn-error text's font size.
 const ERROR_FONT_PX: f64 = 12.;
 /// The spawn-error block's inset from the card's edge.
@@ -174,7 +171,7 @@ impl TerminalBody {
             title: None,
             clipboard_out: None,
             blink: true,
-            inactive_dim: INACTIVE_DIM_DEFAULT,
+            inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             blink_epoch: 0.,
             painted_phase: true,
             painted_focused: false,

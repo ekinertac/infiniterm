@@ -68,9 +68,6 @@ const SEARCH_PANEL_ROWS_REPLACE: f64 = 2.6;
 const SEARCH_PANEL_ROWS_FIND: f64 = 1.6;
 /// Two spaces per tree depth level, CodeMirror's indent.
 const TREE_INDENT: &str = "  ";
-/// The tree's cursor row tints this faint when the tree isn't focused, so
-/// it marks a position without competing with the focused highlight.
-const TREE_CURSOR_UNFOCUSED_ALPHA: f32 = 0.12;
 /// The search field's label text is smaller than the buffer's, like a
 /// caption next to the value it labels.
 const SEARCH_LABEL_FONT_SCALE: f64 = 0.85;
@@ -996,7 +993,7 @@ impl EditorBody {
             } else if is_cursor {
                 window.paint_quad(fill(
                     row_b,
-                    crate::chrome::with_alpha(fg, TREE_CURSOR_UNFOCUSED_ALPHA),
+                    crate::chrome::with_alpha(fg, crate::chrome::TREE_CURSOR_UNFOCUSED_ALPHA),
                 ));
             }
             if current.as_deref() == Some(row.entry.path.as_str())

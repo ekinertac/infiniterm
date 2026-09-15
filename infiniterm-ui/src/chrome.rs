@@ -32,6 +32,13 @@ pub const WHEEL_LINES_PER_TICK: f64 = 3.;
 pub const TEXTURE_BAR_HEIGHT_RATIO: f32 = 0.55;
 /// A texture bar's alpha: a hint of ink, not a glyph.
 pub const TEXTURE_BAR_ALPHA: f32 = 0.45;
+/// `ui.inactiveDim`'s default, before a settings read overwrites it: how
+/// much an unfocused card's scrim dims it. Every body with one starts here.
+pub const INACTIVE_DIM_DEFAULT: f64 = 0.45;
+/// A file tree's cursor row tints this faint when the tree isn't focused,
+/// so it marks a position without competing with the focused highlight.
+/// Shared by the editor's and the diff card's trees.
+pub const TREE_CURSOR_UNFOCUSED_ALPHA: f32 = 0.12;
 
 #[derive(Clone, Debug)]
 pub struct Chrome {

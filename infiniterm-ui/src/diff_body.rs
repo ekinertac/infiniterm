@@ -35,6 +35,28 @@ const PAD_X: f64 = 8.;
 const PAD_Y: f64 = 6.;
 const DISK_POLL_MS: f64 = 2000.;
 
+/// The blame gutter's width in cells: a short hash, a first name, an age.
+const BLAME_GUTTER_COLS: f64 = 22.;
+/// The gap between the blame text and the line number that follows it.
+const BLAME_GUTTER_GAP_COLS: f64 = 2.;
+/// Breathing room beyond the gutter's digits (and blame, when it shows)
+/// before the text starts; wider than the editor's since this gutter also
+/// carries the change bar.
+const DIFF_GUTTER_EXTRA_PAD_PX: f64 = 24.;
+/// A line number sits this far left of the gutter's edge, right-aligned.
+const DIFF_LINE_NUM_MARGIN_PX: f64 = 16.;
+/// Gap between a tree row's file name and its `+added −removed` counts.
+const TREE_NAME_COUNT_GAP_PX: f32 = 8.;
+/// The change bar sits this far left of the text, clear of the gutter.
+const DIFF_BAR_OFFSET_PX: f64 = 6.;
+/// The change bar's width.
+const DIFF_BAR_WIDTH_PX: f64 = 3.;
+/// An added/removed line's background wash: a hint of colour, not a block.
+const DIFF_WASH_ALPHA: f32 = 0.18;
+/// An uncommitted blame line's colour already marks it; a committed one is
+/// dimmed so the code, not the attribution, reads first.
+const BLAME_DIM_ALPHA: f32 = 0.85;
+
 pub struct DiffBody {
     pub card_id: String,
     pub root: String,
@@ -117,7 +139,7 @@ impl DiffBody {
                 line_height: metrics.line_height,
                 cell_w: metrics.cell_w,
             },
-            inactive_dim: 0.45,
+            inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             world,
             dirty: true,
             version: 0,
@@ -323,8 +345,12 @@ impl DiffBody {
             .to_string()
             .len()
             .max(3);
-        let blame = if self.blame_on { 22. + 2. } else { 0. };
-        (digits as f64 + blame) * self.metrics.cell_w + 24.
+        let blame = if self.blame_on {
+            BLAME_GUTTER_COLS + BLAME_GUTTER_GAP_COLS
+        } else {
+            0.
+        };
+        (digits as f64 + blame) * self.metrics.cell_w + DIFF_GUTTER_EXTRA_PAD_PX
     }
 
     fn paint_tree(
@@ -381,7 +407,10 @@ impl DiffBody {
                 window.paint_quad(fill(row_b, sel_bg));
                 color = sel_fg;
             } else if is_cursor {
-                window.paint_quad(fill(row_b, crate::chrome::with_alpha(fg, 0.12)));
+                window.paint_quad(fill(
+                    row_b,
+                    crate::chrome::with_alpha(fg, crate::chrome::TREE_CURSOR_UNFOCUSED_ALPHA),
+                ));
             }
             if self.shown.as_deref() == Some(file.path.as_str()) && color == fg {
                 color = sel_bg;
@@ -396,7 +425,7 @@ impl DiffBody {
             );
             // The name keeps its tail: the file, then as many parents as
             // fit before the counts.
-            let avail = area.size.width - pad * 2. - c.width - px(8.);
+            let avail = area.size.width - pad * 2. - c.width - px(TREE_NAME_COUNT_GAP_PX);
             let mut shown = file.path.clone();
             let mut name = crate::text::shape(window, &shown, font_size, &f, color);
             while name.width > avail && shown.contains('/') {
@@ -416,18 +445,22 @@ impl DiffBody {
             );
             y += line_h;
         }
+        let hairline = px(crate::chrome::HAIRLINE_PX as f32);
         let edge = if self.sidebar_top {
             Bounds::new(
-                point(area.origin.x, area.origin.y + area.size.height - px(1.)),
-                size(area.size.width, px(1.)),
+                point(area.origin.x, area.origin.y + area.size.height - hairline),
+                size(area.size.width, hairline),
             )
         } else {
             Bounds::new(
-                point(area.origin.x + area.size.width - px(1.), area.origin.y),
-                size(px(1.), area.size.height),
+                point(area.origin.x + area.size.width - hairline, area.origin.y),
+                size(hairline, area.size.height),
             )
         };
-        window.paint_quad(fill(edge, crate::chrome::with_alpha(dim, 0.4)));
+        window.paint_quad(fill(
+            edge,
+            crate::chrome::with_alpha(dim, crate::chrome::HAIRLINE_ALPHA),
+        ));
     }
 
     /// The theme's green and red, for the washes and the counts.
@@ -470,7 +503,7 @@ impl CardBody for DiffBody {
         let font_size = px((self.metrics.font_px * scale) as f32);
         let line_h = px((self.line_h() * scale) as f32);
         let cell_w = px((self.metrics.cell_w * scale) as f32);
-        let legible = font_size >= px(3.);
+        let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32);
         if self.tree_shown {
             let area = if self.sidebar_top {
                 Bounds::new(bounds.origin, size(bounds.size.width, s(self.sidebar_w)))
@@ -510,29 +543,42 @@ impl CardBody for DiffBody {
             match row {
                 DiffRow::Added { .. } => {
                     window.paint_quad(fill(
-                        Bounds::new(point(text_x - s(6.), y), size(area.size.width, line_h)),
-                        crate::chrome::with_alpha(green, 0.18),
+                        Bounds::new(
+                            point(text_x - s(DIFF_BAR_OFFSET_PX), y),
+                            size(area.size.width, line_h),
+                        ),
+                        crate::chrome::with_alpha(green, DIFF_WASH_ALPHA),
                     ));
                     window.paint_quad(fill(
-                        Bounds::new(point(text_x - s(6.), y), size(s(3.), line_h)),
+                        Bounds::new(
+                            point(text_x - s(DIFF_BAR_OFFSET_PX), y),
+                            size(s(DIFF_BAR_WIDTH_PX), line_h),
+                        ),
                         green,
                     ));
                 }
                 DiffRow::Deleted { .. } => {
                     window.paint_quad(fill(
-                        Bounds::new(point(text_x - s(6.), y), size(area.size.width, line_h)),
-                        crate::chrome::with_alpha(red, 0.18),
+                        Bounds::new(
+                            point(text_x - s(DIFF_BAR_OFFSET_PX), y),
+                            size(area.size.width, line_h),
+                        ),
+                        crate::chrome::with_alpha(red, DIFF_WASH_ALPHA),
                     ));
                     window.paint_quad(fill(
-                        Bounds::new(point(text_x - s(6.), y), size(s(3.), line_h)),
+                        Bounds::new(
+                            point(text_x - s(DIFF_BAR_OFFSET_PX), y),
+                            size(s(DIFF_BAR_WIDTH_PX), line_h),
+                        ),
                         red,
                     ));
                 }
                 DiffRow::Collapsed { count } => {
-                    for dy in [px(0.), line_h - px(1.)] {
+                    let hairline = px(crate::chrome::HAIRLINE_PX as f32);
+                    for dy in [px(0.), line_h - hairline] {
                         window.paint_quad(fill(
-                            Bounds::new(point(origin.x, y + dy), size(area.size.width, px(1.))),
-                            crate::chrome::with_alpha(gutter_fg, 0.4),
+                            Bounds::new(point(origin.x, y + dy), size(area.size.width, hairline)),
+                            crate::chrome::with_alpha(gutter_fg, crate::chrome::HAIRLINE_ALPHA),
                         ));
                     }
                     if legible {
@@ -557,7 +603,10 @@ impl CardBody for DiffBody {
                 let num = line.to_string();
                 let l = crate::text::shape(window, &num, font_size, &base, gutter_fg);
                 let _ = l.paint(
-                    point(origin.x + gutter_w - s(16.) - l.width, y),
+                    point(
+                        origin.x + gutter_w - s(DIFF_LINE_NUM_MARGIN_PX) - l.width,
+                        y,
+                    ),
                     line_h,
                     window,
                     cx,
@@ -573,7 +622,7 @@ impl CardBody for DiffBody {
                             if uncommitted {
                                 green
                             } else {
-                                crate::chrome::with_alpha(gutter_fg, 0.85)
+                                crate::chrome::with_alpha(gutter_fg, BLAME_DIM_ALPHA)
                             },
                         );
                         let _ = l.paint(point(origin.x, y), line_h, window, cx);
@@ -723,7 +772,7 @@ impl CardBody for DiffBody {
     }
 
     fn wheel(&mut self, _local: Point, _dx: f64, dy: f64, _modifiers: &gpui::Modifiers) {
-        let lines = (dy / self.line_h() * 3.).round() as i64;
+        let lines = (dy / self.line_h() * crate::chrome::WHEEL_LINES_PER_TICK).round() as i64;
         if lines != 0 {
             let max = self.rows.len().saturating_sub(1) as i64;
             self.scroll = (self.scroll as i64 - lines).clamp(0, max) as usize;
