@@ -15,3 +15,4 @@ spikes/canvas/run.log
 tools/winid
 run.log
 spikes/cef-extension/*.log
+tools/locked

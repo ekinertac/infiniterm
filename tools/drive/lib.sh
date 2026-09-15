@@ -18,6 +18,12 @@ SHOTS=${SHOTS:-/tmp/infiniterm-drive/shots}
 SE='tell application "System Events" to tell process "infiniterm"'
 
 drive_start() {
+    # gpui does not draw behind the lock screen and nothing can be activated
+    # there; a locked Mac fails every check, so say so instead.
+    if [ -x "$ROOT/tools/locked" ] && [ "$("$ROOT/tools/locked")" = 1 ]; then
+        echo "abort: the Mac is locked (tools/locked); nothing can be verified on screen" >&2
+        exit 3
+    fi
     mkdir -p "$DATA" "$SHOTS"
     [ "${KEEP_SHOTS:-}" = 1 ] || rm -f "$SHOTS"/*.png
     # FRESH=1 starts empty, KEEP=1 uses whatever the scenario put in $DATA,

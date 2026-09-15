@@ -20,8 +20,8 @@ infiniterm-core/src/        every pure module of the reference, and the backend 
 infiniterm-cli/, infiniterm-hook/   ift and the hook binary, as they were
 infiniterm-term/src/        alacritty grid + frames (grid.rs), palette, key/mouse encoding, output scheduler, ack ledger; no gpui
 infiniterm-editor/src/      the editor's logic, no gpui: buffer (ropey + undo), search, language (15 tree-sitter grammars), highlight, explorer, wrap, diff
-infiniterm-browser/src/     browser crate placeholder; no CEF dependency yet
-infiniterm-ui/src/          the gpui app: main.rs (AppView), runtime.rs (effects, backend drain), paint.rs (one frame), input.rs, overlays.rs (palette, prompt, panel), body.rs (CardBody trait), terminal_body.rs + terminals.rs, editor_body.rs + diff_body.rs + transcript_body.rs + editors.rs, window_state.rs, field.rs, animator.rs, chrome.rs, text.rs
+infiniterm-browser/src/     CEF: process (framework, helpers, profile, extension, pump), surface (one browser: frames, input, popups), moat, app_protocol; no gpui
+infiniterm-ui/src/          the gpui app: main.rs (AppView, CEF startup, the menu), runtime.rs (effects, backend drain), paint.rs (one frame), input.rs, overlays.rs (palette, prompt, panel), body.rs (CardBody trait), terminal_body.rs + terminals.rs, editor_body.rs + diff_body.rs + transcript_body.rs + editors.rs, browser_body.rs + browsers.rs, bin/helper.rs (the CEF helper), window_state.rs, field.rs, animator.rs, chrome.rs, text.rs
 spikes/cef-extension/       cefclient + Claude in Chrome; the shared profile/ and extension/ (gitignored)
 spikes/cef-frame/           CEF frame as a gpui texture; chrome_moat.rs
 spikes/term-zoom/           25 alacritty grids under a zoom
@@ -32,7 +32,7 @@ tools/drive/                the GUI driver: lib.sh (drive_start, cmd, key, type_
 Makefile                    run, run-fresh, stop, log, test, check, fmt, clippy, drive*, shot, release
 ```
 
-Phases 0 to 8 are complete; the browser card (Phase 9) and the bundle with `ift` (Phase 10) remain. Editor, diff and transcript cards draw from `infiniterm-editor`; `tools/drive/editor.sh`, `diff.sh`, `transcript.sh` check them. Phase 4: real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links, drag selection with Cmd+C, cursor blink, the inactive scrim, spawn errors, OSC 52, `dev.stress.*`). 26 flooding cards paint at 110 fps and a zoom over 26 idle cards at 55 to 105 (reference 45 to 60 and 60); idle is two frames a second. Open from Phase 4: the Turkish-Q chord check. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
+Every phase is built. Unverified on screen: the browser card (Phase 9), because the Mac was locked when it was finished; `tools/drive/browser.sh` is the first thing to run. `make bundle` now needs `~/Code/cef-rs` (its `bundle-cef-app` lays out the CEF framework and helpers) and takes about a minute; the app runs only from the bundle (the framework is loaded from beside the executable). Editor, diff and transcript cards draw from `infiniterm-editor`; `tools/drive/editor.sh`, `diff.sh`, `transcript.sh` check them. Phase 4: real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links, drag selection with Cmd+C, cursor blink, the inactive scrim, spawn errors, OSC 52, `dev.stress.*`). 26 flooding cards paint at 110 fps and a zoom over 26 idle cards at 55 to 105 (reference 45 to 60 and 60); idle is two frames a second. Open from Phase 4: the Turkish-Q chord check. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
 
 Things decided while drawing terminals, not in the reference:
 
@@ -52,7 +52,8 @@ Things decided while drawing terminals, not in the reference:
 ```
 make                    # lists the targets
 make run                # build, bundle, launch on a scratch copy of the real canvas (never the real data dir)
-make check              # fmt (the three port crates only; cli and hook stay byte-identical to the reference) + clippy + test
+make check              # fmt (the port crates only; cli and hook stay copies of the reference, except the INFINITERM_DATA_DIR socket override) + clippy + test
+tools/drive/ift.sh      # headless: drives a scratch instance with ift and the hook binary over the socket; runs on a locked Mac
 make drive              # scripted GUI run with screenshots (say so before running it); drive-drag, drive-panel; tools/drive/<scenario>.sh for the rest
 make run DATA=/tmp/x    # any data dir; the default is /tmp/infiniterm-dev
 INFINITERM_CONFIG_DIR   # moves ~/.config/infiniterm the same way; tools/drive/settings.sh edits a copy
@@ -70,7 +71,7 @@ tools/shot.sh <app-name> out.png
 - Logic is a pure function in its own file with tests; gpui elements are wiring.
 - Tests always, unless Ekin says "skip the tests".
 - Stage by file name; commit per phase at least; messages say why; no attribution trailers of any kind.
-- Verify on screen before calling something done, with `tools/drive/`. Announce before sending any input to the Mac and wait for a go: Ekin may be on it. Keys through System Events, never cliclick (see HANDOVER.md). gpui does not draw while the Mac is locked.
+- Verify on screen before calling something done, with `tools/drive/`. Announce before sending any input to the Mac and wait for a go: Ekin may be on it. The driver refuses a locked Mac and a Mac where another app stays frontmost; `tools/drive/ift.sh` is the check that needs no screen. Keys through System Events, never cliclick (see HANDOVER.md). gpui does not draw while the Mac is locked.
 - Never run the native app without `INFINITERM_DATA_DIR` while the Tauri app is the shipping one: it would save over the real canvas (it did once).
 - A spike stays as it is until its replacement is in a crate, then the spike is deleted in the same commit.
 - Style for anything a human reads is in `~/.claude/CLAUDE.md`: plain, specific, no em-dashes, say less.
