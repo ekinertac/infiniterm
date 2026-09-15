@@ -5,6 +5,7 @@
 members = [
     "infiniterm-core",
     "infiniterm-term",
+    "infiniterm-editor",
     "infiniterm-browser",
     "infiniterm-ui",
     "infiniterm-cli",
