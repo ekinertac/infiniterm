@@ -100,8 +100,9 @@ impl AppView {
                 let n = self.timing.2.max(1) as f64;
                 let b = crate::terminal_body::timing_take();
                 eprintln!(
-                    "[paint] {} frames: feed {:.1} ms, paint {:.1} ms per frame (frame {:.1}, links {:.1}, shape {:.1}, glyphs {:.1})",
+                    "[paint] {} frames ({}): feed {:.1} ms, paint {:.1} ms per frame (frame {:.1}, links {:.1}, shape {:.1}, glyphs {:.1})",
                     self.timing.2,
+                    self.frame_reason(),
                     self.timing.0 / n,
                     self.timing.1 / n,
                     b[0] / n,

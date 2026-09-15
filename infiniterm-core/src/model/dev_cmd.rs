@@ -143,4 +143,16 @@ mod tests {
         m.tick(100_000.);
         assert!(m.take_effects().is_empty());
     }
+
+    #[test]
+    fn a_notice_asks_for_a_frame_only_when_its_time_is_up() {
+        let mut m = Model::new();
+        m.tick(1000.);
+        m.notify("hello");
+        assert!(!m.notice_expired(1500.));
+        assert!(m.notice_expired(1000. + super::super::NOTICE_MS));
+        m.tick(1000. + super::super::NOTICE_MS);
+        assert!(m.notice.is_none());
+        assert!(!m.notice_expired(100_000.));
+    }
 }

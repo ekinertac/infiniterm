@@ -237,6 +237,28 @@ impl AppView {
     /// Whether anything is moving or arriving: an animation, a gesture, output
     /// waiting to be parsed, a body with unpainted output. When nothing is,
     /// no frame is requested and the window idles; the poll task wakes it.
+    /// Which of `needs_frame`'s conditions holds, for the `[paint]` log line.
+    pub fn frame_reason(&self) -> &'static str {
+        let now = crate::now_ms();
+        if self.animator.is_running() {
+            "animator"
+        } else if self.pan.is_some() {
+            "pan"
+        } else if self.gesture.is_some() {
+            "gesture"
+        } else if self.scheduler.pending() {
+            "scheduler"
+        } else if !self.glides.is_empty() {
+            "glides"
+        } else if self.bodies.values().any(|b| b.wants_frame(now)) {
+            "body"
+        } else if self.model.notice_expired(now) {
+            "notice"
+        } else {
+            "idle"
+        }
+    }
+
     pub fn needs_frame(&self) -> bool {
         self.animator.is_running()
             || self.pan.is_some()
@@ -245,10 +267,8 @@ impl AppView {
             || !self.glides.is_empty()
             || {
                 let now = crate::now_ms();
-                self.bodies.values().any(|b| b.wants_frame(now))
+                self.bodies.values().any(|b| b.wants_frame(now)) || self.model.notice_expired(now)
             }
-            || self.model.notice.is_some()
-            || self.model.dirty_layout
     }
 
     /// Drains the backend's channels into the model, once per frame.

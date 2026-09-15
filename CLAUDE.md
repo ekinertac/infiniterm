@@ -31,7 +31,7 @@ tools/drive/                the GUI driver: lib.sh (drive_start, cmd, key, type_
 Makefile                    run, run-fresh, stop, log, test, check, fmt, clippy, drive*, shot, release
 ```
 
-Phases 0 to 4 are complete: real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links, drag selection with Cmd+C, cursor blink, the inactive scrim, spawn errors, OSC 52, `dev.stress.*`). 26 flooding cards paint at 68 fps and a zoom over 26 idle cards at 43 to 96 (reference 45 to 60 and 60). Open from Phase 4: the Turkish-Q chord check. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
+Phases 0 to 4 are complete: real shells run in the cards (typing, htop with mouse mode, fastfetch, clear, underlined links, drag selection with Cmd+C, cursor blink, the inactive scrim, spawn errors, OSC 52, `dev.stress.*`). 26 flooding cards paint at 110 fps and a zoom over 26 idle cards at 55 to 105 (reference 45 to 60 and 60); idle is two frames a second. Open from Phase 4: the Turkish-Q chord check. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
 
 Things decided while drawing terminals, not in the reference:
 

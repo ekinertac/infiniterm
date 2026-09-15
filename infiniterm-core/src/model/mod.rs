@@ -360,6 +360,12 @@ impl Model {
         }
     }
 
+    /// The notice's time is up: the next tick clears it, so a frame is due.
+    /// A notice on screen needs no other frame; it does not move.
+    pub fn notice_expired(&self, now_ms: f64) -> bool {
+        self.notice.is_some() && now_ms >= self.notice_until
+    }
+
     pub fn take_effects(&mut self) -> Vec<Effect> {
         std::mem::take(&mut self.effects)
     }

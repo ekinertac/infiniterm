@@ -152,6 +152,10 @@ fn main() {
                         .await;
                     let alive = poll.update(cx, |this, cx| {
                         this.drain_backend();
+                        // The save debounce runs here, not in the frame: a
+                        // layout change with nothing else moving must not
+                        // hold the frame loop open for half a second.
+                        this.schedule_save(now_ms());
                         if this.needs_frame() {
                             cx.notify();
                         }
