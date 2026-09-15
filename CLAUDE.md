@@ -16,8 +16,8 @@ The rules in the reference's Non-negotiables and Traps that are not about the DO
 HANDOVER.md                 state, decisions, spikes, the ten phases
 docs/port-mapping.md        every reference file and where it lands
 Cargo.toml                 workspace for the four native crates
-infiniterm-core/src/        pure app logic; viewport.rs is the first module
-infiniterm-term/src/        terminal crate placeholder
+infiniterm-core/src/        pure geometry, navigation, activity, and viewport modules
+infiniterm-term/src/        output scheduler and parsed-byte acknowledgement ledger
 infiniterm-browser/src/     browser crate placeholder; no CEF dependency yet
 infiniterm-ui/src/          UI crate placeholder; no gpui dependency yet
 spikes/cef-extension/       cefclient + Claude in Chrome; the shared profile/ and extension/ (gitignored)
@@ -27,12 +27,12 @@ spikes/canvas/              all of it on one canvas; viewport.rs is core's first
 tools/shot.sh               screenshot one app's window for remote verification
 ```
 
-Phase 0 is complete. The four crates exist at the repo root with no external dependencies. `infiniterm-core::viewport` carries the canvas spike's 12 tests. Phase 1 starts with `grid.ts` and its tests in the reference repo. The spikes remain untouched until their full replacements exist.
+Phase 0 is complete and Phase 1 is in progress. Geometry, viewport, activity, and terminal output scheduling are ported: 218 reference cases plus 6 native checks pass. The four crates still have no external dependencies. `HANDOVER.md` records the remaining modules. The spikes remain untouched until their full replacements exist.
 
 ## Commands
 
 ```
-cargo test --offline                                  # the workspace; 12 viewport tests
+cargo test --offline                                  # the workspace; 224 tests
 cd spikes/<name> && cargo build --release             # a spike; each is its own workspace
 cargo run --manifest-path ~/Code/cef-rs/Cargo.toml -p cef --bin bundle-cef-app -- <bin> -o target/bundle
 open --stderr "$PWD/run.log" --stdout "$PWD/run.log" target/bundle/<bin>.app

@@ -4,3 +4,38 @@
 //! independent of rendering and card bodies; see HANDOVER.md for the port plan.
 
 pub mod viewport;
+
+pub mod grid;
+
+pub mod layout;
+
+pub mod resize;
+
+pub mod cards;
+
+pub mod navigate;
+
+pub mod slots;
+
+#[cfg(test)]
+mod test_support;
+
+pub mod split;
+
+pub mod swap;
+
+pub mod multi_select;
+
+pub mod agent_state;
+
+pub mod groups;
+
+pub mod workspaces;
+
+pub mod momentum;
+
+pub mod pan_mode;
+
+pub mod chrome;
+
+pub mod format_zoom;

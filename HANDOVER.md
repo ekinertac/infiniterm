@@ -95,7 +95,7 @@ Create the four crates at the repo root, `cargo test` green on nothing. Move `sp
 
 Completed 2026-09-15. The root workspace contains `infiniterm-core/`, `infiniterm-term/`, `infiniterm-browser/`, and `infiniterm-ui/`. The empty workspace passed first; with the viewport module, `cargo test --offline` passes all 12 existing tests. The earlier count of 11 was incorrect. The viewport implementation and tests retain the spike's behavior, with formatting and header changes only. The canvas spike keeps its copy until the full canvas has a replacement. All spikes remain separate workspaces. The browser, terminal, and UI crates are placeholders with no external dependencies. This phase has no app window to check; screen checks begin when the UI exists.
 
-Phase 1 must complete the viewport comparison against the reference source and its 20 test cases. Known gaps: optional fit padding, `PAN_DURATION_MS`, and the separate near/far centering case. Keep these in Phase 1, alongside the geometry modules.
+Phase 1 completed the viewport comparison against all 20 reference cases, including the near/far centering case. Optional fit padding and `PAN_DURATION_MS` are now present.
 
 ### Phase 1: `infiniterm-core`, the pure modules
 
@@ -132,6 +132,9 @@ Every pure TS module becomes `core/src/<name>.rs` with the same test cases in `#
 | `xtermTransform.ts`, `paneRegistry.ts`, `mirror.ts`, `tokens.test.ts`, `version.ts` | | not ported | webview workarounds; the mapping's "What disappears" table says why for each |
 
 Done: `cargo test -p infiniterm-core` green with the ported cases, and a count in the commit message against the 498.
+
+Progress 2026-09-15: 218 of the reference's 498 test cases are ported, plus 6 native regression checks (224 total, all passing). Complete modules: grid, layout, resize/cardActions, cardSize, navigate, slots, split, swap, multiSelect, groups, workspaces, zoomActions/zoomAnimation, momentum, panMode, chrome, formatZoom, agentState, outputScheduler, and flowControl. Geometry uses `f64` to match TypeScript numbers. `grid` owns shared geometry types. Viewport now includes all 20 reference cases, custom fit padding, and pan duration. The terminal scheduler and acknowledgement ledger are in `infiniterm-term`, with no external dependencies. `cargo clippy --workspace --all-targets --offline -- -D warnings` passes. Phase 1 remains in progress: persistence/configuration, key handling, palette, labels, path handling, editor helpers, and domain commands remain. The Turkish-Q physical-key check is still required before the keymap port.
+
 
 ### Phase 2: `infiniterm-core`, the backend
 
@@ -236,4 +239,4 @@ Consolidated from the four NOTES files; each is the short form.
 - `~/Code/infiniterm`: `master` at `67f360f` plus the other session's uncommitted work (browser card as WKWebView, browserKeys, sidebar). The mapping spec there is untracked; the copy at `docs/port-mapping.md` here is the committed one. Its `CLAUDE.md` has a paragraph on the port pointing here.
 - The canvas spike app may still be running on the Mac: `pkill -9 -f "MacOS/canvas"`, then remove `spikes/cef-extension/profile/Singleton*` before the next CEF launch.
 
-Next action: Phase 1. Read the reference `src/lib/grid.ts` and `grid.test.ts`, then port the tests into `infiniterm-core/src/grid.rs` before the implementation.
+Next action: continue Phase 1 with the remaining modules listed in its progress paragraph. Read each source and its tests before porting. Keep the physical-key check before the keymap port.
