@@ -42,6 +42,7 @@ pub mod format_zoom;
 
 pub mod config;
 pub mod fuzzy;
+pub mod itermcolors;
 pub mod jsonc;
 pub mod palette;
 pub mod palette_usage;
