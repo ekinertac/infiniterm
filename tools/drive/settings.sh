@@ -8,7 +8,7 @@ CONFIG=/tmp/infiniterm-drive/config
 mkdir -p "$CONFIG"
 cp "$HOME/.config/infiniterm/settings.json" "$HOME/.config/infiniterm/keybindings.json" "$CONFIG/" 2>/dev/null || true
 FRESH=1
-KEEP_SHOTS=1 drive_start
+drive_start
                                 shot 01-before 1.5
 # The size and the theme in one edit; the watcher polls every second.
 python3 - "$CONFIG/settings.json" <<'PY'
@@ -24,7 +24,7 @@ osascript -e "$SE to set position of window 1 to {300, 200}"
 wait_s 1.5
 quit
 echo "window.json: $(cat "$DATA/window.json" 2>/dev/null)"
-KEEP_SHOTS=1 drive_start
+FRESH= KEEP=1 KEEP_SHOTS=1 drive_start
                                 shot 03-relaunched 1.0
 echo "relaunched at $WX,$WY (expected 300,200)"
 grep -c "" "$DATA/workspace.json" >/dev/null && echo "workspace.json saved"

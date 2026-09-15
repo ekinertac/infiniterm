@@ -13,6 +13,8 @@
 mod animator;
 mod body;
 mod chrome;
+mod editor_body;
+mod editors;
 mod field;
 mod input;
 mod overlays;
@@ -179,6 +181,7 @@ fn main() {
                         // hold the frame loop open for half a second.
                         this.schedule_save(now_ms());
                         this.schedule_window_save(now_ms());
+                        this.idle_editors(now_ms());
                         if this.needs_frame() {
                             cx.notify();
                         }

@@ -559,7 +559,7 @@ impl CardBody for TerminalBody {
         self.refit(world);
     }
 
-    fn key(&mut self, k: &Keystroke, now: f64, cx: &mut App) {
+    fn key(&mut self, k: &Keystroke, now: f64, cx: &mut App) -> BodyAction {
         let m = &k.modifiers;
         // The app owns Cmd; the Cmd keys a terminal answers are copy, paste
         // and the line-movement arrows the encoder knows.
@@ -567,14 +567,14 @@ impl CardBody for TerminalBody {
             if let Some(text) = self.grid.selection_text() {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
-            return;
+            return BodyAction::None;
         }
         if m.platform && k.key == "v" {
             if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
                 let bracketed = self.grid.bracketed_paste();
                 self.write(paste(&text, bracketed));
             }
-            return;
+            return BodyAction::None;
         }
         let key = Key {
             name: &k.key,
@@ -593,6 +593,7 @@ impl CardBody for TerminalBody {
             self.dirty = true;
             self.write(bytes);
         }
+        BodyAction::None
     }
 
     fn mouse_down(

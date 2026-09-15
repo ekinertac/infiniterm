@@ -35,8 +35,11 @@ pub trait CardBody {
     );
     /// The card's rect in world units changed (a drag, a resize, a restore).
     fn resized(&mut self, _world: Size) {}
-    /// A key the app did not claim (no Cmd chord bound to it).
-    fn key(&mut self, _keystroke: &Keystroke, _now: f64, _cx: &mut App) {}
+    /// A key the app did not claim (no Cmd chord bound to it). May ask for
+    /// something, the way a click may (a file opened beside from the tree).
+    fn key(&mut self, _keystroke: &Keystroke, _now: f64, _cx: &mut App) -> BodyAction {
+        BodyAction::None
+    }
     /// A click in the body, in card pixels (the zoom undone).
     fn mouse_down(
         &mut self,

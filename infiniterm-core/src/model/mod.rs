@@ -226,6 +226,11 @@ pub enum Pending {
         fill_phantom: bool,
     },
     NavigateBrowser(String),
+    /// An untitled editor's first save: the path typed becomes the card's,
+    /// then the save runs.
+    SaveAs(String),
+    /// `editor.goToLine`: the number typed lands in `card.line` for the body.
+    GoToLine(String),
 }
 
 /// How long a notice stays up after the last one.

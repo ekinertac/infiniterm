@@ -86,6 +86,7 @@ impl AppView {
         self.start_glides(now);
         self.reconcile_bodies();
         self.reconcile_terminals(window);
+        self.reconcile_editors(window);
         let t0 = std::time::Instant::now();
         self.feed_terminals(now, cx);
         let t1 = std::time::Instant::now();

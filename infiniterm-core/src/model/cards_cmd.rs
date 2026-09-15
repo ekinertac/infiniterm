@@ -288,6 +288,44 @@ impl Model {
                     self.dirty_layout = true;
                 }
             }
+            // The typed path is relative to the card's directory, `~`
+            // allowed, and the card becomes that file: its directory follows
+            // so "beside" and the label do.
+            Pending::SaveAs(id) => {
+                let Some(raw) = text.filter(|t| !t.trim().is_empty()) else {
+                    return;
+                };
+                let from = self.card(&id).cloned();
+                let full = self.resolve_typed_path(raw.trim(), from.as_ref());
+                if let Some(card) = self.card_mut(&id) {
+                    card.cwd = full
+                        .rsplit_once('/')
+                        .map(|(dir, _)| if dir.is_empty() { "/" } else { dir })
+                        .unwrap_or("/")
+                        .to_string();
+                    card.path = Some(full);
+                    self.dirty_layout = true;
+                }
+                self.effects.push(Effect::Editor {
+                    card_id: id,
+                    action: EditorAction::Save,
+                });
+            }
+            Pending::GoToLine(id) => {
+                let Some(n) = text
+                    .and_then(|t| t.trim().parse::<u64>().ok())
+                    .filter(|n| *n > 0)
+                else {
+                    return;
+                };
+                if let Some(card) = self.card_mut(&id) {
+                    card.line = Some(n);
+                }
+                self.effects.push(Effect::Editor {
+                    card_id: id,
+                    action: EditorAction::GoToLine,
+                });
+            }
         }
     }
 
@@ -520,6 +558,15 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("card.close", "Card: close", Model::close_selected);
     r.register("card.save", "Editor: save the file", |m| {
         m.for_selected(|m, id| {
+            let Some(card) = m.card(&id) else { return };
+            if card.kind != CardKind::Editor {
+                return;
+            }
+            // Untitled: ask where first. The answer re-enters as a save.
+            if card.path.is_none() {
+                m.prompt.ask("save as", "", Pending::SaveAs(id));
+                return;
+            }
             m.effects.push(Effect::Editor {
                 card_id: id,
                 action: EditorAction::Save,
@@ -649,7 +696,11 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.editor_action(EditorAction::Find)
     });
     r.register("editor.goToLine", "Editor: go to a line", |m| {
-        m.editor_action(EditorAction::GoToLine)
+        m.with_active_card(|m, id| {
+            if m.card(&id).is_some_and(|c| c.kind == CardKind::Editor) {
+                m.prompt.ask("go to line", "", Pending::GoToLine(id));
+            }
+        })
     });
     for (dir, dx, dy) in [
         (Direction::Left, -MOVE_STEP, 0.),

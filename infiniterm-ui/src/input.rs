@@ -469,10 +469,13 @@ impl AppView {
             return;
         }
         if let Some(id) = self.model.selection.focused_id.clone() {
-            if let Some(body) = self.bodies.get_mut(&id) {
-                body.key(k, now_ms(), cx);
-            }
+            let action = match self.bodies.get_mut(&id) {
+                Some(body) => body.key(k, now_ms(), cx),
+                None => crate::body::BodyAction::None,
+            };
+            self.body_action(&id, action);
             self.flush_writes();
+            self.perform_effects();
         }
     }
 

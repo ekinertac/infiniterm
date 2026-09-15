@@ -2865,6 +2865,7 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "infiniterm-core",
+ "infiniterm-editor",
  "infiniterm-term",
  "serde",
  "serde_json",

@@ -672,4 +672,62 @@ mod tests {
         let close = items.iter().find(|i| i.id == "card.close").unwrap();
         assert_eq!(close.hint.as_deref(), Some("Cmd W"));
     }
+
+    // An untitled editor's save asks where; the answer names the card and
+    // the save then runs. Relative to the card's directory, `~` allowed.
+    #[test]
+    fn saving_an_untitled_editor_asks_for_a_path_then_saves() {
+        let mut h = Harness::new();
+        h.run("card.new.editor");
+        let id = h.focused().id.clone();
+        assert_eq!(h.focused().kind, crate::saved_layout::CardKind::Editor);
+        assert!(h.focused().path.is_none());
+        h.run("card.save");
+        assert_eq!(h.m.prompt.label, "save as");
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::Editor { .. })));
+        let (pending, text) = h.m.prompt.settle(Some("notes/todo.md")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        let card = h.m.card(&id).unwrap();
+        assert!(card.path.as_deref().unwrap().ends_with("/notes/todo.md"));
+        assert!(card.cwd.ends_with("/notes"));
+        assert!(h.m.take_effects().iter().any(|e| matches!(
+            e,
+            Effect::Editor { card_id, action: EditorAction::Save } if card_id == &id
+        )));
+        // Named now: the next save goes straight through.
+        h.run("card.save");
+        assert!(!h.m.prompt.is_open());
+    }
+
+    #[test]
+    fn go_to_line_asks_and_puts_the_number_on_the_card() {
+        let mut h = Harness::new();
+        h.run("card.new.editor");
+        let id = h.focused().id.clone();
+        h.run("editor.goToLine");
+        assert_eq!(h.m.prompt.label, "go to line");
+        let (pending, text) = h.m.prompt.settle(Some(" 42 ")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert_eq!(h.m.card(&id).unwrap().line, Some(42));
+        assert!(h.m.take_effects().iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::GoToLine,
+                ..
+            }
+        )));
+        // Not a number: nothing happens.
+        h.run("editor.goToLine");
+        let (pending, text) = h.m.prompt.settle(Some("abc")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::Editor { .. })));
+    }
 }
