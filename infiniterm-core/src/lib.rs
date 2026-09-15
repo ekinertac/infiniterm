@@ -40,6 +40,7 @@ pub mod chrome;
 
 pub mod format_zoom;
 
+pub mod card_label;
 pub mod config;
 pub mod fuzzy;
 pub mod itermcolors;
