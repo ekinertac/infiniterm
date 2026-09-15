@@ -34,7 +34,16 @@ use infiniterm_editor::explorer::{Entry, Tree, TreeAction};
 use infiniterm_editor::highlight::{Highlighting, Span};
 use infiniterm_editor::language::Language;
 use infiniterm_editor::search::Search;
+use infiniterm_editor::wrap::wrap_line;
 use std::collections::HashMap;
+
+/// One row on screen: a line, or a piece of a wrapped one, as a char range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VRow {
+    line: usize,
+    a: usize,
+    b: usize,
+}
 
 /// The terminal host's inset, so the first column lines up across cards.
 const PAD_X: f64 = 8.;
@@ -106,8 +115,8 @@ pub struct EditorBody {
     selecting: bool,
     /// The rows visible at the last paint, for scrolling the cursor into view.
     rows_visible: usize,
-    /// Shaped lines by line index, keyed by what they were shaped from.
-    shaped: HashMap<usize, (u64, gpui::ShapedLine)>,
+    /// Shaped rows by (line, first char), keyed by what they were shaped from.
+    shaped: HashMap<(usize, usize), (u64, gpui::ShapedLine)>,
     /// Pending events for the frame, drained by `take_event`.
     events: Vec<EditorEvent>,
     /// The line a link or `ift file:42` asked for, once the text is in.
@@ -383,8 +392,30 @@ impl EditorBody {
         let line = self.buffer.line_of(self.buffer.cursor());
         if line < self.scroll_line {
             self.scroll_line = line;
-        } else if line >= self.scroll_line + self.rows_visible {
-            self.scroll_line = line + 1 - self.rows_visible;
+        } else {
+            // Scroll until the cursor's line fits within the visible rows,
+            // counting the rows wrapped lines take.
+            let cols = self.cols_visible(self.world);
+            loop {
+                let mut rows = 0;
+                for l in self.scroll_line..=line {
+                    rows += self.rows_of(l, cols);
+                }
+                if rows <= self.rows_visible || self.scroll_line >= line {
+                    break;
+                }
+                self.scroll_line += 1;
+            }
+        }
+        // Horizontal: the cursor's column, when lines do not wrap.
+        if !self.wrap {
+            let col = self.buffer.col_of(self.buffer.cursor()) as f64 * self.metrics.cell_w;
+            let width = self.cols_visible(self.world) as f64 * self.metrics.cell_w;
+            if col < self.scroll_x {
+                self.scroll_x = col;
+            } else if col > self.scroll_x + width - self.metrics.cell_w {
+                self.scroll_x = col - width + self.metrics.cell_w * 2.;
+            }
         }
         self.dirty = true;
     }
@@ -488,16 +519,57 @@ impl EditorBody {
         (Point { x, y }, Size { w, h })
     }
 
+    fn cols_visible(&self, world: Size) -> usize {
+        let (_, size) = self.text_area(world);
+        (((size.w - PAD_X * 2. - self.gutter_w()) / self.metrics.cell_w).floor()).max(1.) as usize
+    }
+
+    /// The rows on screen from `scroll_line`: one per line, or several when
+    /// a prose line wraps at `cols`.
+    fn visual_rows(&self, cols: usize, max_rows: usize) -> Vec<VRow> {
+        let mut out = vec![];
+        let count = self.buffer.line_count();
+        let mut line = self.scroll_line.min(count.saturating_sub(1));
+        while line < count && out.len() < max_rows {
+            if self.wrap {
+                for (a, b) in wrap_line(&self.buffer.line(line), cols) {
+                    if out.len() >= max_rows {
+                        break;
+                    }
+                    out.push(VRow { line, a, b });
+                }
+            } else {
+                let len = self.buffer.line(line).chars().count();
+                out.push(VRow { line, a: 0, b: len });
+            }
+            line += 1;
+        }
+        out
+    }
+
+    /// How many visual rows `line` takes.
+    fn rows_of(&self, line: usize, cols: usize) -> usize {
+        if self.wrap {
+            wrap_line(&self.buffer.line(line), cols).len()
+        } else {
+            1
+        }
+    }
+
     /// The char index under a point in the text area.
     fn index_at(&self, local: Point, world: Size) -> usize {
         let (origin, _) = self.text_area(world);
         let x = local.x - origin.x - PAD_X - self.gutter_w() + self.scroll_x;
         let y = local.y - origin.y - PAD_Y;
         let row = (y / self.line_h()).floor().max(0.) as usize;
-        let line = (self.scroll_line + row).min(self.buffer.line_count().saturating_sub(1));
+        let cols = self.cols_visible(world);
+        let rows = self.visual_rows(cols, row + 1);
+        let Some(vrow) = rows.get(row).or(rows.last()) else {
+            return 0;
+        };
         let col = ((x / self.metrics.cell_w) + 0.5).floor().max(0.) as usize;
-        let len = self.buffer.line(line).chars().count();
-        self.buffer.line_start(line) + col.min(len)
+        let len = vrow.b - vrow.a;
+        self.buffer.line_start(vrow.line) + vrow.a + col.min(len)
     }
 
     // ----- keys -----
@@ -1087,12 +1159,13 @@ impl CardBody for EditorBody {
         let sel_fg = hex(&self.colors.selection_text);
         let cursor_color = hex(&self.colors.cursor);
         let base = font(self.metrics.family.clone());
-        let first = self
-            .scroll_line
-            .min(self.buffer.line_count().saturating_sub(1));
-        let last = (first + rows_visible).min(self.buffer.line_count());
+        let cols = self.cols_visible(world);
+        let vrows = self.visual_rows(cols, rows_visible);
+        let first = vrows.first().map(|r| r.line).unwrap_or(0);
+        let last = vrows.last().map(|r| r.line + 1).unwrap_or(first);
         let cursor = self.buffer.cursor();
         let cursor_line = self.buffer.line_of(cursor);
+        let cursor_col = self.buffer.col_of(cursor);
         let selection = self.buffer.selection();
         let bracket = self.buffer.matching_bracket();
         let matches: Vec<(usize, usize)> = self
@@ -1122,12 +1195,19 @@ impl CardBody for EditorBody {
         }
         let spans: Vec<Span> = self.spans_for().to_vec();
         let mut span_i = 0;
-        for line_no in first..last {
-            let row = line_no - first;
-            let y = origin.y + line_h * row as f32;
+        // Runs for the line being drawn, built once per line and sliced
+        // per visual row.
+        let mut line_runs: Option<(usize, Vec<TextRun>)> = None;
+        for (row_i, vrow) in vrows.iter().enumerate() {
+            let line_no = vrow.line;
+            let y = origin.y + line_h * row_i as f32;
             let line_text = self.buffer.line(line_no);
             let line_start = self.buffer.line_start(line_no);
             let line_len = line_text.chars().count();
+            // This row's char range in the buffer.
+            let row_start = line_start + vrow.a;
+            let row_end = line_start + vrow.b;
+            let row_len = vrow.b - vrow.a;
             // The active line wash, gutter, selection, matches, then the text.
             if self.highlight_line && line_no == cursor_line && selection.is_none() {
                 window.paint_quad(fill(
@@ -1135,7 +1215,7 @@ impl CardBody for EditorBody {
                     crate::chrome::with_alpha(gpui::rgb(0x808080).into(), 0.10),
                 ));
             }
-            if legible {
+            if legible && vrow.a == 0 {
                 let num = (line_no + 1).to_string();
                 let l = crate::text::shape(window, &num, font_size, &base, gutter_fg);
                 let _ = l.paint(
@@ -1145,9 +1225,10 @@ impl CardBody for EditorBody {
                     cx,
                 );
             }
+            // A range of buffer chars as a quad on this row.
             let range_quad = |a: usize, b: usize, color: Hsla, window: &mut Window| {
-                let a = a.max(line_start).min(line_start + line_len) - line_start;
-                let b = b.max(line_start).min(line_start + line_len + 1) - line_start;
+                let a = a.max(row_start).min(row_end) - row_start;
+                let b = b.max(row_start).min(row_end + 1) - row_start;
                 if b > a {
                     window.paint_quad(fill(
                         Bounds::new(
@@ -1159,7 +1240,7 @@ impl CardBody for EditorBody {
                 }
             };
             for (a, b) in &matches {
-                if *b > line_start && *a <= line_start + line_len {
+                if *b > row_start && *a <= row_end {
                     let strong = current_match == Some((*a, *b));
                     range_quad(
                         *a,
@@ -1170,17 +1251,17 @@ impl CardBody for EditorBody {
                 }
             }
             if let Some(sel) = &selection {
-                if sel.end > line_start && sel.start <= line_start + line_len {
+                if sel.end > row_start && sel.start <= row_end {
                     range_quad(sel.start, sel.end, sel_bg, window);
                 }
             }
             if let Some((a, b)) = bracket {
                 for i in [a, b] {
-                    if i >= line_start && i < line_start + line_len {
+                    if i >= row_start && i < row_end {
                         window.paint_quad(
                             outline(
                                 Bounds::new(
-                                    point(text_x + cell_w * (i - line_start) as f32, y),
+                                    point(text_x + cell_w * (i - row_start) as f32, y),
                                     size(cell_w, line_h),
                                 ),
                                 crate::chrome::with_alpha(fg, 0.5),
@@ -1191,85 +1272,80 @@ impl CardBody for EditorBody {
                     }
                 }
             }
-            if !legible || line_text.trim().is_empty() {
+            if !legible || line_text[..].trim().is_empty() || row_len == 0 {
                 continue;
             }
             // Runs from the spans that fall inside this line.
-            let byte_start = line_byte_starts.get(line_no).copied().unwrap_or(0);
-            let byte_end = byte_start + line_text.len();
-            while span_i < spans.len() && spans[span_i].end <= byte_start {
-                span_i += 1;
+            if line_runs.as_ref().map(|(l, _)| *l) != Some(line_no) {
+                let byte_start = line_byte_starts.get(line_no).copied().unwrap_or(0);
+                let byte_end = byte_start + line_text.len();
+                while span_i < spans.len() && spans[span_i].end <= byte_start {
+                    span_i += 1;
+                }
+                let mut runs: Vec<TextRun> = vec![];
+                let mut pos = 0; // byte offset within the line
+                let mut j = span_i;
+                let push = |runs: &mut Vec<TextRun>, len: usize, color: Hsla, italic: bool| {
+                    if len == 0 {
+                        return;
+                    }
+                    let mut f = base.clone();
+                    if italic {
+                        f.style = FontStyle::Italic;
+                    }
+                    runs.push(TextRun {
+                        len,
+                        font: f,
+                        color,
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    });
+                };
+                while j < spans.len() && spans[j].start < byte_end {
+                    let sp = &spans[j];
+                    let a = sp.start.max(byte_start) - byte_start;
+                    let b = sp.end.min(byte_end) - byte_start;
+                    if a > pos {
+                        push(&mut runs, a - pos, fg, false);
+                        pos = a;
+                    }
+                    if b > pos {
+                        let (color, italic) = match self.rule_for(sp.capture) {
+                            Some(r) => (hex(&r.color), r.italic),
+                            None => (fg, false),
+                        };
+                        push(&mut runs, b - pos, color, italic);
+                        pos = b;
+                    }
+                    j += 1;
+                }
+                if pos < line_text.len() {
+                    push(&mut runs, line_text.len() - pos, fg, false);
+                }
+                // Selected text takes the selection colour, split at the edges.
+                if let Some(sel) = &selection {
+                    if sel.end > line_start && sel.start < line_start + line_len {
+                        let a = sel.start.max(line_start) - line_start;
+                        let b = sel.end.min(line_start + line_len) - line_start;
+                        let (ba, bb) = (char_to_byte(&line_text, a), char_to_byte(&line_text, b));
+                        runs = recolor(runs, ba, bb, sel_fg);
+                    }
+                }
+                line_runs = Some((line_no, runs));
             }
-            let mut runs: Vec<TextRun> = vec![];
-            let mut pos = 0; // byte offset within the line
-            let mut j = span_i;
-            let sel_range = selection.clone();
-            let push = |runs: &mut Vec<TextRun>, len: usize, color: Hsla, italic: bool| {
-                if len == 0 {
-                    return;
-                }
-                let mut f = base.clone();
-                if italic {
-                    f.style = FontStyle::Italic;
-                }
-                runs.push(TextRun {
-                    len,
-                    font: f,
-                    color,
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                });
-            };
-            while j < spans.len() && spans[j].start < byte_end {
-                let sp = &spans[j];
-                let a = sp.start.max(byte_start) - byte_start;
-                let b = sp.end.min(byte_end) - byte_start;
-                if a > pos {
-                    push(&mut runs, a - pos, fg, false);
-                    pos = a;
-                }
-                if b > pos {
-                    let (color, italic) = match self.rule_for(sp.capture) {
-                        Some(r) => (hex(&r.color), r.italic),
-                        None => (fg, false),
-                    };
-                    push(&mut runs, b - pos, color, italic);
-                    pos = b;
-                }
-                j += 1;
-            }
-            if pos < line_text.len() {
-                push(&mut runs, line_text.len() - pos, fg, false);
-            }
-            // Selected text takes the selection colour, split at the edges.
-            if let Some(sel) = sel_range {
-                if sel.end > line_start && sel.start < line_start + line_len {
-                    let a = sel.start.max(line_start) - line_start;
-                    let b = sel.end.min(line_start + line_len) - line_start;
-                    let (ba, bb) = (
-                        line_text
-                            .char_indices()
-                            .nth(a)
-                            .map(|(i, _)| i)
-                            .unwrap_or(line_text.len()),
-                        line_text
-                            .char_indices()
-                            .nth(b)
-                            .map(|(i, _)| i)
-                            .unwrap_or(line_text.len()),
-                    );
-                    runs = recolor(runs, ba, bb, sel_fg);
-                }
-            }
-            // The whole line is shaped and painted at the scroll offset;
-            // gpui clips it to the card. Wrapping is a later step.
-            let shown: String = line_text.clone();
+            let runs = &line_runs.as_ref().unwrap().1;
+            let (ba, bb) = (
+                char_to_byte(&line_text, vrow.a),
+                char_to_byte(&line_text, vrow.b),
+            );
+            let shown = &line_text[ba..bb];
+            let row_runs = slice_runs(runs, ba, bb);
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             use std::hash::{Hash, Hasher};
             shown.hash(&mut hasher);
             f32::from(font_size).to_bits().hash(&mut hasher);
-            for r in &runs {
+            for r in &row_runs {
                 (
                     r.len,
                     r.color.h.to_bits(),
@@ -1280,16 +1356,17 @@ impl CardBody for EditorBody {
                     .hash(&mut hasher);
             }
             let key = hasher.finish();
-            let shaped = match self.shaped.get(&line_no) {
+            let cache_key = (line_no, vrow.a);
+            let shaped = match self.shaped.get(&cache_key) {
                 Some((k, line)) if *k == key => line.clone(),
                 _ => {
                     let line = window.text_system().shape_line(
-                        SharedString::from(shown.clone()),
+                        SharedString::from(shown.to_string()),
                         font_size,
-                        &runs,
+                        &row_runs,
                         None,
                     );
-                    self.shaped.insert(line_no, (key, line.clone()));
+                    self.shaped.insert(cache_key, (key, line.clone()));
                     line
                 }
             };
@@ -1297,9 +1374,15 @@ impl CardBody for EditorBody {
         }
         // The cursor: a block 0.6 em wide in the cursor colour, on when
         // focused and the blink says so; hollow when the card is not focused.
-        if self.focus != Focus::Tree && (cursor_line >= first && cursor_line < last) {
-            let col = self.buffer.col_of(cursor);
-            let y = origin.y + line_h * (cursor_line - first) as f32;
+        let cursor_row = vrows.iter().position(|r| {
+            r.line == cursor_line
+                && cursor_col >= r.a
+                && (cursor_col < r.b
+                    || (cursor_col == r.b && r.b == self.buffer.line(r.line).chars().count()))
+        });
+        if let (true, Some(row_i)) = (self.focus != Focus::Tree, cursor_row) {
+            let col = cursor_col - vrows[row_i].a;
+            let y = origin.y + line_h * row_i as f32;
             let rect = Bounds::new(
                 point(text_x + cell_w * col as f32, y),
                 size(
@@ -1323,7 +1406,7 @@ impl CardBody for EditorBody {
             }
         }
         // Keep the shaping cache to the visible lines.
-        self.shaped.retain(|k, _| *k >= first && *k < last);
+        self.shaped.retain(|(l, _), _| *l >= first && *l < last);
     }
 
     fn key(&mut self, k: &Keystroke, now: f64, cx: &mut App) -> BodyAction {
@@ -1449,6 +1532,36 @@ impl CardBody for EditorBody {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
+}
+
+fn char_to_byte(text: &str, ch: usize) -> usize {
+    text.char_indices()
+        .nth(ch)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len())
+}
+
+/// The runs covering bytes `a..b` of a line, cut at the edges.
+fn slice_runs(runs: &[TextRun], a: usize, b: usize) -> Vec<TextRun> {
+    let mut out = vec![];
+    let mut pos = 0;
+    for r in runs {
+        let (s, e) = (pos, pos + r.len);
+        pos = e;
+        let from = s.max(a);
+        let to = e.min(b);
+        if to > from {
+            out.push(TextRun {
+                len: to - from,
+                font: r.font.clone(),
+                color: r.color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            });
+        }
+    }
+    out
 }
 
 /// Splits `runs` so the bytes in `a..b` take `color`.

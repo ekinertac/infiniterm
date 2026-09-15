@@ -23,6 +23,10 @@ type_text "hello from a new buffer"; shot 11-untitled 0.6
 cmd s; type_text "/tmp/infiniterm-drive/saved.txt"; key_code 36
                                 shot 12-saved 0.8
 echo "saved.txt: $(cat /tmp/infiniterm-drive/saved.txt 2>/dev/null)"
+# Prose wraps: a README with one-line paragraphs.
+cmd_shift p; type_text "open a file"; key_code 36
+type_text "$HOME/Code/infini-rust/README.md"; key_code 36
+cmd 1;                          shot 12b-prose-wrapped 1.0
 # The config pair: two editors, the defaults read-only.
 cmd_shift p; type_text "open settings"; key_code 36
                                 shot 13-config-pair 1.2
