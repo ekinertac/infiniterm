@@ -15,7 +15,8 @@ set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 DATA=${INFINITERM_DATA_DIR:-/tmp/infiniterm-drive}
 SHOTS=${SHOTS:-/tmp/infiniterm-drive/shots}
-SE='tell application "System Events" to tell process "infiniterm"'
+# The Tauri app is also named infiniterm; the process is addressed by bundle id.
+SE='tell application "System Events" to tell (first process whose bundle identifier is "dev.ekinertac.infiniterm.native")'
 
 drive_start() {
     # gpui does not draw behind the lock screen and nothing can be activated
@@ -31,13 +32,15 @@ drive_start() {
     if [ "${FRESH:-}" = 1 ]; then rm -f "$DATA/workspace.json"; elif [ "${KEEP:-}" = 1 ]; then :; else
         cp "$HOME/Library/Application Support/dev.ekinertac.infiniterm/workspace.json" "$DATA/workspace.json" 2>/dev/null || true
     fi
-    pkill -f "MacOS/infiniterm$" 2>/dev/null || true
+    # Only the port's own bundle: the Tauri app's binary has the same name
+    # and a bare "MacOS/infiniterm" once killed it under Ekin.
+    pkill -f "$ROOT/target/bundle/infiniterm.app/Contents/MacOS/infiniterm$" 2>/dev/null || true
     sleep 0.5
     : > "$ROOT/run.log"
     # CONFIG moves ~/.config/infiniterm too, for a scenario that edits settings.
     ( cd "$ROOT" && open --stderr "$PWD/run.log" --stdout "$PWD/run.log" --env INFINITERM_DATA_DIR="$DATA" --env INFINITERM_KEYLOG=1 ${CONFIG:+--env INFINITERM_CONFIG_DIR="$CONFIG"} target/bundle/infiniterm.app )
     sleep 3
-    osascript -e 'tell application "infiniterm" to activate'
+    osascript -e 'tell application id "dev.ekinertac.infiniterm.native" to activate'
     sleep 0.5
     _win
     # Activation alone sometimes leaves the window not key; a click on the
@@ -48,22 +51,27 @@ drive_start() {
     # Setup in iTerm2 and the rest typed into it). Stop before the first key.
     # A launch with CEF takes a few seconds longer to become key: three
     # tries a second apart before deciding someone else has the Mac.
+    # By bundle id, not name: the Tauri app is also called infiniterm, and
+    # keys typed into it land in Ekin's real canvas.
     for _try in 1 2 3; do
-        FRONT=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true')
-        [ "$FRONT" = "infiniterm" ] && break
+        FRONT=$(osascript -e 'tell application "System Events" to get bundle identifier of first application process whose frontmost is true')
+        [ "$FRONT" = "dev.ekinertac.infiniterm.native" ] && break
         sleep 1
-        osascript -e 'tell application "infiniterm" to activate'
+        osascript -e 'tell application id "dev.ekinertac.infiniterm.native" to activate'
         sleep 0.5
     done
-    if [ "$FRONT" != "infiniterm" ]; then
+    if [ "$FRONT" != "dev.ekinertac.infiniterm.native" ]; then
         echo "abort: $FRONT is frontmost, not infiniterm; someone is using the Mac" >&2
         drive_stop
         exit 2
     fi
 }
 
+# The port's own process, never the Tauri app's (same name).
+_pid() { pgrep -f "$ROOT/target/bundle/infiniterm.app/Contents/MacOS/infiniterm$" | head -1; }
+
 _win() {
-    B=$("$ROOT/tools/winid" infiniterm | head -1)
+    B=$("$ROOT/tools/winid" --pid "$(_pid)" | head -1)
     WX=$(echo "$B" | grep -o '"X": [0-9-]*' | grep -o '[0-9-]*$')
     WY=$(echo "$B" | grep -o '"Y": [0-9-]*' | grep -o '[0-9-]*$')
     [ -n "$WX" ] || { echo "no infiniterm window" >&2; exit 1; }
@@ -84,7 +92,7 @@ click() { cliclick "c:$((WX+$1)),$((WY+$2))"; sleep 0.25; }
 shift_click() { cliclick "kd:shift" "c:$((WX+$1)),$((WY+$2))" "ku:shift"; sleep 0.25; }
 drag() { cliclick "dd:$((WX+$1)),$((WY+$2))" "m:$((WX+$3)),$((WY+$4))" "m:$((WX+$3+1)),$((WY+$4))" "du:$((WX+$3+1)),$((WY+$4))"; sleep 0.3; }
 cmd_drag() { cliclick "kd:cmd" "dd:$((WX+$1)),$((WY+$2))" "m:$((WX+$3)),$((WY+$4))" "m:$((WX+$3+1)),$((WY+$4))" "du:$((WX+$3+1)),$((WY+$4))" "ku:cmd"; sleep 0.3; }
-shot() { sleep "${2:-0.4}"; "$ROOT/tools/shot.sh" infiniterm "$SHOTS/$1.png" >/dev/null; echo "shot $1"; }
+shot() { sleep "${2:-0.4}"; screencapture -x -o -l "$("$ROOT/tools/winid" --pid "$(_pid)" | head -1 | cut -f1)" "$SHOTS/$1.png"; echo "shot $1"; }
 wait_s() { sleep "$1"; }
 
 drive_log() {
@@ -95,6 +103,6 @@ drive_log() {
 quit() { key q "command down"; sleep 1; }
 
 drive_stop() {
-    pkill -f "MacOS/infiniterm$" 2>/dev/null || true
+    pkill -f "$ROOT/target/bundle/infiniterm.app/Contents/MacOS/infiniterm$" 2>/dev/null || true
     echo "shots in $SHOTS"
 }

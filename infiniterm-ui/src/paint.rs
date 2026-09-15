@@ -24,7 +24,6 @@ use infiniterm_core::viewport::{ease_out_cubic, Viewport};
 
 /// Cards are live but too small to read between these zooms; a big label
 /// names them.
-const MID_ZOOM_MIN: f64 = 0.25;
 const MID_ZOOM_MAX: f64 = 0.6;
 
 pub fn screen_rect(rect: Rect, vp: Viewport) -> Bounds<Pixels> {
@@ -328,7 +327,10 @@ impl AppView {
                     .border_widths(ring),
                 );
             }
-            let mid = vp.scale >= MID_ZOOM_MIN && vp.scale < MID_ZOOM_MAX;
+            // Below MID_ZOOM_MAX the text is too small to read and the
+            // name is what tells cards apart; the reference stopped showing
+            // it under 25% too, which left the farthest zoom with nothing.
+            let mid = vp.scale < MID_ZOOM_MAX && self.model.config.ui.mid_zoom_label;
             self.paint_labels(card, b, vp.scale, mid, window, cx);
             if let Some(hint) = sel.hints.get(&card.id) {
                 // Big enough to read from across the canvas, over the body
@@ -432,7 +434,8 @@ impl AppView {
     ) {
         let chrome = &self.chrome;
         let inv = inverse_scale(scale, self.model.ui_scale) as f32;
-        let label_px = px(self.model.config.ui.card_label_size as f32 * inv * scale as f32);
+        // 1.2x the setting: at Ekin's ask, the corner labels read small.
+        let label_px = px(self.model.config.ui.card_label_size as f32 * 1.2 * inv * scale as f32);
         let border = px(CARD_BORDER_SCREEN_PX as f32);
         let label = self.model.label_of(card);
         let identity = label_color(&card.id, chrome.theme.as_ref()).and_then(crate::chrome::hex);

@@ -10,7 +10,7 @@ export INFINITERM_DATA_DIR=$DATA
 IFT="$ROOT/target/debug/ift"
 HOOK="$ROOT/target/debug/infiniterm-hook"
 rm -rf "$DATA"; mkdir -p "$DATA"
-pkill -f "MacOS/infiniterm$" 2>/dev/null || true
+pkill -f "$ROOT/target/bundle/infiniterm.app/Contents/MacOS/infiniterm$" 2>/dev/null || true
 sleep 0.5
 : > "$ROOT/run.log"
 ( cd "$ROOT" && open --stderr "$PWD/run.log" --stdout "$PWD/run.log" --env INFINITERM_DATA_DIR="$DATA" target/bundle/infiniterm.app )
@@ -35,4 +35,4 @@ python3 -c "
 import json; d=json.load(open('$DATA/workspace.json'))
 for c in d['cards']: print(c['kind'], repr(c['title']), c['path'], c.get('root'))"
 grep "cmd \|warn\|ift" "$ROOT/run.log" | sed 's/\[infiniterm\] //' | head -12
-pkill -f "MacOS/infiniterm$" 2>/dev/null || true
+pkill -f "$ROOT/target/bundle/infiniterm.app/Contents/MacOS/infiniterm$" 2>/dev/null || true

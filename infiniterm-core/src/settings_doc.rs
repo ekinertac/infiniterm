@@ -168,8 +168,9 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "ui.cardLabelSize",
         &[
-            "Screen pixels, before the Cmd+Shift+= multiplier. Card labels have to survive",
-            "being zoomed out to 10%, which is why this is separate from the others.",
+            "Screen pixels, before the Cmd+Shift+= multiplier; the label is drawn at 1.2x",
+            "this. Card labels have to survive being zoomed out to 10%, which is why this",
+            "is separate from the others.",
         ],
     ),
     (
@@ -185,6 +186,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &[
             "Zooming, panning and card swaps animate rather than jumping. The system",
             "\"reduce motion\" setting switches them off regardless of this.",
+        ],
+    ),
+    (
+        "ui.midZoomLabel",
+        &[
+            "The big name drawn over each card below 60% zoom, where cards are live but",
+            "too small to read. false leaves only the corner label.",
         ],
     ),
     (

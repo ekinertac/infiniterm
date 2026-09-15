@@ -1272,7 +1272,40 @@ impl CardBody for EditorBody {
                     }
                 }
             }
-            if !legible || line_text[..].trim().is_empty() || row_len == 0 {
+            if line_text[..].trim().is_empty() || row_len == 0 {
+                continue;
+            }
+            if !legible {
+                // Texture in place of glyphs, as the terminal does.
+                let bar_h = (line_h * 0.55).max(px(1.));
+                let by = y + (line_h - bar_h) / 2.;
+                let mut start: Option<usize> = None;
+                let chars: Vec<char> = line_text.chars().skip(vrow.a).take(row_len).collect();
+                for (i, ch) in chars.iter().enumerate() {
+                    match (ch.is_whitespace(), start) {
+                        (false, None) => start = Some(i),
+                        (true, Some(s)) => {
+                            window.paint_quad(fill(
+                                Bounds::new(
+                                    point(text_x + cell_w * s as f32, by),
+                                    size(cell_w * (i - s) as f32, bar_h),
+                                ),
+                                crate::chrome::with_alpha(fg, 0.45),
+                            ));
+                            start = None;
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(s) = start {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(text_x + cell_w * s as f32, by),
+                            size(cell_w * (chars.len() - s) as f32, bar_h),
+                        ),
+                        crate::chrome::with_alpha(fg, 0.45),
+                    ));
+                }
                 continue;
             }
             // Runs from the spans that fall inside this line.

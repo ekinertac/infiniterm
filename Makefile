@@ -47,7 +47,7 @@ run-fresh: stop
 	$(MAKE) run DATA=$(DATA)
 
 stop:
-	-pkill -f "MacOS/infiniterm$$" 2>/dev/null; sleep 0.3
+	-pkill -f "$(CURDIR)/target/bundle/infiniterm.app/Contents/MacOS/infiniterm$$" 2>/dev/null; sleep 0.3
 
 log:
 	tail -f run.log

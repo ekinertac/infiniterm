@@ -125,6 +125,9 @@ pub struct Ui {
     /// of it is to be there when something stutters; it holds a permanent
     /// frame loop while on.
     pub show_fps: bool,
+    /// The big centred name over each card below 60% zoom, where cards are
+    /// live but too small to read. Off means only the corner label.
+    pub mid_zoom_label: bool,
 }
 
 /// Page zoom limits for browser cards, the range Safari allows.
@@ -175,6 +178,7 @@ pub fn default_config() -> Config {
             status_bar_size: 11.,
             animations: true,
             show_fps: true,
+            mid_zoom_label: true,
         },
     }
 }
@@ -299,6 +303,7 @@ pub fn merge_config(raw: &Value) -> Config {
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),
             animations: bool_(u.get("animations"), d.ui.animations),
             show_fps: bool_(u.get("showFps"), d.ui.show_fps),
+            mid_zoom_label: bool_(u.get("midZoomLabel"), d.ui.mid_zoom_label),
         },
     }
 }
@@ -341,6 +346,8 @@ mod tests {
             6.
         );
         assert_eq!(m(json!({"ui": {"inactiveDim": 5}})).ui.inactive_dim, 1.);
+        assert!(m(json!({})).ui.mid_zoom_label);
+        assert!(!m(json!({"ui": {"midZoomLabel": false}})).ui.mid_zoom_label);
     }
 
     #[test]

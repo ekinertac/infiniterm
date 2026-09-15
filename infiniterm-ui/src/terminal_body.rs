@@ -31,7 +31,7 @@ use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::ift::{open_plan, url_plan, PathKind};
 use infiniterm_core::links::{find_links, Found, LinkKind};
 use infiniterm_core::links_fs::path_kinds;
-use infiniterm_term::grid::{CursorKind, Frame, Grid, SelectKind, TermEvent};
+use infiniterm_term::grid::{CursorKind, Frame, Grid, SelectKind, TermEvent, SPACER};
 use infiniterm_term::keys::{encode, paste, Key};
 use infiniterm_term::mouse::{self, Mods, MouseButton};
 use infiniterm_term::palette::Palette;
@@ -468,6 +468,49 @@ impl CardBody for TerminalBody {
             }
         }
         if !legible {
+            // Too small for glyphs, not for texture: each run of text is a
+            // faint bar the width of its characters, so a full card reads
+            // as full from across the canvas and an empty one as empty.
+            let ink = crate::chrome::with_alpha(rgb(self.palette.foreground), 0.45);
+            let bar_h = (line_h * 0.55).max(px(1.));
+            for (r, row) in frame.rows.iter().enumerate() {
+                if row.text.trim().is_empty() {
+                    continue;
+                }
+                let y = origin.y + line_h * r as f32 + (line_h - bar_h) / 2.;
+                let mut col = 0usize;
+                for run in &row.runs {
+                    let mut start: Option<usize> = None;
+                    for (i, ch) in run.text.chars().enumerate() {
+                        let blank = ch == ' ' || ch == SPACER;
+                        match (blank, start) {
+                            (false, None) => start = Some(col + i),
+                            (true, Some(s)) => {
+                                window.paint_quad(fill(
+                                    Bounds::new(
+                                        point(origin.x + cell_w * s as f32, y),
+                                        size(cell_w * (col + i - s) as f32, bar_h),
+                                    ),
+                                    run.bg.map(rgb).unwrap_or(ink),
+                                ));
+                                start = None;
+                            }
+                            _ => {}
+                        }
+                    }
+                    let n = run.text.chars().count();
+                    if let Some(s) = start {
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(origin.x + cell_w * s as f32, y),
+                                size(cell_w * (col + n - s) as f32, bar_h),
+                            ),
+                            run.bg.map(rgb).unwrap_or(ink),
+                        ));
+                    }
+                    col += n;
+                }
+            }
             self.frame = frame;
             self.paint_scrim(bounds, focused, window);
             return;
