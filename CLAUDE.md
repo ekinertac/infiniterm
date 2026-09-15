@@ -26,14 +26,19 @@ spikes/cef-frame/           CEF frame as a gpui texture; chrome_moat.rs
 spikes/term-zoom/           25 alacritty grids under a zoom
 spikes/canvas/              all of it on one canvas; viewport.rs is core's first module
 tools/shot.sh               screenshot one app's window for remote verification
+tools/bundle.sh             wrap the binary in target/bundle/infiniterm.app with the themes
+tools/drive/                the GUI driver: phase3.sh runs a scripted session on a scratch data dir
 ```
 
-Phases 0 to 2 are complete: every pure module (483 of 498 reference cases plus 18 native checks) and the whole backend behind `app::Backend`, 581 tests. `commands/*.ts` ports with the stores in Phase 3, which is next: the gpui canvas with blank cards. The browser and ui crates are still empty. `docs/phase-1-progress.md` has the pure-module table. The spikes remain untouched until their full replacements exist.
+Phases 0 to 2 are complete and Phase 3 is nearly so: the model (every store and command) is in core with 29 tests, the gpui canvas with blank card bodies runs on Ekin's real canvas. The browser crate is still empty. `docs/phase-1-progress.md` has the pure-module table; HANDOVER.md has the phase state. The spikes remain untouched until their full replacements exist.
 
 ## Commands
 
 ```
-cargo test --offline                                  # the workspace; 581 tests
+cargo test --offline                                  # the workspace
+cargo fmt -p infiniterm-core -p infiniterm-ui -p infiniterm-term   # never --all: cli and hook stay byte-identical to the reference
+tools/bundle.sh && INFINITERM_DATA_DIR=/tmp/x open --env INFINITERM_DATA_DIR=/tmp/x target/bundle/infiniterm.app
+tools/drive/phase3.sh                                 # scripted GUI run with screenshots (say so before running it)
 cd spikes/<name> && cargo build --release             # a spike; each is its own workspace
 cargo run --manifest-path ~/Code/cef-rs/Cargo.toml -p cef --bin bundle-cef-app -- <bin> -o target/bundle
 open --stderr "$PWD/run.log" --stdout "$PWD/run.log" target/bundle/<bin>.app
@@ -48,7 +53,8 @@ tools/shot.sh <app-name> out.png
 - Logic is a pure function in its own file with tests; gpui elements are wiring.
 - Tests always, unless Ekin says "skip the tests".
 - Stage by file name; commit per phase at least; messages say why; no attribution trailers of any kind.
-- Verify on screen before calling something done. Ekin is usually remote: launch through `open` on the `.app`, activate with osascript, screenshot with `tools/shot.sh`, drive with `cliclick`. gpui does not draw while the Mac is locked.
+- Verify on screen before calling something done, with `tools/drive/`. Announce before sending any input to the Mac and wait for a go: Ekin may be on it. Keys through System Events, never cliclick (see HANDOVER.md). gpui does not draw while the Mac is locked.
+- Never run the native app without `INFINITERM_DATA_DIR` while the Tauri app is the shipping one: it would save over the real canvas (it did once).
 - A spike stays as it is until its replacement is in a crate, then the spike is deleted in the same commit.
 - Style for anything a human reads is in `~/.claude/CLAUDE.md`: plain, specific, no em-dashes, say less.
 

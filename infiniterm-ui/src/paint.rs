@@ -352,13 +352,27 @@ impl AppView {
         let h = label_px * 1.5;
         let mut right = b.origin.x + b.size.width - border;
         if !label.is_empty() {
+            // The head ellipsises from the left, the tail never does: the last
+            // segment is what tells cards apart, and half the directories
+            // anyone works in are called `src`.
             let (head, tail) = split_label(&label);
-            let text = if head.is_empty() {
-                tail.to_string()
-            } else {
-                format!("{head}{tail}")
-            };
-            let line = crate::text::shape(window, &text, label_px, &chrome.ui_font, label_fg);
+            let room = b.size.width - border * 2. - label_px;
+            let mut text = format!("{head}{tail}");
+            let mut line = crate::text::shape(window, &text, label_px, &chrome.ui_font, label_fg);
+            let mut keep = head.chars().count();
+            while line.width > room && keep > 0 {
+                keep /= 2;
+                let cut: String = head
+                    .chars()
+                    .rev()
+                    .take(keep)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                text = format!("\u{2026}{cut}{tail}");
+                line = crate::text::shape(window, &text, label_px, &chrome.ui_font, label_fg);
+            }
             let w = line.width + label_px;
             let lb = Bounds::new(point(right - w, b.origin.y + border), size(w, h));
             window.paint_quad(fill(lb, label_bg));

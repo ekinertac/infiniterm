@@ -26,12 +26,25 @@ pub fn config_dir() -> PathBuf {
     home_dir().join(".config").join("infiniterm")
 }
 
-/// Application Support: the save file and the drafts.
+/// Application Support: the save file and the drafts. `INFINITERM_DATA_DIR`
+/// moves it, and the socket with it: while the Tauri app is the shipping
+/// one, a native build run beside it must not save over its canvas or steal
+/// its socket, and a test must never touch the real directory. (The first
+/// native run did exactly that, 2026-09-15, because this override was
+/// missing here; the test below is the guard.)
 pub fn app_support_dir() -> PathBuf {
-    home_dir()
-        .join("Library")
-        .join("Application Support")
-        .join(BUNDLE_ID)
+    data_dir(std::env::var_os("INFINITERM_DATA_DIR").as_deref())
+}
+
+/// The per-instance directory: the override when set, else Application Support.
+pub fn data_dir(override_: Option<&std::ffi::OsStr>) -> PathBuf {
+    match override_ {
+        Some(dir) => PathBuf::from(dir),
+        None => home_dir()
+            .join("Library")
+            .join("Application Support")
+            .join(BUNDLE_ID),
+    }
 }
 
 pub fn layout_path() -> PathBuf {
@@ -57,6 +70,11 @@ pub fn socket_path() -> PathBuf {
     }
 }
 
+/// `INFINITERM_DATA_DIR` is set: this instance is a side-by-side one.
+pub fn data_dir_overridden() -> bool {
+    std::env::var_os("INFINITERM_DATA_DIR").is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,6 +87,19 @@ mod tests {
             "{path:?}"
         );
         assert!(path.to_string_lossy().contains("Application Support"));
+    }
+
+    // The override moves the save file and the drafts (and the socket, see
+    // `socket_path`); without it, Application Support.
+    #[test]
+    fn the_data_dir_override_moves_the_save_file_and_the_drafts() {
+        let dir = std::path::Path::new("/tmp/infiniterm-x");
+        assert_eq!(data_dir(Some(dir.as_os_str())), dir);
+        assert!(data_dir(None)
+            .to_string_lossy()
+            .contains("Application Support"));
+        assert!(layout_path().starts_with(app_support_dir()));
+        assert!(drafts_dir().starts_with(app_support_dir()));
     }
 
     // The config is hand-edited and this is not; they must never collide.

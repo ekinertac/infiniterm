@@ -200,6 +200,9 @@ impl AppView {
         for (id, from) in marked {
             if let Some(c) = self.model.card(&id) {
                 if c.rect != from {
+                    if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                        eprintln!("[glide] {} from {:?} to {:?}", &id[..8], from, c.rect);
+                    }
                     self.glides.insert(id, Glide { from, started: now });
                 }
             }

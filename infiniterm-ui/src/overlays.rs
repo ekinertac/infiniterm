@@ -597,12 +597,13 @@ impl AppView {
         }
         body = body.child(gestures);
         div()
+            .id("shortcuts")
             .absolute()
             .top_0()
             .right_0()
             .h_full()
             .w(px(520.))
-            .overflow_hidden()
+            .overflow_y_scroll()
             .p_3()
             .bg(chrome.bar_bg)
             .border_l_1()

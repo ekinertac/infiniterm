@@ -76,6 +76,12 @@ osascript -e 'tell application "canvas" to activate'
 
 ## Verifying without being at the Mac
 
+**Say so first.** Ekin is often on the machine, sometimes testing the same app; a click outside the window deactivates it and keys land wherever focus is. Write one line ("taking over the Mac for ~30 s to run the driver") and wait for a go.
+
+**The driver:** `tools/drive/phase3.sh` launches the bundle on a scratch data dir (`/tmp/infiniterm-drive`, a copy of the real canvas; `FRESH=1` for an empty one), sends the Phase 3 sequence, screenshots each step into `/tmp/infiniterm-drive/shots/NN-name.png`, and prints the command log. `tools/drive/lib.sh` has the step functions (`cmd t`, `cmd_shift p`, `key_code 36`, `type_text api`, `click x y`, `drag`, `cmd_drag`, `shot name`); a new scenario is a few lines sourcing it. Keys go through System Events, not cliclick: cliclick's typed characters reach gpui with the fn flag and no character, and its Return and Escape never arrive at all (macOS hands non-printing keys to the input context first); cliclick still moves the mouse. Coordinates are window-relative. Screenshots lag the key by ~100 ms, so a 200 ms glide is caught only by luck; trust the `[glide]` log lines (`INFINITERM_KEYLOG=1`).
+
+**Never run the native app on the real data dir while the Tauri app is the shipping one.** `INFINITERM_DATA_DIR` moves the save file, the drafts and the socket; without it the native app reads AND WRITES `~/Library/Application Support/dev.ekinertac.infiniterm/workspace.json`. The first native run did that (2026-09-15, the override missed the layout path after a formatting pass) and Ekin's real canvas got two extra cards, a workspace and a group from the test session; restored from the pre-launch copy. The app now also goes read-only when another instance holds the socket, and `paths.rs` has the guard test.
+
 Ekin is often remote and asked for visual verification ("use computer use"). What worked:
 
 1. Launch through `open` on the `.app`, never the bare binary: a binary started from a shell is not activated and gets no key events.
@@ -162,6 +168,8 @@ The Svelte components are wiring; the logic they call is in phase 1. Port `App.s
 
 Start from `spikes/canvas/src/main.rs`: it already has the viewport, focus outline, labels, Cmd chords, pending-drag pan and anchored wheel zoom in gpui.
 
+Progress 2026-09-15 (third session): the model is `infiniterm-core/src/model/` (every store and command, 29 tests, commit `9609111`); the gpui side is `infiniterm-ui/src/` (`main.rs` view and frame loop, `paint.rs`, `input.rs`, `overlays.rs`, `animator.rs`, `field.rs`, `chrome.rs`, `body.rs`; commit `3d12fe2` and after). Verified on a copy of Ekin's real canvas by him and by the driver: fit-all, new card, hints, rename (prompt opens with the suggestion selected, Cmd+A), swap with the glide, split and reclaim on close, group to a free block with its frame, workspaces with their viewports, the palette with sections and chords, the shortcuts panel (scrolls), focus rings, group frames. Bodies are blank until Phase 4. Left on this phase's list: the phantom on screen, slot picking, the wheel zoom and Cmd+drag pan through the driver, a card drag by its top edge, the title bar's dots, reduced motion from the system. `tools/bundle.sh` wraps the binary in a `.app` with the 521 themes as resources.
+
 Done: every `Canvas:`, `Card:`, `Focus:`, `Group:`, `Workspace:`, `App:` command from `keymap.ts` works on blank cards; the existing `~/Library/Application Support/infiniterm/workspace.json` loads and saves back byte-compatible; the palette lists and runs commands with the ranking rules; screenshots checked.
 
 ### Phase 4: `infiniterm-term`, the terminal body
@@ -244,4 +252,4 @@ Consolidated from the four NOTES files; each is the short form.
 
 Paused 2026-09-15 (first session) at Ekin's request to conserve the usage allowance; resumed the same day in a second session, which finished Phase 1's pure modules (commits from `Palette usage history` to `The shortcut list`). No build, app launch or background task is running for this port. The two pre-existing untracked files, `spikes/cef-extension/cefclient.log` and `console.log`, remain untouched.
 
-Next action: Phase 3, the canvas with blank cards. Read `~/Code/infiniterm/src/App.svelte`, `Canvas.svelte`, `CardFrame.svelte` and the runes stores first, then port the stores as one tested model in core (`commands/*.ts` with them), and only then the gpui elements in `infiniterm-ui`, starting from `spikes/canvas/src/main.rs`. Done when every `Canvas:`, `Card:`, `Focus:`, `Group:`, `Workspace:`, `App:` command works on blank cards, the real `workspace.json` loads and saves byte-compatible, and screenshots have been checked.
+Next action: finish Phase 3's remaining checks with the driver (phantom, slot picking, wheel zoom, pan, top-edge drag), then Phase 4: the terminal body from `spikes/canvas/src/terminal.rs` into `infiniterm-term`, behind the `CardBody` trait in `infiniterm-ui/src/body.rs`, with the scheduler already there.
