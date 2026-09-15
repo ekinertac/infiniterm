@@ -16,3 +16,6 @@ serde = { version = "1", features = ["derive"] }
 # float_roundtrip: without it serde_json parses -2308.9849719816602 one ULP
 # off, and the save file would drift by a bit on every load/save cycle.
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+# links.rs ports three regexes from the reference; hand-rolling them would
+# be the one place the port could silently diverge from what gets underlined.
+regex = "1"
