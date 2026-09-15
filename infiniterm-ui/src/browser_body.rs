@@ -25,6 +25,23 @@ use infiniterm_core::grid::{Point, Size};
 use smallvec::SmallVec;
 use std::sync::Arc;
 
+/// The device scale CEF renders at moves in steps this fine, so an
+/// animated zoom settles on one value instead of asking for a new frame
+/// size every tick.
+const DEVICE_SCALE_STEPS_PER_UNIT: f64 = 2.;
+/// CEF is never asked to render past this device scale: a sanity ceiling
+/// on how many pixels a zoomed-in browser card can demand.
+const DEVICE_SCALE_MAX: f64 = 3.;
+/// Below this the device scale hasn't really changed, just drifted in
+/// floating point; resizing the surface for it would be wasted work.
+const SCALE_CHANGE_EPSILON: f32 = 0.01;
+/// The "loading"/"unavailable" placeholder text's font size.
+const STATUS_FONT_PX: f64 = 13.;
+/// The placeholder text's inset from the card's corner.
+const STATUS_TEXT_PAD_PX: f64 = 12.;
+/// The placeholder text's line height, looser than its font size.
+const STATUS_LINE_HEIGHT_RATIO: f32 = 1.5;
+
 pub struct BrowserBody {
     pub card_id: String,
     pub url: String,
@@ -82,7 +99,7 @@ impl BrowserBody {
             painted_focused: false,
             page_focused: false,
             left_down: false,
-            inactive_dim: 0.45,
+            inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             card_bg: gpui::rgb(0x0e101a).into(),
             text: gpui::rgb(0xb9c4d2).into(),
             font_family: "Menlo".into(),
@@ -175,10 +192,11 @@ impl CardBody for BrowserBody {
         // Drawn above 100%, the page is asked for more pixels rather than
         // upscaled: the device scale follows the zoom in half steps, so an
         // animation settles on one value instead of re-rendering per frame.
-        let device = (self.scale as f64 * scale * 2.).ceil() / 2.;
-        let device = device.clamp(self.scale as f64, 3.) as f32;
+        let device = (self.scale as f64 * scale * DEVICE_SCALE_STEPS_PER_UNIT).ceil()
+            / DEVICE_SCALE_STEPS_PER_UNIT;
+        let device = device.clamp(self.scale as f64, DEVICE_SCALE_MAX) as f32;
         if let Some(s) = &self.surface {
-            if (s.shared.borrow().scale - device).abs() > 0.01 {
+            if (s.shared.borrow().scale - device).abs() > SCALE_CHANGE_EPSILON {
                 s.resize(
                     self.world.w.round() as i32,
                     self.world.h.round() as i32,
@@ -192,8 +210,8 @@ impl CardBody for BrowserBody {
                 let _ = window.paint_image(bounds, Default::default(), img.clone(), 0, false);
             }
             None => {
-                let font_size = px((13. * scale) as f32);
-                if font_size >= px(3.) {
+                let font_size = px((STATUS_FONT_PX * scale) as f32);
+                if font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32) {
                     let text = self
                         .unavailable
                         .clone()
@@ -207,10 +225,10 @@ impl CardBody for BrowserBody {
                     );
                     let _ = line.paint(
                         point(
-                            bounds.origin.x + px((12. * scale) as f32),
-                            bounds.origin.y + px((12. * scale) as f32),
+                            bounds.origin.x + px((STATUS_TEXT_PAD_PX * scale) as f32),
+                            bounds.origin.y + px((STATUS_TEXT_PAD_PX * scale) as f32),
                         ),
-                        font_size * 1.5,
+                        font_size * STATUS_LINE_HEIGHT_RATIO,
                         window,
                         cx,
                     );
