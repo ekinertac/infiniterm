@@ -1,0 +1,73 @@
+infiniterm License Agreement
+
+Copyright (c) 2026 Ekin Ertac. All rights reserved.
+
+This is a source-available license, not an open source license. You can read, build and modify the source for personal use. Commercial use needs a purchased license. You cannot give the software to anyone else, in source or compiled form.
+
+1. Definitions
+
+"Software" means infiniterm: the source code in this repository, the documentation, the assets, and any compiled build of them, including the `ift` command line tool and the `infiniterm-hook` crate.
+
+"Official Build" means a compiled build of the Software distributed by the Licensor, whether paid or free.
+
+"Licensor" means Ekin Ertac.
+
+"You" means the person or organisation using the Software.
+
+"Commercial Use" means any use in the course of paid work, or on behalf of a company, organisation or other legal entity, whether or not the Software is itself sold. Use by a freelancer or sole proprietor for client work is Commercial Use.
+
+"Personal Use" means any use that is not Commercial Use: hobby projects, learning, evaluation, and open source work done in your own time.
+
+2. Source code
+
+You may read the source, compile it, and run the result on machines you own or control, for Personal Use.
+
+Commercial Use of the Software, whether from source or from an Official Build, requires a license purchased from the Licensor (see section 4). Evaluation of up to 30 days before purchase counts as Personal Use.
+
+You may modify the source for your own use.
+
+You may submit modifications to the Licensor as contributions (see section 6).
+
+You may publish modifications in a public fork of the Licensor's repository for the sole purpose of proposing them as contributions. Such a fork must keep this license and the copyright notice intact.
+
+3. What you may not do
+
+You may not distribute, publish, sell, rent, lease, lend, sublicense or otherwise make available to any third party any compiled build of the Software or of a modified version of it. This includes, without limitation, package managers, app stores, download sites, container images, and prebuilt binaries attached to a fork.
+
+You may not distribute the source code except as described in section 2.
+
+You may not remove or alter any copyright, license or attribution notice.
+
+You may not use the name "infiniterm", the icon, or other branding of the Software to identify a modified version distributed to anyone else.
+
+4. Official Builds
+
+Official Builds are licensed, not sold. Each purchase permits one person to install and use the Software, from an Official Build or from source, on any number of machines that person owns or controls, for Personal Use and Commercial Use. Organisations need one purchase per person using the Software.
+
+You may not redistribute an Official Build. You may make copies for backup.
+
+Free Official Builds, if the Licensor publishes any, are subject to the same restrictions.
+
+5. Third-party components
+
+The Software includes third-party components under their own licenses (see the dependency manifests). Nothing in this agreement restricts your rights under those licenses to those components. This agreement does not grant you any rights to those components beyond what their own licenses grant.
+
+6. Contributions
+
+By submitting a contribution to the Licensor's repository you grant the Licensor a perpetual, worldwide, irrevocable, royalty-free license to use, modify, sublicense and distribute your contribution as part of the Software under any license, including this one and including paid Official Builds. You confirm you have the right to grant this license. You keep the copyright to your contribution.
+
+7. No warranty
+
+The Software is provided "as is", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose and non-infringement.
+
+8. Limitation of liability
+
+In no event shall the Licensor be liable for any claim, damages or other liability, whether in an action of contract, tort or otherwise, arising from, out of or in connection with the Software or the use or other dealings in the Software, even if advised of the possibility of such damages.
+
+9. Termination
+
+This license terminates automatically if you breach any of its terms. On termination you must stop using the Software and destroy all copies, including Official Builds. Sections 5, 6, 7 and 8 survive termination.
+
+10. Governing law
+
+This agreement is governed by the laws of the Republic of Türkiye. Any dispute arising from it is subject to the exclusive jurisdiction of the courts of Ankara.
