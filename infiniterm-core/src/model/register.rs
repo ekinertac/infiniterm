@@ -117,10 +117,6 @@ mod tests {
         fn focused(&self) -> &Card {
             self.m.focused().expect("a focused card")
         }
-
-        fn ids_here(&self) -> Vec<String> {
-            self.m.here().iter().map(|c| c.id.clone()).collect()
-        }
     }
 
     // Every default binding names a command that exists: a binding pointing
