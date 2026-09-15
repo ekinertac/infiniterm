@@ -57,6 +57,7 @@ pub mod palette_usage;
 pub mod prompt;
 pub mod saved_layout;
 pub mod settings_doc;
+pub mod shortcuts;
 pub mod transcript;
 
 pub mod sidebar;
