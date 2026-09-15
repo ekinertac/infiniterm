@@ -86,6 +86,8 @@ pub struct AppView {
     /// The prompt's field, opened with the suggestion selected; the palette's query.
     pub prompt_field: field::Field,
     pub query_field: field::Field,
+    /// The shortcuts panel's filter.
+    pub shortcuts_field: field::Field,
     pub prompt_was_open: bool,
     pub samples: Vec<Sample>,
     pub mouse: Point,

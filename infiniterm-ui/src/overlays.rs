@@ -103,6 +103,19 @@ impl AppView {
         self.perform_effects();
     }
 
+    /// The panel takes the keys while open: Escape closes, typing filters.
+    pub fn shortcuts_key(&mut self, k: &Keystroke, cx: &mut gpui::App) {
+        if k.key == "escape" {
+            self.model.shortcuts_open = false;
+            self.shortcuts_field = crate::field::Field::default();
+            return;
+        }
+        let paste = (k.modifiers.platform && k.key == "v")
+            .then(|| cx.read_from_clipboard().and_then(|c| c.text()))
+            .flatten();
+        self.shortcuts_field.key(k, paste.as_deref());
+    }
+
     pub fn prompt_key(&mut self, k: &Keystroke, cx: &mut gpui::App) {
         let confirm = self.model.prompt.confirm;
         let settled = match k.key.as_str() {
@@ -140,6 +153,9 @@ impl AppView {
             self.prompt_field = crate::field::Field::open(&self.model.prompt.value, true);
         }
         self.prompt_was_open = open;
+        if !self.model.shortcuts_open && !self.shortcuts_field.text.is_empty() {
+            self.shortcuts_field = crate::field::Field::default();
+        }
         if self.model.palette.query != self.query_field.text {
             self.query_field = crate::field::Field::open(&self.model.palette.query, false);
         }
@@ -536,6 +552,9 @@ impl AppView {
             )
     }
 
+    /// The palette's shape and place, on purpose: the two are the same kind
+    /// of thing, a searchable list of what the app can do. Taller, because
+    /// this one is meant to be read as well as searched.
     fn render_shortcuts(&self) -> impl IntoElement {
         let chrome = &self.chrome;
         let labels = self.command_labels();
@@ -543,73 +562,129 @@ impl AppView {
             .iter()
             .map(|(i, l)| (i.as_str(), l.as_str()))
             .collect();
-        let sections = filter_shortcuts(&shortcut_sections(&self.model.keymap, &labels_ref), "");
-        let mut body = div().flex().flex_col().gap_2();
+        let query = self.shortcuts_field.text.clone();
+        let sections =
+            filter_shortcuts(&shortcut_sections(&self.model.keymap, &labels_ref), &query);
+        let key_box = |key: &str| {
+            div()
+                .px_1()
+                .rounded_sm()
+                .bg(chrome.control_bg)
+                .border_1()
+                .border_color(chrome.control_border)
+                .text_size(px(10.))
+                .text_color(chrome.text_mid)
+                .child(key.to_string())
+        };
+        let mut list = div()
+            .id("shortcuts-list")
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            .max_h(px(720.))
+            .pb_2();
         for s in sections {
-            let mut sec = div().flex().flex_col().gap_0p5().child(
+            list = list.child(
                 div()
-                    .text_color(chrome.text_faint)
-                    .text_size(px(10.))
+                    .px_4()
+                    .pt_3()
+                    .pb_1()
+                    .text_size(px(11.))
+                    .text_color(chrome.agent_idle)
                     .child(s.title.to_uppercase()),
             );
             for sc in s.shortcuts {
-                let mut row = div()
-                    .flex()
-                    .justify_between()
-                    .child(div().text_color(chrome.text).child(sc.label));
                 let mut keys = div().flex().gap_2();
                 for chord in sc.chords {
                     let mut k = div().flex().gap_1();
                     for key in chord.split(' ') {
-                        k = k.child(
-                            div()
-                                .px_1()
-                                .rounded_sm()
-                                .bg(chrome.control_bg)
-                                .border_1()
-                                .border_color(chrome.control_border)
-                                .text_size(px(10.))
-                                .text_color(chrome.text_mid)
-                                .child(key.to_string()),
-                        );
+                        k = k.child(key_box(key));
                     }
                     keys = keys.child(k);
                 }
-                row = row.child(keys);
-                sec = sec.child(row);
+                list = list.child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .px_4()
+                        .py(px(4.))
+                        .child(div().text_color(chrome.text).child(sc.label))
+                        .child(keys),
+                );
             }
-            body = body.child(sec);
         }
-        let mut gestures = div().flex().flex_col().gap_0p5().child(
-            div()
-                .text_color(chrome.text_faint)
-                .text_size(px(10.))
-                .child("GESTURES"),
-        );
-        for (keys, label) in GESTURES {
-            gestures = gestures.child(
+        // Gestures are not commands, so they are filtered here by the same rule.
+        let q = query.trim().to_lowercase();
+        let gestures: Vec<_> = GESTURES
+            .iter()
+            .filter(|(keys, label)| {
+                q.is_empty()
+                    || label.to_lowercase().contains(&q)
+                    || keys.to_lowercase().contains(&q)
+            })
+            .collect();
+        if !gestures.is_empty() {
+            list = list.child(
                 div()
-                    .flex()
-                    .justify_between()
-                    .child(div().text_color(chrome.text).child(label))
-                    .child(div().text_color(chrome.text_mid).child(keys)),
+                    .px_4()
+                    .pt_3()
+                    .pb_1()
+                    .text_size(px(11.))
+                    .text_color(chrome.agent_idle)
+                    .child("GESTURES"),
             );
+            for (keys, label) in gestures {
+                list = list.child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .px_4()
+                        .py(px(4.))
+                        .child(div().text_color(chrome.text).child(*label))
+                        .child(div().text_color(chrome.text_mid).child(*keys)),
+                );
+            }
         }
-        body = body.child(gestures);
         div()
-            .id("shortcuts")
             .absolute()
             .top_0()
-            .right_0()
-            .h_full()
-            .w(px(520.))
-            .overflow_y_scroll()
-            .p_3()
-            .bg(chrome.bar_bg)
-            .border_l_1()
-            .border_color(chrome.control_border)
-            .font_family("Menlo")
-            .text_size(px(12.))
-            .child(body)
+            .left_0()
+            .size_full()
+            .flex()
+            .justify_center()
+            .pt(px(80.))
+            .bg(chrome.overlay_backdrop)
+            .child(
+                div().w(px(680.)).h(px(0.)).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .bg(chrome.card_bg)
+                        .border_1()
+                        .border_color(chrome.card_border)
+                        .rounded_md()
+                        .font_family("Menlo")
+                        .text_size(px(13.))
+                        .child(
+                            div()
+                                .px_4()
+                                .py_3()
+                                .border_b_1()
+                                .border_color(chrome.card_border)
+                                .text_size(px(15.))
+                                .text_color(if query.is_empty() {
+                                    chrome.text_faint
+                                } else {
+                                    chrome.text_bright
+                                })
+                                .child(if query.is_empty() {
+                                    "Filter shortcuts".to_string()
+                                } else {
+                                    format!("{query}\u{258f}")
+                                }),
+                        )
+                        .child(list),
+                ),
+            )
     }
 }

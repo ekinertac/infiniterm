@@ -41,6 +41,7 @@ impl AppView {
             gesture: None,
             prompt_field: Default::default(),
             query_field: Default::default(),
+            shortcuts_field: Default::default(),
             prompt_was_open: false,
             samples: vec![],
             mouse: infiniterm_core::grid::Point { x: 0., y: 0. },

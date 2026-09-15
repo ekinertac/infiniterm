@@ -417,6 +417,10 @@ impl AppView {
             self.prompt_key(k, cx);
             return;
         }
+        if self.model.shortcuts_open {
+            self.shortcuts_key(k, cx);
+            return;
+        }
         if let Some(id) = self.model.selection.focused_id.clone() {
             if let Some(body) = self.bodies.get_mut(&id) {
                 body.key(k, cx);
