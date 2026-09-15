@@ -26,6 +26,12 @@ pub const LEGIBLE_FONT_PX: f64 = 3.;
 /// buffer, so the terminal, editor, diff and transcript all feel the same
 /// under the mouse wheel.
 pub const WHEEL_LINES_PER_TICK: f64 = 3.;
+/// Below `LEGIBLE_FONT_PX` a run of text is drawn as a texture bar this
+/// fraction of the line height, shared by the terminal and editor bodies so
+/// an unreadable zoom looks the same in both.
+pub const TEXTURE_BAR_HEIGHT_RATIO: f32 = 0.55;
+/// A texture bar's alpha: a hint of ink, not a glyph.
+pub const TEXTURE_BAR_ALPHA: f32 = 0.45;
 
 #[derive(Clone, Debug)]
 pub struct Chrome {

@@ -62,6 +62,33 @@ fn timing_add(slot: usize, since: std::time::Instant) {
 /// after any key, so it never blinks away while you type.
 const BLINK_MS: f64 = 600.;
 
+/// `ui.inactiveDim`'s default, before a settings read overwrites it: how
+/// much an unfocused card's scrim dims its text.
+const INACTIVE_DIM_DEFAULT: f64 = 0.45;
+/// The spawn-error text's font size.
+const ERROR_FONT_PX: f64 = 12.;
+/// The spawn-error block's inset from the card's edge.
+const ERROR_PAD_PX: f64 = 16.;
+/// The spawn-error lines are spaced looser than the terminal's own rows.
+const ERROR_LINE_HEIGHT_RATIO: f64 = 1.5;
+/// Half a line between the spawn-error's three blocks (the message, the
+/// error, and the retry hint).
+const ERROR_BLOCK_GAP_RATIO: f64 = 0.5;
+/// The beam and underline cursors' stroke: thicker than a hairline so they
+/// still read as a cursor rather than a line in the grid.
+const TERM_CURSOR_STROKE_PX: f32 = 2.;
+/// An unhovered link underline is a hint, not a highlight.
+const LINK_ALPHA: f32 = 0.5;
+/// A link's underline sits just clear of the glyphs' descenders.
+const LINK_UNDERLINE_OFFSET_PX: f32 = 1.5;
+/// Dim text (SGR faint) is drawn at this alpha rather than a different
+/// weight, since the grid has no font-weight axis for dimness.
+const TERM_DIM_ALPHA: f32 = 0.6;
+/// A single wheel tick never sends more than this many scrolled lines to a
+/// mouse-aware program or the alternate screen: a fast trackpad fling must
+/// not flood it.
+const WHEEL_MAX_LINES_PER_EVENT: u32 = 10;
+
 pub struct TerminalBody {
     pub pane: Option<PaneId>,
     pub grid: Grid,
@@ -147,7 +174,7 @@ impl TerminalBody {
             title: None,
             clipboard_out: None,
             blink: true,
-            inactive_dim: 0.45,
+            inactive_dim: INACTIVE_DIM_DEFAULT,
             blink_epoch: 0.,
             painted_phase: true,
             painted_focused: false,
@@ -376,12 +403,12 @@ impl TerminalBody {
         cx: &mut App,
     ) {
         window.paint_quad(fill(bounds, gpui::rgb(0x1a0f0f)));
-        let size_px = px((12. * scale) as f32);
-        if size_px < px(3.) {
+        let size_px = px((ERROR_FONT_PX * scale) as f32);
+        if size_px < px(crate::chrome::LEGIBLE_FONT_PX as f32) {
             return;
         }
-        let pad = px((16. * scale) as f32);
-        let line_h = size_px * 1.5;
+        let pad = px((ERROR_PAD_PX * scale) as f32);
+        let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
         let f = font(self.font_family.clone());
         let mut y = bounds.origin.y + pad;
         let lines = [
@@ -395,7 +422,7 @@ impl TerminalBody {
                 let _ = line.paint(point(bounds.origin.x + pad, y), line_h, window, cx);
                 y += line_h;
             }
-            y += line_h / 2.;
+            y += line_h * ERROR_BLOCK_GAP_RATIO as f32;
         }
     }
 }
@@ -438,7 +465,7 @@ impl CardBody for TerminalBody {
         let base = font(self.font_family.clone());
         // Too small to read: skip the glyphs, keep the ground. The mid-zoom
         // label names the card instead.
-        let legible = font_size >= px(3.);
+        let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32);
         // The cursor under the text: solid when focused and on, hollow when
         // the card is not focused, nothing while scrolled into history.
         if frame.cursor_kind != CursorKind::Hidden
@@ -449,12 +476,18 @@ impl CardBody for TerminalBody {
             let x = origin.x + cell_w * col as f32;
             let y = origin.y + line_h * row as f32;
             let rect = match frame.cursor_kind {
-                CursorKind::Beam => {
-                    Bounds::new(point(x, y), size(px(2. * scale as f32).max(px(1.)), line_h))
-                }
-                CursorKind::Underline => {
-                    Bounds::new(point(x, y + line_h - px(2.)), size(cell_w, px(2.)))
-                }
+                CursorKind::Beam => Bounds::new(
+                    point(x, y),
+                    size(
+                        px(TERM_CURSOR_STROKE_PX * scale as f32)
+                            .max(px(crate::chrome::HAIRLINE_PX as f32)),
+                        line_h,
+                    ),
+                ),
+                CursorKind::Underline => Bounds::new(
+                    point(x, y + line_h - px(TERM_CURSOR_STROKE_PX)),
+                    size(cell_w, px(TERM_CURSOR_STROKE_PX)),
+                ),
                 _ => Bounds::new(point(x, y), size(cell_w, line_h)),
             };
             let color = rgb(self.palette.cursor);
@@ -463,7 +496,7 @@ impl CardBody for TerminalBody {
             } else {
                 window.paint_quad(
                     outline(rect, color, gpui::BorderStyle::Solid)
-                        .border_widths(px((scale as f32).max(1.))),
+                        .border_widths(px((scale as f32).max(crate::chrome::HAIRLINE_PX as f32))),
                 );
             }
         }
@@ -471,8 +504,12 @@ impl CardBody for TerminalBody {
             // Too small for glyphs, not for texture: each run of text is a
             // faint bar the width of its characters, so a full card reads
             // as full from across the canvas and an empty one as empty.
-            let ink = crate::chrome::with_alpha(rgb(self.palette.foreground), 0.45);
-            let bar_h = (line_h * 0.55).max(px(1.));
+            let ink = crate::chrome::with_alpha(
+                rgb(self.palette.foreground),
+                crate::chrome::TEXTURE_BAR_ALPHA,
+            );
+            let bar_h = (line_h * crate::chrome::TEXTURE_BAR_HEIGHT_RATIO)
+                .max(px(crate::chrome::HAIRLINE_PX as f32));
             for (r, row) in frame.rows.iter().enumerate() {
                 if row.text.trim().is_empty() {
                     continue;
@@ -544,12 +581,12 @@ impl CardBody for TerminalBody {
                     let color = if hovered {
                         rgb(self.palette.selection)
                     } else {
-                        crate::chrome::with_alpha(rgb(self.palette.foreground), 0.5)
+                        crate::chrome::with_alpha(rgb(self.palette.foreground), LINK_ALPHA)
                     };
                     window.paint_quad(fill(
                         Bounds::new(
-                            point(ux, y + line_h - px(1.5)),
-                            size(cell_w * len as f32, px(1.)),
+                            point(ux, y + line_h - px(LINK_UNDERLINE_OFFSET_PX)),
+                            size(cell_w * len as f32, px(crate::chrome::HAIRLINE_PX as f32)),
                         ),
                         color,
                     ));
@@ -749,7 +786,8 @@ impl CardBody for TerminalBody {
     /// on the alternate screen (`less`); the scrollback otherwise. `dy` is in
     /// card pixels, positive up.
     fn wheel(&mut self, local: Point, _dx: f64, dy: f64, modifiers: &gpui::Modifiers) {
-        let lines = (dy / (self.font_px * self.line_height) * 3.).round() as i32;
+        let lines = (dy / (self.font_px * self.line_height) * crate::chrome::WHEEL_LINES_PER_TICK)
+            .round() as i32;
         if lines == 0 {
             return;
         }
@@ -761,7 +799,7 @@ impl CardBody for TerminalBody {
             } else {
                 MouseButton::WheelDown
             };
-            for _ in 0..lines.unsigned_abs().min(10) {
+            for _ in 0..lines.unsigned_abs().min(WHEEL_MAX_LINES_PER_EVENT) {
                 self.write(mouse::press(b, col, row, Self::mods(modifiers), sgr));
             }
         } else if self.grid.alternate_scroll() {
@@ -774,7 +812,7 @@ impl CardBody for TerminalBody {
                 self.grid.app_cursor(),
             )
             .unwrap_or_default();
-            for _ in 0..lines.unsigned_abs().min(10) {
+            for _ in 0..lines.unsigned_abs().min(WHEEL_MAX_LINES_PER_EVENT) {
                 self.write(bytes.clone());
             }
         } else {
@@ -837,7 +875,7 @@ fn shape_row(
             text.push(*ch);
             let same = runs.last().is_some_and(|last: &TextRun| {
                 let color = if run.dim {
-                    crate::chrome::with_alpha(rgb(run.fg), 0.6)
+                    crate::chrome::with_alpha(rgb(run.fg), TERM_DIM_ALPHA)
                 } else {
                     rgb(run.fg)
                 };
@@ -869,7 +907,7 @@ fn shape_row(
                 f.style = FontStyle::Italic;
             }
             let color = if run.dim {
-                crate::chrome::with_alpha(rgb(run.fg), 0.6)
+                crate::chrome::with_alpha(rgb(run.fg), TERM_DIM_ALPHA)
             } else {
                 rgb(run.fg)
             };
@@ -879,12 +917,12 @@ fn shape_row(
                 color,
                 background_color: None,
                 underline: run.underline.then_some(UnderlineStyle {
-                    thickness: px(1.),
+                    thickness: px(crate::chrome::HAIRLINE_PX as f32),
                     color: Some(color),
                     wavy: false,
                 }),
                 strikethrough: run.strikeout.then_some(gpui::StrikethroughStyle {
-                    thickness: px(1.),
+                    thickness: px(crate::chrome::HAIRLINE_PX as f32),
                     color: Some(color),
                 }),
             });

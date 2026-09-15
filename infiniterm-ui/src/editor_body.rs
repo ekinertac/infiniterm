@@ -105,10 +105,6 @@ const CURSOR_BLOCK_WIDTH_RATIO: f64 = 0.6;
 const CURSOR_ALPHA: f32 = 0.85;
 /// The active-line wash is barely-there: a hint, not a highlight.
 const ACTIVE_LINE_ALPHA: f32 = 0.10;
-/// Below the legible threshold a line is drawn as texture bars this
-/// fraction of the line height, like the terminal's unreadable-zoom bars.
-const TEXTURE_BAR_HEIGHT_RATIO: f32 = 0.55;
-const TEXTURE_BAR_ALPHA: f32 = 0.45;
 /// A horizontal wheel gesture below this magnitude is noise from a
 /// vertical scroll, not an intentional side-scroll.
 const WHEEL_HORIZONTAL_THRESHOLD: f64 = 0.5;
@@ -1391,8 +1387,8 @@ impl CardBody for EditorBody {
             }
             if !legible {
                 // Texture in place of glyphs, as the terminal does.
-                let bar_h =
-                    (line_h * TEXTURE_BAR_HEIGHT_RATIO).max(px(crate::chrome::HAIRLINE_PX as f32));
+                let bar_h = (line_h * crate::chrome::TEXTURE_BAR_HEIGHT_RATIO)
+                    .max(px(crate::chrome::HAIRLINE_PX as f32));
                 let by = y + (line_h - bar_h) / 2.;
                 let mut start: Option<usize> = None;
                 let chars: Vec<char> = line_text.chars().skip(vrow.a).take(row_len).collect();
@@ -1405,7 +1401,7 @@ impl CardBody for EditorBody {
                                     point(text_x + cell_w * s as f32, by),
                                     size(cell_w * (i - s) as f32, bar_h),
                                 ),
-                                crate::chrome::with_alpha(fg, TEXTURE_BAR_ALPHA),
+                                crate::chrome::with_alpha(fg, crate::chrome::TEXTURE_BAR_ALPHA),
                             ));
                             start = None;
                         }
@@ -1418,7 +1414,7 @@ impl CardBody for EditorBody {
                             point(text_x + cell_w * s as f32, by),
                             size(cell_w * (chars.len() - s) as f32, bar_h),
                         ),
-                        crate::chrome::with_alpha(fg, TEXTURE_BAR_ALPHA),
+                        crate::chrome::with_alpha(fg, crate::chrome::TEXTURE_BAR_ALPHA),
                     ));
                 }
                 continue;
