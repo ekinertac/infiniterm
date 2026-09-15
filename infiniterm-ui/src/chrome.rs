@@ -35,9 +35,9 @@ pub const TEXTURE_BAR_ALPHA: f32 = 0.45;
 /// `ui.inactiveDim`'s default, before a settings read overwrites it: how
 /// much an unfocused card's scrim dims it. Every body with one starts here.
 pub const INACTIVE_DIM_DEFAULT: f64 = 0.45;
-/// A file tree's cursor row tints this faint when the tree isn't focused,
-/// so it marks a position without competing with the focused highlight.
-/// Shared by the editor's and the diff card's trees.
+/// A list's cursor row (a file tree, or the transcript's turn list) tints
+/// this faint when its card isn't focused, so it marks a position without
+/// competing with the focused highlight.
 pub const TREE_CURSOR_UNFOCUSED_ALPHA: f32 = 0.12;
 
 #[derive(Clone, Debug)]

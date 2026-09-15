@@ -24,6 +24,15 @@ const PAD_Y: f64 = 6.;
 const DISK_POLL_MS: f64 = 2000.;
 /// The reference's list rows read at line-height 1.5.
 const LINE: f64 = 1.5;
+/// Columns reserved for the "you"/"claude" role label in a list row.
+const WHO_COL_WIDTH_CELLS: f64 = 7.;
+/// Columns reserved for a list row's timestamp, right-aligned.
+const TIME_COL_WIDTH_CELLS: f64 = 6.;
+/// Columns the row's preview text gives up to the role label, the
+/// timestamp and the gaps around them.
+const PREVIEW_RESERVED_COLS: usize = 14;
+/// Page up/down moves the detail pane by this many lines.
+const PAGE_SCROLL_LINES: usize = 10;
 
 /// The card's colours, resolved by `editors.rs` from the theme and chrome.
 #[derive(Clone, Debug, PartialEq)]
@@ -87,7 +96,7 @@ impl TranscriptBody {
                 line_height: metrics.line_height,
                 cell_w: metrics.cell_w,
             },
-            inactive_dim: 0.45,
+            inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             world,
             dirty: true,
         }
@@ -267,7 +276,7 @@ impl CardBody for TranscriptBody {
         let s = |v: f64| px((v * scale) as f32);
         window.paint_quad(fill(bounds, self.colors.background));
         let font_size = px((self.metrics.font_px * scale) as f32);
-        if font_size < px(3.) {
+        if font_size < px(crate::chrome::LEGIBLE_FONT_PX as f32) {
             return;
         }
         let line_h = s(self.line_h());
@@ -285,16 +294,16 @@ impl CardBody for TranscriptBody {
         } else if self.cursor >= self.list_scroll + rows_visible {
             self.list_scroll = self.cursor + 1 - rows_visible;
         }
-        let who_w = px((self.metrics.cell_w * 7. * scale) as f32);
-        let time_w = px((self.metrics.cell_w * 6. * scale) as f32);
+        let who_w = px((self.metrics.cell_w * WHO_COL_WIDTH_CELLS * scale) as f32);
+        let time_w = px((self.metrics.cell_w * TIME_COL_WIDTH_CELLS * scale) as f32);
         let mut y = list.origin.y + s(PAD_Y);
         if self.turns.is_empty() {
             let text = self.error.clone().unwrap_or_else(|| "no turns yet".into());
             let l = crate::text::shape(window, &text, font_size, &f, self.colors.faint);
             let _ = l.paint(point(list.origin.x + pad, y), line_h, window, cx);
         }
-        let preview_cols =
-            (((ls.w - PAD_X * 2.) / self.metrics.cell_w) as usize).saturating_sub(14);
+        let preview_cols = (((ls.w - PAD_X * 2.) / self.metrics.cell_w) as usize)
+            .saturating_sub(PREVIEW_RESERVED_COLS);
         for (i, t) in self
             .turns
             .iter()
@@ -321,7 +330,10 @@ impl CardBody for TranscriptBody {
                 } else {
                     window.paint_quad(fill(
                         row,
-                        crate::chrome::with_alpha(self.colors.foreground, 0.12),
+                        crate::chrome::with_alpha(
+                            self.colors.foreground,
+                            crate::chrome::TREE_CURSOR_UNFOCUSED_ALPHA,
+                        ),
                     ));
                 }
             }
@@ -354,20 +366,21 @@ impl CardBody for TranscriptBody {
             y += line_h;
         }
         // The edge between list and detail.
+        let hairline = px(crate::chrome::HAIRLINE_PX as f32);
         let edge = if self.sidebar_top {
             Bounds::new(
-                point(list.origin.x, list.origin.y + list.size.height - px(1.)),
-                size(list.size.width, px(1.)),
+                point(list.origin.x, list.origin.y + list.size.height - hairline),
+                size(list.size.width, hairline),
             )
         } else {
             Bounds::new(
-                point(list.origin.x + list.size.width - px(1.), list.origin.y),
-                size(px(1.), list.size.height),
+                point(list.origin.x + list.size.width - hairline, list.origin.y),
+                size(hairline, list.size.height),
             )
         };
         window.paint_quad(fill(
             edge,
-            crate::chrome::with_alpha(self.colors.faint, 0.4),
+            crate::chrome::with_alpha(self.colors.faint, crate::chrome::HAIRLINE_ALPHA),
         ));
         // The detail.
         let (d_o, d_s) = self.detail_area(world);
@@ -415,11 +428,11 @@ impl CardBody for TranscriptBody {
                 self.dirty = true;
             }
             "pagedown" => {
-                self.detail_scroll += 10;
+                self.detail_scroll += PAGE_SCROLL_LINES;
                 self.dirty = true;
             }
             "pageup" => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(10);
+                self.detail_scroll = self.detail_scroll.saturating_sub(PAGE_SCROLL_LINES);
                 self.dirty = true;
             }
             _ => {}
@@ -452,7 +465,7 @@ impl CardBody for TranscriptBody {
     }
 
     fn wheel(&mut self, local: Point, _dx: f64, dy: f64, _modifiers: &gpui::Modifiers) {
-        let lines = (dy / self.line_h() * 3.).round() as i64;
+        let lines = (dy / self.line_h() * crate::chrome::WHEEL_LINES_PER_TICK).round() as i64;
         if lines == 0 {
             return;
         }
