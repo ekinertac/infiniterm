@@ -35,10 +35,10 @@ Phases 0 to 2 are complete and Phase 3 is nearly so: the model (every store and 
 ## Commands
 
 ```
-cargo test --offline                                  # the workspace
-cargo fmt -p infiniterm-core -p infiniterm-ui -p infiniterm-term   # never --all: cli and hook stay byte-identical to the reference
-tools/bundle.sh && INFINITERM_DATA_DIR=/tmp/x open --env INFINITERM_DATA_DIR=/tmp/x target/bundle/infiniterm.app
-tools/drive/phase3.sh                                 # scripted GUI run with screenshots (say so before running it)
+make                    # lists the targets
+make run                # build, bundle, launch on a scratch copy of the real canvas (never the real data dir)
+make check              # fmt (the three port crates only; cli and hook stay byte-identical to the reference) + clippy + test
+make drive              # scripted GUI run with screenshots (say so before running it)
 cd spikes/<name> && cargo build --release             # a spike; each is its own workspace
 cargo run --manifest-path ~/Code/cef-rs/Cargo.toml -p cef --bin bundle-cef-app -- <bin> -o target/bundle
 open --stderr "$PWD/run.log" --stdout "$PWD/run.log" target/bundle/<bin>.app
