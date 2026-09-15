@@ -35,7 +35,8 @@ impl Highlighting {
                 None => return vec![],
             },
         };
-        let Ok(events) = highlighter.highlight(config, text.as_bytes(), None, None, |_| None) else {
+        let Ok(events) = highlighter.highlight(config, text.as_bytes(), None, None, |_| None)
+        else {
             return vec![];
         };
         let mut out = vec![];
@@ -78,7 +79,10 @@ mod tests {
         let c = captures(Language::Rust, "// hi\nfn main() { let s = \"x\"; }");
         assert!(c.contains(&("comment", "// hi".into())));
         assert!(c.contains(&("keyword", "fn".into())));
-        assert!(c.iter().any(|(k, t)| *k == "string" && t.contains("\"x\"")) || c.contains(&("string", "\"x\"".into())));
+        assert!(
+            c.iter().any(|(k, t)| *k == "string" && t.contains("\"x\""))
+                || c.contains(&("string", "\"x\"".into()))
+        );
     }
 
     #[test]

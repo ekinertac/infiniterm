@@ -7,6 +7,7 @@
 //!
 //! The editor actions the model queues (`Effect::Editor`) land here too:
 //! save, find, go to line, the tree's three states.
+use crate::diff_body::DiffBody;
 use crate::editor_body::{EditorBody, EditorEvent};
 use crate::terminals::family_of;
 use crate::AppView;
@@ -32,7 +33,14 @@ impl AppView {
             .and_then(|b| b.as_any_mut().downcast_mut::<EditorBody>())
     }
 
+    pub fn diff_for(&mut self, id: &str) -> Option<&mut DiffBody> {
+        self.bodies
+            .get_mut(id)
+            .and_then(|b| b.as_any_mut().downcast_mut::<DiffBody>())
+    }
+
     pub fn reconcile_editors(&mut self, window: &Window) {
+        self.reconcile_diffs(window);
         let metrics = self.metrics(window);
         let cfg = self.model.config.clone();
         let chrome = EditorChrome {
@@ -139,11 +147,134 @@ impl AppView {
         }
     }
 
+    /// One `DiffBody` per diff card, kept in step like the editors.
+    fn reconcile_diffs(&mut self, window: &Window) {
+        let metrics = self.metrics(window);
+        let cfg = self.model.config.clone();
+        let chrome = EditorChrome {
+            card_bg: format!("#{:06x}", rgb_u32(self.chrome.card_bg)),
+            text: format!("#{:06x}", rgb_u32(self.chrome.text)),
+            text_faint: format!("#{:06x}", rgb_u32(self.chrome.text_faint)),
+        };
+        let colors = editor_colors(
+            self.chrome.theme.as_ref(),
+            &chrome,
+            &cfg.editor.selection_color,
+            &cfg.editor.selection_text_color,
+        );
+        let rules = syntax_rules(self.chrome.theme.as_ref());
+        let cards: Vec<_> = self
+            .model
+            .cards
+            .iter()
+            .filter(|c| c.kind == CardKind::Diff)
+            .cloned()
+            .collect();
+        for card in cards {
+            let world = Size {
+                w: card.rect.w,
+                h: card.rect.h,
+            };
+            if self.diff_for(&card.id).is_none() {
+                let root = card
+                    .root
+                    .clone()
+                    .or_else(|| card.path.clone())
+                    .unwrap_or_else(|| card.cwd.clone());
+                let mut body = DiffBody::new(&card.id, &root, &metrics, world);
+                body.tree_shown = card.explorer;
+                body.refresh();
+                // Opened on a file: show it at once. On a directory: the list.
+                let repo = body.repo().to_string();
+                let target = card
+                    .path
+                    .clone()
+                    .or_else(|| (card.root.is_some() && !card.explorer).then(|| root.clone()));
+                match target {
+                    Some(t)
+                        if !repo.is_empty()
+                            && t.starts_with(&repo)
+                            && std::path::Path::new(&t).is_file() =>
+                    {
+                        let rel = t[repo.len()..].trim_start_matches('/').to_string();
+                        body.show(&rel);
+                    }
+                    _ => {
+                        body.tree_shown = true;
+                        body.tree_focused = true;
+                    }
+                }
+                self.bodies.insert(card.id.clone(), Box::new(body));
+            }
+            let Some(body) = self.diff_for(&card.id) else {
+                continue;
+            };
+            if body.metrics.font_px != metrics.font_px
+                || body.metrics.cell_w != metrics.cell_w
+                || body.metrics.line_height != metrics.line_height
+                || body.metrics.family != metrics.family
+            {
+                body.metrics = crate::terminal_body::Metrics {
+                    family: metrics.family.clone(),
+                    font_px: metrics.font_px,
+                    line_height: metrics.line_height,
+                    cell_w: metrics.cell_w,
+                };
+                body.mark_dirty();
+            }
+            if body.colors != colors || body.rules != rules {
+                body.colors = colors.clone();
+                body.rules = rules.clone();
+                body.mark_dirty();
+            }
+            body.inactive_dim = cfg.ui.inactive_dim;
+            body.sidebar_top = card.sidebar_top;
+            body.sidebar_w = sidebar_width(card.sidebar, sidebar_extent(world, card.sidebar_top));
+            let shown = body.tree_shown;
+            let events = body.take_events();
+            if let Some(c) = self.model.card_mut(&card.id) {
+                if c.explorer != shown {
+                    c.explorer = shown;
+                    self.model.dirty_layout = true;
+                }
+            }
+            for event in events {
+                match event {
+                    EditorEvent::None => {}
+                    EditorEvent::Notice(text) => self.model.notify(text),
+                    EditorEvent::PathChanged { path, cwd } => {
+                        if let Some(c) = self.model.card_mut(&card.id) {
+                            c.path = Some(path);
+                            c.cwd = cwd;
+                            self.model.dirty_layout = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// `Effect::Editor`: the model asked a card's editor for something.
     pub fn editor_effect(&mut self, card_id: &str, action: EditorAction) {
         let now = crate::now_ms();
         let card = self.model.card(card_id).cloned();
         let Some(card) = card else { return };
+        if card.kind == CardKind::Diff {
+            match action {
+                EditorAction::ToggleExplorer => {
+                    if let Some(body) = self.diff_for(card_id) {
+                        body.toggle_tree();
+                    }
+                }
+                EditorAction::ToggleBlame => {
+                    if let Some(body) = self.diff_for(card_id) {
+                        body.toggle_blame();
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         match action {
             EditorAction::Save => {
                 if let Some(path) = card.path.clone() {
@@ -184,11 +315,13 @@ impl AppView {
         }
     }
 
-    /// Between frames: drafts and the disk poll of every editor.
+    /// Between frames: drafts and the disk poll of every editor and diff.
     pub fn idle_editors(&mut self, now: f64) {
         for body in self.bodies.values_mut() {
             if let Some(e) = body.as_any_mut().downcast_mut::<EditorBody>() {
                 e.idle(now);
+            } else if let Some(d) = body.as_any_mut().downcast_mut::<DiffBody>() {
+                d.idle(now);
             }
         }
     }

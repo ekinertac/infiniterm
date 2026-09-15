@@ -559,6 +559,10 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("card.save", "Editor: save the file", |m| {
         m.for_selected(|m, id| {
             let Some(card) = m.card(&id) else { return };
+            if card.kind == CardKind::Diff {
+                m.notify("a diff is read-only; Cmd+click the path to edit");
+                return;
+            }
             if card.kind != CardKind::Editor {
                 return;
             }

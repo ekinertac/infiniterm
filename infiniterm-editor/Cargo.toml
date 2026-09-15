@@ -9,6 +9,7 @@ publish.workspace = true
 # logic tests run headless, the way `infiniterm-term` does for the grid.
 [dependencies]
 ropey = "1.6"
+similar = "2"
 tree-sitter = "0.27"
 tree-sitter-highlight = "0.27"
 tree-sitter-rust = "0.24"

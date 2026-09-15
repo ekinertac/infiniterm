@@ -144,7 +144,9 @@ impl AppView {
             };
             let focused = true;
             if let Some(body) = self.bodies.get_mut(&card.id) {
-                body.paint(bounds, 1., focused, now, window, cx);
+                window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                    body.paint(bounds, 1., focused, now, window, cx)
+                });
             }
             self.paint_labels(&card, bounds, 1., false, window, cx);
             return;
@@ -282,7 +284,11 @@ impl AppView {
             let focused = sel.focused_id.as_deref() == Some(&card.id);
             let selected = sel.extra.contains(&card.id);
             if let Some(body) = self.bodies.get_mut(&card.id) {
-                body.paint(b, vp.scale, focused, now, window, cx);
+                // Clipped to the card: a long line or a wash must not
+                // paint over the neighbour.
+                window.with_content_mask(Some(gpui::ContentMask { bounds: b }), |window| {
+                    body.paint(b, vp.scale, focused, now, window, cx)
+                });
             }
             // The state border: agent state, else the card's resting colour.
             let state_color = match card.agent {

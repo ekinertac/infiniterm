@@ -13,6 +13,7 @@
 mod animator;
 mod body;
 mod chrome;
+mod diff_body;
 mod editor_body;
 mod editors;
 mod field;
