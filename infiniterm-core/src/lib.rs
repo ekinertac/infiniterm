@@ -40,10 +40,12 @@ pub mod chrome;
 
 pub mod format_zoom;
 
+pub mod config;
 pub mod fuzzy;
 pub mod jsonc;
 pub mod palette;
 pub mod palette_usage;
+pub mod settings_doc;
 
 pub mod sidebar;
 
