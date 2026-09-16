@@ -443,16 +443,25 @@ impl AppView {
                 return;
             }
         }
-        // The physical key from the NSEvent, so the keymap is layout-proof.
+        // The physical key and the real Shift state from the NSEvent, so
+        // the keymap is layout-proof; gpui's keystroke has neither.
+        let code = crate::keycode::last_code();
         let press = KeyPress {
             key: &k.key,
-            code: crate::keycode::last_code(),
+            code,
             cmd: m.platform,
             ctrl: m.control,
             alt: m.alt,
-            shift: m.shift,
+            shift: if code.is_some() {
+                crate::keycode::last_shift()
+            } else {
+                m.shift
+            },
         };
         let chord = chord_for(&press);
+        if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+            eprintln!("[chord] {chord} (key {:?}, code {:?})", k.key, code);
+        }
         if (m.platform || m.control) && handle_chord(&mut self.model, &self.registry, &chord) {
             self.perform_effects();
             return;

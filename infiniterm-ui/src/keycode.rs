@@ -12,18 +12,26 @@
 #![allow(unexpected_cfgs, clippy::missing_transmute_annotations)]
 use objc::runtime::Object;
 use objc::{class, msg_send, sel, sel_impl};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 static LAST: AtomicI32 = AtomicI32::new(-1);
+/// Whether Shift was down for that key, from the event's own flags: gpui
+/// clears its shift flag when it reports a shifted character, so the
+/// keystroke cannot say.
+static LAST_SHIFT: AtomicBool = AtomicBool::new(false);
 
 /// NSEventMaskKeyDown.
 const KEY_DOWN_MASK: u64 = 1 << 10;
+/// NSEventModifierFlagShift.
+const SHIFT_FLAG: u64 = 1 << 17;
 
 /// Starts watching key-downs. Once per process, before the window opens.
 pub fn install() {
     let block = block::ConcreteBlock::new(|event: *mut Object| -> *mut Object {
         let code: u16 = unsafe { msg_send![event, keyCode] };
+        let flags: u64 = unsafe { msg_send![event, modifierFlags] };
         LAST.store(code as i32, Ordering::Relaxed);
+        LAST_SHIFT.store(flags & SHIFT_FLAG != 0, Ordering::Relaxed);
         event
     });
     // The monitor holds the block for the life of the process.
@@ -38,6 +46,11 @@ pub fn install() {
 pub fn last_code() -> Option<&'static str> {
     let code = LAST.load(Ordering::Relaxed);
     (code >= 0).then(|| dom_code(code as u16)).flatten()
+}
+
+/// Whether Shift was held for the most recent key-down.
+pub fn last_shift() -> bool {
+    LAST_SHIFT.load(Ordering::Relaxed)
 }
 
 /// macOS virtual key codes (Carbon `kVK_*`) to DOM `code` names.
