@@ -219,7 +219,11 @@ impl Render for AppView {
             .bg(chrome.canvas_bg)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
-                this.key_down(e, cx);
+                if this.key_down(e, cx) {
+                    // Marks the key equivalent handled, or macOS sends
+                    // the same key again as a key down.
+                    cx.stop_propagation();
+                }
                 cx.notify();
             }))
             .child(title_bar)

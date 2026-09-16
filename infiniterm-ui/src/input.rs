@@ -412,7 +412,12 @@ impl AppView {
 
     /// A key: a bare key to a mode that owns one, else a chord to the keymap,
     /// else the palette or prompt if open, else the focused card's body.
-    pub fn key_down(&mut self, e: &KeyDownEvent, cx: &mut gpui::App) {
+    /// Returns whether the key was taken by a chord. macOS delivers a Cmd
+    /// key twice, first as a key equivalent and then as a key down if the
+    /// first was not marked handled; gpui drops the second only when the
+    /// two parse identically, which Cmd+= on a non-US layout does not, so
+    /// the caller must stop propagation on a handled chord.
+    pub fn key_down(&mut self, e: &KeyDownEvent, cx: &mut gpui::App) -> bool {
         let k: &Keystroke = &e.keystroke;
         let m = &k.modifiers;
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
@@ -440,7 +445,7 @@ impl AppView {
             };
             if self.model.handle_bare_key(bare) {
                 self.perform_effects();
-                return;
+                return false;
             }
         }
         // The physical key and the real Shift state from the NSEvent, so
@@ -464,19 +469,19 @@ impl AppView {
         }
         if (m.platform || m.control) && handle_chord(&mut self.model, &self.registry, &chord) {
             self.perform_effects();
-            return;
+            return true;
         }
         if self.model.palette_open() {
             self.palette_key(k, cx);
-            return;
+            return false;
         }
         if self.model.prompt.is_open() {
             self.prompt_key(k, cx);
-            return;
+            return false;
         }
         if self.model.shortcuts_open {
             self.shortcuts_key(k, cx);
-            return;
+            return false;
         }
         if let Some(id) = self.model.selection.focused_id.clone() {
             let action = match self.bodies.get_mut(&id) {
@@ -487,6 +492,7 @@ impl AppView {
             self.flush_writes();
             self.perform_effects();
         }
+        false
     }
 
     /// What a body asked for from a click: a card beside it, or the system.
