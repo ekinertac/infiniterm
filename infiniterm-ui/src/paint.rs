@@ -57,6 +57,12 @@ const LABEL_BADGE_HEIGHT_RATIO: f32 = 1.5;
 /// Below `MID_ZOOM_MAX` the corner label is unreadable, so the mid-zoom
 /// label is drawn twice as large again.
 const MID_ZOOM_LABEL_SCALE: f32 = 2.4;
+/// How much of the card's width the centred label may fill before it starts
+/// shrinking. Short of the edge, so it reads as inside the card.
+const MID_ZOOM_LABEL_FILL: f32 = 0.86;
+/// It will not shrink past this fraction of its size to fit: below it the
+/// label is smaller than the corner one and there is no point in either.
+const MID_ZOOM_LABEL_MIN_SCALE: f32 = 0.45;
 
 pub fn screen_rect(rect: Rect, vp: Viewport) -> Bounds<Pixels> {
     Bounds::new(
@@ -525,6 +531,17 @@ impl AppView {
                 text = format!("\u{2026}{cut}{tail}");
                 line = crate::text::shape(window, &text, label_px, &chrome.ui_font, label_fg);
             }
+            // The tail alone can still be wider than the card: a label with
+            // no slash in it is ALL tail, and an agent's session name has
+            // none. Before this it ran off the card and over its neighbours.
+            if line.width > room {
+                text = crate::text::elide(&text, f32::from(room), |t| {
+                    f32::from(
+                        crate::text::shape(window, t, label_px, &chrome.ui_font, label_fg).width,
+                    )
+                });
+                line = crate::text::shape(window, &text, label_px, &chrome.ui_font, label_fg);
+            }
             let w = line.width + label_px;
             let lb = Bounds::new(point(right - w, b.origin.y + border), size(w, h));
             window.paint_quad(fill(lb, label_bg));
@@ -574,7 +591,40 @@ impl AppView {
                 * MID_ZOOM_LABEL_SCALE
                 * inv
                 * scale as f32);
-            let line = crate::text::shape(window, &label, big, &chrome.ui_font, chrome.text_bright);
+            // The card is the frame. A long label shrinks to fit it, and
+            // only when shrinking would make it unreadable does it get cut:
+            // this is the label you read when you cannot read the card.
+            let room = f32::from(b.size.width) * MID_ZOOM_LABEL_FILL;
+            let mut size_px = big;
+            let mut line =
+                crate::text::shape(window, &label, size_px, &chrome.ui_font, chrome.text_bright);
+            if f32::from(line.width) > room {
+                let fitted = f32::from(big) * (room / f32::from(line.width));
+                size_px = px(fitted.max(f32::from(big) * MID_ZOOM_LABEL_MIN_SCALE));
+                line = crate::text::shape(
+                    window,
+                    &label,
+                    size_px,
+                    &chrome.ui_font,
+                    chrome.text_bright,
+                );
+            }
+            if f32::from(line.width) > room {
+                let shorter = crate::text::elide(&label, room, |t| {
+                    f32::from(
+                        crate::text::shape(window, t, size_px, &chrome.ui_font, chrome.text_bright)
+                            .width,
+                    )
+                });
+                line = crate::text::shape(
+                    window,
+                    &shorter,
+                    size_px,
+                    &chrome.ui_font,
+                    chrome.text_bright,
+                );
+            }
+            let big = size_px;
             let mb = Bounds::new(
                 point(
                     b.origin.x + b.size.width / 2. - line.width / 2.,

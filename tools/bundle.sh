@@ -37,4 +37,13 @@ for kv in "CFBundleIconFile AppIcon" "CFBundleIconName AppIcon" "CFBundleName in
     /usr/libexec/PlistBuddy -c "Set :$1 $2" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :$1 string $2" "$plist"
 done
 /usr/libexec/PlistBuddy -c "Set :NSHighResolutionCapable true" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :NSHighResolutionCapable bool true" "$plist"
+# cef-rs's bundler sets LSFileQuarantineEnabled because it is modelled on
+# the CEF browser sample, and a browser SHOULD quarantine what it downloads.
+# Here it means every file every shell in every card writes is stamped
+# com.apple.quarantine with infiniterm named as the agent: a binary you just
+# compiled in a card is treated by Gatekeeper as an internet download. A
+# terminal must not do that. When browser cards learn to download, the
+# quarantine belongs on the downloaded file, not on everything the app
+# touches.
+/usr/libexec/PlistBuddy -c "Set :LSFileQuarantineEnabled false" "$plist" 2>/dev/null || true
 echo "$app"
