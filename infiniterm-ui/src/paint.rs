@@ -32,8 +32,9 @@ const GRID_LINE_SNAP_OFFSET: f32 = 0.5;
 /// A group's name tab is taller than its text, for a little air above the
 /// frame it labels.
 const GROUP_LABEL_TAB_HEIGHT_RATIO: f32 = 1.6;
-/// A selected-but-unfocused card's ring is half as strong as the focused
-/// one's, so the focused card still reads as THE one.
+/// A single card's ring when it is somehow selected without being focused.
+/// A real multiple selection never uses this: see the ring in `paint_cards`,
+/// where every member is drawn at one strength.
 const SELECTED_UNFOCUSED_RING_ALPHA_SCALE: f32 = 0.5;
 /// A slot-pick hint (the letter you press) is big enough to read from
 /// across the canvas, not just up close.
@@ -375,8 +376,19 @@ impl AppView {
             // The ring sits OUTSIDE the border so the border stays free for agent state.
             if focused || selected {
                 let ring = px(focus_ring_screen_px(vp.scale) as f32);
+                // One card is a FOCUS and wears the white ring. Several are
+                // a SELECTION, and every member wears the same blue at the
+                // same strength: halving the ring on the cards you did not
+                // touch last made it unreadable which ones a command was
+                // about to close, split or group.
+                let multi = !sel.extra.is_empty();
+                let ring_color = if multi {
+                    chrome.selection_ring
+                } else {
+                    chrome.focus_ring
+                };
                 let alpha = focus_ring_alpha(vp.scale) as f32
-                    * if focused {
+                    * if focused || multi {
                         1.
                     } else {
                         SELECTED_UNFOCUSED_RING_ALPHA_SCALE
@@ -388,7 +400,7 @@ impl AppView {
                 window.paint_quad(
                     outline(
                         rb,
-                        crate::chrome::with_alpha(chrome.focus_ring, alpha),
+                        crate::chrome::with_alpha(ring_color, alpha),
                         BorderStyle::Solid,
                     )
                     .border_widths(ring),

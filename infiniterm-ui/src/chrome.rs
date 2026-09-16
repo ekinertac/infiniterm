@@ -66,6 +66,10 @@ pub struct Chrome {
     pub group_border: Hsla,
     pub group_label_fg: Hsla,
     pub focus_ring: Hsla,
+    /// The ring on EVERY card of a multiple selection, at one strength. A
+    /// selection is a set: the commands act on all of it, so a card is in
+    /// it or it is not, and there is nothing in between to draw.
+    pub selection_ring: Hsla,
     pub text_bright: Hsla,
     pub text: Hsla,
     pub text_mid: Hsla,
@@ -135,6 +139,9 @@ impl Chrome {
             group_border: c(0x39414f),
             group_label_fg: c(0xaab4c2),
             focus_ring: c(0xdbe4f0),
+            // Blue: the one hue on this canvas that means neither agent
+            // state nor a card's identity, so it cannot be misread as either.
+            selection_ring: c(0x4a9eff),
             text_bright: c(0xe6ebf2),
             text: c(0xb9c4d2),
             text_mid: c(0x94a3b8),
