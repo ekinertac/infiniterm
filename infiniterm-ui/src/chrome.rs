@@ -48,8 +48,19 @@ pub struct Chrome {
     pub card_border: Hsla,
     pub card_fg: Hsla,
     pub card_label_fg: Hsla,
+    /// Mid-turn. The common state, so it stays the quiet branded clay.
     pub agent_working: Hsla,
-    pub agent_idle: Hsla,
+    /// Blocked on you. The loudest thing on the canvas, and the only one
+    /// that earns being loud.
+    pub agent_waiting: Hsla,
+    /// Finished. Calm, and a different HUE from the other two: at 40% zoom
+    /// two oranges differing only in brightness are one colour.
+    pub agent_done: Hsla,
+    /// Something the app wants to point out that has nothing to do with an
+    /// agent: a frame rate that has fallen over, a search with no hits. Its
+    /// own colour, because borrowing the agent's is how a signal colour
+    /// stops signalling anything.
+    pub warn: Hsla,
     pub remote_bg: Hsla,
     pub remote_fg: Hsla,
     pub group_border: Hsla,
@@ -116,7 +127,9 @@ impl Chrome {
             card_fg: c(0xb9c4d2),
             card_label_fg: c(0x7b8794),
             agent_working: c(0xd97757),
-            agent_idle: c(0xff9d5c),
+            agent_waiting: c(0xffc400),
+            agent_done: c(0x4fb477),
+            warn: c(0xe3a008),
             remote_bg: c(0xc0392b),
             remote_fg: c(0xfff2ef),
             group_border: c(0x39414f),

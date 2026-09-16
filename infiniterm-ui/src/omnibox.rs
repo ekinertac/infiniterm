@@ -383,7 +383,7 @@ impl AppView {
                 div()
                     .text_size(px(PALETTE_SECTION_FONT_PX * ui))
                     .text_color(if matches == 0 && !query.is_empty() {
-                        chrome.agent_idle
+                        chrome.warn
                     } else {
                         chrome.text_muted
                     })

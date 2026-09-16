@@ -7,8 +7,9 @@
 //! Plain div trees. The palette and the prompt take the keys while open
 //! (`input.rs` routes them here), so no card is listening and Enter, Escape
 //! and the arrows are safe despite the cmd-only rule. Attention on a tab is
-//! a dot, never a switch: green for `idle` (waiting on you), a dimmer orange
-//! for `working`, never merged.
+//! a dot, never a switch: the waiting colour for a card BLOCKED ON YOU, a
+//! dimmer clay for `working`, never merged. A card that merely finished
+//! gets no dot: the dot is a request, and one that is always on is not.
 use crate::AppView;
 use gpui::{
     canvas, div, prelude::*, px, Context, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
@@ -369,7 +370,9 @@ impl AppView {
                         .w(px(TAB_DOT_PX * ui))
                         .h(px(TAB_DOT_PX * ui))
                         .rounded_full()
-                        .bg(gpui::rgb(0x5dcd97)),
+                        // The same colour the card's own border takes, so
+                        // the dot and the card it sends you to agree.
+                        .bg(chrome.agent_waiting),
                 );
             }
             if working > 0 {
@@ -439,7 +442,7 @@ impl AppView {
             String::new()
         };
         let fps_color = if self.fps < LOW_FPS_THRESHOLD && self.fps > 0. {
-            chrome.agent_idle
+            chrome.warn
         } else {
             chrome.text_faint
         };
@@ -804,7 +807,7 @@ impl AppView {
                     .pt_3()
                     .pb_1()
                     .text_size(px(CAPTION_FONT_PX * ui))
-                    .text_color(chrome.agent_idle)
+                    .text_color(chrome.text_muted)
                     .child(s.title.to_uppercase()),
             );
             for sc in s.shortcuts {
@@ -844,7 +847,7 @@ impl AppView {
                     .pt_3()
                     .pb_1()
                     .text_size(px(CAPTION_FONT_PX * ui))
-                    .text_color(chrome.agent_idle)
+                    .text_color(chrome.text_muted)
                     .child("GESTURES"),
             );
             for (keys, label) in gestures {

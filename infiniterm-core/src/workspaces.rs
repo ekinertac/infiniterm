@@ -13,8 +13,10 @@ pub const INITIAL_VIEWPORT: Viewport = Viewport {
     y: 0.,
     scale: 1.,
 };
+/// Cards blocked on you. NOT cards that finished: counting those lit the
+/// dot after every turn, and a dot that is always on says nothing.
 pub fn waiting_count(states: &[AgentState]) -> usize {
-    states.iter().filter(|&&s| s == AgentState::Idle).count()
+    states.iter().filter(|&&s| s == AgentState::Waiting).count()
 }
 pub fn working_count(states: &[AgentState]) -> usize {
     states.iter().filter(|&&s| s == AgentState::Working).count()
@@ -60,10 +62,12 @@ mod tests {
         s.iter().map(|s| s.to_string()).collect()
     }
     #[test]
-    fn waiting_counts_only_idle() {
+    fn waiting_counts_only_what_is_asking_for_you() {
         use AgentState::*;
-        assert_eq!(waiting_count(&[Idle, Working, None, Idle]), 2);
+        assert_eq!(waiting_count(&[Waiting, Working, None, Waiting]), 2);
         assert_eq!(waiting_count(&[Working, None]), 0);
+        // A finished turn is not a request.
+        assert_eq!(waiting_count(&[Done, Done]), 0);
         assert_eq!(waiting_count(&[]), 0);
     }
     #[test]
@@ -125,6 +129,6 @@ mod tests {
     #[test]
     fn working_counts_only_working() {
         use AgentState::*;
-        assert_eq!(working_count(&[Working, Idle, None, Working]), 2);
+        assert_eq!(working_count(&[Working, Done, None, Working]), 2);
     }
 }

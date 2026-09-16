@@ -41,7 +41,8 @@ impl Model {
                         agent: match c.agent {
                             crate::agent_state::AgentState::None => "none",
                             crate::agent_state::AgentState::Working => "working",
-                            crate::agent_state::AgentState::Idle => "idle",
+                            crate::agent_state::AgentState::Waiting => "waiting",
+                            crate::agent_state::AgentState::Done => "done",
                         },
                         remote: c.remote.as_deref(),
                     })

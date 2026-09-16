@@ -255,7 +255,8 @@ impl AppView {
                 .any(|c| Some(&c.id) == self.model.selection.focused_id.as_ref());
             let color = match state {
                 AgentState::Working => chrome.agent_working,
-                AgentState::Idle => chrome.agent_idle,
+                AgentState::Waiting => chrome.agent_waiting,
+                AgentState::Done => chrome.agent_done,
                 AgentState::None if active => chrome.text_faint,
                 AgentState::None => chrome.group_border,
             };
@@ -353,7 +354,8 @@ impl AppView {
             let state_color = match card.agent {
                 _ if overlapping && moving.contains(&card.id) => chrome.remote_bg,
                 AgentState::Working => chrome.agent_working,
-                AgentState::Idle => chrome.agent_idle,
+                AgentState::Waiting => chrome.agent_waiting,
+                AgentState::Done => chrome.agent_done,
                 AgentState::None => chrome.card_border,
             };
             window.paint_quad(outline(b, state_color, BorderStyle::Solid).border_widths(border_w));

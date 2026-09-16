@@ -26,14 +26,16 @@ pub fn group_slot_size(card: Size, gutter: f64, pad: f64) -> Size {
         h: GROUP_RESERVE_ROWS as f64 * card.h + (GROUP_RESERVE_ROWS - 1) as f64 * gutter + pad * 2.,
     }
 }
+/// What a group reports: the state that most wants your attention. One card
+/// asking a question is the group asking a question, however many others are
+/// quietly working, because you cannot answer it without going there.
 pub fn aggregate_state(states: &[AgentState]) -> AgentState {
-    if states.contains(&AgentState::Working) {
-        AgentState::Working
-    } else if states.contains(&AgentState::Idle) {
-        AgentState::Idle
-    } else {
-        AgentState::None
+    for state in [AgentState::Waiting, AgentState::Working, AgentState::Done] {
+        if states.contains(&state) {
+            return state;
+        }
     }
+    AgentState::None
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnitKind {
@@ -136,12 +138,16 @@ mod tests {
         assert_eq!(aggregate_state(&[None, None]), None);
     }
     #[test]
-    fn idle_when_nothing_working() {
-        assert_eq!(aggregate_state(&[None, Idle]), Idle);
+    fn a_settled_state_shows_when_nothing_is_working() {
+        assert_eq!(aggregate_state(&[None, Done]), Done);
+        assert_eq!(aggregate_state(&[None, Waiting]), Waiting);
     }
+    // Asking for you outranks working, and working outranks finished: the
+    // group reports whichever of its cards most wants you.
     #[test]
-    fn working_outranks_idle() {
-        assert_eq!(aggregate_state(&[Idle, Working, None]), Working);
+    fn the_group_reports_whatever_most_wants_you() {
+        assert_eq!(aggregate_state(&[Done, Working, None]), Working);
+        assert_eq!(aggregate_state(&[Done, Working, Waiting]), Waiting);
     }
     #[test]
     fn empty_ring_no_stop() {

@@ -2,7 +2,7 @@
 
 Terminal cards on an infinite canvas, with the state of every coding agent visible at a glance.
 
-It started as a way out of iTerm2: ten to fifteen tabs, two or three splits in each, some panes made full screen, and at that point the trail is lost and finding one particular session among twenty to fifty means opening them one by one. Every session on one infinite canvas, where each keeps a place, is what fixes that. Running coding agents made it worse: you cannot tell which are still working and which have finished without cycling through them, so infiniterm also colours each card's border from its agent's state.
+It started as a way out of iTerm2: ten to fifteen tabs, two or three splits in each, some panes made full screen, and at that point the trail is lost and finding one particular session among twenty to fifty means opening them one by one. Every session on one infinite canvas, where each keeps a place, is what fixes that. Running coding agents made it worse: you cannot tell which are still working, which are blocked waiting for an answer, and which have finished without cycling through them, so infiniterm colours each card's border from its agent's state.
 
 Reading that state is the point. Being interrupted by it is not: nothing flashes, nothing steals focus, nothing sends a notification. You switch agents when you are ready, not when one finishes.
 
@@ -11,10 +11,10 @@ Native macOS app in Rust: gpui draws the canvas, `alacritty_terminal` parses the
 ## What it does
 
 - Real shells in cards on a pan-and-zoom canvas, snapped to a 25 px grid. A new card is 69 x 80 cells, portrait, the same on every display. A new card opens in the free slot nearest the one you were in; rows form from the window's shape, so the canvas stays screen-shaped at any count
-- Card borders driven by Claude Code and Pi hooks: sweeping while a turn runs, solid when it is waiting on you, nothing for a plain shell
+- Card borders driven by Claude Code and Pi hooks, in three colours because there are three questions: the agent is working, the agent is blocked on you (it wants permission, or it asked something), or its turn finished. A plain shell has no colour
 - Keyboard-first. Every action is a command; `Cmd` is the app's modifier, and everything else goes to the terminal untouched
 - Card labels and group names take a colour of their own from the terminal theme's palette, derived from the card's id so it never changes
-- Several workspaces, each a canvas of its own, with a dot on the tab when something there is waiting on you
+- Several workspaces, each a canvas of its own, with a dot on the tab when something there is blocked waiting on you (a turn that merely finished does not light it)
 - Groups: a named frame around a set of cards, whose border reports the state of everything inside it. At 5% zoom you cannot read twenty-five card borders, but you can read five frame borders
 - Card labels that track what the card is doing: the running process while one runs, the current directory otherwise; editors carry badges for language, read-only and unsaved. Zoomed out, the name is drawn large across the card and the text becomes texture, so a full card reads as full at 10%
 - Splits, iTerm2's keys: a card gives up half of itself to a new one, and the halves remember each other, so closing one hands its space back
