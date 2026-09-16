@@ -202,6 +202,16 @@ impl LocalPtyBackend {
             None => CommandBuilder::new(default_shell()),
         };
         builder.cwd(cwd);
+        // The shell must know it is in infiniterm, not in whatever launched
+        // the app. Launched from a terminal (`open`, `ift`), the app inherits
+        // that terminal's identity variables and every card claimed to be a
+        // WezTerm pane; fastfetch, tmux and shell prompts read these.
+        for k in INHERITED_TERMINAL_VARS {
+            builder.env_remove(k);
+        }
+        for (k, v) in terminal_identity() {
+            builder.env(k, v);
+        }
         for (k, v) in env {
             builder.env(k, v);
         }
@@ -331,6 +341,36 @@ impl LocalPtyBackend {
     }
 }
 
+/// Variables a parent terminal leaves in the environment; a shell reading
+/// them would take that terminal for its own.
+const INHERITED_TERMINAL_VARS: [&str; 12] = [
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+    "TERM_SESSION_ID",
+    "WEZTERM_PANE",
+    "WEZTERM_UNIX_SOCKET",
+    "WEZTERM_EXECUTABLE",
+    "WEZTERM_EXECUTABLE_DIR",
+    "WEZTERM_CONFIG_FILE",
+    "WEZTERM_CONFIG_DIR",
+    "ITERM_SESSION_ID",
+    "ITERM_PROFILE",
+    "TMUX",
+];
+
+/// What every card's shell is told about the terminal it runs in.
+pub fn terminal_identity() -> Vec<(String, String)> {
+    vec![
+        ("TERM".into(), "xterm-256color".into()),
+        ("COLORTERM".into(), "truecolor".into()),
+        ("TERM_PROGRAM".into(), "infiniterm".into()),
+        (
+            "TERM_PROGRAM_VERSION".into(),
+            env!("CARGO_PKG_VERSION").into(),
+        ),
+    ]
+}
+
 fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
 }
@@ -398,6 +438,24 @@ mod tests {
             .await
             .unwrap();
         assert!(wait_for_output(&rx, pane, "card=card-42"));
+    }
+
+    // The app launched from a WezTerm shell must not hand WezTerm's identity
+    // to every card.
+    #[tokio::test]
+    async fn the_shell_is_told_it_runs_in_infiniterm() {
+        std::env::set_var("WEZTERM_PANE", "19");
+        std::env::set_var("TERM_PROGRAM", "WezTerm");
+        let (backend, rx) = LocalPtyBackend::new();
+        let pane = backend
+            .spawn(
+                std::path::Path::new("/tmp"),
+                Some("echo prog=$TERM_PROGRAM pane=${WEZTERM_PANE:-none}"),
+                vec![],
+            )
+            .await
+            .unwrap();
+        assert!(wait_for_output(&rx, pane, "prog=infiniterm pane=none"));
     }
 
     #[tokio::test]
