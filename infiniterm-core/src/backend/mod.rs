@@ -14,6 +14,7 @@
 //! docs/superpowers/specs/2026-09-10-infiniterm-design.md, "SessionBackend".
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 
 pub mod local_pty;
 pub mod tmux;
@@ -56,4 +57,121 @@ pub trait SessionBackend: Send + Sync {
     /// output is unacknowledged, which stalls the child at the kernel's pty
     /// buffer — the only place a `yes` can be made to wait.
     fn ack(&self, pane: PaneId, bytes: usize);
+}
+
+/// Which backend a card's shell lives in. An enum rather than a trait
+/// object because `SessionBackend` is not dyn-compatible (async fn, E0038),
+/// which the header above has said since v1 and is now the reason this
+/// exists. Every method is the `_now` name the ui already calls, so the
+/// call sites do not know or care which one they have.
+pub enum Panes {
+    Local(local_pty::LocalPtyBackend),
+    Tmux(tmux::TmuxBackend),
+}
+
+impl Panes {
+    /// tmux when it is asked for AND there is a tmux to talk to. A missing
+    /// binary must not mean no terminal, so it falls back and says so.
+    pub fn start(want_tmux: bool) -> (Panes, Receiver<(PaneId, PaneEvent)>, Option<String>) {
+        if want_tmux {
+            if !tmux::available() {
+                let (pty, rx) = local_pty::LocalPtyBackend::new();
+                return (
+                    Panes::Local(pty),
+                    rx,
+                    Some("tmux is not installed; cards use local shells".into()),
+                );
+            }
+            match tmux::TmuxBackend::start() {
+                Some((backend, rx)) => return (Panes::Tmux(backend), rx, None),
+                None => {
+                    let (pty, rx) = local_pty::LocalPtyBackend::new();
+                    return (
+                        Panes::Local(pty),
+                        rx,
+                        Some("tmux would not start; cards use local shells".into()),
+                    );
+                }
+            }
+        }
+        let (pty, rx) = local_pty::LocalPtyBackend::new();
+        (Panes::Local(pty), rx, None)
+    }
+
+    pub fn is_tmux(&self) -> bool {
+        matches!(self, Panes::Tmux(_))
+    }
+
+    pub fn spawn_now(
+        &self,
+        cwd: &Path,
+        cmd: Option<&str>,
+        env: Vec<(String, String)>,
+    ) -> anyhow::Result<PaneId> {
+        match self {
+            Panes::Local(b) => b.spawn_now(cwd, cmd, env),
+            Panes::Tmux(b) => b.spawn_now(cwd, cmd, env),
+        }
+    }
+
+    pub fn write_now(&self, pane: PaneId, bytes: &[u8]) {
+        match self {
+            Panes::Local(b) => b.write_now(pane, bytes),
+            Panes::Tmux(b) => b.write_now(pane, bytes),
+        }
+    }
+
+    pub fn resize_now(&self, pane: PaneId, cols: u16, rows: u16) {
+        match self {
+            Panes::Local(b) => b.resize_now(pane, cols, rows),
+            Panes::Tmux(b) => b.resize_now(pane, cols, rows),
+        }
+    }
+
+    pub fn ack_now(&self, pane: PaneId, bytes: usize) {
+        match self {
+            Panes::Local(b) => b.ack_now(pane, bytes),
+            Panes::Tmux(b) => b.ack_now(pane, bytes),
+        }
+    }
+
+    pub fn kill(&self, pane: PaneId) {
+        match self {
+            Panes::Local(b) => b.kill(pane),
+            Panes::Tmux(b) => b.kill_now(pane),
+        }
+    }
+
+    pub fn write(&self, pane: PaneId, bytes: &[u8]) {
+        self.write_now(pane, bytes)
+    }
+
+    /// Every pane ended. Under tmux this kills the session: it is what
+    /// `app.reload` means, and a reload that left the windows would grow a
+    /// second set beside them.
+    pub fn kill_all(&self) {
+        match self {
+            Panes::Local(b) => b.kill_all(),
+            Panes::Tmux(b) => b.kill_all(),
+        }
+    }
+
+    /// The app is quitting. Local shells die with it; tmux windows are
+    /// LEFT RUNNING, which is the entire point of the tmux backend.
+    pub fn leave(&self) {
+        match self {
+            Panes::Local(b) => b.kill_all(),
+            Panes::Tmux(b) => b.detach(),
+        }
+    }
+
+    /// Live pane pids, for the remote-session poller. tmux answers nothing:
+    /// a tmux pane's process lives wherever the server does, which the
+    /// header of `pids_source` has always said.
+    pub fn pids_source(&self) -> Box<dyn Fn() -> Vec<(PaneId, u32)> + Send + 'static> {
+        match self {
+            Panes::Local(b) => Box::new(b.pids_source()),
+            Panes::Tmux(_) => Box::new(Vec::new),
+        }
+    }
 }

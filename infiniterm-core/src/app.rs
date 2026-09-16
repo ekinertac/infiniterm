@@ -14,8 +14,7 @@
 //! `start` never fails: a socket that cannot bind disables hooks and `ift`
 //! and says so on stderr, since a terminal that refuses to start over a
 //! stale socket is worse than one without hooks.
-use crate::backend::local_pty::LocalPtyBackend;
-use crate::backend::{PaneEvent, PaneId};
+use crate::backend::{PaneEvent, PaneId, Panes};
 use crate::cli::{CliRequest, CliState};
 use crate::config_files::{config_watch, ConfigChange};
 use crate::hooks::{listen, HookReport};
@@ -25,7 +24,8 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 
 pub struct Backend {
-    pub pty: LocalPtyBackend,
+    /// The shells: local PTYs, or tmux windows that outlive the window.
+    pub pty: Panes,
     pub pane_events: Receiver<(PaneId, PaneEvent)>,
     pub hook_reports: Receiver<HookReport>,
     pub cli: Arc<CliState>,
@@ -34,14 +34,19 @@ pub struct Backend {
     pub config_changes: Receiver<ConfigChange>,
     /// Whether the socket bound; false means hooks and `ift` are off.
     pub socket_ok: bool,
+    /// Why tmux was asked for and not used, if it was. The ui says it once.
+    pub fell_back: Option<String>,
 }
 
 impl Backend {
     /// Starts every producer thread. `socket` is the path `ift` and the hook
     /// binary connect to (`paths::socket_path()` in the app; a temp path in
     /// tests, so a test never fights a running infiniterm for the real one).
-    pub fn start(socket: &Path) -> Backend {
-        let (pty, pane_events) = LocalPtyBackend::new();
+    pub fn start(socket: &Path, want_tmux: bool) -> Backend {
+        let (pty, pane_events, fell_back) = Panes::start(want_tmux);
+        if let Some(why) = &fell_back {
+            eprintln!("[infiniterm] {why}");
+        }
         let (hook_tx, hook_reports) = channel();
         let cli = Arc::new(CliState::default());
         let (cli_tx, cli_requests) = channel();
@@ -66,6 +71,7 @@ impl Backend {
             pane_status,
             config_changes,
             socket_ok,
+            fell_back,
         }
     }
 }
@@ -86,7 +92,7 @@ mod tests {
     #[test]
     fn the_socket_answers_ift_and_forwards_hook_reports_with_no_window() {
         let path = temp_socket("app");
-        let backend = Backend::start(&path);
+        let backend = Backend::start(&path, false);
         assert!(backend.socket_ok);
 
         // A hook report, as infiniterm-hook writes it.
@@ -128,7 +134,7 @@ mod tests {
 
     #[test]
     fn a_socket_that_cannot_bind_disables_hooks_but_the_backend_still_starts() {
-        let backend = Backend::start(Path::new("/nonexistent-dir/infiniterm.sock"));
+        let backend = Backend::start(Path::new("/nonexistent-dir/infiniterm.sock"), false);
         assert!(!backend.socket_ok);
         // The PTY side is untouched by that.
         assert!(backend.pane_events.try_recv().is_err());

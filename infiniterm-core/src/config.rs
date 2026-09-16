@@ -42,6 +42,12 @@ pub struct Config {
 pub struct Terminal {
     /// Program to run in a new card. Empty uses the login shell.
     pub shell: String,
+    /// Where a card's shell lives. `tmux` keeps it running when the app
+    /// quits and lets `tmux attach -t infiniterm` reach it from any
+    /// terminal; `pty` is a plain local shell that dies with the window.
+    /// tmux is the default, and a machine without tmux falls back to pty
+    /// rather than to no terminal.
+    pub backend: TerminalBackend,
     pub cursor_style: CursorStyle,
     pub cursor_blink: bool,
     pub font_family: String,
@@ -59,6 +65,13 @@ pub enum CursorStyle {
     Block,
     Bar,
     Underline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TerminalBackend {
+    Tmux,
+    Pty,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -163,6 +176,7 @@ pub fn default_config() -> Config {
         starting_dir: String::new(),
         terminal: Terminal {
             shell: String::new(),
+            backend: TerminalBackend::Tmux,
             cursor_style: CursorStyle::Block,
             cursor_blink: true,
             // What every Mac has. A Nerd Font is one you install, and a
@@ -270,6 +284,14 @@ pub fn merge_config(raw: &Value) -> Config {
         starting_dir: trimmed(r.get("startingDir"), &d.starting_dir),
         terminal: Terminal {
             shell: trimmed(t.get("shell"), &d.terminal.shell),
+            backend: one(
+                t.get("backend"),
+                d.terminal.backend,
+                &[
+                    ("tmux", TerminalBackend::Tmux),
+                    ("pty", TerminalBackend::Pty),
+                ],
+            ),
             cursor_style: one(
                 t.get("cursorStyle"),
                 d.terminal.cursor_style,

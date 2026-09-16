@@ -341,6 +341,12 @@ fn main() {
                 cx.on_app_quit(move |cx| {
                     quitting.update(cx, |this, _| {
                         this.flush_save();
+                        // The shells: local ones die with us, tmux windows
+                        // are left running. That is the whole point of the
+                        // tmux backend, and it has to happen HERE rather
+                        // than by letting the process fall over, or the
+                        // control client dies without detaching.
+                        this.backend.pty.leave();
                         // The surfaces close before CEF shuts down.
                         this.bodies.clear();
                     });

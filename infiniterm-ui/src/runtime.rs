@@ -7,7 +7,6 @@
 use crate::{now_ms, AppView, Glide, SAVE_DEBOUNCE_MS};
 use gpui::FocusHandle;
 use infiniterm_core::app::Backend;
-use infiniterm_core::backend::SessionBackend;
 use infiniterm_core::commands::CommandRegistry;
 use infiniterm_core::config_files::{config_migrate, config_read, config_write, ConfigFile};
 use infiniterm_core::grid::Size;
@@ -32,7 +31,10 @@ impl AppView {
         AppView {
             model: infiniterm_core::model::Model::new(),
             registry,
-            backend: Backend::start(&socket_path()),
+            // The settings are read here rather than in `startup`, which
+            // runs later: the backend has to exist before the first card
+            // does, and which backend it is cannot be changed afterwards.
+            backend: Backend::start(&socket_path(), wants_tmux()),
             animator: crate::Animator::new(),
             chrome: crate::Chrome::default_chrome(),
             bodies: Default::default(),
@@ -443,6 +445,19 @@ impl AppView {
 /// Reads the config directory, rewrites the generated files, seeds and lists
 /// the themes, loads the saved canvas. Order matters: the settings decide
 /// the start directory and the theme before the first card is seeded.
+/// The backend the settings file asks for, read straight from disk because
+/// the model does not exist yet. A malformed or missing file means the
+/// default, which is what `merge_config` already does for everything else.
+fn wants_tmux() -> bool {
+    use infiniterm_core::config::TerminalBackend;
+    let text = config_read(ConfigFile::Settings).unwrap_or_default();
+    let value = infiniterm_core::jsonc::parse_jsonc(&text).unwrap_or(serde_json::Value::Null);
+    infiniterm_core::config::merge_config(&value)
+        .terminal
+        .backend
+        == TerminalBackend::Tmux
+}
+
 pub fn startup(app: &mut AppView) {
     let now = now_ms();
     app.model.tick(now);
@@ -497,6 +512,8 @@ pub fn startup(app: &mut AppView) {
     if !app.backend.socket_ok {
         app.model
             .notify("could not bind the socket: hooks and ift are off");
+    } else if let Some(why) = app.backend.fell_back.clone() {
+        app.model.notify(&why);
     }
 }
 

@@ -263,8 +263,10 @@ impl TmuxBackend {
     }
 }
 
-impl SessionBackend for TmuxBackend {
-    async fn spawn(
+impl TmuxBackend {
+    /// The same as the trait's `spawn`, without the async: nothing here
+    /// waits, and the ui calls it from a frame.
+    pub fn spawn_now(
         &self,
         cwd: &Path,
         cmd: Option<&str>,
@@ -307,7 +309,7 @@ impl SessionBackend for TmuxBackend {
         Ok(id)
     }
 
-    fn write(&self, pane: PaneId, bytes: &[u8]) {
+    pub fn write_now(&self, pane: PaneId, bytes: &[u8]) {
         let Some(target) = self.target(pane) else {
             return;
         };
@@ -321,7 +323,7 @@ impl SessionBackend for TmuxBackend {
         self.command(&format!("send-keys -H -t {target} {}", hex.join(" ")));
     }
 
-    fn resize(&self, pane: PaneId, cols: u16, rows: u16) {
+    pub fn resize_now(&self, pane: PaneId, cols: u16, rows: u16) {
         let Some(window) = self.window_of(pane).filter(|w| !w.id.is_empty()) else {
             return;
         };
@@ -332,7 +334,7 @@ impl SessionBackend for TmuxBackend {
         ));
     }
 
-    fn kill(&self, pane: PaneId) {
+    pub fn kill_now(&self, pane: PaneId) {
         let Some(window) = self.window_of(pane) else {
             return;
         };
@@ -342,10 +344,35 @@ impl SessionBackend for TmuxBackend {
         }
     }
 
-    fn ack(&self, pane: PaneId, _bytes: usize) {
-        // Flow control is tmux's `refresh-client -A`, driven by the ledger in
-        // the ui rather than by the byte count here; see `pause`/`unpause`.
-        let _ = pane;
+    /// Flow control is tmux's `refresh-client -A`, driven by the ledger in
+    /// the ui rather than by a byte count here; see `pause` and `unpause`.
+    pub fn ack_now(&self, _pane: PaneId, _bytes: usize) {}
+}
+
+impl SessionBackend for TmuxBackend {
+    async fn spawn(
+        &self,
+        cwd: &Path,
+        cmd: Option<&str>,
+        env: Vec<(String, String)>,
+    ) -> anyhow::Result<PaneId> {
+        self.spawn_now(cwd, cmd, env)
+    }
+
+    fn write(&self, pane: PaneId, bytes: &[u8]) {
+        self.write_now(pane, bytes)
+    }
+
+    fn resize(&self, pane: PaneId, cols: u16, rows: u16) {
+        self.resize_now(pane, cols, rows)
+    }
+
+    fn kill(&self, pane: PaneId) {
+        self.kill_now(pane)
+    }
+
+    fn ack(&self, pane: PaneId, bytes: usize) {
+        self.ack_now(pane, bytes)
     }
 }
 

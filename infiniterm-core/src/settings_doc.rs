@@ -38,6 +38,18 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["The terminals themselves. Changes reach cards that are already open."],
     ),
     (
+        "terminal.backend",
+        &[
+            "Where a card's shell lives: \"tmux\" or \"pty\".",
+            "tmux keeps the shell running when infiniterm quits, and the same",
+            "sessions are reachable with `tmux attach -t infiniterm` from any",
+            "terminal. Each card is one tmux window; scrollback, selection and",
+            "the mouse stay infiniterm's, because tmux draws nothing here.",
+            "pty is a plain local shell that dies with the window.",
+            "A machine with no tmux falls back to pty and says so once.",
+        ],
+    ),
+    (
         "terminal.shell",
         &[
             "Program to run in a new card. Empty uses your login shell ($SHELL).",
