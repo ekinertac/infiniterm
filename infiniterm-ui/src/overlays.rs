@@ -60,6 +60,8 @@ const DIALOG_BUTTON_GAP_PX: f32 = 8.;
 const DIALOG_BUTTON_PAD_X_PX: f32 = 12.;
 const DIALOG_BUTTON_PAD_Y_PX: f32 = 6.;
 const DIALOG_KEY_PAD_PX: f32 = 5.;
+/// The key cap's ground on a button: dark enough for white ink on orange.
+const DIALOG_KEY_BG_ALPHA: f32 = 0.35;
 /// The shortcuts list scrolls past this height rather than growing the
 /// window to fit every command.
 const SHORTCUTS_LIST_MAX_H_PX: f32 = 720.;
@@ -594,12 +596,14 @@ impl AppView {
         } else {
             format!("{}▏", p.value)
         };
+        // The key sits in a translucent cap so it reads on either button:
+        // white ink on the dark Cancel, the same on the orange action.
         let key_cap = |label: &str, chrome: &crate::chrome::Chrome| {
             div()
                 .px(px(DIALOG_KEY_PAD_PX * ui))
                 .rounded_sm()
-                .bg(chrome.badge_bg)
-                .text_color(chrome.text_faint)
+                .bg(crate::chrome::with_alpha(gpui::black(), DIALOG_KEY_BG_ALPHA))
+                .text_color(chrome.text_bright)
                 .text_size(px(KEY_CAP_FONT_PX * ui))
                 .child(label.to_string())
         };
