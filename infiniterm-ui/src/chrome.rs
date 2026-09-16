@@ -66,9 +66,10 @@ pub struct Chrome {
     pub group_border: Hsla,
     pub group_label_fg: Hsla,
     pub focus_ring: Hsla,
-    /// The ring on EVERY card of a multiple selection, at one strength. A
-    /// selection is a set: the commands act on all of it, so a card is in
-    /// it or it is not, and there is nothing in between to draw.
+    /// The ring on the OTHER cards of a multiple selection, at the same
+    /// strength as the active card's white one. A selection is a set, so a
+    /// card is in it or it is not and there is nothing in between to draw;
+    /// the active card stays white only to say where you are.
     pub selection_ring: Hsla,
     pub text_bright: Hsla,
     pub text: Hsla,

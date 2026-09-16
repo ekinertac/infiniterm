@@ -381,8 +381,12 @@ impl AppView {
                 // same strength: halving the ring on the cards you did not
                 // touch last made it unreadable which ones a command was
                 // about to close, split or group.
+                // The active card keeps the white ring even inside a
+                // selection, so you can still see where you are and which
+                // card the next extend grows from. The rest take blue, all
+                // at one strength.
                 let multi = !sel.extra.is_empty();
-                let ring_color = if multi {
+                let ring_color = if multi && !focused {
                     chrome.selection_ring
                 } else {
                     chrome.focus_ring
