@@ -14,6 +14,11 @@
 set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 DATA=${INFINITERM_DATA_DIR:-/tmp/infiniterm-drive}
+# EXPORTED, so `ift` and the hook binary run from a scenario can only reach
+# the instance under test. Without this they take the default data dir,
+# which is the installed app's socket: a scenario firing hook events would
+# have set agent states on Ekin's real canvas.
+export INFINITERM_DATA_DIR="$DATA"
 SHOTS=${SHOTS:-/tmp/infiniterm-drive/shots}
 # The installed app is also named infiniterm and shares the bundle id; the
 # process under test is addressed by its pid (`_pid`), never by name or id.
