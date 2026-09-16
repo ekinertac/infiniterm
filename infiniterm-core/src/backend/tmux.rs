@@ -75,13 +75,24 @@ pub struct TmuxBackend {
     /// pushes, even the ones whose answer is nothing, or the queue drifts
     /// and a capture would be handed to the wrong card.
     expecting: Arc<Mutex<VecDeque<Expect>>>,
+    /// The window tmux made when it created the session, which belongs to no
+    /// card. The first card kills it once it has one of its own: killing it
+    /// earlier would take the session with it, since a session with no
+    /// windows does not exist.
+    spare: Arc<Mutex<Option<String>>>,
 }
 
 /// What the next reply block will contain.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Expect {
-    /// A `new-window -P -F '#{window_id}'`: one `@N` line.
-    WindowId(PaneId),
+    /// `#{window_id} #{pane_id}` for one card: `@3 %3`.
+    ///
+    /// BOTH, in one answer. Learning the pane from whichever `%output`
+    /// arrived next let a card claim the session's own initial window, and
+    /// everything typed into that card went somewhere no card owned.
+    Ids(PaneId),
+    /// The window tmux made when it created the session, which is nobody's.
+    Spare,
     /// A `capture-pane -p -e -S -`: the pane's history, as many lines.
     History(PaneId),
     /// Anything else. tmux still frames it and the frame still has to be
@@ -100,6 +111,15 @@ pub fn available() -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// `@3 %3` as tmux formats it, into the pair.
+fn split_ids(line: &str) -> Option<(String, String)> {
+    let (window, pane) = line.trim().split_once(' ')?;
+    if !is_window_id(window) || !pane.starts_with('%') || pane.len() < 2 {
+        return None;
+    }
+    Some((window.to_string(), pane.to_string()))
+}
+
 /// `@7` and nothing else: a reply line that is a window id.
 fn is_window_id(line: &str) -> bool {
     line.strip_prefix('@')
@@ -110,6 +130,10 @@ impl TmuxBackend {
     /// Attaches to the session, creating it if it is not there (`-A`).
     /// `None` when tmux will not start, and the caller uses local PTYs.
     pub fn start() -> Option<(TmuxBackend, Receiver<(PaneId, PaneEvent)>)> {
+        // Asked BEFORE attaching: `new-session -A` either attaches to a
+        // session full of our windows or creates one with a window that is
+        // nobody's, and afterwards the two look identical.
+        let existed = Self::session_exists();
         let mut child = Command::new("tmux")
             .args([
                 // A test points this at a socket of its own; the app leaves
@@ -141,7 +165,13 @@ impl TmuxBackend {
             child: Arc::new(Mutex::new(child)),
             next_id: AtomicU32::new(1),
             expecting: Arc::new(Mutex::new(VecDeque::new())),
+            spare: Arc::new(Mutex::new(None)),
         };
+        // tmux answers the `new-session` on its own command line with a
+        // reply block of its own, before anything we send. Nothing queued
+        // it, so without this seat every answer after it is off by one and
+        // a window id lands in the block of some earlier command.
+        backend.expecting.lock().unwrap().push_back(Expect::Nothing);
         // The status line is a row of the card, not decoration: without this
         // every pane is one row shorter than the card it fills.
         backend.command("set -g status off");
@@ -149,6 +179,12 @@ impl TmuxBackend {
         // is theirs and we do not adopt it.
         backend.command("set -g allow-rename off");
         backend.read_thread(stdout, tx);
+        if !existed {
+            backend.command_expecting(
+                &format!("list-windows -t {} -F '#{{window_id}}'", session_name()),
+                Expect::Spare,
+            );
+        }
         Some((backend, rx))
     }
 
@@ -157,6 +193,7 @@ impl TmuxBackend {
     fn read_thread(&self, stdout: std::process::ChildStdout, tx: Sender<(PaneId, PaneEvent)>) {
         let windows = self.windows.clone();
         let expecting = self.expecting.clone();
+        let spare = self.spare.clone();
         std::thread::spawn(move || {
             let mut reader = Reader::new();
             let mut block = Expect::Nothing;
@@ -205,10 +242,16 @@ impl TmuxBackend {
                         history.clear();
                     }
                     Notice::Reply(text) => match &block {
-                        Expect::WindowId(id) if is_window_id(&text) => {
-                            if let Some(w) = windows.lock().unwrap().get_mut(id) {
-                                w.id = text;
+                        Expect::Ids(id) => {
+                            if let Some((window, pane)) = split_ids(&text) {
+                                if let Some(w) = windows.lock().unwrap().get_mut(id) {
+                                    w.id = window;
+                                    w.pane = Some(pane);
+                                }
                             }
+                        }
+                        Expect::Spare if is_window_id(&text) => {
+                            *spare.lock().unwrap() = Some(text);
                         }
                         Expect::History(_) => history.push(text),
                         _ => {}
@@ -241,25 +284,17 @@ impl TmuxBackend {
         });
     }
 
-    /// tmux reports output by PANE and we hold windows, so the first line a
-    /// window produces teaches us its pane id. `list-panes` would be a round
-    /// trip per window for something the output itself carries.
+    /// Which card a pane belongs to, and ONLY if tmux told us so. Output
+    /// from anything else is not ours: the session's own initial window and
+    /// any window somebody made from another terminal both report output,
+    /// and a card that claimed one would send its keystrokes there.
     fn id_for_pane(windows: &Arc<Mutex<HashMap<PaneId, Window>>>, pane: &str) -> Option<PaneId> {
-        let mut map = windows.lock().unwrap();
-        if let Some((id, _)) = map.iter().find(|(_, w)| w.pane.as_deref() == Some(pane)) {
-            return Some(*id);
-        }
-        // A pane we have not seen: it belongs to the window we most recently
-        // made and have no pane for. Anything else is somebody else's window
-        // and is not ours to adopt.
-        let waiting = map
+        windows
+            .lock()
+            .unwrap()
             .iter()
-            .find(|(_, w)| w.pane.is_none())
-            .map(|(id, _)| *id)?;
-        if let Some(w) = map.get_mut(&waiting) {
-            w.pane = Some(pane.to_string());
-        }
-        Some(waiting)
+            .find(|(_, w)| w.pane.as_deref() == Some(pane))
+            .map(|(id, _)| *id)
     }
 
     /// One command, one line, and what its reply block will hold. tmux
@@ -337,12 +372,18 @@ impl TmuxBackend {
             .unwrap_or_default();
         self.command_expecting(
             &format!(
-                "new-window -d -P -F '#{{window_id}}' -c {}{}",
+                "new-window -d -P -F '#{{window_id}} #{{pane_id}}' -c {}{}",
                 crate::drop::shell_quote(&cwd.to_string_lossy()),
                 start
             ),
-            Expect::WindowId(id),
+            Expect::Ids(id),
         );
+        // Now that the session has a window of ours, the one tmux made for
+        // itself can go. Ordered after, or killing the last window would
+        // end the session.
+        if let Some(window) = self.spare.lock().unwrap().take() {
+            self.command(&format!("kill-window -t {window}"));
+        }
         // The window id arrives in the command's reply and the pane id in the
         // window's first output. Neither is waited on: a command issued
         // before they land targets nothing, which tmux ignores, and the
@@ -428,10 +469,29 @@ impl TmuxBackend {
             &format!("capture-pane -p -e -S - -t {window}"),
             Expect::History(id),
         );
-        // A quiet shell produces no output, and the pane id is learned from
-        // output: this makes tmux speak for the window.
-        self.command(&format!("refresh-client -A '{window}:on'"));
+        // Which pane is in it, asked rather than guessed.
+        self.command_expecting(
+            &format!("display-message -p -t {window} '#{{window_id}} #{{pane_id}}'"),
+            Expect::Ids(id),
+        );
         id
+    }
+
+    /// Whether our session is already there. One shot, before the control
+    /// client exists.
+    fn session_exists() -> bool {
+        Command::new("tmux")
+            .args([
+                "-L",
+                &std::env::var("INFINITERM_TMUX_SOCKET").unwrap_or_else(|_| "default".into()),
+                "has-session",
+                "-t",
+                session_name(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
     }
 
     /// The windows this app's session still holds. Blocking and deliberately
