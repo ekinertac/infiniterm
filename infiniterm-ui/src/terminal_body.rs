@@ -290,6 +290,14 @@ impl TerminalBody {
         }
     }
 
+    /// Text put into the shell as if pasted: bracketed when the program
+    /// asked for it, so a path with a newline in its name cannot run as a
+    /// command in a shell that reads pastes as typing.
+    pub fn paste_text(&mut self, text: &str) {
+        let bracketed = self.grid.bracketed_paste();
+        self.write(paste(text, bracketed));
+    }
+
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
     }

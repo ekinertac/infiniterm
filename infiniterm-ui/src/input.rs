@@ -34,7 +34,7 @@ pub enum Hit {
 
 impl AppView {
     /// Screen coordinates are the content area's: the title bar is above.
-    fn to_content(&self, position: gpui::Point<gpui::Pixels>) -> Point {
+    pub(crate) fn to_content(&self, position: gpui::Point<gpui::Pixels>) -> Point {
         Point {
             x: f32::from(position.x) as f64,
             y: f32::from(position.y) as f64 - self.titlebar_h() as f64,
@@ -559,5 +559,68 @@ impl AppView {
                 }
             }
         }
+    }
+}
+
+impl AppView {
+    /// A file dragged from the Finder. What happens is the card's to decide
+    /// (`infiniterm_core::drop::drop_plan`); this finds which card was under
+    /// the pointer, asks the filesystem what each path is, and carries the
+    /// answer out.
+    pub fn file_drop(&mut self, paths: &[std::path::PathBuf], at: Point) {
+        use infiniterm_core::drop::{drop_plan, DropAction};
+        use infiniterm_core::ift::PathKind;
+        let items: Vec<(String, PathKind)> = paths
+            .iter()
+            .filter_map(|p| {
+                // Only what still exists: a path from a drag that has gone
+                // stale would open an empty card or type a lie.
+                let meta = std::fs::metadata(p).ok()?;
+                Some((
+                    p.to_string_lossy().into_owned(),
+                    if meta.is_dir() {
+                        PathKind::Directory
+                    } else {
+                        PathKind::File
+                    },
+                ))
+            })
+            .collect();
+        let hit = self.hit(at);
+        let card = match &hit {
+            Hit::CardBody { id, .. } | Hit::CardEdge { id, .. } => self.model.card(id).cloned(),
+            _ => None,
+        };
+        match drop_plan(&items, card.as_ref().map(|c| c.kind)) {
+            DropAction::Type(text) => {
+                let Some(card) = card else { return };
+                // The drop focuses the card it landed on: the text has gone
+                // into that shell and the keyboard should follow it.
+                self.model.set_focus(Some(&card.id));
+                if let Some(body) = self.bodies.get_mut(&card.id).and_then(|b| {
+                    b.as_any_mut()
+                        .downcast_mut::<crate::terminal_body::TerminalBody>()
+                }) {
+                    body.paste_text(&text);
+                }
+                self.flush_writes();
+            }
+            DropAction::Navigate(url) => {
+                let Some(card) = card else { return };
+                if let Some(c) = self.model.card_mut(&card.id) {
+                    c.url = Some(url);
+                    self.model.dirty_layout = true;
+                }
+                self.model.set_focus(Some(&card.id));
+            }
+            DropAction::Open(plans) => {
+                let from = card.as_ref().map(|c| c.id.clone());
+                for plan in plans {
+                    self.model.open_in_card(plan, from.as_deref());
+                }
+            }
+            DropAction::None => {}
+        }
+        self.perform_effects();
     }
 }

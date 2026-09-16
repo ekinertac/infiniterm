@@ -298,6 +298,16 @@ impl Render for AppView {
                     )
                     .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, _| this.mouse_move(e)))
                     .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, _| this.wheel(e)))
+                    // A file from the Finder. gpui turns the platform's drag
+                    // into its own, so the paths arrive as ExternalPaths and
+                    // the position is where the pointer let go.
+                    .on_drop(
+                        cx.listener(|this, paths: &gpui::ExternalPaths, window, cx| {
+                            let at = this.to_content(window.mouse_position());
+                            this.file_drop(paths.paths(), at);
+                            cx.notify();
+                        }),
+                    )
                     .child(
                         canvas(
                             |_, _, _| (),
