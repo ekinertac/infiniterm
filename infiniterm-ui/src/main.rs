@@ -96,6 +96,13 @@ pub struct Glide {
     pub started: f64,
 }
 
+/// The omnibox's answers on their way back to the UI thread: the query id
+/// they were asked for, and the completions.
+pub type SuggestChannel = (
+    std::sync::mpsc::Sender<(u64, Vec<String>)>,
+    std::sync::mpsc::Receiver<(u64, Vec<String>)>,
+);
+
 pub struct AppView {
     pub model: Model,
     pub registry: CommandRegistry<Model>,
@@ -145,10 +152,7 @@ pub struct AppView {
     pub palette: infiniterm_term::palette::Palette,
     /// Answers from the suggest endpoint, sent by the thread that ran curl
     /// and drained with the backend's channels once a frame.
-    pub suggestions: (
-        std::sync::mpsc::Sender<(u64, Vec<String>)>,
-        std::sync::mpsc::Receiver<(u64, Vec<String>)>,
-    ),
+    pub suggestions: SuggestChannel,
 }
 
 pub fn now_ms() -> f64 {
