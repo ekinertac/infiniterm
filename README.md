@@ -24,7 +24,7 @@ Native macOS app in Rust: gpui draws the canvas, `alacritty_terminal` parses the
 - Terminals select with the mouse (two clicks a word, three a line), `Cmd + C` copies, links and paths that exist underline when you hold `Cmd` over them and `Cmd + click` opens them beside the card. `htop`, `vim` and friends get the mouse
 - Editor cards: a file opens in an editor that is a card like any other, coloured by the terminal theme. Syntax highlighting for fifteen languages through tree-sitter, find and replace, go to line, comment toggle, undo, save; long lines wrap in prose files. No LSP, no completion, on purpose. From `ift <file>` (`file:42` opens at a line), `Cmd + N` for an empty one, the palette, the new-card menu, or `Cmd + click` on a path. A file tree beside the buffer, from `ift <dir>` or `Cmd + K`, keyboard-driven. Unsaved changes survive a quit, the way Sublime keeps them; closing the card discards them. A file changed on disk under a clean buffer is reloaded
 - Diff cards: `ift diff` (or `ift diff <path>`) opens the changes against git HEAD as a card: the changed files with their `+12 −5` on the left, one file's diff on the right, read-only, in the theme's red and green, unchanged stretches folded. `Cmd + B` adds a blame gutter: hash, author, age per line
-- Browser cards: Chromium inside the card, with the Claude in Chrome extension loaded, so Claude Code can drive a browser that lives on your canvas and sign-ins work. `Browser: open a URL` from the palette, or `Cmd + click` a URL in any terminal. The page zooms with the canvas and asks for more pixels above 100%. `Cmd + Esc` leaves it, `Cmd + =` / `Cmd + -` zoom the page. Popups open as cards beside it; `Cmd + Shift + click` sends a link to the system browser instead
+- Browser cards: Chromium inside the card, with the Claude in Chrome extension loaded, so Claude Code can drive a browser that lives on your canvas and sign-ins work. `Cmd + L` for the address bar, `Browser: open a URL` from the palette, or `Cmd + click` a URL in any terminal. The page zooms with the canvas and asks for more pixels above 100%. `Cmd + Esc` leaves it, `Cmd + =` / `Cmd + -` zoom the page. Popups open as cards beside it; `Cmd + Shift + click` sends a link to the system browser instead
 - Transcript cards: `Cmd + I` on a card running Claude Code or Pi opens its session beside it as turns: you / claude on the left with a first line and a time, the chosen turn on the right with every tool call folded under it. Follows the session while it runs. Thinking blocks and subagent chatter are left out
 - A red badge on any card sitting in an SSH session, with the destination
 - Terminal themes from `.itermcolors` files, applied to open terminals live
@@ -69,6 +69,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | `Cmd + B` | in a diff: git blame in the gutter |
 | `Cmd + K` | clear the terminal; in an editor or diff, show or hide the file list |
 | `Cmd + I` | the agent's transcript, as a card beside this one |
+| `Cmd + L` | the address bar: type an address or a search, or pick a page you have been to or a card already open. On a browser card it opens holding that card's address; `Tab` scopes the search to a site (GitHub, MDN, crates.io and six more) |
 | `Cmd + Esc` | leave a browser card's page |
 | `Cmd + Alt + T` | new card outside any group |
 | `Cmd + Shift + T` | new card, but where: every empty slot around the cards gets a letter, press one |
@@ -158,7 +159,8 @@ A terminal can reach everything on the machine, so here is everything this one d
 - `~/.config/infiniterm/` for settings and keybindings; `~/Library/Application Support/dev.ekinertac.infiniterm/` for the canvas, drafts, themes, the window frame and the browser profile. Nothing else is written.
 - A unix socket in the system temp directory, which `ift` and the hook binaries connect to.
 - `ps`, `lsof` and `git` run as subprocesses: to label cards with their process and directory, to spot an SSH session, and for the diff and blame cards. `open` hands URLs and files to the system.
-- The network only from browser cards, which are Chromium loading the page you asked for, and the Claude in Chrome extension inside them talking to Claude Code the way it does in Chrome. There is no telemetry, no account, no update check, and the app makes no request of its own.
+- The network only from browser cards, which are Chromium loading the page you asked for, and the Claude in Chrome extension inside them talking to Claude Code the way it does in Chrome. There is no telemetry, no account, no update check, and the app makes no request of its own. The one exception is off by default: turning on `browser.suggestions` sends what you type in the address bar to Google as you type it.
+- Where browser cards have been, in `history.json` beside the save file, so the address bar can rank what you visit often above what you saw once. Nothing reads it but the address bar, and deleting the file clears it.
 
 The source is public so all of that can be checked, and a release is a tagged commit built with the CEF version named in `Cargo.lock`, signed and notarized.
 

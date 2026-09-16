@@ -137,6 +137,33 @@ impl Model {
     }
 }
 
+/// One heading per line, its results indented, each with the action spelled
+/// out: "why did Enter go there" is the question this answers.
+fn render_omni(response: &crate::omni::rank::OmniResponse) -> String {
+    let mut out = String::new();
+    if let Some(c) = &response.completion {
+        out.push_str(&format!("completion\t{c}\n"));
+    }
+    if let Some((_, name)) = &response.offer {
+        out.push_str(&format!("tab\tsearch {name}\n"));
+    }
+    for section in &response.sections {
+        out.push_str(&format!("\n{}\n", section.heading));
+        for r in &section.results {
+            let action = match &r.action {
+                OmniAction::Navigate(url) => format!("open {url}"),
+                OmniAction::Search(q) => format!("search {q}"),
+                OmniAction::FocusCard(id) => format!("focus {id}"),
+            };
+            out.push_str(&format!("  {}\t{}\n", r.title, action));
+        }
+    }
+    if response.sections.is_empty() {
+        out.push_str("\nnothing\n");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,31 +207,4 @@ mod tests {
         );
         assert!(reply.text.contains("nothing"));
     }
-}
-
-/// One heading per line, its results indented, each with the action spelled
-/// out: "why did Enter go there" is the question this answers.
-fn render_omni(response: &crate::omni::rank::OmniResponse) -> String {
-    let mut out = String::new();
-    if let Some(c) = &response.completion {
-        out.push_str(&format!("completion\t{c}\n"));
-    }
-    if let Some((_, name)) = &response.offer {
-        out.push_str(&format!("tab\tsearch {name}\n"));
-    }
-    for section in &response.sections {
-        out.push_str(&format!("\n{}\n", section.heading));
-        for r in &section.results {
-            let action = match &r.action {
-                OmniAction::Navigate(url) => format!("open {url}"),
-                OmniAction::Search(q) => format!("search {q}"),
-                OmniAction::FocusCard(id) => format!("focus {id}"),
-            };
-            out.push_str(&format!("  {}\t{}\n", r.title, action));
-        }
-    }
-    if response.sections.is_empty() {
-        out.push_str("\nnothing\n");
-    }
-    out
 }
