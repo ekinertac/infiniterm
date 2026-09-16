@@ -69,10 +69,24 @@ pub struct TmuxBackend {
     stdin: Arc<Mutex<ChildStdin>>,
     child: Arc<Mutex<Child>>,
     next_id: AtomicU32,
-    /// Panes whose `new-window` has been sent and whose window id has not
-    /// come back yet, oldest first. tmux answers commands in order, so the
-    /// first `@N` reply belongs to the first pane still waiting.
-    awaiting_window: Arc<Mutex<VecDeque<PaneId>>>,
+    /// What each reply block is an answer to, oldest first. tmux answers
+    /// commands in order and every command gets a `%begin`/`%end`, so a
+    /// queue with one entry per command sent stays in step. Every command
+    /// pushes, even the ones whose answer is nothing, or the queue drifts
+    /// and a capture would be handed to the wrong card.
+    expecting: Arc<Mutex<VecDeque<Expect>>>,
+}
+
+/// What the next reply block will contain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Expect {
+    /// A `new-window -P -F '#{window_id}'`: one `@N` line.
+    WindowId(PaneId),
+    /// A `capture-pane -p -e -S -`: the pane's history, as many lines.
+    History(PaneId),
+    /// Anything else. tmux still frames it and the frame still has to be
+    /// consumed.
+    Nothing,
 }
 
 /// Is there a tmux to talk to at all? The backend falls back to local PTYs
@@ -126,7 +140,7 @@ impl TmuxBackend {
             stdin: Arc::new(Mutex::new(stdin)),
             child: Arc::new(Mutex::new(child)),
             next_id: AtomicU32::new(1),
-            awaiting_window: Arc::new(Mutex::new(VecDeque::new())),
+            expecting: Arc::new(Mutex::new(VecDeque::new())),
         };
         // The status line is a row of the card, not decoration: without this
         // every pane is one row shorter than the card it fills.
@@ -142,9 +156,11 @@ impl TmuxBackend {
     /// events on the same channel the local backend uses.
     fn read_thread(&self, stdout: std::process::ChildStdout, tx: Sender<(PaneId, PaneEvent)>) {
         let windows = self.windows.clone();
-        let awaiting = self.awaiting_window.clone();
+        let expecting = self.expecting.clone();
         std::thread::spawn(move || {
             let mut reader = Reader::new();
+            let mut block = Expect::Nothing;
+            let mut history: Vec<String> = vec![];
             let mut lines = BufReader::new(stdout);
             let mut line = String::new();
             loop {
@@ -180,16 +196,36 @@ impl TmuxBackend {
                             let _ = tx.send((id, PaneEvent::Exited { code: 0 }));
                         }
                     }
-                    // The window id for a `new-window` we sent. tmux answers
-                    // in order, so it belongs to the oldest pane still
-                    // waiting for one. Anything else in a reply block is a
-                    // command we did not ask about.
-                    Notice::Reply(text) if is_window_id(&text) => {
-                        if let Some(id) = awaiting.lock().unwrap().pop_front() {
-                            if let Some(w) = windows.lock().unwrap().get_mut(&id) {
+                    Notice::Begin(_) => {
+                        block = expecting
+                            .lock()
+                            .unwrap()
+                            .pop_front()
+                            .unwrap_or(Expect::Nothing);
+                        history.clear();
+                    }
+                    Notice::Reply(text) => match &block {
+                        Expect::WindowId(id) if is_window_id(&text) => {
+                            if let Some(w) = windows.lock().unwrap().get_mut(id) {
                                 w.id = text;
                             }
                         }
+                        Expect::History(_) => history.push(text),
+                        _ => {}
+                    },
+                    Notice::End { .. } => {
+                        // The scrollback a restored card missed, fed to its
+                        // emulator as one replay rather than as output: it
+                        // is not new, and a card must not look like it just
+                        // printed a day's work.
+                        if let Expect::History(id) = block {
+                            if !history.is_empty() {
+                                let mut bytes = history.join("\r\n").into_bytes();
+                                bytes.extend_from_slice(b"\r\n");
+                                let _ = tx.send((id, PaneEvent::Replay(bytes)));
+                            }
+                        }
+                        block = Expect::Nothing;
                     }
                     // tmux is going away: every card's shell went with it.
                     Notice::Exit(_) => {
@@ -226,13 +262,20 @@ impl TmuxBackend {
         Some(waiting)
     }
 
-    /// One command, one line. tmux answers asynchronously and we do not wait:
-    /// the answers that matter arrive as notices.
-    fn command(&self, line: &str) {
+    /// One command, one line, and what its reply block will hold. tmux
+    /// answers asynchronously and nothing here waits: the answers arrive as
+    /// notices and are matched by the order they were asked in.
+    fn command_expecting(&self, line: &str, expect: Expect) {
+        // Queued BEFORE the write, or a fast reply could arrive first.
+        self.expecting.lock().unwrap().push_back(expect);
         if let Ok(mut stdin) = self.stdin.lock() {
             let _ = writeln!(stdin, "{line}");
             let _ = stdin.flush();
         }
+    }
+
+    fn command(&self, line: &str) {
+        self.command_expecting(line, Expect::Nothing);
     }
 
     fn window_of(&self, pane: PaneId) -> Option<Window> {
@@ -277,10 +320,13 @@ impl TmuxBackend {
         // window only: a tmux window inherits the SERVER's environment, not
         // this client's, so INFINITERM_CARD_ID has to be handed over
         // explicitly or the hooks would report the wrong card.
-        let mut prefix = String::new();
+        // ONE COMMAND PER LINE. A `;`-separated list is several commands to
+        // tmux and produces several reply blocks, which would hand the
+        // window id to the wrong block and desync every answer after it.
+        // Measured, not assumed: three commands, three blocks.
         for (key, value) in super::local_pty::terminal_identity().into_iter().chain(env) {
-            prefix.push_str(&format!(
-                "set-environment -t {} {} {} ; ",
+            self.command(&format!(
+                "set-environment -t {} {} {}",
                 session_name(),
                 key,
                 crate::drop::shell_quote(&value)
@@ -289,16 +335,18 @@ impl TmuxBackend {
         let start = cmd
             .map(|c| format!(" {}", crate::drop::shell_quote(c)))
             .unwrap_or_default();
-        self.command(&format!(
-            "{prefix}new-window -d -P -F '#{{window_id}}' -c {}{}",
-            crate::drop::shell_quote(&cwd.to_string_lossy()),
-            start
-        ));
+        self.command_expecting(
+            &format!(
+                "new-window -d -P -F '#{{window_id}}' -c {}{}",
+                crate::drop::shell_quote(&cwd.to_string_lossy()),
+                start
+            ),
+            Expect::WindowId(id),
+        );
         // The window id arrives in the command's reply and the pane id in the
         // window's first output. Neither is waited on: a command issued
         // before they land targets nothing, which tmux ignores, and the
         // ui reissues size on the next frame anyway.
-        self.awaiting_window.lock().unwrap().push_back(id);
         self.windows.lock().unwrap().insert(
             id,
             Window {
@@ -347,6 +395,74 @@ impl TmuxBackend {
     /// Flow control is tmux's `refresh-client -A`, driven by the ledger in
     /// the ui rather than by a byte count here; see `pause` and `unpause`.
     pub fn ack_now(&self, _pane: PaneId, _bytes: usize) {}
+}
+
+impl TmuxBackend {
+    /// The tmux window a pane ended up in, once tmux has said. The ui keeps
+    /// it on the card so a later launch finds the same window again.
+    pub fn window_id(&self, pane: PaneId) -> Option<String> {
+        self.window_of(pane)
+            .map(|w| w.id)
+            .filter(|id| !id.is_empty())
+    }
+
+    /// Takes over a window this app left running rather than making a new
+    /// one: the card comes back to the shell it had, with the scrollback it
+    /// missed. This is the whole reason for the tmux backend.
+    ///
+    /// The window is trusted to exist because `live_windows` was asked
+    /// first. One that died in between simply never reports output, which a
+    /// card already handles.
+    pub fn adopt(&self, window: &str) -> PaneId {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        self.windows.lock().unwrap().insert(
+            id,
+            Window {
+                id: window.to_string(),
+                pane: None,
+            },
+        );
+        // -e keeps the colours: without it a restored card comes back grey
+        // and looks broken. -S - is the whole history.
+        self.command_expecting(
+            &format!("capture-pane -p -e -S - -t {window}"),
+            Expect::History(id),
+        );
+        // A quiet shell produces no output, and the pane id is learned from
+        // output: this makes tmux speak for the window.
+        self.command(&format!("refresh-client -A '{window}:on'"));
+        id
+    }
+
+    /// The windows this app's session still holds. Blocking and deliberately
+    /// so: it runs once, before any card exists, and its answer decides
+    /// whether each card is adopted or spawned.
+    ///
+    /// A one-shot `tmux` rather than the control client, whose answers are
+    /// asynchronous; this one question has to be answered first.
+    pub fn live_windows() -> Vec<String> {
+        let out = Command::new("tmux")
+            .args([
+                "-L",
+                &std::env::var("INFINITERM_TMUX_SOCKET").unwrap_or_else(|_| "default".into()),
+                "list-windows",
+                "-t",
+                session_name(),
+                "-F",
+                "#{window_id}",
+            ])
+            .output();
+        match out {
+            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| is_window_id(l))
+                .map(String::from)
+                .collect(),
+            // No session yet, or no tmux: nothing to adopt.
+            _ => vec![],
+        }
+    }
 }
 
 impl SessionBackend for TmuxBackend {

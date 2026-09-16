@@ -85,6 +85,17 @@ pub struct SavedCard {
     pub sidebar_top: bool,
     /// A browser card's page zoom; `None` means the config default.
     pub zoom: Option<f64>,
+    /// The tmux window this card's shell lives in (`@7`).
+    ///
+    /// The ONE runtime fact about a shell that is saved. Everything else is
+    /// deliberately left behind, because a restored card must not claim to
+    /// be working days later; this is the opposite case. Under tmux the
+    /// shell really is still there, and without its window id the card
+    /// would start a second one beside it and orphan the first.
+    ///
+    /// Ignored by the local backend, and by any launch where the window has
+    /// gone: the card is then a fresh shell in its directory, as before.
+    pub tmux_window: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,7 +155,7 @@ fn usage_value(usage: &Usage) -> Value {
 }
 
 fn card_value(c: &SavedCard) -> Value {
-    json!({
+    let mut card = json!({
         "id": c.id,
         "workspaceId": c.workspace_id,
         "rect": { "x": num(c.rect.x), "y": num(c.rect.y), "w": num(c.rect.w), "h": num(c.rect.h) },
@@ -162,7 +173,17 @@ fn card_value(c: &SavedCard) -> Value {
         "sidebar": opt_num(c.sidebar),
         "sidebarTop": c.sidebar_top,
         "zoom": opt_num(c.zoom),
-    })
+    });
+    // Written ONLY when there is one. A card with no tmux window behind it
+    // leaves the file exactly as it was, so a canvas that never used tmux
+    // round-trips byte for byte and the file does not grow a column of
+    // nulls for a backend nobody chose.
+    if let Some(window) = &c.tmux_window {
+        if let Some(map) = card.as_object_mut() {
+            map.insert("tmuxWindow".into(), Value::String(window.clone()));
+        }
+    }
+    card
 }
 
 /// The file's JSON value. The caller maps its live cards to `SavedCard`,
@@ -234,6 +255,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
     let kind_str = c.get("kind").and_then(Value::as_str);
     let path = non_empty(c.get("path"));
     let url = non_empty(c.get("url"));
+    let tmux_window = non_empty(c.get("tmuxWindow"));
     // A card is a terminal unless it says otherwise; an editor without a
     // path is an untitled buffer, whose text lives in its draft. A browser
     // without a url or a transcript without a path has nothing to show and
@@ -288,6 +310,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         } else {
             None
         },
+        tmux_window,
     })
 }
 
@@ -481,6 +504,7 @@ mod tests {
             sidebar: None,
             sidebar_top: false,
             zoom: None,
+            tmux_window: None,
         }
     }
 
@@ -573,6 +597,26 @@ mod tests {
 
     // Runtime facts about a shell that no longer exists stay out of the file.
     // The typed SavedCard cannot carry them, so the check is the key set.
+    // The one runtime fact that IS saved, and only when there is one: a
+    // canvas that never used tmux has to round-trip byte for byte, which
+    // the real-file test also checks.
+    #[test]
+    fn a_tmux_window_is_written_only_when_a_card_has_one() {
+        let plain = card_value(&card());
+        assert!(
+            plain.get("tmuxWindow").is_none(),
+            "a card with no tmux window must not grow a null"
+        );
+        let with = card_value(&SavedCard {
+            tmux_window: Some("@7".into()),
+            ..card()
+        });
+        assert_eq!(with["tmuxWindow"], "@7");
+        // And it comes back.
+        assert_eq!(as_card(&with).unwrap().tmux_window.as_deref(), Some("@7"));
+        assert_eq!(as_card(&plain).unwrap().tmux_window, None);
+    }
+
     #[test]
     fn runtime_state_is_not_saved() {
         let out = serialise_layout(

@@ -102,6 +102,33 @@ impl Panes {
         matches!(self, Panes::Tmux(_))
     }
 
+    /// The tmux window a pane is in, for the save file. Local shells have
+    /// none: there is nothing to come back to.
+    pub fn window_id(&self, pane: PaneId) -> Option<String> {
+        match self {
+            Panes::Local(_) => None,
+            Panes::Tmux(b) => b.window_id(pane),
+        }
+    }
+
+    /// Takes over a window left running by an earlier launch. `None` when
+    /// this is not tmux, and the caller spawns a fresh shell as it always
+    /// did.
+    pub fn adopt(&self, window: &str) -> Option<PaneId> {
+        match self {
+            Panes::Local(_) => None,
+            Panes::Tmux(b) => Some(b.adopt(window)),
+        }
+    }
+
+    /// Which windows are still there to adopt.
+    pub fn live_windows(&self) -> Vec<String> {
+        match self {
+            Panes::Local(_) => vec![],
+            Panes::Tmux(_) => tmux::TmuxBackend::live_windows(),
+        }
+    }
+
     pub fn spawn_now(
         &self,
         cwd: &Path,

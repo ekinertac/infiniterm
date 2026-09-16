@@ -67,6 +67,10 @@ impl Model {
                     if let Some(card) = self.card_mut(&id) {
                         card.title = c.title;
                         card.z = c.z;
+                        // The window this card's shell was in. The ui checks
+                        // whether tmux still has it: if so the card is
+                        // adopted, and if not it spawns as any card does.
+                        card.tmux_window = c.tmux_window;
                     }
                 }
                 self.viewport = saved.viewport;
@@ -109,6 +113,7 @@ impl Model {
                 sidebar: c.sidebar,
                 sidebar_top: c.sidebar_top,
                 zoom: c.zoom,
+                tmux_window: c.tmux_window.clone(),
             })
             .collect();
         let groups: Vec<SavedGroup> = self

@@ -49,6 +49,7 @@ impl AppView {
             find_field: crate::field::Field::default(),
             redraw: false,
             clipboard_out: None,
+            live_windows: vec![],
             prompt_was_open: false,
             suggestions: std::sync::mpsc::channel(),
             samples: vec![],
@@ -498,6 +499,8 @@ pub fn startup(app: &mut AppView) {
     app.model.apply_settings_text(&settings);
     app.model.apply_keymap_text(&keys);
     app.animator.animations_on = app.model.config.ui.animations && !app.reduce_motion;
+    // Before any card exists: which windows the last launch left running.
+    app.live_windows = app.backend.pty.live_windows();
     app.model
         .load_layout(infiniterm_core::layout_file::read_layout().as_deref());
     // The omnibox ranks against this; a missing file is an empty history.
