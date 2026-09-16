@@ -11,6 +11,7 @@
 pub mod address;
 pub mod engines;
 pub mod history;
+pub mod providers;
 
 use crate::omni::engines::Engine;
 use crate::omni::history::Visit;
