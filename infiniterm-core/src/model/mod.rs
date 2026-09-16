@@ -184,6 +184,9 @@ pub enum Effect {
     },
     LoadTheme(String),
     RefreshThemes,
+    /// Onto the system clipboard. The model never touches it directly:
+    /// only the ui has an App to write through.
+    Copy(String),
     /// The omnibox asked for completions. Answered off the UI thread; a
     /// response for a superseded query_id is dropped by the model.
     FetchSuggestions {
@@ -227,6 +230,7 @@ pub enum EditorAction {
 pub enum BrowserAction {
     Back,
     Forward,
+    Reload,
 }
 
 /// What a prompt's answer is for. Handed back with the answer by `settle`.
@@ -303,6 +307,11 @@ pub struct Model {
     pub dev_build: bool,
     /// Config pairs that are open: both ids and the card to return to.
     pub config_pairs: Vec<ConfigPair>,
+    /// The last few cards closed, newest last, so a close can be undone.
+    /// Runtime-only: a card nobody reopened before a quit is gone, the same
+    /// as every other runtime fact. Cheap closing is what keeps a canvas
+    /// from silting up, and it is only cheap if it is undoable.
+    pub closed: Vec<Card>,
     /// Closing a dirty editor takes two presses; the first says why.
     discard_armed: Option<(String, f64)>,
     /// `dev.stress.zoom` in progress: the step taken so far and when the
@@ -363,6 +372,7 @@ impl Model {
             home: String::new(),
             dev_build: cfg!(debug_assertions),
             config_pairs: vec![],
+            closed: vec![],
             discard_armed: None,
             stress_zoom: None,
             now_ms: 0.,

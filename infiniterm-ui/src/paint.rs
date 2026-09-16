@@ -106,6 +106,9 @@ impl AppView {
         self.model.tick(now);
         self.note_window(window.window_bounds(), now);
         self.drain_backend();
+        if let Some(text) = self.clipboard_out.take() {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        }
         self.maybe_sweep(now);
         self.animator
             .step(&mut self.model.viewport, self.model.view_size, now);

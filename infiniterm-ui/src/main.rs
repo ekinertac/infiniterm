@@ -125,6 +125,9 @@ pub struct AppView {
     /// address the way it does in a browser.
     pub omni_field: field::Field,
     pub prompt_was_open: bool,
+    /// Text an effect asked to put on the clipboard, written on the next
+    /// frame: only a frame has an App to write through.
+    pub clipboard_out: Option<String>,
     pub samples: Vec<Sample>,
     pub mouse: Point,
     pub seeded: bool,

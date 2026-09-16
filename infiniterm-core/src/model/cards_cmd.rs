@@ -721,6 +721,56 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("browser.forward", "Browser: forward", |m| {
         m.browser_history(BrowserAction::Forward)
     });
+    // The undo for a close. Without it, closing is a decision rather than a
+    // reflex, and a canvas whose cards nobody dares close fills up exactly
+    // the way a tab bar does.
+    r.register("card.reopen", "Card: reopen the last closed one", |m| {
+        let Some(mut card) = m.closed.pop() else {
+            m.notify("nothing to reopen");
+            return;
+        };
+        // Back where it was if that space is still free, else beside
+        // whatever is there now: the old rect is a preference, not a claim.
+        let ws = m.active_workspace.clone().unwrap_or_default();
+        card.workspace_id = ws.clone();
+        let taken: Vec<Rect> = m
+            .cards
+            .iter()
+            .filter(|c| c.workspace_id == ws)
+            .map(|c| c.rect)
+            .collect();
+        if taken.iter().any(|r| rects_overlap(*r, card.rect)) {
+            card.rect = m.next_slot(None, &[], &ws, Some(card.rect));
+        }
+        let id = card.id.clone();
+        // A group that was dissolved while the card was away is not a group.
+        if card.group_id.as_ref().is_some_and(|g| m.group(g).is_none()) {
+            card.group_id = None;
+        }
+        m.cards.push(card);
+        m.set_focus(Some(&id));
+        m.reveal_focused();
+        m.dirty_layout = true;
+    });
+    r.register("browser.reload", "Browser: reload the page", |m| {
+        m.browser_history(BrowserAction::Reload)
+    });
+    // The only way a page's address leaves the app without being retyped.
+    r.register("browser.copyUrl", "Browser: copy the page's address", |m| {
+        m.with_active_card(|m, id| {
+            let url = m
+                .card(&id)
+                .filter(|c| c.kind == CardKind::Browser)
+                .and_then(|c| c.url.clone());
+            match url {
+                Some(url) => {
+                    m.notify("address copied");
+                    m.effects.push(Effect::Copy(url));
+                }
+                None => m.notify("not a browser card"),
+            }
+        })
+    });
     r.register("browser.zoom.in", "Browser: zoom the page in", |m| {
         m.browser_zoom(Some(ZOOM_STEP))
     });

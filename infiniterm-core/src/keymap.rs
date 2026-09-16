@@ -181,6 +181,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "Cmd+T always inherits the group; this is the way out",
     ),
     ("cmd+w", "card.close", ""),
+    // The undo for Cmd+W. Cmd+Shift+T is the browser's chord for this and
+    // is already the placement menu here, so the close chord takes Ctrl.
+    (
+        "cmd+ctrl+t",
+        "card.reopen",
+        "Cmd+Shift+T is already the placement menu",
+    ),
     // The editor's save. A terminal has nothing to save, so the key is inert
     // there rather than reaching the shell, the same as every Cmd key.
     (

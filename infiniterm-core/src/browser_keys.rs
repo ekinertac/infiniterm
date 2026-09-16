@@ -8,13 +8,16 @@
 //! In the port the page is a CEF texture that does scale with the canvas,
 //! but the page zoom is still the thing a person means by Cmd+= over a
 //! browser, so the rule stays.
-const OVERRIDES: [(&str, &str); 5] = [
+const OVERRIDES: [(&str, &str); 6] = [
     ("cmd+=", "browser.zoom.in"),
     ("cmd+-", "browser.zoom.out"),
     ("cmd+0", "browser.zoom.reset"),
     // Safari and Chrome's back and forward. Outside a browser card these
     // step through groups (`focus.prev` / `focus.next`), which is the right
     // thing everywhere the page is not what you are looking at.
+    // Outside a browser card Cmd+R reloads the whole app (development
+    // builds only); over a page it is the page that should come back.
+    ("cmd+r", "browser.reload"),
     ("cmd+[", "browser.back"),
     ("cmd+]", "browser.forward"),
 ];

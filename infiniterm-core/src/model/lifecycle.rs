@@ -7,6 +7,7 @@
 //! the closed card take its space (`reclaim`), focus goes to the card that
 //! took the space, else the NEAREST by geometry: the list is creation order,
 //! which on a rearranged canvas is no order at all.
+use super::Card;
 use super::{Effect, Model};
 use crate::cards::{CardRect, GUTTER};
 use crate::grid::Rect;
@@ -29,12 +30,32 @@ fn short(id: &str) -> &str {
     &id[..id.len().min(8)]
 }
 
+/// How many closed cards can be reopened. Deep enough to undo a mistake,
+/// shallow enough that it is an undo and not a graveyard.
+pub const CLOSED_RING: usize = 10;
+
 impl Model {
     /// `already_exited` says the shell is gone, so there is nothing to kill.
     pub fn close_card(&mut self, id: &str, already_exited: bool) {
         let Some(card) = self.card(id).cloned() else {
             return;
         };
+
+        // Remembered before anything is torn down, so Cmd+Ctrl+T can put it
+        // back. Runtime facts are stripped for the same reason the save file
+        // strips them: a restored card is a fresh shell in the same
+        // directory, never a resurrected process claiming to be working.
+        self.closed.push(Card {
+            pane_id: None,
+            agent: crate::agent_state::AgentState::None,
+            dirty: false,
+            command: None,
+            transcript_path: None,
+            ..card.clone()
+        });
+        if self.closed.len() > CLOSED_RING {
+            self.closed.remove(0);
+        }
 
         // Kill the PTY explicitly: dropping the body would leave the shell
         // running with nothing reading it.

@@ -102,6 +102,7 @@ impl AppView {
         match action {
             BrowserAction::Back => surface.back(),
             BrowserAction::Forward => surface.forward(),
+            BrowserAction::Reload => surface.reload(),
         }
     }
 }

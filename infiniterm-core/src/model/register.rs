@@ -647,6 +647,61 @@ mod tests {
         assert!(h.m.overlay_open(), "a prompt is an overlay too");
     }
 
+    // Closing has to be undoable or nobody closes anything, which is how a
+    // canvas ends up as bad as a tab bar.
+    #[test]
+    fn a_closed_card_comes_back_where_it_was() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        let rect = h.m.cards[0].rect;
+        h.m.cards[0].cwd = "/tmp/somewhere".into();
+        h.run("card.close");
+        assert!(h.m.cards.is_empty());
+        h.run("card.reopen");
+        assert_eq!(h.m.cards.len(), 1);
+        assert_eq!(h.m.cards[0].id, id, "the same card, not a new one");
+        assert_eq!(h.m.cards[0].rect, rect, "its own space was still free");
+        assert_eq!(h.m.cards[0].cwd, "/tmp/somewhere");
+        assert_eq!(h.m.selection.focused_id.as_deref(), Some(id.as_str()));
+        // The ring is empty again: reopening is not a copy machine.
+        h.run("card.reopen");
+        assert_eq!(h.m.cards.len(), 1);
+        assert_eq!(h.m.notice.as_deref(), Some("nothing to reopen"));
+    }
+
+    // A restored card is a fresh shell in the same directory, exactly as it
+    // is when the save file is read: nothing resurrects an agent.
+    #[test]
+    fn a_reopened_card_carries_no_runtime_state() {
+        let mut h = Harness::new();
+        h.m.cards[0].command = Some("claude".into());
+        h.m.cards[0].agent = crate::agent_state::AgentState::Working;
+        h.m.cards[0].transcript_path = Some("/s/x.jsonl".into());
+        h.m.cards[0].pane_id = Some(7);
+        h.run("card.close");
+        h.run("card.reopen");
+        let back = &h.m.cards[0];
+        assert_eq!(back.command, None);
+        assert_eq!(back.agent, crate::agent_state::AgentState::None);
+        assert_eq!(back.transcript_path, None);
+        assert_eq!(back.pane_id, None);
+    }
+
+    // Somewhere else is now standing where it was: it comes back beside
+    // what is there rather than on top of it.
+    #[test]
+    fn a_reopened_card_avoids_whatever_took_its_place() {
+        let mut h = Harness::new();
+        let rect = h.m.cards[0].rect;
+        h.run("card.close");
+        h.run("card.new.terminal");
+        let taken = h.m.cards[0].rect;
+        assert_eq!(taken, rect, "the new card took the free slot");
+        h.run("card.reopen");
+        assert_eq!(h.m.cards.len(), 2);
+        assert_ne!(h.m.cards[1].rect, rect);
+    }
+
     // Back and forward reach the PAGE: the model keeps no history of its
     // own, and a card that is not a browser says so rather than doing
     // nothing anybody can see.

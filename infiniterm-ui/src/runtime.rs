@@ -44,6 +44,7 @@ impl AppView {
             query_field: Default::default(),
             shortcuts_field: Default::default(),
             omni_field: crate::field::Field::default(),
+            clipboard_out: None,
             prompt_was_open: false,
             suggestions: std::sync::mpsc::channel(),
             samples: vec![],
@@ -220,6 +221,11 @@ impl AppView {
                 Effect::RefreshThemes => self.refresh_themes(),
                 Effect::Editor { card_id, action } => self.editor_effect(&card_id, action),
                 Effect::Browser { card_id, action } => self.browser_effect(&card_id, action),
+                // Held rather than written: perform_effects has no App to
+                // write through, and threading one into sixteen call sites
+                // for a clipboard is the wrong trade. The frame flushes it,
+                // the same way a terminal's OSC 52 text is flushed.
+                Effect::Copy(text) => self.clipboard_out = Some(text),
                 Effect::Log(line) => eprintln!("[infiniterm] {line}"),
                 Effect::Warn(line) => eprintln!("[infiniterm/warn] {line}"),
                 Effect::Reload => {
