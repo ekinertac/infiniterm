@@ -231,6 +231,7 @@ impl AppView {
                 Effect::Copy(text) => self.clipboard_out = Some(text),
                 Effect::Log(line) => eprintln!("[infiniterm] {line}"),
                 Effect::Warn(line) => eprintln!("[infiniterm/warn] {line}"),
+                Effect::AgentLog(line) => append_agent_log(&line),
                 Effect::Reload => {
                     self.flush_save();
                     std::process::exit(0);
@@ -544,10 +545,22 @@ fn log_agent_event(
     before: Option<infiniterm_core::agent_state::AgentState>,
     after: Option<infiniterm_core::agent_state::AgentState>,
 ) {
-    use std::io::Write;
     let (Some(before), Some(after)) = (before, after) else {
         return;
     };
+    let short: String = report.card_id.chars().take(8).collect();
+    let arrow = if before == after {
+        format!("{:<7} (unchanged)", after.name())
+    } else {
+        format!("{:<7} -> {}", before.name(), after.name())
+    };
+    append_agent_log(&format!("{short}  {:<18} {arrow}", report.event));
+}
+
+/// One line, stamped, appended. Truncated when it passes the cap so it
+/// cannot grow without bound in an app that runs for weeks.
+fn append_agent_log(line: &str) {
+    use std::io::Write;
     let path = infiniterm_core::paths::agent_log_path();
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > AGENT_LOG_MAX_BYTES) {
         let _ = std::fs::remove_file(&path);
@@ -559,17 +572,10 @@ fn log_agent_event(
     else {
         return;
     };
-    let short: String = report.card_id.chars().take(8).collect();
-    let arrow = if before == after {
-        format!("{:<7} (unchanged)", after.name())
-    } else {
-        format!("{:<7} -> {}", before.name(), after.name())
-    };
     let _ = writeln!(
         file,
-        "{}  {short}  {:<18} {arrow}",
-        infiniterm_core::transcript::clock_ms(crate::now_ms()),
-        report.event,
+        "{}  {line}",
+        infiniterm_core::transcript::clock_ms(crate::now_ms())
     );
 }
 

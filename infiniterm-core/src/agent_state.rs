@@ -22,7 +22,15 @@ pub enum AgentState {
     /// The turn finished. Its result is there when you want it.
     Done,
 }
-pub const STALE_MS: f64 = 60000.;
+/// How long a card may claim to be working with nothing arriving before it
+/// is written off as a crashed agent.
+///
+/// A minute was the reference's, and it is too short now: an agent can think
+/// for longer than that without a tool call or a line of output, and the
+/// card went colourless mid-thought. Five minutes still catches a crash,
+/// and a card that lingers orange is a smaller lie than one that goes blank
+/// while the agent is working.
+pub const STALE_MS: f64 = 300_000.;
 
 impl AgentState {
     /// For the log, and for `ift ls`.
@@ -40,7 +48,15 @@ pub fn apply_hook_event(prev: AgentState, event: &str) -> AgentState {
         "UserPromptSubmit" | "PreToolUse" | "PostToolUse" => AgentState::Working,
         // A turn that ended in failure is exactly when you want to look, so
         // it waits for you rather than reporting itself done.
-        "Notification" | "StopFailure" => AgentState::Waiting,
+        "StopFailure" => AgentState::Waiting,
+        // Claude Code sends Notification for two different things: it wants
+        // permission MID-TURN, and it has been waiting on your input for a
+        // minute. Only the first is the agent being blocked on you; the
+        // second arrives 60 s after every Stop, and treating it as a request
+        // turned every finished card amber a minute after it went green.
+        // A permission prompt can only happen while a turn is running.
+        "Notification" if prev == AgentState::Working => AgentState::Waiting,
+        "Notification" => prev,
         "Stop" => AgentState::Done,
         "SessionStart" | "SessionEnd" => AgentState::None,
         _ => prev,
@@ -76,7 +92,17 @@ mod tests {
         assert_eq!(apply_hook_event(Working, "Stop"), Done);
         assert_eq!(apply_hook_event(Working, "Notification"), Waiting);
         assert_eq!(apply_hook_event(Working, "StopFailure"), Waiting);
-        assert_eq!(apply_hook_event(Done, "Notification"), Waiting);
+    }
+
+    // Claude Code nags a minute after every turn ends. That is not the agent
+    // asking for something, and reading it as one turned every finished card
+    // amber sixty seconds after it went green.
+    #[test]
+    fn the_idle_nag_a_minute_after_a_turn_leaves_the_card_alone() {
+        assert_eq!(apply_hook_event(Done, "Notification"), Done);
+        assert_eq!(apply_hook_event(None, "Notification"), None);
+        // Still blocked if it already was.
+        assert_eq!(apply_hook_event(Waiting, "Notification"), Waiting);
     }
     #[test]
     fn session_start_end_show_nothing() {

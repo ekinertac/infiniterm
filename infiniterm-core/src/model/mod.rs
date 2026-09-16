@@ -218,6 +218,11 @@ pub enum Effect {
     },
     Log(String),
     Warn(String),
+    /// A line for `agent.log`. The staleness sweep writes here rather than
+    /// to stderr: an installed app has no terminal, so a card going
+    /// colourless left no trace anywhere, which is exactly the event
+    /// somebody needs to see.
+    AgentLog(String),
     Reload,
     /// A palette entry or an ift verb that runs a registered command: the
     /// registry lives outside the model, so the ui runs it.

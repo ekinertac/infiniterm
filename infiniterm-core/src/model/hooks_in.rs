@@ -93,20 +93,18 @@ impl Model {
             c.agent = staleness(c.agent, c.last_event_at, c.last_output_at, now);
             if before != c.agent {
                 lines.push(format!(
-                    "[stale] {before:?}->{:?} {} (no event {}s, no output {}s)",
-                    c.agent,
-                    if c.title.is_empty() {
-                        &c.id[..8.min(c.id.len())]
-                    } else {
-                        &c.title
-                    },
+                    "{}  {:<18} {:<7} -> {}  (no event {}s, no output {}s)",
+                    &c.id[..8.min(c.id.len())],
+                    "stale sweep",
+                    before.name(),
+                    c.agent.name(),
                     ((now - c.last_event_at) / 1000.).round(),
                     ((now - c.last_output_at) / 1000.).round()
                 ));
             }
         }
         for line in lines {
-            self.effects.push(super::Effect::Warn(line));
+            self.effects.push(super::Effect::AgentLog(line));
         }
     }
 }

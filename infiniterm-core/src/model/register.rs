@@ -561,7 +561,12 @@ mod tests {
         assert_eq!(h.focused().agent, crate::agent_state::AgentState::Waiting);
         assert_eq!(h.focused().notified_at, h.m.now_ms);
         h.m.apply_hook(&report("UserPromptSubmit"));
-        h.m.tick(h.m.now_ms + 61_000.);
+        // Silence short of the window leaves it working: an agent thinking
+        // for a minute is not a crashed one.
+        h.m.tick(h.m.now_ms + crate::agent_state::STALE_MS - 1_000.);
+        h.m.sweep_stale();
+        assert_eq!(h.focused().agent, crate::agent_state::AgentState::Working);
+        h.m.tick(h.m.now_ms + 2_000.);
         h.m.sweep_stale();
         assert_eq!(h.focused().agent, crate::agent_state::AgentState::None);
     }
