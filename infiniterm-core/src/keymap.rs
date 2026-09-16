@@ -154,6 +154,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "card.maximize.toggle",
         "iTerm2's maximise pane; Escape stays the shell's",
     ),
+    // The address bar chord every browser uses, and free here: a shell
+    // knows Ctrl+L as clear, never Cmd+L.
+    (
+        "cmd+l",
+        "card.omnibox",
+        "the address bar chord every browser uses",
+    ),
     ("cmd+t", "card.new.terminal", ""),
     // iTerm2's split keys with iTerm2's meaning: beside, then below. The
     // card is halved, not a pane tree grown.

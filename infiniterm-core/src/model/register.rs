@@ -647,6 +647,121 @@ mod tests {
         assert!(h.m.overlay_open(), "a prompt is an overlay too");
     }
 
+    // Cmd+L on a browser card edits THAT card's address; anywhere else it
+    // makes a card. The prefill is the whole reason the field is not empty.
+    #[test]
+    fn the_omnibox_prefills_from_a_browser_card_and_navigates_it() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].url = Some("https://a.example/one".into());
+        h.m.set_focus(Some(&id));
+        h.run("card.omnibox");
+        assert!(h.m.omni.open);
+        assert_eq!(h.m.omni.query, "https://a.example/one");
+        assert_eq!(h.m.omni.target.as_deref(), Some(id.as_str()));
+        h.m.omni_type("b.example");
+        h.m.omni_enter();
+        assert!(!h.m.omni.open);
+        assert_eq!(h.m.cards.len(), 1, "the focused browser card was navigated");
+        assert_eq!(
+            h.m.card(&id).unwrap().url.as_deref(),
+            Some("https://b.example")
+        );
+    }
+
+    #[test]
+    fn the_omnibox_makes_a_card_when_no_browser_is_focused() {
+        let mut h = Harness::new();
+        h.run("card.omnibox");
+        assert_eq!(h.m.omni.query, "", "nothing to prefill from a terminal");
+        assert!(h.m.omni.target.is_none());
+        h.m.omni_type("example.com");
+        h.m.omni_enter();
+        assert_eq!(h.m.cards.len(), 2);
+        let made = h.m.cards.last().unwrap();
+        assert_eq!(made.kind, CardKind::Browser);
+        assert_eq!(made.url.as_deref(), Some("https://example.com"));
+    }
+
+    // A card result focuses, it does not navigate: the page is already open.
+    #[test]
+    fn choosing_an_open_card_focuses_it() {
+        let mut h = Harness::new();
+        let first = h.m.cards[0].id.clone();
+        h.m.new_beside_active(
+            CardKind::Browser,
+            None,
+            Some("https://news.ycombinator.com".into()),
+        );
+        let browser = h.m.cards.last().unwrap().id.clone();
+        h.m.card_mut(&browser).unwrap().title = "Hacker News".into();
+        h.m.set_focus(Some(&first));
+        h.run("card.omnibox");
+        h.m.omni_type("hacker");
+        let response = h.m.omni_response();
+        let cards = response
+            .sections
+            .iter()
+            .find(|s| s.heading == "cards")
+            .expect("a cards section");
+        assert_eq!(
+            cards.results[0].action,
+            crate::omni::OmniAction::FocusCard(browser.clone())
+        );
+    }
+
+    #[test]
+    fn tab_scopes_and_unscoping_leaves() {
+        let mut h = Harness::new();
+        h.run("card.omnibox");
+        h.m.omni_type("git");
+        assert_eq!(
+            h.m.omni_response().offer,
+            Some(("github.com".into(), "GitHub".into()))
+        );
+        h.m.omni_tab();
+        assert_eq!(h.m.omni.scope.as_deref(), Some("github.com"));
+        assert_eq!(h.m.omni.query, "", "the field clears for the query");
+        h.m.omni_unscope();
+        assert!(h.m.omni.scope.is_none());
+    }
+
+    // A response for a query that has moved on must never reach the screen.
+    #[test]
+    fn a_stale_suggestion_response_is_dropped() {
+        let mut h = Harness::new();
+        h.m.config.browser.suggestions = true;
+        h.run("card.omnibox");
+        h.m.omni_type("ru");
+        let first = h.m.omni.query_id;
+        h.m.omni_type("rus");
+        h.m.omni_suggestions(first, vec!["stale".into()]);
+        assert!(h.m.omni.suggestions.is_empty());
+        let current = h.m.omni.query_id;
+        h.m.omni_suggestions(current, vec!["rust book".into()]);
+        assert_eq!(h.m.omni.suggestions, vec!["rust book".to_string()]);
+    }
+
+    #[test]
+    fn typing_asks_for_suggestions_only_when_the_setting_is_on() {
+        let mut h = Harness::new();
+        h.run("card.omnibox");
+        h.m.omni_type("rust");
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::FetchSuggestions { .. })));
+        h.m.config.browser.suggestions = true;
+        h.m.omni_type("rust h");
+        assert!(h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::FetchSuggestions { .. })));
+    }
+
     // Palette: the theme picker previews as the selection moves and puts the
     // old theme back on dismissal; use is recorded on run only.
     #[test]

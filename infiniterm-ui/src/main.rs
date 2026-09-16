@@ -143,6 +143,12 @@ pub struct AppView {
     pub scheduler: infiniterm_term::scheduler::OutputScheduler,
     pub ledger: infiniterm_term::credit::AckLedger,
     pub palette: infiniterm_term::palette::Palette,
+    /// Answers from the suggest endpoint, sent by the thread that ran curl
+    /// and drained with the backend's channels once a frame.
+    pub suggestions: (
+        std::sync::mpsc::Sender<(u64, Vec<String>)>,
+        std::sync::mpsc::Receiver<(u64, Vec<String>)>,
+    ),
 }
 
 pub fn now_ms() -> f64 {

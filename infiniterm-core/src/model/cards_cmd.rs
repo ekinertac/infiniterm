@@ -75,7 +75,12 @@ impl Model {
 
     /// A new card of `kind` beside the active card, in its directory and
     /// group; `command` runs instead of the shell (the agents).
-    fn new_beside_active(&mut self, kind: CardKind, command: Option<&str>, url: Option<String>) {
+    pub(super) fn new_beside_active(
+        &mut self,
+        kind: CardKind,
+        command: Option<&str>,
+        url: Option<String>,
+    ) {
         let from = self.focused().cloned();
         let group_id = from.as_ref().and_then(|c| c.group_id.clone());
         let ws = self.active_workspace.clone().unwrap_or_default();
@@ -613,6 +618,9 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("card.new.editor", "Editor: new untitled", |m| {
         m.new_beside_active(CardKind::Editor, None, None)
     });
+    // Cmd+L. Not a prompt: the omnibox ranks history, open cards and what
+    // you typed, and `card.new.browser` stays for the palette's plain ask.
+    r.register("card.omnibox", "Browser: address bar", Model::open_omnibox);
     r.register("card.new.browser", "Browser: open a URL", |m| {
         let from = m.selection.focused_id.clone();
         m.prompt.ask(

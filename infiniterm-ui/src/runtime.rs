@@ -44,6 +44,7 @@ impl AppView {
             query_field: Default::default(),
             shortcuts_field: Default::default(),
             prompt_was_open: false,
+            suggestions: std::sync::mpsc::channel(),
             samples: vec![],
             mouse: infiniterm_core::grid::Point { x: 0., y: 0. },
             seeded: false,
@@ -170,6 +171,15 @@ impl AppView {
                 ),
                 Effect::AnimateFit(to) => self.animator.fit(&mut self.model.viewport, to, now),
                 Effect::CancelAnimation => self.animator.cancel(),
+                Effect::FetchSuggestions { query_id, query } => {
+                    let tx = self.suggestions.0.clone();
+                    // Off the UI thread: curl's worst case is the timeout,
+                    // and a frame must never wait on a name lookup.
+                    std::thread::spawn(move || {
+                        let items = fetch_suggestions(&query);
+                        let _ = tx.send((query_id, items));
+                    });
+                }
                 Effect::KillPane(pane) => self.backend.pty.kill(pane),
                 Effect::KillAllPanes => self.backend.pty.kill_all(),
                 Effect::ClearPane(pane) => {
@@ -285,6 +295,9 @@ impl AppView {
                 self.scheduler.enqueue(pane, bytes.clone());
             }
             self.model.apply_pane_event(pane, &event);
+        }
+        while let Ok((query_id, items)) = self.suggestions.1.try_recv() {
+            self.model.omni_suggestions(query_id, items);
         }
         while let Ok(report) = self.backend.hook_reports.try_recv() {
             self.model.apply_hook(&report);
@@ -453,4 +466,44 @@ pub fn startup(app: &mut AppView) {
 pub fn another_instance_holds_the_socket() -> bool {
     let path = infiniterm_core::paths::socket_path();
     std::os::unix::net::UnixStream::connect(&path).is_ok()
+}
+
+/// curl, not an HTTP crate: one endpoint, off by default, and this app
+/// already shells out to git, ps, lsof and open. `-s` keeps the progress
+/// meter off stderr; `--max-time` is why a DNS stall cannot hold a frame.
+fn suggest_args(query: &str) -> Vec<String> {
+    vec![
+        "-s".into(),
+        "--max-time".into(),
+        infiniterm_core::omni::suggest::SUGGEST_TIMEOUT_S.into(),
+        infiniterm_core::omni::suggest::suggest_url(query),
+    ]
+}
+
+/// Anything that goes wrong is no suggestions: the omnibox's local results
+/// are already on screen and must not be disturbed by this.
+fn fetch_suggestions(query: &str) -> Vec<String> {
+    let Ok(out) = std::process::Command::new("curl")
+        .args(suggest_args(query))
+        .output()
+    else {
+        return vec![];
+    };
+    infiniterm_core::omni::suggest::parse_suggest(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The argument list is the part that can be wrong: without --max-time a
+    // DNS stall would keep a thread alive for the system's timeout.
+    #[test]
+    fn the_suggest_command_is_bounded_and_quiet() {
+        let args = suggest_args("rust");
+        assert!(args.contains(&"--max-time".to_string()));
+        assert!(args.contains(&infiniterm_core::omni::suggest::SUGGEST_TIMEOUT_S.to_string()));
+        assert!(args.contains(&"-s".to_string()), "no progress meter");
+        assert!(args.last().unwrap().contains("q=rust"));
+    }
 }

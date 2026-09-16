@@ -80,7 +80,7 @@ impl Model {
     /// pointer as well; the key path asks the three separately, because each
     /// of them handles keys differently.
     pub fn overlay_open(&self) -> bool {
-        self.palette_open() || self.prompt.is_open() || self.shortcuts_open
+        self.palette_open() || self.prompt.is_open() || self.shortcuts_open || self.omni.open
     }
 
     /// Recomputed every time it is asked for, so it is never stale.

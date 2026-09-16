@@ -27,6 +27,7 @@ pub mod groups_cmd;
 pub mod hooks_in;
 pub mod ift_in;
 pub mod lifecycle;
+pub mod omni_cmd;
 pub mod palette_state;
 pub mod persist;
 pub mod register;
@@ -183,6 +184,12 @@ pub enum Effect {
     },
     LoadTheme(String),
     RefreshThemes,
+    /// The omnibox asked for completions. Answered off the UI thread; a
+    /// response for a superseded query_id is dropped by the model.
+    FetchSuggestions {
+        query_id: u64,
+        query: String,
+    },
     /// An action the editor body owns; the card frame forwards it.
     Editor {
         card_id: String,
@@ -259,6 +266,10 @@ pub struct Model {
     pub palette: PaletteState,
     pub prompt: crate::prompt::Prompt<Pending>,
     pub shortcuts_open: bool,
+    pub omni: omni_cmd::OmniState,
+    /// Where browser cards have been. Loaded once at startup and written
+    /// back debounced; the model only records into it.
+    pub history: crate::omni::history::History,
     pub notice: Option<String>,
     notice_until: f64,
     /// Saved-layout state: nothing is saved until `loaded`; nothing is ever
@@ -322,6 +333,8 @@ impl Model {
             palette: PaletteState::default(),
             prompt: crate::prompt::Prompt::default(),
             shortcuts_open: false,
+            omni: omni_cmd::OmniState::default(),
+            history: crate::omni::history::History::default(),
             notice: None,
             notice_until: 0.,
             loaded: false,
