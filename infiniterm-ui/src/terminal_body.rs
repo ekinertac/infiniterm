@@ -853,7 +853,24 @@ fn shape_row(
     let mut out = vec![];
     let mut col = 0;
     while col < cells.len() {
-        let end = (col + CHUNK).min(cells.len());
+        // A chunk is at most CHUNK cells of ASCII, whose advance in a
+        // monospace font is the cell; anything else (an icon from a Nerd
+        // Font, an emoji, a wide character) is shaped on its own and put
+        // at its cell, because its advance is whatever the fallback font
+        // says and everything shaped after it in the same line would drift.
+        let end = if cells[col].0.is_ascii() {
+            let mut e = col;
+            while e < cells.len() && e - col < CHUNK && cells[e].0.is_ascii() {
+                e += 1;
+            }
+            e
+        } else {
+            let mut e = col + 1;
+            while e < cells.len() && cells[e].0 == infiniterm_term::grid::SPACER {
+                e += 1;
+            }
+            e
+        };
         let slice = &cells[col..end];
         if slice
             .iter()
