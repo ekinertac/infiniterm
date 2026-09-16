@@ -647,6 +647,29 @@ mod tests {
         assert!(h.m.overlay_open(), "a prompt is an overlay too");
     }
 
+    // Back and forward reach the PAGE: the model keeps no history of its
+    // own, and a card that is not a browser says so rather than doing
+    // nothing anybody can see.
+    #[test]
+    fn back_and_forward_go_to_the_page_and_only_from_a_browser_card() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        let effects = h.run("browser.back");
+        assert_eq!(h.m.notice.as_deref(), Some("not a browser card"));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Browser { .. })));
+
+        h.m.cards[0].kind = CardKind::Browser;
+        assert!(h.run("browser.back").contains(&Effect::Browser {
+            card_id: id.clone(),
+            action: crate::model::BrowserAction::Back,
+        }));
+        assert!(h.run("browser.forward").contains(&Effect::Browser {
+            card_id: id,
+            action: crate::model::BrowserAction::Forward,
+        }));
+    }
+
     // Cmd+L on a browser card edits THAT card's address; anywhere else it
     // makes a card. The prefill is the whole reason the field is not empty.
     #[test]

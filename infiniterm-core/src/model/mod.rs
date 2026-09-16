@@ -195,6 +195,11 @@ pub enum Effect {
         card_id: String,
         action: EditorAction,
     },
+    /// An action the page owns, for the same reason.
+    Browser {
+        card_id: String,
+        action: BrowserAction,
+    },
     Log(String),
     Warn(String),
     Reload,
@@ -214,6 +219,14 @@ pub enum EditorAction {
     GoToLine,
     ToggleBlame,
     ToggleExplorer,
+}
+
+/// What a browser card's page is asked to do. History is the page's own,
+/// not the model's: only the surface knows where it has been.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowserAction {
+    Back,
+    Forward,
 }
 
 /// What a prompt's answer is for. Handed back with the answer by `settle`.

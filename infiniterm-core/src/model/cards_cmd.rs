@@ -3,7 +3,7 @@
 //! `commands/cards.ts`. Labels read `Domain: what it does`; a command lives
 //! in the module whose prefix it carries, and `card.clear` is `Terminal:`.
 use super::palette_state::Source;
-use super::{Card, EditorAction, Effect, Model, NewCard, Pending};
+use super::{BrowserAction, Card, EditorAction, Effect, Model, NewCard, Pending};
 use crate::card_label::{card_label, Labelled};
 use crate::cards::GUTTER;
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
@@ -405,6 +405,25 @@ impl Model {
 
     /// Page zoom per browser card, Safari's steps; the config's `browser.zoom`
     /// is the starting point and what reset returns to.
+    /// Back and forward go to the page, which is the only thing that knows
+    /// where it has been: the model keeps no browser history of its own.
+    /// A card that is not a browser says so rather than doing nothing.
+    pub fn browser_history(&mut self, action: BrowserAction) {
+        self.with_active_card(|m, id| {
+            let Some(card) = m.card(&id).cloned() else {
+                return;
+            };
+            if card.kind != CardKind::Browser {
+                m.notify("not a browser card");
+                return;
+            }
+            m.effects.push(Effect::Browser {
+                card_id: id,
+                action,
+            });
+        });
+    }
+
     pub fn browser_zoom(&mut self, factor: Option<f64>) {
         self.with_active_card(|m, id| {
             let Some(card) = m.card(&id).cloned() else {
@@ -692,6 +711,15 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             let next = nearest_to(&others, card.rect).map(|c| c.id.clone());
             m.set_focus(next.as_deref());
         })
+    });
+    // The page's own history, not the canvas's: a misclick has to be
+    // undoable or a card feels worse than a tab, which is the whole
+    // argument for cards.
+    r.register("browser.back", "Browser: back", |m| {
+        m.browser_history(BrowserAction::Back)
+    });
+    r.register("browser.forward", "Browser: forward", |m| {
+        m.browser_history(BrowserAction::Forward)
     });
     r.register("browser.zoom.in", "Browser: zoom the page in", |m| {
         m.browser_zoom(Some(ZOOM_STEP))

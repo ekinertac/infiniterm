@@ -8,6 +8,7 @@ use crate::browser_body::BrowserBody;
 use crate::{now_ms, AppView};
 use infiniterm_core::grid::Size;
 use infiniterm_core::ift::url_plan;
+use infiniterm_core::model::BrowserAction;
 use infiniterm_core::saved_layout::CardKind;
 
 impl AppView {
@@ -82,6 +83,25 @@ impl AppView {
         for (id, url) in opens {
             let plan = url_plan(&url, "");
             self.model.open_in_card(plan, Some(&id));
+        }
+    }
+}
+
+impl AppView {
+    /// Back and forward. The page owns its history, so this is the whole
+    /// implementation: the model only says which card and which direction.
+    pub fn browser_effect(&mut self, card_id: &str, action: BrowserAction) {
+        let Some(body) = self
+            .bodies
+            .get_mut(card_id)
+            .and_then(|b| b.as_any_mut().downcast_mut::<BrowserBody>())
+        else {
+            return;
+        };
+        let Some(surface) = &body.surface else { return };
+        match action {
+            BrowserAction::Back => surface.back(),
+            BrowserAction::Forward => surface.forward(),
         }
     }
 }

@@ -219,6 +219,7 @@ impl AppView {
                 Effect::LoadTheme(name) => self.load_theme(&name),
                 Effect::RefreshThemes => self.refresh_themes(),
                 Effect::Editor { card_id, action } => self.editor_effect(&card_id, action),
+                Effect::Browser { card_id, action } => self.browser_effect(&card_id, action),
                 Effect::Log(line) => eprintln!("[infiniterm] {line}"),
                 Effect::Warn(line) => eprintln!("[infiniterm/warn] {line}"),
                 Effect::Reload => {

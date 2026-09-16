@@ -70,6 +70,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | `Cmd + K` | clear the terminal; in an editor or diff, show or hide the file list |
 | `Cmd + I` | the agent's transcript, as a card beside this one |
 | `Cmd + L` | the address bar: type an address or a search, or pick a page you have been to or a card already open. On a browser card it opens holding that card's address; `Tab` scopes the search to a site (GitHub, MDN, crates.io and six more) |
+| `Cmd + [` / `Cmd + ]` | in a browser card: back and forward (elsewhere: previous / next group) |
 | `Cmd + Esc` | leave a browser card's page |
 | `Cmd + Alt + T` | new card outside any group |
 | `Cmd + Shift + T` | new card, but where: every empty slot around the cards gets a letter, press one |
