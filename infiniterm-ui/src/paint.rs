@@ -17,7 +17,6 @@ use infiniterm_core::chrome::{
     state_border_screen_px, CARD_BORDER_SCREEN_PX,
 };
 use infiniterm_core::grid::{grid_line_offsets, is_grid_visible, Rect, Size};
-use infiniterm_core::groups::aggregate_state;
 use infiniterm_core::label_colors::{label_color, readable_on};
 use infiniterm_core::saved_layout::CardKind;
 use infiniterm_core::viewport::{ease_out_cubic, Viewport};
@@ -250,24 +249,21 @@ impl AppView {
                 .iter()
                 .filter(|c| c.group_id.as_deref() == Some(&group.id) && c.workspace_id == ws)
                 .collect();
-            let state = aggregate_state(&members.iter().map(|c| c.agent).collect::<Vec<_>>());
+            // A frame says WHICH CARDS BELONG TOGETHER and nothing else. It
+            // deliberately carries no agent state: a group holds several
+            // sessions, and a frame in one colour cannot say which of them
+            // wants you. Colouring it only drew the eye to the box instead
+            // of to the card inside it that is asking.
             let active = members
                 .iter()
                 .any(|c| Some(&c.id) == self.model.selection.focused_id.as_ref());
-            let color = match state {
-                AgentState::Working => chrome.agent_working,
-                AgentState::Waiting => chrome.agent_waiting,
-                AgentState::Done => chrome.agent_done,
-                AgentState::None if active => chrome.text_faint,
-                AgentState::None => chrome.group_border,
+            let color = if active {
+                chrome.text_faint
+            } else {
+                chrome.group_border
             };
             let b = at(rect);
-            let frame_w = if state == AgentState::None {
-                border_w
-            } else {
-                px(state_border_screen_px(vp.scale) as f32)
-            };
-            window.paint_quad(outline(b, color, BorderStyle::Solid).border_widths(frame_w));
+            window.paint_quad(outline(b, color, BorderStyle::Solid).border_widths(border_w));
             // The name tab above the frame's top-left corner.
             let label_px = px(self.model.config.ui.group_label_size as f32 * inv * vp.scale as f32);
             let line = crate::text::shape(

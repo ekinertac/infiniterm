@@ -1,8 +1,9 @@
-//! Derived group frames, aggregate activity, and the spatial unit ring.
+//! Derived group frames and the spatial unit ring. A frame says which
+//! cards belong together and carries NO agent state: a group holds several
+//! sessions, and one colour cannot say which of them wants you.
 //! Port of groups.ts and its tests; UI supplies cards and group frames per workspace.
 //! Membership belongs to cards. Loose cards form one trailing navigation stop.
 use crate::{
-    agent_state::AgentState,
     cards::{CardRect, PlacedCard},
     grid::{Rect, Size, GRID_SIZE},
     viewport::bounding_rect,
@@ -25,17 +26,6 @@ pub fn group_slot_size(card: Size, gutter: f64, pad: f64) -> Size {
         w: GROUP_RESERVE_COLS as f64 * card.w + (GROUP_RESERVE_COLS - 1) as f64 * gutter + pad * 2.,
         h: GROUP_RESERVE_ROWS as f64 * card.h + (GROUP_RESERVE_ROWS - 1) as f64 * gutter + pad * 2.,
     }
-}
-/// What a group reports: the state that most wants your attention. One card
-/// asking a question is the group asking a question, however many others are
-/// quietly working, because you cannot answer it without going there.
-pub fn aggregate_state(states: &[AgentState]) -> AgentState {
-    for state in [AgentState::Waiting, AgentState::Working, AgentState::Done] {
-        if states.contains(&state) {
-            return state;
-        }
-    }
-    AgentState::None
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnitKind {
@@ -94,7 +84,6 @@ pub fn step_ring<'a, T: PartialEq>(ring: &'a [T], current: &T, step: isize) -> O
 mod tests {
     use super::*;
     use crate::test_support::{card, r};
-    use AgentState::*;
     fn bounds(rects: &[Rect]) -> Option<Rect> {
         group_bounds(rects, GROUP_PAD)
     }
@@ -128,26 +117,6 @@ mod tests {
                 100. + GROUP_PAD * 2.
             ))
         );
-    }
-    #[test]
-    fn empty_group_state_none() {
-        assert_eq!(aggregate_state(&[]), None);
-    }
-    #[test]
-    fn unreported_group_state_none() {
-        assert_eq!(aggregate_state(&[None, None]), None);
-    }
-    #[test]
-    fn a_settled_state_shows_when_nothing_is_working() {
-        assert_eq!(aggregate_state(&[None, Done]), Done);
-        assert_eq!(aggregate_state(&[None, Waiting]), Waiting);
-    }
-    // Asking for you outranks working, and working outranks finished: the
-    // group reports whichever of its cards most wants you.
-    #[test]
-    fn the_group_reports_whatever_most_wants_you() {
-        assert_eq!(aggregate_state(&[Done, Working, None]), Working);
-        assert_eq!(aggregate_state(&[Done, Working, Waiting]), Waiting);
     }
     #[test]
     fn empty_ring_no_stop() {
