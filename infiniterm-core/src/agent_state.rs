@@ -23,6 +23,18 @@ pub enum AgentState {
     Done,
 }
 pub const STALE_MS: f64 = 60000.;
+
+impl AgentState {
+    /// For the log, and for `ift ls`.
+    pub fn name(self) -> &'static str {
+        match self {
+            AgentState::None => "none",
+            AgentState::Working => "working",
+            AgentState::Waiting => "waiting",
+            AgentState::Done => "done",
+        }
+    }
+}
 pub fn apply_hook_event(prev: AgentState, event: &str) -> AgentState {
     match event {
         "UserPromptSubmit" | "PreToolUse" | "PostToolUse" => AgentState::Working,

@@ -38,12 +38,7 @@ impl Model {
                         id: &c.id,
                         cwd: &c.cwd,
                         group_id: c.group_id.as_deref(),
-                        agent: match c.agent {
-                            crate::agent_state::AgentState::None => "none",
-                            crate::agent_state::AgentState::Working => "working",
-                            crate::agent_state::AgentState::Waiting => "waiting",
-                            crate::agent_state::AgentState::Done => "done",
-                        },
+                        agent: c.agent.name(),
                         remote: c.remote.as_deref(),
                     })
                     .collect();

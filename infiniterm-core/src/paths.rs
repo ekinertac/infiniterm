@@ -65,6 +65,12 @@ pub fn history_path() -> PathBuf {
     app_support_dir().join("history.json")
 }
 
+/// Every agent state change, with a timestamp. Beside the save file so it
+/// can be tailed while you work.
+pub fn agent_log_path() -> PathBuf {
+    app_support_dir().join("agent.log")
+}
+
 pub fn drafts_dir() -> PathBuf {
     app_support_dir().join("drafts")
 }

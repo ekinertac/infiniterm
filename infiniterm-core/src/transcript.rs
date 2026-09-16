@@ -42,6 +42,25 @@ pub struct Turn {
     pub tools: Vec<ToolCall>,
 }
 
+/// `23:04:12.345` from Unix ms, local time. The agent log needs seconds and
+/// milliseconds where a transcript turn only needs the hour and minute: the
+/// question it answers is how fast a card is being flipped.
+///
+/// Here rather than in a module of its own because this is where chrono
+/// already is, and one timestamp format per crate is enough.
+pub fn clock_ms(at_ms: f64) -> String {
+    // `NAN as i64` is 0 in Rust, which would stamp the epoch and look like a
+    // real time; a clock that lies is worse than a blank one.
+    if !at_ms.is_finite() {
+        return String::new();
+    }
+    Local
+        .timestamp_millis_opt(at_ms as i64)
+        .single()
+        .map(|t| t.format("%H:%M:%S%.3f").to_string())
+        .unwrap_or_default()
+}
+
 /// `14:05` from an ISO timestamp or Unix ms, local time; empty when there
 /// is none or it does not parse.
 pub fn turn_time(at: &str) -> String {
@@ -398,6 +417,16 @@ mod tests {
     #[test]
     fn truncates_with_an_ellipsis() {
         assert_eq!(turn_preview(&turn("abcdefghij", vec![]), 5), "abcd…");
+    }
+
+    #[test]
+    fn a_clock_stamp_carries_seconds_and_milliseconds() {
+        let t = clock_ms(1_726_520_652_345.);
+        assert_eq!(t.len(), 12, "HH:MM:SS.mmm, got {t}");
+        assert_eq!(&t[2..3], ":");
+        assert_eq!(&t[5..6], ":");
+        assert_eq!(&t[8..9], ".");
+        assert_eq!(clock_ms(f64::NAN), "");
     }
 
     #[test]

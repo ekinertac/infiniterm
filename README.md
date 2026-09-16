@@ -164,6 +164,7 @@ A terminal can reach everything on the machine, so here is everything this one d
 - A unix socket in the system temp directory, which `ift` and the hook binaries connect to.
 - `ps`, `lsof` and `git` run as subprocesses: to label cards with their process and directory, to spot an SSH session, and for the diff and blame cards. `open` hands URLs and files to the system.
 - The network only from browser cards, which are Chromium loading the page you asked for, and the Claude in Chrome extension inside them talking to Claude Code the way it does in Chrome. There is no telemetry, no account, no update check, and the app makes no request of its own. The one exception is off by default: turning on `browser.suggestions` sends what you type in the address bar to Google as you type it.
+- Every agent state change, in `agent.log` beside the save file: the time, the card, the hook event, and what it did. It answers "why did that card go grey", it is capped at half a megabyte, and it never leaves the machine.
 - Where browser cards have been, in `history.json` beside the save file, so the address bar can rank what you visit often above what you saw once. Nothing reads it but the address bar, and deleting the file clears it.
 
 The source is public so all of that can be checked, and a release is a tagged commit built with the CEF version named in `Cargo.lock`, signed and notarized.

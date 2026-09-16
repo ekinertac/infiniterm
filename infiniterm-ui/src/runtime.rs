@@ -315,7 +315,14 @@ impl AppView {
             self.redraw |= self.model.omni.suggestions != before;
         }
         while let Ok(report) = self.backend.hook_reports.try_recv() {
+            // Logged around the model, which is the only place that knows
+            // what the state WAS: "the card went colourless and I do not
+            // know which event did it" is not answerable from a screenshot.
+            let before = self.model.card(&report.card_id).map(|c| c.agent);
             self.model.apply_hook(&report);
+            let after = self.model.card(&report.card_id).map(|c| c.agent);
+            log_agent_event(&report, before, after);
+            self.redraw |= before != after;
         }
         while let Ok(statuses) = self.backend.pane_status.try_recv() {
             self.model.apply_pane_statuses(&statuses);
@@ -524,6 +531,50 @@ fn fetch_suggestions(query: &str) -> Vec<String> {
     };
     infiniterm_core::omni::suggest::parse_suggest(&String::from_utf8_lossy(&out.stdout))
 }
+
+/// Every hook event and what it did to the card's state, appended to
+/// `agent.log` beside the save file. EVERY event, not only the ones that
+/// changed something: a card that flickers is usually being told the same
+/// thing repeatedly, and a log of changes alone hides that.
+///
+/// Truncated when it passes AGENT_LOG_MAX_BYTES at a write, so it cannot
+/// grow without bound in a long-running app.
+fn log_agent_event(
+    report: &infiniterm_core::hooks::HookReport,
+    before: Option<infiniterm_core::agent_state::AgentState>,
+    after: Option<infiniterm_core::agent_state::AgentState>,
+) {
+    use std::io::Write;
+    let (Some(before), Some(after)) = (before, after) else {
+        return;
+    };
+    let path = infiniterm_core::paths::agent_log_path();
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > AGENT_LOG_MAX_BYTES) {
+        let _ = std::fs::remove_file(&path);
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    else {
+        return;
+    };
+    let short: String = report.card_id.chars().take(8).collect();
+    let arrow = if before == after {
+        format!("{:<7} (unchanged)", after.name())
+    } else {
+        format!("{:<7} -> {}", before.name(), after.name())
+    };
+    let _ = writeln!(
+        file,
+        "{}  {short}  {:<18} {arrow}",
+        infiniterm_core::transcript::clock_ms(crate::now_ms()),
+        report.event,
+    );
+}
+
+/// Enough for days of turns, small enough to open in an editor.
+const AGENT_LOG_MAX_BYTES: u64 = 512 * 1024;
 
 #[cfg(test)]
 mod tests {
