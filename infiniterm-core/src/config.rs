@@ -105,6 +105,27 @@ pub enum Wrap {
 pub struct Browser {
     /// Page zoom a browser card opens at: 1 is actual size.
     pub zoom: f64,
+    /// Where the omnibox sends a search; `%s` is the encoded query.
+    pub search_engine: String,
+    /// Asks Google to complete what is typed in the omnibox. OFF by
+    /// default: it is the only thing in this app that talks to anything but
+    /// the page you asked for.
+    pub suggestions: bool,
+    /// EXTRA tab-to-search sites, added to the nine built in. Empty in the
+    /// defaults file, so nobody has to scroll past a list they did not
+    /// write; `Config::engines` is what the omnibox actually reads.
+    pub engines: Vec<crate::omni::engines::Engine>,
+}
+
+impl Config {
+    /// The tab-to-search registry: the user's entries first, so adding a
+    /// keyword that is already built in overrides it rather than being
+    /// shadowed by it.
+    pub fn engines(&self) -> Vec<crate::omni::engines::Engine> {
+        let mut all = self.browser.engines.clone();
+        all.extend(crate::omni::engines::default_engines());
+        all
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -170,7 +191,12 @@ pub fn default_config() -> Config {
             selection_text_color: String::new(),
             wrap: Wrap::Prose,
         },
-        browser: Browser { zoom: 1. },
+        browser: Browser {
+            zoom: 1.,
+            search_engine: crate::omni::address::SEARCH_TEMPLATE.into(),
+            suggestions: false,
+            engines: vec![],
+        },
         ui: Ui {
             inactive_dim: 0.45,
             card_label_size: 15.,
@@ -295,6 +321,32 @@ pub fn merge_config(raw: &Value) -> Config {
                 BROWSER_ZOOM_MIN,
                 BROWSER_ZOOM_MAX,
             ),
+            search_engine: match b.get("searchEngine").and_then(Value::as_str) {
+                // A template with no %s cannot carry a query, and a URL that
+                // silently drops what was typed is worse than the default.
+                Some(s) if s.contains("%s") => s.to_string(),
+                _ => d.browser.search_engine.clone(),
+            },
+            suggestions: bool_(b.get("suggestions"), d.browser.suggestions),
+            engines: b
+                .get("engines")
+                .and_then(Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|v| {
+                            Some(crate::omni::engines::Engine {
+                                keyword: v.get("keyword")?.as_str()?.to_string(),
+                                name: v.get("name")?.as_str()?.to_string(),
+                                search_url: v
+                                    .get("searchUrl")
+                                    .and_then(Value::as_str)
+                                    .filter(|u| u.contains("%s"))?
+                                    .to_string(),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
         },
         ui: Ui {
             inactive_dim: num(u.get("inactiveDim"), d.ui.inactive_dim, 0., 1.),
@@ -311,6 +363,46 @@ pub fn merge_config(raw: &Value) -> Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_browser_group_carries_the_omnibox_settings() {
+        let d = default_config();
+        assert_eq!(
+            d.browser.search_engine,
+            crate::omni::address::SEARCH_TEMPLATE
+        );
+        assert!(!d.browser.suggestions, "the network call is opt in");
+        // The defaults file shows an empty list; the built-ins are in code.
+        assert!(d.browser.engines.is_empty());
+        assert_eq!(
+            d.engines().len(),
+            crate::omni::engines::DEFAULT_ENGINES.len()
+        );
+
+        // A template without %s cannot carry a query.
+        let c = merge_config(&serde_json::json!({"browser": {"searchEngine": "https://x/?q="}}));
+        assert_eq!(
+            c.browser.search_engine,
+            crate::omni::address::SEARCH_TEMPLATE
+        );
+
+        let c = merge_config(&serde_json::json!({"browser": {"suggestions": true}}));
+        assert!(c.browser.suggestions);
+
+        // A malformed engine is dropped and the rest survive; a user entry
+        // comes before the built-ins, so it can override one.
+        let c = merge_config(&serde_json::json!({"browser": {"engines": [
+            {"keyword": "github.com", "name": "Mine", "searchUrl": "https://x.example/s?q=%s"},
+            {"keyword": "broken"}
+        ]}}));
+        assert_eq!(c.browser.engines.len(), 1);
+        assert_eq!(
+            crate::omni::engines::resolve("github.com", &c.engines())
+                .unwrap()
+                .name,
+            "Mine"
+        );
+    }
     use serde_json::json;
 
     fn m(v: Value) -> Config {

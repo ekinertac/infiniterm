@@ -155,6 +155,31 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "browser.searchEngine",
+        &[
+            "Where the omnibox (Cmd+L) sends a search; %s is the encoded query.",
+            "A template without %s is ignored: it would drop what you typed.",
+        ],
+    ),
+    (
+        "browser.suggestions",
+        &[
+            "Ask Google to complete what you type in the omnibox.",
+            "OFF by default: every keystroke goes to Google while it is on.",
+            "Nothing else in this app talks to the network on its own.",
+        ],
+    ),
+    (
+        "browser.engines",
+        &[
+            "Extra sites Tab can scope a search to, added to the nine built in",
+            "(Google, GitHub, YouTube, Wikipedia, Stack Overflow, MDN, npm,",
+            "crates.io, docs.rs). Each is {keyword, name, searchUrl}, where",
+            "keyword is what you type and searchUrl is a template with %s.",
+            "A keyword that is already built in replaces it.",
+        ],
+    ),
+    (
         "ui",
         &["The app's own chrome: labels, the status bar, dimming."],
     ),

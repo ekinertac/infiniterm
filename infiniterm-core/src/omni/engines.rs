@@ -6,8 +6,10 @@
 //! site's OpenSearch description is a later slice; this is the list that
 //! makes the feature useful on day one. Related: omni/address.rs.
 use crate::omni::address::search_url;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Engine {
     /// What you type to reach it: the host, so "github.com" and "git" both
     /// find GitHub.
