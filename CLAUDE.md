@@ -15,7 +15,7 @@ infiniterm-ui/src/          the gpui app: main.rs (AppView, CEF startup, the men
 infiniterm-cli/, infiniterm-hook/   ift and the hook binary
 assets/                     the app icon
 tools/bundle.sh             target/bundle/infiniterm.app: cef-rs's bundle-cef-app plus themes, icon, ift and the hook as sidecars
-tools/drive/                the GUI driver: lib.sh, then one scenario per area (terminal, select, editor, diff, transcript, browser, stress, idle, settings, ift ...)
+tools/drive/                the GUI driver: lib.sh, then one scenario per area (terminal, select, editor, diff, transcript, browser, stress, idle, settings, ift ...). cast.sh is the odd one out: not a test but the screencast take, paced for a camera, on its own demo repo and canvas under /tmp/infiniterm-cast (`make cast-seed` once, then `make cast`)
 tools/locked.swift, winid.swift   the driver's probes: is the Mac locked, which window belongs to which pid
 HANDOVER.md                 the rewrite's log, phase by phase, with the measurements and decisions
 docs/                       the file-by-file map from the Tauri app, kept as history
@@ -31,7 +31,7 @@ The Tauri app this replaced is archived at `~/Code/infiniterm-tauri` (`ekinertac
 - `Cmd` owns every app binding except `ctrl`+digit; a focused terminal gets everything else. Chords are built from the PHYSICAL key: `keycode.rs` keeps an NSEvent monitor that records every key-down's key code and real Shift flag, and `keymap.rs` names the chord from those, so Turkish Q and every other layout get the keys the panel shows. Alt+Arrow and Cmd+Arrow belong to the shell. Inside an editor the find, replace, comment and select-to-boundary chords are the editor's (`editor_keys.rs`); inside a browser the zoom chords are the page's (`browser_keys.rs`).
 - Positions are permanent; nothing re-tiles. A new card takes the free slot NEAREST the card it opens from (`layout::nearest_free_slot`); ties go to the slot that keeps the workspace's bounding box closest to the window's aspect, then right, below, left, above. No fixed column count. Groups move to a free block right of everything.
 - Anything that reads card geometry is scoped to one workspace. Card placement treats other groups' frames as occupied. A card may not be dropped over another (`Model::end_gesture` puts it back); a drag shows alignment guides on exact matches only.
-- Every viewport change is animated; the system's reduced-motion switch outranks `ui.animations`. UI affordances are sized in screen pixels then divided by the zoom; UI scale reaches labels and panels only.
+- Every viewport change is animated; the system's reduced-motion switch outranks `ui.animations`. UI affordances are sized in screen pixels then divided by the zoom; the interface multiplier (`ui_scale`, Cmd+Shift+= / -) reaches every piece of chrome (card labels, the title bar and its tabs, the status bar, the palette, the dialogs, the shortcuts panel; `titlebar_h()` / `statusbar_h()` in main.rs) and never terminal text, borders or focus rings. The traffic lights stay where macOS put them.
 - One tagged event stream for all panes; the reader thread moves bytes, the UI thread parses one budget per frame (the scheduler in `infiniterm-term`). Backpressure is 256 KiB unacknowledged per pane.
 - Two agent states, working and idle. A group reports the aggregate. Attention per workspace is a dot, never a switch. A card's title is a name somebody chose; the label derives name, else process, else directory.
 - Settings: defaults and overrides are separate files, the defaults rewritten at launch; a new setting needs a `settings_doc.rs` entry or the test fails. Writes to the user file patch the text, never reserialise.
@@ -47,6 +47,7 @@ The Tauri app this replaced is archived at `~/Code/infiniterm-tauri` (`ekinertac
 - The diff card's rows come from `similar` with the merge view's collapse rule (margin 3, minSize 4). Bodies paint under a content mask.
 - The browser lays out at the card's world size and is painted as a texture; the device scale follows the zoom in half steps above 100%. CEF starts before gpui, pumps every 4 ms, and reads its profile and the extension from `<data>/browser/`, seeded from Chrome's install and, once, from the spike's signed-in profile. Popups are refused and opened as cards. The first click on an unfocused browser card only focuses it.
 - The window frame is `window.json` beside the save file. The socket is the single-instance lock. The app menu is built by hand (no File, no Edit), so Cmd+H, Cmd+Alt+H, Cmd+M and Cmd+Q are unbindable.
+- One dialog, three shapes (`prompt.rs`, drawn by `render_prompt`): a text prompt (label, field, the two keys captioned under it), a confirm (question, Cancel and the action's verb as buttons, `confirm(label, action, pending)`), and an alert (message, OK; unused so far). All sit under a dim sheet that cancels on a click outside; buttons click through `prompt_settle`. Enter and Escape are the primary path; the buttons exist so a mouse is not refused. `tools/drive/dialogs.sh` shows them.
 - The shortcuts panel is a centred filterable overlay. `ui.midZoomLabel` draws the card's name large below 60% zoom; corner labels are drawn at 1.2x `ui.cardLabelSize`.
 
 ## Commands
@@ -88,6 +89,7 @@ make run DATA=/tmp/x    # any data dir; INFINITERM_CONFIG_DIR moves ~/.config/in
 - cliclick keys never arrive as gpui keystrokes. `screencapture -o` drops the window shadow, which offset every click by ~58 px.
 - An effect that needs state from before the command (swap animation's old rects) must carry it.
 - A notice or a pending save must not hold the frame loop open: a launch notice ran the app at 120 fps for five seconds.
-- The palette matches "stress flood" to the calm command first; the driver types "run yes". Palette queries in scenarios must match a real label ("browser open a url", not "new browser").
+- The palette matches "stress flood" to the calm command first; the driver types "run yes". Palette queries in scenarios must match a real label ("browser open a url", not "new browser"; "workspace: close", not "close workspace").
+- System Events `keystroke "0" using {command down, shift down}` drops Shift to produce the character; use `key_code 29 "command down, shift down"` (and 24 for Equal, 27 for Minus) when a scenario needs a shifted chord. Chords are physical now, so scenarios press key codes, not characters.
 - `resized` on a body was never called until the browser needed it; `paint.rs` now calls it when a card's rect changes. The terminal ignores it: `terminals.rs` refits and resizes the PTY together.
 - Two apps named infiniterm with the same bundle id: a driver that finds windows or processes by name typed into Ekin's real canvas once.

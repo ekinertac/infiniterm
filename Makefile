@@ -11,7 +11,7 @@ APP = target/bundle/infiniterm.app
 REAL = $(HOME)/Library/Application\ Support/dev.ekinertac.infiniterm/workspace.json
 CRATES = -p infiniterm-core -p infiniterm-ui -p infiniterm-term
 
-.PHONY: help build release bundle run run-fresh stop log test check fmt clippy drive drive-drag drive-panel shot clean
+.PHONY: help build release bundle run run-fresh stop log test check fmt clippy drive drive-drag drive-panel cast cast-seed shot clean
 
 help:
 	@echo "make run        build, bundle and launch on a copy of the real canvas ($(DATA))"
@@ -23,6 +23,8 @@ help:
 	@echo "make fmt        cargo fmt on the three port crates (never the cli and hook copies)"
 	@echo "make drive      the scripted GUI run with screenshots (say so first if Ekin is on the Mac)"
 	@echo "make drive-drag / drive-panel   the other scenarios"
+	@echo "make cast-seed  build the screencast's demo repo and canvas (off camera)"
+	@echo "make cast       the screencast take, on the seeded canvas"
 	@echo "make shot       screenshot the running window to /tmp/infiniterm-shot.png"
 	@echo "make release    optimised build and bundle"
 
@@ -71,6 +73,16 @@ drive-drag: bundle
 
 drive-panel: bundle
 	tools/drive/panel.sh
+
+# The screencast needs ift and the hook beside the app: the demo repo's
+# hooks point at target/debug, and the take reads card state back with ift.
+cast-seed: bundle
+	cargo build -p infiniterm-cli -p infiniterm-hook
+	tools/drive/cast.sh seed
+
+cast: bundle
+	cargo build -p infiniterm-cli -p infiniterm-hook
+	tools/drive/cast.sh take
 
 shot:
 	tools/shot.sh infiniterm /tmp/infiniterm-shot.png
