@@ -16,6 +16,8 @@
 use std::path::{Path, PathBuf};
 
 pub mod local_pty;
+pub mod tmux;
+pub mod tmux_protocol;
 
 pub type PaneId = u32;
 
