@@ -68,6 +68,14 @@ pub struct Chrome {
     pub sel_fg: Hsla,
     pub row_highlight: Hsla,
     pub row_selected: Hsla,
+    /// An overlay's own ground: LIGHTER than the canvas, because a raised
+    /// surface catches more light. The sheets used `bar_bg`, which is
+    /// darker than the canvas they float over, so nothing about them said
+    /// "on top".
+    pub overlay_bg: Hsla,
+    /// An overlay's hairline, brighter than a control's: it is the edge of
+    /// a surface rather than of a widget.
+    pub overlay_border: Hsla,
     pub overlay_backdrop: Hsla,
     pub badge_bg: Hsla,
     pub phantom: Hsla,
@@ -127,8 +135,13 @@ impl Chrome {
             sel_fg: c(0x0e101a),
             row_highlight: c(0x1e242e),
             row_selected: c(0x2b3442),
+            overlay_bg: c(0x1b2029),
+            overlay_border: c(0x39414f),
+            // Deep enough that the canvas recedes. At 0.53 over a near-black
+            // canvas there was almost nothing left to darken, so the sheet
+            // had to do all the separating by itself.
             overlay_backdrop: Hsla {
-                a: 0.53,
+                a: 0.72,
                 ..c(0x000000)
             },
             badge_bg: Hsla {
