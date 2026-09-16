@@ -34,11 +34,34 @@ const TAB_WORKING_DOT_ALPHA: f32 = 0.6;
 const TITLE_BAR_TRAFFIC_LIGHT_INSET_PX: f32 = 84.;
 /// Below this the status bar's fps reads as a stall, not a frame rate.
 const LOW_FPS_THRESHOLD: f32 = 50.;
+/// A key cap: the panel's own ground for ink on a near-white cap, which
+/// inverts with the theme (a light theme's `text_bright` is dark, and the
+/// cap goes dark with light ink). Shared by the palette's hints and the
+/// shortcuts panel's rows.
+fn key_cap_box(key: &str, chrome: &crate::chrome::Chrome, ui: f32) -> gpui::Div {
+    gpui::div()
+        .px(px(KEY_CAP_PAD_X_PX * ui))
+        .py(px(KEY_CAP_PAD_Y_PX * ui))
+        .rounded_sm()
+        .bg(chrome.text_bright)
+        .text_size(px(KEY_CAP_FONT_PX * ui))
+        .text_color(chrome.bar_bg)
+        .child(key.to_string())
+}
+
+/// What the palette calls everything that is not one of the five most
+/// recently used entries.
+const PALETTE_REST_TITLE: &str = "all";
 /// A palette section heading ("recent", and so on).
 const PALETTE_SECTION_FONT_PX: f32 = 10.;
-/// The small text inside a keycap badge, in a palette hint or the
-/// shortcuts panel.
-const KEY_CAP_FONT_PX: f32 = 10.;
+/// The text inside a keycap badge, in a palette hint or the shortcuts
+/// panel. A key cap is read, not scanned: at 10 px against the panel it was
+/// the least legible thing in the app.
+const KEY_CAP_FONT_PX: f32 = 12.;
+/// A key cap's padding. Enough that a single letter is a key and not a
+/// character that happens to have a border.
+const KEY_CAP_PAD_X_PX: f32 = 6.;
+const KEY_CAP_PAD_Y_PX: f32 = 1.;
 /// A secondary caption below an overlay's title: the prompt's label, and
 /// the shortcuts panel's section and gesture headings.
 const CAPTION_FONT_PX: f32 = 11.;
@@ -96,11 +119,14 @@ impl AppView {
             usage_bonus(usage.get(&use_key(source.id(), id)))
         });
         let recent = recent_keys(usage, RECENT_LIMIT);
+        // Both halves are titled: the five you actually use, then everything
+        // else. Without a heading on the second one the list read as one run
+        // of commands whose order nobody could explain.
         let sections = sectionise(
             &ranked.items,
             &recent,
             |item| use_key(source.id(), &item.id),
-            "",
+            PALETTE_REST_TITLE,
         );
         let mut flat = vec![];
         let mut heads = vec![];
@@ -449,12 +475,17 @@ impl AppView {
             );
         }
         for (i, item) in flat.iter().enumerate().skip(start).take(PALETTE_ROWS) {
-            if let Some((title, _)) = heads.iter().find(|(_, at)| *at == i) {
+            if let Some((title, at)) = heads.iter().find(|(_, at)| *at == i) {
                 list = list.child(
                     div()
                         .px_3()
                         .pt_2()
                         .pb_1()
+                        // A rule above every heading but the first, so the
+                        // split is visible before the words are read.
+                        .when(*at > 0, |d| {
+                            d.border_t_1().border_color(chrome.bar_border).mt_1()
+                        })
                         .text_size(px(PALETTE_SECTION_FONT_PX * ui))
                         .text_color(chrome.text_faint)
                         .child(title.clone()),
@@ -492,17 +523,7 @@ impl AppView {
             if let Some(hint) = &item.item.hint {
                 let mut keys = div().flex().gap_1();
                 for key in hint.split(' ') {
-                    keys = keys.child(
-                        div()
-                            .px_1()
-                            .rounded_sm()
-                            .bg(chrome.control_bg)
-                            .border_1()
-                            .border_color(chrome.control_border)
-                            .text_size(px(KEY_CAP_FONT_PX * ui))
-                            .text_color(chrome.text_mid)
-                            .child(key.to_string()),
-                    );
+                    keys = keys.child(key_cap_box(key, &chrome, ui));
                 }
                 row = row.child(keys);
             }
@@ -602,7 +623,10 @@ impl AppView {
             div()
                 .px(px(DIALOG_KEY_PAD_PX * ui))
                 .rounded_sm()
-                .bg(crate::chrome::with_alpha(gpui::black(), DIALOG_KEY_BG_ALPHA))
+                .bg(crate::chrome::with_alpha(
+                    gpui::black(),
+                    DIALOG_KEY_BG_ALPHA,
+                ))
                 .text_color(chrome.text_bright)
                 .text_size(px(KEY_CAP_FONT_PX * ui))
                 .child(label.to_string())
@@ -753,17 +777,7 @@ impl AppView {
         let query = self.shortcuts_field.text.clone();
         let sections =
             filter_shortcuts(&shortcut_sections(&self.model.keymap, &labels_ref), &query);
-        let key_box = |key: &str| {
-            div()
-                .px_1()
-                .rounded_sm()
-                .bg(chrome.control_bg)
-                .border_1()
-                .border_color(chrome.control_border)
-                .text_size(px(KEY_CAP_FONT_PX * ui))
-                .text_color(chrome.text_mid)
-                .child(key.to_string())
-        };
+        let key_box = |key: &str| key_cap_box(key, &chrome, ui);
         let mut list = div()
             .id("shortcuts-list")
             .flex()
