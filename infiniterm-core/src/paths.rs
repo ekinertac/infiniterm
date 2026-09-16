@@ -60,6 +60,11 @@ pub fn layout_path() -> PathBuf {
     app_support_dir().join("workspace.json")
 }
 
+/// Where the omnibox's history lives, beside the save file.
+pub fn history_path() -> PathBuf {
+    app_support_dir().join("history.json")
+}
+
 pub fn drafts_dir() -> PathBuf {
     app_support_dir().join("drafts")
 }

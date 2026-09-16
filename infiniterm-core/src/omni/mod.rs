@@ -10,3 +10,4 @@
 //! score, this takes free text and mixes sources.
 pub mod address;
 pub mod engines;
+pub mod history;
