@@ -523,7 +523,7 @@ impl AppView {
             if let Some(hint) = &item.item.hint {
                 let mut keys = div().flex().gap_1();
                 for key in hint.split(' ') {
-                    keys = keys.child(key_cap_box(key, &chrome, ui));
+                    keys = keys.child(key_cap_box(key, chrome, ui));
                 }
                 row = row.child(keys);
             }
@@ -777,7 +777,7 @@ impl AppView {
         let query = self.shortcuts_field.text.clone();
         let sections =
             filter_shortcuts(&shortcut_sections(&self.model.keymap, &labels_ref), &query);
-        let key_box = |key: &str| key_cap_box(key, &chrome, ui);
+        let key_box = |key: &str| key_cap_box(key, chrome, ui);
         let mut list = div()
             .id("shortcuts-list")
             .flex()
