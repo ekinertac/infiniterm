@@ -34,6 +34,8 @@ ift — drive infiniterm from a shell
                              changed files under path (the current directory
                              without one) and each file's diff
   ift ls                     cards as TSV: id, group, directory, state, remote
+  ift omni <term>            what the omnibox (Cmd+L) would show for a term,
+                             ranked against the real history and open cards
   ift name <text>            name the card this is run from
   ift group <name>           put this card in a group, creating it if needed
   ift install                put ift on $PATH (a symlink in ~/.local/bin)
@@ -61,6 +63,7 @@ fn main() -> ExitCode {
         ),
         Some("install") => install_self(),
         Some("ls") => send("ls", vec![]),
+        Some("omni") => send("omni", rest()),
         Some("diff") => diff_path(args.get(1).map(String::as_str).unwrap_or(".")),
         Some("name") => send("name", rest()),
         Some("group") => send("group", rest()),

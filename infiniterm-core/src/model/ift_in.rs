@@ -5,6 +5,7 @@
 use super::{Effect, Model};
 use crate::cli::{CliReply, CliRequest};
 use crate::ift::{diff_plan, format_card_list, open_plan, ListedCard, PathKind};
+use crate::omni::OmniAction;
 
 fn kind_of(s: &str) -> PathKind {
     if s == "directory" {
@@ -50,6 +51,17 @@ impl Model {
                     |id| self.group(id).map(|g| g.name.clone()),
                     &self.home,
                 ))
+            }
+            // `ift omni <term>`: what Cmd+L would show, ranked against the
+            // live history and the cards actually open, so a result nobody
+            // can explain has a repro that is not a screenshot. Reads only.
+            "omni" => {
+                let term = req.args.join(" ");
+                let saved = self.omni.query.clone();
+                self.omni.query = term;
+                let response = self.omni_response();
+                self.omni.query = saved;
+                ok(render_omni(&response))
             }
             "open" => {
                 let path = req.args.first().map(String::as_str).unwrap_or("");
@@ -123,4 +135,76 @@ impl Model {
             other => err(&format!("unknown command: {other}")),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Model;
+
+    // `ift omni` must not disturb a box somebody has open: it borrows the
+    // query, ranks, and puts the old one back.
+    #[test]
+    fn omni_ranks_a_term_without_touching_the_open_box() {
+        let mut m = Model::new();
+        m.history.record("https://news.ycombinator.com", 1.);
+        m.history
+            .set_title("https://news.ycombinator.com", "Hacker News");
+        m.omni.query = "left alone".into();
+        let reply = m.run_ift(
+            &CliRequest {
+                id: 1,
+                cmd: "omni".into(),
+                args: vec!["news".into()],
+                card_id: None,
+            },
+            &[],
+        );
+        assert!(reply.ok);
+        assert!(reply.text.contains("Hacker News"), "{}", reply.text);
+        assert!(reply.text.contains("open https://news.ycombinator.com"));
+        assert_eq!(m.omni.query, "left alone");
+    }
+
+    #[test]
+    fn omni_says_so_when_nothing_matches() {
+        let mut m = Model::new();
+        let reply = m.run_ift(
+            &CliRequest {
+                id: 1,
+                cmd: "omni".into(),
+                args: vec![],
+                card_id: None,
+            },
+            &[],
+        );
+        assert!(reply.text.contains("nothing"));
+    }
+}
+
+/// One heading per line, its results indented, each with the action spelled
+/// out: "why did Enter go there" is the question this answers.
+fn render_omni(response: &crate::omni::rank::OmniResponse) -> String {
+    let mut out = String::new();
+    if let Some(c) = &response.completion {
+        out.push_str(&format!("completion\t{c}\n"));
+    }
+    if let Some((_, name)) = &response.offer {
+        out.push_str(&format!("tab\tsearch {name}\n"));
+    }
+    for section in &response.sections {
+        out.push_str(&format!("\n{}\n", section.heading));
+        for r in &section.results {
+            let action = match &r.action {
+                OmniAction::Navigate(url) => format!("open {url}"),
+                OmniAction::Search(q) => format!("search {q}"),
+                OmniAction::FocusCard(id) => format!("focus {id}"),
+            };
+            out.push_str(&format!("  {}\t{}\n", r.title, action));
+        }
+    }
+    if response.sections.is_empty() {
+        out.push_str("\nnothing\n");
+    }
+    out
 }
