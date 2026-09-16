@@ -402,6 +402,13 @@ impl AppView {
     /// Cmd+scroll (and a trackpad pinch, which arrives as ctrl) zooms about
     /// the cursor: the world point under the pointer must not move.
     pub fn wheel(&mut self, e: &ScrollWheelEvent) {
+        // An overlay's list scrolls itself, but the event still arrives at the
+        // canvas under it: a scroll in the shortcuts panel also scrolled the
+        // terminal the pointer happened to be over. Nothing behind a modal
+        // moves, zoom included.
+        if self.model.overlay_open() {
+            return;
+        }
         let p = self.to_content(e.position);
         let (dx, dy) = match e.delta {
             ScrollDelta::Pixels(d) => (f32::from(d.x) as f64, f32::from(d.y) as f64),

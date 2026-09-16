@@ -630,6 +630,23 @@ mod tests {
         assert!(effects.contains(&Effect::DraftDelete(id)));
     }
 
+    // The wheel asks this one question before it touches the canvas: a
+    // scroll inside an overlay must not reach the card under the pointer.
+    #[test]
+    fn every_overlay_reports_itself_as_open() {
+        let mut h = Harness::new();
+        assert!(!h.m.overlay_open());
+        h.run("app.palette");
+        assert!(h.m.overlay_open());
+        h.m.close_palette(false);
+        assert!(!h.m.overlay_open());
+        h.run("app.shortcuts");
+        assert!(h.m.overlay_open());
+        h.m.shortcuts_open = false;
+        h.run("card.rename");
+        assert!(h.m.overlay_open(), "a prompt is an overlay too");
+    }
+
     // Palette: the theme picker previews as the selection moves and puts the
     // old theme back on dismissal; use is recorded on run only.
     #[test]

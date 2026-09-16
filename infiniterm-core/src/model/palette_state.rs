@@ -74,6 +74,15 @@ impl Model {
         self.palette.source.is_some()
     }
 
+    /// Anything drawn over the canvas that owns the pointer and the keys.
+    /// The wheel asks because a scroll inside an overlay's own list still
+    /// reaches the canvas element under it, and scrolled the card behind the
+    /// pointer as well; the key path asks the three separately, because each
+    /// of them handles keys differently.
+    pub fn overlay_open(&self) -> bool {
+        self.palette_open() || self.prompt.is_open() || self.shortcuts_open
+    }
+
     /// Recomputed every time it is asked for, so it is never stale.
     pub fn palette_items(
         &self,
