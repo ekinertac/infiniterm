@@ -187,6 +187,9 @@ wrap_find_handler! {
             active_match_ordinal: ::std::os::raw::c_int,
             _final_update: ::std::os::raw::c_int,
         ) {
+            if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                eprintln!("[find] count={count} active={active_match_ordinal}");
+            }
             self.handler.shared.borrow_mut().find = (count, active_match_ordinal);
         }
     }

@@ -126,6 +126,11 @@ pub struct AppView {
     pub omni_field: field::Field,
     /// The find bar's text.
     pub find_field: field::Field,
+    /// Something that arrived mid-frame changed what the chrome says, so one
+    /// more frame is owed. The element tree is built BEFORE `frame()` runs,
+    /// so anything drained there (a find count, the omnibox's suggestions)
+    /// is a frame behind and would sit unseen until the next keystroke.
+    pub redraw: bool,
     pub prompt_was_open: bool,
     /// Text an effect asked to put on the clipboard, written on the next
     /// frame: only a frame has an App to write through.

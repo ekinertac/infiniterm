@@ -45,6 +45,7 @@ impl AppView {
             shortcuts_field: Default::default(),
             omni_field: crate::field::Field::default(),
             find_field: crate::field::Field::default(),
+            redraw: false,
             clipboard_out: None,
             prompt_was_open: false,
             suggestions: std::sync::mpsc::channel(),
@@ -286,7 +287,8 @@ impl AppView {
     }
 
     pub fn needs_frame(&self) -> bool {
-        self.animator.is_running()
+        self.redraw
+            || self.animator.is_running()
             || self.pan.is_some()
             || self.gesture.is_some()
             || self.scheduler.pending()
@@ -308,7 +310,9 @@ impl AppView {
             self.model.apply_pane_event(pane, &event);
         }
         while let Ok((query_id, items)) = self.suggestions.1.try_recv() {
+            let before = self.model.omni.suggestions.clone();
             self.model.omni_suggestions(query_id, items);
+            self.redraw |= self.model.omni.suggestions != before;
         }
         while let Ok(report) = self.backend.hook_reports.try_recv() {
             self.model.apply_hook(&report);

@@ -75,6 +75,11 @@ impl AppView {
             if let Some(c) = self.model.card_mut(&id) {
                 c.url = Some(url);
                 self.model.dirty_layout = true;
+                // The label and the status bar were drawn from the old
+                // address before this ran, and a page that has finished
+                // loading asks for no further frames: without this the card
+                // says where it used to be until something else moves.
+                self.redraw = true;
             }
         }
         for (url, title) in titles {
@@ -136,7 +141,9 @@ impl AppView {
             .and_then(|b| b.surface.as_ref())
             .map(|s| s.find_result());
         if let Some((matches, active)) = result {
+            let before = (self.model.find.matches, self.model.find.active);
             self.model.find_result(&card_id, matches, active);
+            self.redraw |= (self.model.find.matches, self.model.find.active) != before;
         }
     }
 }
