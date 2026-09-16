@@ -9,3 +9,4 @@
 //! NOT the command palette: that matches a fixed list of commands by fuzzy
 //! score, this takes free text and mixes sources.
 pub mod address;
+pub mod engines;
