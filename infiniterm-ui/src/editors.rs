@@ -9,7 +9,7 @@
 //! save, find, go to line, the tree's three states.
 use crate::diff_body::DiffBody;
 use crate::editor_body::{EditorBody, EditorEvent};
-use crate::terminals::family_of;
+
 use crate::transcript_body::{TranscriptBody, TranscriptColors};
 use crate::AppView;
 use gpui::Window;
@@ -89,17 +89,8 @@ impl AppView {
             let Some(body) = self.editor_for(&card.id) else {
                 continue;
             };
-            if body.metrics.family != family_of(&cfg.terminal.font_family)
-                || body.metrics.font_px != metrics.font_px
-                || body.metrics.line_height != metrics.line_height
-                || body.metrics.cell_w != metrics.cell_w
-            {
-                body.metrics = crate::terminal_body::Metrics {
-                    family: metrics.family.clone(),
-                    font_px: metrics.font_px,
-                    line_height: metrics.line_height,
-                    cell_w: metrics.cell_w,
-                };
+            if body.metrics != metrics {
+                body.metrics = metrics.clone();
                 body.mark_dirty();
             }
             if body.colors != colors || body.rules != rules {
@@ -199,16 +190,8 @@ impl AppView {
             else {
                 continue;
             };
-            if body.metrics.font_px != metrics.font_px
-                || body.metrics.cell_w != metrics.cell_w
-                || body.metrics.family != metrics.family
-            {
-                body.metrics = crate::terminal_body::Metrics {
-                    family: metrics.family.clone(),
-                    font_px: metrics.font_px,
-                    line_height: metrics.line_height,
-                    cell_w: metrics.cell_w,
-                };
+            if body.metrics != metrics {
+                body.metrics = metrics.clone();
                 body.mark_dirty();
             }
             if body.colors != colors {
@@ -287,17 +270,8 @@ impl AppView {
             let Some(body) = self.diff_for(&card.id) else {
                 continue;
             };
-            if body.metrics.font_px != metrics.font_px
-                || body.metrics.cell_w != metrics.cell_w
-                || body.metrics.line_height != metrics.line_height
-                || body.metrics.family != metrics.family
-            {
-                body.metrics = crate::terminal_body::Metrics {
-                    family: metrics.family.clone(),
-                    font_px: metrics.font_px,
-                    line_height: metrics.line_height,
-                    cell_w: metrics.cell_w,
-                };
+            if body.metrics != metrics {
+                body.metrics = metrics.clone();
                 body.mark_dirty();
             }
             if body.colors != colors || body.rules != rules {

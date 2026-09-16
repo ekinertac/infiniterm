@@ -5,7 +5,7 @@
 //! backpressure), what the programs wrote back goes to the PTYs, and a card
 //! whose rect or metrics changed re-counts its grid and tells the PTY.
 //! Port of `paneRegistry.ts`'s routing and `TerminalCard.svelte`'s start.
-use crate::terminal_body::{Metrics, TerminalBody};
+use crate::terminal_body::{weight_of, Metrics, TerminalBody};
 use crate::AppView;
 use gpui::{font, px, TextRun, Window};
 use infiniterm_core::grid::Size;
@@ -28,7 +28,10 @@ impl AppView {
     pub fn metrics(&self, window: &Window) -> Metrics {
         let t = &self.model.config.terminal;
         let family = family_of(&t.font_family);
-        let f = font(family.clone());
+        let weight = weight_of(&t.font_weight);
+        let bold_weight = weight_of(&t.font_weight_bold);
+        let mut f = font(family.clone());
+        f.weight = weight;
         let probe = window.text_system().shape_line(
             "M".into(),
             px(t.font_size as f32),
@@ -52,6 +55,8 @@ impl AppView {
             font_px: t.font_size,
             line_height: t.line_height,
             cell_w: f32::from(probe.width) as f64,
+            weight,
+            bold_weight,
         }
     }
 
@@ -109,6 +114,8 @@ impl AppView {
             body.blink = blink;
             body.inactive_dim = inactive_dim;
             let metrics_changed = body.font_family != metrics.family
+                || body.weight != metrics.weight
+                || body.bold_weight != metrics.bold_weight
                 || body.font_px != metrics.font_px
                 || body.line_height != metrics.line_height
                 || body.cell_w != metrics.cell_w;

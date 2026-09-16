@@ -11,7 +11,7 @@
 //! arrived on the agent card with its first hook event.
 use crate::body::{BodyAction, CardBody};
 use crate::terminal_body::Metrics;
-use gpui::{fill, font, point, px, size, App, Bounds, Hsla, Keystroke, Pixels, Window};
+use gpui::{fill, point, px, size, App, Bounds, Hsla, Keystroke, Pixels, Window};
 use infiniterm_core::files::file_mtime;
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::transcript::{
@@ -90,12 +90,7 @@ impl TranscriptBody {
                 sel_bg: c(0xe39500),
                 sel_fg: c(0x0e101a),
             },
-            metrics: Metrics {
-                family: metrics.family.clone(),
-                font_px: metrics.font_px,
-                line_height: metrics.line_height,
-                cell_w: metrics.cell_w,
-            },
+            metrics: metrics.clone(),
             inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             world,
             dirty: true,
@@ -280,7 +275,7 @@ impl CardBody for TranscriptBody {
             return;
         }
         let line_h = s(self.line_h());
-        let f = font(self.metrics.family.clone());
+        let f = self.metrics.font();
         let pad = s(PAD_X);
         // The list.
         let (lo, ls) = self.list_area(world);

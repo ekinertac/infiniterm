@@ -17,8 +17,8 @@ use crate::body::{BodyAction, CardBody};
 use crate::editor_body::EditorEvent;
 use crate::terminal_body::Metrics;
 use gpui::{
-    fill, font, point, px, size, App, Bounds, FontStyle, Hsla, Keystroke, Pixels, SharedString,
-    TextRun, Window,
+    fill, point, px, size, App, Bounds, FontStyle, Hsla, Keystroke, Pixels, SharedString, TextRun,
+    Window,
 };
 use infiniterm_core::blame::{blame_text, BlameLine};
 use infiniterm_core::editor_theme::{EditorColors, SyntaxRule};
@@ -133,12 +133,7 @@ impl DiffBody {
                 gutter: "#5a6472".into(),
             },
             rules: vec![],
-            metrics: Metrics {
-                family: metrics.family.clone(),
-                font_px: metrics.font_px,
-                line_height: metrics.line_height,
-                cell_w: metrics.cell_w,
-            },
+            metrics: metrics.clone(),
             inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             world,
             dirty: true,
@@ -363,7 +358,7 @@ impl DiffBody {
     ) {
         let line_h = px((self.line_h() * scale) as f32);
         let font_size = px((self.metrics.font_px * scale) as f32);
-        let f = font(self.metrics.family.clone());
+        let f = self.metrics.font();
         let fg = hex(&self.colors.foreground);
         let dim = hex(&self.colors.gutter);
         let sel_bg = hex(&self.colors.selection);
@@ -531,7 +526,7 @@ impl CardBody for DiffBody {
         let gutter_fg = hex(&self.colors.gutter);
         let green = hex(&self.green());
         let red = hex(&self.red());
-        let base = font(self.metrics.family.clone());
+        let base = self.metrics.font();
         let now_s = crate::now_ms() / 1000.;
         let first = self.scroll.min(self.rows.len().saturating_sub(1));
         let last = (first + rows_visible).min(self.rows.len());

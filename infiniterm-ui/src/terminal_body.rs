@@ -91,6 +91,8 @@ pub struct TerminalBody {
     pub grid: Grid,
     pub palette: Palette,
     pub font_family: String,
+    pub weight: FontWeight,
+    pub bold_weight: FontWeight,
     pub font_px: f64,
     pub line_height: f64,
     /// The cell width at `font_px`, measured once from the font.
@@ -139,11 +141,38 @@ pub struct TerminalBody {
 /// cell's x bounds the drift to a chunk.
 const CHUNK: usize = 24;
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct Metrics {
     pub family: String,
     pub font_px: f64,
     pub line_height: f64,
     pub cell_w: f64,
+    /// `terminal.fontWeight` and `fontWeightBold`, resolved.
+    pub weight: FontWeight,
+    pub bold_weight: FontWeight,
+}
+
+impl Metrics {
+    /// The font at the configured weight.
+    pub fn font(&self) -> gpui::Font {
+        let mut f = font(self.family.clone());
+        f.weight = self.weight;
+        f
+    }
+}
+
+/// `"normal"`, `"bold"`, or a number 100 to 900, as CSS spells weights.
+pub fn weight_of(s: &str) -> FontWeight {
+    match s.trim() {
+        "bold" => FontWeight::BOLD,
+        "normal" | "" => FontWeight::NORMAL,
+        n => n
+            .parse::<f32>()
+            .ok()
+            .filter(|w| (100. ..=900.).contains(w))
+            .map(FontWeight)
+            .unwrap_or(FontWeight::NORMAL),
+    }
 }
 
 impl TerminalBody {
@@ -161,6 +190,8 @@ impl TerminalBody {
             grid: Grid::new(cols, rows, scrollback),
             palette,
             font_family: metrics.family.clone(),
+            weight: metrics.weight,
+            bold_weight: metrics.bold_weight,
             font_px: metrics.font_px,
             line_height: metrics.line_height,
             cell_w: metrics.cell_w,
@@ -231,6 +262,8 @@ impl TerminalBody {
     /// reference's `refit` rule insists on, and the caller resizes the PTY.
     pub fn set_metrics(&mut self, metrics: &Metrics, world: Size) -> bool {
         self.font_family = metrics.family.clone();
+        self.weight = metrics.weight;
+        self.bold_weight = metrics.bold_weight;
         self.font_px = metrics.font_px;
         self.line_height = metrics.line_height;
         self.cell_w = metrics.cell_w;
@@ -459,7 +492,9 @@ impl CardBody for TerminalBody {
         let cell_w = px((self.cell_w * scale) as f32);
         let pad = px((PAD * scale) as f32);
         let origin = point(bounds.origin.x + pad, bounds.origin.y + pad);
-        let base = font(self.font_family.clone());
+        let mut base = font(self.font_family.clone());
+        base.weight = self.weight;
+        let bold_weight = self.bold_weight;
         // Too small to read: skip the glyphs, keep the ground. The mid-zoom
         // label names the card instead.
         let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32);
@@ -613,7 +648,7 @@ impl CardBody for TerminalBody {
             }
             if self.shaped[r].0 != key {
                 let t = std::time::Instant::now();
-                let chunks = shape_row(row, &base, font_size, window);
+                let chunks = shape_row(row, &base, bold_weight, font_size, window);
                 self.shaped[r] = (key, chunks);
                 timing_add(2, t);
             }
@@ -840,6 +875,7 @@ impl CardBody for TerminalBody {
 fn shape_row(
     row: &infiniterm_term::grid::Row,
     base: &gpui::Font,
+    bold_weight: FontWeight,
     font_size: Pixels,
     window: &Window,
 ) -> Vec<(usize, gpui::ShapedLine)> {
@@ -894,12 +930,7 @@ fn shape_row(
                     rgb(run.fg)
                 };
                 last.color == color
-                    && last.font.weight
-                        == if run.bold {
-                            FontWeight::BOLD
-                        } else {
-                            base.weight
-                        }
+                    && last.font.weight == if run.bold { bold_weight } else { base.weight }
                     && last.font.style
                         == if run.italic {
                             FontStyle::Italic
@@ -915,7 +946,7 @@ fn shape_row(
             }
             let mut f = base.clone();
             if run.bold {
-                f.weight = FontWeight::BOLD;
+                f.weight = bold_weight;
             }
             if run.italic {
                 f.style = FontStyle::Italic;
@@ -950,4 +981,19 @@ fn shape_row(
         col = end;
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weights_are_spelled_as_css_spells_them() {
+        assert_eq!(weight_of("normal"), FontWeight::NORMAL);
+        assert_eq!(weight_of("bold"), FontWeight::BOLD);
+        assert_eq!(weight_of("800"), FontWeight(800.));
+        assert_eq!(weight_of(" 600 "), FontWeight(600.));
+        assert_eq!(weight_of("heavy"), FontWeight::NORMAL);
+        assert_eq!(weight_of("1000"), FontWeight::NORMAL);
+    }
 }

@@ -20,8 +20,8 @@ use crate::body::{BodyAction, CardBody};
 use crate::field::{Edit, Field};
 use crate::terminal_body::Metrics;
 use gpui::{
-    fill, font, outline, point, px, size, App, Bounds, ClipboardItem, FontStyle, Hsla, Keystroke,
-    Pixels, SharedString, TextRun, Window,
+    fill, outline, point, px, size, App, Bounds, ClipboardItem, FontStyle, Hsla, Keystroke, Pixels,
+    SharedString, TextRun, Window,
 };
 use infiniterm_core::editor_theme::{EditorColors, SyntaxRule};
 use infiniterm_core::files::{
@@ -231,12 +231,7 @@ impl EditorBody {
                 gutter: "#5a6472".into(),
             },
             rules: vec![],
-            metrics: Metrics {
-                family: metrics.family.clone(),
-                font_px: metrics.font_px,
-                line_height: metrics.line_height,
-                cell_w: metrics.cell_w,
-            },
+            metrics: metrics.clone(),
             blink: true,
             blink_epoch: 0.,
             painted_phase: true,
@@ -966,7 +961,7 @@ impl EditorBody {
         let Some(tree) = &self.tree else { return };
         let line_h = px((self.line_h() * scale) as f32);
         let font_size = px((self.metrics.font_px * scale) as f32);
-        let f = font(self.metrics.family.clone());
+        let f = self.metrics.font();
         let rows = tree.rows();
         let visible = ((f32::from(area.size.height) / f32::from(line_h)).floor() as usize).max(1);
         // The cursor row stays in view.
@@ -1053,7 +1048,7 @@ impl EditorBody {
         let Some(s) = &self.search else { return };
         let line_h = px((self.line_h() * scale) as f32);
         let font_size = px((self.metrics.font_px * SEARCH_LABEL_FONT_SCALE * scale) as f32);
-        let f = font(self.metrics.family.clone());
+        let f = self.metrics.font();
         let fg = hex(&self.colors.foreground);
         let dim = hex(&self.colors.gutter);
         let sel_bg = hex(&self.colors.selection);
@@ -1259,7 +1254,7 @@ impl CardBody for EditorBody {
         let sel_bg = hex(&self.colors.selection);
         let sel_fg = hex(&self.colors.selection_text);
         let cursor_color = hex(&self.colors.cursor);
-        let base = font(self.metrics.family.clone());
+        let base = self.metrics.font();
         let cols = self.cols_visible(world);
         let vrows = self.visual_rows(cols, rows_visible);
         let first = vrows.first().map(|r| r.line).unwrap_or(0);
