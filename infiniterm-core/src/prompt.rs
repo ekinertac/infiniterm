@@ -11,11 +11,14 @@
 //! REPLACES the first: two prompts sharing one input would leave whichever
 //! lost never answered, so `ask` hands the loser back as cancelled.
 //!
-//! `confirm` is the same panel without the field: Enter for yes, Escape for
-//! no. Used only where a key would otherwise destroy something with nothing
-//! to undo it (closing a workspace kills every shell on it). A dirty editor
+//! `confirm` is a question with two buttons, the verb on the second
+//! (`action`): Enter or the button for yes, Escape or Cancel for no. Used
+//! only where a key would otherwise destroy something with nothing to undo
+//! it (closing a workspace kills every shell on it). A dirty editor
 //! deliberately does NOT get one; a dialog on every close is a dialog
-//! nobody reads. The name-prompt element renders this and calls `settle`.
+//! nobody reads. `alert` is a message with one button, for something the
+//! status bar's notice is too small for. The dialog element renders all
+//! three and calls `settle`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Prompt<P> {
     pub open: bool,
@@ -23,6 +26,10 @@ pub struct Prompt<P> {
     pub value: String,
     /// A yes/no question rather than a text field.
     pub confirm: bool,
+    /// A message with one button; settles yes on Enter, no on Escape.
+    pub alert: bool,
+    /// The verb on the confirming button ("Close workspace"), "OK" for an alert.
+    pub action: String,
     pending: Option<P>,
 }
 
@@ -37,6 +44,8 @@ impl<P> Default for Prompt<P> {
             label: String::new(),
             value: String::new(),
             confirm: false,
+            alert: false,
+            action: String::new(),
             pending: None,
         }
     }
@@ -49,20 +58,32 @@ impl<P> Prompt<P> {
         let displaced = self.pending.take().map(|p| (p, None));
         self.open = true;
         self.confirm = false;
+        self.alert = false;
+        self.action = String::new();
         self.label = label.into();
         self.value = initial.into();
         self.pending = Some(pending);
         displaced
     }
 
-    /// Opens a yes/no question; the answer's text is `Some("")` for yes.
-    pub fn confirm(&mut self, label: &str, pending: P) -> Option<Answer<P>> {
+    /// Opens a yes/no question with `action` on the yes button; the
+    /// answer's text is `Some("")` for yes.
+    pub fn confirm(&mut self, label: &str, action: &str, pending: P) -> Option<Answer<P>> {
         let displaced = self.pending.take().map(|p| (p, None));
         self.open = true;
         self.confirm = true;
+        self.alert = false;
+        self.action = action.into();
         self.label = label.into();
         self.value.clear();
         self.pending = Some(pending);
+        displaced
+    }
+
+    /// Opens a message with one button. Settles like a confirm.
+    pub fn alert(&mut self, label: &str, pending: P) -> Option<Answer<P>> {
+        let displaced = self.confirm(label, "OK", pending);
+        self.alert = true;
         displaced
     }
 
@@ -73,7 +94,7 @@ impl<P> Prompt<P> {
         let pending = self.pending.take();
         self.open = false;
         let pending = pending?;
-        if self.confirm {
+        if self.confirm || self.alert {
             return Some((pending, value.map(String::from))); // "" is a yes; only None is a no
         }
         Some((
@@ -152,10 +173,19 @@ mod tests {
     #[test]
     fn confirm_is_yes_on_enter_and_no_on_cancel() {
         let mut p = Prompt::default();
-        p.confirm("close the workspace?", 1);
+        p.confirm("close the workspace?", "Close workspace", 1);
         assert!(p.confirm);
+        assert_eq!(p.action, "Close workspace");
         assert_eq!(p.settle(Some("")), Some((1, Some(String::new()))));
-        p.confirm("again?", 2);
+        p.confirm("again?", "Yes", 2);
         assert_eq!(p.settle(None), Some((2, None)));
+        // An alert is a confirm with one button and the same verdicts.
+        p.alert("the file is gone", 3);
+        assert!(p.alert && p.confirm);
+        assert_eq!(p.action, "OK");
+        assert_eq!(p.settle(Some("")), Some((3, Some(String::new()))));
+        // A text prompt after that carries neither.
+        p.ask("name", "", 4);
+        assert!(!p.confirm && !p.alert);
     }
 }

@@ -9,7 +9,7 @@
 //! and the arrows are safe despite the cmd-only rule. Attention on a tab is
 //! a dot, never a switch: green for `idle` (waiting on you), a dimmer orange
 //! for `working`, never merged.
-use crate::{AppView, STATUSBAR_H, TITLEBAR_H};
+use crate::AppView;
 use gpui::{
     canvas, div, prelude::*, px, Context, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Render, ScrollWheelEvent, Window,
@@ -53,6 +53,13 @@ const PALETTE_WIDTH_PX: f32 = 640.;
 /// search.
 const PROMPT_TOP_PAD_PX: f32 = 120.;
 const PROMPT_WIDTH_PX: f32 = 480.;
+/// The dialog's insides: padding, the gap between its rows, and the buttons.
+const DIALOG_PAD_PX: f32 = 16.;
+const DIALOG_GAP_PX: f32 = 10.;
+const DIALOG_BUTTON_GAP_PX: f32 = 8.;
+const DIALOG_BUTTON_PAD_X_PX: f32 = 12.;
+const DIALOG_BUTTON_PAD_Y_PX: f32 = 6.;
+const DIALOG_KEY_PAD_PX: f32 = 5.;
 /// The shortcuts list scrolls past this height rather than growing the
 /// window to fit every command.
 const SHORTCUTS_LIST_MAX_H_PX: f32 = 720.;
@@ -209,7 +216,7 @@ impl Render for AppView {
         let title_bar = self.render_title_bar(cx);
         let status_bar = self.render_status_bar();
         let palette = self.model.palette_open().then(|| self.render_palette(cx));
-        let prompt = self.model.prompt.is_open().then(|| self.render_prompt());
+        let prompt = self.model.prompt.is_open().then(|| self.render_prompt(cx));
         let shortcuts = self.model.shortcuts_open.then(|| self.render_shortcuts());
 
         div()
@@ -282,6 +289,8 @@ impl Render for AppView {
 
 impl AppView {
     fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
+        let ui = self.model.ui_scale as f32;
         let chrome = &self.chrome;
         let active = self.model.active_workspace.clone();
         let mut tabs = div().flex().items_center().gap_1();
@@ -300,7 +309,7 @@ impl AppView {
                 .px_2()
                 .py_1()
                 .rounded_sm()
-                .text_size(px(TAB_LABEL_FONT_PX))
+                .text_size(px(TAB_LABEL_FONT_PX * ui))
                 .text_color(if is_active {
                     chrome.text_bright
                 } else {
@@ -319,16 +328,23 @@ impl AppView {
             if waiting > 0 {
                 tab = tab.child(
                     div()
-                        .w(px(TAB_DOT_PX))
-                        .h(px(TAB_DOT_PX))
+                        .w(px(TAB_DOT_PX * ui))
+                        .h(px(TAB_DOT_PX * ui))
                         .rounded_full()
                         .bg(gpui::rgb(0x5dcd97)),
                 );
             }
             if working > 0 {
-                tab = tab.child(div().w(px(TAB_DOT_PX)).h(px(TAB_DOT_PX)).rounded_full().bg(
-                    crate::chrome::with_alpha(chrome.agent_working, TAB_WORKING_DOT_ALPHA),
-                ));
+                tab = tab.child(
+                    div()
+                        .w(px(TAB_DOT_PX * ui))
+                        .h(px(TAB_DOT_PX * ui))
+                        .rounded_full()
+                        .bg(crate::chrome::with_alpha(
+                            chrome.agent_working,
+                            TAB_WORKING_DOT_ALPHA,
+                        )),
+                );
             }
             tabs = tabs.child(tab);
         }
@@ -337,7 +353,7 @@ impl AppView {
                 .id("tab-new")
                 .px_2()
                 .py_1()
-                .text_size(px(TAB_LABEL_FONT_PX))
+                .text_size(px(TAB_LABEL_FONT_PX * ui))
                 .text_color(chrome.text_faint)
                 .on_mouse_down(
                     MouseButton::Left,
@@ -349,7 +365,7 @@ impl AppView {
                 .child("+"),
         );
         div()
-            .h(px(TITLEBAR_H))
+            .h(px(self.titlebar_h()))
             .w_full()
             .flex()
             .items_center()
@@ -390,7 +406,7 @@ impl AppView {
             chrome.text_faint
         };
         div()
-            .h(px(STATUSBAR_H))
+            .h(px(self.statusbar_h()))
             .w_full()
             .flex()
             .items_center()
@@ -408,6 +424,8 @@ impl AppView {
     }
 
     fn render_palette(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
+        let ui = self.model.ui_scale as f32;
         let chrome = &self.chrome;
         let Some(source) = self.model.palette.source else {
             return div();
@@ -435,7 +453,7 @@ impl AppView {
                         .px_3()
                         .pt_2()
                         .pb_1()
-                        .text_size(px(PALETTE_SECTION_FONT_PX))
+                        .text_size(px(PALETTE_SECTION_FONT_PX * ui))
                         .text_color(chrome.text_faint)
                         .child(title.clone()),
                 );
@@ -479,7 +497,7 @@ impl AppView {
                             .bg(chrome.control_bg)
                             .border_1()
                             .border_color(chrome.control_border)
-                            .text_size(px(KEY_CAP_FONT_PX))
+                            .text_size(px(KEY_CAP_FONT_PX * ui))
                             .text_color(chrome.text_mid)
                             .child(key.to_string()),
                     );
@@ -506,11 +524,11 @@ impl AppView {
             .size_full()
             .flex()
             .justify_center()
-            .pt(px(OVERLAY_TOP_PAD_PX))
+            .pt(px(OVERLAY_TOP_PAD_PX * ui))
             .bg(chrome.overlay_backdrop)
             .child(
                 div()
-                    .w(px(PALETTE_WIDTH_PX))
+                    .w(px(PALETTE_WIDTH_PX * ui))
                     .h(px(0.))
                     .flex()
                     .flex_col()
@@ -523,7 +541,7 @@ impl AppView {
                             .border_color(chrome.control_border)
                             .rounded_md()
                             .font_family("Menlo")
-                            .text_size(px(OVERLAY_BODY_FONT_PX))
+                            .text_size(px(OVERLAY_BODY_FONT_PX * ui))
                             .text_color(chrome.text)
                             .child(
                                 div()
@@ -547,17 +565,147 @@ impl AppView {
             )
     }
 
-    fn render_prompt(&self) -> impl IntoElement {
-        let chrome = &self.chrome;
+    /// The dialog's verdict from a button: yes or no, then the answer.
+    pub fn prompt_settle(&mut self, yes: bool) {
+        let v = self.model.prompt.value.clone();
+        let settled = self.model.prompt.settle(yes.then_some(v.as_str()));
+        if let Some((pending, text)) = settled {
+            self.model
+                .answer(pending, text, |path| std::path::Path::new(path).exists());
+        }
+        self.perform_effects();
+    }
+
+    /// One dialog, three shapes: a text prompt (label, field, the two keys
+    /// as a caption), a confirm (question, Cancel and the action as
+    /// buttons) and an alert (message, OK). Centred, modal in look, and
+    /// every button has its key beside it because the keyboard is how the
+    /// app is used; the buttons are there so a mouse is not refused.
+    fn render_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
+        let ui = self.model.ui_scale as f32;
+        let chrome = self.chrome.clone();
         let p = &self.model.prompt;
+        let is_confirm = p.confirm && !p.alert;
+        let is_alert = p.alert;
         let selected = self.prompt_field.selected && !p.confirm;
-        let field = if p.confirm {
-            "Enter for yes, Escape for no".to_string()
-        } else if selected {
+        let field = if selected {
             p.value.clone()
         } else {
             format!("{}▏", p.value)
         };
+        let key_cap = |label: &str, chrome: &crate::chrome::Chrome| {
+            div()
+                .px(px(DIALOG_KEY_PAD_PX * ui))
+                .rounded_sm()
+                .bg(chrome.badge_bg)
+                .text_color(chrome.text_faint)
+                .text_size(px(KEY_CAP_FONT_PX * ui))
+                .child(label.to_string())
+        };
+        let button = |label: String, key: &str, primary: bool, chrome: &crate::chrome::Chrome| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(DIALOG_BUTTON_GAP_PX * ui))
+                .px(px(DIALOG_BUTTON_PAD_X_PX * ui))
+                .py(px(DIALOG_BUTTON_PAD_Y_PX * ui))
+                .rounded_md()
+                .border_1()
+                .border_color(if primary {
+                    chrome.sel_bg
+                } else {
+                    chrome.control_border
+                })
+                .bg(if primary {
+                    chrome.sel_bg
+                } else {
+                    chrome.control_bg
+                })
+                .text_color(if primary { chrome.sel_fg } else { chrome.text })
+                .child(label)
+                .child(key_cap(key, chrome))
+        };
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap(px(DIALOG_GAP_PX * ui))
+            .p(px(DIALOG_PAD_PX * ui))
+            .bg(chrome.bar_bg)
+            .border_1()
+            .border_color(chrome.control_border)
+            .rounded_lg()
+            .font_family("Menlo")
+            .text_size(px(OVERLAY_BODY_FONT_PX * ui));
+        if is_confirm || is_alert {
+            // The question, then the buttons: Cancel on the left, the verb on
+            // the right in the selection colour, as macOS lays them out.
+            body = body.child(div().text_color(chrome.text_bright).child(p.label.clone()));
+            let mut row = div()
+                .flex()
+                .justify_end()
+                .gap(px(DIALOG_BUTTON_GAP_PX * ui))
+                .pt(px(DIALOG_GAP_PX * ui));
+            if is_confirm {
+                row = row.child(
+                    button("Cancel".into(), "esc", false, &chrome).on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                            this.prompt_settle(false);
+                            cx.notify();
+                        }),
+                    ),
+                );
+            }
+            row = row.child(
+                button(p.action.clone(), "enter", true, &chrome).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        this.prompt_settle(true);
+                        cx.notify();
+                    }),
+                ),
+            );
+            body = body.child(row);
+        } else {
+            body = body
+                .child(
+                    div()
+                        .text_color(chrome.text_muted)
+                        .text_size(px(CAPTION_FONT_PX * ui))
+                        .child(p.label.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .px_2()
+                        .py_1()
+                        .rounded_sm()
+                        .bg(chrome.control_bg)
+                        .border_1()
+                        .border_color(chrome.control_border)
+                        .text_color(chrome.text_bright)
+                        .child(
+                            div()
+                                .when(selected, |d| d.bg(chrome.sel_bg).text_color(chrome.sel_fg))
+                                .child(field),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(DIALOG_BUTTON_GAP_PX * ui))
+                        .items_center()
+                        .text_color(chrome.text_faint)
+                        .text_size(px(KEY_CAP_FONT_PX * ui))
+                        .child(key_cap("enter", &chrome))
+                        .child("confirm")
+                        .child(key_cap("esc", &chrome))
+                        .child("cancel"),
+                );
+        }
+        // A dim sheet over the canvas says "answer this first"; a click on
+        // it is a cancel, the way a sheet's outside is.
         div()
             .absolute()
             .top_0()
@@ -565,42 +713,24 @@ impl AppView {
             .size_full()
             .flex()
             .justify_center()
-            .pt(px(PROMPT_TOP_PAD_PX))
+            .items_start()
+            .pt(px(PROMPT_TOP_PAD_PX * ui))
+            .bg(chrome.overlay_backdrop)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.prompt_settle(false);
+                    cx.notify();
+                }),
+            )
             .child(
-                div().w(px(PROMPT_WIDTH_PX)).h(px(0.)).child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .p_3()
-                        .bg(chrome.bar_bg)
-                        .border_1()
-                        .border_color(chrome.control_border)
-                        .rounded_md()
-                        .font_family("Menlo")
-                        .text_size(px(OVERLAY_BODY_FONT_PX))
-                        .child(
-                            div()
-                                .text_color(chrome.text_muted)
-                                .text_size(px(CAPTION_FONT_PX))
-                                .child(p.label.clone()),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .px_2()
-                                .py_1()
-                                .bg(chrome.control_bg)
-                                .text_color(chrome.text_bright)
-                                .child(
-                                    div()
-                                        .when(selected, |d| {
-                                            d.bg(chrome.sel_bg).text_color(chrome.sel_fg)
-                                        })
-                                        .child(field),
-                                ),
-                        ),
-                ),
+                div()
+                    .w(px(PROMPT_WIDTH_PX * ui))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()),
+                    )
+                    .child(body),
             )
     }
 
@@ -608,6 +738,8 @@ impl AppView {
     /// of thing, a searchable list of what the app can do. Taller, because
     /// this one is meant to be read as well as searched.
     fn render_shortcuts(&self) -> impl IntoElement {
+        // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
+        let ui = self.model.ui_scale as f32;
         let chrome = &self.chrome;
         let labels = self.command_labels();
         let labels_ref: Vec<(&str, &str)> = labels
@@ -624,7 +756,7 @@ impl AppView {
                 .bg(chrome.control_bg)
                 .border_1()
                 .border_color(chrome.control_border)
-                .text_size(px(KEY_CAP_FONT_PX))
+                .text_size(px(KEY_CAP_FONT_PX * ui))
                 .text_color(chrome.text_mid)
                 .child(key.to_string())
         };
@@ -633,7 +765,7 @@ impl AppView {
             .flex()
             .flex_col()
             .overflow_y_scroll()
-            .max_h(px(SHORTCUTS_LIST_MAX_H_PX))
+            .max_h(px(SHORTCUTS_LIST_MAX_H_PX * ui))
             .pb_2();
         for s in sections {
             list = list.child(
@@ -641,7 +773,7 @@ impl AppView {
                     .px_4()
                     .pt_3()
                     .pb_1()
-                    .text_size(px(CAPTION_FONT_PX))
+                    .text_size(px(CAPTION_FONT_PX * ui))
                     .text_color(chrome.agent_idle)
                     .child(s.title.to_uppercase()),
             );
@@ -659,7 +791,7 @@ impl AppView {
                         .flex()
                         .justify_between()
                         .px_4()
-                        .py(px(SHORTCUTS_ROW_PAD_PX))
+                        .py(px(SHORTCUTS_ROW_PAD_PX * ui))
                         .child(div().text_color(chrome.text).child(sc.label))
                         .child(keys),
                 );
@@ -681,7 +813,7 @@ impl AppView {
                     .px_4()
                     .pt_3()
                     .pb_1()
-                    .text_size(px(CAPTION_FONT_PX))
+                    .text_size(px(CAPTION_FONT_PX * ui))
                     .text_color(chrome.agent_idle)
                     .child("GESTURES"),
             );
@@ -691,7 +823,7 @@ impl AppView {
                         .flex()
                         .justify_between()
                         .px_4()
-                        .py(px(SHORTCUTS_ROW_PAD_PX))
+                        .py(px(SHORTCUTS_ROW_PAD_PX * ui))
                         .child(div().text_color(chrome.text).child(*label))
                         .child(div().text_color(chrome.text_mid).child(*keys)),
                 );
@@ -704,10 +836,10 @@ impl AppView {
             .size_full()
             .flex()
             .justify_center()
-            .pt(px(OVERLAY_TOP_PAD_PX))
+            .pt(px(OVERLAY_TOP_PAD_PX * ui))
             .bg(chrome.overlay_backdrop)
             .child(
-                div().w(px(SHORTCUTS_WIDTH_PX)).h(px(0.)).child(
+                div().w(px(SHORTCUTS_WIDTH_PX * ui)).h(px(0.)).child(
                     div()
                         .flex()
                         .flex_col()
@@ -716,14 +848,14 @@ impl AppView {
                         .border_color(chrome.card_border)
                         .rounded_md()
                         .font_family("Menlo")
-                        .text_size(px(OVERLAY_BODY_FONT_PX))
+                        .text_size(px(OVERLAY_BODY_FONT_PX * ui))
                         .child(
                             div()
                                 .px_4()
                                 .py_3()
                                 .border_b_1()
                                 .border_color(chrome.card_border)
-                                .text_size(px(PANEL_TITLE_FONT_PX))
+                                .text_size(px(PANEL_TITLE_FONT_PX * ui))
                                 .text_color(if query.is_empty() {
                                     chrome.text_faint
                                 } else {

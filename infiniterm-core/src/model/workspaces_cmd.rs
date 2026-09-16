@@ -93,7 +93,8 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             ws.name,
             if count == 1 { "" } else { "s" }
         );
-        m.prompt.confirm(&label, Pending::CloseWorkspace(ws.id));
+        m.prompt
+            .confirm(&label, "Close workspace", Pending::CloseWorkspace(ws.id));
     });
     // Follow the card: sending it somewhere you cannot see reads as losing it.
     for step in [1isize, -1] {

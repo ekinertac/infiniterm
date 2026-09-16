@@ -48,6 +48,18 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 pub const TITLEBAR_H: f32 = 44.;
+
+impl AppView {
+    /// The title bar's height under the interface multiplier. The traffic
+    /// lights stay where macOS put them; the bar grows around them.
+    pub fn titlebar_h(&self) -> f32 {
+        TITLEBAR_H * self.model.ui_scale as f32
+    }
+
+    pub fn statusbar_h(&self) -> f32 {
+        STATUSBAR_H * self.model.ui_scale as f32
+    }
+}
 pub const STATUSBAR_H: f32 = 22.;
 /// Movement below this is a click with a shaky hand, not a drag.
 pub const DRAG_SLOP: f64 = 4.;

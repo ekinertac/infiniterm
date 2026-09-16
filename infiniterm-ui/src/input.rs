@@ -37,7 +37,7 @@ impl AppView {
     fn to_content(&self, position: gpui::Point<gpui::Pixels>) -> Point {
         Point {
             x: f32::from(position.x) as f64,
-            y: f32::from(position.y) as f64 - crate::TITLEBAR_H as f64,
+            y: f32::from(position.y) as f64 - self.titlebar_h() as f64,
         }
     }
 
