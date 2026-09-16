@@ -443,9 +443,10 @@ impl AppView {
                 return;
             }
         }
+        // The physical key from the NSEvent, so the keymap is layout-proof.
         let press = KeyPress {
             key: &k.key,
-            code: None,
+            code: crate::keycode::last_code(),
             cmd: m.platform,
             ctrl: m.control,
             alt: m.alt,

@@ -3159,6 +3159,7 @@ dependencies = [
 name = "infiniterm-ui"
 version = "0.1.0"
 dependencies = [
+ "block",
  "cef",
  "gpui",
  "image",

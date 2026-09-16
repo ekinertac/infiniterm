@@ -21,6 +21,7 @@ mod editor_body;
 mod editors;
 mod field;
 mod input;
+mod keycode;
 mod overlays;
 mod paint;
 mod runtime;
@@ -175,6 +176,7 @@ fn main() {
         std::process::exit(0);
     }
     Application::new().run(move |cx: &mut App| {
+        keycode::install();
         let cef_running = match cef.as_mut() {
             Some(p) => {
                 infiniterm_browser::app_protocol::install();
