@@ -148,6 +148,18 @@ Agent state is deliberately not saved. A restored card starts with no agent and 
 
 One instance at a time: the unix socket `ift` and the hooks talk to is the lock, and a second launch activates the first.
 
+## What it touches
+
+A terminal can reach everything on the machine, so here is everything this one does:
+
+- Your shells, one PTY per card, started as your login shell in the card's directory with `INFINITERM_CARD_ID` in the environment. Nothing is typed into them that you did not type.
+- `~/.config/infiniterm/` for settings and keybindings; `~/Library/Application Support/dev.ekinertac.infiniterm/` for the canvas, drafts, themes, the window frame and the browser profile. Nothing else is written.
+- A unix socket in the system temp directory, which `ift` and the hook binaries connect to.
+- `ps`, `lsof` and `git` run as subprocesses: to label cards with their process and directory, to spot an SSH session, and for the diff and blame cards. `open` hands URLs and files to the system.
+- The network only from browser cards, which are Chromium loading the page you asked for, and the Claude in Chrome extension inside them talking to Claude Code the way it does in Chrome. There is no telemetry, no account, no update check, and the app makes no request of its own.
+
+The source is public so all of that can be checked, and a release is a tagged commit built with the CEF version named in `Cargo.lock`, signed and notarized.
+
 ## The icon
 
 Two cards on the canvas grid, the front one wearing the border colour an agent working in it would paint. `assets/AppIcon.icns` and `assets/icon.png`; the source SVG is in the archived Tauri repo under `docs/icons/`.
