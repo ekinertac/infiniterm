@@ -19,6 +19,10 @@ use crate::saved_layout::CardKind;
 pub struct Labelled<'a> {
     /// A name the user or the shell set. Empty when never set.
     pub title: &'a str,
+    /// The name an AGENT in this card gave its session, through the
+    /// terminal's title escape. Only ever set while an agent is running
+    /// there, so a shell's own title never reaches a label.
+    pub session: Option<&'a str>,
     /// The foreground process, from the process table.
     pub proc: Option<&'a str>,
     pub cwd: &'a str,
@@ -107,6 +111,12 @@ pub fn card_label(card: &Labelled, home: &str) -> String {
         Some(CardKind::Diff) => return "diff".to_string(),
         _ => {}
     }
+    // Above the process, because "claude" on six cards says less than the
+    // six things those sessions are called; below a chosen name, because
+    // renaming a card is a decision and this is not.
+    if let Some(session) = card.session.map(str::trim).filter(|s| !s.is_empty()) {
+        return session.to_string();
+    }
     if let Some(proc) = card.proc.map(str::trim).filter(|p| !p.is_empty()) {
         return proc.to_string();
     }
@@ -137,6 +147,39 @@ mod tests {
             cwd: "/Users/ekinertac/Code/api",
             ..Default::default()
         }
+    }
+
+    // An agent's session name beats the process it is running under, and
+    // loses to a name somebody chose. Claude Code renames the session (and
+    // so the terminal's title) as the work changes, and `/rename` is the
+    // same thing done by hand.
+    #[test]
+    fn an_agents_session_name_outranks_its_process_and_nothing_else() {
+        let session = Labelled {
+            session: Some("porting the omnibox"),
+            proc: Some("claude"),
+            ..card()
+        };
+        assert_eq!(card_label(&session, HOME), "porting the omnibox");
+
+        let renamed = Labelled {
+            title: "the one I named",
+            ..session.clone()
+        };
+        assert_eq!(card_label(&renamed, HOME), "the one I named");
+
+        // Nothing to say is not something to say.
+        let blank = Labelled {
+            session: Some("   "),
+            ..session.clone()
+        };
+        assert_eq!(card_label(&blank, HOME), "claude");
+
+        let no_agent = Labelled {
+            session: None,
+            ..session
+        };
+        assert_eq!(card_label(&no_agent, HOME), "claude");
     }
 
     fn kind<'a>(kind: CardKind, path: Option<&'a str>) -> Labelled<'a> {

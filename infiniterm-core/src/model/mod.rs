@@ -80,6 +80,12 @@ pub struct Card {
     /// The session file of the agent in this card, from its hook events.
     /// Runtime-only; what `card.transcript` opens.
     pub transcript_path: Option<String>,
+    /// The title the program in this card set through the terminal (OSC 0
+    /// or 2). Runtime-only and NEVER `title`: that is a name somebody chose
+    /// and a program must not overwrite it, which is what LAYOUT_VERSION 2
+    /// was about. Used for the label only while an agent is in the card,
+    /// where the title is the session's name and a plain shell's is noise.
+    pub osc_title: Option<String>,
     /// The buffer differs from the file on disk. Runtime-only.
     pub dirty: bool,
     /// Where an editor puts the caret when it opens. Runtime-only, consumed once.
@@ -564,6 +570,7 @@ impl Model {
             zoom: opts.zoom,
             command: opts.command,
             transcript_path: None,
+            osc_title: None,
             dirty: false,
             line: opts.line,
             language: None,

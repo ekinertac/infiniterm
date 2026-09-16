@@ -27,6 +27,16 @@ impl Model {
         card_label(
             &Labelled {
                 title: &card.title,
+                // Only an agent's title is trusted: a card running Claude
+                // Code or Pi has a transcript, and that title IS the
+                // session's name. A plain shell's title is its own idea of
+                // the directory or the last command, which is what the
+                // label already says better.
+                session: card
+                    .transcript_path
+                    .is_some()
+                    .then_some(card.osc_title.as_deref())
+                    .flatten(),
                 proc: card.proc.as_deref(),
                 cwd: &card.cwd,
                 path: card.path.as_deref(),

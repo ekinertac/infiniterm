@@ -157,6 +157,17 @@ impl AppView {
                 }
             }
             body.cwd = card.cwd.clone();
+            // The title the program set through the terminal. Kept apart
+            // from `card.title`, which is a name somebody chose; the label
+            // uses this only while an agent is in the card.
+            let osc = body.title.clone();
+            if card.osc_title != osc {
+                if let Some(c) = self.model.card_mut(&card.id) {
+                    c.osc_title = osc;
+                }
+                // The label was drawn before this ran.
+                self.redraw = true;
+            }
         }
     }
 
