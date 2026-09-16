@@ -101,6 +101,7 @@ impl AppView {
                     .then(|| c[query.trim().len()..].to_string())
             })
             .unwrap_or_default();
+        let placeholder = query.is_empty() && self.model.omni.scope.is_none();
         let mut field = div().flex().items_center().gap_1();
         if let Some(keyword) = &self.model.omni.scope {
             let name =
@@ -116,21 +117,37 @@ impl AppView {
                     .child(format!("search {name}")),
             );
         }
-        field = field
-            .child(
-                div()
-                    .text_color(if query.is_empty() {
-                        chrome.text_faint
-                    } else {
-                        chrome.text_bright
-                    })
-                    .child(if query.is_empty() && self.model.omni.scope.is_none() {
-                        "search or enter address".to_string()
-                    } else {
-                        format!("{query}▏")
-                    }),
-            )
-            .child(div().text_color(chrome.text_faint).child(tail));
+        // The caret goes AFTER the completion, and the completion is drawn
+        // as a selection, which is what a browser does: the tail is text you
+        // are about to accept, not text sitting past the cursor. Putting the
+        // caret between the two read as "exam| ple.com".
+        field = field.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_0()
+                .text_color(if query.is_empty() {
+                    chrome.text_faint
+                } else {
+                    chrome.text_bright
+                })
+                .child(if placeholder {
+                    "search or enter address".to_string()
+                } else {
+                    query.clone()
+                })
+                .when(!tail.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .bg(chrome.sel_bg)
+                            .text_color(chrome.sel_fg)
+                            .child(tail.clone()),
+                    )
+                })
+                // No caret against the placeholder: the box is empty, and a
+                // caret there suggests those words are text you typed.
+                .when(!placeholder, |d| d.child("▏")),
+        );
 
         let mut list = div().flex().flex_col();
         let mut row_index = 0usize;
