@@ -12,6 +12,15 @@ pub const RING_ALPHA_NEAR: f64 = 0.45;
 pub const RING_ALPHA_MID: f64 = 0.75;
 pub const RING_ALPHA_FAR: f64 = 1.;
 pub const CARD_BORDER_SCREEN_PX: f64 = 2.;
+/// A card with an agent in it wears a heavier border than a resting one.
+/// Hue cannot carry a signal through two screen pixels: at a glance across
+/// a canvas it is the AREA of colour that is read, not the colour.
+pub const STATE_BORDER_NEAR: f64 = 4.;
+pub const STATE_BORDER_MID: f64 = 6.;
+/// Zoomed out the card is a rectangle and the border is the only thing left
+/// that says anything, so it takes the largest share it can without eating
+/// the card. The steps are the focus ring's, for the same reason.
+pub const STATE_BORDER_FAR: f64 = 9.;
 pub fn clamp_ui_scale(value: f64) -> f64 {
     if !value.is_finite() {
         return 1.;
@@ -42,6 +51,19 @@ pub fn focus_ring_alpha(scale: f64) -> f64 {
 pub fn focus_ring_world_px(scale: f64) -> f64 {
     focus_ring_screen_px(scale) / scale
 }
+/// The border a card with agent state wears, in SCREEN pixels. Stepped with
+/// the zoom like the focus ring: the further out you are, the more of the
+/// card has to be border for the state to register at all.
+pub fn state_border_screen_px(scale: f64) -> f64 {
+    if scale >= 0.6 {
+        STATE_BORDER_NEAR
+    } else if scale >= 0.25 {
+        STATE_BORDER_MID
+    } else {
+        STATE_BORDER_FAR
+    }
+}
+
 pub fn card_border_world_px(scale: f64) -> f64 {
     CARD_BORDER_SCREEN_PX / scale
 }
@@ -155,5 +177,22 @@ mod tests {
     fn invalid_scale_falls_back() {
         assert_eq!(clamp_ui_scale(f64::NAN), 1.);
         assert_eq!(clamp_ui_scale(f64::INFINITY), 1.);
+    }
+
+    // A state border is always heavier than a resting one, and heavier the
+    // further out you are: the card shrinks, the signal must not.
+    #[test]
+    fn a_state_border_thickens_as_the_canvas_shrinks() {
+        assert_eq!(state_border_screen_px(1.), STATE_BORDER_NEAR);
+        assert_eq!(state_border_screen_px(0.6), STATE_BORDER_NEAR);
+        assert_eq!(state_border_screen_px(0.4), STATE_BORDER_MID);
+        assert_eq!(state_border_screen_px(0.25), STATE_BORDER_MID);
+        assert_eq!(state_border_screen_px(0.1), STATE_BORDER_FAR);
+        for scale in [2., 1., 0.6, 0.4, 0.25, 0.1, 0.05] {
+            assert!(
+                state_border_screen_px(scale) > CARD_BORDER_SCREEN_PX,
+                "a state border must outweigh a resting one at {scale}"
+            );
+        }
     }
 }

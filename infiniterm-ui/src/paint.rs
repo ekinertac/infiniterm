@@ -14,7 +14,7 @@ use infiniterm_core::agent_state::AgentState;
 use infiniterm_core::card_label::split_label;
 use infiniterm_core::chrome::{
     card_border_world_px, focus_ring_alpha, focus_ring_screen_px, inverse_scale,
-    CARD_BORDER_SCREEN_PX,
+    state_border_screen_px, CARD_BORDER_SCREEN_PX,
 };
 use infiniterm_core::grid::{grid_line_offsets, is_grid_visible, Rect, Size};
 use infiniterm_core::groups::aggregate_state;
@@ -261,7 +261,12 @@ impl AppView {
                 AgentState::None => chrome.group_border,
             };
             let b = at(rect);
-            window.paint_quad(outline(b, color, BorderStyle::Solid).border_widths(border_w));
+            let frame_w = if state == AgentState::None {
+                border_w
+            } else {
+                px(state_border_screen_px(vp.scale) as f32)
+            };
+            window.paint_quad(outline(b, color, BorderStyle::Solid).border_widths(frame_w));
             // The name tab above the frame's top-left corner.
             let label_px = px(self.model.config.ui.group_label_size as f32 * inv * vp.scale as f32);
             let line = crate::text::shape(
@@ -358,7 +363,15 @@ impl AppView {
                 AgentState::Done => chrome.agent_done,
                 AgentState::None => chrome.card_border,
             };
-            window.paint_quad(outline(b, state_color, BorderStyle::Solid).border_widths(border_w));
+            // A resting card keeps the hairline; one with an agent in it gets
+            // the heavier, zoom-stepped border, because at a distance the
+            // area of colour is what is read rather than the colour.
+            let state_w = if card.agent == AgentState::None {
+                border_w
+            } else {
+                px(state_border_screen_px(vp.scale) as f32)
+            };
+            window.paint_quad(outline(b, state_color, BorderStyle::Solid).border_widths(state_w));
             // The ring sits OUTSIDE the border so the border stays free for agent state.
             if focused || selected {
                 let ring = px(focus_ring_screen_px(vp.scale) as f32);
@@ -502,12 +515,30 @@ impl AppView {
         let border = px(CARD_BORDER_SCREEN_PX as f32);
         let label = self.model.label_of(card);
         let identity = label_color(&card.id, chrome.theme.as_ref()).and_then(crate::chrome::hex);
+        // While an agent is in the card the chip carries its STATE rather
+        // than the card's identity colour. The chip is the largest piece of
+        // colour on a card, and it was spending it on a hash of the card id
+        // while the thing you actually scan for lived in the border: a
+        // card whose identity colour happened to be yellow read as waiting.
+        // The identity colour comes back when the session ends.
+        let state_chip = match card.agent {
+            AgentState::Working => Some(chrome.agent_working),
+            AgentState::Waiting => Some(chrome.agent_waiting),
+            AgentState::Done => Some(chrome.agent_done),
+            AgentState::None => None,
+        };
         let (label_bg, label_fg) = match (identity, label_color(&card.id, chrome.theme.as_ref())) {
             (Some(bg), Some(hex_)) => (
                 bg,
                 crate::chrome::hex(readable_on(hex_)).unwrap_or(chrome.text_bright),
             ),
             _ => (chrome.control_bg, chrome.card_label_fg),
+        };
+        // All three state colours are light; the card's own ground is the
+        // ink that reads on every one of them.
+        let (label_bg, label_fg) = match state_chip {
+            Some(bg) => (bg, chrome.card_bg),
+            None => (label_bg, label_fg),
         };
         let h = label_px * LABEL_BADGE_HEIGHT_RATIO;
         let mut right = b.origin.x + b.size.width - border;
