@@ -106,6 +106,7 @@ impl AppView {
         self.model.tick(now);
         self.note_window(window.window_bounds(), now);
         self.drain_backend();
+        self.drain_find();
         if let Some(text) = self.clipboard_out.take() {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
         }

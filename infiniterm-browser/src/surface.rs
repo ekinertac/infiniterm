@@ -47,6 +47,10 @@ pub struct Shared {
     pub width: i32,
     pub height: i32,
     pub scale: f32,
+    /// The last find's result: how many matches and which one is current.
+    /// Chromium reports this several times per search as it walks the page,
+    /// so the bar shows whatever arrived last.
+    pub find: (i32, i32),
 }
 
 #[derive(Clone)]
@@ -168,12 +172,33 @@ wrap_load_handler! {
     }
 }
 
+wrap_find_handler! {
+    struct FindBuilder {
+        handler: Handler,
+    }
+
+    impl FindHandler {
+        fn on_find_result(
+            &self,
+            _browser: Option<&mut Browser>,
+            _identifier: ::std::os::raw::c_int,
+            count: ::std::os::raw::c_int,
+            _selection_rect: Option<&cef::Rect>,
+            active_match_ordinal: ::std::os::raw::c_int,
+            _final_update: ::std::os::raw::c_int,
+        ) {
+            self.handler.shared.borrow_mut().find = (count, active_match_ordinal);
+        }
+    }
+}
+
 wrap_client! {
     struct ClientBuilder {
         render_handler: RenderHandler,
         life_span_handler: LifeSpanHandler,
         display_handler: DisplayHandler,
         load_handler: LoadHandler,
+        find_handler: FindHandler,
     }
 
     impl Client {
@@ -188,6 +213,9 @@ wrap_client! {
         }
         fn load_handler(&self) -> Option<LoadHandler> {
             Some(self.load_handler.clone())
+        }
+        fn find_handler(&self) -> Option<FindHandler> {
+            Some(self.find_handler.clone())
         }
     }
 }
@@ -222,7 +250,8 @@ impl Surface {
             RenderHandlerBuilder::new(handler.clone()),
             LifeSpanBuilder::new(handler.clone()),
             DisplayBuilder::new(handler.clone()),
-            LoadBuilder::new(handler),
+            LoadBuilder::new(handler.clone()),
+            FindBuilder::new(handler),
         );
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
@@ -261,6 +290,31 @@ impl Surface {
 
     pub fn reload(&self) {
         self.browser.reload();
+    }
+
+    /// Find in page. `next` false starts a new search (Chromium highlights
+    /// everything and selects the first hit); true steps to the next or
+    /// previous hit of the search already running.
+    pub fn find(&self, text: &str, forward: bool, next: bool) {
+        if let Some(host) = self.host() {
+            host.find(Some(&text.into()), forward as i32, 0, next as i32);
+        }
+    }
+
+    /// Ends the search and drops every highlight. Always called when the
+    /// bar closes: highlights that outlive the bar are litter nobody can
+    /// clear.
+    pub fn stop_find(&self) {
+        if let Some(host) = self.host() {
+            host.stop_finding(1);
+        }
+        self.shared.borrow_mut().find = (0, 0);
+    }
+
+    /// (matches, which one is current). Zero matches means no hits, which
+    /// is the only way the bar can say so.
+    pub fn find_result(&self) -> (i32, i32) {
+        self.shared.borrow().find
     }
 
     /// The layout size or the device scale changed: tell CEF, which asks

@@ -8,7 +8,7 @@ use crate::browser_body::BrowserBody;
 use crate::{now_ms, AppView};
 use infiniterm_core::grid::Size;
 use infiniterm_core::ift::url_plan;
-use infiniterm_core::model::BrowserAction;
+use infiniterm_core::model::{BrowserAction, FindRequest};
 use infiniterm_core::saved_layout::CardKind;
 
 impl AppView {
@@ -103,6 +103,40 @@ impl AppView {
             BrowserAction::Back => surface.back(),
             BrowserAction::Forward => surface.forward(),
             BrowserAction::Reload => surface.reload(),
+        }
+    }
+
+    /// Find in page. A None request ends the search and clears the
+    /// highlights, which is what closing the bar must always do.
+    pub fn find_effect(&mut self, card_id: &str, request: Option<FindRequest>) {
+        let Some(body) = self
+            .bodies
+            .get_mut(card_id)
+            .and_then(|b| b.as_any_mut().downcast_mut::<BrowserBody>())
+        else {
+            return;
+        };
+        let Some(surface) = &body.surface else { return };
+        match request {
+            Some(r) => surface.find(&r.text, r.forward, r.next),
+            None => surface.stop_find(),
+        }
+    }
+
+    /// Chromium reports a find's progress several times per search; the
+    /// model takes whatever arrived by this frame.
+    pub fn drain_find(&mut self) {
+        let Some(card_id) = self.model.find.card_id.clone() else {
+            return;
+        };
+        let result = self
+            .bodies
+            .get_mut(&card_id)
+            .and_then(|b| b.as_any_mut().downcast_mut::<BrowserBody>())
+            .and_then(|b| b.surface.as_ref())
+            .map(|s| s.find_result());
+        if let Some((matches, active)) = result {
+            self.model.find_result(&card_id, matches, active);
         }
     }
 }

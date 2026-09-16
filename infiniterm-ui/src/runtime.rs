@@ -44,6 +44,7 @@ impl AppView {
             query_field: Default::default(),
             shortcuts_field: Default::default(),
             omni_field: crate::field::Field::default(),
+            find_field: crate::field::Field::default(),
             clipboard_out: None,
             prompt_was_open: false,
             suggestions: std::sync::mpsc::channel(),
@@ -221,6 +222,7 @@ impl AppView {
                 Effect::RefreshThemes => self.refresh_themes(),
                 Effect::Editor { card_id, action } => self.editor_effect(&card_id, action),
                 Effect::Browser { card_id, action } => self.browser_effect(&card_id, action),
+                Effect::Find { card_id, request } => self.find_effect(&card_id, request),
                 // Held rather than written: perform_effects has no App to
                 // write through, and threading one into sixteen call sites
                 // for a clipboard is the wrong trade. The frame flushes it,

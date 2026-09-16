@@ -253,6 +253,7 @@ impl Render for AppView {
         let prompt = self.model.prompt.is_open().then(|| self.render_prompt(cx));
         let shortcuts = self.model.shortcuts_open.then(|| self.render_shortcuts());
         let omnibox = self.model.omni.open.then(|| self.render_omnibox(cx));
+        let find_bar = self.model.find.open.then(|| self.render_find_bar(cx));
 
         div()
             .size_full()
@@ -317,7 +318,8 @@ impl Render for AppView {
                     .children(palette)
                     .children(prompt)
                     .children(shortcuts)
-                    .children(omnibox),
+                    .children(omnibox)
+                    .children(find_bar),
             )
             .child(status_bar)
     }

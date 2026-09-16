@@ -293,3 +293,110 @@ impl AppView {
             )
     }
 }
+
+/// The find bar's width. Narrower than the omnibox: it holds a short query
+/// and a count, not a list.
+pub const FIND_BAR_WIDTH_PX: f32 = 320.;
+/// Clear of the title bar, on the right, where every browser puts it.
+pub const FIND_BAR_TOP_PX: f32 = 12.;
+pub const FIND_BAR_RIGHT_PX: f32 = 16.;
+
+impl AppView {
+    /// The find bar's keys. Enter steps forward, Shift+Enter back, Escape
+    /// closes and clears the highlights. Everything else is the field.
+    pub fn find_key(&mut self, k: &Keystroke, cx: &mut gpui::App) {
+        match k.key.as_str() {
+            "escape" => {
+                self.model.close_find();
+                self.find_field = crate::field::Field::default();
+            }
+            "enter" => self.model.find_step(!k.modifiers.shift),
+            _ => {
+                let paste = (k.modifiers.platform && k.key == "v")
+                    .then(|| cx.read_from_clipboard().and_then(|c| c.text()))
+                    .flatten();
+                if let crate::field::Edit::Changed = self.find_field.key(k, paste.as_deref()) {
+                    let text = self.find_field.text.clone();
+                    self.model.find_type(&text);
+                }
+            }
+        }
+        self.perform_effects();
+    }
+
+    /// No backdrop and no dimming: the whole point is reading the page while
+    /// this is open, which is also why it does not join `overlay_open`.
+    pub fn render_find_bar(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let ui = self.model.ui_scale as f32;
+        let chrome = &self.chrome;
+        if !self.model.find.open {
+            return div();
+        }
+        let query = self.model.find.query.clone();
+        let (matches, active) = (self.model.find.matches, self.model.find.active);
+        // Nothing to say before a query; "0/0" against an empty box reads
+        // as a failure rather than as a prompt.
+        let count = if query.is_empty() {
+            String::new()
+        } else if matches == 0 {
+            "no matches".to_string()
+        } else {
+            format!("{active}/{matches}")
+        };
+        div()
+            .absolute()
+            .top(px(FIND_BAR_TOP_PX * ui))
+            .right(px(FIND_BAR_RIGHT_PX * ui))
+            .w(px(FIND_BAR_WIDTH_PX * ui))
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_1()
+            .bg(chrome.bar_bg)
+            .border_1()
+            .border_color(chrome.control_border)
+            .rounded_md()
+            .font_family("Menlo")
+            .text_size(px(OVERLAY_BODY_FONT_PX * ui))
+            .child(
+                div()
+                    .flex_1()
+                    .text_color(if query.is_empty() {
+                        chrome.text_faint
+                    } else {
+                        chrome.text_bright
+                    })
+                    .child(if query.is_empty() {
+                        "find in page".to_string()
+                    } else {
+                        format!("{query}▏")
+                    }),
+            )
+            .child(
+                div()
+                    .text_size(px(PALETTE_SECTION_FONT_PX * ui))
+                    .text_color(if matches == 0 && !query.is_empty() {
+                        chrome.agent_idle
+                    } else {
+                        chrome.text_muted
+                    })
+                    .child(count),
+            )
+            .child(
+                div()
+                    .id("find-close")
+                    .text_color(chrome.text_faint)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                            this.model.close_find();
+                            this.find_field = crate::field::Field::default();
+                            this.perform_effects();
+                            cx.notify();
+                        }),
+                    )
+                    .child("✕"),
+            )
+    }
+}

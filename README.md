@@ -72,6 +72,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | `Cmd + L` | the address bar: type an address or a search, or pick a page you have been to or a card already open. On a browser card it opens holding that card's address; `Tab` scopes the search to a site (GitHub, MDN, crates.io and six more) |
 | `Cmd + [` / `Cmd + ]` | in a browser card: back and forward (elsewhere: previous / next group) |
 | `Cmd + R` | in a browser card: reload the page |
+| `Cmd + F` | in a browser card: find in page, with a match count; `Enter` and `Shift + Enter` step |
 | `Cmd + Ctrl + T` | reopen the last card you closed, where it was |
 | `Cmd + Esc` | leave a browser card's page |
 | `Cmd + Alt + T` | new card outside any group |

@@ -22,6 +22,7 @@ pub mod canvas_cmd;
 pub mod cards_cmd;
 pub mod context;
 pub mod dev_cmd;
+pub mod find_cmd;
 pub mod focus_cmd;
 pub mod groups_cmd;
 pub mod hooks_in;
@@ -203,6 +204,12 @@ pub enum Effect {
         card_id: String,
         action: BrowserAction,
     },
+    /// Find in page. A None request ends the search and clears every
+    /// highlight, which must happen whenever the bar closes.
+    Find {
+        card_id: String,
+        request: Option<FindRequest>,
+    },
     Log(String),
     Warn(String),
     Reload,
@@ -231,6 +238,15 @@ pub enum BrowserAction {
     Back,
     Forward,
     Reload,
+}
+
+/// Find in page. `next` false is a new search, true steps through the one
+/// already running; `forward` is the direction of that step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FindRequest {
+    pub text: String,
+    pub forward: bool,
+    pub next: bool,
 }
 
 /// What a prompt's answer is for. Handed back with the answer by `settle`.
@@ -284,6 +300,7 @@ pub struct Model {
     pub prompt: crate::prompt::Prompt<Pending>,
     pub shortcuts_open: bool,
     pub omni: omni_cmd::OmniState,
+    pub find: find_cmd::FindState,
     /// Where browser cards have been. Loaded once at startup and written
     /// back debounced; the model only records into it.
     pub history: crate::omni::history::History,
@@ -356,6 +373,7 @@ impl Model {
             prompt: crate::prompt::Prompt::default(),
             shortcuts_open: false,
             omni: omni_cmd::OmniState::default(),
+            find: find_cmd::FindState::default(),
             history: crate::omni::history::History::default(),
             notice: None,
             notice_until: 0.,
@@ -596,6 +614,12 @@ impl Model {
     }
 
     fn land_focus(&mut self, id: Option<&str>) {
+        // A find bar belongs to the card it was opened on, the way a
+        // browser's belongs to its tab: looking at something else closes it
+        // and clears the highlights behind it.
+        if self.find.open && self.find.card_id.as_deref() != id {
+            self.close_find();
+        }
         self.selection.focused_id = id.map(String::from);
         if let Some(id) = id {
             self.selection.phantom = None;

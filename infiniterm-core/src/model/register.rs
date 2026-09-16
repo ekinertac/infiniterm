@@ -647,6 +647,70 @@ mod tests {
         assert!(h.m.overlay_open(), "a prompt is an overlay too");
     }
 
+    // Find in page: the bar belongs to one card, typing searches, Enter
+    // steps, and closing always clears the highlights behind it.
+    #[test]
+    fn the_find_bar_belongs_to_the_card_it_was_opened_on() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        h.run("browser.find");
+        assert_eq!(h.m.notice.as_deref(), Some("not a browser card"));
+        assert!(!h.m.find.open);
+
+        h.m.cards[0].kind = CardKind::Browser;
+        h.run("browser.find");
+        assert!(h.m.find.open);
+        assert_eq!(h.m.find.card_id.as_deref(), Some(id.as_str()));
+
+        h.m.find_type("rope");
+        let effects = h.m.take_effects();
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::Find { request: Some(r), .. }
+            if r.text == "rope" && !r.next)));
+
+        h.m.find_step(false);
+        assert!(h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::Find { request: Some(r), .. }
+            if r.next && !r.forward)));
+
+        // Chromium's count reaches the bar only for the card it is on.
+        h.m.find_result(&id, 12, 3);
+        assert_eq!((h.m.find.matches, h.m.find.active), (12, 3));
+        h.m.find_result("someone-else", 1, 1);
+        assert_eq!((h.m.find.matches, h.m.find.active), (12, 3));
+
+        // Closing clears: a highlight that outlives the bar cannot be got
+        // rid of.
+        h.m.close_find();
+        assert!(!h.m.find.open);
+        assert!(h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::Find { request: None, .. })));
+    }
+
+    #[test]
+    fn looking_at_another_card_closes_the_find_bar() {
+        let mut h = Harness::new();
+        h.m.cards[0].kind = CardKind::Browser;
+        let first = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&first));
+        h.run("browser.find");
+        h.m.find_type("rope");
+        h.m.take_effects();
+        let effects = h.run("card.new.terminal");
+        assert!(!h.m.find.open, "the bar went with the card");
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::Find { request: None, .. })));
+    }
+
     // Closing has to be undoable or nobody closes anything, which is how a
     // canvas ends up as bad as a tab bar.
     #[test]

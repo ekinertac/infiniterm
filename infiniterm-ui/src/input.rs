@@ -504,6 +504,10 @@ impl AppView {
             self.omni_key(k, cx);
             return false;
         }
+        if self.model.find.open {
+            self.find_key(k, cx);
+            return false;
+        }
         if self.model.prompt.is_open() {
             self.prompt_key(k, cx);
             return false;

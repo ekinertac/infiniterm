@@ -752,6 +752,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.reveal_focused();
         m.dirty_layout = true;
     });
+    r.register("browser.find", "Browser: find in page", Model::open_find);
     r.register("browser.reload", "Browser: reload the page", |m| {
         m.browser_history(BrowserAction::Reload)
     });

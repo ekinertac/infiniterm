@@ -124,6 +124,8 @@ pub struct AppView {
     /// The omnibox's text, opened selected so typing replaces a prefilled
     /// address the way it does in a browser.
     pub omni_field: field::Field,
+    /// The find bar's text.
+    pub find_field: field::Field,
     pub prompt_was_open: bool,
     /// Text an effect asked to put on the clipboard, written on the next
     /// frame: only a frame has an App to write through.
