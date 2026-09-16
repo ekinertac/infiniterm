@@ -182,15 +182,9 @@ seed_window() {
         "$CAST_W" "$CAST_H" >"$CAST_DIR/data/window.json"
 }
 
-serve() {
-    pkill -f "http.server $PORT" 2>/dev/null || true
-    (cd "$APP_DIR" && python3 -m http.server "$PORT" >/dev/null 2>&1 &)
-}
-
 # The canvas the take opens on: seven cards with real scrollback in them, the
 # way a canvas looks an hour into a day. The take adds the rest on camera.
 seed_canvas() {
-    rm -f "$CAST_DIR/data/workspace.json"
     FRESH=1 drive_start
     # 1: the hero card, the one act 1 sits inside.
     slow "cd $APP_DIR && git log --oneline"
@@ -219,7 +213,7 @@ seed_canvas() {
     # 6: the page itself.
     palette "browser open a url"
     hold 1
-    slow "localhost:$PORT"
+    slow "http://localhost:$PORT"
     enter
     hold 3
     # 7: somewhere else entirely, so the canvas is not one project deep.
@@ -228,9 +222,26 @@ seed_canvas() {
     slow "cd $APP_DIR && git log --stat -1"
     enter
     hold 1
+    # Every card here is in one directory, so the derived labels are seven
+    # copies of the same path. Names make the canvas readable zoomed out and
+    # give the take somewhere to navigate TO.
+    i=1
+    for n in converter server shell app.js diff page log; do
+        id=$("$IFT" ls | sed -n "${i}p" | cut -f1)
+        INFINITERM_CARD_ID=$id "$IFT" name "$n" >/dev/null
+        i=$((i + 1))
+    done
+    hold 1
     cmd 2
     hold 1
     shot seed-canvas 1
+    # The take opens on the hero card: from the last card made, left along the
+    # bottom row and up into the corner.
+    cmd_alt $LEFT
+    cmd_alt $LEFT
+    cmd_alt $LEFT
+    cmd_alt $UP
+    hold 1
     quit
     drive_stop
 }
@@ -238,6 +249,18 @@ seed_canvas() {
 # --- the take -------------------------------------------------------------
 take() {
     drive_start
+    # ACT 0 — the dev server, in the card seeded for it. A restored card is a
+    # fresh shell in its directory, so the command has to be typed again; it
+    # doubles as the thing any dev does first.
+    mark "act 0: the server"
+    cmd_alt $RIGHT
+    hold 1
+    slow "python3 -m http.server $PORT"
+    enter
+    hold 1.5
+    cmd_alt $LEFT
+    hold 1
+
     # ACT 1 — one card. At actual size the card is wider than the window, so
     # nothing else is on screen and this reads as an ordinary terminal.
     mark "act 1: one card"
@@ -439,7 +462,6 @@ seed)
     seed_repo
     seed_hooks
     seed_window
-    serve
     seed_canvas
     echo "seeded $CAST_DIR; run tools/drive/cast.sh for the take"
     ;;
@@ -448,7 +470,6 @@ take)
         echo "no seeded canvas: run tools/drive/cast.sh seed first" >&2
         exit 1
     }
-    serve
     take
     ;;
 *)

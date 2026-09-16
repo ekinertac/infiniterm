@@ -78,11 +78,11 @@ drive-panel: bundle
 # hooks point at target/debug, and the take reads card state back with ift.
 cast-seed: bundle
 	cargo build -p infiniterm-cli -p infiniterm-hook
-	tools/drive/cast.sh seed
+	caffeinate -disu -t 2400 tools/drive/cast.sh seed
 
 cast: bundle
 	cargo build -p infiniterm-cli -p infiniterm-hook
-	tools/drive/cast.sh take
+	caffeinate -disu -t 2400 tools/drive/cast.sh take
 
 shot:
 	tools/shot.sh infiniterm /tmp/infiniterm-shot.png

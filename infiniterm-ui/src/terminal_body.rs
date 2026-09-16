@@ -8,7 +8,7 @@
 //! the term-zoom spike's shape); keys the app did not claim are encoded
 //! here (`infiniterm-term::keys`); the mouse goes to the program when it
 //! asked for it and scrolls the scrollback otherwise. URLs and confirmed
-//! paths in the output are underlined and open with Cmd+click, the same
+//! paths in the output underline under a Cmd+hover and open with Cmd+click, the same
 //! path as `ift <path>`. A plain click only focuses the card.
 //!
 //! Size follows the card's rect in world units at scale 1: the grid is
@@ -74,8 +74,6 @@ const ERROR_BLOCK_GAP_RATIO: f64 = 0.5;
 /// The beam and underline cursors' stroke: thicker than a hairline so they
 /// still read as a cursor rather than a line in the grid.
 const TERM_CURSOR_STROKE_PX: f32 = 2.;
-/// An unhovered link underline is a hint, not a highlight.
-const LINK_ALPHA: f32 = 0.5;
 /// A link's underline sits just clear of the glyphs' descenders.
 const LINK_UNDERLINE_OFFSET_PX: f32 = 1.5;
 /// Dim text (SGR faint) is drawn at this alpha rather than a different
@@ -600,27 +598,25 @@ impl CardBody for TerminalBody {
                 }
                 x += w;
             }
-            // Link underlines, for the ones the filesystem confirmed.
+            // The underline is the Cmd+hover affordance and nothing else.
+            // Underlining every confirmed link marked up most of the output
+            // of anything that prints paths, which is most things.
             if let Some(links) = self.links.get(r) {
                 for (f, _) in links {
                     let start = row.text[..f.start.min(row.text.len())].chars().count();
                     let len = row.text[f.start.min(row.text.len())..f.end.min(row.text.len())]
                         .chars()
                         .count();
-                    let hovered =
-                        hover.is_some_and(|(hc, hr)| hr == r && hc >= start && hc < start + len);
+                    if !under_hover(hover, r, start, len) {
+                        continue;
+                    }
                     let ux = origin.x + cell_w * start as f32;
-                    let color = if hovered {
-                        rgb(self.palette.selection)
-                    } else {
-                        crate::chrome::with_alpha(rgb(self.palette.foreground), LINK_ALPHA)
-                    };
                     window.paint_quad(fill(
                         Bounds::new(
                             point(ux, y + line_h - px(LINK_UNDERLINE_OFFSET_PX)),
                             size(cell_w * len as f32, px(crate::chrome::HAIRLINE_PX as f32)),
                         ),
-                        color,
+                        rgb(self.palette.selection),
                     ));
                 }
             }
@@ -800,7 +796,13 @@ impl CardBody for TerminalBody {
 
     fn mouse_move(&mut self, local: Point, modifiers: &gpui::Modifiers) {
         let (col, row) = self.cell_at(local);
+        // Nothing else changes when the pointer moves, so the underline
+        // appearing or going away is the only reason for the next frame.
+        let was = self.hover;
         self.hover = modifiers.platform.then_some((col, row));
+        if self.hover != was {
+            self.dirty = true;
+        }
         if self.selecting {
             self.grid.update_selection(col, row, self.right_half(local));
             self.dirty = true;
@@ -983,9 +985,32 @@ fn shape_row(
     out
 }
 
+/// Whether a link occupying `len` cells from `start` on row `r` is the one
+/// under the pointer. `hover` is `None` unless Cmd is held, which is what
+/// makes the underline a Cmd+hover affordance rather than permanent markup.
+///
+/// A stationary pointer whose Cmd is released keeps its underline until the
+/// next move: nothing reports a bare modifier release to a body.
+fn under_hover(hover: Option<(usize, usize)>, r: usize, start: usize, len: usize) -> bool {
+    hover.is_some_and(|(hc, hr)| hr == r && hc >= start && hc < start + len)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The underline is drawn only under the pointer, and only while Cmd is
+    // held: `hover` is None otherwise.
+    #[test]
+    fn a_link_underlines_only_under_a_cmd_hover() {
+        assert!(!under_hover(None, 3, 5, 4));
+        assert!(under_hover(Some((5, 3)), 3, 5, 4));
+        assert!(under_hover(Some((8, 3)), 3, 5, 4));
+        // The cell past the end, the row above, the cell before.
+        assert!(!under_hover(Some((9, 3)), 3, 5, 4));
+        assert!(!under_hover(Some((5, 2)), 3, 5, 4));
+        assert!(!under_hover(Some((4, 3)), 3, 5, 4));
+    }
 
     #[test]
     fn weights_are_spelled_as_css_spells_them() {

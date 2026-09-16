@@ -345,7 +345,25 @@ impl AppView {
     pub fn mouse_up(&mut self, e: &MouseUpEvent) {
         let p = self.to_content(e.position);
         let was_dragging = matches!(self.pan, Some(Pan::Dragging(_)));
+        // A Cmd+press that never moved far enough to pan was a CLICK, and the
+        // body never saw the press: `starts_pan` claims every Cmd+left press
+        // before the hit test, because a Cmd+drag over a card has to pan the
+        // canvas. So the press is delivered here instead, which is what makes
+        // Cmd+click open a link. Cmd must still be down: releasing it first
+        // means a plain click, which would start a text selection.
+        let was_click = matches!(self.pan, Some(Pan::Pending(_))) && e.modifiers.platform;
         self.pan = None;
+        if was_click {
+            if let Hit::CardBody { id, local } = self.hit(p) {
+                let action = match self.bodies.get_mut(&id) {
+                    Some(body) => body.mouse_down(local, e.button, &e.modifiers, e.click_count),
+                    None => crate::body::BodyAction::None,
+                };
+                self.body_action(&id, action);
+                self.perform_effects();
+            }
+            return;
+        }
         if was_dragging {
             let v = velocity_from(&self.samples, now_ms());
             self.samples.clear();
