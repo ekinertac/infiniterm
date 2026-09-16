@@ -220,17 +220,6 @@ impl Model {
             w: reserve.w.max(bounds.w + GROUP_PAD * 2.),
             h: reserve.h.max(bounds.h + GROUP_PAD * 2.),
         };
-        let cols = best_cols(
-            crate::cards::TYPICAL_CARDS,
-            size.w,
-            size.h,
-            GUTTER,
-            self.view_size.w,
-            self.view_size.h,
-        );
-        let grid_right = HALF_CELL + cols as f64 * (size.w + GUTTER);
-        // A wider gap than between two cards, so the groups read as a region.
-        let group_gap = GUTTER * 4.;
         let mut taken: Vec<Rect> = self
             .cards
             .iter()
@@ -238,11 +227,21 @@ impl Model {
             .map(|c| c.rect)
             .collect();
         taken.extend(self.other_frames(card.group_id.as_deref(), &card.workspace_id));
+        // Right of EVERYTHING that is already there, measured rather than
+        // assumed. This used to start at the right edge of a hypothetical
+        // twelve-card grid, which was true while placement used a fixed
+        // column count; since cards take the nearest free slot they spread
+        // as far as they like, and a group would land in a gap inside the
+        // loose cluster instead of clear of it.
+        let cluster_right = taken.iter().map(|r| r.x + r.w).fold(HALF_CELL, f64::max);
+        // A wider gap than between two cards, so the groups read as a region
+        // of their own rather than as more cards.
+        let group_gap = GUTTER * 4.;
         let spot = first_free_slot(
             &taken,
             block,
             Point {
-                x: grid_right + group_gap,
+                x: cluster_right + group_gap,
                 y: HALF_CELL,
             },
             GUTTER,

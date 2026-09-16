@@ -264,6 +264,36 @@ mod tests {
         assert_eq!(h.m.card(&a).unwrap().rect, na);
     }
 
+    // The block starts right of the cards that are ACTUALLY there. It used
+    // to start right of a hypothetical twelve-card grid, which was true
+    // while placement used a fixed column count; cards now take the nearest
+    // free slot and spread as far as they like, and the group would land in
+    // a gap inside the loose cluster rather than clear of it.
+    #[test]
+    fn a_new_group_lands_clear_of_every_loose_card() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        // A loose card far out to the right, further than any grid would go.
+        h.run("card.new.terminal");
+        let far = h.focused().id.clone();
+        let mut rect = h.m.card(&far).unwrap().rect;
+        rect.x = 40_000.;
+        h.m.card_mut(&far).unwrap().rect = rect;
+
+        h.m.set_focus(Some(&a));
+        h.run("group.new");
+        let (pending, text) = h.m.prompt.settle(Some("api")).unwrap();
+        h.m.answer(pending, text, |_| true);
+
+        let grouped = h.m.card(&a).unwrap().rect;
+        assert!(
+            grouped.x > rect.x + rect.w,
+            "the group at {} is not clear of the loose card ending at {}",
+            grouped.x,
+            rect.x + rect.w
+        );
+    }
+
     #[test]
     fn a_blank_group_name_is_a_cancel() {
         let mut h = Harness::new();
