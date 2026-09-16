@@ -43,12 +43,14 @@ impl AppView {
             prompt_field: Default::default(),
             query_field: Default::default(),
             shortcuts_field: Default::default(),
+            omni_field: crate::field::Field::default(),
             prompt_was_open: false,
             suggestions: std::sync::mpsc::channel(),
             samples: vec![],
             mouse: infiniterm_core::grid::Point { x: 0., y: 0. },
             seeded: false,
             save_due: None,
+            history_due: None,
             last_sweep: now_ms(),
             glides: Default::default(),
             marked: Default::default(),
@@ -352,6 +354,21 @@ impl AppView {
         }
     }
 
+    /// The omnibox's history, on the same debounce as the layout: a page
+    /// that redirects three times is one write, not three.
+    pub fn schedule_history(&mut self, now: f64) {
+        if self.model.history.is_dirty() && self.history_due.is_none() {
+            self.history_due = Some(now + SAVE_DEBOUNCE_MS);
+        }
+        if self.history_due.is_some_and(|due| now >= due) {
+            self.history_due = None;
+            self.model.history.clear_dirty();
+            self.model
+                .history
+                .save(&infiniterm_core::paths::history_path());
+        }
+    }
+
     /// The frame changed: write it half a second after it stops changing.
     pub fn note_window(&mut self, bounds: gpui::WindowBounds, now: f64) {
         let state = crate::window_state::WindowState::of(bounds);
@@ -447,6 +464,9 @@ pub fn startup(app: &mut AppView) {
     app.animator.animations_on = app.model.config.ui.animations && !app.reduce_motion;
     app.model
         .load_layout(infiniterm_core::layout_file::read_layout().as_deref());
+    // The omnibox ranks against this; a missing file is an empty history.
+    app.model.history =
+        infiniterm_core::omni::history::History::load(&infiniterm_core::paths::history_path());
     // Drafts belong to cards; one whose card is gone is a leak, not a backup.
     if !app.model.read_only {
         let keep: Vec<String> = app.model.cards.iter().map(|c| c.id.clone()).collect();

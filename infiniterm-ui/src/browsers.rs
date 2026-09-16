@@ -5,7 +5,7 @@
 //! it moved to onto the card, popups opened as cards beside it. CEF
 //! itself is started once in `main.rs`; `cef_running` says whether it is.
 use crate::browser_body::BrowserBody;
-use crate::AppView;
+use crate::{now_ms, AppView};
 use infiniterm_core::grid::Size;
 use infiniterm_core::ift::url_plan;
 use infiniterm_core::saved_layout::CardKind;
@@ -33,6 +33,7 @@ impl AppView {
             .collect();
         let mut opens: Vec<(String, String)> = vec![];
         let mut moved: Vec<(String, String)> = vec![];
+        let mut titles: Vec<(String, String)> = vec![];
         for card in cards {
             let world = Size {
                 w: card.rect.w,
@@ -58,15 +59,25 @@ impl AppView {
             if let Some(new_url) = body.sync() {
                 moved.push((card.id.clone(), new_url));
             }
+            if let Some(title) = body.take_title() {
+                titles.push((body.url.clone(), title));
+            }
             for popup in std::mem::take(&mut body.popups) {
                 opens.push((card.id.clone(), popup));
             }
         }
         for (id, url) in moved {
+            // Every navigation passes through here, which is the only place
+            // the app sees one: history is recorded here rather than in the
+            // model, which never learns where a page went by itself.
+            self.model.record_visit(&url, None, now_ms());
             if let Some(c) = self.model.card_mut(&id) {
                 c.url = Some(url);
                 self.model.dirty_layout = true;
             }
+        }
+        for (url, title) in titles {
+            self.model.history.set_title(&url, &title);
         }
         for (id, url) in opens {
             let plan = url_plan(&url, "");

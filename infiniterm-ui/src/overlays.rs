@@ -38,7 +38,7 @@ const LOW_FPS_THRESHOLD: f32 = 50.;
 /// inverts with the theme (a light theme's `text_bright` is dark, and the
 /// cap goes dark with light ink). Shared by the palette's hints and the
 /// shortcuts panel's rows.
-fn key_cap_box(key: &str, chrome: &crate::chrome::Chrome, ui: f32) -> gpui::Div {
+pub fn key_cap_box(key: &str, chrome: &crate::chrome::Chrome, ui: f32) -> gpui::Div {
     gpui::div()
         .px(px(KEY_CAP_PAD_X_PX * ui))
         .py(px(KEY_CAP_PAD_Y_PX * ui))
@@ -53,7 +53,7 @@ fn key_cap_box(key: &str, chrome: &crate::chrome::Chrome, ui: f32) -> gpui::Div 
 /// recently used entries.
 const PALETTE_REST_TITLE: &str = "all";
 /// A palette section heading ("recent", and so on).
-const PALETTE_SECTION_FONT_PX: f32 = 10.;
+pub const PALETTE_SECTION_FONT_PX: f32 = 10.;
 /// The text inside a keycap badge, in a palette hint or the shortcuts
 /// panel. A key cap is read, not scanned: at 10 px against the panel it was
 /// the least legible thing in the app.
@@ -67,10 +67,10 @@ const KEY_CAP_PAD_Y_PX: f32 = 1.;
 const CAPTION_FONT_PX: f32 = 11.;
 /// An overlay's body text: the palette's rows, the prompt's field, the
 /// shortcuts list.
-const OVERLAY_BODY_FONT_PX: f32 = 13.;
+pub const OVERLAY_BODY_FONT_PX: f32 = 13.;
 /// The palette and shortcuts panel sit this far from the top, clear of the
 /// title bar.
-const OVERLAY_TOP_PAD_PX: f32 = 80.;
+pub const OVERLAY_TOP_PAD_PX: f32 = 80.;
 const PALETTE_WIDTH_PX: f32 = 640.;
 /// The prompt sits lower than the palette: it interrupts one action, not a
 /// search.
@@ -233,6 +233,12 @@ impl AppView {
         if self.model.palette.query != self.query_field.text {
             self.query_field = crate::field::Field::open(&self.model.palette.query, false);
         }
+        // The command opens the box with the card's address already in it,
+        // SELECTED, so the first character typed replaces the whole URL the
+        // way it does in a browser.
+        if self.model.omni.open && self.model.omni.query != self.omni_field.text {
+            self.omni_field = crate::field::Field::open(&self.model.omni.query, true);
+        }
     }
 }
 
@@ -246,6 +252,7 @@ impl Render for AppView {
         let palette = self.model.palette_open().then(|| self.render_palette(cx));
         let prompt = self.model.prompt.is_open().then(|| self.render_prompt(cx));
         let shortcuts = self.model.shortcuts_open.then(|| self.render_shortcuts());
+        let omnibox = self.model.omni.open.then(|| self.render_omnibox(cx));
 
         div()
             .size_full()
@@ -309,7 +316,8 @@ impl Render for AppView {
                     )
                     .children(palette)
                     .children(prompt)
-                    .children(shortcuts),
+                    .children(shortcuts)
+                    .children(omnibox),
             )
             .child(status_bar)
     }

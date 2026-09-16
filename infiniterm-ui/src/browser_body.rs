@@ -65,6 +65,10 @@ pub struct BrowserBody {
     pub font_family: String,
     dirty: bool,
     pub popups: Vec<String>,
+    /// The page title as last reported, so a change can be told from the
+    /// same title arriving every frame. Not the card's title: that is a
+    /// name somebody CHOSE, and a page must never overwrite it.
+    title: Option<String>,
 }
 
 impl BrowserBody {
@@ -105,6 +109,7 @@ impl BrowserBody {
             font_family: "Menlo".into(),
             dirty: true,
             popups: vec![],
+            title: None,
         }
     }
 
@@ -135,6 +140,17 @@ impl BrowserBody {
             return Some(url);
         }
         None
+    }
+
+    /// The page title, but only when it has changed since the last call.
+    /// The omnibox's history wants it; nothing else does.
+    pub fn take_title(&mut self) -> Option<String> {
+        let t = self.surface.as_ref()?.title()?;
+        if Some(&t) == self.title.as_ref() {
+            return None;
+        }
+        self.title = Some(t.clone());
+        Some(t)
     }
 
     pub fn navigate(&mut self, url: &str) {

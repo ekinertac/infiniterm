@@ -125,6 +125,7 @@ impl AppView {
         self.paint_world(bounds, now, window, cx);
         let t2 = std::time::Instant::now();
         self.schedule_save(now);
+        self.schedule_history(now);
         // Where a frame goes, once a second, for the stress numbers.
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
             self.timing.0 += (t1 - t0).as_secs_f64() * 1000.;

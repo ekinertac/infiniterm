@@ -22,6 +22,7 @@ mod editors;
 mod field;
 mod input;
 mod keycode;
+mod omnibox;
 mod overlays;
 mod paint;
 mod runtime;
@@ -120,11 +121,17 @@ pub struct AppView {
     pub query_field: field::Field,
     /// The shortcuts panel's filter.
     pub shortcuts_field: field::Field,
+    /// The omnibox's text, opened selected so typing replaces a prefilled
+    /// address the way it does in a browser.
+    pub omni_field: field::Field,
     pub prompt_was_open: bool,
     pub samples: Vec<Sample>,
     pub mouse: Point,
     pub seeded: bool,
     pub save_due: Option<f64>,
+    /// When the omnibox's history is due to be written, on the layout's
+    /// debounce.
+    pub history_due: Option<f64>,
     pub last_sweep: f64,
     pub glides: HashMap<String, Glide>,
     /// Rects as of the last frame, to notice a MarkSwap'd card moving.

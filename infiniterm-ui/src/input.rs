@@ -500,6 +500,10 @@ impl AppView {
             self.palette_key(k, cx);
             return false;
         }
+        if self.model.omni.open {
+            self.omni_key(k, cx);
+            return false;
+        }
         if self.model.prompt.is_open() {
             self.prompt_key(k, cx);
             return false;
