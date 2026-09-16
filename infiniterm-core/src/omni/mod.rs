@@ -13,6 +13,7 @@ pub mod engines;
 pub mod history;
 pub mod providers;
 pub mod rank;
+pub mod suggest;
 
 use crate::omni::engines::Engine;
 use crate::omni::history::Visit;
