@@ -506,6 +506,18 @@ pub fn startup(app: &mut AppView) {
     // The omnibox ranks against this; a missing file is an empty history.
     app.model.history =
         infiniterm_core::omni::history::History::load(&infiniterm_core::paths::history_path());
+    // Windows this app left running that no card came back for: a crash's
+    // litter. Only when the canvas actually loaded, because a save file that
+    // failed to parse claims nothing and would make every window an orphan.
+    if app.model.loaded {
+        let claimed: Vec<String> = app
+            .model
+            .cards
+            .iter()
+            .filter_map(|c| c.tmux_window.clone())
+            .collect();
+        app.backend.pty.kill_orphans(&claimed);
+    }
     // Drafts belong to cards; one whose card is gone is a leak, not a backup.
     if !app.model.read_only {
         let keep: Vec<String> = app.model.cards.iter().map(|c| c.id.clone()).collect();

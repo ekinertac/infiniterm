@@ -37,6 +37,10 @@ pub const SESSION: &str = "infiniterm";
 /// is holding: the same reason the driver addresses the app by pid and the
 /// scenarios scope `ift` to their own data dir.
 pub const DEV_SESSION: &str = "infiniterm-dev";
+/// A tmux user option set on every window this app makes. It is how our own
+/// litter is told from somebody's window: a window made by hand with
+/// `tmux neww -t infiniterm` carries no tag and is never ours to kill.
+pub const TAG: &str = "@infiniterm";
 
 /// The session this instance may touch.
 pub fn session_name() -> &'static str {
@@ -80,7 +84,22 @@ pub struct TmuxBackend {
     /// earlier would take the session with it, since a session with no
     /// windows does not exist.
     spare: Arc<Mutex<Option<String>>>,
+    /// Bytes sent for each pane that the ui has not acknowledged yet, and
+    /// which panes are paused because of it. The local backend stops READING
+    /// a pane past the same mark, which stalls the child at the kernel's pty
+    /// buffer; tmux is asked to stop sending instead, which stops it reading
+    /// too once no client wants the pane.
+    ///
+    /// Without this a single flooding card would be a regression against the
+    /// local backend: everything shares one socket here, so one screaming
+    /// pane delays every other card.
+    in_flight: Arc<Mutex<HashMap<PaneId, usize>>>,
+    paused: Arc<Mutex<HashMap<PaneId, bool>>>,
 }
+
+/// Back under this and the pane is let go again. Half the mark, so a pane
+/// hovering at the limit is not paused and continued on every frame.
+const LOW_WATER: usize = super::local_pty::HIGH_WATER / 2;
 
 /// What the next reply block will contain.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,6 +128,26 @@ pub fn available() -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// One command out, and what its reply block will hold.
+///
+/// The queue push happens while the stdin lock is HELD. Both the ui thread
+/// and the reader send commands, and if one could push between the other's
+/// push and write, the queue would no longer be in the order tmux answers
+/// in, which is the only thing tying a reply to the command that asked.
+fn send(
+    stdin: &Arc<Mutex<ChildStdin>>,
+    expecting: &Arc<Mutex<VecDeque<Expect>>>,
+    line: &str,
+    expect: Expect,
+) {
+    let Ok(mut out) = stdin.lock() else {
+        return;
+    };
+    expecting.lock().unwrap().push_back(expect);
+    let _ = writeln!(out, "{line}");
+    let _ = out.flush();
 }
 
 /// `@3 %3` as tmux formats it, into the pair.
@@ -166,6 +205,8 @@ impl TmuxBackend {
             next_id: AtomicU32::new(1),
             expecting: Arc::new(Mutex::new(VecDeque::new())),
             spare: Arc::new(Mutex::new(None)),
+            in_flight: Arc::new(Mutex::new(HashMap::new())),
+            paused: Arc::new(Mutex::new(HashMap::new())),
         };
         // tmux answers the `new-session` on its own command line with a
         // reply block of its own, before anything we send. Nothing queued
@@ -194,6 +235,9 @@ impl TmuxBackend {
         let windows = self.windows.clone();
         let expecting = self.expecting.clone();
         let spare = self.spare.clone();
+        let in_flight = self.in_flight.clone();
+        let paused = self.paused.clone();
+        let stdin = self.stdin.clone();
         std::thread::spawn(move || {
             let mut reader = Reader::new();
             let mut block = Expect::Nothing;
@@ -215,9 +259,30 @@ impl TmuxBackend {
                 let text = String::from_utf8_lossy(&raw);
                 match reader.line(&text) {
                     Notice::Output { pane, bytes } => {
-                        let id = Self::id_for_pane(&windows, &pane);
-                        if let Some(id) = id {
-                            let _ = tx.send((id, PaneEvent::Output(bytes)));
+                        let Some(id) = Self::id_for_pane(&windows, &pane) else {
+                            continue;
+                        };
+                        let owed = {
+                            let mut map = in_flight.lock().unwrap();
+                            let owed = map.entry(id).or_insert(0);
+                            *owed += bytes.len();
+                            *owed
+                        };
+                        let _ = tx.send((id, PaneEvent::Output(bytes)));
+                        // Past the mark, ask tmux to stop. It stops reading
+                        // the pane too once no client wants it, so the
+                        // program itself waits, exactly as a full pty buffer
+                        // makes it wait under the local backend.
+                        if owed > super::local_pty::HIGH_WATER
+                            && !paused.lock().unwrap().get(&id).copied().unwrap_or(false)
+                        {
+                            paused.lock().unwrap().insert(id, true);
+                            send(
+                                &stdin,
+                                &expecting,
+                                &format!("refresh-client -A '{pane}:pause'"),
+                                Expect::Nothing,
+                            );
                         }
                     }
                     Notice::WindowClose(window) => {
@@ -245,9 +310,21 @@ impl TmuxBackend {
                         Expect::Ids(id) => {
                             if let Some((window, pane)) = split_ids(&text) {
                                 if let Some(w) = windows.lock().unwrap().get_mut(id) {
-                                    w.id = window;
+                                    w.id = window.clone();
                                     w.pane = Some(pane);
                                 }
+                                // Tagged BY ID, here, because this is the
+                                // first moment the id exists. `-t <session>`
+                                // targets the session's CURRENT window, and
+                                // `new-window -d` does not change that, so
+                                // tagging at send time marked the wrong
+                                // window every time.
+                                send(
+                                    &stdin,
+                                    &expecting,
+                                    &format!("set-option -w -t {window} {TAG} 1"),
+                                    Expect::Nothing,
+                                );
                             }
                         }
                         Expect::Spare if is_window_id(&text) => {
@@ -301,12 +378,7 @@ impl TmuxBackend {
     /// answers asynchronously and nothing here waits: the answers arrive as
     /// notices and are matched by the order they were asked in.
     fn command_expecting(&self, line: &str, expect: Expect) {
-        // Queued BEFORE the write, or a fast reply could arrive first.
-        self.expecting.lock().unwrap().push_back(expect);
-        if let Ok(mut stdin) = self.stdin.lock() {
-            let _ = writeln!(stdin, "{line}");
-            let _ = stdin.flush();
-        }
+        send(&self.stdin, &self.expecting, line, expect);
     }
 
     fn command(&self, line: &str) {
@@ -433,9 +505,29 @@ impl TmuxBackend {
         }
     }
 
-    /// Flow control is tmux's `refresh-client -A`, driven by the ledger in
-    /// the ui rather than by a byte count here; see `pause` and `unpause`.
-    pub fn ack_now(&self, _pane: PaneId, _bytes: usize) {}
+    /// The ui has parsed this much: the pane owes less, and once it is well
+    /// under the mark tmux is told to send again.
+    pub fn ack_now(&self, pane: PaneId, bytes: usize) {
+        let owed = {
+            let mut map = self.in_flight.lock().unwrap();
+            let owed = map.entry(pane).or_insert(0);
+            *owed = owed.saturating_sub(bytes);
+            *owed
+        };
+        let is_paused = self
+            .paused
+            .lock()
+            .unwrap()
+            .get(&pane)
+            .copied()
+            .unwrap_or(false);
+        if is_paused && owed < LOW_WATER {
+            self.paused.lock().unwrap().insert(pane, false);
+            if let Some(target) = self.target(pane) {
+                self.command(&format!("refresh-client -A '{target}:continue'"));
+            }
+        }
+    }
 }
 
 impl TmuxBackend {
@@ -494,6 +586,46 @@ impl TmuxBackend {
             .is_ok_and(|s| s.success())
     }
 
+    /// Windows this app made and no card claimed: the litter a crash leaves
+    /// behind. Killed at startup so the session mirrors the canvas.
+    ///
+    /// ONLY tagged windows. One somebody opened by hand in the same session
+    /// is theirs, and a canvas that failed to load claims nothing, which is
+    /// why the caller checks that first: a corrupt save file must not take
+    /// a day's work with it.
+    pub fn kill_orphans(&self, claimed: &[String]) {
+        for (window, tagged) in Self::windows_with_tag() {
+            if tagged && !claimed.iter().any(|c| c == &window) {
+                self.command(&format!("kill-window -t {window}"));
+            }
+        }
+    }
+
+    /// Every window in our session, and whether we made it.
+    fn windows_with_tag() -> Vec<(String, bool)> {
+        let out = Command::new("tmux")
+            .args([
+                "-L",
+                &std::env::var("INFINITERM_TMUX_SOCKET").unwrap_or_else(|_| "default".into()),
+                "list-windows",
+                "-t",
+                session_name(),
+                "-F",
+                &format!("#{{window_id}} #{{?{TAG},1,0}}"),
+            ])
+            .output();
+        match out {
+            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter_map(|line| {
+                    let (window, tag) = line.trim().split_once(' ')?;
+                    is_window_id(window).then(|| (window.to_string(), tag == "1"))
+                })
+                .collect(),
+            _ => vec![],
+        }
+    }
+
     /// The windows this app's session still holds. Blocking and deliberately
     /// so: it runs once, before any card exists, and its answer decides
     /// whether each card is adopted or spawned.
@@ -549,22 +681,6 @@ impl SessionBackend for TmuxBackend {
 
     fn ack(&self, pane: PaneId, bytes: usize) {
         self.ack_now(pane, bytes)
-    }
-}
-
-impl TmuxBackend {
-    /// Stops tmux sending this pane's output. Measured at exactly zero lines
-    /// per second while paused, against 18,700 unpaused.
-    pub fn pause(&self, pane: PaneId) {
-        if let Some(target) = self.target(pane) {
-            self.command(&format!("refresh-client -A '{target}:pause'"));
-        }
-    }
-
-    pub fn unpause(&self, pane: PaneId) {
-        if let Some(target) = self.target(pane) {
-            self.command(&format!("refresh-client -A '{target}:continue'"));
-        }
     }
 }
 

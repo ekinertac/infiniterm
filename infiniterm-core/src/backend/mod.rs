@@ -121,6 +121,14 @@ impl Panes {
         }
     }
 
+    /// Windows this app made that no card claims: what a crash left behind.
+    /// Does nothing under the local backend, which has no litter to leave.
+    pub fn kill_orphans(&self, claimed: &[String]) {
+        if let Panes::Tmux(b) = self {
+            b.kill_orphans(claimed);
+        }
+    }
+
     /// Which windows are still there to adopt.
     pub fn live_windows(&self) -> Vec<String> {
         match self {
