@@ -88,6 +88,8 @@ pub struct DiffBody {
     pub inactive_dim: f64,
     world: Size,
     dirty: bool,
+    /// The wheel's fraction of a line, carried between events.
+    wheel_carry: crate::chrome::WheelCarry,
     /// Bumped when the rows change, for the shaping cache.
     version: u64,
     shaped: HashMap<usize, (u64, gpui::ShapedLine)>,
@@ -137,6 +139,7 @@ impl DiffBody {
             inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             world,
             dirty: true,
+            wheel_carry: crate::chrome::WheelCarry::default(),
             version: 0,
             shaped: HashMap::new(),
             events: vec![],
@@ -767,7 +770,7 @@ impl CardBody for DiffBody {
     }
 
     fn wheel(&mut self, _local: Point, _dx: f64, dy: f64, _modifiers: &gpui::Modifiers) {
-        let lines = (dy / self.line_h() * crate::chrome::WHEEL_LINES_PER_TICK).round() as i64;
+        let lines = self.wheel_carry.lines(dy, self.line_h());
         if lines != 0 {
             let max = self.rows.len().saturating_sub(1) as i64;
             self.scroll = (self.scroll as i64 - lines).clamp(0, max) as usize;

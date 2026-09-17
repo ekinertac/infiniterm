@@ -26,6 +26,80 @@ pub const LEGIBLE_FONT_PX: f64 = 3.;
 /// buffer, so the terminal, editor, diff and transcript all feel the same
 /// under the mouse wheel.
 pub const WHEEL_LINES_PER_TICK: f64 = 3.;
+
+/// Turns wheel deltas into whole lines without losing the fraction between
+/// events.
+///
+/// A trackpad sends pixels and a mouse wheel sends "lines", which macOS
+/// accelerates: a slow, deliberate notch arrives as 0.1 of a line, which is
+/// two pixels, which is a third of a text row, which rounded to zero and
+/// was dropped. Ten slow notches were ten nothings; only a flick moved the
+/// text, so a mouse could not scroll a terminal. The remainder is carried
+/// to the next event instead, so three slow notches make one line. A change
+/// of direction cancels what was carried, which is what a wheel does.
+#[derive(Debug, Default)]
+pub struct WheelCarry(f64);
+
+impl WheelCarry {
+    /// `dy` in world pixels, `row_px` the height of one text row. Positive
+    /// is up, as gpui delivers it.
+    pub fn lines(&mut self, dy: f64, row_px: f64) -> i64 {
+        let exact = dy / row_px * WHEEL_LINES_PER_TICK + self.0;
+        let whole = exact.trunc();
+        self.0 = exact - whole;
+        whole as i64
+    }
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use super::*;
+
+    // One slow mouse notch at the default font: 0.1 line * 20 px = 2 px
+    // against a 16.8 px row. Rounded, that was 0 every time.
+    const SLOW_NOTCH_PX: f64 = 2.;
+    const ROW_PX: f64 = 16.8;
+
+    #[test]
+    fn slow_notches_add_up_instead_of_vanishing() {
+        let mut w = WheelCarry::default();
+        let mut moved = 0;
+        for _ in 0..3 {
+            moved += w.lines(SLOW_NOTCH_PX, ROW_PX);
+        }
+        assert_eq!(
+            moved, 1,
+            "three slow notches are one line, not three nothings"
+        );
+        let mut none = WheelCarry::default();
+        assert_eq!(
+            none.lines(SLOW_NOTCH_PX, ROW_PX),
+            0,
+            "the first one alone is still under a line"
+        );
+    }
+
+    #[test]
+    fn a_full_notch_and_a_flick_still_move_at_once() {
+        let mut w = WheelCarry::default();
+        assert_eq!(w.lines(20., ROW_PX), 3, "one full notch is the tick");
+        assert!(w.lines(400., ROW_PX) > 50, "a flick is many");
+    }
+
+    #[test]
+    fn reversing_cancels_what_was_carried() {
+        let mut w = WheelCarry::default();
+        w.lines(SLOW_NOTCH_PX, ROW_PX);
+        w.lines(SLOW_NOTCH_PX, ROW_PX); // 0.71 carried
+        assert_eq!(w.lines(-SLOW_NOTCH_PX, ROW_PX), 0);
+        assert_eq!(w.lines(-SLOW_NOTCH_PX, ROW_PX), 0);
+        assert_eq!(
+            w.lines(-SLOW_NOTCH_PX, ROW_PX),
+            0,
+            "back where it started, nothing moved"
+        );
+    }
+}
 /// Below `LEGIBLE_FONT_PX` a run of text is drawn as a texture bar this
 /// fraction of the line height, shared by the terminal and editor bodies so
 /// an unreadable zoom looks the same in both.

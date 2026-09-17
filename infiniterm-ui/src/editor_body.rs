@@ -169,6 +169,8 @@ pub struct EditorBody {
     painted_phase: bool,
     painted_focused: bool,
     dirty: bool,
+    /// The wheel's fraction of a line, carried between events.
+    wheel_carry: crate::chrome::WheelCarry,
     /// The file tree, once Cmd+K or `ift <dir>` asked for one.
     pub tree: Option<Tree>,
     pub tree_focused: bool,
@@ -237,6 +239,7 @@ impl EditorBody {
             painted_phase: true,
             painted_focused: false,
             dirty: true,
+            wheel_carry: crate::chrome::WheelCarry::default(),
             tree: None,
             tree_focused: false,
             sidebar_w: 0.,
@@ -1643,7 +1646,7 @@ impl CardBody for EditorBody {
     }
 
     fn wheel(&mut self, _local: Point, dx: f64, dy: f64, _modifiers: &gpui::Modifiers) {
-        let lines = (dy / self.line_h() * crate::chrome::WHEEL_LINES_PER_TICK).round() as i64;
+        let lines = self.wheel_carry.lines(dy, self.line_h());
         if lines != 0 {
             let max = self.buffer.line_count().saturating_sub(1);
             self.scroll_line = (self.scroll_line as i64 - lines).clamp(0, max as i64) as usize;

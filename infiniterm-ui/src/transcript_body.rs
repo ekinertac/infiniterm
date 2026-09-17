@@ -64,6 +64,8 @@ pub struct TranscriptBody {
     pub inactive_dim: f64,
     world: Size,
     dirty: bool,
+    /// The wheel's fraction of a line, carried between events.
+    wheel_carry: crate::chrome::WheelCarry,
 }
 
 impl TranscriptBody {
@@ -94,6 +96,7 @@ impl TranscriptBody {
             inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             world,
             dirty: true,
+            wheel_carry: crate::chrome::WheelCarry::default(),
         }
     }
 
@@ -460,7 +463,7 @@ impl CardBody for TranscriptBody {
     }
 
     fn wheel(&mut self, local: Point, _dx: f64, dy: f64, _modifiers: &gpui::Modifiers) {
-        let lines = (dy / self.line_h() * crate::chrome::WHEEL_LINES_PER_TICK).round() as i64;
+        let lines = self.wheel_carry.lines(dy, self.line_h());
         if lines == 0 {
             return;
         }

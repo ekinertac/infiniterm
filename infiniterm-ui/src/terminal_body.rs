@@ -108,6 +108,8 @@ pub struct TerminalBody {
     pub replies: Vec<Vec<u8>>,
     /// Output arrived since the last paint.
     pub dirty: bool,
+    /// The wheel's fraction of a line, carried between events.
+    wheel_carry: crate::chrome::WheelCarry,
     pub title: Option<String>,
     /// OSC 52: text a program put on the clipboard, taken by the ui.
     pub clipboard_out: Option<String>,
@@ -204,6 +206,7 @@ impl TerminalBody {
             outgoing: vec![],
             replies: vec![],
             dirty: true,
+            wheel_carry: crate::chrome::WheelCarry::default(),
             title: None,
             clipboard_out: None,
             blink: true,
@@ -854,8 +857,7 @@ impl CardBody for TerminalBody {
     /// on the alternate screen (`less`); the scrollback otherwise. `dy` is in
     /// card pixels, positive up.
     fn wheel(&mut self, local: Point, _dx: f64, dy: f64, modifiers: &gpui::Modifiers) {
-        let lines = (dy / (self.font_px * self.line_height) * crate::chrome::WHEEL_LINES_PER_TICK)
-            .round() as i32;
+        let lines = self.wheel_carry.lines(dy, self.font_px * self.line_height) as i32;
         if lines == 0 {
             return;
         }
