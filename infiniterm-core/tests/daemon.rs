@@ -216,3 +216,57 @@ fn a_session_survives_the_backend_and_replays_on_reattach() {
         "iftd unlinks its socket once Kill reaches it"
     );
 }
+
+/// The replayed ring can be cut mid-state: a program that was in the
+/// alternate screen when the oldest bytes fell out has no re-entry
+/// sequence left in what we replay. `nudge_resize` covers that by making
+/// the program repaint its CURRENT screen over whatever the replay left,
+/// and the whole design's risk section leans on it working.
+///
+/// Asserted the only way the client side can see it: a shell that reports
+/// the signal. Nothing else in the suite proves the nudge is sent at all.
+#[test]
+fn adopting_a_session_makes_the_program_repaint() {
+    ensure_iftd_on_path();
+    let dir = TempDir::new();
+
+    let (backend, rx) = DaemonBackend::new(dir.path().to_path_buf(), 4);
+    // The trap has to be installed before we detach, so it is the command
+    // the pane runs rather than something typed at a prompt afterwards.
+    let pane = backend
+        .spawn_now(
+            Path::new("/tmp"),
+            // A LOOP, not one long sleep: a shell runs a trap between
+            // commands, so with `sleep 30` in the foreground the handler
+            // would not run until the sleep returned and the test would
+            // time out on a nudge that had in fact arrived.
+            Some("trap 'echo WINCHED' WINCH; echo armed; while :; do sleep 0.2; done"),
+            vec![],
+        )
+        .expect("iftd starts");
+    let armed = wait_for_event(
+        &rx,
+        pane,
+        |e| matches!(e, PaneEvent::Output(b) if String::from_utf8_lossy(b).contains("armed")),
+    );
+    assert!(armed.is_some(), "the trap is installed before we detach");
+
+    let session_id = backend.session_id(pane).expect("a session id");
+    backend.detach();
+
+    // A fresh receiver, so any SIGWINCH from the first backend's own sizing
+    // cannot be mistaken for the one the adopt is supposed to cause.
+    let (backend2, rx2) = DaemonBackend::new(dir.path().to_path_buf(), 4);
+    let pane2 = backend2.adopt(&session_id).expect("still there");
+    let winched = wait_for_event(
+        &rx2,
+        pane2,
+        |e| matches!(e, PaneEvent::Output(b) if String::from_utf8_lossy(b).contains("WINCHED")),
+    );
+    assert!(
+        winched.is_some(),
+        "adopting nudges the size, so the program repaints over the replay"
+    );
+
+    backend2.kill_now(pane2);
+}
