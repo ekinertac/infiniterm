@@ -320,10 +320,35 @@ impl AppView {
     /// Drains the backend's channels into the model, once per frame.
     pub fn drain_backend(&mut self) {
         while let Ok((pane, event)) = self.backend.pane_events.try_recv() {
-            if let infiniterm_core::backend::PaneEvent::Output(bytes)
-            | infiniterm_core::backend::PaneEvent::Replay(bytes) = &event
-            {
-                self.scheduler.enqueue(pane, bytes.clone());
+            use infiniterm_core::backend::PaneEvent;
+            match &event {
+                PaneEvent::Output(bytes) => self.scheduler.enqueue(pane, bytes.clone()),
+                // A replay is a known, finite bulk that arrives once, at
+                // adopt, before any live output. Through the scheduler it
+                // took a full canvas about 170 frames (11 cards, 4 MiB each,
+                // 64 KiB a frame for four panes) and the history could be
+                // WATCHED scrolling past on every launch. The budget exists
+                // to bound a flood; this is not one. Fed whole, so it lands
+                // in one frame, and acked whole, or the daemon's credit
+                // stalls it. The body is always mapped by now: adopt sets
+                // the pane and this runs on the same thread, after; the
+                // fallback exists so a byte is never dropped, not because
+                // it is expected to run.
+                PaneEvent::Replay(bytes) => {
+                    let fed = match self.terminal_for_pane(pane) {
+                        Some(body) => {
+                            body.feed_replay(bytes);
+                            true
+                        }
+                        None => false,
+                    };
+                    if fed {
+                        self.backend.pty.ack_now(pane, bytes.len());
+                    } else {
+                        self.scheduler.enqueue(pane, bytes.clone());
+                    }
+                }
+                _ => {}
             }
             self.model.apply_pane_event(pane, &event);
         }

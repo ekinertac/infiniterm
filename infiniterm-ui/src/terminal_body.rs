@@ -245,6 +245,25 @@ impl TerminalBody {
         self.drain_events();
     }
 
+    /// History from a daemon's ring, on adopt. The bytes go to the grid
+    /// like live output; the EVENTS do not. A query in the history (the
+    /// kitty keyboard question, a colour request, a cursor report) was
+    /// answered live, back when the program asked it, by whoever was
+    /// attached then. Answering it again now sends the reply into the
+    /// program's input as if it had just asked, which is the same mistake
+    /// tmux made by answering beside us (bug 9). An OSC 52 in the history
+    /// would put months-old text on the clipboard. The title is kept: the
+    /// last one set is still the program's name for itself.
+    pub fn feed_replay(&mut self, bytes: &[u8]) {
+        self.grid.advance(bytes);
+        self.dirty = true;
+        for event in self.grid.take_events() {
+            if let TermEvent::Title(t) = event {
+                self.title = Some(t);
+            }
+        }
+    }
+
     fn drain_events(&mut self) {
         for event in self.grid.take_events() {
             match event {
@@ -1013,6 +1032,56 @@ fn under_hover(hover: Option<(usize, usize)>, r: usize, start: usize, len: usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn body() -> TerminalBody {
+        let metrics = Metrics {
+            family: "Menlo".into(),
+            font_px: 14.,
+            line_height: 1.2,
+            cell_w: 8.4,
+            weight: FontWeight::NORMAL,
+            bold_weight: FontWeight::BOLD,
+        };
+        TerminalBody::new(
+            &metrics,
+            Palette::default_palette(),
+            Size { w: 800., h: 600. },
+            1000,
+            "/tmp".into(),
+        )
+    }
+
+    // A cursor position report, a clipboard write and a title, as a ring
+    // would hold them from a program's past. Live, the report is answered
+    // and the clipboard is set; replayed, only the title survives.
+    const HISTORY: &[u8] = b"\x1b]0;old title\x07\x1b[6n\x1b]52;c;aGVsbG8=\x07text";
+
+    #[test]
+    fn live_output_answers_queries_and_sets_the_clipboard() {
+        let mut b = body();
+        b.feed(HISTORY);
+        assert!(!b.replies.is_empty(), "the cursor report is answered");
+        assert_eq!(b.clipboard_out.as_deref(), Some("hello"));
+        assert_eq!(b.title.as_deref(), Some("old title"));
+    }
+
+    // The same bytes as history: nothing is answered, nothing reaches the
+    // clipboard, the screen and the title are what they were.
+    #[test]
+    fn a_replay_draws_the_past_without_reliving_it() {
+        let mut b = body();
+        b.feed_replay(HISTORY);
+        assert!(
+            b.replies.is_empty(),
+            "a question from the past is not answered again"
+        );
+        assert!(
+            b.clipboard_out.is_none(),
+            "history does not touch the clipboard"
+        );
+        assert_eq!(b.title.as_deref(), Some("old title"));
+        assert!(b.dirty, "and it still needs painting");
+    }
 
     // The underline is drawn only under the pointer, and only while Cmd is
     // held: `hover` is None otherwise.
