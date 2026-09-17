@@ -97,6 +97,17 @@ pub struct SavedCard {
     /// Ignored by the local backend, and by any launch where the session has
     /// gone: the card is then a fresh shell in its directory, as before.
     pub session: Option<String>,
+    /// Whether the program in this pane speaks the kitty keyboard protocol.
+    ///
+    /// Saved because it cannot be learned again. A program announces itself
+    /// once, at startup, by asking `CSI ? u`; Claude Code was measured
+    /// never re-asking, on a resize or a keystroke or anything else. Under
+    /// the daemon backend a card comes back to a program that started hours
+    /// ago, and the ring holds only the last few MiB, so the announcement
+    /// is long gone from the history we replay. Without this the gate stays
+    /// shut after every relaunch and Shift+Enter sends the prompt instead
+    /// of breaking the line.
+    pub kitty_keys: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -184,6 +195,13 @@ fn card_value(c: &SavedCard) -> Value {
             map.insert("session".into(), Value::String(session.clone()));
         }
     }
+    // Same rule as `session`: written only when true, so a canvas whose
+    // cards run plain shells does not grow a column of falses.
+    if c.kitty_keys {
+        if let Some(map) = card.as_object_mut() {
+            map.insert("kittyKeys".into(), Value::Bool(true));
+        }
+    }
     card
 }
 
@@ -260,6 +278,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
     // used; "session" is what every backend's opaque handle is called now.
     // Read both, preferring the current key, so those canvases still load.
     let session = non_empty(c.get("session")).or_else(|| non_empty(c.get("tmuxWindow")));
+    let kitty_keys = c.get("kittyKeys").and_then(Value::as_bool).unwrap_or(false);
     // A card is a terminal unless it says otherwise; an editor without a
     // path is an untitled buffer, whose text lives in its draft. A browser
     // without a url or a transcript without a path has nothing to show and
@@ -315,6 +334,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
             None
         },
         session,
+        kitty_keys,
     })
 }
 
@@ -495,6 +515,7 @@ mod tests {
                 h: 800.,
             },
             z: 0.,
+            kitty_keys: false,
             title: "api".into(),
             cwd: "/Users/ekinertac/Code/api".into(),
             group_id: None,
@@ -619,6 +640,40 @@ mod tests {
         // And it comes back.
         assert_eq!(as_card(&with).unwrap().session.as_deref(), Some("@7"));
         assert_eq!(as_card(&plain).unwrap().session, None);
+    }
+
+    // A program announces the kitty keyboard protocol once, at startup,
+    // and Claude Code was measured never re-announcing. An adopted card's
+    // startup is long out of the daemon's ring, so the save file is the
+    // only thing that can still know, and Shift+Enter depends on it.
+    #[test]
+    fn the_kitty_flag_survives_the_save_file() {
+        let saved = round_trip(
+            &[SavedCard {
+                kitty_keys: true,
+                ..card()
+            }],
+            &[],
+        )
+        .unwrap();
+        assert!(saved.cards[0].kitty_keys);
+    }
+
+    // Written only when true, like `session`, so a canvas of plain shells
+    // does not grow a column of falses.
+    #[test]
+    fn a_plain_shell_writes_no_kitty_flag() {
+        let text = layout_text(&serialise_layout(
+            &[card()],
+            &[],
+            &vp(10., 20., 0.5),
+            None,
+            1.,
+            &Usage::default(),
+            &ws(),
+            Some("w1"),
+        ));
+        assert!(!text.contains("kittyKeys"), "{text}");
     }
 
     #[test]

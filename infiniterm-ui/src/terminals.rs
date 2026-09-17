@@ -145,6 +145,14 @@ impl AppView {
                     .and_then(|s| self.backend.pty.adopt(&s));
                 if let Some(pane) = adopt {
                     body.pane = Some(pane);
+                    // The program in an adopted session announced whether it
+                    // speaks the kitty keyboard protocol at ITS startup,
+                    // which is long out of the ring we are about to replay,
+                    // and Claude Code was measured never re-announcing. The
+                    // save file is the only thing that still remembers.
+                    if card.kitty_keys {
+                        body.assume_kitty_keys();
+                    }
                     self.backend.pty.resize_now(pane, body.cols(), body.rows());
                     if let Some(c) = self.model.card_mut(&card.id) {
                         c.pane_id = Some(pane);
@@ -196,6 +204,14 @@ impl AppView {
                         c.session = session;
                         self.model.dirty_layout = true;
                     }
+                }
+            }
+            // Mirrored so a relaunch can seed it back; see `assume_kitty_keys`.
+            let kitty = body.kitty_keys();
+            if card.kitty_keys != kitty {
+                if let Some(c) = self.model.card_mut(&card.id) {
+                    c.kitty_keys = kitty;
+                    self.model.dirty_layout = true;
                 }
             }
             let osc = body.title.clone();

@@ -71,6 +71,11 @@ impl Model {
                         // whether the backend still has it: if so the card is
                         // adopted, and if not it spawns as any card does.
                         card.session = c.session;
+                        // Restored so an adopted card's program is still
+                        // known to speak the kitty keyboard protocol: it
+                        // announced that once, at a startup that has long
+                        // fallen out of the ring we replay.
+                        card.kitty_keys = c.kitty_keys;
                     }
                 }
                 self.viewport = saved.viewport;
@@ -114,6 +119,7 @@ impl Model {
                 sidebar_top: c.sidebar_top,
                 zoom: c.zoom,
                 session: c.session.clone(),
+                kitty_keys: c.kitty_keys,
             })
             .collect();
         let groups: Vec<SavedGroup> = self

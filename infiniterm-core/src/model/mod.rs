@@ -86,6 +86,11 @@ pub struct Card {
     /// lets a restored card find the session it had rather than start a
     /// new one.
     pub session: Option<String>,
+    /// Whether the program in this pane speaks the kitty keyboard protocol.
+    /// Mirrored from the body every frame and SAVED, because a program
+    /// announces itself only at startup and an adopted card's startup is
+    /// long out of the ring. See `saved_layout::SavedCard::kitty_keys`.
+    pub kitty_keys: bool,
     /// The title the program in this card set through the terminal (OSC 0
     /// or 2). Runtime-only and NEVER `title`: that is a name somebody chose
     /// and a program must not overwrite it, which is what LAYOUT_VERSION 2
@@ -587,6 +592,7 @@ impl Model {
             command: opts.command,
             transcript_path: None,
             session: None,
+            kitty_keys: false,
             osc_title: None,
             dirty: false,
             line: opts.line,

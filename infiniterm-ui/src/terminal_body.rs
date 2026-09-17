@@ -242,6 +242,16 @@ impl TerminalBody {
     }
 
     /// One budget's worth of output.
+    /// See `Grid::assume_kitty_keys`: an adopted pane's program announced
+    /// itself before we were attached.
+    pub fn assume_kitty_keys(&mut self) {
+        self.grid.assume_kitty_keys();
+    }
+
+    pub fn kitty_keys(&self) -> bool {
+        self.grid.kitty_keys()
+    }
+
     pub fn feed(&mut self, bytes: &[u8]) {
         self.grid.advance(bytes);
         self.dirty = true;

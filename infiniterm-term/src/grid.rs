@@ -321,6 +321,14 @@ impl Grid {
     /// exit; zsh turns it off on every Enter, so a Claude that crashed
     /// without saying goodbye leaves the shell one wrong Shift+Enter at
     /// most before it heals.
+    /// Seeds the flag for a pane whose program announced itself before we
+    /// were watching: an adopted session, whose startup is out of the ring.
+    /// Only ever turns it ON. The live rules still turn it off when the
+    /// program leaves, so a wrong seed costs one keystroke and heals.
+    pub fn assume_kitty_keys(&mut self) {
+        self.kitty_asked = true;
+    }
+
     pub fn kitty_keys(&self) -> bool {
         self.term.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES) || self.kitty_asked
     }
