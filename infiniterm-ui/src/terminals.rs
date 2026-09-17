@@ -8,6 +8,7 @@
 use crate::terminal_body::{weight_of, Metrics, TerminalBody};
 use crate::AppView;
 use gpui::{font, px, TextRun, Window};
+use infiniterm_core::backend::Panes;
 use infiniterm_core::grid::Size;
 use infiniterm_core::saved_layout::CardKind;
 
@@ -234,7 +235,6 @@ impl AppView {
         // anything, so our replies MUST go: `we_are_the_terminal()` is true
         // there and false only under tmux. Inverting this line reproduces
         // tmux bug 9 exactly, so it is not spelled as `!is_tmux()` any more.
-        let answer = self.backend.pty.we_are_the_terminal();
         let mut per_pane: Vec<PaneWrites> = vec![];
         for body in self.bodies.values_mut() {
             if let Some(t) = body.as_any_mut().downcast_mut::<TerminalBody>() {
@@ -244,7 +244,8 @@ impl AppView {
                 }
             }
         }
-        for (pane, bytes) in gated_writes(answer, per_pane) {
+        let writes = writes_for(&self.backend.pty, per_pane);
+        for (pane, bytes) in writes {
             self.backend.pty.write_now(pane, &bytes);
         }
     }
@@ -273,12 +274,26 @@ impl AppView {
 /// group is gated (see `gated_writes`).
 type PaneWrites = (u32, Vec<Vec<u8>>, Vec<Vec<u8>>);
 
+/// The one place the gate's POLARITY is written down.
+///
+/// `gated_writes` below takes a bool, which a test can pin from both sides
+/// but which anyone can also negate by accident at a call site, where no
+/// test reaches: `feed_terminals` needs a live `AppView`, a gpui window and
+/// a real backend, and nothing in this crate stands one up. So the call
+/// site is given no bool to negate. It hands over the backend, and the
+/// question is asked here, once, in an expression with no room for a `!`.
+/// Structural, because the alternative was a comment asking the next person
+/// to be careful, and tmux bug 9 is what being careful already cost.
+fn writes_for(terminal: &Panes, per_pane: Vec<PaneWrites>) -> Vec<(u32, Vec<u8>)> {
+    gated_writes(terminal.we_are_the_terminal(), per_pane)
+}
+
 /// The `feed_terminals` write gate, pulled out of the gpui-shaped loop so it
 /// can be tested without a window or a live pty: keystrokes and pastes
 /// (`outgoing`) always reach the pane, but the emulator's own replies to a
 /// program's query go only when `answer` says we are the terminal. Getting
-/// `answer` backwards is tmux bug 9 (see `feed_terminals`); this is the
-/// function a test can pin so an inverted `we_are_the_terminal()` fails loud.
+/// `answer` backwards is tmux bug 9; see `writes_for` for why no caller
+/// passes this argument by hand.
 fn gated_writes(answer: bool, per_pane: Vec<PaneWrites>) -> Vec<(u32, Vec<u8>)> {
     let mut writes = vec![];
     for (pane, outgoing, replies) in per_pane {
@@ -297,6 +312,26 @@ fn gated_writes(answer: bool, per_pane: Vec<PaneWrites>) -> Vec<(u32, Vec<u8>)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Through a REAL backend, not a bool somebody passed in: this is the
+    // half of the gate that the pure tests below cannot reach. A local
+    // shell is our own terminal, so a program's query gets our answer.
+    // (The false half needs a tmux to build `Panes::Tmux`, which these
+    // tests must not require; `we_are_the_terminal` covers it in core.)
+    #[test]
+    fn a_local_backend_sends_the_emulators_answers() {
+        use infiniterm_core::config::TerminalBackend;
+        let (panes, _rx, _fell_back) = Panes::start(TerminalBackend::Pty, 4);
+        let writes = writes_for(
+            &panes,
+            vec![(7, vec![b"ls\n".to_vec()], vec![b"\x1b[0n".to_vec()])],
+        );
+        assert_eq!(
+            writes,
+            vec![(7, b"ls\n".to_vec()), (7, b"\x1b[0n".to_vec())],
+            "a local shell has nothing in front of it to answer for us"
+        );
+    }
 
     // The call site under test: `we_are_the_terminal()` becomes `answer`,
     // and this is the boundary between "true" (local shells, our daemon)
