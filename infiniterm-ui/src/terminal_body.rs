@@ -575,7 +575,7 @@ impl CardBody for TerminalBody {
             let bar_h = (line_h * crate::chrome::TEXTURE_BAR_HEIGHT_RATIO)
                 .max(px(crate::chrome::HAIRLINE_PX as f32));
             for (r, row) in frame.rows.iter().enumerate() {
-                if row.text.trim().is_empty() {
+                if row_paints_nothing(row) {
                     continue;
                 }
                 let y = origin.y + line_h * r as f32 + (line_h - bar_h) / 2.;
@@ -618,7 +618,7 @@ impl CardBody for TerminalBody {
         }
         let hover = self.hover;
         for (r, row) in frame.rows.iter().enumerate() {
-            if row.text.trim().is_empty() {
+            if row_paints_nothing(row) {
                 continue;
             }
             let y = origin.y + line_h * r as f32;
@@ -1029,6 +1029,16 @@ fn under_hover(hover: Option<(usize, usize)>, r: usize, start: usize, len: usize
     hover.is_some_and(|(hc, hr)| hr == r && hc >= start && hc < start + len)
 }
 
+/// Whether a row can be skipped by the painter. Blank text is not enough:
+/// a space with a background is a painted cell. Pi draws its cursor as an
+/// inverse-video space, and on an empty input line that space is the whole
+/// row, so skipping "rows with no text" skipped the cursor and it could
+/// not be seen until something was typed beside it. The same skip would
+/// have hidden any TUI's full-width highlight on an empty row.
+fn row_paints_nothing(row: &infiniterm_term::grid::Row) -> bool {
+    row.text.trim().is_empty() && row.runs.iter().all(|r| r.bg.is_none())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1049,6 +1059,44 @@ mod tests {
             1000,
             "/tmp".into(),
         )
+    }
+
+    // Pi's cursor on an empty input line: one inverse-video space. Its
+    // text trims to nothing and it must be painted anyway.
+    #[test]
+    fn a_blank_row_with_a_background_is_still_painted() {
+        use infiniterm_term::grid::{Row, Run};
+        let run = |bg: Option<[u8; 3]>| Run {
+            text: " ".into(),
+            fg: [0, 0, 0],
+            bg,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikeout: false,
+            dim: false,
+        };
+        let cursor = Row {
+            runs: vec![run(Some([200, 200, 200]))],
+            text: " ".into(),
+        };
+        assert!(
+            !row_paints_nothing(&cursor),
+            "an inverse space is a painted cell"
+        );
+        let empty = Row {
+            runs: vec![run(None)],
+            text: "      ".into(),
+        };
+        assert!(
+            row_paints_nothing(&empty),
+            "a truly blank row is still skipped"
+        );
+        let text = Row {
+            runs: vec![run(None)],
+            text: " x ".into(),
+        };
+        assert!(!row_paints_nothing(&text));
     }
 
     // A cursor position report, a clipboard write and a title, as a ring

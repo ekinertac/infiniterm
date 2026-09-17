@@ -603,6 +603,29 @@ mod tests {
         assert!(!g.kitty_keys());
     }
 
+    // Pi's cursor, exactly as it sends it: an inverse-video space alone on
+    // the input line. The row's text is blank, and the run must still
+    // carry a background or the painter has nothing to draw the block with.
+    #[test]
+    fn an_inverse_space_on_an_empty_row_has_a_background() {
+        let mut g = Grid::new(20, 3, 100);
+        g.advance(b"\r\n\x1b[7m \x1b[0m");
+        let f = g.frame(&Palette::default_palette());
+        let row = &f.rows[1];
+        assert!(
+            row.text.trim().is_empty(),
+            "nothing but the space: {:?}",
+            row.text
+        );
+        let block = row.runs.iter().find(|r| r.bg.is_some());
+        assert!(
+            block.is_some(),
+            "the inverse space has a background: {:?}",
+            row.runs
+        );
+        assert_eq!(block.unwrap().text, " ");
+    }
+
     #[test]
     fn clear_empties_the_screen() {
         let mut g = Grid::new(10, 3, 100);
