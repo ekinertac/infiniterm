@@ -140,10 +140,14 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("canvas.zoom.out", "Canvas: zoom out", |m| {
         m.zoom_by(1. / 1.2)
     });
-    // The selection's bounding box, which for one card is the card.
+    // The selection's SLOT: for one card the card, and for a card that has
+    // been split the whole space those halves share. Framing half a slot
+    // put the other half off screen, and a split is not somewhere else.
     r.register("canvas.zoom.fitCard", "Canvas: fit the selection", |m| {
-        let rects: Vec<_> = m.selected().iter().map(|c| c.rect).collect();
-        if let Some(bounds) = bounding_rect(&rects) {
+        let selected = m.selected();
+        let rects: Vec<_> = selected.iter().map(|c| c.rect).collect();
+        let groups: Vec<_> = selected.iter().map(|c| c.soft_group_id.clone()).collect();
+        if let Some(bounds) = m.slot_bounds(&rects, &groups) {
             m.frame_card(bounds);
         }
     });

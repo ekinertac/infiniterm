@@ -746,6 +746,58 @@ mod tests {
             .any(|e| matches!(e, Effect::Find { request: None, .. })));
     }
 
+    // Splitting while framing used to drop the view onto the new half and
+    // put the other one off screen. A split subdivides where you already
+    // are; it does not move you somewhere else.
+    #[test]
+    fn splitting_while_framing_keeps_both_halves_in_view() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        let whole = h.m.card(&id).unwrap().rect;
+        h.m.view_size = crate::grid::Size { w: 1400., h: 900. };
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.framing);
+        h.run("card.split.down");
+        assert_eq!(h.m.cards.len(), 2);
+        // The frame covers the WHOLE original slot, so the top half is
+        // still on screen.
+        let rects: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+        let both = crate::viewport::bounding_rect(&rects).unwrap();
+        assert!(
+            (both.h - whole.h).abs() < 1.,
+            "the two halves still add up to the slot"
+        );
+        let framed =
+            h.m.slot_bounds(
+                &[h.m.focused().unwrap().rect],
+                &[h.m.focused().unwrap().soft_group_id.clone()],
+            )
+            .unwrap();
+        assert!(
+            (framed.h - whole.h).abs() < 1.,
+            "framing the new half frames the slot, not the half: got {framed:?}"
+        );
+    }
+
+    // A half dragged away from its partner is not a slot any more, and
+    // framing the pair would zoom out to nothing.
+    #[test]
+    fn a_half_that_has_wandered_is_framed_alone() {
+        let mut h = Harness::new();
+        h.m.view_size = crate::grid::Size { w: 1400., h: 900. };
+        h.run("card.split.down");
+        let moved = h.m.cards[1].id.clone();
+        h.m.card_mut(&moved).unwrap().rect.x += 20_000.;
+        let card = h.m.cards[0].clone();
+        let framed =
+            h.m.slot_bounds(&[card.rect], std::slice::from_ref(&card.soft_group_id))
+                .unwrap();
+        assert_eq!(
+            framed, card.rect,
+            "the runaway half is not part of the slot"
+        );
+    }
+
     // Closing has to be undoable or nobody closes anything, which is how a
     // canvas ends up as bad as a tab bar.
     #[test]

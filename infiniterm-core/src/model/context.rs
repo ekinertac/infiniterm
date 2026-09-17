@@ -104,11 +104,17 @@ impl Model {
     /// hops between neighbours you can see cost no motion. While framing,
     /// re-fits on the card instead.
     pub fn reveal_focused(&mut self) {
-        let Some(rect) = self.focused().map(|c| c.rect) else {
+        let Some(card) = self.focused().cloned() else {
             return;
         };
+        let rect = card.rect;
         if self.framing {
-            self.frame_card(rect);
+            // The slot, not the half: a split moves focus to the new piece
+            // and the frame must not follow it down into half the space.
+            let bounds = self
+                .slot_bounds(&[rect], std::slice::from_ref(&card.soft_group_id))
+                .unwrap_or(rect);
+            self.frame_card(bounds);
             return;
         }
         let next = ensure_visible(rect, self.viewport, self.view_size, REVEAL_PADDING);
@@ -129,6 +135,38 @@ impl Model {
     }
 
     /// Fits the view on one rect and keeps framing: arrows re-fit from here.
+    /// The SLOT a selection sits in: the cards themselves, plus the halves
+    /// they were split from, as long as those pieces still add up to about
+    /// one card's worth of space.
+    ///
+    /// Splitting a card while framing used to fit the new half, which is
+    /// half a slot: the view dropped onto the bottom piece and the top one
+    /// went off screen. A split does not move you somewhere else, it
+    /// subdivides where you already are, so the frame stays on the slot.
+    ///
+    /// The size check is what keeps it honest. A half dragged across the
+    /// canvas is no longer part of a slot, and framing the pair would zoom
+    /// out to nothing.
+    pub fn slot_bounds(&self, cards: &[Rect], soft_groups: &[Option<String>]) -> Option<Rect> {
+        let mut rects: Vec<Rect> = cards.to_vec();
+        for group in soft_groups.iter().flatten() {
+            for card in &self.cards {
+                if card.soft_group_id.as_deref() == Some(group.as_str())
+                    && !rects.contains(&card.rect)
+                {
+                    rects.push(card.rect);
+                }
+            }
+        }
+        let widened = bounding_rect(&rects)?;
+        let one = self.default_size();
+        // Still one slot? Then the pieces belong together.
+        if widened.w <= one.w + GUTTER && widened.h <= one.h + GUTTER {
+            return Some(widened);
+        }
+        bounding_rect(cards)
+    }
+
     pub fn frame_card(&mut self, rect: Rect) {
         self.apply_viewport(fit_rect(rect, self.view_size));
         self.framing = true;
