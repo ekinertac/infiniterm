@@ -24,9 +24,28 @@ fn modifier(k: &Key) -> u8 {
 }
 
 /// `app_cursor` is DECCKM: arrows and Home/End send SS3 instead of CSI.
+/// Legacy keys only; `encode_with` takes the kitty flag as well.
 pub fn encode(k: &Key, app_cursor: bool) -> Option<Vec<u8>> {
+    encode_with(k, app_cursor, false)
+}
+
+/// `kitty` is whether the program in the pane speaks the kitty keyboard
+/// protocol, per `Grid::kitty_keys`. While it does, Enter with Shift or
+/// Ctrl is `CSI 13 ; modifier u`, which is the only spelling that differs
+/// from Enter at all: legacy xterm sends CR for both, so a program cannot
+/// tell "send" from "new line". This is exactly what kitty itself sends in
+/// its legacy mode, for the keys that have no legacy encoding, and it is
+/// what Claude Code means by Shift+Enter being "native" in kitty, Ghostty,
+/// WezTerm and iTerm2. Nothing else changes: Alt+Enter keeps `ESC CR`,
+/// plain Enter keeps CR, Esc keeps ESC. Measured against Claude Code
+/// 2.1.274: it accepts CSI 13;2u, rejects CSI 27 u for Esc, and never
+/// pushes a flag, so this cannot be gated on a push.
+pub fn encode_with(k: &Key, app_cursor: bool, kitty: bool) -> Option<Vec<u8>> {
     let m = modifier(k);
     let plain = m == 1;
+    if kitty && !k.cmd && !k.alt && k.name == "enter" && (k.shift || k.ctrl) {
+        return Some(format!("\x1b[13;{m}u").into_bytes());
+    }
     // The reference's text-field arrows.
     if !k.ctrl && !k.shift {
         match (k.alt, k.cmd, k.name) {
@@ -188,6 +207,51 @@ pub fn paste(text: &str, bracketed: bool) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The one key the kitty protocol changes for us. Shift+Enter is the
+    // whole reason: legacy xterm sends CR for it and for Enter, and Claude
+    // Code then sent the prompt where a new line was wanted.
+    #[test]
+    fn a_kitty_program_gets_csi_u_for_shift_or_ctrl_enter_and_legacy_for_the_rest() {
+        let mut shift = key("enter", Some("\n"));
+        shift.shift = true;
+        assert_eq!(
+            encode_with(&shift, false, true),
+            Some(b"\x1b[13;2u".to_vec())
+        );
+        let mut ctrl = key("enter", Some("\n"));
+        ctrl.ctrl = true;
+        assert_eq!(
+            encode_with(&ctrl, false, true),
+            Some(b"\x1b[13;5u".to_vec())
+        );
+        // These have legacy spellings and kitty keeps them; so do we.
+        let mut alt = key("enter", Some("\n"));
+        alt.alt = true;
+        assert_eq!(encode_with(&alt, false, true), Some(b"\x1b\r".to_vec()));
+        assert_eq!(
+            encode_with(&key("enter", Some("\n")), false, true),
+            Some(b"\r".to_vec())
+        );
+        assert_eq!(
+            encode_with(&key("escape", None), false, true),
+            Some(b"\x1b".to_vec())
+        );
+        let mut stab = key("tab", Some("\t"));
+        stab.shift = true;
+        assert_eq!(encode_with(&stab, false, true), Some(b"\x1b[Z".to_vec()));
+    }
+
+    // A shell never asks, and must keep the bytes it has always had. With
+    // CSI u forced on, zsh was measured turning Shift+Enter into the text
+    // `;2u` on the command line instead of running it.
+    #[test]
+    fn a_shell_still_gets_cr_for_shift_enter() {
+        let mut shift = key("enter", Some("\n"));
+        shift.shift = true;
+        assert_eq!(encode_with(&shift, false, false), Some(b"\r".to_vec()));
+        assert_eq!(encode(&shift, false), Some(b"\r".to_vec()));
+    }
 
     fn key<'a>(name: &'a str, text: Option<&'a str>) -> Key<'a> {
         Key {

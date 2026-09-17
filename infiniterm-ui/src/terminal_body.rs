@@ -32,7 +32,7 @@ use infiniterm_core::ift::{open_plan, url_plan, PathKind};
 use infiniterm_core::links::{find_links, Found, LinkKind};
 use infiniterm_core::links_fs::path_kinds;
 use infiniterm_term::grid::{CursorKind, Frame, Grid, SelectKind, TermEvent, SPACER};
-use infiniterm_term::keys::{encode, paste, Key};
+use infiniterm_term::keys::{encode, encode_with, paste, Key};
 use infiniterm_term::mouse::{self, Mods, MouseButton};
 use infiniterm_term::palette::Palette;
 
@@ -708,7 +708,7 @@ impl CardBody for TerminalBody {
             shift: m.shift,
             cmd: m.platform,
         };
-        if let Some(bytes) = encode(&key, self.grid.app_cursor()) {
+        if let Some(bytes) = encode_with(&key, self.grid.app_cursor(), self.grid.kitty_keys()) {
             self.grid.scroll_to_bottom();
             // Typing is where the selection stops mattering and where a
             // blinking cursor must be visible.

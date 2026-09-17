@@ -135,6 +135,8 @@ pub struct Grid {
     /// Something outside alacritty's damage tracking changed (the palette,
     /// a resize): the next frame rebuilds every row.
     full_dirty: bool,
+    /// A program asked `CSI ? u` and has not left since. See `kitty_keys`.
+    kitty_asked: bool,
 }
 
 impl Grid {
@@ -142,6 +144,14 @@ impl Grid {
         let events = Listener::default();
         let config = Config {
             scrolling_history: scrollback,
+            // The kitty keyboard protocol. Off by default in alacritty, and
+            // off meant the query (CSI ? u) went unanswered, so a program
+            // that asks before pushing never pushed. Claude Code asks, and
+            // without an answer Shift+Enter reached it as a bare CR and
+            // sent the prompt instead of breaking the line. With it on,
+            // alacritty answers, tracks the push and the pop, and
+            // `disambiguate_keys` tells the encoder what to send.
+            kitty_keyboard: true,
             ..Default::default()
         };
         let size = Size {
@@ -154,6 +164,7 @@ impl Grid {
             events,
             size,
             full_dirty: true,
+            kitty_asked: false,
         }
     }
 
@@ -167,6 +178,14 @@ impl Grid {
 
     /// Parses `bytes`; the caller budgets how many per frame.
     pub fn advance(&mut self, bytes: &[u8]) {
+        let pasting = self.bracketed_paste();
+        self.advance_bytes(bytes);
+        if pasting && !self.bracketed_paste() {
+            self.kitty_asked = false;
+        }
+    }
+
+    fn advance_bytes(&mut self, bytes: &[u8]) {
         self.processor.advance(&mut self.term, bytes);
     }
 
@@ -185,7 +204,16 @@ impl Grid {
     }
 
     pub fn take_events(&mut self) -> Vec<TermEvent> {
-        std::mem::take(&mut *self.events.0.borrow_mut())
+        let events = std::mem::take(&mut *self.events.0.borrow_mut());
+        // alacritty's answer to `CSI ? u` passes through here on its way to
+        // the pty. The question is the program's opt-in in practice; see
+        // `kitty_keys`.
+        if events.iter().any(
+            |e| matches!(e, TermEvent::Write(s) if s.starts_with("\x1b[?") && s.ends_with('u')),
+        ) {
+            self.kitty_asked = true;
+        }
+        events
     }
 
     /// A viewport cell as a grid point, which is what a selection is made of:
@@ -277,6 +305,24 @@ impl Grid {
 
     pub fn app_cursor(&self) -> bool {
         self.term.mode().contains(TermMode::APP_CURSOR)
+    }
+
+    /// Whether the program in this pane speaks the kitty keyboard protocol,
+    /// for `keys::encode_with`.
+    ///
+    /// True while a flag is pushed, as the protocol says, OR while a program
+    /// has merely ASKED (`CSI ? u`) and not yet gone away. The second half
+    /// is the one that matters: Claude Code asks, is answered, and then
+    /// pushes nothing, expecting the terminal to send `CSI 13;2u` for
+    /// Shift+Enter on its own, which is what kitty's legacy mode does and
+    /// what the other terminals it calls "native" do. A shell never asks.
+    ///
+    /// "Gone away" is bracketed paste turning off. Claude turns it off on
+    /// exit; zsh turns it off on every Enter, so a Claude that crashed
+    /// without saying goodbye leaves the shell one wrong Shift+Enter at
+    /// most before it heals.
+    pub fn kitty_keys(&self) -> bool {
+        self.term.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES) || self.kitty_asked
     }
 
     pub fn bracketed_paste(&self) -> bool {
@@ -509,6 +555,52 @@ mod tests {
         let events = g.take_events();
         assert!(matches!(events.first(), Some(TermEvent::Write(s)) if s.starts_with("\x1b[")));
         assert!(g.take_events().is_empty());
+    }
+
+    // The kitty keyboard protocol, as Claude Code drives it: it asks with
+    // CSI ? u, and only a terminal that ANSWERS gets the push that follows.
+    // Unanswered, it stayed on legacy keys and Shift+Enter arrived as a bare
+    // CR, identical to Enter, and sent the prompt instead of breaking the
+    // line. Every terminal Claude lists as "native" answers this query.
+    #[test]
+    fn the_kitty_keyboard_query_is_answered() {
+        let mut g = Grid::new(10, 2, 100);
+        g.advance(b"\x1b[?u");
+        let events = g.take_events();
+        assert!(
+            matches!(events.first(), Some(TermEvent::Write(s)) if s == "\x1b[?0u"),
+            "no flags pushed yet, so the answer is ?0u: {events:?}"
+        );
+    }
+
+    // Claude Code asks and never pushes, so the question itself has to be
+    // the opt-in. It ends when the program does: bracketed paste going off
+    // is how both Claude (on exit) and zsh (on every Enter) say so.
+    #[test]
+    fn asking_about_kitty_keys_turns_them_on_until_the_program_leaves() {
+        let mut g = Grid::new(10, 2, 100);
+        assert!(!g.kitty_keys(), "a shell that never asked gets legacy keys");
+        g.advance(b"\x1b[?2004h\x1b[?u");
+        let _ = g.take_events(); // the answer is where the asking is noticed
+        assert!(g.kitty_keys(), "asked, so Shift+Enter is CSI u from here");
+        g.advance(b"echo still running");
+        assert!(g.kitty_keys(), "output alone does not end it");
+        g.advance(b"\x1b[?2004l");
+        assert!(
+            !g.kitty_keys(),
+            "bracketed paste off is the program leaving"
+        );
+    }
+
+    // The protocol's own path still counts: a program that pushes a flag
+    // gets CSI u whether or not it asked first.
+    #[test]
+    fn a_pushed_flag_counts_too_and_a_pop_ends_it() {
+        let mut g = Grid::new(10, 2, 100);
+        g.advance(b"\x1b[>1u");
+        assert!(g.kitty_keys());
+        g.advance(b"\x1b[<u");
+        assert!(!g.kitty_keys());
     }
 
     #[test]
