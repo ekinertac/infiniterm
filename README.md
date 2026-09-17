@@ -15,11 +15,11 @@ Native macOS app in Rust: gpui draws the canvas, `alacritty_terminal` parses the
 - Keyboard-first. Every action is a command; `Cmd` is the app's modifier, and everything else goes to the terminal untouched
 - Card labels and group names take a colour of their own from the terminal theme's palette, derived from the card's id so it never changes
 - Several workspaces, each a canvas of its own, with a dot on the tab when something there is blocked waiting on you (a turn that merely finished does not light it)
-- Groups: a named frame around a set of cards, whose border reports the state of everything inside it. At 5% zoom you cannot read twenty-five card borders, but you can read five frame borders
+- Groups: a named frame around a set of cards, placed clear of the loose ones. The frame carries no agent colour of its own: it holds several sessions, and one colour could not say which of them wants you
 - Card labels that track what the card is doing: the running process while one runs, the current directory otherwise; editors carry badges for language, read-only and unsaved. Zoomed out, the name is drawn large across the card and the text becomes texture, so a full card reads as full at 10%
 - Splits, iTerm2's keys: a card gives up half of itself to a new one, and the halves remember each other, so closing one hands its space back
 - Free drag and resize from the card's edges, with alignment guides against the other cards, and a card dropped on another goes back where it started
-- Multi-select with `Cmd + Shift + Arrow` or Shift + click, and every command that can sensibly mean several cards acts on all of them
+- Multi-select with `Cmd + Shift + Arrow` or Shift + click, and every command that can sensibly mean several cards acts on all of them. The active card keeps its white ring so you know where you are; the rest wear blue
 - No mouse needed to reach anything: arrow into an empty slot to get a hollow card you can fill, `Cmd + Shift + T` letters every empty slot, `Cmd + F` letters every card
 - Drag a file in from the Finder: onto a terminal it arrives as the shell-escaped path, the way it does in iTerm2, so it works mid-command; onto a browser card the page goes to the file; anywhere else it opens as a card, the same as `ift <path>`
 - Terminals select with the mouse (two clicks a word, three a line), `Cmd + C` copies, links and paths that exist underline when you hold `Cmd` over them and `Cmd + click` opens them beside the card. `htop`, `vim` and friends get the mouse
@@ -30,7 +30,7 @@ Native macOS app in Rust: gpui draws the canvas, `alacritty_terminal` parses the
 - A red badge on any card sitting in an SSH session, with the destination
 - Terminal themes from `.itermcolors` files, applied to open terminals live
 - Configuration in `~/.config/infiniterm/`, Sublime style: your overrides beside a commented defaults file, watched and applied without a restart
-- Shells that outlive the window, if you ask for them: `terminal.backend: "tmux"` makes each card a tmux window, so quitting leaves your work running and reopening brings back the same shell with its scrollback, reachable from any terminal with `tmux attach -t infiniterm`. Not the default yet. Shells and full-screen programs are fine; a program that redraws inline, like Claude Code, can still come out with two lines in one row
+- Shells that outlive the window, if you ask for them: `terminal.backend: "daemon"` gives each card its own small `iftd` sidecar holding the pty, so quitting leaves your work running and reopening replays what it printed straight into the same emulator, no second one in the path. Opt-in for now, pending the falsification test in `tools/drive/daemon.sh` (a shell running Claude Code, quit, relaunch, look). `terminal.backend: "tmux"` is still there too: same idea, a real tmux window per card, reachable with `tmux attach -t infiniterm` from any terminal, at the cost of being a second terminal emulator in the path
 - The canvas survives a restart too: cards, their positions and sizes, groups, workspaces, the viewport. The window reopens where and how you left it
 
 Twenty-six cards all running `yes` at once paint at 110 fps on a 120 Hz display; a zoom over twenty-six idle cards runs at 55 to 105. Three things do that: the PTY reader stops at 256 KiB unacknowledged per pane, so a fast program waits at the kernel's buffer the way it always has on a slow terminal; output is parsed one frame's budget at a time on the UI thread; and only the rows the terminal changed are rebuilt and reshaped. An idle canvas paints twice a second, for the cursor.
@@ -155,9 +155,9 @@ The canvas is saved to `~/Library/Application Support/dev.ekinertac.infiniterm/w
 
 Agent state is deliberately not saved. A restored card starts with no agent, so nothing comes back claiming to be working days after the agent died. A file from a newer build is never written back; the app runs on it read-only.
 
-The one runtime fact that IS saved is the tmux window each card's shell lives in, because under tmux the shell really is still there and without its id the card would start a second one beside it and orphan the first. It is written only for cards that have one, so a canvas that never used tmux is the same file it always was.
+The one runtime fact that IS saved is the session id each card's shell lives in under `tmux` or `daemon` (a tmux window id, or an `iftd` socket's id), because the shell really is still there and without it the card would start a second one beside it and orphan the first. It is written only for cards that have one, so a canvas that never used either backend is the same file it always was.
 
-Windows this app made and no card comes back for are killed at the next launch: that is what a crash leaves behind. Every window it makes is tagged, so a window you opened yourself with `tmux neww -t infiniterm` is never touched.
+Sessions this app made and no card comes back for are killed at the next launch: that is what a crash leaves behind. Every one it makes is tagged, so a tmux window you opened yourself with `tmux neww -t infiniterm` is never touched.
 
 One instance at a time: the unix socket `ift` and the hooks talk to is the lock, and a second launch activates the first.
 

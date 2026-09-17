@@ -23,9 +23,12 @@ if [ "$profile" = release ]; then
     done
 fi
 # ift and the hook ride along as sidecars, which is what `ift install`
-# symlinks and `ift install-claude-hooks` points the hooks at.
-cargo build $( [ "$profile" = release ] && echo --release ) -p infiniterm-cli -p infiniterm-hook
-cp "target/$profile/ift" "target/$profile/infiniterm-hook" "$app/Contents/MacOS/"
+# symlinks and `ift install-claude-hooks` points the hooks at. `iftd` rides
+# along too: it is how a card's shell outlives the app, and
+# `DaemonBackend::find_iftd` looks beside the executable first, which is
+# exactly this directory.
+cargo build $( [ "$profile" = release ] && echo --release ) -p infiniterm-cli -p infiniterm-hook -p infiniterm-session
+cp "target/$profile/ift" "target/$profile/infiniterm-hook" "target/$profile/iftd" "$app/Contents/MacOS/"
 # The Tauri app's icon, as it was.
 cp assets/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 themes="$HOME/Code/infiniterm-tauri/src-tauri/resources/themes"

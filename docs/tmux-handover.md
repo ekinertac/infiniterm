@@ -1,5 +1,7 @@
 # tmux backend: where it stands
 
+**2026-09-17, later the same day: superseded by the session daemon.** `docs/superpowers/specs/2026-09-17-session-daemon-design.md` replaces this backend with our own sidecar (`iftd`) rather than fixing it, because six of the ten bugs below trace to the same fact: tmux is a second terminal emulator. tmux stays selectable (`terminal.backend: "tmux"`); the bug list below is why the daemon is shaped the way it is, so it is kept rather than deleted.
+
 Written 2026-09-17, mid-work, so the next session does not have to rediscover any of this.
 
 ## The way back
