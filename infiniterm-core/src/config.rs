@@ -194,7 +194,7 @@ pub fn default_config() -> Config {
         starting_dir: String::new(),
         terminal: Terminal {
             shell: String::new(),
-            backend: TerminalBackend::Pty,
+            backend: TerminalBackend::Daemon,
             cursor_style: CursorStyle::Block,
             cursor_blink: true,
             // What every Mac has. A Nerd Font is one you install, and a
@@ -467,12 +467,15 @@ mod tests {
             let c = m(json!({"terminal": {"backend": text}}));
             assert_eq!(c.terminal.backend, want, "{text}");
         }
-        // A typo falls back to the default rather than breaking the file.
+        // A typo falls back to THE DEFAULT, whatever that currently is,
+        // rather than breaking the file. Asked of `default_config` rather
+        // than spelled out, so flipping the default cannot leave this test
+        // asserting yesterday's answer.
         assert_eq!(
             m(json!({"terminal": {"backend": "nonsense"}}))
                 .terminal
                 .backend,
-            TerminalBackend::Pty
+            default_config().terminal.backend
         );
     }
 

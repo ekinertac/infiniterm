@@ -41,7 +41,7 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         "terminal.backend",
         &[
             "Where a card's shell lives: \"pty\", \"tmux\", or \"daemon\".",
-            "pty, the default, is a plain local shell that dies with the window.",
+            "pty is a plain local shell that dies with the window.",
             "tmux keeps the shell running when infiniterm quits, and the same",
             "sessions are reachable with `tmux attach -t infiniterm` from any",
             "terminal. Each card is one tmux window, but tmux is a second",
@@ -49,7 +49,7 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "can come out with two lines in one row, because two emulators are",
             "tracking one program and a redraw that never clears never recovers",
             "from a disagreement. Shells and full-screen programs are fine.",
-            "daemon runs one small `iftd` sidecar per card instead: it parses no",
+            "daemon, the default, runs one small `iftd` sidecar per card: it parses no",
             "terminal output at all, so a reattach after infiniterm quits replays",
             "the exact bytes our own emulator would have seen live, with no second",
             "emulator to disagree with. `ift sessions` and `ift attach <id>` reach",
