@@ -51,6 +51,12 @@ pub fn encode_with(k: &Key, app_cursor: bool, kitty: bool) -> Option<Vec<u8>> {
         match (k.alt, k.cmd, k.name) {
             (true, false, "left") => return Some(b"\x1bb".to_vec()),
             (true, false, "right") => return Some(b"\x1bf".to_vec()),
+            // The forward twin of Alt+Backspace's `ESC DEL`. xterm's own
+            // `CSI 3;3~` is bound by no line editor: zsh, Claude Code and
+            // Pi all showed it landing on the line as the text `3~`.
+            // `ESC d` is readline's delete-word-forward and all three bind
+            // it.
+            (true, false, "delete") => return Some(b"\x1bd".to_vec()),
             (false, true, "left") => return Some(vec![0x01]),
             (false, true, "right") => return Some(vec![0x05]),
             _ => {}
@@ -179,11 +185,17 @@ pub fn encode_with(k: &Key, app_cursor: bool, kitty: bool) -> Option<Vec<u8>> {
                 if text.is_empty() || text.chars().any(char::is_control) {
                     return None;
                 }
+                // Alt is Meta, an ESC prefix, which is what bash and zsh
+                // expect. EXCEPT where the layout makes Option a character
+                // key: on Turkish Q, Option+S is `ş` and Option+I is `ı`,
+                // and macOS hands us that character rather than `s`. An ESC
+                // in front of it is a sequence nothing binds, and it
+                // reached the line as `<ffffffff>`. The character IS the
+                // key there, so it goes alone. A layout where Option
+                // changes nothing (US: Option+S is still `s`) keeps Meta.
+                let composed = k.alt && text != k.name;
                 let mut out = Vec::with_capacity(text.len() + 1);
-                if k.alt {
-                    // Meta as ESC prefix, what bash and zsh expect by default;
-                    // the character is the unmodified one on macOS since gpui
-                    // gives it to us for the physical key.
+                if k.alt && !composed {
                     out.push(0x1b);
                 }
                 out.extend_from_slice(text.as_bytes());
@@ -207,6 +219,42 @@ pub fn paste(text: &str, bracketed: bool) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Turkish Q: Option+S is `ş`, a character key, not Meta+s. macOS
+    // resolves it through the layout and hands us the composed character;
+    // an ESC in front of it is a sequence no shell binds, and it showed on
+    // the line as `<ffffffff>`.
+    #[test]
+    fn option_types_the_character_a_layout_composes() {
+        let mut k = key("s", Some("ş"));
+        k.alt = true;
+        assert_eq!(encode(&k, false), Some("ş".as_bytes().to_vec()));
+        let mut dotless = key("i", Some("ı"));
+        dotless.alt = true;
+        assert_eq!(encode(&dotless, false), Some("ı".as_bytes().to_vec()));
+    }
+
+    // US layout: Option+S is still `s`, so Alt keeps meaning Meta and the
+    // ESC prefix stays. Losing this would break Alt+letter in every shell.
+    #[test]
+    fn option_is_still_meta_where_the_layout_composes_nothing() {
+        let mut k = key("s", Some("s"));
+        k.alt = true;
+        assert_eq!(encode(&k, false), Some(b"\x1bs".to_vec()));
+    }
+
+    // Alt+Backspace deletes the word behind; Alt+Delete must delete the
+    // word ahead. xterm's CSI 3;3~ is bound by nothing and arrived as the
+    // text `3~`, measured in zsh, Claude Code and Pi.
+    #[test]
+    fn alt_delete_is_delete_word_forward() {
+        let mut k = key("delete", None);
+        k.alt = true;
+        assert_eq!(encode(&k, false), Some(b"\x1bd".to_vec()));
+        let mut back = key("backspace", None);
+        back.alt = true;
+        assert_eq!(encode(&back, false), Some(b"\x1b\x7f".to_vec()));
+    }
 
     // The one key the kitty protocol changes for us. Shift+Enter is the
     // whole reason: legacy xterm sends CR for it and for Enter, and Claude
