@@ -16,6 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
+pub mod daemon;
 pub mod local_pty;
 pub mod session_protocol;
 pub mod tmux;
