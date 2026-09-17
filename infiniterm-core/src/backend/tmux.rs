@@ -62,6 +62,12 @@ const INITIAL_ROWS: u16 = 24;
 struct Window {
     /// `@7`
     id: String,
+    /// The size the ui last asked for. Remembered because the ui asks
+    /// before tmux has said what the window is called, and that first ask
+    /// is the one that matters: a card whose size never lands runs at
+    /// 80x24 while showing a much bigger grid, and a full-screen program
+    /// draws into the corner of it.
+    size: Option<(u16, u16)>,
     /// `%7`. Learned from the first `%output` for the window, because tmux
     /// reports output by PANE and commands take either.
     pane: Option<String>,
@@ -219,6 +225,10 @@ impl TmuxBackend {
         // Ours, and only ours: a window somebody made from another terminal
         // is theirs and we do not adopt it.
         backend.command("set -g allow-rename off");
+        // A pane border is a row of the card. Somebody's `pane-border-status
+        // top` left every shell one row shorter than the grid drawn for it,
+        // so a full-screen program's last line landed in the wrong place.
+        backend.command("set -g pane-border-status off");
         backend.read_thread(stdout, tx);
         if !existed {
             backend.command_expecting(
@@ -312,6 +322,18 @@ impl TmuxBackend {
                                 if let Some(w) = windows.lock().unwrap().get_mut(id) {
                                     w.id = window.clone();
                                     w.pane = Some(pane);
+                                }
+                                // The size the ui asked for before tmux had
+                                // named this window. Without this the card
+                                // keeps the 80x24 it was created with.
+                                let size = windows.lock().unwrap().get(id).and_then(|w| w.size);
+                                if let Some((cols, rows)) = size {
+                                    send(
+                                        &stdin,
+                                        &expecting,
+                                        &format!("refresh-client -C '{window}:{cols}x{rows}'"),
+                                        Expect::Nothing,
+                                    );
                                 }
                                 // Tagged BY ID, here, because this is the
                                 // first moment the id exists. `-t <session>`
@@ -465,6 +487,7 @@ impl TmuxBackend {
             Window {
                 id: String::new(),
                 pane: None,
+                size: None,
             },
         );
         Ok(id)
@@ -485,9 +508,19 @@ impl TmuxBackend {
     }
 
     pub fn resize_now(&self, pane: PaneId, cols: u16, rows: u16) {
-        let Some(window) = self.window_of(pane).filter(|w| !w.id.is_empty()) else {
-            return;
+        // Kept whether or not it can be sent yet: the ui asks the moment it
+        // spawns, which is before tmux has named the window.
+        let window = {
+            let mut map = self.windows.lock().unwrap();
+            let Some(w) = map.get_mut(&pane) else {
+                return;
+            };
+            w.size = Some((cols, rows));
+            w.clone()
         };
+        if window.id.is_empty() {
+            return;
+        }
         // Per WINDOW, which is what lets two cards be two sizes.
         self.command(&format!(
             "refresh-client -C '{}:{}x{}'",
@@ -553,6 +586,7 @@ impl TmuxBackend {
             Window {
                 id: window.to_string(),
                 pane: None,
+                size: None,
             },
         );
         // -e keeps the colours: without it a restored card comes back grey
