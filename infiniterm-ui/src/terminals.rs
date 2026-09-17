@@ -222,12 +222,26 @@ impl AppView {
         for (pane, bytes) in self.ledger.drain() {
             self.backend.pty.ack_now(pane, bytes);
         }
+        // What the emulator answered a program with (a colour query, device
+        // attributes, a cursor report) is sent ONLY when we are the
+        // terminal. Under tmux we are not: tmux answers the pane itself,
+        // and a second answer arrives at the program as keystrokes. It was
+        // measured landing in the shell as `10;rgb:5050/9e9e/3131` after
+        // the program that asked had already gone, and Claude Code, which
+        // re-queries as it redraws, took a steady drip of it into its input.
+        let answer = !self.backend.pty.is_tmux();
         let mut writes: Vec<(u32, Vec<u8>)> = vec![];
         for body in self.bodies.values_mut() {
             if let Some(t) = body.as_any_mut().downcast_mut::<TerminalBody>() {
+                let replies = std::mem::take(&mut t.replies);
                 if let Some(pane) = t.pane {
                     for bytes in std::mem::take(&mut t.outgoing) {
                         writes.push((pane, bytes));
+                    }
+                    if answer {
+                        for bytes in replies {
+                            writes.push((pane, bytes));
+                        }
                     }
                 }
             }

@@ -100,6 +100,12 @@ pub struct TerminalBody {
     pub error: Option<String>,
     /// Bytes to write to the pty: the ui drains them after each event.
     pub outgoing: Vec<Vec<u8>>,
+    /// What the EMULATOR answered a program with: a colour query, device
+    /// attributes, a cursor report. Kept apart from `outgoing`, which is
+    /// what the person typed, because under tmux these must not be sent at
+    /// all: tmux is the terminal from the program's point of view and
+    /// answers them itself, and a second answer arrives as keystrokes.
+    pub replies: Vec<Vec<u8>>,
     /// Output arrived since the last paint.
     pub dirty: bool,
     pub title: Option<String>,
@@ -196,6 +202,7 @@ impl TerminalBody {
             cwd,
             error: None,
             outgoing: vec![],
+            replies: vec![],
             dirty: true,
             title: None,
             clipboard_out: None,
@@ -241,7 +248,7 @@ impl TerminalBody {
     fn drain_events(&mut self) {
         for event in self.grid.take_events() {
             match event {
-                TermEvent::Write(s) => self.outgoing.push(s.into_bytes()),
+                TermEvent::Write(s) => self.replies.push(s.into_bytes()),
                 TermEvent::Title(t) => self.title = Some(t),
                 // The reference does nothing on a bell either.
                 TermEvent::Bell => {}
