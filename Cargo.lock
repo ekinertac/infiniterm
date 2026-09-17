@@ -3102,6 +3102,8 @@ dependencies = [
 name = "infiniterm-cli"
 version = "0.1.0"
 dependencies = [
+ "infiniterm-core",
+ "libc",
  "serde_json",
 ]
 

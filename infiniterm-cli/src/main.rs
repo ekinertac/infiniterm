@@ -18,6 +18,7 @@
 //! Exit codes are API once anything scripts against them: 0 success, 1 infiniterm
 //! is not running, 2 bad usage.
 
+mod attach;
 mod claude_hooks;
 mod socket;
 
@@ -34,6 +35,10 @@ ift — drive infiniterm from a shell
                              changed files under path (the current directory
                              without one) and each file's diff
   ift ls                     cards as TSV: id, group, directory, state, remote
+  ift sessions               session daemons still running, app or no app:
+                             id, pid, cwd, command, started, tab separated
+  ift attach <id>            connect a session's shell to this terminal;
+                             Ctrl-\\ (0x1c) detaches, leaving it running
   ift omni <term>            what the omnibox (Cmd+L) would show for a term,
                              ranked against the real history and open cards
   ift name <text>            name the card this is run from
@@ -63,6 +68,11 @@ fn main() -> ExitCode {
         ),
         Some("install") => install_self(),
         Some("ls") => send("ls", vec![]),
+        Some("sessions") => attach::sessions_cmd(),
+        Some("attach") => match args.get(1) {
+            Some(id) => attach::attach(id),
+            None => attach::no_id(),
+        },
         Some("omni") => send("omni", rest()),
         Some("diff") => diff_path(args.get(1).map(String::as_str).unwrap_or(".")),
         Some("name") => send("name", rest()),

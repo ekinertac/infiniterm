@@ -16,3 +16,13 @@ path = "src/main.rs"
 # all of that through a hand-rolled parser is exactly the kind of cleverness that
 # eats somebody's configuration.
 serde_json = "1"
+
+# `ift attach` needs libc for real, not just to dodge a portable-pty style crate:
+# raw mode is tcgetattr/cfmakeraw/tcsetattr and the window size is an ioctl
+# (TIOCGWINSZ), and SIGWINCH needs a signal handler. Shelling out to `stty` to
+# avoid the dependency is the kind of cleverness that breaks the moment stdout
+# is a pipe rather than a tty.
+libc = "0.2"
+# session_protocol (the wire to iftd) and paths::sessions_dir, so `ift sessions`
+# and `ift attach` read the same directory and speak the same frames as the app.
+infiniterm-core = { path = "../infiniterm-core" }
