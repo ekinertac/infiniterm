@@ -406,7 +406,12 @@ impl DaemonBackend {
                     ids.push(id.to_string());
                 }
             } else {
+                // Nothing is listening, so the daemon died without cleaning
+                // up. Take the meta with the socket: `ift sessions` reads
+                // the metas, and a meta left behind advertises a session
+                // that cannot be attached to.
                 let _ = std::fs::remove_file(&path);
+                let _ = std::fs::remove_file(path.with_extension("meta"));
             }
         }
         ids
@@ -657,8 +662,16 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("dead.sock"), b"").unwrap();
 
+        // The meta beside it, which is what `ift sessions` reads.
+        std::fs::write(dir.join("dead.meta"), b"{}").unwrap();
+
         assert!(DaemonBackend::live_sessions(&dir).is_empty());
         assert!(!dir.join("dead.sock").exists(), "and it is swept");
+        assert!(
+            !dir.join("dead.meta").exists(),
+            "the meta goes with the socket, or ift sessions keeps offering \
+             an attach to a daemon that is gone"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

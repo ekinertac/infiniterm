@@ -38,7 +38,19 @@ echo "--- part 1: a synthetic inline redraw, no Claude needed ---"
 # clearing the screen. Any point where the emulator loses track of the
 # cursor shows as both lines sharing one row, which is the exact failure
 # mode this whole design is about.
-type_text "printf 'top\\nbottom\\n'; for i in \$(seq 1 50); do sleep 0.3; printf '\\033[2A\\033[Ktop %s\\n\\033[Kbottom %s\\n' \"\$i\" \"\$i\"; done"
+# Written to a file and RUN, not typed: `type_text` interpolates into an
+# AppleScript string literal, so a double quote in the payload closes it
+# and osascript dies with "Expected \" but found unknown token".
+cat > "$DATA/redraw.sh" <<'SH'
+printf 'top\nbottom\n'
+i=1
+while [ $i -le 50 ]; do
+  sleep 0.3
+  printf '\033[2A\033[Ktop %s\n\033[Kbottom %s\n' $i $i
+  i=$((i + 1))
+done
+SH
+type_text "sh $DATA/redraw.sh"
 key_code 36
 wait_s 2
                                 shot 01-redrawing 1

@@ -86,6 +86,13 @@ pub fn list_sessions(dir: &Path) -> Vec<SessionRow> {
         let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
+        // A meta whose socket is gone is a daemon that died without
+        // cleaning up. Listing it offers an attach that cannot work, and
+        // the app sweeps these only when it happens to be running, so the
+        // listing checks for itself rather than trusting the directory.
+        if !path.with_extension("sock").exists() {
+            continue;
+        }
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -441,6 +448,23 @@ mod tests {
         assert_eq!(rows[0].started, "2026-09-17T10:00:00Z");
     }
 
+    // Found by running tools/drive/daemon.sh: a killed daemon left its
+    // .meta behind and `ift sessions` went on advertising a session whose
+    // socket was gone, offering an attach that could only fail. The app
+    // sweeps these, but only while it is running, and this command's whole
+    // reason to exist is working when it is not.
+    #[test]
+    fn a_meta_with_no_socket_is_not_a_session() {
+        let dir = tempdir();
+        let row = r#"{"pid":42,"cwd":"/tmp","cmd":"zsh","started":"2026-09-17T10:00:00Z"}"#;
+        std::fs::write(dir.join("alive.meta"), row).unwrap();
+        std::fs::write(dir.join("alive.sock"), b"").unwrap();
+        std::fs::write(dir.join("dead.meta"), row).unwrap();
+
+        let ids: Vec<String> = list_sessions(&dir).into_iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec!["alive".to_string()]);
+    }
+
     #[test]
     fn a_missing_directory_is_an_empty_list_not_an_error() {
         let dir = std::env::temp_dir().join("ift-attach-test-does-not-exist-at-all");
@@ -471,6 +495,8 @@ mod tests {
             r#"{"pid":7,"cwd":"/home/x","cmd":"fish","started":"2026-09-17T11:00:00Z"}"#,
         )
         .unwrap();
+        // A listed session needs its socket: see `a_meta_with_no_socket_is_not_a_session`.
+        std::fs::write(dir.join("good.sock"), b"").unwrap();
         let rows = list_sessions(&dir);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "good");
@@ -487,6 +513,7 @@ mod tests {
                 ),
             )
             .unwrap();
+            std::fs::write(dir.join(format!("{id}.sock")), b"").unwrap();
         }
         let ids: Vec<_> = list_sessions(&dir).into_iter().map(|r| r.id).collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
@@ -502,6 +529,7 @@ mod tests {
             r#"{"pid":1,"cwd":"/tmp","cmd":"zsh","started":"2026-09-17T10:00:00Z"}"#,
         )
         .unwrap();
+        std::fs::write(dir.join("real.sock"), b"").unwrap();
         let rows = list_sessions(&dir);
         assert!(!rows.iter().any(|r| r.id == "nonexistent"));
         assert!(rows.iter().any(|r| r.id == "real"));
