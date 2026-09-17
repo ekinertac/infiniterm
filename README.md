@@ -30,11 +30,12 @@ Native macOS app in Rust: gpui draws the canvas, `alacritty_terminal` parses the
 - A red badge on any card sitting in an SSH session, with the destination
 - Terminal themes from `.itermcolors` files, applied to open terminals live
 - Configuration in `~/.config/infiniterm/`, Sublime style: your overrides beside a commented defaults file, watched and applied without a restart
-- The canvas survives a restart: cards, their positions and sizes, groups, workspaces, the viewport. Each card comes back as a fresh shell in its saved directory. The window reopens where and how you left it
+- Shells that outlive the window. Each card is a tmux window, so quitting infiniterm leaves your work running and reopening brings back the same shell with its scrollback: a build still building, an agent still thinking. The same sessions are reachable from any terminal with `tmux attach -t infiniterm`. tmux draws nothing, so scrollback, selection and the mouse are still infiniterm's. No tmux on the machine means plain local shells instead, and it says so once
+- The canvas survives a restart too: cards, their positions and sizes, groups, workspaces, the viewport. The window reopens where and how you left it
 
 Twenty-six cards all running `yes` at once paint at 110 fps on a 120 Hz display; a zoom over twenty-six idle cards runs at 55 to 105. Three things do that: the PTY reader stops at 256 KiB unacknowledged per pane, so a fast program waits at the kernel's buffer the way it always has on a slow terminal; output is parsed one frame's budget at a time on the UI thread; and only the rows the terminal changed are rebuilt and reshaped. An idle canvas paints twice a second, for the cursor.
 
-Not done yet: scrollback and running processes across a restart (that needs a tmux backend; this restores your layout, not your work), and adapters for Codex and OpenCode.
+Not done yet: adapters for Codex and OpenCode.
 
 ## Running it
 
@@ -152,7 +153,11 @@ A theme drives the app's own chrome as well as the terminal, the editor's syntax
 
 The canvas is saved to `~/Library/Application Support/dev.ekinertac.infiniterm/workspace.json`, half a second after any change and again on quit. Application Support rather than `~/.config` because the app writes it constantly and you should never have to edit it; deleting it resets the canvas without touching your settings. The window's own frame is `window.json` beside it, and the browser's profile and the Claude in Chrome extension live under `browser/` there.
 
-Agent state is deliberately not saved. A restored card starts with no agent and no shell until it spawns one, so nothing can come back claiming to be working days after the agent died. A file from a newer build is never written back; the app runs on it read-only.
+Agent state is deliberately not saved. A restored card starts with no agent, so nothing comes back claiming to be working days after the agent died. A file from a newer build is never written back; the app runs on it read-only.
+
+The one runtime fact that IS saved is the tmux window each card's shell lives in, because under tmux the shell really is still there and without its id the card would start a second one beside it and orphan the first. It is written only for cards that have one, so a canvas that never used tmux is the same file it always was.
+
+Windows this app made and no card comes back for are killed at the next launch: that is what a crash leaves behind. Every window it makes is tagged, so a window you opened yourself with `tmux neww -t infiniterm` is never touched.
 
 One instance at a time: the unix socket `ift` and the hooks talk to is the lock, and a second launch activates the first.
 
@@ -160,10 +165,10 @@ One instance at a time: the unix socket `ift` and the hooks talk to is the lock,
 
 A terminal can reach everything on the machine, so here is everything this one does:
 
-- Your shells, one PTY per card, started as your login shell in the card's directory with `INFINITERM_CARD_ID` in the environment. Nothing is typed into them that you did not type.
+- Your shells, one per card, started as your login shell in the card's directory with `INFINITERM_CARD_ID` in the environment. Nothing is typed into them that you did not type. Under the default tmux backend they are tmux windows in a session named `infiniterm` on tmux's usual socket, which is why you can reach them from any terminal; the app talks to tmux as a `tmux -C` client and never asks it to draw anything. Set `terminal.backend` to `pty` for plain local shells that die with the window.
 - `~/.config/infiniterm/` for settings and keybindings; `~/Library/Application Support/dev.ekinertac.infiniterm/` for the canvas, drafts, themes, the window frame and the browser profile. Nothing else is written.
 - A unix socket in the system temp directory, which `ift` and the hook binaries connect to.
-- `ps`, `lsof` and `git` run as subprocesses: to label cards with their process and directory, to spot an SSH session, and for the diff and blame cards. `open` hands URLs and files to the system.
+- `tmux`, `ps`, `lsof` and `git` run as subprocesses: to label cards with their process and directory, to spot an SSH session, and for the diff and blame cards. `open` hands URLs and files to the system.
 - The network only from browser cards, which are Chromium loading the page you asked for, and the Claude in Chrome extension inside them talking to Claude Code the way it does in Chrome. There is no telemetry, no account, no update check, and the app makes no request of its own. The one exception is off by default: turning on `browser.suggestions` sends what you type in the address bar to Google as you type it.
 - Every agent state change, in `agent.log` beside the save file: the time, the card, the hook event, and what it did. It answers "why did that card go grey", it is capped at half a megabyte, and it never leaves the machine.
 - Where browser cards have been, in `history.json` beside the save file, so the address bar can rank what you visit often above what you saw once. Nothing reads it but the address bar, and deleting the file clears it.
