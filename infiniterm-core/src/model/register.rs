@@ -165,19 +165,35 @@ mod tests {
         assert!(second.x > first.x, "{second:?} beside {first:?}");
     }
 
+    // A new card takes the GROUP and not the directory. Opening a card to
+    // start something else and landing in the last card's directory is a
+    // surprise you only notice after you have run the wrong command there.
     #[test]
-    fn a_new_card_inherits_the_group_and_the_directory_the_ungrouped_one_only_the_directory() {
+    fn a_new_card_inherits_the_group_but_never_the_directory() {
         let mut h = Harness::new();
         let first = h.focused().id.clone();
         h.m.card_mut(&first).unwrap().cwd = "/Users/me/Code/api".into();
         let g = h.m.add_group("api");
         h.m.card_mut(&first).unwrap().group_id = Some(g.clone());
+        let start = h.m.start_dir.clone();
         h.run("card.new.terminal");
         assert_eq!(h.focused().group_id.as_deref(), Some(g.as_str()));
-        assert_eq!(h.focused().cwd, "/Users/me/Code/api");
+        assert_eq!(h.focused().cwd, start, "a new card starts at startingDir");
         h.m.set_focus(Some(&first));
         h.run("card.new.ungrouped");
         assert_eq!(h.focused().group_id, None);
+        assert_eq!(h.focused().cwd, start);
+    }
+
+    // The other half of the rule: a split IS about carrying on where you
+    // are, so it keeps the directory. This is the pair that has to move
+    // together; changing one without the other is the bug being fixed.
+    #[test]
+    fn a_split_keeps_the_directory_it_was_carved_out_of() {
+        let mut h = Harness::new();
+        let first = h.focused().id.clone();
+        h.m.card_mut(&first).unwrap().cwd = "/Users/me/Code/api".into();
+        h.run("card.split.right");
         assert_eq!(h.focused().cwd, "/Users/me/Code/api");
     }
 

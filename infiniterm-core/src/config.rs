@@ -98,7 +98,8 @@ pub struct Cards {
     /// Size of a new card, in 25px grid cells.
     pub width: f64,
     pub height: f64,
-    /// Whether a new card opens in the active card's directory.
+    /// Whether a card carved out of another (a split) keeps its
+    /// directory. A plain new card always starts at `starting_dir`.
     pub inherit_directory: bool,
 }
 

@@ -49,8 +49,10 @@ impl Model {
     }
 
     /// `inherit` decides whether the new card joins the active card's group.
-    /// The directory is inherited either way: wanting a card outside the
-    /// group is a statement about grouping, not about where you work.
+    /// The DIRECTORY is not inherited either way: a new card is a new place
+    /// to work and starts at `startingDir`. A split is the opposite case
+    /// and keeps inheriting, because it is carved out of the card it came
+    /// from and is plainly about continuing there.
     pub fn new_card(&mut self, inherit: bool) {
         if self.fill_phantom(CardKind::Terminal, None) {
             return;
@@ -69,7 +71,7 @@ impl Model {
             };
             let ws = self.active_workspace.clone().unwrap_or_default();
             let id = self.add_card(
-                &self.cwd_beside(from.as_ref()),
+                &self.start_dir.clone(),
                 NewCard {
                     avoid: self.other_frames(group_id.as_deref(), &ws),
                     group_id,

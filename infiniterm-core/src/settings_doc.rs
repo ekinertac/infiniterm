@@ -130,8 +130,10 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "cards.inheritDirectory",
         &[
-            "Whether Cmd+T opens in the active card's directory rather than startingDir.",
-            "Cmd+Alt+T always opens outside any group; this is about the directory only.",
+            "Whether a card carved out of another one keeps its directory.",
+            "That is a split (Cmd+D, Cmd+Shift+D) and a card opened onto what",
+            "the active card is showing. A plain new card (Cmd+T, Cmd+Alt+T)",
+            "always starts at startingDir: a new card is a new place to work.",
         ],
     ),
     ("canvas", &["The canvas itself: zooming and panning."]),

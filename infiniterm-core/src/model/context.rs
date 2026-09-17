@@ -74,9 +74,13 @@ impl Model {
         }
     }
 
-    /// Where a card opened next to `from` starts. `cards.inheritDirectory`
-    /// decides only the DIRECTORY: group inheritance is what the two
-    /// new-card commands are for, and stays a keystroke.
+    /// Where a card CARVED OUT of `from` starts: a split, or a card opened
+    /// to work on what `from` is showing. `cards.inheritDirectory` turns it
+    /// off for anyone who does not want it.
+    ///
+    /// Plain new cards do not come through here. They start at
+    /// `startingDir`, because a new card is a new place to work, where a
+    /// split is a statement about carrying on in this one.
     pub fn cwd_beside(&self, from: Option<&Card>) -> String {
         if self.config.cards.inherit_directory {
             if let Some(c) = from {

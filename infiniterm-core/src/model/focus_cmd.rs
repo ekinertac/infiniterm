@@ -59,15 +59,12 @@ impl Model {
         self.selection.slot_picks.clear();
         let ws = self.active_workspace.clone();
         for ph in all {
-            // The directory of the card the phantom was reached from is gone
-            // with the focus; the nearest card is the best stand-in.
-            let here = self.here();
-            let placed = self.placed(&here);
-            let from = nearest_to(&placed, ph.rect)
-                .and_then(|p| self.card(&p.id))
-                .cloned();
+            // Filling a phantom slot makes a NEW card, so it starts at
+            // `startingDir` like any other. It used to borrow the nearest
+            // card's directory, which meant where a card landed decided
+            // where its shell started.
             let id = self.add_card(
-                &self.cwd_beside(from.as_ref()),
+                &self.start_dir.clone(),
                 NewCard {
                     rect: Some(ph.rect),
                     group_id: ph.group_id,
