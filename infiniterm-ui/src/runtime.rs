@@ -360,6 +360,16 @@ impl AppView {
             let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
             let reply = self.model.run_ift(&req, &ids);
             self.backend.cli.reply(req.id, reply.ok, reply.text);
+            // An ift verb arrives from the socket, after the element tree
+            // for this frame was built, and several of them change chrome
+            // rather than anything that draws itself: `ift name` sets a
+            // card's title, `ift group` its group. Without owing a frame
+            // the model changed and the screen did not, and the card kept
+            // its old label until something unrelated repainted the canvas.
+            // Claude Code renames its card at the END of a turn, which is
+            // exactly when the card stops producing the output that would
+            // have forced a frame, so it looked like the rename was refused.
+            self.redraw = true;
         }
         self.perform_effects();
     }

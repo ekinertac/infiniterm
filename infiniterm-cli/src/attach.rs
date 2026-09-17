@@ -417,15 +417,25 @@ fn run_attached(stream: UnixStream) -> ExitCode {
 mod tests {
     use super::*;
 
+    /// A directory of this test's own.
+    ///
+    /// A COUNTER, not a timestamp. These tests run in parallel and the
+    /// clock is not guaranteed to tick between two calls, so two tests
+    /// could be handed the same path and then read each other's files:
+    /// `a_malformed_meta_file_is_skipped_not_panicked_on` would find
+    /// another test's valid session and fail, only sometimes, and only
+    /// under load. Measured on a full `cargo test`, not theorised.
     fn tempdir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
             "ift-attach-test-{}-{}",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
+        // A path from a previous run with a recycled pid must not carry
+        // its files into this one.
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

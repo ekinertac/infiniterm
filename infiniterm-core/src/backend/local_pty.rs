@@ -399,7 +399,12 @@ mod tests {
         pane: PaneId,
         needle: &str,
     ) -> bool {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        // Generous on purpose. These spawn the REAL login shell, so the
+        // user's own profile runs first, and this suite now spawns shells
+        // in several crates at once: five seconds was enough alone and
+        // intermittently was not under a full `cargo test`. The deadline
+        // only costs this long when a test is failing anyway.
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
         let mut acc = Vec::new();
         while std::time::Instant::now() < deadline {
             if let Ok((p, PaneEvent::Output(bytes))) = rx.recv_timeout(Duration::from_millis(200)) {
@@ -506,8 +511,11 @@ mod tests {
             .await
             .unwrap();
         backend.resize(pane, 120, 40);
-        backend.write(pane, b"tput cols\n");
-        assert!(wait_for_output(&rx, pane, "120"));
+        // Marked, not a bare "120": the shell's own startup prints plenty
+        // of numbers and a loose match could pass without the resize ever
+        // having been seen.
+        backend.write(pane, b"echo COLS=$(tput cols)\n");
+        assert!(wait_for_output(&rx, pane, "COLS=120"));
     }
 
     #[tokio::test]
