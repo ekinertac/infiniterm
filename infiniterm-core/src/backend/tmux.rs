@@ -101,7 +101,22 @@ pub struct TmuxBackend {
     /// pane delays every other card.
     in_flight: Arc<Mutex<HashMap<PaneId, usize>>>,
     paused: Arc<Mutex<HashMap<PaneId, bool>>>,
+    /// Output for a tmux pane we have not matched to a card yet, by tmux's
+    /// pane id.
+    ///
+    /// Adoption asks tmux which pane is in the window, and a program does
+    /// not wait for that answer: tmux makes a pane redraw when a client
+    /// attaches, so the redraw arrives BEFORE we know whose it is. Dropping
+    /// it threw away the clear-screen at the front of that redraw, and the
+    /// program then painted over a screen we had never cleared, which put
+    /// two lines in one row character by character.
+    early: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
+
+/// How much output is held for one unmatched pane. A window belonging to
+/// somebody else also arrives here and is never claimed, so this is the
+/// ceiling on what that can cost.
+const EARLY_LIMIT: usize = 1024 * 1024;
 
 /// Back under this and the pane is let go again. Half the mark, so a pane
 /// hovering at the limit is not paused and continued on every frame.
@@ -213,6 +228,7 @@ impl TmuxBackend {
             spare: Arc::new(Mutex::new(None)),
             in_flight: Arc::new(Mutex::new(HashMap::new())),
             paused: Arc::new(Mutex::new(HashMap::new())),
+            early: Arc::new(Mutex::new(HashMap::new())),
         };
         // tmux answers the `new-session` on its own command line with a
         // reply block of its own, before anything we send. Nothing queued
@@ -247,6 +263,7 @@ impl TmuxBackend {
         let spare = self.spare.clone();
         let in_flight = self.in_flight.clone();
         let paused = self.paused.clone();
+        let early = self.early.clone();
         let stdin = self.stdin.clone();
         std::thread::spawn(move || {
             let mut reader = Reader::new();
@@ -270,6 +287,14 @@ impl TmuxBackend {
                 match reader.line(&text) {
                     Notice::Output { pane, bytes } => {
                         let Some(id) = Self::id_for_pane(&windows, &pane) else {
+                            // Not ours YET. Held rather than dropped: see
+                            // `early`. A pane that never turns out to be
+                            // ours costs at most EARLY_LIMIT.
+                            let mut held = early.lock().unwrap();
+                            let buffer = held.entry(pane).or_default();
+                            if buffer.len() + bytes.len() <= EARLY_LIMIT {
+                                buffer.extend(bytes);
+                            }
                             continue;
                         };
                         let owed = {
@@ -332,7 +357,16 @@ impl TmuxBackend {
                             if let Some((window, pane)) = split_ids(&text) {
                                 if let Some(w) = windows.lock().unwrap().get_mut(id) {
                                     w.id = window.clone();
-                                    w.pane = Some(pane);
+                                    w.pane = Some(pane.clone());
+                                }
+                                // Whatever this pane said before we knew
+                                // whose it was, in the order it said it and
+                                // after any replayed history, which is
+                                // older.
+                                if let Some(held) = early.lock().unwrap().remove(&pane) {
+                                    if !held.is_empty() {
+                                        let _ = tx.send((*id, PaneEvent::Output(held)));
+                                    }
                                 }
                                 // The size the ui asked for before tmux had
                                 // named this window. Without this the card
