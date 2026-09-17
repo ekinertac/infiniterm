@@ -858,6 +858,14 @@ impl CardBody for TerminalBody {
     /// card pixels, positive up.
     fn wheel(&mut self, local: Point, _dx: f64, dy: f64, modifiers: &gpui::Modifiers) {
         let lines = self.wheel_carry.lines(dy, self.font_px * self.line_height) as i32;
+        if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+            eprintln!(
+                "[wheel]   terminal: {lines} lines, mouse-mode {} alt-scroll {} offset {}",
+                self.grid.wants_mouse(),
+                self.grid.alternate_scroll(),
+                self.frame.display_offset
+            );
+        }
         if lines == 0 {
             return;
         }

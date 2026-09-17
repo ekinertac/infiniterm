@@ -5,12 +5,22 @@ use crate::grid::round;
 pub const UI_SCALE_MIN: f64 = 0.6;
 pub const UI_SCALE_MAX: f64 = 2.5;
 pub const UI_SCALE_STEP: f64 = 0.1;
-pub const RING_NEAR: f64 = 2.;
-pub const RING_MID: f64 = 3.;
-pub const RING_FAR: f64 = 4.;
-pub const RING_ALPHA_NEAR: f64 = 0.45;
-pub const RING_ALPHA_MID: f64 = 0.75;
+/// The focus ring, in screen pixels, stepped with the zoom. It was 2 px at
+/// 45% alpha up close, a half-transparent hairline that read as "faintly
+/// there" on a resting card and as nothing at all beside a 4 px agent
+/// border in yellow or green. The ring is the one thing that says where
+/// you are, so it is wide enough to see and nearly opaque at every zoom.
+pub const RING_NEAR: f64 = 3.;
+pub const RING_MID: f64 = 4.;
+pub const RING_FAR: f64 = 5.;
+pub const RING_ALPHA_NEAR: f64 = 0.9;
+pub const RING_ALPHA_MID: f64 = 0.95;
 pub const RING_ALPHA_FAR: f64 = 1.;
+/// Canvas between the card's border and the ring, as a multiple of the
+/// ring's width. Touching a solid agent border the white ring merged into
+/// the colour; floated off it on a strip of canvas it reads as its own
+/// shape whatever the border's colour is.
+pub const RING_GAP_RATIO: f64 = 1.;
 pub const CARD_BORDER_SCREEN_PX: f64 = 2.;
 /// A card with an agent in it wears a heavier border than a resting one.
 /// Hue cannot carry a signal through two screen pixels: at a glance across
@@ -153,8 +163,9 @@ mod tests {
     }
     #[test]
     fn far_zoom_has_wide_world_ring() {
-        assert_eq!(focus_ring_world_px(0.05), 80.);
-        assert_eq!(focus_ring_world_px(1.), 2.);
+        // 5% zoom: the far ring in world pixels is 20x its screen width.
+        assert_eq!(focus_ring_world_px(0.05), RING_FAR / 0.05);
+        assert_eq!(focus_ring_world_px(1.), RING_NEAR);
     }
     #[test]
     fn ring_dims_zooming_in() {

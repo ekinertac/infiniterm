@@ -377,9 +377,12 @@ impl AppView {
                     } else {
                         SELECTED_UNFOCUSED_RING_ALPHA_SCALE
                     };
+                // Off the border by a strip of canvas, so the ring keeps
+                // its own edge against an agent border of any colour.
+                let off = ring + ring * infiniterm_core::chrome::RING_GAP_RATIO as f32;
                 let rb = Bounds::new(
-                    point(b.origin.x - ring, b.origin.y - ring),
-                    size(b.size.width + ring * 2., b.size.height + ring * 2.),
+                    point(b.origin.x - off, b.origin.y - off),
+                    size(b.size.width + off * 2., b.size.height + off * 2.),
                 );
                 window.paint_quad(
                     outline(

@@ -402,11 +402,15 @@ impl AppView {
     /// Cmd+scroll (and a trackpad pinch, which arrives as ctrl) zooms about
     /// the cursor: the world point under the pointer must not move.
     pub fn wheel(&mut self, e: &ScrollWheelEvent) {
+        let keylog = std::env::var_os("INFINITERM_KEYLOG").is_some();
         // An overlay's list scrolls itself, but the event still arrives at the
         // canvas under it: a scroll in the shortcuts panel also scrolled the
         // terminal the pointer happened to be over. Nothing behind a modal
         // moves, zoom included.
         if self.model.overlay_open() {
+            if keylog {
+                eprintln!("[wheel] {:?} dropped: overlay open", e.delta);
+            }
             return;
         }
         let p = self.to_content(e.position);
@@ -414,6 +418,21 @@ impl AppView {
             ScrollDelta::Pixels(d) => (f32::from(d.x) as f64, f32::from(d.y) as f64),
             ScrollDelta::Lines(l) => (l.x as f64 * 20., l.y as f64 * 20.),
         };
+        if keylog {
+            // Where a wheel event goes is a chain of four decisions and a
+            // mouse could not scroll a terminal once with nothing to say
+            // which link failed. The delta's KIND is the first thing to
+            // know: a trackpad sends pixels, a mouse wheel sends lines.
+            eprintln!(
+                "[wheel] {:?} -> dy {dy:.2} at {p:?} hit {:?}",
+                e.delta,
+                match self.hit(p) {
+                    Hit::CardBody { id, .. } => format!("body {}", &id[..8.min(id.len())]),
+                    Hit::CardEdge { .. } => "card edge".to_string(),
+                    _ => "not a card".to_string(),
+                }
+            );
+        }
         if e.modifiers.platform || e.modifiers.control {
             self.animator.cancel();
             let sensitivity = self.model.config.canvas.zoom_sensitivity;
