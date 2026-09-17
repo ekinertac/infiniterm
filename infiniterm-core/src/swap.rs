@@ -1,6 +1,11 @@
-//! Whole-rectangle swaps with peers, preferring bounded holes beside the card.
-//! Port of swap.ts and its tests. Commands supply cards from one workspace.
-//! Every card and foreign group frame blocks holes; only same-group peers swap.
+//! Whole-rectangle swaps with peers, preferring the empty slot beside the
+//! card. Port of swap.ts and its tests, with one change from the reference:
+//! an empty slot is taken whether or not a neighbour exists beyond it. The
+//! reference refused to move with no peer in that direction, which meant the
+//! card at the end of a row could not be nudged into the phantom slot next
+//! to it on the same chord that swaps everywhere else. Commands supply cards
+//! from one workspace. Every card and foreign group frame blocks holes; only
+//! same-group peers swap.
 use crate::{
     cards::{CardRect, PlacedCard},
     grid::{Rect, Size},
@@ -19,12 +24,6 @@ pub fn swap_with_neighbour(
     occupied: &[Rect],
 ) -> Option<Swap> {
     let from = cards.iter().find(|c| c.id == from_id)?;
-    let peers: Vec<_> = cards
-        .iter()
-        .filter(|c| c.group_id == from.group_id)
-        .cloned()
-        .collect();
-    let target = nearest_in_direction(&peers, from_id, dir)?;
     let blocked: Vec<_> = cards
         .iter()
         .filter(|c| c.id != from_id)
@@ -49,6 +48,13 @@ pub fn swap_with_neighbour(
             b: None,
         });
     }
+    // No hole, so it is a swap, and a swap needs a peer to swap with.
+    let peers: Vec<_> = cards
+        .iter()
+        .filter(|c| c.group_id == from.group_id)
+        .cloned()
+        .collect();
+    let target = nearest_in_direction(&peers, from_id, dir)?;
     Some(Swap {
         a: CardRect {
             id: from.id.clone(),
@@ -127,10 +133,35 @@ mod tests {
         assert_eq!(s.a.rect, r(200., 0., 400., 300.));
         assert_eq!(s.b.unwrap().rect, r(0., 0., 100., 100.));
     }
+    // The end of a row moves on into the phantom slot beside it, on the
+    // same chord that swaps everywhere else. The reference refused this,
+    // and the card at the edge was the one that could not be moved.
     #[test]
-    fn no_neighbour_no_swap() {
-        assert!(go(&row(), "right", Direction::Right, 100.).is_none());
-        assert!(go(&row(), "mid", Direction::Up, 100.).is_none());
+    fn no_neighbour_moves_into_the_empty_slot() {
+        let s = go(&row(), "right", Direction::Right, 100.).unwrap();
+        assert_eq!(
+            s.a.rect,
+            r(600., 0., 100., 100.),
+            "one slot right, one gutter over"
+        );
+        assert!(s.b.is_none(), "nothing to swap with");
+        let s = go(&row(), "mid", Direction::Up, 100.).unwrap();
+        assert_eq!(s.a.rect, r(200., -200., 100., 100.));
+        assert!(s.b.is_none());
+    }
+
+    // With no hole AND no peer there is still nothing to do: a foreign
+    // group's frame fills the slot and no same-group card lies beyond it.
+    #[test]
+    fn no_hole_and_no_peer_is_no_move() {
+        let s = swap_with_neighbour(
+            &row(),
+            "right",
+            Direction::Right,
+            100.,
+            &[r(600., 0., 100., 100.)],
+        );
+        assert!(s.is_none());
     }
     fn gap() -> Vec<PlacedCard> {
         vec![card("left", 0., 0.), card("right", 240., 0.)]
@@ -148,10 +179,6 @@ mod tests {
             );
             assert!(s.b.is_none());
         }
-    }
-    #[test]
-    fn open_space_is_not_hole() {
-        assert!(go(&gap(), "right", Direction::Right, 20.).is_none());
     }
     #[test]
     fn any_card_blocks_hole() {
@@ -197,13 +224,20 @@ mod tests {
     }
     #[test]
     fn never_crosses_groups() {
-        assert!(go(
+        // The slot between them is free, so this is a move into it; the
+        // point is that it is never a swap with the other group's card.
+        let s = go(
             &[grouped("mine", 0., "g1"), grouped("theirs", 200., "g2")],
             "mine",
             Direction::Right,
-            0.
+            0.,
         )
-        .is_none());
+        .unwrap();
+        assert!(
+            s.b.is_none(),
+            "a card in another group is never a swap partner"
+        );
+        assert_eq!(s.a.rect, r(100., 0., 100., 100.));
     }
     #[test]
     fn grouped_peers_ignore_loose_target() {
@@ -231,8 +265,11 @@ mod tests {
     }
     #[test]
     fn diagonal_is_in_no_cone() {
+        // A card on the diagonal is not to the right or below, so it is
+        // never the swap partner; with the adjacent slots free, both are
+        // plain moves.
         let c = [card("here", 0., 0.), card("corner", 200., 200.)];
-        assert!(go(&c, "here", Direction::Right, 0.).is_none());
-        assert!(go(&c, "here", Direction::Down, 0.).is_none());
+        assert!(target(go(&c, "here", Direction::Right, 0.)).is_none());
+        assert!(target(go(&c, "here", Direction::Down, 0.)).is_none());
     }
 }
