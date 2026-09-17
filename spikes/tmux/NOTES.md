@@ -52,8 +52,21 @@ exactly **0 lines in 1.5 seconds** while paused, then 15,555/s after continue.
 tmux emits `%pause %0` when it happens. `off` goes further and stops tmux
 reading the pane at all once no client wants it.
 
-That maps onto the ack ledger we already have: past the unacknowledged budget,
-pause the pane; when the ui catches up, continue it.
+`pause` is the WRONG verb for it, which cost an evening to learn. A paused
+pane keeps running and tmux DISCARDS what it produces for that client:
+measured, output made while paused arrives neither during the pause nor
+after `continue`, while tmux's own grid has it all. Backpressure built on
+`pause` silently loses bytes, and a card's grid then stops matching the
+program's; the symptom is a redraw landing in the wrong place, which looks
+like a rendering bug and is not.
+
+    refresh-client -A '%0:off'    and 'on'
+
+`off` is the one. tmux stops READING the pane once no client wants it, so
+the program blocks instead of producing output nobody receives, and
+everything arrives when it is turned back on. Measured both ways. That is
+the same mechanism the local backend uses: a reader that stops reading
+stalls the child at the kernel's pty buffer.
 
 ## Sessions survive, and the history comes back
 

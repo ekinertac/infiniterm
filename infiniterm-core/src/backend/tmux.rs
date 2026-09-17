@@ -279,10 +279,21 @@ impl TmuxBackend {
                             *owed
                         };
                         let _ = tx.send((id, PaneEvent::Output(bytes)));
-                        // Past the mark, ask tmux to stop. It stops reading
-                        // the pane too once no client wants it, so the
-                        // program itself waits, exactly as a full pty buffer
-                        // makes it wait under the local backend.
+                        // Past the mark, ask tmux to stop sending. `off`,
+                        // never `pause`: a PAUSED pane keeps running and
+                        // tmux DISCARDS what it produces, so the bytes are
+                        // gone for good and our grid quietly stops matching
+                        // the program's. Measured: output made while paused
+                        // arrives neither during nor after `continue`, while
+                        // tmux's own grid has it.
+                        //
+                        // `off` makes tmux stop READING the pane once no
+                        // client wants it, so the program blocks instead of
+                        // producing output nobody receives, and everything
+                        // arrives when it is turned back on. That is the
+                        // same mechanism the local backend uses: a reader
+                        // that stops reading stalls the child at the
+                        // kernel's pty buffer.
                         if owed > super::local_pty::HIGH_WATER
                             && !paused.lock().unwrap().get(&id).copied().unwrap_or(false)
                         {
@@ -290,7 +301,7 @@ impl TmuxBackend {
                             send(
                                 &stdin,
                                 &expecting,
-                                &format!("refresh-client -A '{pane}:pause'"),
+                                &format!("refresh-client -A '{pane}:off'"),
                                 Expect::Nothing,
                             );
                         }
@@ -552,7 +563,8 @@ impl TmuxBackend {
     }
 
     /// The ui has parsed this much: the pane owes less, and once it is well
-    /// under the mark tmux is told to send again.
+    /// under the mark tmux is told to send again. `on`, the counterpart of
+    /// the `off` that stopped it; nothing was lost in between.
     pub fn ack_now(&self, pane: PaneId, bytes: usize) {
         let owed = {
             let mut map = self.in_flight.lock().unwrap();
@@ -570,7 +582,7 @@ impl TmuxBackend {
         if is_paused && owed < LOW_WATER {
             self.paused.lock().unwrap().insert(pane, false);
             if let Some(target) = self.target(pane) {
-                self.command(&format!("refresh-client -A '{target}:continue'"));
+                self.command(&format!("refresh-client -A '{target}:on'"));
             }
         }
     }
