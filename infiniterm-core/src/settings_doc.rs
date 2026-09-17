@@ -245,13 +245,6 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
-        "ui.midZoomLabel",
-        &[
-            "The big name drawn over each card below 60% zoom, where cards are live but",
-            "too small to read. false leaves only the corner label.",
-        ],
-    ),
-    (
         "ui.showFps",
         &[
             "Frame counter in the status bar, orange below 50. It holds a permanent",

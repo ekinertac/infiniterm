@@ -21,6 +21,28 @@ pub const STATE_BORDER_MID: f64 = 6.;
 /// that says anything, so it takes the largest share it can without eating
 /// the card. The steps are the focus ring's, for the same reason.
 pub const STATE_BORDER_FAR: f64 = 9.;
+/// The corner label's multiplier on `ui.cardLabelSize`, stepped with the
+/// zoom.
+///
+/// A card label is sized in SCREEN pixels, so it never shrank as you zoomed
+/// out; what shrank was the card around it, until a name sat in a rectangle
+/// barely taller than the text. A second, larger label used to be drawn in
+/// the middle of the card to cover that, which meant two pieces of chrome
+/// saying the same word. The corner label grows instead, on the focus
+/// ring's steps and for the focus ring's reason: the further out you are,
+/// the more of the card has to be label for the name to register.
+pub const CORNER_LABEL_NEAR: f64 = 1.2;
+pub const CORNER_LABEL_MID: f64 = 1.8;
+pub const CORNER_LABEL_FAR: f64 = 2.4;
+pub fn corner_label_scale(scale: f64) -> f64 {
+    if scale >= 0.6 {
+        CORNER_LABEL_NEAR
+    } else if scale >= 0.25 {
+        CORNER_LABEL_MID
+    } else {
+        CORNER_LABEL_FAR
+    }
+}
 pub fn clamp_ui_scale(value: f64) -> f64 {
     if !value.is_finite() {
         return 1.;
@@ -77,6 +99,34 @@ mod tests {
     fn close(a: f64, b: f64) {
         assert!((a - b).abs() < 1e-10);
     }
+    // The same steps as the ring, because it replaced a separate mid-zoom
+    // label drawn in the middle of the card: one label, growing, rather
+    // than two saying the same thing.
+    #[test]
+    fn the_corner_label_grows_zooming_out() {
+        for (s, e) in [
+            (1., CORNER_LABEL_NEAR),
+            (0.6, CORNER_LABEL_NEAR),
+            (0.59, CORNER_LABEL_MID),
+            (0.25, CORNER_LABEL_MID),
+            (0.24, CORNER_LABEL_FAR),
+            (0.05, CORNER_LABEL_FAR),
+        ] {
+            assert_eq!(corner_label_scale(s), e, "at {s}");
+        }
+        // Never smaller as you pull back: the card is shrinking, so a
+        // label that shrank with it would be the problem this replaced.
+        let zooms = [1., 0.8, 0.6, 0.4, 0.25, 0.1, 0.05];
+        for pair in zooms.windows(2) {
+            assert!(
+                corner_label_scale(pair[1]) >= corner_label_scale(pair[0]),
+                "{} to {} made the label smaller",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
+
     #[test]
     fn ring_thickens_zooming_out() {
         for (s, e) in [

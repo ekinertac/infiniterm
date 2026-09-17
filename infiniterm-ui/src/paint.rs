@@ -21,10 +21,6 @@ use infiniterm_core::label_colors::{label_color, readable_on};
 use infiniterm_core::saved_layout::CardKind;
 use infiniterm_core::viewport::{ease_out_cubic, Viewport};
 
-/// Cards are live but too small to read between these zooms; a big label
-/// names them.
-const MID_ZOOM_MAX: f64 = 0.6;
-
 /// A grid line snaps to the middle of its pixel, so a 1px stroke sits on a
 /// pixel rather than straddling two.
 const GRID_LINE_SNAP_OFFSET: f32 = 0.5;
@@ -49,20 +45,8 @@ const ALIGNMENT_GUIDE_ALPHA: f32 = 0.8;
 /// A phantom's key label is larger than the corner labels, since it is the
 /// one thing on an empty slot to read.
 const PHANTOM_LABEL_SCALE: f32 = 1.4;
-/// The corner labels (name, kind badges, remote) read small at the
-/// setting's literal size; 1.2x is Ekin's ask.
-const CORNER_LABEL_SCALE: f32 = 1.2;
 /// A corner label's badge is taller than its text, for click room.
 const LABEL_BADGE_HEIGHT_RATIO: f32 = 1.5;
-/// Below `MID_ZOOM_MAX` the corner label is unreadable, so the mid-zoom
-/// label is drawn twice as large again.
-const MID_ZOOM_LABEL_SCALE: f32 = 2.4;
-/// How much of the card's width the centred label may fill before it starts
-/// shrinking. Short of the edge, so it reads as inside the card.
-const MID_ZOOM_LABEL_FILL: f32 = 0.86;
-/// It will not shrink past this fraction of its size to fit: below it the
-/// label is smaller than the corner one and there is no point in either.
-const MID_ZOOM_LABEL_MIN_SCALE: f32 = 0.45;
 
 pub fn screen_rect(rect: Rect, vp: Viewport) -> Bounds<Pixels> {
     Bounds::new(
@@ -206,7 +190,7 @@ impl AppView {
                     body.paint(bounds, 1., focused, now, window, cx)
                 });
             }
-            self.paint_labels(&card, bounds, 1., false, window, cx);
+            self.paint_labels(&card, bounds, 1., window, cx);
             return;
         }
 
@@ -406,11 +390,7 @@ impl AppView {
                     .border_widths(ring),
                 );
             }
-            // Below MID_ZOOM_MAX the text is too small to read and the
-            // name is what tells cards apart; the reference stopped showing
-            // it under 25% too, which left the farthest zoom with nothing.
-            let mid = vp.scale < MID_ZOOM_MAX && self.model.config.ui.mid_zoom_label;
-            self.paint_labels(card, b, vp.scale, mid, window, cx);
+            self.paint_labels(card, b, vp.scale, window, cx);
             if let Some(hint) = sel.hints.get(&card.id) {
                 // Big enough to read from across the canvas, over the body
                 // rather than in a corner.
@@ -514,14 +494,17 @@ impl AppView {
         card: &infiniterm_core::model::Card,
         b: Bounds<Pixels>,
         scale: f64,
-        mid: bool,
         window: &mut Window,
         cx: &mut App,
     ) {
         let chrome = &self.chrome;
         let inv = inverse_scale(scale, self.model.ui_scale) as f32;
+        // Screen-sized, so it never shrinks with the canvas, and stepped
+        // up as you zoom out so the name keeps its share of a card that is
+        // getting smaller. This is what replaced the separate label the
+        // mid zoom used to draw across the middle of the card.
         let label_px = px(self.model.config.ui.card_label_size as f32
-            * CORNER_LABEL_SCALE
+            * infiniterm_core::chrome::corner_label_scale(scale) as f32
             * inv
             * scale as f32);
         let border = px(CARD_BORDER_SCREEN_PX as f32);
@@ -630,54 +613,6 @@ impl AppView {
             );
             window.paint_quad(fill(rb, chrome.remote_bg));
             crate::text::paint_in(window, cx, &line, rb, label_px / 2.);
-        }
-        if mid && !label.is_empty() {
-            let big = px(self.model.config.ui.card_label_size as f32
-                * MID_ZOOM_LABEL_SCALE
-                * inv
-                * scale as f32);
-            // The card is the frame. A long label shrinks to fit it, and
-            // only when shrinking would make it unreadable does it get cut:
-            // this is the label you read when you cannot read the card.
-            let room = f32::from(b.size.width) * MID_ZOOM_LABEL_FILL;
-            let mut size_px = big;
-            let mut line =
-                crate::text::shape(window, &label, size_px, &chrome.ui_font, chrome.text_bright);
-            if f32::from(line.width) > room {
-                let fitted = f32::from(big) * (room / f32::from(line.width));
-                size_px = px(fitted.max(f32::from(big) * MID_ZOOM_LABEL_MIN_SCALE));
-                line = crate::text::shape(
-                    window,
-                    &label,
-                    size_px,
-                    &chrome.ui_font,
-                    chrome.text_bright,
-                );
-            }
-            if f32::from(line.width) > room {
-                let shorter = crate::text::elide(&label, room, |t| {
-                    f32::from(
-                        crate::text::shape(window, t, size_px, &chrome.ui_font, chrome.text_bright)
-                            .width,
-                    )
-                });
-                line = crate::text::shape(
-                    window,
-                    &shorter,
-                    size_px,
-                    &chrome.ui_font,
-                    chrome.text_bright,
-                );
-            }
-            let big = size_px;
-            let mb = Bounds::new(
-                point(
-                    b.origin.x + b.size.width / 2. - line.width / 2.,
-                    b.origin.y + b.size.height / 2. - big,
-                ),
-                size(line.width, big * CENTERED_LABEL_HEIGHT_SCALE),
-            );
-            crate::text::paint_in(window, cx, &line, mb, px(0.));
         }
     }
 }
