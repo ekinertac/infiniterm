@@ -30,7 +30,7 @@ Native macOS app in Rust: gpui draws the canvas, `alacritty_terminal` parses the
 - A red badge on any card sitting in an SSH session, with the destination
 - Terminal themes from `.itermcolors` files, applied to open terminals live
 - Configuration in `~/.config/infiniterm/`, Sublime style: your overrides beside a commented defaults file, watched and applied without a restart
-- Shells that outlive the window. Each card is a tmux window, so quitting infiniterm leaves your work running and reopening brings back the same shell with its scrollback: a build still building, an agent still thinking. The same sessions are reachable from any terminal with `tmux attach -t infiniterm`. tmux draws nothing, so scrollback, selection and the mouse are still infiniterm's. No tmux on the machine means plain local shells instead, and it says so once
+- Shells that outlive the window, if you ask for them: `terminal.backend: "tmux"` makes each card a tmux window, so quitting leaves your work running and reopening brings back the same shell with its scrollback, reachable from any terminal with `tmux attach -t infiniterm`. Not the default yet. Shells and full-screen programs are fine; a program that redraws inline, like Claude Code, can still come out with two lines in one row
 - The canvas survives a restart too: cards, their positions and sizes, groups, workspaces, the viewport. The window reopens where and how you left it
 
 Twenty-six cards all running `yes` at once paint at 110 fps on a 120 Hz display; a zoom over twenty-six idle cards runs at 55 to 105. Three things do that: the PTY reader stops at 256 KiB unacknowledged per pane, so a fast program waits at the kernel's buffer the way it always has on a slow terminal; output is parsed one frame's budget at a time on the UI thread; and only the rows the terminal changed are rebuilt and reshaped. An idle canvas paints twice a second, for the cursor.
@@ -165,7 +165,7 @@ One instance at a time: the unix socket `ift` and the hooks talk to is the lock,
 
 A terminal can reach everything on the machine, so here is everything this one does:
 
-- Your shells, one per card, started as your login shell in the card's directory with `INFINITERM_CARD_ID` in the environment. Nothing is typed into them that you did not type. Under the default tmux backend they are tmux windows in a session named `infiniterm` on tmux's usual socket, which is why you can reach them from any terminal; the app talks to tmux as a `tmux -C` client and never asks it to draw anything. Set `terminal.backend` to `pty` for plain local shells that die with the window.
+- Your shells, one PTY per card, started as your login shell in the card's directory with `INFINITERM_CARD_ID` in the environment. Nothing is typed into them that you did not type. With `terminal.backend: "tmux"` they are tmux windows in a session named `infiniterm` on tmux's usual socket instead, which is how you can reach them from another terminal; the app talks to tmux as a `tmux -C` client and never asks it to draw anything.
 - `~/.config/infiniterm/` for settings and keybindings; `~/Library/Application Support/dev.ekinertac.infiniterm/` for the canvas, drafts, themes, the window frame and the browser profile. Nothing else is written.
 - A unix socket in the system temp directory, which `ift` and the hook binaries connect to.
 - `tmux`, `ps`, `lsof` and `git` run as subprocesses: to label cards with their process and directory, to spot an SSH session, and for the diff and blame cards. `open` hands URLs and files to the system.

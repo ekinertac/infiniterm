@@ -16,9 +16,15 @@ Three ways out, cheapest first:
 
 The tmux session itself survives all three: `tmux kill-session -t infiniterm` ends it.
 
+## Status: opt-in, not the default
+
+Pulled back to opt-in on 2026-09-17 after an evening of use. `terminal.backend` defaults to `pty` again; setting it to `tmux` turns all of this on.
+
+The reason is open item 1 below, and it is not another one-line fix: a program that redraws INLINE, moving the cursor up and erasing a line rather than clearing the screen, needs our grid's scroll position to match exactly what it believes. Under tmux two emulators track one program with a replayed history in between, and a redraw that never clears never recovers from a one-row disagreement. Claude Code is exactly that program, which is why `top` came back clean across a restart and Claude did not.
+
 ## What is built
 
-tmux is the DEFAULT backend. One `tmux -C` control client on tmux's usual socket, attached to one session named `infiniterm`, and a card is a tmux WINDOW holding one pane.
+tmux is the backend when asked for. One `tmux -C` control client on tmux's usual socket, attached to one session named `infiniterm`, and a card is a tmux WINDOW holding one pane.
 
 - Shells outlive the app. Quitting detaches; relaunching adopts the same windows and replays their scrollback.
 - The card's window id is in the save file (`tmuxWindow`), written only for cards that have one, so a canvas that never used tmux still round-trips byte for byte.
@@ -48,11 +54,12 @@ Every one of these was found by running it, not by reading it. The unit tests pa
 
 ## Open, in the order I would take them
 
-1. **Colour reporting under tmux.** Programs now get tmux's answer rather than ours, so a program that adapts to the terminal's theme sees tmux's idea of it, not the card's. Nothing looked wrong in testing, but a light theme would be the case to check.
-2. **Nerd Font glyph widths.** Suspected, not proven. Those glyphs live in Unicode's private use area, where the width tables say one cell and the font draws two. If stray characters still appear beside `📁` or a powerline glyph in FRESH output, this is the cause, and it would affect the local backend equally. Nothing to do with tmux.
-3. **A window that dies while the app is closed.** `live_windows` is asked once at startup and a card adopts from that list. A window that dies between the ask and the adopt never reports output; the card sits there with no shell rather than spawning one. Not seen, but it is a hole.
-4. **Ekin's `~/.tmux.conf` generally.** We override `status`, `allow-rename` and `pane-border-status` for our session. Anything else in there applies and is a candidate whenever something looks wrong: `default-terminal` is `tmux-256color` (the terminfo is present on this machine), `mouse on`, and 5.5 KB besides.
-5. **A very long scrollback on adopt.** `capture-pane -S -` replays the whole history at once. Tested with a few hundred lines, not with a hundred thousand.
+1. **An inline redraw lands a row out.** THE reason tmux is not the default. Two lines share one row character by character, in Claude Code and not in `top` or `vim`: those repaint a whole screen, Claude moves the cursor up and erases a line, which only works if our scroll position matches its belief exactly. Suspects, in order: the replayed history leaving our grid at a different scroll offset than the program assumes; our emulator and tmux disagreeing about where a wrapped line ended; a `%output` boundary splitting an escape sequence (the reader hands alacritty whatever arrived, and a sequence split across two `%output` lines should be fine, but it has not been proved). The way to chase it is to record the exact bytes for one pane and replay them into a bare alacritty grid outside the app.
+2. **Colour reporting under tmux.** Programs now get tmux's answer rather than ours, so a program that adapts to the terminal's theme sees tmux's idea of it, not the card's. Nothing looked wrong in testing, but a light theme would be the case to check.
+3. **Nerd Font glyph widths.** Suspected, not proven. Those glyphs live in Unicode's private use area, where the width tables say one cell and the font draws two. If stray characters still appear beside `📁` or a powerline glyph in FRESH output, this is the cause, and it would affect the local backend equally. Nothing to do with tmux.
+4. **A window that dies while the app is closed.** `live_windows` is asked once at startup and a card adopts from that list. A window that dies between the ask and the adopt never reports output; the card sits there with no shell rather than spawning one. Not seen, but it is a hole.
+5. **Ekin's `~/.tmux.conf` generally.** We override `status`, `allow-rename` and `pane-border-status` for our session. Anything else in there applies and is a candidate whenever something looks wrong: `default-terminal` is `tmux-256color` (the terminfo is present on this machine), `mouse on`, and 5.5 KB besides.
+6. **A very long scrollback on adopt.** `capture-pane -S -` replays the whole history at once. Tested with a few hundred lines, not with a hundred thousand.
 
 ## Traps, for whoever is next
 

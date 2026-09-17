@@ -42,11 +42,17 @@ pub struct Config {
 pub struct Terminal {
     /// Program to run in a new card. Empty uses the login shell.
     pub shell: String,
-    /// Where a card's shell lives. `tmux` keeps it running when the app
-    /// quits and lets `tmux attach -t infiniterm` reach it from any
-    /// terminal; `pty` is a plain local shell that dies with the window.
-    /// tmux is the default, and a machine without tmux falls back to pty
-    /// rather than to no terminal.
+    /// Where a card's shell lives. `pty` is a plain local shell that dies
+    /// with the window; `tmux` keeps it running when the app quits and lets
+    /// `tmux attach -t infiniterm` reach it from any terminal.
+    ///
+    /// pty is the DEFAULT. tmux works for shells and for programs that
+    /// repaint a whole screen, but a program that redraws INLINE, moving
+    /// the cursor up and erasing a line rather than clearing, needs our
+    /// grid's scroll position to match exactly what it believes. Two
+    /// emulators track one program under tmux, with a replayed history in
+    /// between, and when they disagree by a row that kind of redraw lands
+    /// wrong and never heals, because it never clears. Claude Code is one.
     pub backend: TerminalBackend,
     pub cursor_style: CursorStyle,
     pub cursor_blink: bool,
@@ -176,7 +182,7 @@ pub fn default_config() -> Config {
         starting_dir: String::new(),
         terminal: Terminal {
             shell: String::new(),
-            backend: TerminalBackend::Tmux,
+            backend: TerminalBackend::Pty,
             cursor_style: CursorStyle::Block,
             cursor_blink: true,
             // What every Mac has. A Nerd Font is one you install, and a
