@@ -80,11 +80,12 @@ pub struct Card {
     /// The session file of the agent in this card, from its hook events.
     /// Runtime-only; what `card.transcript` opens.
     pub transcript_path: Option<String>,
-    /// The tmux window this card's shell lives in (`@7`), when the backend
-    /// is tmux. SAVED, unlike every other runtime fact about a shell: it is
-    /// the only thing that lets a restored card find the session it had
-    /// rather than start a new one.
-    pub tmux_window: Option<String>,
+    /// This card's shell, as an opaque handle in whichever backend holds it
+    /// (a tmux window id like `@7`, or a daemon session id). SAVED, unlike
+    /// every other runtime fact about a shell: it is the only thing that
+    /// lets a restored card find the session it had rather than start a
+    /// new one.
+    pub session: Option<String>,
     /// The title the program in this card set through the terminal (OSC 0
     /// or 2). Runtime-only and NEVER `title`: that is a name somebody chose
     /// and a program must not overwrite it, which is what LAYOUT_VERSION 2
@@ -580,7 +581,7 @@ impl Model {
             zoom: opts.zoom,
             command: opts.command,
             transcript_path: None,
-            tmux_window: None,
+            session: None,
             osc_title: None,
             dirty: false,
             line: opts.line,

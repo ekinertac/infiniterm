@@ -125,15 +125,15 @@ impl AppView {
                 body.refit_to(world)
             };
             if card.pane_id.is_none() && body.error.is_none() {
-                // A card that was here before and whose tmux window is still
+                // A card that was here before and whose session is still
                 // running takes it back rather than starting a second shell
-                // beside it. This is the whole point of the tmux backend and
-                // the only reason `tmux_window` is in the save file.
+                // beside it. This is the whole point of the tmux and daemon
+                // backends and the only reason `session` is in the save file.
                 let adopt = card
-                    .tmux_window
+                    .session
                     .clone()
-                    .filter(|w| self.live_windows.iter().any(|live| live == w))
-                    .and_then(|w| self.backend.pty.adopt(&w));
+                    .filter(|s| self.live_sessions.iter().any(|live| live == s))
+                    .and_then(|s| self.backend.pty.adopt(&s));
                 if let Some(pane) = adopt {
                     body.pane = Some(pane);
                     self.backend.pty.resize_now(pane, body.cols(), body.rows());
@@ -177,13 +177,14 @@ impl AppView {
             // The title the program set through the terminal. Kept apart
             // from `card.title`, which is a name somebody chose; the label
             // uses this only while an agent is in the card.
-            // What tmux called this card's window, learned a frame or two
-            // after the card was made. Saved, so the next launch can find it.
+            // What the backend calls this card's session, learned a frame or
+            // two after the card was made. Saved, so the next launch can
+            // find it.
             if let Some(pane) = card.pane_id {
-                let window = self.backend.pty.window_id(pane);
-                if window.is_some() && card.tmux_window != window {
+                let session = self.backend.pty.session_id(pane);
+                if session.is_some() && card.session != session {
                     if let Some(c) = self.model.card_mut(&card.id) {
-                        c.tmux_window = window;
+                        c.session = session;
                         self.model.dirty_layout = true;
                     }
                 }

@@ -34,12 +34,23 @@ use super::{PaneEvent, PaneId};
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::Shutdown;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
+
+/// `sizeof(sockaddr_un.sun_path)` on macOS, NUL included. AF_UNIX simply
+/// cannot name a path longer than this — it is not a big ask that might
+/// still work, it is not a socket at all. Checked in `spawn_now` before
+/// `iftd` ever runs, so the failure names the actual path and the actual
+/// limit instead of iftd's own bind failing three processes away with
+/// nothing but exit code 4 to explain it. `paths::sessions_dir` already
+/// spends as little of this budget as it reasonably can; this is the net
+/// that catches whatever is left, such as a longer home directory.
+const SUN_PATH_MAX: usize = 104;
 
 /// How long `spawn_now`/`adopt` will wait for iftd's `Hello` before giving
 /// up. Generous: this covers process start plus `openpty` plus a shell
@@ -146,9 +157,10 @@ impl DaemonBackend {
         cmd: Option<&str>,
         env: Vec<(String, String)>,
     ) -> anyhow::Result<PaneId> {
-        std::fs::create_dir_all(&self.sessions_dir)?;
         let session_id = new_session_id();
         let socket = self.sessions_dir.join(format!("{session_id}.sock"));
+        check_socket_path(&socket)?;
+        std::fs::create_dir_all(&self.sessions_dir)?;
         let iftd = find_iftd()?;
 
         let mut command = std::process::Command::new(&iftd);
@@ -259,6 +271,13 @@ impl DaemonBackend {
                 .filter_map(|(id, p)| p.pid.map(|pid| (*id, pid)))
                 .collect()
         }
+    }
+
+    /// The directory this backend's sockets live under, so `Panes::live_sessions`
+    /// can ask `DaemonBackend::live_sessions` about the right one without
+    /// this module and `backend/mod.rs` each hard-coding `paths::sessions_dir()`.
+    pub fn sessions_dir(&self) -> &Path {
+        &self.sessions_dir
     }
 
     /// The session id a pane was spawned or adopted with, for the save file.
@@ -526,6 +545,31 @@ fn nudge_resize(panes: &Arc<Mutex<HashMap<PaneId, Pane>>>, id: PaneId) {
     let _ = s.write_all(&Frame::Resize { cols, rows }.encode());
 }
 
+/// Refuses a socket path before it is ever bound, rather than letting a
+/// too-long one reach `iftd` and fail there with an opaque exit code. See
+/// `SUN_PATH_MAX`'s own doc comment for why this exists at all.
+fn check_socket_path(socket: &Path) -> anyhow::Result<()> {
+    // +1: sockaddr_un.sun_path always carries a terminating NUL, which is
+    // part of the 104-byte budget, not extra room beyond it.
+    let len = socket.as_os_str().as_bytes().len() + 1;
+    if len > SUN_PATH_MAX {
+        anyhow::bail!(
+            "{} is {len} bytes, over the {SUN_PATH_MAX}-byte unix socket path limit \
+             (sockaddr_un.sun_path on macOS, NUL included); shorten INFINITERM_DATA_DIR \
+             or your home directory path",
+            socket.display()
+        );
+    }
+    Ok(())
+}
+
+/// Whether `iftd` can be found at all, for `Panes::start`'s fallback: a
+/// daemon backend with no sidecar to run must not mean no terminal, exactly
+/// as a missing `tmux` binary does not.
+pub fn available() -> bool {
+    find_iftd().is_ok()
+}
+
 /// Names a socket file under `sessions_dir` and nothing else: a slash or a
 /// `..` in it would name a file outside that directory. Also short, which
 /// is not cosmetic: the id becomes `sessions_dir.join(id + ".sock")`, and
@@ -579,6 +623,30 @@ mod tests {
         let id = new_session_id();
         assert!(id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
         assert_ne!(new_session_id(), id, "two cards never collide");
+    }
+
+    // A user whose home directory is a few characters longer than
+    // `/Users/ekinertac` would otherwise be unable to open any card at
+    // all, with nothing but a confusing bind failure from iftd to show for
+    // it: this refuses before iftd is even run, with a message naming the
+    // path and the limit.
+    #[test]
+    fn a_socket_path_over_the_sun_path_limit_is_refused_before_it_is_attempted() {
+        // Deliberately absurd, so the assertion holds regardless of this
+        // machine's actual $TMPDIR length.
+        let dir = std::path::PathBuf::from("/tmp").join("x".repeat(120));
+        let (backend, _rx) = DaemonBackend::new(dir.clone(), 4);
+
+        let err = backend
+            .spawn_now(Path::new("/tmp"), None, vec![])
+            .expect_err("a path this long cannot be a unix socket");
+        let msg = err.to_string();
+        assert!(msg.contains("104"), "{msg}");
+        assert!(msg.contains(dir.to_str().unwrap()), "{msg}");
+        assert!(
+            !dir.exists(),
+            "refused before the sessions dir is even created, let alone iftd run"
+        );
     }
 
     #[test]

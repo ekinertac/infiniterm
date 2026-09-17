@@ -13,6 +13,8 @@
 //! and feeds `infiniterm-term`'s scheduler. See the reference's
 //! docs/superpowers/specs/2026-09-10-infiniterm-design.md, "SessionBackend".
 
+use crate::config::TerminalBackend;
+use crate::paths;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
@@ -69,73 +71,110 @@ pub trait SessionBackend: Send + Sync {
 pub enum Panes {
     Local(local_pty::LocalPtyBackend),
     Tmux(tmux::TmuxBackend),
+    Daemon(daemon::DaemonBackend),
 }
 
 impl Panes {
-    /// tmux when it is asked for AND there is a tmux to talk to. A missing
-    /// binary must not mean no terminal, so it falls back and says so.
-    pub fn start(want_tmux: bool) -> (Panes, Receiver<(PaneId, PaneEvent)>, Option<String>) {
-        if want_tmux {
-            if !tmux::available() {
+    /// tmux or the daemon when asked for AND there is one to talk to (a
+    /// `tmux` binary on PATH, an `iftd` sidecar beside the app or on PATH).
+    /// A missing binary must not mean no terminal, so both fall back to
+    /// local shells and say so; `pty` has nothing to fall back from.
+    pub fn start(
+        backend: TerminalBackend,
+        buffer_mib: usize,
+    ) -> (Panes, Receiver<(PaneId, PaneEvent)>, Option<String>) {
+        match backend {
+            TerminalBackend::Pty => {
                 let (pty, rx) = local_pty::LocalPtyBackend::new();
-                return (
-                    Panes::Local(pty),
-                    rx,
-                    Some("tmux is not installed; cards use local shells".into()),
-                );
+                (Panes::Local(pty), rx, None)
             }
-            match tmux::TmuxBackend::start() {
-                Some((backend, rx)) => return (Panes::Tmux(backend), rx, None),
-                None => {
+            TerminalBackend::Tmux => {
+                if !tmux::available() {
                     let (pty, rx) = local_pty::LocalPtyBackend::new();
                     return (
                         Panes::Local(pty),
                         rx,
-                        Some("tmux would not start; cards use local shells".into()),
+                        Some("tmux is not installed; cards use local shells".into()),
                     );
                 }
+                match tmux::TmuxBackend::start() {
+                    Some((backend, rx)) => (Panes::Tmux(backend), rx, None),
+                    None => {
+                        let (pty, rx) = local_pty::LocalPtyBackend::new();
+                        (
+                            Panes::Local(pty),
+                            rx,
+                            Some("tmux would not start; cards use local shells".into()),
+                        )
+                    }
+                }
+            }
+            TerminalBackend::Daemon => {
+                if !daemon::available() {
+                    let (pty, rx) = local_pty::LocalPtyBackend::new();
+                    return (
+                        Panes::Local(pty),
+                        rx,
+                        Some("iftd is not installed; cards use local shells".into()),
+                    );
+                }
+                let (backend, rx) = daemon::DaemonBackend::new(paths::sessions_dir(), buffer_mib);
+                (Panes::Daemon(backend), rx, None)
             }
         }
-        let (pty, rx) = local_pty::LocalPtyBackend::new();
-        (Panes::Local(pty), rx, None)
     }
 
     pub fn is_tmux(&self) -> bool {
         matches!(self, Panes::Tmux(_))
     }
 
-    /// The tmux window a pane is in, for the save file. Local shells have
-    /// none: there is nothing to come back to.
-    pub fn window_id(&self, pane: PaneId) -> Option<String> {
+    /// Whether OUR emulator is the thing programs are talking to. False only
+    /// under tmux, which is a terminal in its own right and answers colour and
+    /// device queries before we can; our second answer then reaches the program
+    /// as keystrokes. See `TerminalBody::replies` and tmux bug 9.
+    pub fn we_are_the_terminal(&self) -> bool {
+        !matches!(self, Panes::Tmux(_))
+    }
+
+    /// This card's shell, as an opaque handle for the save file: a tmux
+    /// window id (`@7`) or a daemon session id. Local shells have none:
+    /// there is nothing to come back to.
+    pub fn session_id(&self, pane: PaneId) -> Option<String> {
         match self {
             Panes::Local(_) => None,
             Panes::Tmux(b) => b.window_id(pane),
+            Panes::Daemon(b) => b.session_id(pane),
         }
     }
 
-    /// Takes over a window left running by an earlier launch. `None` when
-    /// this is not tmux, and the caller spawns a fresh shell as it always
-    /// did.
-    pub fn adopt(&self, window: &str) -> Option<PaneId> {
+    /// Takes over a session left running by an earlier launch. `None` when
+    /// this is the local backend, or the session has gone; the caller
+    /// spawns a fresh shell as it always did.
+    pub fn adopt(&self, session: &str) -> Option<PaneId> {
         match self {
             Panes::Local(_) => None,
-            Panes::Tmux(b) => Some(b.adopt(window)),
+            Panes::Tmux(b) => Some(b.adopt(session)),
+            Panes::Daemon(b) => b.adopt(session),
         }
     }
 
-    /// Windows this app made that no card claims: what a crash left behind.
-    /// Does nothing under the local backend, which has no litter to leave.
+    /// Sessions this app made that no card claims: what a crash left
+    /// behind. Does nothing under the local backend, which has no litter
+    /// to leave.
     pub fn kill_orphans(&self, claimed: &[String]) {
-        if let Panes::Tmux(b) = self {
-            b.kill_orphans(claimed);
+        match self {
+            Panes::Local(_) => {}
+            Panes::Tmux(b) => b.kill_orphans(claimed),
+            Panes::Daemon(b) => b.kill_orphans(claimed),
         }
     }
 
-    /// Which windows are still there to adopt.
-    pub fn live_windows(&self) -> Vec<String> {
+    /// Which sessions are still there to adopt.
+    pub fn live_sessions(&self) -> Vec<String> {
         match self {
             Panes::Local(_) => vec![],
             Panes::Tmux(_) => tmux::TmuxBackend::live_windows(),
+            Panes::Daemon(b) => daemon::DaemonBackend::live_sessions(b.sessions_dir()),
         }
     }
 
@@ -148,6 +187,7 @@ impl Panes {
         match self {
             Panes::Local(b) => b.spawn_now(cwd, cmd, env),
             Panes::Tmux(b) => b.spawn_now(cwd, cmd, env),
+            Panes::Daemon(b) => b.spawn_now(cwd, cmd, env),
         }
     }
 
@@ -155,6 +195,7 @@ impl Panes {
         match self {
             Panes::Local(b) => b.write_now(pane, bytes),
             Panes::Tmux(b) => b.write_now(pane, bytes),
+            Panes::Daemon(b) => b.write_now(pane, bytes),
         }
     }
 
@@ -162,6 +203,7 @@ impl Panes {
         match self {
             Panes::Local(b) => b.resize_now(pane, cols, rows),
             Panes::Tmux(b) => b.resize_now(pane, cols, rows),
+            Panes::Daemon(b) => b.resize_now(pane, cols, rows),
         }
     }
 
@@ -169,6 +211,7 @@ impl Panes {
         match self {
             Panes::Local(b) => b.ack_now(pane, bytes),
             Panes::Tmux(b) => b.ack_now(pane, bytes),
+            Panes::Daemon(b) => b.ack_now(pane, bytes),
         }
     }
 
@@ -176,6 +219,7 @@ impl Panes {
         match self {
             Panes::Local(b) => b.kill(pane),
             Panes::Tmux(b) => b.kill_now(pane),
+            Panes::Daemon(b) => b.kill_now(pane),
         }
     }
 
@@ -183,32 +227,62 @@ impl Panes {
         self.write_now(pane, bytes)
     }
 
-    /// Every pane ended. Under tmux this kills the session: it is what
-    /// `app.reload` means, and a reload that left the windows would grow a
-    /// second set beside them.
+    /// Every pane ended. Under tmux or the daemon this kills the session: it
+    /// is what `app.reload` means, and a reload that left the sessions would
+    /// grow a second set beside them.
     pub fn kill_all(&self) {
         match self {
             Panes::Local(b) => b.kill_all(),
             Panes::Tmux(b) => b.kill_all(),
+            Panes::Daemon(b) => b.kill_all(),
         }
     }
 
-    /// The app is quitting. Local shells die with it; tmux windows are
-    /// LEFT RUNNING, which is the entire point of the tmux backend.
+    /// The app is quitting. Local shells die with it; tmux windows and
+    /// daemon sessions are LEFT RUNNING, which is the entire point of
+    /// either backend.
     pub fn leave(&self) {
         match self {
             Panes::Local(b) => b.kill_all(),
             Panes::Tmux(b) => b.detach(),
+            Panes::Daemon(b) => b.detach(),
         }
     }
 
     /// Live pane pids, for the remote-session poller. tmux answers nothing:
     /// a tmux pane's process lives wherever the server does, which the
-    /// header of `pids_source` has always said.
+    /// header of `pids_source` has always said. The daemon answers real
+    /// pids, unlike tmux: iftd always learns its child's pid before it ever
+    /// says `Hello`.
     pub fn pids_source(&self) -> Box<dyn Fn() -> Vec<(PaneId, u32)> + Send + 'static> {
         match self {
             Panes::Local(b) => Box::new(b.pids_source()),
             Panes::Tmux(_) => Box::new(Vec::new),
+            Panes::Daemon(b) => Box::new(b.pids_source()),
         }
+    }
+}
+
+#[cfg(test)]
+mod panes_tests {
+    use super::*;
+
+    // tmux is the ONLY backend that answers terminal queries itself. Getting
+    // this backwards sends our answers into a program that already got
+    // tmux's and they arrive as keystrokes: that was tmux bug 9, and it is
+    // what made Claude Code "a mess" for an evening.
+    //
+    // Local shells and a missing `iftd` both land on `Panes::Local`, so this
+    // also covers "iftd not found" without needing iftd built for this test.
+    #[test]
+    fn only_tmux_answers_for_itself() {
+        assert!(Panes::start(TerminalBackend::Pty, 4)
+            .0
+            .we_are_the_terminal());
+        assert!(Panes::start(TerminalBackend::Daemon, 4)
+            .0
+            .we_are_the_terminal());
+        // tmux's arm is asserted in tmux's own tests, which have a tmux to
+        // talk to; this crate's tests must not depend on one being installed.
     }
 }

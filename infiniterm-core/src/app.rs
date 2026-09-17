@@ -16,6 +16,7 @@
 //! stale socket is worse than one without hooks.
 use crate::backend::{PaneEvent, PaneId, Panes};
 use crate::cli::{CliRequest, CliState};
+use crate::config::TerminalBackend;
 use crate::config_files::{config_watch, ConfigChange};
 use crate::hooks::{listen, HookReport};
 use crate::inspect::{pane_status_poll, PaneStatus};
@@ -42,8 +43,9 @@ impl Backend {
     /// Starts every producer thread. `socket` is the path `ift` and the hook
     /// binary connect to (`paths::socket_path()` in the app; a temp path in
     /// tests, so a test never fights a running infiniterm for the real one).
-    pub fn start(socket: &Path, want_tmux: bool) -> Backend {
-        let (pty, pane_events, fell_back) = Panes::start(want_tmux);
+    /// `session_buffer_mib` is ignored by every backend but `Daemon`.
+    pub fn start(socket: &Path, backend: TerminalBackend, session_buffer_mib: usize) -> Backend {
+        let (pty, pane_events, fell_back) = Panes::start(backend, session_buffer_mib);
         if let Some(why) = &fell_back {
             eprintln!("[infiniterm] {why}");
         }
@@ -92,7 +94,7 @@ mod tests {
     #[test]
     fn the_socket_answers_ift_and_forwards_hook_reports_with_no_window() {
         let path = temp_socket("app");
-        let backend = Backend::start(&path, false);
+        let backend = Backend::start(&path, TerminalBackend::Pty, 4);
         assert!(backend.socket_ok);
 
         // A hook report, as infiniterm-hook writes it.
@@ -134,7 +136,11 @@ mod tests {
 
     #[test]
     fn a_socket_that_cannot_bind_disables_hooks_but_the_backend_still_starts() {
-        let backend = Backend::start(Path::new("/nonexistent-dir/infiniterm.sock"), false);
+        let backend = Backend::start(
+            Path::new("/nonexistent-dir/infiniterm.sock"),
+            TerminalBackend::Pty,
+            4,
+        );
         assert!(!backend.socket_ok);
         // The PTY side is untouched by that.
         assert!(backend.pane_events.try_recv().is_err());

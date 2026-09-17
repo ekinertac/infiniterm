@@ -81,6 +81,23 @@ pub fn themes_dir() -> PathBuf {
     app_support_dir().join("themes")
 }
 
+/// Where each card's `iftd` socket and `.meta` file live: `<data>/s/<id>.sock`.
+///
+/// Under the data dir on purpose, not a sibling of it: `INFINITERM_DATA_DIR`
+/// then isolates a scratch instance's sockets for free, the same property
+/// tmux needed a whole `session_name()` split (a real name and a dev name)
+/// to get.
+///
+/// Named `s`, not `sessions`: a unix socket path is capped at
+/// `sizeof(sockaddr_un.sun_path)`, 104 bytes on macOS including the NUL, and
+/// every byte spent here is budget taken from the 16 hex character session
+/// id joined onto it (see `backend::daemon::SUN_PATH_MAX`). Created on
+/// demand by whoever writes into it first (`DaemonBackend::spawn_now`), not
+/// here.
+pub fn sessions_dir() -> PathBuf {
+    app_support_dir().join("s")
+}
+
 /// The unix socket `ift` and the hook binary connect to. Its existence is
 /// the answer to "is infiniterm running", which is what `ift` asks first.
 pub fn socket_path() -> PathBuf {
@@ -133,5 +150,13 @@ mod tests {
     #[test]
     fn layout_path_is_not_the_config_path() {
         assert_ne!(layout_path().parent(), Some(config_dir().as_path()));
+    }
+
+    // Short on purpose: see this fn's own doc comment for the socket path
+    // budget "sessions" would have spent instead.
+    #[test]
+    fn sessions_dir_is_under_the_data_dir_and_short() {
+        assert!(sessions_dir().starts_with(app_support_dir()));
+        assert_eq!(sessions_dir().file_name().unwrap(), "s");
     }
 }

@@ -43,16 +43,21 @@ pub struct Terminal {
     /// Program to run in a new card. Empty uses the login shell.
     pub shell: String,
     /// Where a card's shell lives. `pty` is a plain local shell that dies
-    /// with the window; `tmux` keeps it running when the app quits and lets
-    /// `tmux attach -t infiniterm` reach it from any terminal.
+    /// with the window; `tmux` and `daemon` both keep it running when the
+    /// app quits, reachable again from any terminal (`tmux attach -t
+    /// infiniterm`, `ift attach <id>`).
     ///
-    /// pty is the DEFAULT. tmux works for shells and for programs that
-    /// repaint a whole screen, but a program that redraws INLINE, moving
-    /// the cursor up and erasing a line rather than clearing, needs our
-    /// grid's scroll position to match exactly what it believes. Two
-    /// emulators track one program under tmux, with a replayed history in
-    /// between, and when they disagree by a row that kind of redraw lands
-    /// wrong and never heals, because it never clears. Claude Code is one.
+    /// pty is the DEFAULT here (Task 7 flips it to `daemon` once the
+    /// falsification scenario in `tools/drive/daemon.sh` has run). tmux
+    /// works for shells and for programs that repaint a whole screen, but a
+    /// program that redraws INLINE, moving the cursor up and erasing a line
+    /// rather than clearing, needs our grid's scroll position to match
+    /// exactly what it believes. Two emulators track one program under
+    /// tmux, with a replayed history in between, and when they disagree by
+    /// a row that kind of redraw lands wrong and never heals, because it
+    /// never clears. Claude Code is one. `daemon` (`iftd`, one per card) has
+    /// no second emulator in the path at all: it never parses VT, so a
+    /// reattach replays the exact bytes our own parser would have seen live.
     pub backend: TerminalBackend,
     pub cursor_style: CursorStyle,
     pub cursor_blink: bool,
@@ -63,6 +68,12 @@ pub struct Terminal {
     pub letter_spacing: f64,
     pub line_height: f64,
     pub scrollback: f64,
+    /// MiB of raw output the `daemon` backend keeps per card, replayed on
+    /// reattach. Ignored by `pty` and `tmux`. 4 is the design's starting
+    /// guess, not a measured floor; Ink's repaints are large and repetitive
+    /// enough that a Claude card may need more, which is the whole reason
+    /// this is a setting and not a constant.
+    pub session_buffer: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +89,7 @@ pub enum CursorStyle {
 pub enum TerminalBackend {
     Tmux,
     Pty,
+    Daemon,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -195,6 +207,7 @@ pub fn default_config() -> Config {
             letter_spacing: 0.,
             line_height: 1.2,
             scrollback: 10_000.,
+            session_buffer: 4.,
         },
         cards: Cards {
             width: 69.,
@@ -296,6 +309,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 &[
                     ("tmux", TerminalBackend::Tmux),
                     ("pty", TerminalBackend::Pty),
+                    ("daemon", TerminalBackend::Daemon),
                 ],
             ),
             cursor_style: one(
@@ -315,6 +329,7 @@ pub fn merge_config(raw: &Value) -> Config {
             letter_spacing: num(t.get("letterSpacing"), d.terminal.letter_spacing, -10., 10.),
             line_height: num(t.get("lineHeight"), d.terminal.line_height, 0.8, 3.),
             scrollback: num(t.get("scrollback"), d.terminal.scrollback, 0., 1_000_000.),
+            session_buffer: num(t.get("sessionBuffer"), d.terminal.session_buffer, 1., 64.),
         },
         cards: Cards {
             // Floors that keep a card usable: below about 40 columns a
@@ -440,6 +455,25 @@ mod tests {
     #[test]
     fn an_empty_object_gives_the_defaults() {
         assert_eq!(m(json!({})), default_config());
+    }
+
+    #[test]
+    fn the_backend_setting_names_three_things() {
+        for (text, want) in [
+            ("pty", TerminalBackend::Pty),
+            ("tmux", TerminalBackend::Tmux),
+            ("daemon", TerminalBackend::Daemon),
+        ] {
+            let c = m(json!({"terminal": {"backend": text}}));
+            assert_eq!(c.terminal.backend, want, "{text}");
+        }
+        // A typo falls back to the default rather than breaking the file.
+        assert_eq!(
+            m(json!({"terminal": {"backend": "nonsense"}}))
+                .terminal
+                .backend,
+            TerminalBackend::Pty
+        );
     }
 
     #[test]

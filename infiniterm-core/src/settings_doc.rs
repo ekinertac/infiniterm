@@ -40,16 +40,21 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "terminal.backend",
         &[
-            "Where a card's shell lives: \"pty\" or \"tmux\".",
+            "Where a card's shell lives: \"pty\", \"tmux\", or \"daemon\".",
             "pty, the default, is a plain local shell that dies with the window.",
             "tmux keeps the shell running when infiniterm quits, and the same",
             "sessions are reachable with `tmux attach -t infiniterm` from any",
-            "terminal. Each card is one tmux window.",
-            "tmux is not the default yet: a program that redraws INLINE, like",
-            "Claude Code, can come out with two lines in one row, because two",
-            "emulators are tracking one program and a redraw that never clears",
-            "never recovers from a disagreement. Shells and full-screen",
-            "programs are fine.",
+            "terminal. Each card is one tmux window, but tmux is a second",
+            "terminal emulator: a program that redraws INLINE, like Claude Code,",
+            "can come out with two lines in one row, because two emulators are",
+            "tracking one program and a redraw that never clears never recovers",
+            "from a disagreement. Shells and full-screen programs are fine.",
+            "daemon runs one small `iftd` sidecar per card instead: it parses no",
+            "terminal output at all, so a reattach after infiniterm quits replays",
+            "the exact bytes our own emulator would have seen live, with no second",
+            "emulator to disagree with. `ift sessions` and `ift attach <id>` reach",
+            "a daemon card's shell even with infiniterm not running.",
+            "Neither tmux nor daemon is the default yet, pending more use.",
         ],
     ),
     (
@@ -97,6 +102,15 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "terminal.scrollback",
         &["Lines kept per card. Costs memory per card, not per app."],
+    ),
+    (
+        "terminal.sessionBuffer",
+        &[
+            "MiB of raw output the \"daemon\" backend keeps per card, replayed on",
+            "reattach. Ignored by \"pty\" and \"tmux\". Turn it down to shrink the",
+            "worst case of many cards each holding a full buffer; turn it up if a",
+            "card's early output is gone by the time you reattach to it.",
+        ],
     ),
     (
         "cards",
@@ -419,7 +433,8 @@ mod tests {
     fn whole_numbers_render_without_a_decimal_point() {
         let text = default_settings_text();
         assert!(text.contains("\"fontSize\": 14,"));
-        assert!(text.contains("\"scrollback\": 10000\n"));
+        assert!(text.contains("\"scrollback\": 10000,"));
+        assert!(text.contains("\"sessionBuffer\": 4\n"));
         assert!(text.contains("\"lineHeight\": 1.2,"));
     }
 }

@@ -85,17 +85,18 @@ pub struct SavedCard {
     pub sidebar_top: bool,
     /// A browser card's page zoom; `None` means the config default.
     pub zoom: Option<f64>,
-    /// The tmux window this card's shell lives in (`@7`).
+    /// This card's shell, as an opaque handle in whichever backend holds it
+    /// (a tmux window id like `@7`, or a daemon session id).
     ///
     /// The ONE runtime fact about a shell that is saved. Everything else is
     /// deliberately left behind, because a restored card must not claim to
-    /// be working days later; this is the opposite case. Under tmux the
-    /// shell really is still there, and without its window id the card
-    /// would start a second one beside it and orphan the first.
+    /// be working days later; this is the opposite case. Under tmux or the
+    /// daemon backend the shell really is still there, and without this the
+    /// card would start a second one beside it and orphan the first.
     ///
-    /// Ignored by the local backend, and by any launch where the window has
+    /// Ignored by the local backend, and by any launch where the session has
     /// gone: the card is then a fresh shell in its directory, as before.
-    pub tmux_window: Option<String>,
+    pub session: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,13 +175,13 @@ fn card_value(c: &SavedCard) -> Value {
         "sidebarTop": c.sidebar_top,
         "zoom": opt_num(c.zoom),
     });
-    // Written ONLY when there is one. A card with no tmux window behind it
-    // leaves the file exactly as it was, so a canvas that never used tmux
-    // round-trips byte for byte and the file does not grow a column of
-    // nulls for a backend nobody chose.
-    if let Some(window) = &c.tmux_window {
+    // Written ONLY when there is one. A card with no session behind it
+    // leaves the file exactly as it was, so a canvas that never used tmux or
+    // the daemon backend round-trips byte for byte and the file does not
+    // grow a column of nulls for a backend nobody chose.
+    if let Some(session) = &c.session {
         if let Some(map) = card.as_object_mut() {
-            map.insert("tmuxWindow".into(), Value::String(window.clone()));
+            map.insert("session".into(), Value::String(session.clone()));
         }
     }
     card
@@ -255,7 +256,10 @@ fn as_card(v: &Value) -> Option<SavedCard> {
     let kind_str = c.get("kind").and_then(Value::as_str);
     let path = non_empty(c.get("path"));
     let url = non_empty(c.get("url"));
-    let tmux_window = non_empty(c.get("tmuxWindow"));
+    // "tmuxWindow" is the spelling one evening of tmux-backend save files
+    // used; "session" is what every backend's opaque handle is called now.
+    // Read both, preferring the current key, so those canvases still load.
+    let session = non_empty(c.get("session")).or_else(|| non_empty(c.get("tmuxWindow")));
     // A card is a terminal unless it says otherwise; an editor without a
     // path is an untitled buffer, whose text lives in its draft. A browser
     // without a url or a transcript without a path has nothing to show and
@@ -310,7 +314,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         } else {
             None
         },
-        tmux_window,
+        session,
     })
 }
 
@@ -504,7 +508,7 @@ mod tests {
             sidebar: None,
             sidebar_top: false,
             zoom: None,
-            tmux_window: None,
+            session: None,
         }
     }
 
@@ -598,23 +602,47 @@ mod tests {
     // Runtime facts about a shell that no longer exists stay out of the file.
     // The typed SavedCard cannot carry them, so the check is the key set.
     // The one runtime fact that IS saved, and only when there is one: a
-    // canvas that never used tmux has to round-trip byte for byte, which
-    // the real-file test also checks.
+    // canvas that never used tmux or the daemon backend has to round-trip
+    // byte for byte, which the real-file test also checks.
     #[test]
-    fn a_tmux_window_is_written_only_when_a_card_has_one() {
+    fn a_session_is_written_only_when_a_card_has_one() {
         let plain = card_value(&card());
         assert!(
-            plain.get("tmuxWindow").is_none(),
-            "a card with no tmux window must not grow a null"
+            plain.get("session").is_none(),
+            "a card with no session must not grow a null"
         );
         let with = card_value(&SavedCard {
-            tmux_window: Some("@7".into()),
+            session: Some("@7".into()),
             ..card()
         });
-        assert_eq!(with["tmuxWindow"], "@7");
+        assert_eq!(with["session"], "@7");
         // And it comes back.
-        assert_eq!(as_card(&with).unwrap().tmux_window.as_deref(), Some("@7"));
-        assert_eq!(as_card(&plain).unwrap().tmux_window, None);
+        assert_eq!(as_card(&with).unwrap().session.as_deref(), Some("@7"));
+        assert_eq!(as_card(&plain).unwrap().session, None);
+    }
+
+    #[test]
+    fn a_session_survives_the_save_file() {
+        let saved = round_trip(
+            &[SavedCard {
+                session: Some("abc-123".into()),
+                ..card()
+            }],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(saved.cards[0].session.as_deref(), Some("abc-123"));
+    }
+
+    // Canvases written by the tmux evening still load: the key it used is
+    // read as a fallback, even though it is never written any more.
+    #[test]
+    fn the_old_tmux_window_key_is_still_read() {
+        let with_legacy_key = with(card_json(), &[("tmuxWindow", json!("@3"))]);
+        assert_eq!(
+            as_card(&with_legacy_key).unwrap().session.as_deref(),
+            Some("@3")
+        );
     }
 
     #[test]
@@ -1106,6 +1134,12 @@ mod tests {
     // save file parses, re-serialises to the same bytes, and the Tauri app
     // could therefore open what this build writes. Skipped where the file
     // is absent.
+    //
+    // One deliberate exception: "tmuxWindow" is written as "session" now
+    // (still read under either spelling, see
+    // `the_old_tmux_window_key_is_still_read`), so a real file saved before
+    // that rename is normalised to the new spelling before the comparison
+    // rather than the test pinning the old key forever.
     #[test]
     fn the_real_workspace_file_round_trips_byte_for_byte() {
         let Some(home) = std::env::var_os("HOME") else {
@@ -1127,6 +1161,7 @@ mod tests {
             &layout.workspaces,
             layout.active_workspace_id.as_deref(),
         ));
-        assert_eq!(again, text.trim_end());
+        let expected = text.trim_end().replace("\"tmuxWindow\":", "\"session\":");
+        assert_eq!(again, expected);
     }
 }

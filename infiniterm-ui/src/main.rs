@@ -135,11 +135,11 @@ pub struct AppView {
     /// Text an effect asked to put on the clipboard, written on the next
     /// frame: only a frame has an App to write through.
     pub clipboard_out: Option<String>,
-    /// The tmux windows that were already running when this launch started.
-    /// Asked ONCE: a card adopts one only if it was there before we were,
-    /// and a window this launch created must never be adopted by another
-    /// card.
-    pub live_windows: Vec<String>,
+    /// The sessions (tmux windows, daemon sessions) that were already
+    /// running when this launch started. Asked ONCE: a card adopts one only
+    /// if it was there before we were, and a session this launch created
+    /// must never be adopted by another card.
+    pub live_sessions: Vec<String>,
     pub samples: Vec<Sample>,
     pub mouse: Point,
     pub seeded: bool,

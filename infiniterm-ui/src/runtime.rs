@@ -28,13 +28,14 @@ impl AppView {
         let mut registry = CommandRegistry::new(|line| eprintln!("[infiniterm] {line}"));
         register_commands(&mut registry);
         registry.set_context(describe_context);
+        // The settings are read here rather than in `startup`, which runs
+        // later: the backend has to exist before the first card does, and
+        // which backend it is cannot be changed afterwards.
+        let (term_backend, session_buffer_mib) = startup_terminal();
         AppView {
             model: infiniterm_core::model::Model::new(),
             registry,
-            // The settings are read here rather than in `startup`, which
-            // runs later: the backend has to exist before the first card
-            // does, and which backend it is cannot be changed afterwards.
-            backend: Backend::start(&socket_path(), wants_tmux()),
+            backend: Backend::start(&socket_path(), term_backend, session_buffer_mib),
             animator: crate::Animator::new(),
             chrome: crate::Chrome::default_chrome(),
             bodies: Default::default(),
@@ -49,7 +50,7 @@ impl AppView {
             find_field: crate::field::Field::default(),
             redraw: false,
             clipboard_out: None,
-            live_windows: vec![],
+            live_sessions: vec![],
             prompt_was_open: false,
             suggestions: std::sync::mpsc::channel(),
             samples: vec![],
@@ -446,17 +447,15 @@ impl AppView {
 /// Reads the config directory, rewrites the generated files, seeds and lists
 /// the themes, loads the saved canvas. Order matters: the settings decide
 /// the start directory and the theme before the first card is seeded.
-/// The backend the settings file asks for, read straight from disk because
-/// the model does not exist yet. A malformed or missing file means the
-/// default, which is what `merge_config` already does for everything else.
-fn wants_tmux() -> bool {
-    use infiniterm_core::config::TerminalBackend;
+/// The backend (and its buffer size) the settings file asks for, read
+/// straight from disk because the model does not exist yet. A malformed or
+/// missing file means the defaults, which is what `merge_config` already
+/// does for everything else.
+fn startup_terminal() -> (infiniterm_core::config::TerminalBackend, usize) {
     let text = config_read(ConfigFile::Settings).unwrap_or_default();
     let value = infiniterm_core::jsonc::parse_jsonc(&text).unwrap_or(serde_json::Value::Null);
-    infiniterm_core::config::merge_config(&value)
-        .terminal
-        .backend
-        == TerminalBackend::Tmux
+    let terminal = infiniterm_core::config::merge_config(&value).terminal;
+    (terminal.backend, terminal.session_buffer as usize)
 }
 
 pub fn startup(app: &mut AppView) {
@@ -499,22 +498,22 @@ pub fn startup(app: &mut AppView) {
     app.model.apply_settings_text(&settings);
     app.model.apply_keymap_text(&keys);
     app.animator.animations_on = app.model.config.ui.animations && !app.reduce_motion;
-    // Before any card exists: which windows the last launch left running.
-    app.live_windows = app.backend.pty.live_windows();
+    // Before any card exists: which sessions the last launch left running.
+    app.live_sessions = app.backend.pty.live_sessions();
     app.model
         .load_layout(infiniterm_core::layout_file::read_layout().as_deref());
     // The omnibox ranks against this; a missing file is an empty history.
     app.model.history =
         infiniterm_core::omni::history::History::load(&infiniterm_core::paths::history_path());
-    // Windows this app left running that no card came back for: a crash's
+    // Sessions this app left running that no card came back for: a crash's
     // litter. Only when the canvas actually loaded, because a save file that
-    // failed to parse claims nothing and would make every window an orphan.
+    // failed to parse claims nothing and would make every session an orphan.
     if app.model.loaded {
         let claimed: Vec<String> = app
             .model
             .cards
             .iter()
-            .filter_map(|c| c.tmux_window.clone())
+            .filter_map(|c| c.session.clone())
             .collect();
         app.backend.pty.kill_orphans(&claimed);
     }
