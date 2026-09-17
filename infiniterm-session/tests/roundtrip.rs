@@ -56,9 +56,49 @@ impl TempDir {
 }
 
 impl Drop for TempDir {
+    /// Kills every daemon this directory owns BEFORE removing it.
+    ///
+    /// A daemon outlives its client by design, so a test that fails or
+    /// panics before its own `stop` would otherwise leave a detached shell
+    /// running forever, with its socket path deleted a moment later so
+    /// nothing can ever reach it again. That is a leak per failing run on
+    /// whatever machine ran the suite, and this suite is meant to be run
+    /// often. Killing the DAEMON is what matters: the kernel closes the pty
+    /// master with it, which hangs up the shell underneath.
     fn drop(&mut self) {
+        if let Ok(entries) = std::fs::read_dir(&self.0) {
+            for socket in entries.flatten().map(|e| e.path()) {
+                if socket.extension().is_some_and(|e| e == "sock") {
+                    for pid in daemons_for(&socket) {
+                        // SIGKILL, not SIGTERM: this runs on a path where a
+                        // graceful exit has already failed to happen.
+                        let _ = std::process::Command::new("kill")
+                            .args(["-9", &pid.to_string()])
+                            .status();
+                    }
+                }
+            }
+        }
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+/// Every `iftd` process serving this socket path. Returns an empty vector
+/// rather than panicking: on the cleanup path a daemon that already exited
+/// is the normal case, not a failure.
+fn daemons_for(socket: &Path) -> Vec<u32> {
+    let needle = format!("--socket {}", socket.display());
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-axww", "-o", "pid=,command="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|line| line.contains(&needle))
+        .filter_map(|line| line.split_whitespace().next()?.parse().ok())
+        .collect()
 }
 
 fn tempdir() -> TempDir {
