@@ -1065,6 +1065,29 @@ mod tests {
         assert_eq!(h.m.usage.len(), 1);
     }
 
+    // A menu is muscle memory. The placement menu and the phantom's kind
+    // picker keep the order they were designed in, and using them leaves
+    // no record that could reorder them next time.
+    #[test]
+    fn menus_keep_their_order_and_record_no_use() {
+        let mut h = Harness::new();
+        assert!(Source::Placement.keeps_its_order());
+        assert!(Source::SlotKind.keeps_its_order());
+        assert!(
+            !Source::Commands.keeps_its_order(),
+            "hundreds of commands: recency helps"
+        );
+        assert!(
+            !Source::Themes.keeps_its_order(),
+            "hundreds of themes: recency helps"
+        );
+        h.m.note_use(Source::Placement, "claude");
+        h.m.note_use(Source::SlotKind, "browser");
+        assert!(h.m.usage.is_empty(), "a menu choice is not remembered");
+        h.m.note_use(Source::Commands, "canvas.zoom.in");
+        assert_eq!(h.m.usage.len(), 1, "a command choice still is");
+    }
+
     #[test]
     fn the_command_source_lists_every_command_but_the_palette_with_its_chord() {
         let h = Harness::new();

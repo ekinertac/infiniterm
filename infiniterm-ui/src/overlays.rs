@@ -115,6 +115,14 @@ impl AppView {
             .map(|(i, l)| (i.as_str(), l.as_str()))
             .collect();
         let items = self.model.palette_items(source, &labels_ref);
+        // A menu keeps its designed order: no usage bonus to reorder it and
+        // no recent/rest split to move a row under a heading. Typing still
+        // filters, and `rank` is stable, so what is left is in the order
+        // the source listed it. See `Source::keeps_its_order`.
+        if source.keeps_its_order() {
+            let ranked = rank(&items, &self.model.palette.query, MAX_RESULTS, |_| 0.);
+            return (ranked.items, ranked.total, vec![]);
+        }
         let usage = &self.model.usage;
         let ranked = rank(&items, &self.model.palette.query, MAX_RESULTS, |id| {
             usage_bonus(usage.get(&use_key(source.id(), id)))

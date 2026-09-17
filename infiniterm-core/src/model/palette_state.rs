@@ -30,6 +30,19 @@ impl Source {
         }
     }
 
+    /// Whether this source's rows stay where they were designed to be.
+    ///
+    /// Recency earns its place in a list of hundreds: the five commands you
+    /// actually run, or the theme you keep coming back to, at the top. A
+    /// list of nine, or three, is a MENU, and a menu is muscle memory: Enter
+    /// on a phantom, then Enter again, has to mean "terminal" every time,
+    /// and Cmd+Shift+T then the second row has to be the same second row
+    /// tomorrow. Ranking those by use moved the rows under the hand that had
+    /// learned them.
+    pub fn keeps_its_order(self) -> bool {
+        matches!(self, Source::Placement | Source::SlotKind)
+    }
+
     /// Prompt text in the empty input.
     pub fn placeholder(self) -> &'static str {
         match self {
@@ -202,6 +215,11 @@ impl Model {
     /// Records a choice, capped so 521 themes cannot grow the map for the
     /// life of the install.
     pub fn note_use(&mut self, source: Source, id: &str) {
+        // A menu that keeps its order has no use for a record of use, and
+        // recording one would only be a map entry nothing reads.
+        if source.keeps_its_order() {
+            return;
+        }
         self.usage = prune_usage(
             &record_use(&self.usage, &use_key(source.id(), id), self.now_ms),
             USAGE_LIMIT,
