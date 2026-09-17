@@ -124,10 +124,6 @@ impl Panes {
         }
     }
 
-    pub fn is_tmux(&self) -> bool {
-        matches!(self, Panes::Tmux(_))
-    }
-
     /// Whether OUR emulator is the thing programs are talking to. False only
     /// under tmux, which is a terminal in its own right and answers colour and
     /// device queries before we can; our second answer then reaches the program

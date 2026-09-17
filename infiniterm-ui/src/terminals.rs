@@ -230,24 +230,21 @@ impl AppView {
         // measured landing in the shell as `10;rgb:5050/9e9e/3131` after
         // the program that asked had already gone, and Claude Code, which
         // re-queries as it redraws, took a steady drip of it into its input.
-        let answer = !self.backend.pty.is_tmux();
-        let mut writes: Vec<(u32, Vec<u8>)> = vec![];
+        // Under our own daemon nothing between us and the pty answers
+        // anything, so our replies MUST go: `we_are_the_terminal()` is true
+        // there and false only under tmux. Inverting this line reproduces
+        // tmux bug 9 exactly, so it is not spelled as `!is_tmux()` any more.
+        let answer = self.backend.pty.we_are_the_terminal();
+        let mut per_pane: Vec<PaneWrites> = vec![];
         for body in self.bodies.values_mut() {
             if let Some(t) = body.as_any_mut().downcast_mut::<TerminalBody>() {
                 let replies = std::mem::take(&mut t.replies);
                 if let Some(pane) = t.pane {
-                    for bytes in std::mem::take(&mut t.outgoing) {
-                        writes.push((pane, bytes));
-                    }
-                    if answer {
-                        for bytes in replies {
-                            writes.push((pane, bytes));
-                        }
-                    }
+                    per_pane.push((pane, std::mem::take(&mut t.outgoing), replies));
                 }
             }
         }
-        for (pane, bytes) in writes {
+        for (pane, bytes) in gated_writes(answer, per_pane) {
             self.backend.pty.write_now(pane, &bytes);
         }
     }
@@ -268,5 +265,87 @@ impl AppView {
         for (pane, bytes) in writes {
             self.backend.pty.write_now(pane, &bytes);
         }
+    }
+}
+
+/// One pane's pending writes: its own keystrokes/pastes, and the emulator's
+/// replies to a program's query, still separate because only the second
+/// group is gated (see `gated_writes`).
+type PaneWrites = (u32, Vec<Vec<u8>>, Vec<Vec<u8>>);
+
+/// The `feed_terminals` write gate, pulled out of the gpui-shaped loop so it
+/// can be tested without a window or a live pty: keystrokes and pastes
+/// (`outgoing`) always reach the pane, but the emulator's own replies to a
+/// program's query go only when `answer` says we are the terminal. Getting
+/// `answer` backwards is tmux bug 9 (see `feed_terminals`); this is the
+/// function a test can pin so an inverted `we_are_the_terminal()` fails loud.
+fn gated_writes(answer: bool, per_pane: Vec<PaneWrites>) -> Vec<(u32, Vec<u8>)> {
+    let mut writes = vec![];
+    for (pane, outgoing, replies) in per_pane {
+        for bytes in outgoing {
+            writes.push((pane, bytes));
+        }
+        if answer {
+            for bytes in replies {
+                writes.push((pane, bytes));
+            }
+        }
+    }
+    writes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The call site under test: `we_are_the_terminal()` becomes `answer`,
+    // and this is the boundary between "true" (local shells, our daemon)
+    // and "false" (tmux). Inverted, our replies reach a program that tmux
+    // already answered, landing in its input as keystrokes (tmux bug 9).
+    #[test]
+    fn replies_are_forwarded_only_when_we_are_the_terminal() {
+        let per_pane = vec![(1, vec![b"keys".to_vec()], vec![b"\x1b[0c".to_vec()])];
+
+        let writes = gated_writes(true, per_pane.clone());
+        assert_eq!(
+            writes,
+            vec![(1, b"keys".to_vec()), (1, b"\x1b[0c".to_vec())],
+            "we are the terminal: our reply must reach the pane"
+        );
+
+        let writes = gated_writes(false, per_pane);
+        assert_eq!(
+            writes,
+            vec![(1, b"keys".to_vec())],
+            "under tmux tmux already answered; a second answer is corruption"
+        );
+    }
+
+    // Outgoing bytes are a card's own keystrokes/pastes, not an emulator's
+    // reply to a query; they must never be gated by the terminal-identity
+    // question, or a paste under tmux would silently vanish.
+    #[test]
+    fn outgoing_bytes_ignore_the_gate_entirely() {
+        let per_pane = vec![(7, vec![b"echo hi\n".to_vec()], vec![])];
+        assert_eq!(
+            gated_writes(false, per_pane.clone()),
+            vec![(7, b"echo hi\n".to_vec())]
+        );
+        assert_eq!(
+            gated_writes(true, per_pane),
+            vec![(7, b"echo hi\n".to_vec())]
+        );
+    }
+
+    #[test]
+    fn several_panes_are_each_gated_independently() {
+        let per_pane = vec![
+            (1, vec![], vec![b"reply-1".to_vec()]),
+            (2, vec![], vec![b"reply-2".to_vec()]),
+        ];
+        assert_eq!(
+            gated_writes(true, per_pane),
+            vec![(1, b"reply-1".to_vec()), (2, b"reply-2".to_vec())]
+        );
     }
 }
