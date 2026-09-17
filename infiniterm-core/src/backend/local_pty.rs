@@ -15,6 +15,12 @@
 //! Moved from the Tauri app unchanged. `HIGH_WATER` here bounds memory; the
 //! per-frame parse budget in `infiniterm-term::scheduler` bounds time, and
 //! both are needed (the term-zoom spike measured 1 fps without the budget).
+//!
+//! `INHERITED_TERMINAL_VARS`, `terminal_identity` and `default_shell` are
+//! `pub`: `infiniterm-session`'s `iftd` spawns a card's shell now instead of
+//! this process, so the env scrubbing has to live here and be used from
+//! there too, or a daemon-backed card claims to be whatever terminal
+//! launched the app.
 
 use super::{PaneEvent, PaneId, SessionBackend};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
@@ -343,7 +349,12 @@ impl LocalPtyBackend {
 
 /// Variables a parent terminal leaves in the environment; a shell reading
 /// them would take that terminal for its own.
-const INHERITED_TERMINAL_VARS: [&str; 12] = [
+///
+/// `pub`: `iftd` (infiniterm-session) spawns the child now, so the scrubbing
+/// lives here and is used from there too. Without it every card claims to be
+/// a WezTerm pane again once a card's shell is a daemon's child rather than
+/// this process's — see the WezTerm trap in CLAUDE.md.
+pub const INHERITED_TERMINAL_VARS: [&str; 12] = [
     "TERM_PROGRAM",
     "TERM_PROGRAM_VERSION",
     "TERM_SESSION_ID",
@@ -371,7 +382,9 @@ pub fn terminal_identity() -> Vec<(String, String)> {
     ]
 }
 
-fn default_shell() -> String {
+/// `pub`: `iftd` builds the same command line this backend does, and must
+/// fall back to the same shell when `$SHELL` is unset.
+pub fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
 }
 

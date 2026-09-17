@@ -11,6 +11,7 @@ members = [
     "infiniterm-ui",
     "infiniterm-cli",
     "infiniterm-hook",
+    "infiniterm-session",
 ]
 resolver = "2"
 

@@ -3148,6 +3148,16 @@ name = "infiniterm-hook"
 version = "0.1.0"
 
 [[package]]
+name = "infiniterm-session"
+version = "0.1.0"
+dependencies = [
+ "infiniterm-core",
+ "libc",
+ "portable-pty",
+ "serde_json",
+]
+
+[[package]]
 name = "infiniterm-term"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,29 @@
+# Produces `iftd`, one sidecar daemon per card's shell (see src/main.rs).
+# Kept as its own crate rather than a bin in infiniterm-core so the app
+# never links a fork/setsid daemon into itself by accident.
+[package]
+name = "infiniterm-session"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# `iftd`, beside `ift`: one daemon per card, spawned by the app and outliving it.
+[[bin]]
+name = "iftd"
+path = "src/main.rs"
+
+[dependencies]
+infiniterm-core = { path = "../infiniterm-core" }
+portable-pty = "0.9"
+# fork/setsid, and nothing else. A daemon that must survive its parent has
+# no portable spelling.
+libc = "0.2"
+# The meta file is JSON that `ift sessions` (Task 6) parses with no app
+# running; a cwd or command containing a quote is exactly the kind of
+# trust-boundary case hand-rolled escaping gets wrong, and CLAUDE.md says
+# not to cut those for simplicity. Already resolved in the workspace
+# lockfile via infiniterm-core, so this adds no new crate to the tree.
+serde_json = "1"
+
+[dev-dependencies]
+infiniterm-core = { path = "../infiniterm-core" }
