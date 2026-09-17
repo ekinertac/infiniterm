@@ -252,6 +252,14 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "app.shortcuts",
         "Cmd+? is the Help menu's search field",
     ),
+    // Four modifiers, on purpose. Quitting and reopening ends every process
+    // in every card, and the daemon backend only makes that survivable, not
+    // free. Nothing else in this table is this hard to press by accident.
+    (
+        "cmd+ctrl+alt+r",
+        "app.restart",
+        "a restart nobody asked for is expensive",
+    ),
     // Cmd+T with Shift: a new terminal, but WHERE is the question. A short
     // menu whose first entry letters every empty slot around the cards.
     ("cmd+shift+t", "card.place", "a new terminal, but WHERE"),

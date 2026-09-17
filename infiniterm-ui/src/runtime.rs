@@ -240,6 +240,19 @@ impl AppView {
                     self.flush_save();
                     std::process::exit(0);
                 }
+                Effect::Restart => {
+                    self.flush_save();
+                    match relaunch_after_exit() {
+                        // The waiter is running and holds our pid; nothing
+                        // left to do but go, and it opens the bundle once
+                        // we are gone. Cards come back to their sessions
+                        // and the frame comes back from window.json.
+                        Ok(()) => std::process::exit(0),
+                        // Still here, so say why rather than quitting into
+                        // nothing and looking like a crash.
+                        Err(e) => self.model.notify(format!("could not restart: {e}")),
+                    }
+                }
                 Effect::RunCommand(id) => self.run_command(&id),
                 Effect::LogFps(n) => eprintln!("[infiniterm] stress zoom {n}: {:.0} fps", self.fps),
                 Effect::LogDims => {
@@ -613,9 +626,66 @@ fn append_agent_log(line: &str) {
 /// Enough for days of turns, small enough to open in an editor.
 const AGENT_LOG_MAX_BYTES: u64 = 512 * 1024;
 
+/// The `.app` an executable lives in: `.../x.app/Contents/MacOS/x` is three
+/// ancestors up. `None` for a bare binary, which is what `cargo run` and
+/// every test is, and which must not be "restarted" into anything.
+fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
+    exe.ancestors()
+        .nth(3)
+        .filter(|p| p.extension().is_some_and(|e| e == "app"))
+}
+
+/// Arranges for this app bundle to be reopened once this process is gone.
+///
+/// Nothing inside a process can outlive it, so the waiting is done by a
+/// detached `/bin/sh` that polls our pid and then runs `open`. `open` and
+/// not `exec`: the relauncher must not become the app, or the new instance
+/// inherits a shell's environment and every card claims to be running under
+/// whatever started it (the trap `local_pty::terminal_identity` exists for).
+///
+/// The wait is a poll rather than a signal because the child cannot wait on
+/// a process that is not its own. 100 ms is below noticing and costs a few
+/// wakeups at most: a quit takes well under a second.
+fn relaunch_after_exit() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let bundle = bundle_of(&exe).ok_or("not running from an .app bundle")?;
+    let script = format!(
+        "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; exec open {bundle}",
+        pid = std::process::id(),
+        bundle = infiniterm_core::drop::shell_quote(&bundle.to_string_lossy()),
+    );
+    std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(script)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Three up and it must be the bundle, or `open` gets handed a path
+    // that is not an app and the restart quits into nothing.
+    #[test]
+    fn the_bundle_is_three_above_the_executable() {
+        use std::path::Path;
+        assert_eq!(
+            bundle_of(Path::new(
+                "/Applications/infiniterm.app/Contents/MacOS/infiniterm"
+            )),
+            Some(Path::new("/Applications/infiniterm.app"))
+        );
+        // cargo's own binary, which is what every test and `cargo run` is.
+        assert_eq!(
+            bundle_of(Path::new(
+                "/Users/x/Code/infiniterm/target/debug/infiniterm"
+            )),
+            None
+        );
+        assert_eq!(bundle_of(Path::new("/infiniterm")), None);
+    }
 
     // The argument list is the part that can be wrong: without --max-time a
     // DNS stall would keep a thread alive for the system's timeout.

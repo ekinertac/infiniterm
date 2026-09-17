@@ -197,6 +197,35 @@ mod tests {
         assert_eq!(h.focused().cwd, "/Users/me/Code/api");
     }
 
+    // The restart is safe only because the daemon backend DETACHES on quit:
+    // the shells and whatever is running in them survive and the cards
+    // adopt them again. On a local pty the same chord would end every
+    // process in every card, so it refuses and says why instead.
+    #[test]
+    fn restart_refuses_on_a_backend_that_would_kill_the_shells() {
+        use crate::config::TerminalBackend;
+        let mut h = Harness::new();
+
+        h.m.config.terminal.backend = TerminalBackend::Pty;
+        let effects = h.run("app.restart");
+        assert!(
+            !effects.iter().any(|e| matches!(e, Effect::Restart)),
+            "pty must not restart"
+        );
+        assert!(h.m.notice.is_some(), "and it says why");
+
+        h.m.config.terminal.backend = TerminalBackend::Tmux;
+        let effects = h.run("app.restart");
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Restart)));
+
+        h.m.config.terminal.backend = TerminalBackend::Daemon;
+        let effects = h.run("app.restart");
+        assert!(
+            effects.iter().any(|e| matches!(e, Effect::Restart)),
+            "the daemon keeps the shells, so it may"
+        );
+    }
+
     // Focus after a close goes to the NEAREST card by geometry, not the next in the list.
     #[test]
     fn closing_hands_focus_to_the_nearest_card() {

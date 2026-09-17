@@ -4,6 +4,7 @@
 use super::palette_state::Source;
 use super::{ConfigPair, Effect, Model};
 use crate::chrome::{clamp_ui_scale, UI_SCALE_STEP};
+use crate::config::TerminalBackend;
 use crate::config_files::{config_path, ConfigFile};
 use crate::grid::Point;
 use crate::ift::{open_plan, PathKind};
@@ -202,6 +203,22 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("theme.next", "Theme: next", |m| m.cycle_theme(1));
     r.register("theme.prev", "Theme: previous", |m| m.cycle_theme(-1));
     // A reload kills every shell and its chord is a reflex from browsers; it
+    // Deliberately a four-key chord. It ends every process in every card,
+    // and a restart you did not mean to ask for is expensive in a way that
+    // no other binding here is.
+    r.register("app.restart", "App: restart", |m| {
+        // Under the daemon backend quitting DETACHES, so the shells and
+        // anything running in them are still there afterwards and the cards
+        // adopt them again. Under a local pty the same keystroke means
+        // "kill everything I have open", which is not a thing to do on a
+        // chord: say so instead of doing it.
+        if m.config.terminal.backend != TerminalBackend::Daemon {
+            m.notify("restart needs terminal.backend \"daemon\"; on pty it would kill every shell");
+            return;
+        }
+        m.effects.push(Effect::Restart);
+    });
+
     // exists only while the app is being developed.
     r.register(
         "app.reload",

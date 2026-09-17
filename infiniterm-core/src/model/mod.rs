@@ -230,6 +230,11 @@ pub enum Effect {
     /// somebody needs to see.
     AgentLog(String),
     Reload,
+    /// Quit and come back: the ui saves, arranges for something outside the
+    /// process to reopen the bundle once it is gone, and exits. The window
+    /// frame is already in `window.json`, so size and position return on
+    /// their own.
+    Restart,
     /// A palette entry or an ift verb that runs a registered command: the
     /// registry lives outside the model, so the ui runs it.
     RunCommand(String),
