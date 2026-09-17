@@ -361,8 +361,21 @@ impl TmuxBackend {
                         // is not new, and a card must not look like it just
                         // printed a day's work.
                         if let Expect::History(id) = block {
-                            if !history.is_empty() {
-                                let mut bytes = history.join("\r\n").into_bytes();
+                            // Trailing padding is stripped, and it is not
+                            // cosmetic. `capture-pane` flattens tmux's grid
+                            // and pads every line to the pane's width using
+                            // TMUX's idea of how wide each character is. A
+                            // line with an emoji in it that our emulator
+                            // measures one cell differently then overflows
+                            // the width, wraps, and every line after it
+                            // lands a row out: the replayed scrollback came
+                            // back shifted with characters interleaved.
+                            //
+                            // Nothing is lost. Trailing blanks on a captured
+                            // line are padding, never content.
+                            let text: Vec<&str> = history.iter().map(|l| l.trim_end()).collect();
+                            if text.iter().any(|l| !l.is_empty()) {
+                                let mut bytes = text.join("\r\n").into_bytes();
                                 bytes.extend_from_slice(b"\r\n");
                                 let _ = tx.send((id, PaneEvent::Replay(bytes)));
                             }
@@ -843,6 +856,28 @@ mod tests {
                 return value;
             }
         }
+    }
+
+    // What `capture-pane` returns for a line is padded to the pane's width
+    // with tmux's own character widths. Replaying that padding is what
+    // shifted a restored card's scrollback: one emoji measured differently
+    // and the line wraps where tmux did not wrap it.
+    #[test]
+    fn captured_padding_is_not_replayed() {
+        let captured = [
+            "  config overriding bundle.                    ",
+            "[Sonnet 5] \u{1f4c1} ~/Code/melina                     ",
+            "",
+        ];
+        let text: Vec<&str> = captured.iter().map(|l| l.trim_end()).collect();
+        assert_eq!(text[0], "  config overriding bundle.");
+        assert_eq!(text[1], "[Sonnet 5] \u{1f4c1} ~/Code/melina");
+        // Leading space is content: an indent is part of the line.
+        assert!(text[0].starts_with("  "));
+        assert!(
+            text.iter().any(|l| !l.is_empty()),
+            "there is something to replay"
+        );
     }
 
     #[test]
