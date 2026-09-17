@@ -80,11 +80,19 @@ impl AppView {
             .filter(|c| c.kind == CardKind::Terminal)
             .cloned()
             .collect();
+        let maximized = self
+            .model
+            .selection
+            .maximized
+            .then(|| self.model.selection.focused_id.clone())
+            .flatten();
         for card in cards {
-            let world = Size {
-                w: card.rect.w,
-                h: card.rect.h,
-            };
+            let world = fit_size(
+                &card.id,
+                card.rect,
+                maximized.as_deref(),
+                self.model.view_size,
+            );
             let is_terminal = self
                 .bodies
                 .get_mut(&card.id)
@@ -269,6 +277,29 @@ impl AppView {
     }
 }
 
+/// The size a card's grid is fitted to.
+///
+/// A maximized card is PAINTED into the whole canvas at scale 1 (paint.rs
+/// returns early and hands the body `bounds`), so that is the size its grid
+/// has to be. Fitting it to `card.rect` instead left the pty at the size
+/// the card is on the canvas: it filled the window and the shell still
+/// believed it had the old columns and rows, so nothing reflowed and
+/// maximising appeared to change nothing.
+fn fit_size(
+    id: &str,
+    rect: infiniterm_core::grid::Rect,
+    maximized: Option<&str>,
+    view: Size,
+) -> Size {
+    if maximized == Some(id) {
+        return view;
+    }
+    Size {
+        w: rect.w,
+        h: rect.h,
+    }
+}
+
 /// One pane's pending writes: its own keystrokes/pastes, and the emulator's
 /// replies to a program's query, still separate because only the second
 /// group is gated (see `gated_writes`).
@@ -312,6 +343,35 @@ fn gated_writes(answer: bool, per_pane: Vec<PaneWrites>) -> Vec<(u32, Vec<u8>)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Cmd+Shift+Enter fills the window with the card, and the grid has to
+    // follow or the shell keeps the columns it had on the canvas.
+    #[test]
+    fn a_maximized_card_is_fitted_to_the_view_and_the_others_to_their_rects() {
+        let rect = infiniterm_core::grid::Rect {
+            x: 0.,
+            y: 0.,
+            w: 400.,
+            h: 300.,
+        };
+        let view = Size { w: 1920., h: 1080. };
+        let own = Size { w: 400., h: 300. };
+        assert_eq!(
+            fit_size("term-1", rect, Some("term-1"), view),
+            view,
+            "the maximized one fills the window"
+        );
+        assert_eq!(
+            fit_size("term-1", rect, None, view),
+            own,
+            "nothing maximized: its own rect"
+        );
+        assert_eq!(
+            fit_size("term-1", rect, Some("another-card"), view),
+            own,
+            "a card behind the maximized one keeps its own size"
+        );
+    }
 
     // Through a REAL backend, not a bool somebody passed in: this is the
     // half of the gate that the pure tests below cannot reach. A local
