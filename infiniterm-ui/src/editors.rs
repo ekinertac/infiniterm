@@ -106,7 +106,7 @@ impl AppView {
                 Wrap::Never => false,
                 Wrap::Prose => Language::is_prose(&path),
             };
-            body.read_only = is_generated(&path);
+            body.read_only = is_generated(&path) || Language::is_image(&path);
             body.sidebar_top = card.sidebar_top;
             body.sidebar_w = sidebar_width(card.sidebar, sidebar_extent(world, card.sidebar_top));
             if card.explorer {

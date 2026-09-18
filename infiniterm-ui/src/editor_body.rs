@@ -16,12 +16,19 @@
 //! deleted when the buffer matches the file again; `closeCard` deletes
 //! the rest. The card's `dirty`, `language` and `read_only` are copied
 //! from here by `editors.rs` each frame, which is how the badges know.
+//!
+//! A picture (`Language::is_image`) is the same card with the text pane
+//! showing the image instead: gpui decodes it through its asset cache
+//! (`ImageAssetLoader`), it is fitted to the pane and never enlarged past
+//! its own pixels at the canvas zoom, and the buffer stays empty and
+//! read-only so nothing can save text over it. The tree, Cmd+K and the
+//! disk poll work as for a file, so a screenshot taken again shows again.
 use crate::body::{BodyAction, CardBody};
 use crate::field::{Edit, Field};
 use crate::terminal_body::Metrics;
 use gpui::{
-    fill, outline, point, px, size, App, Bounds, ClipboardItem, FontStyle, Hsla, Keystroke, Pixels,
-    SharedString, TextRun, Window,
+    fill, outline, point, px, size, App, Bounds, ClipboardItem, Corners, FontStyle, Hsla,
+    ImageAssetLoader, Keystroke, Pixels, Resource, SharedString, TextRun, Window,
 };
 use infiniterm_core::editor_theme::{EditorColors, SyntaxRule};
 use infiniterm_core::files::{
@@ -186,6 +193,10 @@ pub struct EditorBody {
     events: Vec<EditorEvent>,
     /// The line a link or `ift file:42` asked for, once the text is in.
     pub pending_line: Option<u64>,
+    /// The file is a picture: shown, not read. `image_stale` says the
+    /// disk poll saw it change, so the next paint drops gpui's cached copy.
+    image: Option<String>,
+    image_stale: bool,
     /// The card's size in world px, for hit tests between paints.
     world: Size,
 }
@@ -249,6 +260,8 @@ impl EditorBody {
             shaped: HashMap::new(),
             events: vec![],
             pending_line: None,
+            image: None,
+            image_stale: false,
             world,
         }
     }
@@ -287,6 +300,16 @@ impl EditorBody {
         self.scroll_line = 0;
         self.scroll_x = 0.;
         self.shaped.clear();
+        self.image = Language::is_image(path).then(|| path.to_string());
+        if self.image.is_some() {
+            // Nothing to read: the decoder reads the file at paint time.
+            self.buffer = Buffer::new("");
+            self.saved.clear();
+            self.disk_stamp = file_mtime(path);
+            self.dirty = true;
+            self.blink_epoch = now;
+            return;
+        }
         match file_read(path) {
             Ok(text) => {
                 self.saved = text.clone();
@@ -321,8 +344,12 @@ impl EditorBody {
         self.dirty = true;
     }
 
-    /// Writes the buffer to `path`, which the card now carries.
+    /// Writes the buffer to `path`, which the card now carries. A picture
+    /// has an empty buffer, and writing that would erase the file.
     pub fn save(&mut self, path: &str, now: f64) {
+        if self.image.is_some() {
+            return;
+        }
         if self.path.as_deref() != Some(path) {
             self.path = Some(path.to_string());
             self.cwd = parent_of(path);
@@ -380,6 +407,11 @@ impl EditorBody {
             return;
         }
         self.disk_stamp = stamp;
+        if self.image.is_some() {
+            self.image_stale = true;
+            self.dirty = true;
+            return;
+        }
         let Ok(text) = file_read(&path) else { return };
         if text == self.saved {
             return;
@@ -644,6 +676,84 @@ impl EditorBody {
         let col = ((x / self.metrics.cell_w) + 0.5).floor().max(0.) as usize;
         let len = vrow.b - vrow.a;
         self.buffer.line_start(vrow.line) + vrow.a + col.min(len)
+    }
+
+    /// The picture, fitted to the pane and centred. Its natural size is
+    /// its pixels at the window's scale, times the zoom, so a screenshot
+    /// at 100% is pixel for pixel and zooming out shrinks it with the
+    /// card; a pane smaller than that shrinks it further, aspect kept.
+    fn paint_image(
+        &mut self,
+        path: &str,
+        area: Bounds<Pixels>,
+        scale: f64,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let source = Resource::Path(std::path::Path::new(path).into());
+        if self.image_stale {
+            self.image_stale = false;
+            cx.remove_asset::<ImageAssetLoader>(&source);
+        }
+        let pad = px((PAD_X * scale) as f32);
+        let font_size = px((self.metrics.font_px * scale) as f32);
+        let line_h = px((self.line_h() * scale) as f32);
+        let say = |text: &str, window: &mut Window, cx: &mut App| {
+            let run = TextRun {
+                len: text.len(),
+                font: self.metrics.font(),
+                color: hex(&self.colors.gutter),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let line = window.text_system().shape_line(
+                SharedString::from(text.to_string()),
+                font_size,
+                &[run],
+                None,
+            );
+            let _ = line.paint(
+                point(
+                    area.origin.x + pad,
+                    area.origin.y + px((PAD_Y * scale) as f32),
+                ),
+                line_h,
+                window,
+                cx,
+            );
+        };
+        let image = match window.use_asset::<ImageAssetLoader>(&source, cx) {
+            None => return, // decoding; gpui redraws the view when it lands
+            Some(Err(e)) => {
+                say(&format!("could not show this picture: {e}"), window, cx);
+                return;
+            }
+            Some(Ok(image)) => image,
+        };
+        let natural = image.size(0);
+        let device_scale = window.scale_factor() as f64;
+        let (w, h) = (
+            natural.width.0 as f64 / device_scale * scale,
+            natural.height.0 as f64 / device_scale * scale,
+        );
+        if w <= 0. || h <= 0. {
+            return;
+        }
+        let fit_w = (f32::from(area.size.width) as f64 - 2. * PAD_X * scale).max(1.);
+        let fit_h = (f32::from(area.size.height) as f64 - 2. * PAD_Y * scale).max(1.);
+        let shrink = (fit_w / w).min(fit_h / h).min(1.);
+        let (w, h) = (w * shrink, h * shrink);
+        let rect = Bounds::new(
+            point(
+                area.origin.x + px(((f32::from(area.size.width) as f64 - w) / 2.) as f32),
+                area.origin.y + px(((f32::from(area.size.height) as f64 - h) / 2.) as f32),
+            ),
+            size(px(w as f32), px(h as f32)),
+        );
+        if let Err(e) = window.paint_image(rect, Corners::default(), image, 0, false) {
+            say(&format!("could not show this picture: {e}"), window, cx);
+        }
     }
 
     // ----- keys -----
@@ -1288,6 +1398,11 @@ impl CardBody for EditorBody {
             ),
             size(s(t_size.w), s(t_size.h)),
         );
+        if let Some(path) = self.image.clone() {
+            self.world = world;
+            self.paint_image(&path, area, scale, window, cx);
+            return;
+        }
         if self.search.is_some() && legible {
             let panel = Bounds::new(
                 point(area.origin.x, area.origin.y - s(self.panel_h())),
@@ -1887,5 +2002,44 @@ mod tests {
         let mut runs = vec![run(5)];
         fit_runs(&mut runs, "");
         assert!(runs.is_empty());
+    }
+
+    fn body() -> EditorBody {
+        let metrics = Metrics {
+            family: "Menlo".into(),
+            font_px: 13.,
+            line_height: 1.4,
+            cell_w: 8.,
+            weight: gpui::FontWeight::NORMAL,
+            bold_weight: gpui::FontWeight::BOLD,
+        };
+        EditorBody::new("c1", None, "/".into(), &metrics, Size { w: 400., h: 300. })
+    }
+
+    // A picture is shown, never read into the buffer, and a save must not
+    // write the empty buffer over it: the file is still the picture after.
+    #[test]
+    fn a_picture_is_never_read_as_text_nor_written_back() {
+        let dir = std::env::temp_dir().join(format!(
+            "ift-editor-image-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shot.png");
+        let bytes = b"\x89PNG\r\n\x1a\nnot really a picture";
+        std::fs::write(&path, bytes).unwrap();
+        let path = path.to_string_lossy().to_string();
+        let mut b = body();
+        b.load(&path, false, 0.);
+        assert!(b.image.is_some());
+        assert_eq!(b.buffer.text(), "");
+        assert!(!b.is_dirty());
+        b.save(&path, 1.);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

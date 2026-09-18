@@ -139,6 +139,22 @@ impl Language {
         }
     }
 
+    /// Whether the file is a picture the editor shows instead of reading:
+    /// the formats gpui decodes (the `image` crate plus resvg). Anything
+    /// else with a picture's name is still read as text, which is honest
+    /// where a blank pane is not.
+    pub fn is_image(path: &str) -> bool {
+        let lower = path.to_ascii_lowercase();
+        let name = lower.rsplit('/').next().unwrap_or(&lower);
+        match name.rsplit_once('.') {
+            Some((stem, ext)) if !stem.is_empty() => [
+                "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "tif", "svg",
+            ]
+            .contains(&ext),
+            _ => false,
+        }
+    }
+
     /// Whether the file is prose, for `editor.wrap: "prose"`.
     pub fn is_prose(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
@@ -267,6 +283,18 @@ mod tests {
         assert_eq!(Language::Json.comment_token(), "//");
         assert!(Language::is_prose("README.md"));
         assert!(!Language::is_prose("main.rs"));
+    }
+
+    // Case-blind, on the last name only: `.png` alone and a directory
+    // called `png.d` are not pictures.
+    #[test]
+    fn a_picture_is_known_by_its_extension() {
+        assert!(Language::is_image("/tmp/shots/01.png"));
+        assert!(Language::is_image("/tmp/Photo.JPG"));
+        assert!(Language::is_image("logo.svg"));
+        assert!(!Language::is_image("/tmp/.png"));
+        assert!(!Language::is_image("/tmp/png.d/notes"));
+        assert!(!Language::is_image("main.rs"));
     }
 
     #[test]
