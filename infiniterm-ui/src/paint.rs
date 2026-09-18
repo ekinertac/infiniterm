@@ -117,6 +117,7 @@ impl AppView {
         self.start_glides(now);
         self.reconcile_bodies();
         self.reconcile_terminals(window);
+        self.reconcile_decoys(window);
         self.reconcile_editors(window);
         self.reconcile_browsers();
         let t0 = std::time::Instant::now();
@@ -202,7 +203,14 @@ impl AppView {
                 return;
             };
             let focused = true;
-            if let Some(body) = self.bodies.get_mut(&card.id) {
+            let body = if card.masked {
+                self.decoys
+                    .get_mut(&card.id)
+                    .map(|d| d as &mut dyn crate::body::CardBody)
+            } else {
+                self.bodies.get_mut(&card.id).map(|b| b.as_mut())
+            };
+            if let Some(body) = body {
                 window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
                     body.paint(bounds, 1., focused, now, window, cx)
                 });
@@ -346,7 +354,15 @@ impl AppView {
             }
             let focused = sel.focused_id.as_deref() == Some(&card.id);
             let selected = sel.extra.contains(&card.id);
-            if let Some(body) = self.bodies.get_mut(&card.id) {
+            // A masked card shows its decoy in its place (decoys.rs).
+            let body = if card.masked {
+                self.decoys
+                    .get_mut(&card.id)
+                    .map(|d| d as &mut dyn crate::body::CardBody)
+            } else {
+                self.bodies.get_mut(&card.id).map(|b| b.as_mut())
+            };
+            if let Some(body) = body {
                 // Clipped to the card: a long line or a wash must not
                 // paint over the neighbour.
                 window.with_content_mask(Some(gpui::ContentMask { bounds: b }), |window| {

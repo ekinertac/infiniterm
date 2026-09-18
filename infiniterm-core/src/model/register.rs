@@ -276,6 +276,18 @@ mod tests {
             .any(|e| matches!(e, Effect::Log(l) if l.starts_with("close "))));
     }
 
+    // The mask is a toggle on the focused card, a maximised one included.
+    #[test]
+    fn masking_toggles_the_focused_card() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.selection.maximized = true;
+        h.run("card.mask");
+        assert!(h.m.card(&id).unwrap().masked);
+        h.run("card.mask");
+        assert!(!h.m.card(&id).unwrap().masked);
+    }
+
     #[test]
     fn a_shell_exit_closes_the_card_the_same_way() {
         let mut h = Harness::new();

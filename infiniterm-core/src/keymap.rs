@@ -154,6 +154,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "card.maximize.toggle",
         "iTerm2's maximise pane; Escape stays the shell's",
     ),
+    // H for hide. Cmd+H and Cmd+Alt+H are macOS's (hide the app, hide the
+    // others) and unbindable; this one is free.
+    (
+        "cmd+shift+h",
+        "card.mask",
+        "a decoy over the card while somebody reads your screen",
+    ),
     // The address bar chord every browser uses, and free here: a shell
     // knows Ctrl+L as clear, never Cmd+L.
     (

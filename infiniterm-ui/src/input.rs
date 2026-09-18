@@ -220,7 +220,7 @@ impl AppView {
                         // card slide under the pointer as it went.
                         self.reveal_on_release = Some(p);
                     }
-                    let (action, captures) = match self.bodies.get_mut(&id) {
+                    let (action, captures) = match self.live_body(&id) {
                         Some(body) => (
                             body.mouse_down(local, e.button, &e.modifiers, e.click_count),
                             body.captures_drag(),
@@ -325,14 +325,14 @@ impl AppView {
         // A selection or a program's drag follows the pointer past the card.
         if let Some(id) = self.body_drag.clone() {
             if let Some(local) = self.local_in(&id, p) {
-                if let Some(body) = self.bodies.get_mut(&id) {
+                if let Some(body) = self.live_body(&id) {
                     body.mouse_move(local, &e.modifiers);
                 }
             }
             return;
         }
         let hit_id = if let Hit::CardBody { id, local } = self.hit(p) {
-            if let Some(body) = self.bodies.get_mut(&id) {
+            if let Some(body) = self.live_body(&id) {
                 body.mouse_move(local, &e.modifiers);
             }
             Some(id)
@@ -342,11 +342,7 @@ impl AppView {
         // A body that cares about hover (the browser) needs telling when the
         // pointer moves off it, the way a real mouseout would.
         if self.hover_body != hit_id {
-            if let Some(left) = self
-                .hover_body
-                .take()
-                .and_then(|id| self.bodies.get_mut(&id))
-            {
+            if let Some(left) = self.hover_body.take().and_then(|id| self.live_body(&id)) {
                 left.mouse_leave();
             }
             self.hover_body = hit_id;
@@ -406,7 +402,7 @@ impl AppView {
         self.pan = None;
         if was_click {
             if let Hit::CardBody { id, local } = self.hit(p) {
-                let action = match self.bodies.get_mut(&id) {
+                let action = match self.live_body(&id) {
                     Some(body) => body.mouse_down(local, e.button, &e.modifiers, e.click_count),
                     None => crate::body::BodyAction::None,
                 };
@@ -437,14 +433,14 @@ impl AppView {
         }
         if let Some(id) = self.body_drag.take() {
             if let Some(local) = self.local_in(&id, p) {
-                if let Some(body) = self.bodies.get_mut(&id) {
+                if let Some(body) = self.live_body(&id) {
                     body.mouse_up(local, e.button, &e.modifiers);
                 }
             }
             return;
         }
         if let Hit::CardBody { id, local } = self.hit(p) {
-            if let Some(body) = self.bodies.get_mut(&id) {
+            if let Some(body) = self.live_body(&id) {
                 body.mouse_up(local, e.button, &e.modifiers);
             }
         }
@@ -498,7 +494,7 @@ impl AppView {
         }
         if let Hit::CardBody { id, local } = self.hit(p) {
             let scale = self.model.viewport.scale;
-            if let Some(body) = self.bodies.get_mut(&id) {
+            if let Some(body) = self.live_body(&id) {
                 body.wheel(local, dx / scale, dy / scale, &e.modifiers);
             }
             self.flush_writes();
@@ -591,7 +587,17 @@ impl AppView {
             return self.shortcuts_key(k, cx);
         }
         if let Some(id) = self.model.selection.focused_id.clone() {
-            let action = match self.bodies.get_mut(&id) {
+            // A masked card takes no keys: Enter or Escape lifts the mask,
+            // anything else is swallowed so it reaches neither the decoy
+            // nor the shell under it. The chords above still work.
+            if self.model.card(&id).is_some_and(|c| c.masked) {
+                if matches!(k.key.as_str(), "enter" | "escape") {
+                    self.model.set_mask(&id, false);
+                    self.redraw = true;
+                }
+                return true;
+            }
+            let action = match self.live_body(&id) {
                 Some(body) => body.key(k, now_ms(), cx),
                 None => crate::body::BodyAction::None,
             };
@@ -607,6 +613,16 @@ impl AppView {
             return taken;
         }
         false
+    }
+
+    /// The body input may reach: none while the card is masked, so a click,
+    /// a wheel, a paste or a composed character cannot get under the decoy
+    /// (`decoys.rs`). Everything in this file and ime.rs goes through here.
+    pub fn live_body(&mut self, id: &str) -> Option<&mut Box<dyn crate::body::CardBody>> {
+        if self.model.card(id).is_some_and(|c| c.masked) {
+            return None;
+        }
+        self.bodies.get_mut(id)
     }
 
     /// What a body asked for from a click: a card beside it, or the system.
@@ -678,7 +694,7 @@ impl AppView {
                 // The drop focuses the card it landed on: the text has gone
                 // into that shell and the keyboard should follow it.
                 self.model.set_focus(Some(&card.id));
-                if let Some(body) = self.bodies.get_mut(&card.id).and_then(|b| {
+                if let Some(body) = self.live_body(&card.id).and_then(|b| {
                     b.as_any_mut()
                         .downcast_mut::<crate::terminal_body::TerminalBody>()
                 }) {

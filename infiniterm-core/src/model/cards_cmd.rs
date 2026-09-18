@@ -904,6 +904,16 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.selection.maximized = !m.selection.maximized;
         }
     });
+    // Somebody is reading your screen. The card keeps running under a decoy
+    // that looks like work; Enter or Escape (input.rs) or the chord again
+    // takes it away. Every selected card, so a split masks as one.
+    // A maximised card is the one most worth masking, so not `for_selected`.
+    r.register("card.mask", "Card: mask with a decoy / unmask", |m| {
+        for id in m.selected_ids() {
+            let on = !m.card(&id).is_some_and(|c| c.masked);
+            m.set_mask(&id, on);
+        }
+    });
     r.register("card.place", "Card: new… (choose where)", |m| {
         if m.palette.source == Some(Source::Placement) {
             m.close_palette(false);

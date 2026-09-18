@@ -39,6 +39,7 @@ impl AppView {
             animator: crate::Animator::new(),
             chrome: crate::Chrome::default_chrome(),
             bodies: Default::default(),
+            decoys: Default::default(),
             focus,
             composing: None,
             reveal_on_release: None,
@@ -144,13 +145,15 @@ impl AppView {
         &mut self,
         pane: infiniterm_core::backend::PaneId,
     ) -> Option<&mut crate::terminal_body::TerminalBody> {
-        let id = self
+        let Some(id) = self
             .model
             .cards
             .iter()
-            .find(|c| c.pane_id == Some(pane))?
-            .id
-            .clone();
+            .find(|c| c.pane_id == Some(pane))
+            .map(|c| c.id.clone())
+        else {
+            return self.decoy_for_pane(pane);
+        };
         self.bodies
             .get_mut(&id)?
             .as_any_mut()
@@ -303,7 +306,12 @@ impl AppView {
             "scheduler"
         } else if !self.glides.is_empty() {
             "glides"
-        } else if self.bodies.values().any(|b| b.wants_frame(now)) {
+        } else if self.bodies.values().any(|b| b.wants_frame(now))
+            || self
+                .decoys
+                .values()
+                .any(|d| crate::body::CardBody::wants_frame(d, now))
+        {
             "body"
         } else if self.model.notice_expired(now) {
             "notice"
@@ -321,7 +329,12 @@ impl AppView {
             || !self.glides.is_empty()
             || {
                 let now = crate::now_ms();
-                self.bodies.values().any(|b| b.wants_frame(now)) || self.model.notice_expired(now)
+                self.bodies.values().any(|b| b.wants_frame(now))
+                    || self
+                        .decoys
+                        .values()
+                        .any(|d| crate::body::CardBody::wants_frame(d, now))
+                    || self.model.notice_expired(now)
             }
     }
 

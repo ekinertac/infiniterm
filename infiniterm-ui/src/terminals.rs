@@ -268,6 +268,13 @@ impl AppView {
                 }
             }
         }
+        // A decoy's program may query its terminal too (decoys.rs).
+        for t in self.decoys.values_mut() {
+            let replies = std::mem::take(&mut t.replies);
+            if let Some(pane) = t.pane {
+                per_pane.push((pane, std::mem::take(&mut t.outgoing), replies));
+            }
+        }
         let writes = writes_for(&self.backend.pty, per_pane);
         for (pane, bytes) in writes {
             self.backend.pty.write_now(pane, &bytes);

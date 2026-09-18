@@ -16,6 +16,7 @@ mod body;
 mod browser_body;
 mod browsers;
 mod chrome;
+mod decoys;
 mod diff_body;
 mod editor_body;
 mod editors;
@@ -112,6 +113,8 @@ pub struct AppView {
     pub animator: Animator,
     pub chrome: Chrome,
     pub bodies: HashMap<String, Box<dyn CardBody>>,
+    /// The decoy drawn over each masked card, by card id (`decoys.rs`).
+    pub decoys: HashMap<String, crate::terminal_body::TerminalBody>,
     pub focus: FocusHandle,
     /// Text an input method is composing and has not committed: the `\u{b4}`
     /// after Option+E, a Pinyin candidate. Held so macOS knows a composition

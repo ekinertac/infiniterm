@@ -47,7 +47,7 @@ impl AppView {
         } else if self.model.shortcuts_open {
             self.shortcuts_field.insert_text(text);
         } else if let Some(id) = self.model.selection.focused_id.clone() {
-            if let Some(body) = self.bodies.get_mut(&id) {
+            if let Some(body) = self.live_body(&id) {
                 body.insert_text(text);
             }
             self.flush_writes();

@@ -105,6 +105,9 @@ pub struct Card {
     pub language: Option<String>,
     /// An editor that refuses edits (the generated config files). Runtime-only.
     pub read_only: bool,
+    /// A decoy is drawn over this card (`card.mask`): somebody is reading
+    /// your screen. Runtime-only; a restart shows the card.
+    pub masked: bool,
     pub rect: Rect,
     pub z: f64,
     /// A name somebody CHOSE. Never seeded from the directory or the OSC
@@ -606,6 +609,7 @@ impl Model {
             line: opts.line,
             language: None,
             read_only: false,
+            masked: false,
             rect,
             z: self.cards.len() as f64,
             title: String::new(),
@@ -627,6 +631,15 @@ impl Model {
         self.cards.push(card);
         self.dirty_layout = true;
         id
+    }
+
+    /// The one door for a mask. The ui reconciles its decoy panes from
+    /// the flag each frame (`decoys.rs`), the way terminal bodies follow
+    /// the cards, so there is no effect to keep in step with it.
+    pub fn set_mask(&mut self, id: &str, on: bool) {
+        if let Some(card) = self.card_mut(id) {
+            card.masked = on;
+        }
     }
 
     pub fn remove_card(&mut self, id: &str) {

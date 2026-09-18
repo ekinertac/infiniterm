@@ -113,6 +113,15 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "terminal.decoyCommand",
+        &[
+            "What Cmd+Shift+H runs over the focused card when somebody is reading",
+            "your screen: a program that looks like work and says nothing. The",
+            "card underneath keeps running unseen; Enter or Escape brings it back.",
+            "\"ping 8.8.8.8\" and \"top\" are the other classics.",
+        ],
+    ),
+    (
         "cards",
         &["New cards: how big they are and where they start."],
     ),
@@ -436,7 +445,7 @@ mod tests {
         let text = default_settings_text();
         assert!(text.contains("\"fontSize\": 14,"));
         assert!(text.contains("\"scrollback\": 10000,"));
-        assert!(text.contains("\"sessionBuffer\": 4\n"));
+        assert!(text.contains("\"sessionBuffer\": 4,\n"));
         assert!(text.contains("\"lineHeight\": 1.2,"));
     }
 }

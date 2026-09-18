@@ -74,6 +74,10 @@ pub struct Terminal {
     /// enough that a Claude card may need more, which is the whole reason
     /// this is a setting and not a constant.
     pub session_buffer: f64,
+    /// What `card.mask` runs over a card when someone is reading your
+    /// screen: a program that looks like work and says nothing. Empty
+    /// falls back to the default.
+    pub decoy_command: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,6 +212,9 @@ pub fn default_config() -> Config {
             line_height: 1.2,
             scrollback: 10_000.,
             session_buffer: 4.,
+            // Live, dense, unreadable at a glance, on every Mac. Not
+            // system.log: unified logging left it a line every ten minutes.
+            decoy_command: "log stream --style compact".into(),
         },
         cards: Cards {
             width: 69.,
@@ -330,6 +337,10 @@ pub fn merge_config(raw: &Value) -> Config {
             line_height: num(t.get("lineHeight"), d.terminal.line_height, 0.8, 3.),
             scrollback: num(t.get("scrollback"), d.terminal.scrollback, 0., 1_000_000.),
             session_buffer: num(t.get("sessionBuffer"), d.terminal.session_buffer, 1., 64.),
+            decoy_command: match trimmed(t.get("decoyCommand"), &d.terminal.decoy_command) {
+                s if s.is_empty() => d.terminal.decoy_command.clone(),
+                s => s,
+            },
         },
         cards: Cards {
             // Floors that keep a card usable: below about 40 columns a
