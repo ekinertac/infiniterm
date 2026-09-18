@@ -175,6 +175,9 @@ impl Model {
                 .or(before)
                 .or_else(|| nearest_to(&here, card.rect).map(|c| c.id.clone()));
             self.set_focus(next.as_deref());
+            // The card focused before may be off screen; the closed one was
+            // in view, so the eye needs to be taken there.
+            self.reveal_focused();
         } else {
             self.selection.extra.retain(|e| e != id);
         }

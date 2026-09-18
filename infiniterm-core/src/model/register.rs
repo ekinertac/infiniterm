@@ -240,9 +240,14 @@ mod tests {
         // c is nearest to b; a was focused last.
         h.m.set_focus(Some(&a));
         h.m.set_focus(Some(&b));
-        h.run("card.close");
+        // a is off screen: the close pans to it.
+        h.m.card_mut(&a).unwrap().rect.x += 20_000.;
+        let effects = h.run("card.close");
         assert_eq!(h.focused().id, a);
         assert!(h.m.card(&b).is_none());
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::AnimatePan { .. })));
         // And back once more, past the closed card, to c.
         h.run("card.close");
         assert_eq!(h.focused().id, c);
