@@ -22,7 +22,6 @@ Hook adapters so a card running something other than Claude Code gets the same c
 
 The daemon keeps a shell alive across the app quitting. Nothing keeps a process alive across a reboot, and Ekin does not want that; he wanted the scrollback, and since 2026-09-18 he has it (see Done).
 
-- **Inline images in a terminal card.** Nothing handles iTerm2's `OSC 1337 File=` (imgcat), the kitty graphics protocol, or sixel today. It means intercepting the sequence in the output path, decoding the image, keeping it beside the grid rows it occupies, painting it as a texture at those cells, and making it scroll and survive a replay from the ring. One protocol done properly is about two days; iTerm2's is the one Ekin would use, kitty's is what newer tools emit.
 - **Zoom at 30 fps on a dense canvas.** Measured 2026-09-18 with `[paint]`: 4 to 8 ms a frame at rest, 18 to 30 while zooming, split between shaping (9 to 16) and glyph rasterising (8 to 12). Rounding the font size to whole pixels during the zoom took glyphs to 6 and shaping nowhere, and the text visibly snapped between sizes inside a smoothly scaling frame, so it was reverted the same hour. The floor is call count, not cache misses: every non-ASCII glyph is its own `shape_line` call (the drift trap), so a Claude card row is fifteen-plus calls and a dense card thousands a frame. The fix is to shape each row ONCE and paint its glyphs at our cell positions with `Window::paint_glyph`, which removes the drift problem at its root and the ASCII-only chunking with it. Half a day in `terminal_body.rs`, then the same for the editor, diff and transcript bodies; needs the log before and after and an on-screen check of wide characters, emoji and the cursor.
 - **Composing text is not drawn.** Dead keys and input methods work (ime.rs), but the `\u{b4}` before the `e` is held and not shown, and an input method's candidate window sits at the caret only for terminals. Drawing the marked text at the caret, and caret bounds for the fields, is the rest of it.
 - **Ring compaction**, only if 4 MiB proves shallow for a Claude card. Ink repaints are large and repetitive. The upgrade is to parse what is about to fall out of the ring into a headless grid with our own parser and serialise it back as the new front. Named in the daemon spec, deliberately not built.
@@ -32,6 +31,10 @@ The daemon keeps a shell alive across the app quitting. Nothing keeps a process 
 - `tools/drive/daemon.sh` ran once and passed; its screenshots 01 to 04 did not write (`winid --pid` found nothing for those instances) and only 05 did. Not chased.
 - What N daemons cost in practice. 13 were alive at once on the real canvas; the spec guessed ~2 MB each plus the ring. Never measured.
 - Colour reporting under tmux, Nerd Font glyph widths, a very long scrollback on adopt: the tmux handover's open items 2, 3 and 6, still true of tmux, mostly moot under the daemon.
+
+## Dropped
+
+- Inline images in a terminal card (imgcat, kitty graphics, sixel). Dropped 2026-09-18: Cmd+click on an image path opens it in an editor card, and the tree walks a folder of screenshots with the arrows, which is what the images were wanted for. Rendering inside the grid would have been two days per protocol for the same picture in a smaller box.
 
 ## Parked
 
