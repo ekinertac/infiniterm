@@ -137,6 +137,11 @@ pub struct AppView {
     /// The card body the pointer is currently over, so a body that cares
     /// about hover (the browser) gets told when the pointer leaves it.
     pub hover_body: Option<String>,
+    /// A slim right-click menu open over a browser card. The position is
+    /// fixed at open time (content-area screen pixels), not re-derived from
+    /// the card each frame: simplest thing that works for a menu open for a
+    /// couple of clicks, at the cost of not tracking a pan mid-menu.
+    pub context_menu: Option<crate::browsers::CardContextMenu>,
     /// The prompt's field, opened with the suggestion selected; the palette's query.
     pub prompt_field: field::Field,
     pub query_field: field::Field,

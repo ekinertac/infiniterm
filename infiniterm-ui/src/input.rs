@@ -127,6 +127,10 @@ impl AppView {
         let button = match e.button {
             MouseButton::Left => 0,
             MouseButton::Middle => 1,
+            // Never pans (`starts_pan` only fires for 0 and 1): a right
+            // click still needs the hit test below, to reach the browser
+            // card and let CEF ask for its slim menu.
+            MouseButton::Right => 2,
             _ => return,
         };
         if starts_pan(button, e.modifiers.platform) {
@@ -454,7 +458,7 @@ impl AppView {
         // canvas under it: a scroll in the shortcuts panel also scrolled the
         // terminal the pointer happened to be over. Nothing behind a modal
         // moves, zoom included.
-        if self.model.overlay_open() {
+        if self.model.overlay_open() || self.context_menu.is_some() {
             if keylog {
                 eprintln!("[wheel] {:?} dropped: overlay open", e.delta);
             }
@@ -569,6 +573,15 @@ impl AppView {
         }
         if (m.platform || m.control) && handle_chord(&mut self.model, &self.registry, &chord) {
             self.perform_effects();
+            return true;
+        }
+        // The slim menu takes no chord of its own: Escape dismisses it,
+        // everything else is swallowed so it cannot reach the page under it
+        // while the menu is up.
+        if self.context_menu.is_some() {
+            if k.key == "escape" {
+                self.context_menu = None;
+            }
             return true;
         }
         if self.model.palette_open() {

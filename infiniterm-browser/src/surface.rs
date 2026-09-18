@@ -32,6 +32,18 @@ pub struct Frame {
     pub bgra: Vec<u8>,
 }
 
+/// A right-click, in page pixels (the same space `mouse_down` takes), and
+/// enough of what it landed on for a slim menu: the ui decides what to show
+/// and how, CEF's own model and native menu are never used.
+#[derive(Clone, Debug)]
+pub struct ContextMenuRequest {
+    pub x: i32,
+    pub y: i32,
+    pub link_url: Option<String>,
+    pub editable: bool,
+    pub has_selection: bool,
+}
+
 #[derive(Default)]
 pub struct Shared {
     pub frame: Option<Arc<Frame>>,
@@ -55,6 +67,8 @@ pub struct Shared {
     /// over a link, text over an input. Empty means CEF hasn't said yet, the
     /// same as "default" to whoever reads it.
     pub cursor: &'static str,
+    /// A right-click since the ui last took one.
+    pub context_menu: Option<ContextMenuRequest>,
 }
 
 #[derive(Clone)]
@@ -264,6 +278,54 @@ wrap_find_handler! {
     }
 }
 
+wrap_context_menu_handler! {
+    struct ContextMenuBuilder {
+        handler: Handler,
+    }
+
+    impl ContextMenuHandler {
+        // A slim menu is ours to draw, never Chromium's: `params` is enough
+        // to decide what a card's overlay should offer (a link, an editable
+        // field, a selection), and `cancel` on the callback is how CEF is
+        // told no command was chosen through ITS model, since one never
+        // will be. Chromium's own default menu (OSR cannot show it: there
+        // is no native window to anchor one to) is never asked for.
+        fn run_context_menu(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            params: Option<&mut ContextMenuParams>,
+            _model: Option<&mut MenuModel>,
+            callback: Option<&mut RunContextMenuCallback>,
+        ) -> ::std::os::raw::c_int {
+            if let Some(params) = params {
+                let link = CefStringUtf16::from(&params.link_url()).to_string();
+                let flags = params.type_flags().as_ref().0;
+                self.handler.shared.borrow_mut().context_menu = Some(ContextMenuRequest {
+                    x: params.xcoord(),
+                    y: params.ycoord(),
+                    link_url: (!link.is_empty()).then_some(link),
+                    editable: params.is_editable() != 0,
+                    has_selection: has_flag(
+                        flags,
+                        sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0,
+                    ),
+                });
+            }
+            if let Some(callback) = callback {
+                callback.cancel();
+            }
+            1
+        }
+    }
+}
+
+/// Whether `bit` is set in a CEF bitmask (`ContextMenuTypeFlags` and its
+/// kin wrap a raw `u32` with no `Eq` against a single flag).
+fn has_flag(flags: u32, bit: u32) -> bool {
+    flags & bit != 0
+}
+
 wrap_client! {
     struct ClientBuilder {
         render_handler: RenderHandler,
@@ -271,6 +333,7 @@ wrap_client! {
         display_handler: DisplayHandler,
         load_handler: LoadHandler,
         find_handler: FindHandler,
+        context_menu_handler: ContextMenuHandler,
     }
 
     impl Client {
@@ -288,6 +351,9 @@ wrap_client! {
         }
         fn find_handler(&self) -> Option<FindHandler> {
             Some(self.find_handler.clone())
+        }
+        fn context_menu_handler(&self) -> Option<ContextMenuHandler> {
+            Some(self.context_menu_handler.clone())
         }
     }
 }
@@ -323,7 +389,8 @@ impl Surface {
             LifeSpanBuilder::new(handler.clone()),
             DisplayBuilder::new(handler.clone()),
             LoadBuilder::new(handler.clone()),
-            FindBuilder::new(handler),
+            FindBuilder::new(handler.clone()),
+            ContextMenuBuilder::new(handler),
         );
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
@@ -425,6 +492,11 @@ impl Surface {
 
     pub fn take_popups(&self) -> Vec<String> {
         std::mem::take(&mut self.shared.borrow_mut().popups)
+    }
+
+    /// A right-click since the last call, if one landed.
+    pub fn take_context_menu(&self) -> Option<ContextMenuRequest> {
+        self.shared.borrow_mut().context_menu.take()
     }
 
     pub fn title(&self) -> Option<String> {
@@ -719,5 +791,13 @@ mod tests {
         assert_eq!(cursor_name(CursorType::POINTER), "default");
         // gpui has no spinner cursor: WAIT falls back rather than faking one.
         assert_eq!(cursor_name(CursorType::WAIT), "default");
+    }
+
+    #[test]
+    fn has_flag_reads_one_bit_out_of_a_combined_mask() {
+        let selection = sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0;
+        let link = sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_LINK.0;
+        assert!(has_flag(selection | link, selection));
+        assert!(!has_flag(link, selection));
     }
 }

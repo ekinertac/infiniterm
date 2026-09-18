@@ -70,6 +70,9 @@ pub struct BrowserBody {
     /// same title arriving every frame. Not the card's title: that is a
     /// name somebody CHOSE, and a page must never overwrite it.
     title: Option<String>,
+    /// A right-click since the last drain, for `browsers.rs` to turn into
+    /// the app-level menu overlay.
+    pub context_menu: Option<infiniterm_browser::ContextMenuRequest>,
 }
 
 impl BrowserBody {
@@ -111,6 +114,7 @@ impl BrowserBody {
             dirty: true,
             popups: vec![],
             title: None,
+            context_menu: None,
         }
     }
 
@@ -131,6 +135,9 @@ impl BrowserBody {
             }
         }
         self.popups.extend(surface.take_popups());
+        if let Some(request) = surface.take_context_menu() {
+            self.context_menu = Some(request);
+        }
         if self.zoom != self.applied_zoom {
             surface.set_zoom(self.zoom.unwrap_or(1.));
             self.applied_zoom = self.zoom;

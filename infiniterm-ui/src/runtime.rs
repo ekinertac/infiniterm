@@ -49,6 +49,7 @@ impl AppView {
             gesture: None,
             body_drag: None,
             hover_body: None,
+            context_menu: None,
             prompt_field: Default::default(),
             query_field: Default::default(),
             shortcuts_field: Default::default(),

@@ -13,4 +13,4 @@ pub mod moat;
 pub mod process;
 pub mod surface;
 
-pub use surface::{Button, Frame, Mods, Surface};
+pub use surface::{Button, ContextMenuRequest, Frame, Mods, Surface};

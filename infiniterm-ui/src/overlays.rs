@@ -284,6 +284,10 @@ impl Render for AppView {
         let shortcuts = self.model.shortcuts_open.then(|| self.render_shortcuts());
         let omnibox = self.model.omni.open.then(|| self.render_omnibox(cx));
         let find_bar = self.model.find.open.then(|| self.render_find_bar(cx));
+        let context_menu = self
+            .context_menu
+            .is_some()
+            .then(|| self.render_context_menu(cx));
 
         div()
             .size_full()
@@ -317,12 +321,27 @@ impl Render for AppView {
                         MouseButton::Middle,
                         cx.listener(|this, e: &MouseDownEvent, _, _| this.mouse_down(e)),
                     )
+                    // A browser card's own right-click menu (CEF asks for it
+                    // once the down and up both arrive); every other body
+                    // ignores the button, same as it always has.
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                            window.focus(&this.focus);
+                            this.mouse_down(e);
+                            cx.notify();
+                        }),
+                    )
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(|this, e: &MouseUpEvent, _, _| this.mouse_up(e)),
                     )
                     .on_mouse_up(
                         MouseButton::Middle,
+                        cx.listener(|this, e: &MouseUpEvent, _, _| this.mouse_up(e)),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Right,
                         cx.listener(|this, e: &MouseUpEvent, _, _| this.mouse_up(e)),
                     )
                     .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, _| this.mouse_move(e)))
@@ -367,7 +386,8 @@ impl Render for AppView {
                     .children(prompt)
                     .children(shortcuts)
                     .children(omnibox)
-                    .children(find_bar),
+                    .children(find_bar)
+                    .children(context_menu),
             )
             .child(status_bar)
     }
