@@ -214,7 +214,11 @@ pub fn default_config() -> Config {
             session_buffer: 4.,
             // Live, dense, unreadable at a glance, on every Mac. Not
             // system.log: unified logging left it a line every ten minutes.
-            decoy_command: "log stream --style compact".into(),
+            // `command` bypasses zsh's own builtin `log` (a login shell
+            // always checks builtins before PATH), which otherwise takes
+            // the args meant for /usr/bin/log and answers "too many
+            // arguments": the decoy showed an error instead of the log.
+            decoy_command: "command log stream --style compact".into(),
         },
         cards: Cards {
             width: 69.,
