@@ -10,6 +10,7 @@ The list Ekin asks about. Dates are when something landed. The rule for this fil
 - File drops from the Finder, three agent states with three hues, selection rings, agent state log.
 - Persistent sessions, 2026-09-17: our own daemon, `iftd`, one per card. tmux was tried first, was the default for one evening, and was pulled (docs/tmux-handover.md). Claude Code renders clean through a quit and a relaunch. `ift sessions` and `ift attach`. Design: docs/superpowers/specs/2026-09-17-session-daemon-design.md.
 - Cmd+Ctrl+Alt+R restarts the app in place, same window, same sessions.
+- 2026-09-18, the first day living in it: Shift+Enter in Claude Code and Pi (the kitty keyboard handshake, and the daemon keeps a session's opening bytes so it survives a relaunch), Turkish Option characters, Option+Delete, the swap chord into phantom slots, one card label instead of two, menus that keep their order, the Pi cursor, a replay that lands in one frame, a focus ring you can see, a maximized card that reflows, an editor crash on scroll, text fields with a real caret and the macOS chord set, the canvas dimming when another app is in front, and cards and workspaces as palette rows.
 
 ## v1.5: the other agents
 
