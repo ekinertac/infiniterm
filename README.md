@@ -30,6 +30,7 @@ Native macOS app in Rust: gpui draws the canvas, `alacritty_terminal` parses the
 - A red badge on any card sitting in an SSH session, with the destination
 - Terminal themes from `.itermcolors` files, applied to open terminals live
 - Configuration in `~/.config/infiniterm/`, Sublime style: your overrides beside a commented defaults file, watched and applied without a restart
+- Cmd+Shift+P finds commands, cards and workspaces by name; Enter on a card switches there and fits it. Cmd+Ctrl+Space opens the emoji panel, dead keys and input methods compose into any card or field, and Shift+Enter breaks the line in Claude Code and Pi.
 - Shells that outlive the window: `terminal.backend: "daemon"`, the default, gives each card its own small `iftd` sidecar holding the pty, so quitting leaves your work running and reopening replays what it printed straight into the same emulator, no second one in the path. Opt-in for now, pending the falsification test in `tools/drive/daemon.sh` (a shell running Claude Code, quit, relaunch, look). `terminal.backend: "tmux"` is still there too: same idea, a real tmux window per card, reachable with `tmux attach -t infiniterm` from any terminal, at the cost of being a second terminal emulator in the path
 - The canvas survives a restart too: cards, their positions and sizes, groups, workspaces, the viewport. The window reopens where and how you left it
 
