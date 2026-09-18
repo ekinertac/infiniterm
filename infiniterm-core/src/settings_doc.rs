@@ -118,7 +118,10 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "What Cmd+Shift+H runs over the focused card when somebody is reading",
             "your screen: a program that looks like work and says nothing. The",
             "card underneath keeps running unseen; Enter or Escape brings it back.",
-            "\"ping 8.8.8.8\" and \"top\" are the other classics.",
+            "\"ping 8.8.8.8\" and \"top\" are the other classics. It runs through a",
+            "login shell, not an interactive one, so a PATH set in .zshrc is not",
+            "there: give a Homebrew program its full path, cron's rule",
+            "(\"/opt/homebrew/bin/htop\").",
         ],
     ),
     (
