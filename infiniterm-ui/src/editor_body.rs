@@ -1285,16 +1285,6 @@ impl CardBody for EditorBody {
             crate::chrome::with_alpha(gutter_fg, crate::chrome::HAIRLINE_ALPHA),
         ));
         // Byte offsets of the lines shown, for the spans, which are bytes.
-        let text = self.buffer.text();
-        let mut line_byte_starts = vec![0usize];
-        for (i, b) in text.bytes().enumerate() {
-            if b == b'\n' {
-                line_byte_starts.push(i + 1);
-                if line_byte_starts.len() > last {
-                    break;
-                }
-            }
-        }
         let spans: Vec<Span> = self.spans_for().to_vec();
         let mut span_i = 0;
         // Runs for the line being drawn, built once per line and sliced
@@ -1416,7 +1406,14 @@ impl CardBody for EditorBody {
             }
             // Runs from the spans that fall inside this line.
             if line_runs.as_ref().map(|(l, _)| *l) != Some(line_no) {
-                let byte_start = line_byte_starts.get(line_no).copied().unwrap_or(0);
+                // From the rope. This used to come from a byte scan of the
+                // whole text that stopped at the last line it had collected,
+                // and fell back to 0 for anything past it: a line scrolled
+                // into view beyond that point was highlighted with
+                // whole-buffer span offsets measured from the file's start,
+                // which made runs longer than the line, which made gpui
+                // slice past the end of the string and ABORT the app.
+                let byte_start = self.buffer.line_byte_start(line_no);
                 let byte_end = byte_start + line_text.len();
                 while span_i < spans.len() && spans[span_i].end <= byte_start {
                     span_i += 1;
@@ -1462,6 +1459,12 @@ impl CardBody for EditorBody {
                 if pos < line_text.len() {
                     push(&mut runs, line_text.len() - pos, fg, false);
                 }
+                // gpui indexes the string BY these lengths and panics if they
+                // do not add up, which aborts the process rather than drawing
+                // a line wrong. Nothing that only paints should be able to do
+                // that, so the invariant is enforced here rather than hoped
+                // for: see `fit_runs`.
+                fit_runs(&mut runs, &line_text);
                 // Selected text takes the selection colour, split at the edges.
                 if let Some(sel) = &selection {
                     if sel.end > line_start && sel.start < line_start + line_len {
@@ -1684,6 +1687,38 @@ fn char_to_byte(text: &str, ch: usize) -> usize {
         .unwrap_or(text.len())
 }
 
+/// Makes `runs` describe exactly `text`: the lengths must sum to its byte
+/// length and none may split a character.
+///
+/// gpui's `layout_line` slices the string by these lengths, so a mismatch
+/// is `slice_error_fail` and an aborted process, not a misdrawn line. A
+/// painter has no business being able to kill the app, so this is a clamp
+/// and not an assert: the worst case is one line drawn in the wrong colour.
+fn fit_runs(runs: &mut Vec<TextRun>, text: &str) {
+    let mut pos = 0usize;
+    let mut i = 0;
+    while i < runs.len() {
+        let mut end = (pos + runs[i].len).min(text.len());
+        // A run may not end inside a character.
+        while end > pos && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        runs[i].len = end - pos;
+        pos = end;
+        if runs[i].len == 0 {
+            runs.remove(i);
+            continue;
+        }
+        i += 1;
+    }
+    if pos < text.len() {
+        // Short: the tail keeps the last run's styling, or the default.
+        if let Some(last) = runs.last_mut() {
+            last.len += text.len() - pos;
+        }
+    }
+}
+
 /// The runs covering bytes `a..b` of a line, cut at the edges.
 fn slice_runs(runs: &[TextRun], a: usize, b: usize) -> Vec<TextRun> {
     let mut out = vec![];
@@ -1733,4 +1768,71 @@ fn recolor(runs: Vec<TextRun>, a: usize, b: usize, color: Hsla) -> Vec<TextRun> 
         cut(ib, e, r.color, &mut out);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(len: usize) -> TextRun {
+        TextRun {
+            len,
+            font: gpui::font("Menlo"),
+            color: gpui::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }
+    }
+
+    fn total(runs: &[TextRun]) -> usize {
+        runs.iter().map(|r| r.len).sum()
+    }
+
+    // gpui slices the line BY these lengths and aborts the PROCESS on a
+    // mismatch. The crash that prompted this used a byte offset of 0 for a
+    // line far into the file, which made the runs enormous.
+    #[test]
+    fn runs_are_made_to_fit_the_line_they_describe() {
+        let text = "let x = 1;";
+        let mut too_long = vec![run(4), run(9999)];
+        fit_runs(&mut too_long, text);
+        assert_eq!(total(&too_long), text.len());
+
+        let mut too_short = vec![run(3)];
+        fit_runs(&mut too_short, text);
+        assert_eq!(total(&too_short), text.len());
+
+        let mut exact = vec![run(4), run(6)];
+        fit_runs(&mut exact, text);
+        assert_eq!(exact.len(), 2, "a correct set is left alone");
+        assert_eq!(exact[0].len, 4);
+    }
+
+    // A run may not end inside a character: `ş` is two bytes, `→` three.
+    // Cutting one is the same panic by another route.
+    #[test]
+    fn a_run_never_splits_a_character() {
+        let text = "şey → ok";
+        for cut in 1..text.len() {
+            let mut runs = vec![run(cut), run(text.len())];
+            fit_runs(&mut runs, text);
+            assert_eq!(total(&runs), text.len(), "cut {cut}");
+            let mut pos = 0;
+            for r in &runs {
+                pos += r.len;
+                assert!(
+                    text.is_char_boundary(pos),
+                    "cut {cut} left a run ending inside a character"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_line_takes_no_runs() {
+        let mut runs = vec![run(5)];
+        fit_runs(&mut runs, "");
+        assert!(runs.is_empty());
+    }
 }

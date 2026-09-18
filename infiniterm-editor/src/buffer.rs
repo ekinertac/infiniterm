@@ -125,6 +125,14 @@ impl Buffer {
             .line_to_char(line.min(self.line_count().saturating_sub(1)))
     }
 
+    /// The BYTE offset a line starts at, which is what tree-sitter's spans
+    /// are measured in. From the rope, so it is right for every line rather
+    /// than only the ones some caller happened to scan for.
+    pub fn line_byte_start(&self, line: usize) -> usize {
+        self.text
+            .line_to_byte(line.min(self.line_count().saturating_sub(1)))
+    }
+
     /// The char index just before line `line`'s newline.
     pub fn line_end(&self, line: usize) -> usize {
         let start = self.line_start(line);
