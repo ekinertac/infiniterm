@@ -19,6 +19,14 @@ static LAST: AtomicI32 = AtomicI32::new(-1);
 /// clears its shift flag when it reports a shifted character, so the
 /// keystroke cannot say.
 static LAST_SHIFT: AtomicBool = AtomicBool::new(false);
+/// Whether that key-down was a DEAD key: one that types nothing by itself
+/// and waits for the next letter (Option+E on a US layout, then E, for é).
+/// The event's `characters` is empty for exactly that case, and it is the
+/// only authoritative sign of it: gpui's keystroke reports the standalone
+/// accent instead (`\u{b4}`), because it translates the key with a space
+/// after it to have something to show, so nothing downstream of gpui can
+/// tell a dead key from a layout where Option+E simply types an accent.
+static LAST_DEAD: AtomicBool = AtomicBool::new(false);
 
 /// NSEventMaskKeyDown.
 const KEY_DOWN_MASK: u64 = 1 << 10;
@@ -30,8 +38,20 @@ pub fn install() {
     let block = block::ConcreteBlock::new(|event: *mut Object| -> *mut Object {
         let code: u16 = unsafe { msg_send![event, keyCode] };
         let flags: u64 = unsafe { msg_send![event, modifierFlags] };
+        // `characters` is nil for a modifier-only event, empty for a dead
+        // key, and the typed text otherwise. Only "empty" is a dead key.
+        let dead = unsafe {
+            let chars: *mut Object = msg_send![event, characters];
+            if chars.is_null() {
+                false
+            } else {
+                let len: usize = msg_send![chars, length];
+                len == 0
+            }
+        };
         LAST.store(code as i32, Ordering::Relaxed);
         LAST_SHIFT.store(flags & SHIFT_FLAG != 0, Ordering::Relaxed);
+        LAST_DEAD.store(dead, Ordering::Relaxed);
         event
     });
     // The monitor holds the block for the life of the process.
@@ -51,6 +71,13 @@ pub fn last_code() -> Option<&'static str> {
 /// Whether Shift was held for the most recent key-down.
 pub fn last_shift() -> bool {
     LAST_SHIFT.load(Ordering::Relaxed)
+}
+
+/// Whether the most recent key-down was a dead key. A body or a field
+/// that sees this must NOT take the key: taking it tells macOS it was
+/// handled and the composition never happens. See `LAST_DEAD`.
+pub fn last_dead() -> bool {
+    LAST_DEAD.load(Ordering::Relaxed)
 }
 
 /// macOS virtual key codes (Carbon `kVK_*`) to DOM `code` names.

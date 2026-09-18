@@ -480,7 +480,16 @@ impl AppView {
         let k: &Keystroke = &e.keystroke;
         let m = &k.modifiers;
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
-            eprintln!("[key] {k:?}");
+            eprintln!("[key] {k:?} dead={}", crate::keycode::last_dead());
+        }
+        // A dead key (Option+E on a US layout, waiting for its vowel) is
+        // nobody's to take: taking it tells macOS it was handled and the
+        // composition never happens. gpui reports it as the standalone
+        // accent, which every body and field would happily type, so the
+        // NSEvent's own word is used and the key is left for the input
+        // context. The composed letter comes back through ime.rs.
+        if crate::keycode::last_dead() && !m.platform && !m.control {
+            return false;
         }
         if !m.platform && !m.control && !m.alt {
             let bare = match k.key.as_str() {
