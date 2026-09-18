@@ -42,6 +42,7 @@ impl AppView {
             focus,
             composing: None,
             reveal_on_release: None,
+            label_hits: Vec::new(),
             show_character_palette: false,
             pan: None,
             gesture: None,

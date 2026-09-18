@@ -42,6 +42,16 @@ impl AppView {
     }
 
     pub fn hit(&self, screen: Point) -> Hit {
+        // The label chip first, as the frame it is: painted over the body,
+        // last painted wins.
+        if let Some((id, _)) = self.label_hits.iter().rev().find(|(_, r)| {
+            screen.x >= r.x && screen.x <= r.x + r.w && screen.y >= r.y && screen.y <= r.y + r.h
+        }) {
+            return Hit::CardEdge {
+                id: id.clone(),
+                edge: None,
+            };
+        }
         let vp = self.model.viewport;
         let world = world_pos_of(screen, vp);
         let band = EDGE_HIT / vp.scale;
@@ -167,6 +177,16 @@ impl AppView {
             }
             Hit::CardEdge { id, edge } => {
                 self.model.set_focus(Some(&id));
+                // A double-click on the frame fits the card, which is Cmd+1
+                // for the mouse. The frame and not the body: a double-click
+                // in the body belongs to the program (a word selection in a
+                // terminal), and the frame is the one part of a card that
+                // is ours and never the program's.
+                if e.click_count >= 2 {
+                    self.run_command("canvas.zoom.fitCard");
+                    self.perform_effects();
+                    return;
+                }
                 let start_rect = self.model.card(&id).map(|c| c.rect).unwrap_or_default();
                 let kind = match edge {
                     None => GestureKind::Move,

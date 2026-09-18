@@ -126,6 +126,11 @@ pub struct AppView {
     /// A press that moved the focus to a card: where it landed, so the
     /// release can tell a click from a drag and reveal the card on a click.
     pub reveal_on_release: Option<Point>,
+    /// Where each card's label chip was painted this frame, in content
+    /// pixels, in paint order. The label is a FRAME target for the mouse
+    /// (drag to move, double-click to fit), not a body target: a
+    /// double-click that reached the terminal selected a word instead.
+    pub label_hits: Vec<(String, Rect)>,
     /// The card body the pointer is currently over, so a body that cares
     /// about hover (the browser) gets told when the pointer leaves it.
     pub hover_body: Option<String>,

@@ -189,6 +189,7 @@ impl AppView {
     }
 
     fn paint_world(&mut self, bounds: Bounds<Pixels>, now: f64, window: &mut Window, cx: &mut App) {
+        self.label_hits.clear();
         let origin = bounds.origin;
         let vp = self.model.viewport;
         let view = self.model.view_size;
@@ -509,7 +510,7 @@ impl AppView {
     /// The name (top-right), the kind badges beside it, the remote badge
     /// (top-left, red) and the mid-zoom label. Pointer-inert, over the body.
     fn paint_labels(
-        &self,
+        &mut self,
         card: &infiniterm_core::model::Card,
         b: Bounds<Pixels>,
         scale: f64,
@@ -591,6 +592,17 @@ impl AppView {
             }
             let w = line.width + label_px;
             let lb = Bounds::new(point(right - w, b.origin.y + border), size(w, h));
+            // Remembered for the hit test, in the content coordinates the
+            // mouse arrives in (the title bar is above the canvas).
+            self.label_hits.push((
+                card.id.clone(),
+                infiniterm_core::grid::Rect {
+                    x: f32::from(lb.origin.x) as f64,
+                    y: f32::from(lb.origin.y) as f64 - self.titlebar_h() as f64,
+                    w: f32::from(lb.size.width) as f64,
+                    h: f32::from(lb.size.height) as f64,
+                },
+            ));
             window.paint_quad(fill(lb, label_bg));
             crate::text::paint_in(window, cx, &line, lb, label_px / 2.);
             right -= w;
