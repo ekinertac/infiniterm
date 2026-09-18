@@ -108,6 +108,9 @@ pub struct SavedCard {
     /// shut after every relaunch and Shift+Enter sends the prompt instead
     /// of breaking the line.
     pub kitty_keys: bool,
+    /// The last Claude Code session the card ran, for `claude --resume`
+    /// after a reboot. Written only when there is one.
+    pub agent_session: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,6 +205,11 @@ fn card_value(c: &SavedCard) -> Value {
             map.insert("kittyKeys".into(), Value::Bool(true));
         }
     }
+    if let Some(agent) = &c.agent_session {
+        if let Some(map) = card.as_object_mut() {
+            map.insert("agentSession".into(), Value::String(agent.clone()));
+        }
+    }
     card
 }
 
@@ -287,6 +295,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
     // Read both, preferring the current key, so those canvases still load.
     let session = non_empty(c.get("session")).or_else(|| non_empty(c.get("tmuxWindow")));
     let kitty_keys = c.get("kittyKeys").and_then(Value::as_bool).unwrap_or(false);
+    let agent_session = non_empty(c.get("agentSession"));
     // A card is a terminal unless it says otherwise; an editor without a
     // path is an untitled buffer, whose text lives in its draft. A browser
     // without a url or a transcript without a path has nothing to show and
@@ -343,6 +352,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         },
         session,
         kitty_keys,
+        agent_session,
     })
 }
 
@@ -525,6 +535,7 @@ mod tests {
             },
             z: 0.,
             kitty_keys: false,
+            agent_session: None,
             title: "api".into(),
             cwd: "/Users/ekinertac/Code/api".into(),
             group_id: None,
@@ -667,6 +678,25 @@ mod tests {
         )
         .unwrap();
         assert!(saved.cards[0].kitty_keys);
+    }
+
+    // After a reboot the shell is new and the ring is all that is left of
+    // the agent; the id is what turns that into `claude --resume`.
+    #[test]
+    fn the_agent_session_survives_the_save_file_and_is_written_only_when_known() {
+        let saved = round_trip(
+            &[SavedCard {
+                agent_session: Some("c0ffee".into()),
+                ..card()
+            }],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(saved.cards[0].agent_session.as_deref(), Some("c0ffee"));
+        assert!(!card_value(&card())
+            .as_object()
+            .unwrap()
+            .contains_key("agentSession"));
     }
 
     // Written only when true, like `session`, so a canvas of plain shells

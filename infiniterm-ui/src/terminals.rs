@@ -169,7 +169,7 @@ impl AppView {
                     .as_deref()
                     .and_then(|s| self.backend.pty.take_ring(s))
                 {
-                    body.feed_lost_session(&ring, &when);
+                    body.feed_lost_session(&ring, &when, card.agent_session.as_deref());
                 }
                 // `terminal.shell` when set, else the backend's $SHELL; a card
                 // made to run one program runs that instead.

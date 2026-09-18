@@ -80,6 +80,12 @@ pub struct Card {
     /// The session file of the agent in this card, from its hook events.
     /// Runtime-only; what `card.transcript` opens.
     pub transcript_path: Option<String>,
+    /// The last Claude Code session this card ran, from its hook events.
+    /// SAVED (`agentSession`): after a reboot the card's shell is new and
+    /// the ring is all that is left, so the lost-session notice can offer
+    /// `claude --resume <id>` ready to paste. Never cleared by the app;
+    /// the next hook event overwrites it.
+    pub agent_session: Option<String>,
     /// This card's shell, as an opaque handle in whichever backend holds it
     /// (a tmux window id like `@7`, or a daemon session id). SAVED, unlike
     /// every other runtime fact about a shell: it is the only thing that
@@ -602,6 +608,7 @@ impl Model {
             zoom: opts.zoom,
             command: opts.command,
             transcript_path: None,
+            agent_session: None,
             session: None,
             kitty_keys: false,
             osc_title: None,

@@ -20,6 +20,13 @@ impl Model {
         if let Some(t) = &report.transcript {
             card.transcript_path = Some(t.clone());
         }
+        let mut layout_changed = false;
+        if let Some(s) = &report.session {
+            if card.agent_session.as_deref() != Some(s) {
+                card.agent_session = Some(s.clone());
+                layout_changed = true;
+            }
+        }
         let before = card.agent;
         card.agent = apply_hook_event(card.agent, &report.event);
         card.last_event_at = now;
@@ -39,6 +46,9 @@ impl Model {
             }
         );
         self.log(line);
+        if layout_changed {
+            self.dirty_layout = true;
+        }
     }
 
     /// The whole list arrives each time and is applied wholesale: a card

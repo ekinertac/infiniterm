@@ -76,6 +76,7 @@ impl Model {
                         // announced that once, at a startup that has long
                         // fallen out of the ring we replay.
                         card.kitty_keys = c.kitty_keys;
+                        card.agent_session = c.agent_session.clone();
                     }
                 }
                 self.viewport = saved.viewport;
@@ -120,6 +121,7 @@ impl Model {
                 zoom: c.zoom,
                 session: c.session.clone(),
                 kitty_keys: c.kitty_keys,
+                agent_session: c.agent_session.clone(),
             })
             .collect();
         let groups: Vec<SavedGroup> = self

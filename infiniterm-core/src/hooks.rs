@@ -27,6 +27,9 @@ pub struct HookReport {
     pub tool: Option<String>,
     /// The session's JSONL, which every Claude Code hook event names.
     pub transcript: Option<String>,
+    /// Claude Code's `session_id`, the argument to `claude --resume`. Pi's
+    /// adapter does not send one.
+    pub session: Option<String>,
 }
 
 /// A report with no `card_id` is dropped: without it there is no card to
@@ -48,6 +51,7 @@ pub fn parse_hook_line(line: &str) -> Option<HookReport> {
         event,
         tool: field("tool_name"),
         transcript: field("transcript_path"),
+        session: field("session_id"),
     })
 }
 

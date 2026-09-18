@@ -639,10 +639,15 @@ mod tests {
             event: event.into(),
             tool: None,
             transcript: Some("/s/x.jsonl".into()),
+            session: Some("sess-1".into()),
         };
         h.m.apply_hook(&report("PreToolUse"));
         assert_eq!(h.focused().agent, crate::agent_state::AgentState::Working);
         assert_eq!(h.focused().transcript_path.as_deref(), Some("/s/x.jsonl"));
+        // The session id is kept for `claude --resume` after a reboot, and
+        // its arrival is a layout change so it reaches the save file.
+        assert_eq!(h.focused().agent_session.as_deref(), Some("sess-1"));
+        assert!(h.m.dirty_layout);
         h.m.apply_hook(&report("Notification"));
         assert_eq!(h.focused().agent, crate::agent_state::AgentState::Waiting);
         assert_eq!(h.focused().notified_at, h.m.now_ms);
