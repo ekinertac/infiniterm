@@ -1048,13 +1048,23 @@ impl EditorBody {
             } else {
                 "  "
             };
-            let text = format!(
+            let mut text = format!(
                 "{}{}{}",
                 TREE_INDENT.repeat(row.depth),
                 marker,
                 row.entry.name
             );
-            let line = crate::text::shape(window, &text, font_size, &f, color);
+            let mut line = crate::text::shape(window, &text, font_size, &f, color);
+            // A name wider than the tree is cut with an ellipsis, not drawn
+            // over the buffer beside it. The row's highlight already stopped
+            // at the tree's edge; the text kept going.
+            let room = area.size.width - pad * 2.;
+            if line.width > room {
+                text = crate::text::elide(&text, f32::from(room), |t| {
+                    f32::from(crate::text::shape(window, t, font_size, &f, color).width)
+                });
+                line = crate::text::shape(window, &text, font_size, &f, color);
+            }
             let _ = line.paint(point(area.origin.x + pad, y), line_h, window, cx);
             y += line_h;
         }
