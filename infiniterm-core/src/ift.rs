@@ -144,25 +144,7 @@ pub fn diff_plan(path: &str, kind: PathKind) -> OpenPlan {
     }
 }
 
-/// What the browser card can show and the editor cannot. Chromium renders
-/// these itself; anything else on `file://` would be a download prompt or
-/// a text dump, so the list stays exact rather than "not text".
-const IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif",
-];
-
-fn is_image(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    match name.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() => {
-            IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
-        }
-        _ => false,
-    }
-}
-
 /// `line` is where the editor opens, from `file:42` or a `path:42:7` link.
-/// An image is a browser card at `file://`: the editor would show its bytes.
 pub fn open_plan(path: &str, kind: PathKind, line: Option<f64>) -> OpenPlan {
     if kind == PathKind::Directory {
         return OpenPlan::Editor {
@@ -173,10 +155,6 @@ pub fn open_plan(path: &str, kind: PathKind, line: Option<f64>) -> OpenPlan {
         };
     }
     match parent(path) {
-        Some(cwd) if is_image(path) => OpenPlan::Browser {
-            cwd,
-            url: format!("file://{path}"),
-        },
         Some(cwd) => OpenPlan::Editor {
             cwd,
             path: Some(path.into()),
@@ -319,35 +297,6 @@ mod tests {
         assert!(
             matches!(open_plan("/top.txt", PathKind::File, None), OpenPlan::Editor { cwd, .. } if cwd == "/")
         );
-    }
-
-    // The editor would show an image's bytes; the browser card draws it.
-    // The rule is one list of extensions, case-blind, on the last name only.
-    #[test]
-    fn opens_an_image_as_a_browser_card_on_the_file() {
-        assert_eq!(
-            open_plan("/Users/me/shots/01.png", PathKind::File, None),
-            OpenPlan::Browser {
-                cwd: "/Users/me/shots".into(),
-                url: "file:///Users/me/shots/01.png".into(),
-            }
-        );
-        assert!(matches!(
-            open_plan("/tmp/Photo.JPG", PathKind::File, Some(3.)),
-            OpenPlan::Browser { .. }
-        ));
-        assert!(matches!(
-            open_plan("/tmp/.png", PathKind::File, None),
-            OpenPlan::Editor { .. }
-        ));
-        assert!(matches!(
-            open_plan("/tmp/png.d/notes", PathKind::File, None),
-            OpenPlan::Editor { .. }
-        ));
-        assert!(matches!(
-            open_plan("/tmp/pics.png", PathKind::Directory, None),
-            OpenPlan::Editor { .. }
-        ));
     }
 
     #[test]
