@@ -135,6 +135,12 @@ Keys are flat and dotted, the way VS Code writes them, so an override is one lin
 }
 ```
 
+Each card's shell gets its own history file (`INFINITERM_HISTFILE`, under the data dir by card id) so a new card does not open with every other card's past, and after a reboot the card that ran Claude has `claude --resume <id>` as its last entry: Up, Enter. macOS sets `HISTFILE` before your `.zshrc` runs, so the shell takes it from one line there:
+
+```zsh
+HISTFILE="${INFINITERM_HISTFILE:-$HOME/.zsh_history}"
+```
+
 The `terminal.` keys cover the shell, cursor, font and the decoy; `cards.` how big a new card is and whether it inherits the active card's directory; `canvas.` zoom sensitivity and pan momentum; `editor.` the selection colours, line wash and wrapping; `browser.` the page zoom and search; `ui.` chrome sizes, dimming, animation and the frame counter. A file in the older nested shape (`"terminal": { "fontSize": 16 }`) still reads. `settings.default.json` is the documentation.
 
 Comments and trailing commas work in both. `Cmd + ,` opens settings and `Cmd + Shift + ,` keybindings, each as a pair of editor cards on the canvas. Both apply on save without a restart.

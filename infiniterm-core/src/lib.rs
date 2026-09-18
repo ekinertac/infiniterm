@@ -72,6 +72,7 @@ pub mod paths;
 pub mod prompt;
 pub mod saved_layout;
 pub mod settings_doc;
+pub mod shell_history;
 pub mod shortcuts;
 pub mod themes_files;
 pub mod transcript;

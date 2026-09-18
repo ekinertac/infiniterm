@@ -164,17 +164,39 @@ impl AppView {
                 // back above the new shell, with a line saying so, instead
                 // of 23 cards of a bare prompt. `card.session` is overwritten
                 // below once the new pane reports its id.
+                // Each card's shell keeps its own history (shell_history.rs);
+                // the path is made now so the new shell can write to it.
+                let history = infiniterm_core::shell_history::history_file(&card.id);
+                let _ = infiniterm_core::shell_history::ensure_dir(&history);
                 if let Some((ring, when)) = card
                     .session
                     .as_deref()
                     .and_then(|s| self.backend.pty.take_ring(s))
                 {
-                    body.feed_lost_session(&ring, &when, card.agent_session.as_deref());
+                    let resume = card.agent_session.as_deref();
+                    body.feed_lost_session(&ring, &when, resume);
+                    // And the same command as the card's last history entry,
+                    // so Up in the new shell is all it takes.
+                    if let Some(id) = resume {
+                        let cmd = format!("claude --resume {id}");
+                        if let Err(e) = infiniterm_core::shell_history::append(&history, &cmd) {
+                            eprintln!(
+                                "[infiniterm/warn] could not write {}: {e}",
+                                history.display()
+                            );
+                        }
+                    }
                 }
                 // `terminal.shell` when set, else the backend's $SHELL; a card
                 // made to run one program runs that instead.
                 let command = card.command.clone().or_else(|| shell.clone());
-                let env = vec![("INFINITERM_CARD_ID".to_string(), card.id.clone())];
+                let env = vec![
+                    ("INFINITERM_CARD_ID".to_string(), card.id.clone()),
+                    (
+                        "INFINITERM_HISTFILE".to_string(),
+                        history.to_string_lossy().to_string(),
+                    ),
+                ];
                 match self.backend.pty.spawn_now(
                     std::path::Path::new(&card.cwd),
                     command.as_deref(),
