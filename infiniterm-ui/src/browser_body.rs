@@ -17,7 +17,8 @@
 //! stays a rectangle.
 use crate::body::{BodyAction, CardBody};
 use gpui::{
-    fill, font, point, px, size, App, Bounds, Hsla, Keystroke, Pixels, RenderImage, Window,
+    fill, font, point, px, size, App, Bounds, CursorStyle, Hsla, Keystroke, Pixels, RenderImage,
+    Window,
 };
 use image::{Frame as ImageFrame, RgbaImage};
 use infiniterm_browser::{Button, Mods, Surface};
@@ -175,6 +176,12 @@ impl BrowserBody {
         }
     }
 
+    /// The OS cursor the page last asked for (a pointer over a link, an
+    /// I-beam over an input), or `Arrow` before it has said anything.
+    pub fn cursor_style(&self) -> CursorStyle {
+        cursor_style_for(self.surface.as_ref().map_or("default", |s| s.cursor()))
+    }
+
     fn mods(m: &gpui::Modifiers) -> Mods {
         Mods {
             shift: m.shift,
@@ -274,7 +281,7 @@ impl CardBody for BrowserBody {
             return BodyAction::None;
         };
         if k.modifiers.platform {
-            surface.edit_chord(&k.key);
+            surface.edit_chord(&k.key, k.modifiers.shift);
             return BodyAction::None;
         }
         surface.key(&k.key, k.key_char.as_deref(), Self::mods(&k.modifiers));
@@ -343,12 +350,13 @@ impl CardBody for BrowserBody {
 
     fn mouse_move(&mut self, local: Point, modifiers: &gpui::Modifiers) {
         if let Some(surface) = &self.surface {
-            surface.mouse_move(
-                local.x as f32,
-                local.y as f32,
-                Self::mods(modifiers),
-                self.left_down,
-            );
+            surface.mouse_move(local.x as f32, local.y as f32, Self::mods(modifiers));
+        }
+    }
+
+    fn mouse_leave(&mut self) {
+        if let Some(surface) = &self.surface {
+            surface.mouse_leave();
         }
     }
 
@@ -374,5 +382,53 @@ impl CardBody for BrowserBody {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+/// The CSS cursor keyword `Surface::cursor` reports, mapped to gpui's
+/// cursor styles. gpui has no spinner or "all scroll" cursor, so the CEF
+/// types that would need one (`wait`, `progress`, `help`, `move`) fall back
+/// to the arrow rather than picking something misleading.
+fn cursor_style_for(name: &str) -> CursorStyle {
+    match name {
+        "pointer" => CursorStyle::PointingHand,
+        "text" => CursorStyle::IBeam,
+        "crosshair" => CursorStyle::Crosshair,
+        "grab" => CursorStyle::OpenHand,
+        "grabbing" => CursorStyle::ClosedHand,
+        "e-resize" => CursorStyle::ResizeRight,
+        "w-resize" => CursorStyle::ResizeLeft,
+        "n-resize" => CursorStyle::ResizeUp,
+        "s-resize" => CursorStyle::ResizeDown,
+        "ns-resize" => CursorStyle::ResizeUpDown,
+        "ew-resize" => CursorStyle::ResizeLeftRight,
+        "nesw-resize" => CursorStyle::ResizeUpRightDownLeft,
+        "nwse-resize" => CursorStyle::ResizeUpLeftDownRight,
+        "col-resize" => CursorStyle::ResizeColumn,
+        "row-resize" => CursorStyle::ResizeRow,
+        "not-allowed" => CursorStyle::OperationNotAllowed,
+        "copy" => CursorStyle::DragCopy,
+        "alias" => CursorStyle::DragLink,
+        "context-menu" => CursorStyle::ContextualMenu,
+        "vertical-text" => CursorStyle::IBeamCursorForVerticalLayout,
+        "none" => CursorStyle::None,
+        _ => CursorStyle::Arrow,
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+
+    #[test]
+    fn a_link_gets_a_pointer_and_an_input_gets_an_ibeam() {
+        assert_eq!(cursor_style_for("pointer"), CursorStyle::PointingHand);
+        assert_eq!(cursor_style_for("text"), CursorStyle::IBeam);
+    }
+
+    #[test]
+    fn an_unmapped_or_default_cursor_falls_back_to_the_arrow() {
+        assert_eq!(cursor_style_for("default"), CursorStyle::Arrow);
+        assert_eq!(cursor_style_for("wait"), CursorStyle::Arrow);
     }
 }

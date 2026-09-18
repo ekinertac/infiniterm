@@ -117,6 +117,8 @@ pub struct AppView {
     /// after Option+E, a Pinyin candidate. Held so macOS knows a composition
     /// is in progress; see `ime.rs`.
     pub composing: Option<String>,
+    /// `app.emoji` asked; the next frame, which has the window, opens it.
+    pub show_character_palette: bool,
     pub pan: Option<Pan>,
     pub gesture: Option<Gesture>,
     /// The card whose body is following a drag (a text selection).
@@ -278,11 +280,11 @@ fn main() {
                 let _ = cx.update_window(w, |_, window, _| window.zoom_window());
             }
         });
-        // The emoji panel. macOS fires Cmd+Ctrl+Space through the app's
-        // "Emoji & Symbols" menu item, so without an Edit menu the chord
-        // did nothing here; the item and the binding give it a target.
-        // What the panel then inserts arrives through the input handler
-        // in ime.rs, not as a key.
+        // The emoji panel, from the menu. The chord is `app.emoji` in the
+        // keymap, not a gpui binding here: macOS also handles
+        // Cmd+Ctrl+Space system-wide, and with a gpui action bound to it
+        // too the three fought and it worked sometimes. What the panel
+        // inserts arrives through the input handler in ime.rs.
         cx.on_action(|_: &ShowCharacterPalette, cx| {
             for w in cx.windows() {
                 let _ = cx.update_window(w, |_, window, _| window.show_character_palette());
@@ -293,7 +295,6 @@ fn main() {
             KeyBinding::new("cmd-h", Hide, None),
             KeyBinding::new("cmd-alt-h", HideOthers, None),
             KeyBinding::new("cmd-m", Minimize, None),
-            KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),
         ]);
         cx.set_menus(vec![
             Menu {

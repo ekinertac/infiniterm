@@ -240,6 +240,9 @@ pub enum Effect {
     /// frame is already in `window.json`, so size and position return on
     /// their own.
     Restart,
+    /// Open macOS's Emoji & Symbols panel. What it inserts comes back
+    /// through the ui's input handler, not as a key.
+    ShowCharacterPalette,
     /// A palette entry or an ift verb that runs a registered command: the
     /// registry lives outside the model, so the ui runs it.
     RunCommand(String),

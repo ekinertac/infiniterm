@@ -111,6 +111,9 @@ impl AppView {
         self.model.seed_first_card(&mut seeded);
         self.seeded = seeded;
         self.perform_effects();
+        if std::mem::take(&mut self.show_character_palette) {
+            window.show_character_palette();
+        }
         self.start_glides(now);
         self.reconcile_bodies();
         self.reconcile_terminals(window);
@@ -120,6 +123,7 @@ impl AppView {
         self.feed_terminals(now, cx);
         let t1 = std::time::Instant::now();
         self.paint_world(bounds, now, window, cx);
+        self.apply_hover_cursor(window);
         // Another app is in front: a wash over everything, so a glance says
         // keys are going elsewhere. Over the cards and their labels, under
         // the overlays gpui draws after this canvas, which are not open

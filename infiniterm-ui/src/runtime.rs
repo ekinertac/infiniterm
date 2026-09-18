@@ -41,6 +41,7 @@ impl AppView {
             bodies: Default::default(),
             focus,
             composing: None,
+            show_character_palette: false,
             pan: None,
             gesture: None,
             body_drag: None,
@@ -242,6 +243,9 @@ impl AppView {
                     self.flush_save();
                     std::process::exit(0);
                 }
+                // Needs the Window, which effects do not have; the frame
+                // makes the call. Same shape as the owed-frame flag.
+                Effect::ShowCharacterPalette => self.show_character_palette = true,
                 Effect::Restart => {
                     self.flush_save();
                     match relaunch_after_exit() {

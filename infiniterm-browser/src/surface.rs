@@ -51,6 +51,10 @@ pub struct Shared {
     /// Chromium reports this several times per search as it walks the page,
     /// so the bar shows whatever arrived last.
     pub find: (i32, i32),
+    /// The page's last requested cursor, as a CSS cursor keyword: a pointer
+    /// over a link, text over an input. Empty means CEF hasn't said yet, the
+    /// same as "default" to whoever reads it.
+    pub cursor: &'static str,
 }
 
 #[derive(Clone)]
@@ -157,6 +161,71 @@ wrap_display_handler! {
                 self.handler.shared.borrow_mut().url = u;
             }
         }
+
+        // Windowless CEF has no native cursor tracking of its own: without
+        // this the OS cursor never changes over a link or a text field.
+        fn on_cursor_change(
+            &self,
+            _browser: Option<&mut Browser>,
+            _cursor: *mut u8,
+            type_: CursorType,
+            _custom_cursor_info: Option<&CursorInfo>,
+        ) -> ::std::os::raw::c_int {
+            self.handler.shared.borrow_mut().cursor = cursor_name(type_);
+            1
+        }
+    }
+}
+
+/// CEF's cursor type as a CSS cursor keyword, the vocabulary the ui maps to
+/// a gpui `CursorStyle`. A cursor gpui has no equivalent for (the OS-drawn
+/// spinner behind `WAIT`/`PROGRESS`, `HELP`) falls back to the default
+/// arrow rather than faking one.
+fn cursor_name(t: CursorType) -> &'static str {
+    if t == CursorType::HAND {
+        "pointer"
+    } else if t == CursorType::IBEAM {
+        "text"
+    } else if t == CursorType::CROSS {
+        "crosshair"
+    } else if t == CursorType::GRAB {
+        "grab"
+    } else if t == CursorType::GRABBING {
+        "grabbing"
+    } else if t == CursorType::EASTRESIZE {
+        "e-resize"
+    } else if t == CursorType::WESTRESIZE {
+        "w-resize"
+    } else if t == CursorType::NORTHRESIZE {
+        "n-resize"
+    } else if t == CursorType::SOUTHRESIZE {
+        "s-resize"
+    } else if t == CursorType::NORTHSOUTHRESIZE {
+        "ns-resize"
+    } else if t == CursorType::EASTWESTRESIZE {
+        "ew-resize"
+    } else if t == CursorType::NORTHEASTSOUTHWESTRESIZE {
+        "nesw-resize"
+    } else if t == CursorType::NORTHWESTSOUTHEASTRESIZE {
+        "nwse-resize"
+    } else if t == CursorType::COLUMNRESIZE {
+        "col-resize"
+    } else if t == CursorType::ROWRESIZE {
+        "row-resize"
+    } else if t == CursorType::NOTALLOWED || t == CursorType::NODROP {
+        "not-allowed"
+    } else if t == CursorType::COPY {
+        "copy"
+    } else if t == CursorType::ALIAS {
+        "alias"
+    } else if t == CursorType::CONTEXTMENU {
+        "context-menu"
+    } else if t == CursorType::VERTICALTEXT {
+        "vertical-text"
+    } else if t == CursorType::NONE {
+        "none"
+    } else {
+        "default"
     }
 }
 
@@ -366,6 +435,17 @@ impl Surface {
         self.shared.borrow().url.clone()
     }
 
+    /// The page's last requested cursor, as a CSS keyword ("pointer",
+    /// "text", ...), or "default" before CEF has said anything.
+    pub fn cursor(&self) -> &'static str {
+        let c = self.shared.borrow().cursor;
+        if c.is_empty() {
+            "default"
+        } else {
+            c
+        }
+    }
+
     pub fn close(&self) {
         if let Some(host) = self.host() {
             host.close_browser(1);
@@ -394,10 +474,21 @@ impl Surface {
         }
     }
 
-    /// `x`, `y` in page pixels: the caller has already undone the zoom.
-    pub fn mouse_move(&self, x: f32, y: f32, mods: Mods, left: bool) {
+    /// `x`, `y` in page pixels: the caller has already undone the zoom. The
+    /// second argument to `send_mouse_move_event` is CEF's `mouseLeave`, not
+    /// a button flag: a move within the card is never a leave.
+    pub fn mouse_move(&self, x: f32, y: f32, mods: Mods) {
         if let Some(host) = self.host() {
-            host.send_mouse_move_event(Some(&Self::mouse(x, y, mods)), (!left) as i32);
+            host.send_mouse_move_event(Some(&Self::mouse(x, y, mods)), 0);
+        }
+    }
+
+    /// The pointer left the card for another card or empty canvas: tells
+    /// CEF the way a real mouseout would, so `:hover` and tooltips clear
+    /// instead of sticking to whatever was last under the cursor.
+    pub fn mouse_leave(&self) {
+        if let Some(host) = self.host() {
+            host.send_mouse_move_event(Some(&Self::mouse(0., 0., Mods::default())), 1);
         }
     }
 
@@ -440,8 +531,9 @@ impl Surface {
         }
     }
 
-    /// Cmd chords a page owns. Returns whether it took the key.
-    pub fn edit_chord(&self, key: &str) -> bool {
+    /// Cmd chords a page owns: `shift` splits Cmd+Z (undo) from
+    /// Cmd+Shift+Z (redo). Returns whether it took the key.
+    pub fn edit_chord(&self, key: &str, shift: bool) -> bool {
         let Some(frame) = self.browser.main_frame() else {
             return false;
         };
@@ -450,6 +542,7 @@ impl Surface {
             "c" => frame.copy(),
             "x" => frame.cut(),
             "a" => frame.select_all(),
+            "z" if shift => frame.redo(),
             "z" => frame.undo(),
             _ => return false,
         }
@@ -459,16 +552,24 @@ impl Surface {
     /// A key by gpui's name and character: named keys go as RAWKEYDOWN /
     /// KEYUP with Windows virtual key codes, printable ones as CHAR
     /// events, which is what a page's handlers and text fields expect.
+    /// `native_key_code` rides along on the named-key path: macOS resolves
+    /// editing commands (delete, cursor movement, select-word) through
+    /// Cocoa's key-binding tables, keyed on the real macOS keycode rather
+    /// than the Windows one, and a synthetic event that leaves it at 0 (the
+    /// `A` key) resolves to nothing, which is why Backspace and the arrows
+    /// silently did not work in a text field.
     pub fn key(&self, name: &str, text: Option<&str>, mods: Mods) {
         let Some(host) = self.host() else { return };
         let modifiers = Self::flags(mods);
         let vk = virtual_key(name);
         if vk != 0 {
+            let native_key_code = native_key_code(name);
             for type_ in [KeyEventType::RAWKEYDOWN, KeyEventType::KEYUP] {
                 host.send_key_event(Some(&KeyEvent {
                     type_,
                     modifiers,
                     windows_key_code: vk,
+                    native_key_code,
                     ..Default::default()
                 }));
             }
@@ -478,6 +579,7 @@ impl Surface {
                     type_: KeyEventType::CHAR,
                     modifiers,
                     windows_key_code: vk,
+                    native_key_code,
                     character: ch,
                     unmodified_character: ch,
                     ..Default::default()
@@ -553,6 +655,42 @@ pub fn virtual_key(name: &str) -> i32 {
     }
 }
 
+/// macOS virtual key codes (Carbon `kVK_*`) for the same named keys, the
+/// codeset Cocoa's `interpretKeyEvents:` resolves editing commands from.
+/// Only meaningful alongside `virtual_key`, which is why an unnamed key (0)
+/// never reaches here: `key()` skips this table for the CHAR-only path.
+fn native_key_code(name: &str) -> i32 {
+    match name {
+        "enter" => 0x24,
+        "backspace" => 0x33,
+        "tab" => 0x30,
+        "escape" => 0x35,
+        "space" => 0x31,
+        "pageup" => 0x74,
+        "pagedown" => 0x79,
+        "end" => 0x77,
+        "home" => 0x73,
+        "left" => 0x7B,
+        "up" => 0x7E,
+        "right" => 0x7C,
+        "down" => 0x7D,
+        "delete" => 0x75,
+        "f1" => 0x7A,
+        "f2" => 0x78,
+        "f3" => 0x63,
+        "f4" => 0x76,
+        "f5" => 0x60,
+        "f6" => 0x61,
+        "f7" => 0x62,
+        "f8" => 0x64,
+        "f9" => 0x65,
+        "f10" => 0x6D,
+        "f11" => 0x67,
+        "f12" => 0x6F,
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,5 +700,24 @@ mod tests {
         assert_eq!(virtual_key("enter"), 0x0D);
         assert_eq!(virtual_key("f5"), 0x74);
         assert_eq!(virtual_key("a"), 0);
+    }
+
+    #[test]
+    fn backspace_carries_the_real_macos_keycode_not_the_a_key() {
+        // Cocoa resolves deleteBackward: from the native code; left at the
+        // default (0, kVK_ANSI_A) the key silently did nothing in a field.
+        assert_eq!(native_key_code("backspace"), 0x33);
+        assert_eq!(native_key_code("left"), 0x7B);
+        assert_eq!(native_key_code("home"), 0x73);
+        assert_eq!(native_key_code("a"), 0);
+    }
+
+    #[test]
+    fn cursor_name_covers_a_link_and_an_input_and_falls_back_for_the_rest() {
+        assert_eq!(cursor_name(CursorType::HAND), "pointer");
+        assert_eq!(cursor_name(CursorType::IBEAM), "text");
+        assert_eq!(cursor_name(CursorType::POINTER), "default");
+        // gpui has no spinner cursor: WAIT falls back rather than faking one.
+        assert_eq!(cursor_name(CursorType::WAIT), "default");
     }
 }

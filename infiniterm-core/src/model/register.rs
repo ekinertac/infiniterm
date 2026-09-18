@@ -1102,6 +1102,25 @@ mod tests {
         assert_eq!(close.hint.as_deref(), Some("Cmd W"));
     }
 
+    // The emoji panel has one owner: our chord, our command, one effect
+    // the frame turns into the call. Not a gpui binding, not macOS's own
+    // handling, which between them made it work sometimes.
+    #[test]
+    fn the_emoji_panel_is_a_command_with_its_chord() {
+        let mut h = Harness::new();
+        let effects = h.run("app.emoji");
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::ShowCharacterPalette)));
+        assert_eq!(
+            crate::keymap::default_keymap()
+                .iter()
+                .find(|(_, id)| id == "app.emoji")
+                .map(|(c, _)| c.as_str()),
+            Some("cmd+ctrl+space")
+        );
+    }
+
     // Switching back to a workspace lands on the card you were working
     // in there, not on whichever card was made first.
     #[test]

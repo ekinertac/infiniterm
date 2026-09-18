@@ -247,6 +247,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
     ),
     // Cmd+/ only. Cmd+Shift+/ is Cmd+? on a US layout, which macOS reserves
     // for the Help menu's search field.
+    // macOS's own chord for the panel, taken over so it has exactly one
+    // owner here; see app.emoji.
+    (
+        "cmd+ctrl+space",
+        "app.emoji",
+        "the system's chord, owned by us",
+    ),
     (
         "cmd+/",
         "app.shortcuts",

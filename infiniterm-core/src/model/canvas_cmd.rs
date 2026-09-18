@@ -169,6 +169,14 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.open_palette(Source::Commands);
         }
     });
+    // Our own chord for the emoji panel, through the same physical-key
+    // path as every other binding. macOS handles Cmd+Ctrl+Space system-wide
+    // too, and a gpui action bound to it as well, and which of the three
+    // won depended on the focus state of the moment: it worked sometimes.
+    // One owner now.
+    r.register("app.emoji", "App: emoji & symbols", |m| {
+        m.effects.push(Effect::ShowCharacterPalette);
+    });
     r.register("app.shortcuts", "App: keyboard shortcuts", |m| {
         m.shortcuts_open = !m.shortcuts_open
     });

@@ -128,6 +128,22 @@ impl AppView {
         }
     }
 
+    /// The OS cursor follows whichever browser card the pointer is over
+    /// (a pointer over a link, an I-beam over an input), the way it would
+    /// in a real browser tab. Anything else hovered, or nothing, keeps the
+    /// arrow: nothing else in the app sets a cursor style, so this is
+    /// decided fresh every frame rather than left to whatever gpui reset
+    /// to on its own.
+    pub fn apply_hover_cursor(&mut self, window: &mut gpui::Window) {
+        let style = self
+            .hover_body
+            .clone()
+            .and_then(|id| self.browser_for(&id))
+            .map(|b| b.cursor_style())
+            .unwrap_or(gpui::CursorStyle::Arrow);
+        window.set_window_cursor_style(style);
+    }
+
     /// Chromium reports a find's progress several times per search; the
     /// model takes whatever arrived by this frame.
     pub fn drain_find(&mut self) {
