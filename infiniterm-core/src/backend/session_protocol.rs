@@ -237,9 +237,28 @@ const LINE_SCAN: usize = 64 * 1024;
 /// the first time. tmux's `capture-pane` could only hand back a flattened,
 /// padded copy of ITS grid, measured with ITS character widths, and a line
 /// it padded differently wrapped in a place ours had not.
+/// How much of a session's first output is kept whatever else is dropped.
+///
+/// A program declares itself to the terminal in its opening bytes: the
+/// kitty keyboard query, bracketed paste, the alternate screen, mouse
+/// tracking. Those bytes are the OLDEST in the session, so they are the
+/// first thing a ring throws away, and a card adopted hours later replayed
+/// a history with no declarations in it. Claude Code was measured never
+/// re-declaring, on a resize or a keystroke or anything else, so Shift+Enter
+/// stopped working after the first relaunch and could not recover.
+///
+/// 8 KiB is far more than any program's opening handshake and costs nothing
+/// beside a multi-megabyte ring.
+pub const PREAMBLE_BYTES: usize = 8 * 1024;
+
 pub struct Ring {
     buf: std::collections::VecDeque<u8>,
     cap: usize,
+    /// The session's first bytes, kept verbatim. See `PREAMBLE_BYTES`.
+    preamble: Vec<u8>,
+    /// Whether anything has been dropped from the front. Until it has, the
+    /// preamble is still IN the ring and replaying both would double it.
+    trimmed: bool,
 }
 
 impl Ring {
@@ -247,16 +266,24 @@ impl Ring {
         Ring {
             buf: std::collections::VecDeque::new(),
             cap,
+            preamble: Vec::new(),
+            trimmed: false,
         }
     }
 
     pub fn push(&mut self, bytes: &[u8]) {
+        if self.preamble.len() < PREAMBLE_BYTES {
+            let room = PREAMBLE_BYTES - self.preamble.len();
+            self.preamble
+                .extend_from_slice(&bytes[..room.min(bytes.len())]);
+        }
         self.buf.extend(bytes);
         if self.buf.len() <= self.cap {
             return;
         }
         // The newest output is what a program just drew; the oldest is what
         // scrolled away. Drop from the front.
+        self.trimmed = true;
         self.buf.drain(..self.buf.len() - self.cap);
         // Then forward to just past a line ending, so a replay never begins
         // halfway through a line somebody will read.
@@ -281,7 +308,13 @@ impl Ring {
         if self.buf.is_empty() {
             return Vec::new();
         }
-        let mut out = Vec::with_capacity(self.buf.len() + 4);
+        let mut out = Vec::with_capacity(self.buf.len() + PREAMBLE_BYTES + 4);
+        // The opening bytes first, but ONLY once the ring has dropped
+        // something: until then they are still in `buf` and sending both
+        // would draw the program's startup twice. See `PREAMBLE_BYTES`.
+        if self.trimmed {
+            out.extend(&self.preamble);
+        }
         out.extend(b"\x1b[0m");
         out.extend(self.buf.iter().copied());
         out
@@ -402,8 +435,13 @@ mod tests {
         let mut ring = Ring::new(16);
         ring.push(b"aaaa\nbbbb\ncccc\ndddd\n");
         let out = ring.replay();
-        assert!(out.starts_with(b"\x1b[0m"), "the reset is always first");
-        let body = &out[4..];
+        // The preamble comes first once the ring has wrapped, so the reset
+        // and the ring's own bytes are what FOLLOW it.
+        let at = out
+            .windows(4)
+            .position(|w| w == b"\x1b[0m")
+            .expect("the reset marks where the ring's own bytes start");
+        let body = &out[at + 4..];
         assert!(body.len() <= 16, "never over the cap: {}", body.len());
         assert!(
             body.starts_with(b"bbbb\n") || body.starts_with(b"cccc\n"),
@@ -415,6 +453,43 @@ mod tests {
         );
     }
 
+    // The bytes a program opens with declare it to the terminal, and they
+    // are the first thing a ring drops. Claude Code asks CSI ? u once at
+    // startup and never again, so a card adopted after the ring wrapped
+    // replayed a history with no declaration in it and Shift+Enter went
+    // back to sending the prompt.
+    #[test]
+    fn a_wrapped_ring_still_replays_the_programs_opening_bytes() {
+        let mut ring = Ring::new(64);
+        ring.push(b"\x1b[?2004h\x1b[?u\x1b[?1049h");
+        for _ in 0..40 {
+            ring.push(b"much later output\n");
+        }
+        let out = ring.replay();
+        assert!(
+            out.windows(4).any(|w| w == b"\x1b[?u"),
+            "the kitty query survived the wrap"
+        );
+        assert!(
+            out.ends_with(b"much later output\n"),
+            "and the newest output is still last"
+        );
+    }
+
+    // Until the ring drops anything the opening bytes are still in it, and
+    // sending them again would draw the program's startup twice.
+    #[test]
+    fn an_unwrapped_ring_does_not_repeat_the_opening() {
+        let mut ring = Ring::new(4096);
+        ring.push(b"\x1b[?u hello\n");
+        let out = ring.replay();
+        assert_eq!(
+            out.windows(4).filter(|w| *w == b"\x1b[?u").count(),
+            1,
+            "once, not twice"
+        );
+    }
+
     // Binary output has no newlines to cut at; the ring must still be bounded
     // rather than scanning itself to death looking for one.
     #[test]
@@ -423,7 +498,9 @@ mod tests {
         for _ in 0..100 {
             ring.push(&[0xffu8; 32]);
         }
-        assert!(ring.replay().len() <= 64 + 4);
+        // Bounded by the cap plus the reset plus the preamble, which is
+        // fixed: the point is that it does not grow with what was printed.
+        assert!(ring.replay().len() <= 64 + 4 + PREAMBLE_BYTES);
     }
 
     // One push larger than the whole ring keeps the END of it: the newest
@@ -434,6 +511,6 @@ mod tests {
         ring.push(b"0123456789abcdef");
         let out = ring.replay();
         assert!(out.ends_with(b"f"), "got {:?}", out);
-        assert!(out.len() <= 8 + 4);
+        assert!(out.len() <= 8 + 4 + PREAMBLE_BYTES);
     }
 }
