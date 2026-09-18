@@ -11,7 +11,7 @@ APP = target/bundle/infiniterm.app
 REAL = $(HOME)/Library/Application\ Support/dev.ekinertac.infiniterm/workspace.json
 CRATES = -p infiniterm-core -p infiniterm-ui -p infiniterm-term
 
-.PHONY: help build release bundle run run-fresh stop log test check fmt clippy drive drive-drag drive-panel cast cast-seed shot clean
+.PHONY: help build release install notarize bundle run run-fresh stop log test check fmt clippy drive drive-drag drive-panel cast cast-seed shot clean
 
 help:
 	@echo "make run        build, bundle and launch on a copy of the real canvas ($(DATA))"
@@ -26,16 +26,25 @@ help:
 	@echo "make cast-seed  build the screencast's demo repo and canvas (off camera)"
 	@echo "make cast       the screencast take, on the seeded canvas"
 	@echo "make shot       screenshot the running window to /tmp/infiniterm-shot.png"
-	@echo "make release    optimised build and bundle"
+	@echo "make release    optimised build and bundle, signed with the Developer ID"
+	@echo "make install    make release, then into /Applications (the running app keeps its cards: iftd holds them)"
+	@echo "make notarize   make release, then Apple's notary service and the stapled ticket"
 
 build:
 	cargo build $(if $(filter release,$(PROFILE)),--release,) -p infiniterm-ui
 
 bundle: build
 	tools/bundle.sh $(PROFILE)
+	tools/sign.sh
 
 release:
 	$(MAKE) bundle PROFILE=release
+
+install: release
+	ditto $(APP) /Applications/infiniterm.app
+
+notarize: release
+	tools/sign.sh notarize
 
 run: bundle stop
 	@mkdir -p $(DATA)
