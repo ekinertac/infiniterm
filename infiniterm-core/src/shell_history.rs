@@ -24,13 +24,19 @@ pub fn history_file(card_id: &str) -> PathBuf {
     app_support_dir().join("history").join(card_id)
 }
 
-/// The history file's directory, made if needed, so a shell's first write
-/// does not fail on a missing parent (zsh gives up silently on that).
-pub fn ensure_dir(path: &std::path::Path) -> std::io::Result<()> {
-    match path.parent() {
-        Some(dir) => std::fs::create_dir_all(dir),
-        None => Ok(()),
+/// The history file, made empty if it is not there yet, directory and
+/// all. zsh gives up silently on a missing parent, and mcfly refuses to
+/// start without a file to read (Ekin's .zshrc says so), so the file
+/// exists before the shell does.
+pub fn ensure_file(path: &std::path::Path) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
     }
+    std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+        .map(|_| ())
 }
 
 /// One command onto the end of a history file, as the last thing Up finds.
@@ -43,7 +49,7 @@ pub fn append(path: &std::path::Path, command: &str) -> std::io::Result<()> {
             "a history entry is one non-empty line",
         ));
     }
-    ensure_dir(path)?;
+    ensure_file(path)?;
     let mut text = std::fs::read_to_string(path).unwrap_or_default();
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
@@ -62,6 +68,18 @@ mod tests {
             .join(format!("ift-hist-{}-{name}", std::process::id()))
             .join("history")
             .join("card-1")
+    }
+
+    #[test]
+    fn ensure_file_makes_an_empty_file_and_leaves_a_full_one_alone() {
+        let p = scratch("ensure");
+        let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
+        ensure_file(&p).unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "");
+        std::fs::write(&p, "ls\n").unwrap();
+        ensure_file(&p).unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "ls\n");
+        let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
     }
 
     #[test]

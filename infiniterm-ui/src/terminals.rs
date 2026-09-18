@@ -167,7 +167,7 @@ impl AppView {
                 // Each card's shell keeps its own history (shell_history.rs);
                 // the path is made now so the new shell can write to it.
                 let history = infiniterm_core::shell_history::history_file(&card.id);
-                let _ = infiniterm_core::shell_history::ensure_dir(&history);
+                let _ = infiniterm_core::shell_history::ensure_file(&history);
                 if let Some((ring, when)) = card
                     .session
                     .as_deref()
