@@ -170,7 +170,11 @@ impl AppView {
                 let paste = (k.modifiers.platform && k.key == "v")
                     .then(|| cx.read_from_clipboard().and_then(|c| c.text()))
                     .flatten();
-                if let crate::field::Edit::Changed = self.query_field.key(k, paste.as_deref()) {
+                let edit = self.query_field.key(k, paste.as_deref());
+                if let Some(text) = edit.clipboard() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
+                }
+                if edit.changed() {
                     self.model.palette.query = self.query_field.text.clone();
                     self.model.palette.index = 0;
                 }
@@ -196,7 +200,10 @@ impl AppView {
         let paste = (k.modifiers.platform && k.key == "v")
             .then(|| cx.read_from_clipboard().and_then(|c| c.text()))
             .flatten();
-        self.shortcuts_field.key(k, paste.as_deref());
+        let edit = self.shortcuts_field.key(k, paste.as_deref());
+        if let Some(text) = edit.clipboard() {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
+        }
     }
 
     pub fn prompt_key(&mut self, k: &Keystroke, cx: &mut gpui::App) {
@@ -211,7 +218,11 @@ impl AppView {
                 let paste = (k.modifiers.platform && k.key == "v")
                     .then(|| cx.read_from_clipboard().and_then(|c| c.text()))
                     .flatten();
-                if let crate::field::Edit::Changed = self.prompt_field.key(k, paste.as_deref()) {
+                let edit = self.prompt_field.key(k, paste.as_deref());
+                if let Some(text) = edit.clipboard() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
+                }
+                if edit.changed() {
                     self.model.prompt.value = self.prompt_field.text.clone();
                 }
                 None
@@ -609,10 +620,13 @@ impl AppView {
                                     } else {
                                         chrome.text_bright
                                     })
-                                    .child(if query.is_empty() {
-                                        source.placeholder().to_string()
-                                    } else {
-                                        format!("{query}▏")
+                                    .when(query.is_empty(), |d| {
+                                        d.child(source.placeholder().to_string())
+                                    })
+                                    .when(!query.is_empty(), |d| {
+                                        d.child(
+                                            self.query_field.inline(chrome.sel_bg, chrome.sel_fg),
+                                        )
                                     }),
                             )
                             .child(list),
@@ -643,12 +657,7 @@ impl AppView {
         let p = &self.model.prompt;
         let is_confirm = p.confirm && !p.alert;
         let is_alert = p.alert;
-        let selected = self.prompt_field.selected && !p.confirm;
-        let field = if selected {
-            p.value.clone()
-        } else {
-            format!("{}▏", p.value)
-        };
+        let field = self.prompt_field.inline(chrome.sel_bg, chrome.sel_fg);
         // The key sits in a translucent cap so it reads on either button:
         // white ink on the dark Cancel, the same on the orange action.
         let key_cap = |label: &str, chrome: &crate::chrome::Chrome| {
@@ -746,11 +755,9 @@ impl AppView {
                         .border_1()
                         .border_color(chrome.control_border)
                         .text_color(chrome.text_bright)
-                        .child(
-                            div()
-                                .when(selected, |d| d.bg(chrome.sel_bg).text_color(chrome.sel_fg))
-                                .child(field),
-                        ),
+                        // The selection is drawn by the field itself now,
+                        // only over the selected part.
+                        .child(field),
                 )
                 .child(
                     div()
@@ -913,10 +920,13 @@ impl AppView {
                                 } else {
                                     chrome.text_bright
                                 })
-                                .child(if query.is_empty() {
-                                    "Filter shortcuts".to_string()
-                                } else {
-                                    format!("{query}\u{258f}")
+                                .when(query.is_empty(), |d| {
+                                    d.child("Filter shortcuts".to_string())
+                                })
+                                .when(!query.is_empty(), |d| {
+                                    d.child(
+                                        self.shortcuts_field.inline(chrome.sel_bg, chrome.sel_fg),
+                                    )
                                 }),
                         )
                         .child(list),

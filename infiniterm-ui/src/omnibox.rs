@@ -70,7 +70,11 @@ impl AppView {
                 let paste = (k.modifiers.platform && k.key == "v")
                     .then(|| cx.read_from_clipboard().and_then(|c| c.text()))
                     .flatten();
-                if let crate::field::Edit::Changed = self.omni_field.key(k, paste.as_deref()) {
+                let edit = self.omni_field.key(k, paste.as_deref());
+                if let Some(text) = edit.clipboard() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
+                }
+                if edit.changed() {
                     let text = self.omni_field.text.clone();
                     self.model.omni_type(&text);
                 }
@@ -131,10 +135,13 @@ impl AppView {
                 } else {
                     chrome.text_bright
                 })
-                .child(if placeholder {
-                    "search or enter address".to_string()
-                } else {
-                    query.clone()
+                // No caret against the placeholder: the box is empty, and a
+                // caret there suggests those words are text you typed.
+                .when(placeholder, |d| {
+                    d.child("search or enter address".to_string())
+                })
+                .when(!placeholder, |d| {
+                    d.child(self.omni_field.inline(chrome.sel_bg, chrome.sel_fg))
                 })
                 .when(!tail.is_empty(), |d| {
                     d.child(
@@ -143,10 +150,7 @@ impl AppView {
                             .text_color(chrome.sel_fg)
                             .child(tail.clone()),
                     )
-                })
-                // No caret against the placeholder: the box is empty, and a
-                // caret there suggests those words are text you typed.
-                .when(!placeholder, |d| d.child("▏")),
+                }),
         );
 
         let mut list = div().flex().flex_col();
@@ -316,7 +320,11 @@ impl AppView {
                 let paste = (k.modifiers.platform && k.key == "v")
                     .then(|| cx.read_from_clipboard().and_then(|c| c.text()))
                     .flatten();
-                if let crate::field::Edit::Changed = self.find_field.key(k, paste.as_deref()) {
+                let edit = self.find_field.key(k, paste.as_deref());
+                if let Some(text) = edit.clipboard() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
+                }
+                if edit.changed() {
                     let text = self.find_field.text.clone();
                     self.model.find_type(&text);
                 }
@@ -373,10 +381,9 @@ impl AppView {
                     } else {
                         chrome.text_bright
                     })
-                    .child(if query.is_empty() {
-                        "find in page".to_string()
-                    } else {
-                        format!("{query}▏")
+                    .when(query.is_empty(), |d| d.child("find in page".to_string()))
+                    .when(!query.is_empty(), |d| {
+                        d.child(self.find_field.inline(chrome.sel_bg, chrome.sel_fg))
                     }),
             )
             .child(

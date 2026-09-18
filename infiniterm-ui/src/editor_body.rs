@@ -888,15 +888,19 @@ impl EditorBody {
         } else {
             &mut self.replacement
         };
-        match field.key(k, paste.as_deref()) {
-            Edit::Changed => {
+        let edit = field.key(k, paste.as_deref());
+        if let Some(text) = edit.clipboard() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
+        }
+        match edit {
+            Edit::Changed | Edit::Cut(_) => {
                 self.refresh_search();
                 if self.focus == Focus::Query {
                     self.show_match();
                 }
                 self.dirty = true;
             }
-            Edit::Handled => self.dirty = true,
+            Edit::Handled | Edit::Copy(_) => self.dirty = true,
             Edit::Ignored => {}
         }
     }
@@ -1094,46 +1098,41 @@ impl EditorBody {
                 )
                 .border_widths(px(crate::chrome::HAIRLINE_PX as f32)),
             );
-            let text = if field.text.is_empty() && !active {
-                String::new()
+            // Three pieces, measured separately, so the selection's ground
+            // covers only the selected part and the caret sits where the
+            // caret is rather than at the end.
+            let (before, selected, after) = if field.text.is_empty() && !active {
+                (String::new(), String::new(), String::new())
             } else {
-                field.text.clone()
+                field.parts()
             };
-            let mut runs_color = fg;
-            if field.selected && !field.text.is_empty() {
-                let tw = crate::text::shape(window, &text, font_size, &f, fg).width;
+            let x0 = field_b.origin.x + px(FIELD_TEXT_PAD_PX as f32);
+            let ty = y + px(FIELD_ROW_INSET_PX as f32);
+            let th = row_h - px(FIELD_ROW_INSET_TOTAL_PX as f32);
+            let mut x = x0;
+            if !before.is_empty() {
+                let line = crate::text::shape(window, &before, font_size, &f, fg);
+                let _ = line.paint(point(x, ty), th, window, cx);
+                x += line.width;
+            }
+            if !selected.is_empty() {
+                let line = crate::text::shape(window, &selected, font_size, &f, sel_fg);
                 window.paint_quad(fill(
                     Bounds::new(
-                        point(
-                            field_b.origin.x + px(FIELD_TEXT_PAD_PX as f32),
-                            field_b.origin.y + px(SELECTION_BG_INSET_PX as f32),
-                        ),
+                        point(x, field_b.origin.y + px(SELECTION_BG_INSET_PX as f32)),
                         size(
-                            tw,
+                            line.width,
                             field_b.size.height - px(SELECTION_BG_INSET_TOTAL_PX as f32),
                         ),
                     ),
                     sel_bg,
                 ));
-                runs_color = sel_fg;
-            }
-            let line = crate::text::shape(window, &text, font_size, &f, runs_color);
-            let _ = line.paint(
-                point(
-                    field_b.origin.x + px(FIELD_TEXT_PAD_PX as f32),
-                    y + px(FIELD_ROW_INSET_PX as f32),
-                ),
-                row_h - px(FIELD_ROW_INSET_TOTAL_PX as f32),
-                window,
-                cx,
-            );
-            if active && !field.selected {
+                let _ = line.paint(point(x, ty), th, window, cx);
+                x += line.width;
+            } else if active {
                 window.paint_quad(fill(
                     Bounds::new(
-                        point(
-                            field_b.origin.x + px(FIELD_TEXT_PAD_PX as f32) + line.width,
-                            field_b.origin.y + px(CARET_TOP_INSET_PX as f32),
-                        ),
+                        point(x, field_b.origin.y + px(CARET_TOP_INSET_PX as f32)),
                         size(
                             px(CARET_WIDTH_PX as f32),
                             field_b.size.height - px(CARET_HEIGHT_INSET_PX as f32),
@@ -1141,6 +1140,10 @@ impl EditorBody {
                     ),
                     fg,
                 ));
+            }
+            if !after.is_empty() {
+                let line = crate::text::shape(window, &after, font_size, &f, fg);
+                let _ = line.paint(point(x, ty), th, window, cx);
             }
             if which == Focus::Query {
                 let count = match (s.current, s.matches.len()) {
