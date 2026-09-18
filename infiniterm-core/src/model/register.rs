@@ -1102,6 +1102,39 @@ mod tests {
         assert_eq!(close.hint.as_deref(), Some("Cmd W"));
     }
 
+    // Switching back to a workspace lands on the card you were working
+    // in there, not on whichever card was made first.
+    #[test]
+    fn a_workspace_remembers_which_card_was_focused() {
+        let mut h = Harness::new();
+        let ws1 = h.m.active_workspace.clone().unwrap();
+        let first = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let second = h.focused().id.clone();
+        assert_ne!(first, second);
+        // Working in the second card, leave for a new workspace.
+        h.run("workspace.new");
+        let ws2 = h.m.active_workspace.clone().unwrap();
+        assert_ne!(ws1, ws2);
+        assert_ne!(h.focused().id, second, "the new workspace has its own card");
+        // And come back.
+        h.m.show_workspace(&ws1);
+        assert_eq!(
+            h.focused().id,
+            second,
+            "back where we were, not on the first card"
+        );
+        // A remembered card that has since closed falls back to the first.
+        h.m.show_workspace(&ws2);
+        h.m.workspaces
+            .iter_mut()
+            .find(|w| w.id == ws1)
+            .unwrap()
+            .focused = Some("gone".into());
+        h.m.show_workspace(&ws1);
+        assert_eq!(h.focused().id, first);
+    }
+
     // The palette is also the way to a card by name, across workspaces:
     // every card is a row, a card elsewhere says where, and Enter switches
     // there, focuses it and fits it, which is Cmd+1 once you have arrived.

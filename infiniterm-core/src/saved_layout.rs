@@ -224,7 +224,15 @@ pub fn serialise_layout(
         "uiScale": num(ui_scale),
         "usage": usage_value(usage),
         "focusedId": focused_id,
-        "workspaces": workspaces.iter().map(|w| json!({ "id": w.id, "name": w.name, "viewport": viewport_value(&w.viewport) })).collect::<Vec<_>>(),
+        "workspaces": workspaces.iter().map(|w| {
+            let mut v = json!({ "id": w.id, "name": w.name, "viewport": viewport_value(&w.viewport) });
+            // Written only when there is one, so a file from before this
+            // field round-trips byte for byte.
+            if let (Some(f), Some(map)) = (&w.focused, v.as_object_mut()) {
+                map.insert("focused".into(), Value::String(f.clone()));
+            }
+            v
+        }).collect::<Vec<_>>(),
         "activeWorkspaceId": active_workspace_id,
         "groups": groups.iter().map(|g| json!({ "id": g.id, "name": g.name })).collect::<Vec<_>>(),
         "cards": cards.iter().map(card_value).collect::<Vec<_>>(),
@@ -361,6 +369,7 @@ fn as_workspace(v: &Value) -> Option<SavedWorkspace> {
             .unwrap_or("")
             .to_string(),
         viewport: as_viewport(w.get("viewport")),
+        focused: non_empty(w.get("focused")),
     })
 }
 
@@ -555,6 +564,7 @@ mod tests {
             id: "w1".into(),
             name: "w".into(),
             viewport: vp(0., 0., 1.),
+            focused: None,
         }]
     }
 
@@ -970,6 +980,7 @@ mod tests {
             id: "w1".into(),
             name: "humbl.ai".into(),
             viewport: vp(10., 20., 0.5),
+            focused: None,
         }];
         let text = layout_text(&serialise_layout(
             &[card()],

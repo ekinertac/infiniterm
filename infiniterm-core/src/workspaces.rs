@@ -7,6 +7,11 @@ pub struct Workspace {
     pub id: String,
     pub name: String,
     pub viewport: Viewport,
+    /// The card that was focused when this workspace was last left, so
+    /// coming back lands where you were. Without it a switch focused the
+    /// first card in the list, which is whichever one happened to be made
+    /// first and rarely the one you were working in.
+    pub focused: Option<String>,
 }
 pub const INITIAL_VIEWPORT: Viewport = Viewport {
     x: 0.,

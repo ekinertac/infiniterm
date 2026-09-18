@@ -763,6 +763,7 @@ impl Model {
             id: id.clone(),
             name,
             viewport: INITIAL_VIEWPORT,
+            focused: None,
         });
         self.dirty_layout = true;
         id
@@ -777,28 +778,45 @@ impl Model {
             return;
         }
         let vp = self.viewport;
+        // What the workspace being left remembers: where the view was, and
+        // which card had the focus, if it was one of its own.
+        let leaving_focus = self
+            .focused()
+            .filter(|c| Some(c.workspace_id.as_str()) == self.active_workspace.as_deref())
+            .map(|c| c.id.clone());
         if let Some(leaving) = self
             .active_workspace
             .clone()
             .and_then(|a| self.workspaces.iter_mut().find(|w| w.id == a))
         {
             leaving.viewport = vp;
+            leaving.focused = leaving_focus;
         }
         let Some(entering) = self.workspaces.iter().find(|w| w.id == id) else {
             return;
         };
         self.viewport = entering.viewport;
+        let remembered = entering.focused.clone();
         self.active_workspace = Some(id.to_string());
         self.framing = false;
         self.effects.push(Effect::CancelAnimation);
         let here = self.focused().is_some_and(|c| c.workspace_id == id);
         if !here {
-            let first = self
-                .cards
-                .iter()
-                .find(|c| c.workspace_id == id)
-                .map(|c| c.id.clone());
-            self.set_focus(first.as_deref());
+            // The card that was focused here last time, if it still is
+            // here; else the first one, as before.
+            let back = remembered
+                .filter(|f| {
+                    self.cards
+                        .iter()
+                        .any(|c| &c.id == f && c.workspace_id == id)
+                })
+                .or_else(|| {
+                    self.cards
+                        .iter()
+                        .find(|c| c.workspace_id == id)
+                        .map(|c| c.id.clone())
+                });
+            self.set_focus(back.as_deref());
         }
         self.selection.maximized = false;
         self.dirty_layout = true;
