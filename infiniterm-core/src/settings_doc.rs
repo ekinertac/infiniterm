@@ -10,7 +10,11 @@
 //! `undocumented` is the guard: a new setting cannot ship without a line
 //! saying what it does. `config.rs` owns the values; the settings writer in
 //! the backend calls `render_settings_default` at startup.
-use crate::config::{default_config, Config};
+//!
+//! The file is FLAT: one `"terminal.fontSize": 14` per line, VS Code's
+//! shape, so an override is one line copied across and nothing to nest. A
+//! group's own doc line (`terminal`, `cards`) heads its run of keys.
+use crate::config::{default_config, flatten, Config};
 use serde_json::Value;
 
 /// What each setting is for, by dotted key. Every leaf in the defaults has
@@ -308,44 +312,60 @@ const HEADER: &[&str] = &[
     "",
     "THIS FILE IS REWRITTEN EVERY LAUNCH. Editing it does nothing.",
     "Put your changes in settings.json beside it, which overrides what is here and",
-    "is never touched by an upgrade. Copy a line across and change it.",
+    "is never touched by an upgrade. Copy a line across and change it: the keys",
+    "are flat, so \"terminal.fontSize\": 16 is a whole override.",
     "",
     "Comments and trailing commas are allowed in both files.",
 ];
 
-fn render(value: &Value, indent: &str, path: &str) -> String {
+/// One JSON value, printed the way JSON.stringify prints it: `14`, not
+/// `14.0`. The config holds f64 everywhere and a file people copy from must
+/// not suggest a decimal where the reference writes a whole number.
+fn scalar(value: &Value) -> String {
+    match value.as_f64() {
+        Some(n) => n.to_string(),
+        None => value.to_string(),
+    }
+}
+
+/// The settings as flat dotted keys, each under its comment, with a group's
+/// own comment heading its first key and a blank line between entries so
+/// the file reads as sections rather than a wall.
+fn render(value: &Value) -> String {
     let Some(map) = value.as_object() else {
-        // Numbers print the way JSON.stringify prints them: `14`, not `14.0`.
-        // The config holds f64 everywhere and a file people copy from must
-        // not suggest a decimal where the reference writes a whole number.
-        return match value.as_f64() {
-            Some(n) => n.to_string(),
-            None => value.to_string(),
-        };
+        return scalar(value);
     };
-    let inner: Vec<String> = map
+    let flat = flatten(map);
+    let mut seen_groups: Vec<String> = vec![];
+    let inner: Vec<String> = flat
         .iter()
         .enumerate()
-        .map(|(i, (k, v))| {
-            let key = if path.is_empty() {
-                k.clone()
+        .map(|(i, (key, v))| {
+            let mut comment = String::new();
+            if let Some((group, _)) = key.rsplit_once('.') {
+                if !seen_groups.iter().any(|g| g == group) {
+                    seen_groups.push(group.to_string());
+                    for line in doc(group) {
+                        comment.push_str(&format!("  // {line}\n"));
+                    }
+                    if !doc(group).is_empty() {
+                        comment.push_str("  //\n");
+                    }
+                }
+            }
+            for line in doc(key) {
+                comment.push_str(&format!("  // {line}\n"));
+            }
+            let spacer = if !comment.is_empty() && i > 0 {
+                "\n"
             } else {
-                format!("{path}.{k}")
+                ""
             };
-            let lines = doc(&key);
-            // A blank line before each commented entry, except the first, so
-            // the file reads as sections rather than a wall.
-            let spacer = if !lines.is_empty() && i > 0 { "\n" } else { "" };
-            let comment: String = lines
-                .iter()
-                .map(|line| format!("{indent}  // {line}\n"))
-                .collect();
-            let comma = if i < map.len() - 1 { "," } else { "" };
-            let child = render(v, &format!("{indent}  "), &key);
-            format!("{spacer}{comment}{indent}  \"{k}\": {child}{comma}")
+            let comma = if i < flat.len() - 1 { "," } else { "" };
+            format!("{spacer}{comment}  \"{key}\": {}{comma}", scalar(v))
         })
         .collect();
-    format!("{{\n{}\n{indent}}}", inner.join("\n"))
+    format!("{{\n{}\n}}", inner.join("\n"))
 }
 
 /// The full text of `settings.default.json`.
@@ -361,7 +381,7 @@ pub fn render_settings_default(config: &Config) -> String {
         })
         .collect();
     let value = serde_json::to_value(config).expect("config serialises");
-    format!("{}\n{}\n", header.join("\n"), render(&value, "", ""))
+    format!("{}\n{}\n", header.join("\n"), render(&value))
 }
 
 /// The defaults file as shipped.
@@ -401,15 +421,10 @@ mod tests {
         );
     }
 
-    // It has to be parseable by the same reader the user's file goes through.
-    #[test]
-    fn parses_back_to_exactly_the_defaults() {
-        // Typed, because a Value compares `14` and `14.0` as different numbers.
-        let parsed: Config =
-            serde_json::from_value(parse_jsonc(&default_settings_text()).unwrap()).unwrap();
-        assert_eq!(parsed, default_config());
-    }
-
+    // It has to be parseable by the same reader the user's file goes
+    // through, and come back as exactly the defaults. Through `merge_config`,
+    // not serde: the file is flat and Config is not, and typed, because a
+    // Value compares `14` and `14.0` as different numbers.
     #[test]
     fn round_trips_through_the_real_merge() {
         assert_eq!(
@@ -437,8 +452,8 @@ mod tests {
     fn is_rendered_from_the_defaults_so_a_value_cannot_drift_from_the_code() {
         let text = default_settings_text();
         let d = default_config();
-        assert!(text.contains(&format!("\"fontSize\": {}", d.terminal.font_size)));
-        assert!(text.contains(&format!("\"showFps\": {}", d.ui.show_fps)));
+        assert!(text.contains(&format!("\"terminal.fontSize\": {}", d.terminal.font_size)));
+        assert!(text.contains(&format!("\"ui.showFps\": {}", d.ui.show_fps)));
     }
 
     // Native check: f64 defaults render as JSON.stringify would, so the file
@@ -446,9 +461,24 @@ mod tests {
     #[test]
     fn whole_numbers_render_without_a_decimal_point() {
         let text = default_settings_text();
-        assert!(text.contains("\"fontSize\": 14,"));
-        assert!(text.contains("\"scrollback\": 10000,"));
-        assert!(text.contains("\"sessionBuffer\": 4,\n"));
-        assert!(text.contains("\"lineHeight\": 1.2,"));
+        assert!(text.contains("\"terminal.fontSize\": 14,"));
+        assert!(text.contains("\"terminal.scrollback\": 10000,"));
+        assert!(text.contains("\"terminal.sessionBuffer\": 4,\n"));
+        assert!(text.contains("\"terminal.lineHeight\": 1.2,"));
+    }
+
+    // Flat: no key opens a group, and a group's doc heads its first key.
+    #[test]
+    fn is_flat_with_the_group_comment_over_its_first_key() {
+        let text = default_settings_text();
+        assert!(!text.contains("\"terminal\": {"));
+        assert!(!text.contains("\"ui\": {"));
+        let group = text.find("// New cards: how big").unwrap();
+        let first = text.find("\n  \"cards.").unwrap();
+        assert!(group < first && first - group < 400, "{group} {first}");
+        // The whole thing parses as one flat object.
+        let parsed = parse_jsonc(&text).unwrap();
+        assert!(parsed.as_object().unwrap().keys().all(|k| !k.is_empty()));
+        assert!(parsed.get("terminal.fontSize").is_some());
     }
 }

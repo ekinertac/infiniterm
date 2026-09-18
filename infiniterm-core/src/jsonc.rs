@@ -115,37 +115,29 @@ pub fn parse_jsonc(text: &str) -> Result<Value, serde_json::Error> {
 }
 
 /// Replaces one value in JSON text, leaving everything else byte for byte.
-/// `path` may name one level of nesting (`ui.showFps`). `None` when nothing
-/// would change, so writing the value already there touches no file, and
-/// when the text has no object to edit.
+/// `path` is a setting's dotted name (`ui.showFps`). A file that already
+/// holds it, flat or under a group (the shape before flat keys), has that
+/// value replaced where it is; a file without it gets the FLAT key, so
+/// nothing writes the nested shape any more. `None` when nothing would
+/// change, so writing the value already there touches no file, and when
+/// the text has no object to edit.
 pub fn patch_json_text(text: &str, path: &str, value: &Value) -> Option<String> {
     let mask = strip_comments(text);
-    let (head, tail) = match path.split_once('.') {
-        Some((h, t)) => (h, Some(t)),
-        None => (path, None),
-    };
     let encoded = value.to_string();
     let object = find_object(&mask, 0)?;
-    let outer = find_key(&mask, object, head);
-
-    let Some(tail) = tail else {
-        let Some(outer) = outer else {
-            return Some(insert_key(text, &mask, object, head, &encoded));
-        };
-        return replace_value(text, outer, &encoded);
-    };
-
-    // Nested: the parent must exist and be an object, or there is nothing
-    // to descend into and the whole group is written fresh.
-    let Some(outer) = outer else {
-        let group = format!("{{ {}: {} }}", Value::String(tail.into()), encoded);
-        return Some(insert_key(text, &mask, object, head, &group));
-    };
-    let inner = find_object(&mask, outer.start)?;
-    match find_key(&mask, inner, tail) {
-        None => Some(insert_key(text, &mask, inner, tail, &encoded)),
-        Some(leaf) => replace_value(text, leaf, &encoded),
+    if let Some(flat) = find_key(&mask, object, path) {
+        return replace_value(text, flat, &encoded);
     }
+    if let Some((head, tail)) = path.split_once('.') {
+        if let Some(outer) = find_key(&mask, object, head) {
+            if let Some(inner) = find_object(&mask, outer.start) {
+                if let Some(leaf) = find_key(&mask, inner, tail) {
+                    return replace_value(text, leaf, &encoded);
+                }
+            }
+        }
+    }
+    Some(insert_key(text, &mask, object, path, &encoded))
 }
 
 fn replace_value(text: &str, span: Span, encoded: &str) -> Option<String> {
@@ -442,17 +434,21 @@ mod tests {
         assert_eq!(p(&after), json!({"ui": {"showFps": false}}));
     }
 
+    // A missing setting is written FLAT, whatever else the file holds; a
+    // flat key already there is the one replaced.
     #[test]
-    fn adds_a_nested_key_and_the_group_when_it_is_missing() {
+    fn adds_a_missing_key_flat_and_replaces_a_flat_one() {
         let a = patch_json_text(
             "{\n  \"ui\": {\n    \"a\": 1\n  }\n}",
             "ui.showFps",
             &json!(false),
         )
         .unwrap();
-        assert_eq!(p(&a), json!({"ui": {"a": 1, "showFps": false}}));
+        assert_eq!(p(&a), json!({"ui": {"a": 1}, "ui.showFps": false}));
         let b = patch_json_text("{\n}", "ui.showFps", &json!(false)).unwrap();
-        assert_eq!(p(&b), json!({"ui": {"showFps": false}}));
+        assert_eq!(p(&b), json!({"ui.showFps": false}));
+        let c = patch_json_text("{ \"ui.showFps\": true }", "ui.showFps", &json!(false)).unwrap();
+        assert_eq!(p(&c), json!({"ui.showFps": false}));
     }
 
     // Writing the value that is already there must touch no file.

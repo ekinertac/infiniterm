@@ -7,6 +7,13 @@
 //! backfill: a new setting reaches an existing install through a file nobody
 //! edits.
 //!
+//! Keys are FLAT and dotted, VS Code's shape: `"terminal.decoyCommand": "top"`
+//! is the whole override, one line copied from the defaults file. The nested
+//! shape the files had first (`"terminal": { "decoyCommand": ... }`) is still
+//! read, because every install from before 2026-09-18 has one: `flatten`
+//! turns it into dotted keys before anything looks, and a key given both
+//! ways takes the flat one. Nothing writes the nested shape any more.
+//!
 //! Every value has a default and a partial file falls back rather than
 //! failing; out-of-range numbers CLAMP rather than reject, because a font
 //! size of 2000 is a typo and throwing away every valid setting beside it is
@@ -287,18 +294,56 @@ fn one<T: Copy>(value: Option<&Value>, fallback: T, allowed: &[(&str, T)]) -> T 
         .map_or(fallback, |(_, v)| *v)
 }
 
-/// The group `key` of `raw` as an object, or an empty one.
-fn group(raw: &serde_json::Map<String, Value>, key: &str) -> serde_json::Map<String, Value> {
-    raw.get(key)
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default()
+/// Every setting in `raw` by its dotted name, whichever shape wrote it.
+/// Nested objects are walked into dotted keys; a key that already holds a
+/// dot is taken as it is and, entered last, wins over the same setting
+/// spelled nested. Arrays are values (`browser.engines`), never walked.
+pub fn flatten(raw: &serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
+    fn walk(prefix: &str, value: &Value, out: &mut serde_json::Map<String, Value>) {
+        match value.as_object() {
+            Some(map) => {
+                for (k, v) in map {
+                    let key = if prefix.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{prefix}.{k}")
+                    };
+                    walk(&key, v, out);
+                }
+            }
+            None => {
+                out.insert(prefix.to_string(), value.clone());
+            }
+        }
+    }
+    let mut out = serde_json::Map::new();
+    for (k, v) in raw.iter().filter(|(k, _)| !k.contains('.')) {
+        walk(k, v, &mut out);
+    }
+    for (k, v) in raw.iter().filter(|(k, _)| k.contains('.')) {
+        out.insert(k.clone(), v.clone());
+    }
+    out
+}
+
+/// The settings under `prefix.` in a flattened file, by their short name,
+/// so a section's fields read as `t.get("shell")`.
+fn group(flat: &serde_json::Map<String, Value>, prefix: &str) -> serde_json::Map<String, Value> {
+    let head = format!("{prefix}.");
+    flat.iter()
+        .filter_map(|(k, v)| {
+            k.strip_prefix(&head)
+                .map(|rest| (rest.to_string(), v.clone()))
+        })
+        .collect()
 }
 
 /// Merges a parsed file over the defaults, clamping anything out of range.
 pub fn merge_config(raw: &Value) -> Config {
     let d = default_config();
-    let Some(r) = raw.as_object() else { return d };
+    let Some(raw) = raw.as_object() else { return d };
+    let flat = flatten(raw);
+    let r = &flat;
     let t = group(r, "terminal");
     let u = group(r, "ui");
     let c = group(r, "cards");
@@ -584,6 +629,25 @@ mod tests {
             m(json!({"theme": "Dracula"})).theme.as_deref(),
             Some("Dracula")
         );
+    }
+
+    // The file's shape is the user's business: flat dotted keys are what
+    // the defaults file shows, the nested shape is what older files have,
+    // and a setting written both ways takes the flat one.
+    #[test]
+    fn flat_and_nested_keys_read_alike_and_flat_wins() {
+        let flat = m(json!({"terminal.fontSize": 18, "ui.showFps": true}));
+        assert_eq!(flat.terminal.font_size, 18.);
+        assert!(flat.ui.show_fps);
+        let nested = m(json!({"terminal": {"fontSize": 18}, "ui": {"showFps": true}}));
+        assert_eq!(nested, flat);
+        let both = m(json!({"terminal": {"fontSize": 18}, "terminal.fontSize": 20}));
+        assert_eq!(both.terminal.font_size, 20.);
+        // An array is a value, not a group to walk into.
+        let engines = m(json!({"browser.engines": [
+            {"keyword": "g", "name": "G", "searchUrl": "https://g/?q=%s"}
+        ]}));
+        assert_eq!(engines.browser.engines.len(), 1);
     }
 
     #[test]

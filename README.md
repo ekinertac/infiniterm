@@ -126,7 +126,16 @@ keybindings.default.json   every binding, commented
 
 The `.default` files are rewritten on every launch, which is what makes them read-only in practice. Read them to learn what exists, copy a line across to change it. That split is also why an upgrade never touches your files: new settings appear in the defaults, not in yours.
 
-The `terminal` block covers the shell, cursor and font; `cards` sets how big a new card is and whether it inherits the active card's directory; `canvas` covers zoom sensitivity and pan momentum; `editor` the selection colours, line wash and wrapping; `browser` the page zoom; `ui` chrome sizes, dimming, animation, the centred zoomed-out name and the frame counter. `settings.default.json` is the documentation.
+Keys are flat and dotted, the way VS Code writes them, so an override is one line:
+
+```jsonc
+{
+  "terminal.fontSize": 16,
+  "ui.showFps": true
+}
+```
+
+The `terminal.` keys cover the shell, cursor, font and the decoy; `cards.` how big a new card is and whether it inherits the active card's directory; `canvas.` zoom sensitivity and pan momentum; `editor.` the selection colours, line wash and wrapping; `browser.` the page zoom and search; `ui.` chrome sizes, dimming, animation and the frame counter. A file in the older nested shape (`"terminal": { "fontSize": 16 }`) still reads. `settings.default.json` is the documentation.
 
 Comments and trailing commas work in both. `Cmd + ,` opens settings and `Cmd + Shift + ,` keybindings, each as a pair of editor cards on the canvas. Both apply on save without a restart.
 
