@@ -280,6 +280,16 @@ impl TerminalBody {
         }
     }
 
+    /// A session that died with the machine: its ring from disk, a line
+    /// saying so, and every mode the dead program left on turned off
+    /// (alternate screen, mouse, bracketed paste, hidden cursor, kitty
+    /// flags), or the fresh shell would type into Claude's leftover screen.
+    pub fn feed_lost_session(&mut self, ring: &[u8], when: &str) {
+        self.feed_replay(ring);
+        self.feed_replay(lost_session_tail(when).as_bytes());
+        self.grid.forget_kitty_keys();
+    }
+
     fn drain_events(&mut self) {
         for event in self.grid.take_events() {
             match event {
@@ -1095,6 +1105,15 @@ fn under_hover(hover: Option<(usize, usize)>, r: usize, start: usize, len: usize
 /// have hidden any TUI's full-width highlight on an empty row.
 fn row_paints_nothing(row: &infiniterm_term::grid::Row) -> bool {
     row.text.trim().is_empty() && row.runs.iter().all(|r| r.bg.is_none())
+}
+
+/// What is appended after a dead session's ring. The order matters: the
+/// alternate screen is left first so the notice lands on the primary
+/// screen, and the reset of attributes comes last so the shell starts clean.
+pub fn lost_session_tail(when: &str) -> String {
+    format!(
+        "\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[<u\x1b[?25h\x1b[0m\r\n\x1b[2m[session lost {when}; this is a new shell]\x1b[0m\r\n"
+    )
 }
 
 #[cfg(test)]

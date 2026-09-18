@@ -326,6 +326,31 @@ fn a_reattach_replays_what_was_missed() {
     stop(dir.path(), "b", &mut again);
 }
 
+// What survives a reboot: the ring reaches the disk beside the socket
+// within the snapshot interval, whole (renamed over, never partial), and a
+// shell that ends takes it with it, because a finished session has nothing
+// to salvage. `DEADLINE` covers the two-second interval.
+#[test]
+fn the_ring_is_written_to_disk_and_removed_on_exit() {
+    let dir = tempdir();
+    let ring = dir.path().join("r.ring");
+    let mut c = Conn::new(start(dir.path(), "r"));
+    c.recv_matching(|f| matches!(f, Frame::Hello { .. }));
+    c.send(&Frame::Data(b"echo marker-77\n".to_vec()));
+    c.collect_output("marker-77");
+    assert!(
+        wait_until(|| std::fs::read(&ring).is_ok_and(|b| {
+            String::from_utf8_lossy(&b).contains("marker-77")
+        })),
+        "the ring landed on disk with the output in it"
+    );
+    assert!(!dir.path().join("r.ring.tmp").exists(), "renamed, not left half-written");
+
+    c.send(&Frame::Data(b"exit\n".to_vec()));
+    assert!(wait_until(|| !ring.exists()), "a finished shell leaves no ring");
+    assert!(wait_until(|| !dir.path().join("r.sock").exists()));
+}
+
 #[test]
 fn kill_ends_the_child_and_removes_the_socket() {
     let dir = tempdir();

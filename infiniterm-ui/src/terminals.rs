@@ -159,6 +159,18 @@ impl AppView {
                     }
                     continue;
                 }
+                // The session is gone (a reboot, a power cut) but its daemon
+                // may have left the ring on disk: what was on screen comes
+                // back above the new shell, with a line saying so, instead
+                // of 23 cards of a bare prompt. `card.session` is overwritten
+                // below once the new pane reports its id.
+                if let Some((ring, when)) = card
+                    .session
+                    .as_deref()
+                    .and_then(|s| self.backend.pty.take_ring(s))
+                {
+                    body.feed_lost_session(&ring, &when);
+                }
                 // `terminal.shell` when set, else the backend's $SHELL; a card
                 // made to run one program runs that instead.
                 let command = card.command.clone().or_else(|| shell.clone());

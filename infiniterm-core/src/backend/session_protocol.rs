@@ -259,6 +259,9 @@ pub struct Ring {
     /// Whether anything has been dropped from the front. Until it has, the
     /// preamble is still IN the ring and replaying both would double it.
     trimmed: bool,
+    /// Bumped by every push. The snapshot thread in `iftd` compares it to
+    /// the generation it last wrote, so an idle card writes nothing.
+    generation: u64,
 }
 
 impl Ring {
@@ -268,10 +271,17 @@ impl Ring {
             cap,
             preamble: Vec::new(),
             trimmed: false,
+            generation: 0,
         }
     }
 
+    /// How many pushes so far; equal generations mean an identical replay.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn push(&mut self, bytes: &[u8]) {
+        self.generation += 1;
         if self.preamble.len() < PREAMBLE_BYTES {
             let room = PREAMBLE_BYTES - self.preamble.len();
             self.preamble

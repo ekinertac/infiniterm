@@ -48,6 +48,15 @@ const INITIAL_ROWS: u16 = 24;
 /// of that config so `iftd` is a complete, testable program on its own.
 const DEFAULT_BUFFER_MIB: usize = 4;
 
+/// How often the ring is written to `<id>.ring` beside the socket, when
+/// it changed. This is what survives a power cut: the daemon keeps the
+/// shell across an app restart, but nothing keeps it across a reboot, and
+/// the app replays this file into a card whose session is gone so 23 cards
+/// do not all come back as a bare prompt. Two seconds bounds what a cut
+/// costs; a busy card rewrites at most its ring every two seconds, an idle
+/// one nothing. fsync'd, or the page cache keeps it from the disk.
+const SNAPSHOT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// How long the child waiter thread will wait to tell an attached client
 /// the pane exited before giving up and cleaning up anyway. The child is
 /// already dead by the time this fires; a client too stalled to take a few
@@ -345,6 +354,31 @@ fn run(listener: UnixListener, opts: Options) -> ! {
         });
     }
 
+    // snapshot: the ring to disk, tmp then rename so a reader never sees
+    // half a file. See SNAPSHOT_INTERVAL. The normal exit below removes
+    // the file: a shell that ended has nothing to salvage.
+    let ring_path = opts.socket.with_extension("ring");
+    {
+        let ring = ring.clone();
+        let ring_path = ring_path.clone();
+        std::thread::spawn(move || {
+            let mut written = 0u64;
+            loop {
+                std::thread::sleep(SNAPSHOT_INTERVAL);
+                let (generation, bytes) = {
+                    let r = ring.lock().unwrap();
+                    if r.generation() == written {
+                        continue;
+                    }
+                    (r.generation(), r.replay())
+                };
+                if write_snapshot(&ring_path, &bytes).is_ok() {
+                    written = generation;
+                }
+            }
+        });
+    }
+
     // child waiter: the one thread that owns `child`, so a long wait never
     // blocks the reader or the accept loop. It is the sole place the
     // process actually ends, so a socket left bound with no cleanup is only
@@ -353,6 +387,7 @@ fn run(listener: UnixListener, opts: Options) -> ! {
         let client = client.clone();
         let socket_path = opts.socket.clone();
         let meta_path = meta_path.clone();
+        let ring_path = ring_path.clone();
         std::thread::spawn(move || {
             let code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
             if let Some(slot) = client.lock().unwrap().take() {
@@ -369,6 +404,7 @@ fn run(listener: UnixListener, opts: Options) -> ! {
             }
             let _ = std::fs::remove_file(&socket_path);
             let _ = std::fs::remove_file(&meta_path);
+            let _ = std::fs::remove_file(&ring_path);
             std::process::exit(0);
         });
     }
@@ -481,6 +517,16 @@ fn forward_to_client(client: &Arc<Mutex<Option<ClientSlot>>>, frame: &Frame) {
 /// child; the waiter thread does the actual exit and cleanup once
 /// `child.wait()` returns). Ends on EOF, a protocol error, or `Kill`.
 #[allow(clippy::too_many_arguments)]
+/// The ring to `path`, whole or not at all: written beside it, synced, then
+/// renamed over it.
+fn write_snapshot(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("ring.tmp");
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_data()?;
+    std::fs::rename(&tmp, path)
+}
+
 fn run_client_reader(
     mut stream: UnixStream,
     epoch: u64,

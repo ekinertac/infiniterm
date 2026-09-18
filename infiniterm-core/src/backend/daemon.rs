@@ -370,6 +370,42 @@ impl DaemonBackend {
                 let _ = s.write_all(&Frame::Kill.encode());
             }
         }
+        // A dead session's ring that no saved card will ask for (the card
+        // was closed while the app was down) is a leftover, not scrollback.
+        if let Ok(entries) = std::fs::read_dir(&self.sessions_dir) {
+            for path in entries.flatten().map(|e| e.path()) {
+                if path.extension().is_none_or(|e| e != "ring") {
+                    continue;
+                }
+                let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if !claimed.iter().any(|c| c == id) {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
+
+    /// The scrollback a dead session's daemon last wrote to disk
+    /// (`<id>.ring`, see `iftd`'s SNAPSHOT_INTERVAL), taken: the file is
+    /// removed, so a card replays it once and a later launch does not
+    /// stack a second copy under the new shell. With it, when the file was
+    /// last written, local time, which is within two seconds of the last
+    /// output the card saw. `None` for a live session (its daemon still
+    /// has the ring and `adopt` gets it over the socket) and for a session
+    /// that left nothing.
+    pub fn take_ring(&self, session_id: &str) -> Option<(Vec<u8>, String)> {
+        let path = self.sessions_dir.join(format!("{session_id}.ring"));
+        let bytes = std::fs::read(&path).ok()?;
+        let when = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .map(|t| {
+                chrono::DateTime::<chrono::Local>::from(t)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string()
+            })
+            .unwrap_or_default();
+        let _ = std::fs::remove_file(&path);
+        (!bytes.is_empty()).then_some((bytes, when))
     }
 
     /// Drops every socket this backend holds and returns; it sends nothing
@@ -652,6 +688,39 @@ mod tests {
             !dir.exists(),
             "refused before the sessions dir is even created, let alone iftd run"
         );
+    }
+
+    // The ring outlives the daemon so a reboot leaves the scrollback; it is
+    // taken once, and one no card claims is swept with the orphans.
+    #[test]
+    fn a_dead_sessions_ring_is_taken_once_and_unclaimed_ones_are_swept() {
+        let dir = std::env::temp_dir().join(format!("dmn-r-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (backend, _rx) = DaemonBackend::new(dir.clone(), 4);
+        std::fs::write(dir.join("aaaa.ring"), b"old output\r\n").unwrap();
+        std::fs::write(dir.join("bbbb.ring"), b"nobody's").unwrap();
+        std::fs::write(dir.join("cccc.ring"), b"").unwrap();
+
+        backend.kill_orphans(&["aaaa".to_string()]);
+        assert!(
+            dir.join("aaaa.ring").exists(),
+            "claimed, kept for the replay"
+        );
+        assert!(!dir.join("bbbb.ring").exists(), "unclaimed, swept");
+
+        let (bytes, when) = backend.take_ring("aaaa").unwrap();
+        assert_eq!(bytes, b"old output\r\n");
+        assert_eq!(when.len(), "2026-09-18 20:41".len(), "{when}");
+        assert_eq!(backend.take_ring("aaaa"), None, "taken means gone");
+        assert!(!dir.join("aaaa.ring").exists());
+        std::fs::write(dir.join("cccc.ring"), b"").unwrap();
+        assert_eq!(
+            backend.take_ring("cccc"),
+            None,
+            "an empty ring is nothing to show"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

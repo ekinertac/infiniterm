@@ -166,6 +166,15 @@ impl Panes {
     }
 
     /// Which sessions are still there to adopt.
+    /// A dead session's scrollback from disk, daemon backend only: the
+    /// local pty has no daemon to have written one and tmux keeps its own.
+    pub fn take_ring(&self, session_id: &str) -> Option<(Vec<u8>, String)> {
+        match self {
+            Panes::Daemon(b) => b.take_ring(session_id),
+            Panes::Local(_) | Panes::Tmux(_) => None,
+        }
+    }
+
     pub fn live_sessions(&self) -> Vec<String> {
         match self {
             Panes::Local(_) => vec![],

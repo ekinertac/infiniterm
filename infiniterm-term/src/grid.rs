@@ -325,6 +325,12 @@ impl Grid {
     /// were watching: an adopted session, whose startup is out of the ring.
     /// Only ever turns it ON. The live rules still turn it off when the
     /// program leaves, so a wrong seed costs one keystroke and heals.
+    /// The program that asked is gone (its session died with a reboot and
+    /// a new shell is starting): Shift+Enter must not send `CSI u` to zsh.
+    pub fn forget_kitty_keys(&mut self) {
+        self.kitty_asked = false;
+    }
+
     pub fn assume_kitty_keys(&mut self) {
         self.kitty_asked = true;
     }
