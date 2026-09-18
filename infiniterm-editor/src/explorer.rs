@@ -28,6 +28,11 @@ pub struct Row {
 pub enum TreeAction {
     None,
     Open(String),
+    /// The cursor moved onto a file without opening it. The editor shows a
+    /// picture at once on this, so a folder of screenshots is walked with
+    /// the arrows alone; text waits for Enter, since a preview of it would
+    /// mean a buffer swapped under the reader every keystroke.
+    Landed(String),
     /// Escape: back to the buffer.
     Close,
 }
@@ -109,6 +114,7 @@ impl Tree {
         let rows = self.rows();
         let last = rows.len().saturating_sub(1);
         let row = rows.get(self.cursor).cloned();
+        let was = self.cursor;
         match key {
             "down" => self.cursor = (self.cursor + 1).min(last),
             "up" => self.cursor = self.cursor.saturating_sub(1),
@@ -134,7 +140,12 @@ impl Tree {
             "escape" => return TreeAction::Close,
             _ => {}
         }
-        TreeAction::None
+        match rows.get(self.cursor) {
+            Some(r) if self.cursor != was && !r.entry.is_dir => {
+                TreeAction::Landed(r.entry.path.clone())
+            }
+            _ => TreeAction::None,
+        }
     }
 }
 
@@ -168,7 +179,10 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[1].entry.name, "main.rs");
         assert_eq!(rows[1].depth, 1);
-        t.key("down", &mut list);
+        assert_eq!(
+            t.key("down", &mut list),
+            TreeAction::Landed("/r/src/main.rs".into())
+        );
         assert_eq!(
             t.key("enter", &mut list),
             TreeAction::Open("/r/src/main.rs".into())
@@ -186,10 +200,11 @@ mod tests {
         let mut list = fs();
         let mut t = Tree::new("/r");
         t.ensure_root(&mut list);
-        t.key("up", &mut list);
+        assert_eq!(t.key("up", &mut list), TreeAction::None);
         assert_eq!(t.cursor, 0);
         t.key("down", &mut list);
-        t.key("down", &mut list);
+        // At the end already: the cursor did not move, so nothing landed.
+        assert_eq!(t.key("down", &mut list), TreeAction::None);
         t.key("down", &mut list);
         assert_eq!(t.cursor, 1);
         assert_eq!(

@@ -1032,7 +1032,26 @@ impl EditorBody {
                 BodyAction::None
             }
             TreeAction::Open(path) => self.open_from_tree(path, now),
+            TreeAction::Landed(path) => {
+                self.preview_from_tree(path, now);
+                BodyAction::None
+            }
         }
+    }
+
+    /// A picture the tree's cursor landed on is shown at once, the tree
+    /// keeping the focus so the next arrow shows the next one. Text is
+    /// not: it waits for Enter. Unsaved text is never swapped out from
+    /// under the reader for a preview.
+    fn preview_from_tree(&mut self, path: String, now: f64) {
+        if !Language::is_image(&path) || (self.is_dirty() && self.path.is_some()) {
+            return;
+        }
+        self.load(&path, false, now);
+        self.events.push(EditorEvent::PathChanged {
+            path,
+            cwd: self.cwd.clone(),
+        });
     }
 
     /// Keys with a possible action for the frame (a file opened beside).
@@ -2040,6 +2059,24 @@ mod tests {
         assert!(!b.is_dirty());
         b.save(&path, 1.);
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
+
+        // Walking the tree shows each picture the cursor lands on without
+        // leaving the tree; a text file waits for Enter.
+        std::fs::write(dir.join("a.png"), bytes).unwrap();
+        std::fs::write(dir.join("notes.txt"), "hi").unwrap();
+        let mut b = body();
+        b.show_tree(&dir.to_string_lossy());
+        assert_eq!(b.focus, Focus::Tree);
+        let down = Keystroke::parse("down").unwrap();
+        b.key_tree(&down, 0.); // a.png -> notes.txt
+        assert_eq!(b.path, None);
+        b.key_tree(&down, 0.); // notes.txt -> shot.png
+        assert_eq!(
+            b.path.as_deref(),
+            Some(dir.join("shot.png").to_str().unwrap())
+        );
+        assert_eq!(b.focus, Focus::Tree);
+        assert!(b.image.is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
