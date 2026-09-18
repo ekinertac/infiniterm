@@ -20,6 +20,11 @@ pub enum Source {
     SlotKind,
 }
 
+/// Prefixes that tell a card row and a workspace row apart from a command
+/// id in the Commands source. A command id never contains a colon.
+pub const CARD_ROW: &str = "card:";
+pub const WORKSPACE_ROW: &str = "workspace:";
+
 impl Source {
     pub fn id(self) -> &'static str {
         match self {
@@ -113,7 +118,7 @@ impl Model {
                         chords.push((id, format_chord(chord)));
                     }
                 }
-                command_labels
+                let mut items: Vec<PaletteItem> = command_labels
                     .iter()
                     .filter(|(id, _)| *id != "app.palette")
                     .map(|(id, label)| PaletteItem {
@@ -121,7 +126,37 @@ impl Model {
                         label: label.to_string(),
                         hint: chords.iter().find(|(i, _)| i == id).map(|(_, c)| c.clone()),
                     })
-                    .collect()
+                    .collect();
+                // Every card and every workspace, after the commands, so
+                // the palette is also the way to a card by name. Live from
+                // the model each time, never stale. A card in another
+                // workspace says which, because choosing it switches there.
+                let here = self.active_workspace.as_deref();
+                for card in &self.cards {
+                    let mut label = format!("Card: {}", self.label_of(card));
+                    if Some(card.workspace_id.as_str()) != here {
+                        if let Some(ws) = self.workspaces.iter().find(|w| w.id == card.workspace_id)
+                        {
+                            label.push_str(&format!(" \u{b7} {}", ws.name));
+                        }
+                    }
+                    items.push(PaletteItem {
+                        id: format!("{CARD_ROW}{}", card.id),
+                        label,
+                        hint: None,
+                    });
+                }
+                for ws in &self.workspaces {
+                    if Some(ws.id.as_str()) == here {
+                        continue;
+                    }
+                    items.push(PaletteItem {
+                        id: format!("{WORKSPACE_ROW}{}", ws.id),
+                        label: format!("Workspace: {}", ws.name),
+                        hint: None,
+                    });
+                }
+                items
             }
             // The theme in force is listed FIRST, so opening the picker
             // previews what you already have instead of whatever sorts first.

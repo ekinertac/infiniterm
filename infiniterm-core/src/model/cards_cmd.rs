@@ -3,6 +3,7 @@
 //! `commands/cards.ts`. Labels read `Domain: what it does`; a command lives
 //! in the module whose prefix it carries, and `card.clear` is `Terminal:`.
 use super::palette_state::Source;
+use super::palette_state::{CARD_ROW, WORKSPACE_ROW};
 use super::{BrowserAction, Card, EditorAction, Effect, Model, NewCard, Pending};
 use crate::card_label::{card_label, Labelled};
 use crate::cards::GUTTER;
@@ -516,9 +517,32 @@ impl Model {
     }
 
     /// The placement menu's `run`, and the slot menu's.
+    /// The palette's answer to "take me to that card": switch to its
+    /// workspace if it is in another, focus it, and fit it, which is what
+    /// Cmd+1 does once you are there.
+    pub fn go_to_card(&mut self, card_id: &str) {
+        let Some(card) = self.card(card_id).cloned() else {
+            return;
+        };
+        if self.active_workspace.as_deref() != Some(card.workspace_id.as_str()) {
+            self.show_workspace(&card.workspace_id);
+        }
+        self.set_focus(Some(&card.id));
+        self.effects
+            .push(Effect::RunCommand("canvas.zoom.fitCard".into()));
+    }
+
     pub fn palette_run(&mut self, source: Source, id: &str) {
         match source {
-            Source::Commands => self.effects.push(Effect::RunCommand(id.to_string())),
+            Source::Commands => {
+                if let Some(card_id) = id.strip_prefix(CARD_ROW) {
+                    self.go_to_card(card_id);
+                } else if let Some(ws) = id.strip_prefix(WORKSPACE_ROW) {
+                    self.show_workspace(ws);
+                } else {
+                    self.effects.push(Effect::RunCommand(id.to_string()));
+                }
+            }
             // Already applied by the preview; this makes it outlive the
             // session, in the settings file where `theme` already lives.
             Source::Themes => self.effects.push(Effect::SaveSetting {

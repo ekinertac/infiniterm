@@ -1102,6 +1102,72 @@ mod tests {
         assert_eq!(close.hint.as_deref(), Some("Cmd W"));
     }
 
+    // The palette is also the way to a card by name, across workspaces:
+    // every card is a row, a card elsewhere says where, and Enter switches
+    // there, focuses it and fits it, which is Cmd+1 once you have arrived.
+    #[test]
+    fn the_palette_lists_cards_and_workspaces_and_enter_goes_there() {
+        use super::super::palette_state::{CARD_ROW, WORKSPACE_ROW};
+        let mut h = Harness::new();
+        let home_ws = h.m.active_workspace.clone().unwrap();
+        let first = h.focused().id.clone();
+        h.m.card_mut(&first).unwrap().title = "embers".into();
+        h.run("workspace.new");
+        let other_ws = h.m.active_workspace.clone().unwrap();
+        assert_ne!(other_ws, home_ws);
+        h.m.workspaces
+            .iter_mut()
+            .find(|w| w.id == other_ws)
+            .unwrap()
+            .name = "side".into();
+
+        let labels: Vec<(&str, &str)> =
+            h.r.all()
+                .iter()
+                .map(|c| (c.id.as_str(), c.label.as_str()))
+                .collect();
+        let items = h.m.palette_items(Source::Commands, &labels);
+        let row = items
+            .iter()
+            .find(|i| i.id == format!("{CARD_ROW}{first}"))
+            .expect("the card is a row");
+        assert!(row.label.starts_with("Card: embers"), "{}", row.label);
+        assert!(
+            row.label.contains("workspace 1") || row.label.contains("\u{b7}"),
+            "a card elsewhere says which workspace: {}",
+            row.label
+        );
+        assert!(
+            items
+                .iter()
+                .any(|i| i.id == format!("{WORKSPACE_ROW}{home_ws}")),
+            "the other workspace is a row"
+        );
+        assert!(
+            !items
+                .iter()
+                .any(|i| i.id == format!("{WORKSPACE_ROW}{other_ws}")),
+            "the one you are in is not: choosing it would do nothing"
+        );
+
+        h.m.palette_run(Source::Commands, &format!("{CARD_ROW}{first}"));
+        assert_eq!(
+            h.m.active_workspace.as_deref(),
+            Some(home_ws.as_str()),
+            "switched back"
+        );
+        assert_eq!(h.focused().id, first, "and focused it");
+        assert!(
+            h.m.take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::RunCommand(c) if c == "canvas.zoom.fitCard")),
+            "and fitted it, as Cmd+1 would"
+        );
+
+        h.m.palette_run(Source::Commands, &format!("{WORKSPACE_ROW}{other_ws}"));
+        assert_eq!(h.m.active_workspace.as_deref(), Some(other_ws.as_str()));
+    }
+
     // An untitled editor's save asks where; the answer names the card and
     // the save then runs. Relative to the card's directory, `~` allowed.
     #[test]
