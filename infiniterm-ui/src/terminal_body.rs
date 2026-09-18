@@ -519,33 +519,15 @@ impl CardBody for TerminalBody {
         window: &mut Window,
         cx: &mut App,
     ) {
-        // While the zoom is in motion, text is drawn at a WHOLE pixel size
-        // and the grid scaled to match. gpui caches a shaped line by its
-        // exact size and rasterises a glyph once per size, and a zoom that
-        // moves every frame asked for a new fractional size every frame,
-        // so both missed on every line of every card: measured at 9 to 16
-        // ms of shaping and 8 to 12 of glyphs a frame, 30 fps on a dense
-        // canvas. Rounded, a zoom passes through a handful of sizes and the
-        // caches carry the rest. The frame after the zoom stops is exact,
-        // asked for here so the card never rests a rounding away from its
-        // real size.
-        let moving = self.scale != scale;
         self.scale = scale;
-        let draw_scale = if moving {
-            let whole = (self.font_px * scale).round().max(1.);
-            whole / self.font_px
-        } else {
-            scale
-        };
         self.painted_bounds = Some(bounds);
-        self.dirty = moving;
+        self.dirty = false;
         self.painted_focused = focused;
         self.painted_phase = self.blink_on(now);
         if let Some(error) = self.error.clone() {
             self.paint_error(&error, bounds, scale, window, cx);
             return;
         }
-        let scale = draw_scale;
         let t = std::time::Instant::now();
         let mut frame = std::mem::take(&mut self.frame);
         let rebuilt = self.grid.update_frame(&self.palette, &mut frame);
