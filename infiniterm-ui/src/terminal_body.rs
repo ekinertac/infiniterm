@@ -121,6 +121,8 @@ pub struct TerminalBody {
     blink_epoch: f64,
     painted_phase: bool,
     painted_focused: bool,
+    /// Where the last paint put the card, for `caret_bounds`.
+    painted_bounds: Option<Bounds<Pixels>>,
     /// A drag selecting text.
     selecting: bool,
     /// The rows as last built; `Grid::update_frame` touches only the
@@ -213,6 +215,7 @@ impl TerminalBody {
             inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             blink_epoch: 0.,
             painted_phase: true,
+            painted_bounds: None,
             painted_focused: false,
             selecting: false,
             frame: Frame::default(),
@@ -517,6 +520,7 @@ impl CardBody for TerminalBody {
         cx: &mut App,
     ) {
         self.scale = scale;
+        self.painted_bounds = Some(bounds);
         self.dirty = false;
         self.painted_focused = focused;
         self.painted_phase = self.blink_on(now);
@@ -740,16 +744,50 @@ impl CardBody for TerminalBody {
             shift: m.shift,
             cmd: m.platform,
         };
-        if let Some(bytes) = encode_with(&key, self.grid.app_cursor(), self.grid.kitty_keys()) {
-            self.grid.scroll_to_bottom();
-            // Typing is where the selection stops mattering and where a
-            // blinking cursor must be visible.
-            self.grid.clear_selection();
-            self.blink_epoch = now;
-            self.dirty = true;
-            self.write(bytes);
-        }
+        let Some(bytes) = encode_with(&key, self.grid.app_cursor(), self.grid.kitty_keys()) else {
+            // Nothing to send: a dead key on its own, a bare modifier. Said
+            // so, and macOS's input context gets the key, which is how a
+            // composition starts.
+            return BodyAction::Ignored;
+        };
+        self.grid.scroll_to_bottom();
+        // Typing is where the selection stops mattering and where a
+        // blinking cursor must be visible.
+        self.grid.clear_selection();
+        self.blink_epoch = now;
+        self.dirty = true;
+        self.write(bytes);
         BodyAction::None
+    }
+
+    /// The emoji panel, a finished composition, an input method's commit:
+    /// text with no key behind it, sent as if typed.
+    fn insert_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.grid.scroll_to_bottom();
+        self.grid.clear_selection();
+        self.dirty = true;
+        self.write(text.as_bytes().to_vec());
+    }
+
+    /// The cursor cell on screen, from the last paint, so the input
+    /// method's candidate window sits under what is being typed.
+    fn caret_bounds(&self) -> Option<Bounds<Pixels>> {
+        let painted = self.painted_bounds?;
+        let scale = self.scale;
+        let (col, row) = self.frame.cursor;
+        let line_h = px((self.font_px * self.line_height * scale) as f32);
+        let cell_w = px((self.cell_w * scale) as f32);
+        let pad = px((PAD * scale) as f32);
+        Some(Bounds::new(
+            point(
+                painted.origin.x + pad + cell_w * col as f32,
+                painted.origin.y + pad + line_h * row as f32,
+            ),
+            size(cell_w, line_h),
+        ))
     }
 
     fn mouse_down(
@@ -1117,6 +1155,44 @@ mod tests {
             text: " x ".into(),
         };
         assert!(!row_paints_nothing(&text));
+    }
+
+    // The same contract for a terminal: an empty character is not taken,
+    // so macOS composes; the emoji panel's text arrives with no key at all
+    // and is written as if typed.
+    #[test]
+    fn a_terminal_ignores_a_composition_prefix_and_writes_inserted_text() {
+        use gpui::{Keystroke, Modifiers};
+        let mut b = body();
+        b.pane = Some(1);
+        let dead = Keystroke {
+            modifiers: Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+            key: "e".into(),
+            key_char: Some("".into()),
+        };
+        // `key` needs an App for the clipboard arms; the encoder path it
+        // reaches for this key does not, so the check goes through the
+        // encoder the body calls, with the body's own gate state.
+        let k = infiniterm_term::keys::Key {
+            name: &dead.key,
+            text: dead.key_char.as_deref(),
+            alt: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            infiniterm_term::keys::encode_with(&k, false, b.kitty_keys()),
+            None,
+            "nothing to send for a bare dead key, which is what makes it Ignored"
+        );
+        b.insert_text("🎉");
+        assert_eq!(
+            b.outgoing.concat(),
+            "🎉".as_bytes(),
+            "inserted text is written as typed"
+        );
     }
 
     // A cursor position report, a clipboard write and a title, as a ring

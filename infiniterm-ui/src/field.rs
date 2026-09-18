@@ -289,6 +289,12 @@ impl Field {
 
     // --- edits ---
 
+    /// Text with no key behind it (the emoji panel, a finished composition,
+    /// an input method's commit), placed as typing would place it.
+    pub fn insert_text(&mut self, with: &str) {
+        self.insert(with);
+    }
+
     fn insert(&mut self, with: &str) {
         self.delete_selection();
         let mut chars: Vec<char> = self.text.chars().collect();
@@ -592,6 +598,27 @@ mod tests {
             (before.as_str(), sel.as_str(), after.as_str()),
             ("şeylğ", "", "er")
         );
+    }
+
+    // A dead key on its own (Option+E, waiting for its vowel) arrives with
+    // an EMPTY character. The field must not take it: taking it tells
+    // macOS the key was handled and the composition never happens. The
+    // composed `é` comes back later through `insert_text`.
+    #[test]
+    fn a_composition_prefix_is_ignored_and_the_result_is_inserted() {
+        let mut f = Field::open("caf", false);
+        let dead = ks(
+            "e",
+            Some(""),
+            Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+        );
+        assert!(matches!(f.key(&dead, None), Edit::Ignored));
+        assert_eq!(f.text, "caf", "nothing typed");
+        f.insert_text("é");
+        assert_eq!(f.text, "café");
     }
 
     // What the renderers draw from.

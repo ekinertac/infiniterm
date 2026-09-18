@@ -304,10 +304,25 @@ impl AppView {
             }
             return;
         }
-        if let Hit::CardBody { id, local } = self.hit(p) {
+        let hit_id = if let Hit::CardBody { id, local } = self.hit(p) {
             if let Some(body) = self.bodies.get_mut(&id) {
                 body.mouse_move(local, &e.modifiers);
             }
+            Some(id)
+        } else {
+            None
+        };
+        // A body that cares about hover (the browser) needs telling when the
+        // pointer moves off it, the way a real mouseout would.
+        if self.hover_body != hit_id {
+            if let Some(left) = self
+                .hover_body
+                .take()
+                .and_then(|id| self.bodies.get_mut(&id))
+            {
+                left.mouse_leave();
+            }
+            self.hover_body = hit_id;
         }
     }
 
@@ -516,33 +531,35 @@ impl AppView {
             return true;
         }
         if self.model.palette_open() {
-            self.palette_key(k, cx);
-            return false;
+            return self.palette_key(k, cx);
         }
         if self.model.omni.open {
-            self.omni_key(k, cx);
-            return false;
+            return self.omni_key(k, cx);
         }
         if self.model.find.open {
-            self.find_key(k, cx);
-            return false;
+            return self.find_key(k, cx);
         }
         if self.model.prompt.is_open() {
-            self.prompt_key(k, cx);
-            return false;
+            return self.prompt_key(k, cx);
         }
         if self.model.shortcuts_open {
-            self.shortcuts_key(k, cx);
-            return false;
+            return self.shortcuts_key(k, cx);
         }
         if let Some(id) = self.model.selection.focused_id.clone() {
             let action = match self.bodies.get_mut(&id) {
                 Some(body) => body.key(k, now_ms(), cx),
                 None => crate::body::BodyAction::None,
             };
+            // A key the body took is HANDLED, so macOS does not also hand
+            // it to the input context, which would type it a second time
+            // through `replace_text_in_range` now that there is an input
+            // handler. A key the body ignored (a dead key on its own) is
+            // not, so the input context gets it and a composition begins.
+            let taken = !matches!(action, crate::body::BodyAction::Ignored);
             self.body_action(&id, action);
             self.flush_writes();
             self.perform_effects();
+            return taken;
         }
         false
     }
@@ -550,7 +567,7 @@ impl AppView {
     /// What a body asked for from a click: a card beside it, or the system.
     fn body_action(&mut self, id: &str, action: crate::body::BodyAction) {
         match action {
-            crate::body::BodyAction::None => {}
+            crate::body::BodyAction::None | crate::body::BodyAction::Ignored => {}
             crate::body::BodyAction::Retry => {
                 // Clearing the error is what makes the reconcile spawn again.
                 if let Some(t) = self.bodies.get_mut(id).and_then(|b| {

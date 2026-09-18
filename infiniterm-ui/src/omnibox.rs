@@ -41,7 +41,10 @@ impl AppView {
     /// Keys while the omnibox is open. Escape leaves a scope before it
     /// closes the box, the way Backspace does, because losing a whole
     /// typed query to a stray Escape is worse than one extra press.
-    pub fn omni_key(&mut self, k: &Keystroke, cx: &mut gpui::App) {
+    /// Whether the key was taken. A key the field ignored is left for
+    /// macOS's input context, so a dead key can begin a composition.
+    pub fn omni_key(&mut self, k: &Keystroke, cx: &mut gpui::App) -> bool {
+        let mut taken = true;
         match k.key.as_str() {
             "escape" => {
                 if self.model.omni.scope.is_some() {
@@ -78,9 +81,11 @@ impl AppView {
                     let text = self.omni_field.text.clone();
                     self.model.omni_type(&text);
                 }
+                taken = !matches!(edit, crate::field::Edit::Ignored);
             }
         }
         self.perform_effects();
+        taken
     }
 
     pub fn render_omnibox(&self, cx: &mut Context<Self>) -> gpui::Div {
@@ -309,7 +314,8 @@ pub const FIND_BAR_RIGHT_PX: f32 = 16.;
 impl AppView {
     /// The find bar's keys. Enter steps forward, Shift+Enter back, Escape
     /// closes and clears the highlights. Everything else is the field.
-    pub fn find_key(&mut self, k: &Keystroke, cx: &mut gpui::App) {
+    pub fn find_key(&mut self, k: &Keystroke, cx: &mut gpui::App) -> bool {
+        let mut taken = true;
         match k.key.as_str() {
             "escape" => {
                 self.model.close_find();
@@ -328,9 +334,11 @@ impl AppView {
                     let text = self.find_field.text.clone();
                     self.model.find_type(&text);
                 }
+                taken = !matches!(edit, crate::field::Edit::Ignored);
             }
         }
         self.perform_effects();
+        taken
     }
 
     /// No backdrop and no dimming: the whole point is reading the page while

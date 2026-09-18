@@ -148,10 +148,13 @@ impl AppView {
         (flat, ranked.total, heads)
     }
 
-    pub fn palette_key(&mut self, k: &Keystroke, cx: &mut gpui::App) {
+    /// Whether the key was taken. A key the field ignored is left for
+    /// macOS's input context, so a dead key can begin a composition.
+    pub fn palette_key(&mut self, k: &Keystroke, cx: &mut gpui::App) -> bool {
         let Some(source) = self.model.palette.source else {
-            return;
+            return false;
         };
+        let mut taken = true;
         let (flat, _, _) = self.palette_rows();
         let index = self.model.palette.index.min(flat.len().saturating_sub(1));
         match k.key.as_str() {
@@ -178,6 +181,7 @@ impl AppView {
                     self.model.palette.query = self.query_field.text.clone();
                     self.model.palette.index = 0;
                 }
+                taken = !matches!(edit, crate::field::Edit::Ignored);
             }
         }
         // Live preview follows the highlight, which is the point for themes.
@@ -188,14 +192,15 @@ impl AppView {
             self.model.palette_preview(source, id.as_deref());
         }
         self.perform_effects();
+        taken
     }
 
     /// The panel takes the keys while open: Escape closes, typing filters.
-    pub fn shortcuts_key(&mut self, k: &Keystroke, cx: &mut gpui::App) {
+    pub fn shortcuts_key(&mut self, k: &Keystroke, cx: &mut gpui::App) -> bool {
         if k.key == "escape" {
             self.model.shortcuts_open = false;
             self.shortcuts_field = crate::field::Field::default();
-            return;
+            return true;
         }
         let paste = (k.modifiers.platform && k.key == "v")
             .then(|| cx.read_from_clipboard().and_then(|c| c.text()))
@@ -204,10 +209,12 @@ impl AppView {
         if let Some(text) = edit.clipboard() {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
         }
+        !matches!(edit, crate::field::Edit::Ignored)
     }
 
-    pub fn prompt_key(&mut self, k: &Keystroke, cx: &mut gpui::App) {
+    pub fn prompt_key(&mut self, k: &Keystroke, cx: &mut gpui::App) -> bool {
         let confirm = self.model.prompt.confirm;
+        let mut taken = true;
         let settled = match k.key.as_str() {
             "escape" => self.model.prompt.settle(None),
             "enter" => {
@@ -225,6 +232,7 @@ impl AppView {
                 if edit.changed() {
                     self.model.prompt.value = self.prompt_field.text.clone();
                 }
+                taken = !matches!(edit, crate::field::Edit::Ignored);
                 None
             }
             _ => None,
@@ -234,6 +242,7 @@ impl AppView {
                 .answer(pending, text, |path| std::path::Path::new(path).exists());
         }
         self.perform_effects();
+        taken
     }
 }
 
@@ -267,6 +276,7 @@ impl Render for AppView {
         self.sync_fields();
         let chrome = self.chrome.clone();
         let entity = cx.entity();
+        let focus = self.focus.clone();
         let title_bar = self.render_title_bar(cx);
         let status_bar = self.render_status_bar();
         let palette = self.model.palette_open().then(|| self.render_palette(cx));
@@ -331,6 +341,14 @@ impl Render for AppView {
                         canvas(
                             |_, _, _| (),
                             move |bounds, _, window, cx| {
+                                // macOS's text input system, for the emoji
+                                // panel, dead keys and input methods. Has to
+                                // be re-registered every paint; see ime.rs.
+                                window.handle_input(
+                                    &focus,
+                                    gpui::ElementInputHandler::new(bounds, entity.clone()),
+                                    cx,
+                                );
                                 let more = entity.update(cx, |this, cx| {
                                     this.frame(bounds, window, cx);
                                     this.needs_frame()

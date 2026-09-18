@@ -20,6 +20,7 @@ mod diff_body;
 mod editor_body;
 mod editors;
 mod field;
+mod ime;
 mod input;
 mod keycode;
 mod omnibox;
@@ -112,10 +113,17 @@ pub struct AppView {
     pub chrome: Chrome,
     pub bodies: HashMap<String, Box<dyn CardBody>>,
     pub focus: FocusHandle,
+    /// Text an input method is composing and has not committed: the `\u{b4}`
+    /// after Option+E, a Pinyin candidate. Held so macOS knows a composition
+    /// is in progress; see `ime.rs`.
+    pub composing: Option<String>,
     pub pan: Option<Pan>,
     pub gesture: Option<Gesture>,
     /// The card whose body is following a drag (a text selection).
     pub body_drag: Option<String>,
+    /// The card body the pointer is currently over, so a body that cares
+    /// about hover (the browser) gets told when the pointer leaves it.
+    pub hover_body: Option<String>,
     /// The prompt's field, opened with the suggestion selected; the palette's query.
     pub prompt_field: field::Field,
     pub query_field: field::Field,
@@ -186,7 +194,15 @@ pub fn now_ms() -> f64 {
 
 actions!(
     infiniterm,
-    [Quit, Hide, HideOthers, ShowAll, Minimize, Zoom]
+    [
+        Quit,
+        Hide,
+        HideOthers,
+        ShowAll,
+        Minimize,
+        Zoom,
+        ShowCharacterPalette
+    ]
 );
 
 /// `NSWorkspace.accessibilityDisplayShouldReduceMotion`: the system's
@@ -262,11 +278,22 @@ fn main() {
                 let _ = cx.update_window(w, |_, window, _| window.zoom_window());
             }
         });
+        // The emoji panel. macOS fires Cmd+Ctrl+Space through the app's
+        // "Emoji & Symbols" menu item, so without an Edit menu the chord
+        // did nothing here; the item and the binding give it a target.
+        // What the panel then inserts arrives through the input handler
+        // in ime.rs, not as a key.
+        cx.on_action(|_: &ShowCharacterPalette, cx| {
+            for w in cx.windows() {
+                let _ = cx.update_window(w, |_, window, _| window.show_character_palette());
+            }
+        });
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-h", Hide, None),
             KeyBinding::new("cmd-alt-h", HideOthers, None),
             KeyBinding::new("cmd-m", Minimize, None),
+            KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),
         ]);
         cx.set_menus(vec![
             Menu {
@@ -278,6 +305,10 @@ fn main() {
                     MenuItem::separator(),
                     MenuItem::action("Quit infiniterm", Quit),
                 ],
+            },
+            Menu {
+                name: "Edit".into(),
+                items: vec![MenuItem::action("Emoji & Symbols", ShowCharacterPalette)],
             },
             Menu {
                 name: "Window".into(),

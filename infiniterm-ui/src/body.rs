@@ -9,7 +9,13 @@ use infiniterm_core::grid::{Point, Size};
 /// What a body hands back from a click: something for the model to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum BodyAction {
+    /// The key was taken; nothing else to do.
     None,
+    /// The key was NOT taken: nothing in this body wanted it. The app then
+    /// lets macOS's input context have it, which is how a dead key (Option+E
+    /// on its own, a bare composition prefix) starts composing instead of
+    /// vanishing. A body that says `None` for everything never composes.
+    Ignored,
     /// Cmd+click on a URL or a confirmed path: open it beside this card.
     Open(infiniterm_core::ift::OpenPlan),
     /// Cmd+Shift+click: the system's handler.
@@ -37,6 +43,16 @@ pub trait CardBody {
     fn resized(&mut self, _world: Size) {}
     /// A key the app did not claim (no Cmd chord bound to it). May ask for
     /// something, the way a click may (a file opened beside from the tree).
+    /// Text that arrived without a key: the emoji panel, a finished dead-key
+    /// composition, an input method's commit. Delivered as if typed.
+    fn insert_text(&mut self, _text: &str) {}
+
+    /// Where the caret is on screen, for the input method's candidate window
+    /// to sit under. `None` puts it at the window's corner.
+    fn caret_bounds(&self) -> Option<Bounds<Pixels>> {
+        None
+    }
+
     fn key(&mut self, _keystroke: &Keystroke, _now: f64, _cx: &mut App) -> BodyAction {
         BodyAction::None
     }
@@ -58,6 +74,8 @@ pub trait CardBody {
     ) {
     }
     fn mouse_move(&mut self, _local: Point, _modifiers: &gpui::Modifiers) {}
+    /// The pointer moved off this body onto another card or empty canvas.
+    fn mouse_leave(&mut self) {}
     /// A bare scroll over the body: the terminal's scrollback, the page's scroll.
     fn wheel(&mut self, _local: Point, _dx: f64, _dy: f64, _modifiers: &gpui::Modifiers) {}
     /// Whether the next frame would paint differently: output arrived, or a

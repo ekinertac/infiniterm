@@ -927,6 +927,15 @@ impl EditorBody {
 
     /// Keys with a possible action for the frame (a file opened beside).
     pub fn key_action(&mut self, k: &Keystroke, now: f64, cx: &mut App) -> BodyAction {
+        // A key that produces an EMPTY character and carries no chord is a
+        // composition prefix: a dead key on its own (Option+E waiting for
+        // its vowel). Nothing here can do anything with it, and taking it
+        // would stop macOS composing, so it is left for the input context.
+        // The composed text comes back through `insert_text`.
+        let m = &k.modifiers;
+        if !m.platform && !m.control && k.key_char.as_deref() == Some("") {
+            return BodyAction::Ignored;
+        }
         match self.focus {
             Focus::Tree => self.key_tree(k, now),
             Focus::Query | Focus::Replace => {
@@ -937,6 +946,33 @@ impl EditorBody {
                 self.key_buffer(k, now, cx);
                 BodyAction::None
             }
+        }
+    }
+
+    /// The emoji panel, a finished composition, an input method's commit:
+    /// into the buffer, or into whichever find field has the focus.
+    pub fn insert_composed(&mut self, text: &str, now: f64) {
+        match self.focus {
+            Focus::Buffer => {
+                if !self.read_only {
+                    self.buffer.insert(text, now);
+                    self.dirty = true;
+                }
+            }
+            Focus::Query | Focus::Replace => {
+                let field = if self.focus == Focus::Query {
+                    &mut self.query
+                } else {
+                    &mut self.replacement
+                };
+                field.insert_text(text);
+                self.refresh_search();
+                if self.focus == Focus::Query {
+                    self.show_match();
+                }
+                self.dirty = true;
+            }
+            Focus::Tree => {}
         }
     }
 
@@ -1560,6 +1596,10 @@ impl CardBody for EditorBody {
 
     fn key(&mut self, k: &Keystroke, now: f64, cx: &mut App) -> BodyAction {
         self.key_action(k, now, cx)
+    }
+
+    fn insert_text(&mut self, text: &str) {
+        self.insert_composed(text, crate::now_ms());
     }
 
     fn mouse_down(
