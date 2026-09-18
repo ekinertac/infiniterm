@@ -191,6 +191,10 @@ impl AppView {
                         .gap_2()
                         .px_3()
                         .py_1()
+                        // The row is exactly the dialog's width; without this
+                        // a long url painted past its own bounds and over the
+                        // border, since gpui does not clip by default.
+                        .overflow_hidden()
                         .when(selected, |d| d.bg(chrome.row_selected))
                         .on_mouse_down(
                             MouseButton::Left,
@@ -204,14 +208,25 @@ impl AppView {
                                 cx.notify();
                             }),
                         )
-                        .child(div().text_color(chrome.text_faint).child(mark(result.kind)))
                         .child(
                             div()
+                                .flex_shrink_0()
+                                .text_color(chrome.text_faint)
+                                .child(mark(result.kind)),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
                                 .text_color(chrome.text_bright)
                                 .child(result.title.clone()),
                         )
                         .child(
+                            // The title keeps its width; the url takes what
+                            // is left and elides rather than pushing the row
+                            // past the dialog's edge.
                             div()
+                                .flex_1()
+                                .truncate()
                                 .text_color(crate::chrome::with_alpha(
                                     chrome.text_muted,
                                     OMNIBOX_SUBTITLE_ALPHA,
