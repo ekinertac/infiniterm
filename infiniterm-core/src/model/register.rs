@@ -226,7 +226,30 @@ mod tests {
         );
     }
 
-    // Focus after a close goes to the NEAREST card by geometry, not the next in the list.
+    // Focus after a close goes back to the card focused BEFORE the closed
+    // one: an editor opened from a terminal closes back onto the terminal,
+    // however the cards lie.
+    #[test]
+    fn closing_returns_to_the_card_focused_before() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let c = h.focused().id.clone();
+        // c is nearest to b; a was focused last.
+        h.m.set_focus(Some(&a));
+        h.m.set_focus(Some(&b));
+        h.run("card.close");
+        assert_eq!(h.focused().id, a);
+        assert!(h.m.card(&b).is_none());
+        // And back once more, past the closed card, to c.
+        h.run("card.close");
+        assert_eq!(h.focused().id, c);
+    }
+
+    // With no trail to follow (a restart has none), the NEAREST card by
+    // geometry, not the next in the list.
     #[test]
     fn closing_hands_focus_to_the_nearest_card() {
         let mut h = Harness::new();
@@ -238,6 +261,7 @@ mod tests {
         // Put c far away, then close b: a is nearest.
         h.m.card_mut(&c).unwrap().rect.x += 20_000.;
         h.m.set_focus(Some(&b));
+        h.m.focus_trail.clear();
         let effects = h.run("card.close");
         assert_eq!(h.focused().id, a);
         assert!(h.m.card(&b).is_none());

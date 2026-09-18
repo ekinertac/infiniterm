@@ -315,6 +315,10 @@ pub struct Model {
     /// The card last focused inside each group (`UNGROUPED` for the loose
     /// set), so stepping back into a group returns to where you were.
     pub last_focused: HashMap<String, String>,
+    /// Every card focused this session, oldest first, each once. Closing
+    /// the focused card goes back along it; not saved, a restart has no
+    /// "before".
+    pub focus_trail: Vec<String>,
     pub viewport: Viewport,
     /// The CONTENT area, not the window.
     pub view_size: Size,
@@ -393,6 +397,7 @@ impl Model {
             active_workspace: None,
             selection: Selection::default(),
             last_focused: HashMap::new(),
+            focus_trail: Vec::new(),
             viewport: INITIAL_VIEWPORT,
             view_size: Size { w: 0., h: 0. },
             framing: false,
@@ -626,10 +631,15 @@ impl Model {
 
     pub fn remove_card(&mut self, id: &str) {
         self.cards.retain(|c| c.id != id);
+        self.focus_trail.retain(|t| t != id);
         self.dirty_layout = true;
     }
 
     // ----- selection -------------------------------------------------------
+
+    /// How far back a close can walk. The trail is pruned as cards close,
+    /// so this bounds memory, not the reach.
+    const FOCUS_TRAIL: usize = 64;
 
     /// The one door for a plain focus change. A plain move of focus empties
     /// the extras (the text-field rule: Shift+Arrow grows a selection, a
@@ -664,6 +674,11 @@ impl Model {
                     .clone()
                     .unwrap_or_else(|| UNGROUPED.to_string());
                 self.last_focused.insert(key, id.to_string());
+                self.focus_trail.retain(|t| t != id);
+                self.focus_trail.push(id.to_string());
+                if self.focus_trail.len() > Self::FOCUS_TRAIL {
+                    self.focus_trail.remove(0);
+                }
             }
         }
         self.dirty_layout = true;

@@ -5,8 +5,10 @@
 //! shell itself exiting (`exit`, Ctrl+D). The second once had no handler and
 //! left a dead card printing `[exited 0]`. The split partners flush against
 //! the closed card take its space (`reclaim`), focus goes to the card that
-//! took the space, else the NEAREST by geometry: the list is creation order,
-//! which on a rearranged canvas is no order at all.
+//! took the space, else the card focused BEFORE this one (`focus_trail`),
+//! which is where a person expects to land after closing an editor they
+//! opened from a terminal, else the nearest by geometry: the list is
+//! creation order, which on a rearranged canvas is no order at all.
 use super::Card;
 use super::{Effect, Model};
 use crate::cards::{CardRect, GUTTER};
@@ -161,9 +163,16 @@ impl Model {
         // in some other card must not steal focus from what you are in.
         if self.selection.focused_id.as_deref() == Some(id) {
             self.selection.maximized = false;
+            let before = self
+                .focus_trail
+                .iter()
+                .rev()
+                .find(|t| here.iter().any(|c| &c.id == *t))
+                .cloned();
             let next = grown
                 .first()
                 .map(|g| g.id.clone())
+                .or(before)
                 .or_else(|| nearest_to(&here, card.rect).map(|c| c.id.clone()));
             self.set_focus(next.as_deref());
         } else {
