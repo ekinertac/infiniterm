@@ -123,6 +123,9 @@ pub struct AppView {
     pub gesture: Option<Gesture>,
     /// The card whose body is following a drag (a text selection).
     pub body_drag: Option<String>,
+    /// A press that moved the focus to a card: where it landed, so the
+    /// release can tell a click from a drag and reveal the card on a click.
+    pub reveal_on_release: Option<Point>,
     /// The card body the pointer is currently over, so a body that cares
     /// about hover (the browser) gets told when the pointer leaves it.
     pub hover_body: Option<String>,

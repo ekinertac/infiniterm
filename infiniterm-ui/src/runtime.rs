@@ -41,6 +41,7 @@ impl AppView {
             bodies: Default::default(),
             focus,
             composing: None,
+            reveal_on_release: None,
             show_character_palette: false,
             pan: None,
             gesture: None,

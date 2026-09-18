@@ -192,6 +192,13 @@ impl AppView {
                     let already = self.model.selection.focused_id.as_deref() == Some(&id);
                     if !already {
                         self.model.set_focus(Some(&id));
+                        // Revealed on the RELEASE, if the press turns out to
+                        // have been a click: a card clipped by the window's
+                        // edge came into focus and stayed clipped, and Cmd+1
+                        // was the only way to see all of it. Not on the
+                        // press, or a drag to select text would have the
+                        // card slide under the pointer as it went.
+                        self.reveal_on_release = Some(p);
                     }
                     let (action, captures) = match self.bodies.get_mut(&id) {
                         Some(body) => (
@@ -359,6 +366,15 @@ impl AppView {
 
     pub fn mouse_up(&mut self, e: &MouseUpEvent) {
         let p = self.to_content(e.position);
+        // A press that focused a card and did not travel was a click on
+        // it: bring the whole card into view, as a keyboard focus move
+        // already does. A drag (text selection) leaves the view alone.
+        if let Some(start) = self.reveal_on_release.take() {
+            if (p.x - start.x).hypot(p.y - start.y) < crate::DRAG_SLOP {
+                self.model.reveal_focused();
+                self.perform_effects();
+            }
+        }
         let was_dragging = matches!(self.pan, Some(Pan::Dragging(_)));
         // A Cmd+press that never moved far enough to pan was a CLICK, and the
         // body never saw the press: `starts_pan` claims every Cmd+left press
