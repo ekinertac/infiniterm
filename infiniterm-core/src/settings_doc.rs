@@ -222,6 +222,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.unfocusedDim",
+        &[
+            "How much the whole canvas is dimmed while another app is in front, 0 to 1.",
+            "Says at a glance that keys are going elsewhere. 0 turns it off.",
+        ],
+    ),
+    (
         "ui.cardLabelSize",
         &[
             "Screen pixels, before the Cmd+Shift+= multiplier; the label is drawn at 1.2x",

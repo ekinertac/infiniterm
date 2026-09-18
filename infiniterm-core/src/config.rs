@@ -165,6 +165,8 @@ impl Config {
 pub struct Ui {
     /// How much of an inactive card's text is dimmed away, 0 to 1.
     pub inactive_dim: f64,
+    /// How much the whole canvas is dimmed while another app is in front.
+    pub unfocused_dim: f64,
     /// Chrome font sizes in SCREEN pixels, before the UI-scale multiplier.
     /// Three values because they are read at three distances: a card label
     /// has to survive 10% zoom, a group name sits above a block, the status
@@ -230,6 +232,7 @@ pub fn default_config() -> Config {
         },
         ui: Ui {
             inactive_dim: 0.45,
+            unfocused_dim: 0.4,
             card_label_size: 15.,
             group_label_size: 15.,
             status_bar_size: 11.,
@@ -390,6 +393,7 @@ pub fn merge_config(raw: &Value) -> Config {
         },
         ui: Ui {
             inactive_dim: num(u.get("inactiveDim"), d.ui.inactive_dim, 0., 1.),
+            unfocused_dim: num(u.get("unfocusedDim"), d.ui.unfocused_dim, 0., 1.),
             card_label_size: num(u.get("cardLabelSize"), d.ui.card_label_size, 6., 64.),
             group_label_size: num(u.get("groupLabelSize"), d.ui.group_label_size, 6., 64.),
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),
@@ -475,6 +479,18 @@ mod tests {
         );
     }
 
+    // A wash over the whole canvas while another app is in front. Clamped
+    // like inactiveDim: 1 is a blackout and anything past it is a typo.
+    #[test]
+    fn the_unfocused_dim_is_a_fraction() {
+        assert_eq!(
+            m(json!({"ui": {"unfocusedDim": 0.7}})).ui.unfocused_dim,
+            0.7
+        );
+        assert_eq!(m(json!({"ui": {"unfocusedDim": 0}})).ui.unfocused_dim, 0.);
+        assert_eq!(m(json!({"ui": {"unfocusedDim": 5}})).ui.unfocused_dim, 1.);
+    }
+
     #[test]
     fn a_partial_file_only_overrides_what_it_sets() {
         let c = m(json!({"terminal": {"fontSize": 14}}));
@@ -482,6 +498,7 @@ mod tests {
         assert_eq!(c.terminal.font_size, 14.);
         assert_eq!(c.terminal.font_family, d.terminal.font_family);
         assert_eq!(c.ui.inactive_dim, d.ui.inactive_dim);
+        assert_eq!(c.ui.unfocused_dim, d.ui.unfocused_dim);
     }
 
     // A font size of 2000 is a typo; throwing away every other valid setting

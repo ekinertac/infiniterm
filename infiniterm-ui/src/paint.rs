@@ -120,6 +120,18 @@ impl AppView {
         self.feed_terminals(now, cx);
         let t1 = std::time::Instant::now();
         self.paint_world(bounds, now, window, cx);
+        // Another app is in front: a wash over everything, so a glance says
+        // keys are going elsewhere. Over the cards and their labels, under
+        // the overlays gpui draws after this canvas, which are not open
+        // when the window is not active anyway. gpui refreshes the window
+        // on every activation change, so this needs no observer of its own.
+        let dim = self.model.config.ui.unfocused_dim;
+        if dim > 0. && !window.is_window_active() {
+            window.paint_quad(fill(
+                bounds,
+                crate::chrome::with_alpha(self.chrome.canvas_bg, dim as f32),
+            ));
+        }
         let t2 = std::time::Instant::now();
         self.schedule_save(now);
         self.schedule_history(now);
