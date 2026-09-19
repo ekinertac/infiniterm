@@ -59,6 +59,10 @@ pub struct BrowserBody {
     /// The page has keyboard focus: a click reached it since the card
     /// was focused.
     pub page_focused: bool,
+    /// The last Escape's timestamp while locked, for double-Escape
+    /// detection; `None` after any other key, after unlocking, or before
+    /// the first Escape.
+    pub last_escape_ms: Option<f64>,
     left_down: bool,
     pub inactive_dim: f64,
     pub card_bg: Hsla,
@@ -106,6 +110,7 @@ impl BrowserBody {
             scale,
             painted_focused: false,
             page_focused: false,
+            last_escape_ms: None,
             left_down: false,
             inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             card_bg: gpui::rgb(0x0e101a).into(),

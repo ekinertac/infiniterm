@@ -63,6 +63,16 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
         })
 }
 
+/// Both presses of a double-Escape must land inside this window, matching
+/// the feel of a double-click rather than two unrelated taps.
+pub const DOUBLE_ESCAPE_MS: f64 = 400.;
+
+/// `prev` is the last Escape's timestamp while still locked, if any (reset
+/// on any other key or on unlocking). `now` is this Escape's.
+pub fn is_double_escape(prev: Option<f64>, now: f64) -> bool {
+    prev.is_some_and(|p| now - p <= DOUBLE_ESCAPE_MS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +123,21 @@ mod tests {
         // cmd+= is already browser_override's, unaffected by locking
         assert_eq!(lock_override("cmd+="), None);
         assert_eq!(browser_override("cmd+="), Some("browser.zoom.in"));
+    }
+
+    #[test]
+    fn double_escape_is_two_presses_inside_the_window_not_one_or_a_slow_two() {
+        assert!(
+            !is_double_escape(None, 1000.),
+            "a first press is never a double"
+        );
+        assert!(
+            is_double_escape(Some(1000.), 1300.),
+            "300ms apart, inside 400ms"
+        );
+        assert!(
+            !is_double_escape(Some(1000.), 1500.),
+            "500ms apart, outside it"
+        );
     }
 }

@@ -534,6 +534,32 @@ impl AppView {
         if crate::keycode::last_dead() && !m.platform && !m.control {
             return false;
         }
+        if k.key == "escape" && !m.platform && !m.control && !m.alt {
+            if let Some(id) = self.model.selection.focused_id.clone() {
+                if self.model.card(&id).is_some_and(|c| c.locked) {
+                    let now = now_ms();
+                    let double = self.browser_for(&id).is_some_and(|b| {
+                        let was =
+                            infiniterm_core::browser_keys::is_double_escape(b.last_escape_ms, now);
+                        b.last_escape_ms = if was { None } else { Some(now) };
+                        was
+                    });
+                    if double {
+                        if let Some(body) = self.browser_for(&id) {
+                            body.set_focus(false);
+                        }
+                        if let Some(c) = self.model.card_mut(&id) {
+                            c.locked = false;
+                        }
+                        return true;
+                    }
+                    // A single Escape while locked reaches the page, same
+                    // as real Chrome (closes an autocomplete, exits
+                    // fullscreen). Falls through to the normal body.key()
+                    // dispatch below by NOT returning here.
+                }
+            }
+        }
         if !m.platform && !m.control && !m.alt {
             let bare = match k.key.as_str() {
                 "enter" => BareKey::Enter,
