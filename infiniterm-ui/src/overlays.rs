@@ -18,6 +18,7 @@ use gpui::{
 use infiniterm_core::format_zoom::format_zoom;
 use infiniterm_core::palette::{highlight, rank, sectionise, step_index, RankedItem, MAX_RESULTS};
 use infiniterm_core::palette_usage::{recent_keys, usage_bonus, use_key, RECENT_LIMIT};
+use infiniterm_core::saved_layout::CardKind;
 use infiniterm_core::shortcuts::{filter_shortcuts, shortcut_sections, GESTURES};
 use infiniterm_core::workspaces::{waiting_count, working_count};
 
@@ -486,6 +487,16 @@ impl AppView {
             .child(tabs)
     }
 
+    /// Whether the focused card is a locked browser: the one fact the
+    /// status bar needs to say the keyboard currently means something
+    /// different than it did a keystroke ago.
+    fn browser_lock_indicator(&self) -> Option<&'static str> {
+        self.model
+            .focused()
+            .filter(|c| c.kind == CardKind::Browser && c.locked)
+            .map(|_| "locked: browser")
+    }
+
     fn render_status_bar(&self) -> impl IntoElement {
         let chrome = &self.chrome;
         let m = &self.model;
@@ -528,7 +539,17 @@ impl AppView {
             .text_color(chrome.text_muted)
             .child(div().child(left))
             .child(div().text_color(chrome.text).child(notice))
-            .child(div().text_color(fps_color).child(right))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .children(
+                        self.browser_lock_indicator()
+                            .map(|label| div().text_color(chrome.warn).child(label)),
+                    )
+                    .child(div().text_color(fps_color).child(right)),
+            )
     }
 
     fn render_palette(&self, cx: &mut Context<Self>) -> impl IntoElement {
