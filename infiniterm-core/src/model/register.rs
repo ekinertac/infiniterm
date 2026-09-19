@@ -441,6 +441,39 @@ mod tests {
         );
     }
 
+    // The way back up: a quarter kept after Cmd+Ctrl+W grows to the
+    // default size from its corner when the space is free, and stays put
+    // with a word when a card is in the way.
+    #[test]
+    fn full_size_restores_the_default_when_the_space_is_free() {
+        let mut h = Harness::new();
+        let kept = h.focused().id.clone();
+        let original = h.focused().rect;
+        h.run("card.split.right");
+        let half = h.m.card(&kept).unwrap().rect;
+        assert!(half.w < original.w);
+        h.m.set_focus(Some(&kept));
+        h.run("card.size.reset");
+        assert_eq!(
+            h.m.card(&kept).unwrap().rect,
+            half,
+            "the split partner is in the way"
+        );
+        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("no room")));
+        // Close the partner leaving the space, then it fits.
+        let partner = h.m.cards.iter().find(|c| c.id != kept).unwrap().id.clone();
+        h.m.set_focus(Some(&partner));
+        h.run("card.close.leave");
+        h.m.set_focus(Some(&kept));
+        let effects = h.run("card.size.reset");
+        assert_eq!(h.m.card(&kept).unwrap().rect, original);
+        assert_eq!(h.m.card(&kept).unwrap().soft_group_id, None);
+        assert!(
+            effects.iter().any(|e| matches!(e, Effect::MarkSwap(_))),
+            "animated"
+        );
+    }
+
     // Grouping moves the selection to a free block right of the grid, as one block.
     #[test]
     fn grouping_names_the_group_and_moves_the_cards_together() {

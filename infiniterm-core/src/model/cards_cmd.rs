@@ -885,6 +885,46 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             },
         );
     }
+    // The way back up from a quarter: the default size again, from the
+    // same top-left corner, if that space is free. Cards may not overlap,
+    // so a card in the way means nothing happens and the status bar says
+    // why; the space it needs is what Cmd+Ctrl+W leaves behind.
+    r.register("card.size.reset", "Card: full size", |m| {
+        m.with_active_card(|m, id| {
+            let Some(card) = m.card(&id).cloned() else {
+                return;
+            };
+            let size = m.default_size();
+            let full = Rect {
+                x: card.rect.x,
+                y: card.rect.y,
+                w: size.w,
+                h: size.h,
+            };
+            if full == card.rect {
+                return;
+            }
+            let mut taken: Vec<Rect> = m
+                .here()
+                .iter()
+                .filter(|c| c.id != id)
+                .map(|c| c.rect)
+                .collect();
+            taken.extend(m.other_frames(Some(&id), &card.workspace_id));
+            if taken.iter().any(|r| rects_overlap(full, *r)) {
+                m.notify("no room: a card is in the way");
+                return;
+            }
+            m.mark_swap(std::slice::from_ref(&id));
+            if let Some(c) = m.card_mut(&id) {
+                c.rect = full;
+                // Whatever pair it was carved from, it is its own card now.
+                c.soft_group_id = None;
+            }
+            m.dirty_layout = true;
+            m.reveal_focused();
+        })
+    });
     // Grows and shrinks from the bottom-right, so the top-left corner stays put.
     for (name, dw, dh) in [
         ("wider", RESIZE_STEP, 0.),

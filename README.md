@@ -69,6 +69,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | --- | --- |
 | `Cmd + T` / `Cmd + W` | new card / close card (a dirty editor asks for a second press; a browser card with several tabs asks once, since closing it takes every tab) |
 | `Cmd + Ctrl + W` | close card and leave its space free: the split partner keeps its size |
+| `Cmd + Ctrl + Enter` | full size again: a split-down card grows back to the default size from its corner, if the space is free |
 | double-click | on a card's frame or label fits it (`Cmd + 1`); on empty canvas fits everything (`Cmd + 2`) |
 | | every card wears a number (`#7`) ahead of its label, for naming it to somebody: given once, kept across restarts, in `ift ls` and `ift sessions` as trailing columns; `ift attach 7` reaches that card's shell from any terminal, app running or not |
 | `Cmd + S` / `Cmd + N` | save the editor card's file / new empty editor |

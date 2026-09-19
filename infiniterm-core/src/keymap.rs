@@ -193,6 +193,11 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "card.close.leave",
         "the split partner keeps its size; the space stays free",
     ),
+    (
+        "cmd+ctrl+enter",
+        "card.size.reset",
+        "back to the default size from a split, when the space is free",
+    ),
     // The undo for Cmd+W. Cmd+Shift+T is the browser's chord for this and
     // is already the placement menu here, so the close chord takes Ctrl.
     (
