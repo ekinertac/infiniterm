@@ -453,17 +453,6 @@ impl CardBody for BrowserBody {
         // Every tab follows the zoom, not just the visible one: a background
         // tab has to be the right size the moment it becomes active, or the
         // first frame after the switch is a stretched page.
-        //
-        // This still resizes CEF to `self.world`, the CARD's full size, not
-        // `page_bounds` below: `self.world` is set from `card.rect` by
-        // `resized`, and `card.rect` means the same thing everywhere else
-        // that reads it (placement, restore, the save file). Shrinking it
-        // here to dodge the strip would make this body the one reader with
-        // its own idea of the card's size. The strip is chrome painted OVER
-        // the page instead, which costs a sliver of the topmost rendered
-        // pixels under the strip and a slight vertical scale to fit the
-        // texture into the shorter `page_bounds` below; not pixel-perfect,
-        // but the alternative desyncs `self.world` from `card.rect`.
         for tab in &self.tabs {
             if let Some(s) = &tab.surface {
                 if (s.shared.borrow().scale - device).abs() > SCALE_CHANGE_EPSILON {
@@ -475,20 +464,23 @@ impl CardBody for BrowserBody {
                 }
             }
         }
-        // The strip's height in screen pixels, `ui_scale`-aware like every
-        // other piece of chrome, clamped to the card's own height so a
-        // tiny/zoomed-out card cannot push `page_bounds` negative.
-        let strip_h =
-            px((TAB_STRIP_HEIGHT_PX * self.ui_scale as f64 * scale) as f32).min(bounds.size.height);
-        let strip = Bounds::new(bounds.origin, size(bounds.size.width, strip_h));
-        let page_bounds = Bounds::new(
-            point(bounds.origin.x, bounds.origin.y + strip_h),
-            size(bounds.size.width, bounds.size.height - strip_h),
-        );
+        // The page paints at the FULL `bounds`, unchanged from before the
+        // strip existed: `local` in `mouse_down`/`mouse_move`/`wheel` is
+        // computed by `input.rs::hit()` from the card's WORLD rect and
+        // forwarded straight to `Surface::mouse_button`/`mouse_move`/`wheel`
+        // with no strip awareness, so if the page were painted into a
+        // shorter box here, what the user clicked and what they saw under
+        // the cursor would disagree (worst near the top, by the strip's own
+        // height). Squeezing the texture into a shorter `page_bounds` was
+        // tried and reverted for exactly this: it fixed nothing CEF-side
+        // and broke every click's y-coordinate against what was on screen.
+        // The strip is painted AFTER the page instead (below), covering its
+        // own band of page content the way a real browser's toolbar does,
+        // which is what the design doc actually asked for.
         window.paint_quad(fill(bounds, self.card_bg));
         match self.active_tab().and_then(|t| t.texture.clone()) {
             Some(img) => {
-                let _ = window.paint_image(page_bounds, Default::default(), img, 0, false);
+                let _ = window.paint_image(bounds, Default::default(), img, 0, false);
             }
             None => {
                 let font_size = px((STATUS_FONT_PX * scale) as f32);
@@ -506,8 +498,8 @@ impl CardBody for BrowserBody {
                     );
                     let _ = line.paint(
                         point(
-                            page_bounds.origin.x + px((STATUS_TEXT_PAD_PX * scale) as f32),
-                            page_bounds.origin.y + px((STATUS_TEXT_PAD_PX * scale) as f32),
+                            bounds.origin.x + px((STATUS_TEXT_PAD_PX * scale) as f32),
+                            bounds.origin.y + px((STATUS_TEXT_PAD_PX * scale) as f32),
                         ),
                         font_size * STATUS_LINE_HEIGHT_RATIO,
                         window,
@@ -518,13 +510,22 @@ impl CardBody for BrowserBody {
         }
         if !focused && self.inactive_dim > 0. {
             window.paint_quad(fill(
-                page_bounds,
+                bounds,
                 crate::chrome::with_alpha(self.card_bg, self.inactive_dim as f32),
             ));
         }
-        // The strip itself, painted last so it sits over the page rather
+        // The strip's height in screen pixels, `ui_scale`-aware like every
+        // other piece of chrome, clamped to the card's own height so a
+        // tiny/zoomed-out card cannot make it taller than the card itself.
+        let strip_h =
+            px((TAB_STRIP_HEIGHT_PX * self.ui_scale as f64 * scale) as f32).min(bounds.size.height);
+        let strip = Bounds::new(bounds.origin, size(bounds.size.width, strip_h));
+        // The strip itself, painted last so it sits OVER the page rather
         // than under it: each tab's elided title, the active one visually
         // distinct, the card's number where the corner label used to be.
+        // This covers the top `strip_h` of page content until Task 8b gives
+        // the strip its own clicks; a bounded, known cost rather than the
+        // whole-page click-accuracy regression the `page_bounds` approach had.
         window.paint_quad(fill(strip, self.card_bg));
         let tab_w = px((TAB_STRIP_TAB_WIDTH_PX * self.ui_scale as f64 * scale) as f32);
         let strip_font = px((TAB_STRIP_FONT_PX * self.ui_scale as f64 * scale) as f32);
