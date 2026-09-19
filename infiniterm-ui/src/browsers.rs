@@ -48,6 +48,41 @@ pub enum ContextMenuAction {
     OpenLinkInNewTab,
 }
 
+/// What the body has to do to hold the tabs the card says it has.
+#[derive(Debug, PartialEq, Eq)]
+enum TabDiff {
+    /// No tab opened or closed. The urls may still differ: a tab that
+    /// navigated in place is the navigate branch's business, not a
+    /// structural change.
+    Keep,
+    Added(String),
+    RemovedAt(usize),
+    /// Neither one-step case fits, so nothing can say WHICH tabs moved:
+    /// build the list again from the card's. The expensive one, and the
+    /// only one that always converges.
+    Rebuild,
+}
+
+/// A `tabs_cmd.rs` command changes the list by exactly one, so one step is
+/// all a frame normally has to catch up on. A frame can carry more than one
+/// though: two popups from the same page drain into two `browser_tab_open`
+/// calls before the next reconcile ever runs. Leaving that case alone
+/// stranded the body at the wrong tab count for the rest of the run, with
+/// `set_active` refusing an out-of-range index, so the card's label said one
+/// address while the body painted another.
+fn tab_diff(old: &[String], new: &[String]) -> TabDiff {
+    if let Some(added) = diff_added(old, new) {
+        return TabDiff::Added(added);
+    }
+    if let Some(at) = diff_removed_index(old, new) {
+        return TabDiff::RemovedAt(at);
+    }
+    if old.len() == new.len() {
+        return TabDiff::Keep;
+    }
+    TabDiff::Rebuild
+}
+
 /// The one url `new` has that `old` does not, assuming at most one tab was
 /// appended since the last frame (every `tabs_cmd.rs` command that grows the
 /// list appends). `None` when the lengths do not differ by exactly +1.
@@ -108,9 +143,10 @@ impl AppView {
             let url = card.url.clone().unwrap_or_else(|| "about:blank".into());
             if self.browser_for(&card.id).is_none() {
                 // A restored card arrives with every tab it was saved with,
-                // so the body is built holding all of them: the diff below
-                // moves one tab per frame and would never catch up, and the
-                // write-back would read the shortfall as tabs having closed.
+                // so the body is built holding all of them. `tab_diff` would
+                // rebuild it into the same shape a frame later anyway; doing
+                // it here is a CEF browser opened and closed for nothing on
+                // every restored card, saved.
                 let first = card.tabs.first().unwrap_or(&url);
                 let mut body = BrowserBody::new(&card.id, first, world, scale, cef);
                 for later in card.tabs.iter().skip(1) {
@@ -128,22 +164,20 @@ impl AppView {
             body.zoom = card.zoom;
 
             // Tabs: the card's list of urls against the body's list of
-            // surfaces. A `tabs_cmd.rs` command only ever changes the list
-            // by one (append for new and reopen, remove-at-index for close),
-            // so a length difference of exactly one says which structural
-            // change happened and an equal length says none did. A
-            // single-tab card keeps `tabs` empty, so it stands in as the
-            // card's one url and nothing about it changes.
+            // surfaces, `tab_diff` saying what that means. A single-tab card
+            // keeps `tabs` empty, so its one url stands in and nothing about
+            // it ever changes.
             let desired: Vec<String> = if card.tabs.is_empty() {
                 vec![url.clone()]
             } else {
                 card.tabs.clone()
             };
             let actual: Vec<String> = body.tabs.iter().map(|t| t.url.clone()).collect();
-            if let Some(added) = diff_added(&actual, &desired) {
-                body.open_tab(&added);
-            } else if let Some(removed_at) = diff_removed_index(&actual, &desired) {
-                body.close_tab(removed_at);
+            match tab_diff(&actual, &desired) {
+                TabDiff::Keep => {}
+                TabDiff::Added(added) => body.open_tab(&added),
+                TabDiff::RemovedAt(at) => body.close_tab(at),
+                TabDiff::Rebuild => body.rebuild_tabs(&desired),
             }
             // The active index arrives from the card the way `card.zoom`
             // does; it has to be applied after the open or close, or it
@@ -502,6 +536,36 @@ mod tab_diff_tests {
         let old = vec!["a".to_string(), "b".to_string()];
         let new = vec!["a".to_string()];
         assert_eq!(diff_removed_index(&old, &new), Some(1));
+    }
+
+    #[test]
+    fn one_step_changes_are_the_one_step_cases() {
+        let two = vec!["a".to_string(), "b".to_string()];
+        let three = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        assert_eq!(tab_diff(&two, &three), TabDiff::Added("c".to_string()));
+        assert_eq!(tab_diff(&three, &two), TabDiff::RemovedAt(2));
+        assert_eq!(tab_diff(&two, &two), TabDiff::Keep);
+    }
+
+    #[test]
+    fn a_url_that_changed_in_place_is_not_a_structural_change() {
+        // The omnibox navigating the active tab: same tabs, one new
+        // address, which `body.navigate` handles a few lines further on.
+        let old = vec!["a".to_string(), "b".to_string()];
+        let new = vec!["a".to_string(), "z".to_string()];
+        assert_eq!(tab_diff(&old, &new), TabDiff::Keep);
+    }
+
+    #[test]
+    fn more_than_one_step_in_a_frame_rebuilds() {
+        // Two popups from one page land in the same frame, so `card.tabs`
+        // grows by two before the next reconcile: neither one-step case
+        // fits, and doing nothing would strand the body a tab behind for
+        // the rest of the run.
+        let old = vec!["a".to_string()];
+        let new = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        assert_eq!(tab_diff(&old, &new), TabDiff::Rebuild);
+        assert_eq!(tab_diff(&new, &old), TabDiff::Rebuild);
     }
 
     #[test]

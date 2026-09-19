@@ -205,6 +205,27 @@ impl BrowserBody {
         self.dirty = true;
     }
 
+    /// Throws every tab away and opens `urls` instead, the state a body is
+    /// built in. The escape hatch for a card whose list moved by more than
+    /// one step between frames, where no diff can say WHICH tabs moved: it
+    /// costs every tab's live state (scroll, form input, whatever its JS
+    /// holds), and it is the only thing that always converges. `browsers.rs`
+    /// reaches for it last.
+    pub fn rebuild_tabs(&mut self, urls: &[String]) {
+        // Cleared first so the old surfaces are gone before the new ones
+        // are asked for, rather than twice the browsers alive at once.
+        self.tabs.clear();
+        self.focused_tab = None;
+        let (world, scale, cef) = (self.world, self.scale, self.cef_running);
+        self.tabs = urls
+            .iter()
+            .map(|u| Tab::open(u, world, scale, cef))
+            .collect();
+        self.active = 0;
+        self.apply_focus();
+        self.dirty = true;
+    }
+
     /// Closes the tab at `index`, which closes its surface with it. Out of
     /// range is a no-op rather than a panic: the index comes from a diff
     /// against `card.tabs`, and a painter must not be able to kill the app.
