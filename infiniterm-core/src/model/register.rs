@@ -1163,6 +1163,35 @@ mod tests {
     }
 
     #[test]
+    fn alt_enter_opens_a_new_tab_instead_of_navigating_in_place() {
+        let mut m = Model::new();
+        m.home = "/h".into();
+        m.start_dir = "/h".into();
+        let id = m.add_card(
+            "/h",
+            NewCard {
+                kind: CardKind::Browser,
+                url: Some("https://a.example".into()),
+                ..Default::default()
+            },
+        );
+        m.set_focus(Some(&id));
+        m.open_omnibox();
+        m.omni_type("https://b.example");
+        m.omni_enter_new_tab();
+        assert!(!m.omni.open);
+        assert_eq!(
+            m.card(&id).unwrap().tabs.len(),
+            2,
+            "opened as a tab, not navigated in place"
+        );
+        assert_eq!(
+            m.card(&id).unwrap().url.as_deref(),
+            Some("https://b.example")
+        );
+    }
+
+    #[test]
     fn the_omnibox_makes_a_card_when_no_browser_is_focused() {
         let mut h = Harness::new();
         h.run("card.omnibox");

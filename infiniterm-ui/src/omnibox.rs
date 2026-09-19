@@ -55,7 +55,11 @@ impl AppView {
                 }
             }
             "enter" => {
-                self.model.omni_enter();
+                if k.modifiers.alt {
+                    self.model.omni_enter_new_tab();
+                } else {
+                    self.model.omni_enter();
+                }
                 self.omni_field = crate::field::Field::default();
             }
             "down" => self.model.omni_step(1),

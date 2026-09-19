@@ -154,6 +154,32 @@ impl Model {
         }
     }
 
+    /// `Alt+Enter`: what was typed opens as a NEW tab on the target card
+    /// instead of navigating it in place, matching Chrome's own binding.
+    /// Outside a browser card (no `omni.target`) there is no tab strip to
+    /// add to, so this is identical to `omni_enter`. A `FocusCard` result
+    /// has no url to open as a tab either way, so it just focuses, same as
+    /// `Enter`.
+    pub fn omni_enter_new_tab(&mut self) {
+        let Some(target) = self.omni.target.clone() else {
+            self.omni_enter();
+            return;
+        };
+        let chosen = self.omni_flat().into_iter().nth(self.omni.index);
+        self.close_omnibox();
+        let Some(result) = chosen else { return };
+        let url = match result.action {
+            OmniAction::FocusCard(id) => {
+                self.set_focus(Some(&id));
+                self.reveal_focused();
+                return;
+            }
+            OmniAction::Navigate(url) => url,
+            OmniAction::Search(query) => search_url(&self.config.browser.search_engine, &query),
+        };
+        self.browser_tab_open(&target, Some(&url));
+    }
+
     /// Navigates the card Cmd+L was opened on, or makes one where a new card
     /// would go.
     fn omni_go(&mut self, url: String, target: Option<String>) {
