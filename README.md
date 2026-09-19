@@ -87,7 +87,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | `Cmd + T` / `Cmd + W` | on a locked browser card: new tab / close tab (closes the card only when it was the last tab) |
 | `Cmd + Shift + T` | on a locked browser card: reopen the last closed tab |
 | `Cmd + 1` … `Cmd + 8` / `Cmd + 9` | on a locked browser card: jump to tab N / the last tab |
-| `Ctrl + Tab` / `Ctrl + Shift + Tab` | on a locked browser card: next / previous tab |
+| `Cmd + Shift + ]` / `Cmd + Shift + [` | on a locked browser card: next / previous tab (elsewhere, see below: previous / next workspace) |
 | `Cmd + Alt + T` | new card outside any group |
 | `Cmd + Shift + T` | new card, but where: every empty slot around the cards gets a letter, press one |
 | `Cmd + D` / `Cmd + Shift + D` | split the card: new card to the right / below |

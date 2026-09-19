@@ -57,8 +57,15 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
         .find(|(c, _)| *c == chord)
         .map(|(_, id)| *id)
         .or(match chord {
-            "ctrl+tab" => Some("browser.tab.next"),
-            "ctrl+shift+tab" => Some("browser.tab.prev"),
+            // Real Mac Chrome and Edge, not `Ctrl+Tab`'s Windows muscle
+            // memory. `keymap.rs`'s default binding already reserved these
+            // two for `workspace.prev`/`.next` as a stand-in "browser tab"
+            // chord before the browser had real tabs; now it does, and a
+            // locked card is where that stand-in hands off to the real
+            // thing, the same way `Cmd+T` hands `card.new.terminal` off to
+            // `browser.tab.new`.
+            "cmd+shift+]" => Some("browser.tab.next"),
+            "cmd+shift+[" => Some("browser.tab.prev"),
             _ => None,
         })
 }
@@ -109,8 +116,12 @@ mod tests {
         assert_eq!(lock_override("cmd+1"), Some("browser.tab.jump.1"));
         assert_eq!(lock_override("cmd+8"), Some("browser.tab.jump.8"));
         assert_eq!(lock_override("cmd+9"), Some("browser.tab.jump.last"));
-        assert_eq!(lock_override("ctrl+tab"), Some("browser.tab.next"));
-        assert_eq!(lock_override("ctrl+shift+tab"), Some("browser.tab.prev"));
+        // Real Mac Chrome/Edge, not Ctrl+Tab's Windows muscle memory;
+        // outside a locked card these are workspace.next/prev instead
+        // (keymap.rs's default binding), which handle_chord's caller,
+        // not lock_override, decides between.
+        assert_eq!(lock_override("cmd+shift+]"), Some("browser.tab.next"));
+        assert_eq!(lock_override("cmd+shift+["), Some("browser.tab.prev"));
     }
 
     #[test]
