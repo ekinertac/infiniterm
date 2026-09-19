@@ -320,6 +320,13 @@ pub enum Pending {
     RenameGroup(String),
     RenameWorkspace(String),
     CloseWorkspace(String),
+    /// A single browser card with more than one tab, asked before `Cmd+W`
+    /// takes them all at once; `reclaim` carries `card.close`'s own meaning
+    /// through the round trip (`card.close.leave` says no).
+    CloseCard {
+        id: String,
+        reclaim: bool,
+    },
     OpenFile {
         from: Option<String>,
     },

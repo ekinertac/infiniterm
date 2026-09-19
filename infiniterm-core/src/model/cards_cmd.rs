@@ -176,7 +176,36 @@ impl Model {
     /// splitting a card down to a quarter and wanting only that quarter:
     /// the rest of the space is left free, for whatever comes next.
     pub fn close_selected_with(&mut self, reclaim: bool) {
-        let mut ids = self.selected_ids();
+        let ids = self.selected_ids();
+        // A single browser card holding several tabs is several pages at
+        // once, the same reasoning `workspace.close` already applies to
+        // several shells; a config pair is never a browser card, so it
+        // skips this and keeps its own two-press dirty flow below.
+        if let [id] = ids.as_slice() {
+            let is_pair = self.config_pairs.iter().any(|p| p.ids.contains(id));
+            if !is_pair {
+                if let Some(count) = self
+                    .card(id)
+                    .filter(|c| c.kind == CardKind::Browser && c.tabs.len() > 1)
+                    .map(|c| c.tabs.len())
+                {
+                    let label = format!("close this card and its {count} tabs?");
+                    self.prompt.confirm(
+                        &label,
+                        "Close card",
+                        Pending::CloseCard {
+                            id: id.clone(),
+                            reclaim,
+                        },
+                    );
+                    return;
+                }
+            }
+        }
+        self.close_selected_confirmed(ids, reclaim);
+    }
+
+    fn close_selected_confirmed(&mut self, mut ids: Vec<String>, reclaim: bool) {
         let pair = if ids.len() == 1 {
             self.config_pairs
                 .iter()
@@ -294,6 +323,11 @@ impl Model {
             Pending::CloseWorkspace(id) => {
                 if text.is_some() {
                     self.close_workspace_confirmed(&id);
+                }
+            }
+            Pending::CloseCard { id, reclaim } => {
+                if text.is_some() {
+                    self.close_card_with(&id, false, reclaim);
                 }
             }
             Pending::OpenFile { from } => {

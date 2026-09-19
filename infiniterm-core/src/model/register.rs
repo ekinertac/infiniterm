@@ -541,6 +541,35 @@ mod tests {
         );
     }
 
+    // A single tab is exactly today's close: no dialog, because there is
+    // nothing extra to lose. Several tabs on one card is several pages at
+    // once, the same reasoning `workspace.close` already applies to several
+    // shells; a cancel leaves every tab open, a confirm takes them all.
+    #[test]
+    fn closing_a_browser_card_with_several_tabs_asks_first() {
+        let mut h = Harness::new();
+        h.m.new_beside_active(CardKind::Browser, None, Some("https://a".into()));
+        let single = h.focused().id.clone();
+        h.run("card.close");
+        assert!(h.m.card(&single).is_none(), "one tab closes right away");
+
+        h.m.new_beside_active(CardKind::Browser, None, Some("https://a".into()));
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().tabs = vec!["https://a".into(), "https://b".into()];
+        h.run("card.close");
+        assert!(h.m.card(&id).is_some(), "waiting on the confirm");
+        assert!(h.m.prompt.confirm);
+
+        let (pending, text) = h.m.prompt.settle(None).unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert!(h.m.card(&id).is_some(), "a cancel keeps both tabs");
+
+        h.run("card.close");
+        let (pending, text) = h.m.prompt.settle(Some("")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert!(h.m.card(&id).is_none());
+    }
+
     // An arrow into an empty slot shows a PHANTOM; Enter asks what goes in it.
     #[test]
     fn an_arrow_into_empty_space_shows_a_phantom_and_enter_fills_it() {
