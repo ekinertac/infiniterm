@@ -22,14 +22,17 @@ pub const HAIRLINE_ALPHA: f32 = 0.4;
 /// looking at (1.7 microseconds each in gpui, measured 2026-09-19: eleven
 /// cards at fit-all, about 4 px, cost 85 ms a frame in glyphs alone); card
 /// bodies paint texture bars instead. Shared by every body that draws text.
-/// Was 3 px; at 4 px nothing was readable and everything was paid for.
-pub const LEGIBLE_FONT_PX: f64 = 5.;
+/// Was 3 px, then 5: at 4 px nothing was readable and everything was
+/// paid for, and Ekin's fit-all is 6.6 px, where a frame still cost 100
+/// ms and the text still did not read.
+pub const LEGIBLE_FONT_PX: f64 = 7.;
 /// Below this, text is "far": while the viewport MOVES the terminal draws
-/// bars so the animation stays smooth, and at rest a frame asked for by
-/// output or the cursor blink is painted at most every `FAR_REFRESH_MS`,
-/// since nobody reads a 7 px stream frame by frame. Zoomed in, nothing
-/// changes.
-pub const FAR_FONT_PX: f64 = 9.;
+/// bars so the animation stays smooth (a zoom from fit-all passes through
+/// this band with every card still on screen), and at rest, in the band
+/// between `LEGIBLE_FONT_PX` and this where a frame is expensive but the
+/// text just reads, a frame asked for by output or the cursor blink is
+/// painted at most every `FAR_REFRESH_MS`. Zoomed in, nothing changes.
+pub const FAR_FONT_PX: f64 = 12.;
 pub const FAR_REFRESH_MS: f64 = 250.;
 /// Lines scrolled per wheel tick, shared by every card body with a text
 /// buffer, so the terminal, editor, diff and transcript all feel the same

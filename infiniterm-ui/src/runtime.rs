@@ -322,11 +322,12 @@ impl AppView {
         }
     }
 
-    /// Whether the text is too small to be worth a frame per change:
-    /// see `chrome::FAR_FONT_PX`.
+    /// Whether the text is in the band where a frame is expensive (glyphs,
+    /// not bars) and too small to be worth one per change: see
+    /// `chrome::FAR_FONT_PX`.
     pub fn far(&self) -> bool {
-        self.model.config.terminal.font_size * self.model.viewport.scale
-            < crate::chrome::FAR_FONT_PX
+        let font = self.model.config.terminal.font_size * self.model.viewport.scale;
+        (crate::chrome::LEGIBLE_FONT_PX..crate::chrome::FAR_FONT_PX).contains(&font)
     }
 
     pub fn needs_frame(&self) -> bool {
