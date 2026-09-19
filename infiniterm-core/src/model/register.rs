@@ -339,7 +339,15 @@ mod tests {
         assert!(!effects.iter().any(|e| matches!(e, Effect::MarkSwap(_))));
         assert_eq!(h.focused().id, kept_id);
         assert_eq!(h.m.card(&kept_id).unwrap().soft_group_id, None);
-        // The space is free: the survivor can be moved into it.
+        // The space is free, and the phantom beside the survivor is the
+        // survivor's size, so the arrow lands exactly in the freed half.
+        h.run("focus.move.right");
+        let phantom = h.m.selection.phantom.clone().expect("a slot, not a card");
+        assert_eq!((phantom.rect.w, phantom.rect.h), (half.w, half.h));
+        assert!(phantom.rect.x > half.x + half.w - 1.);
+        h.run("focus.move.left");
+        assert_eq!(h.focused().id, kept_id);
+        // And the survivor can be moved into it.
         h.run("card.swap.right");
         let moved = h.m.card(&kept_id).unwrap().rect;
         assert!(

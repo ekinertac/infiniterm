@@ -8,7 +8,7 @@
 use super::palette_state::Source;
 use super::{Effect, Model, NewCard, Phantom};
 use crate::cards::{CardRect, PlacedCard, GUTTER};
-use crate::grid::{Point, Rect, HALF_CELL};
+use crate::grid::{Point, Rect, Size, HALF_CELL};
 use crate::groups::{canvas_units, step_ring, CanvasUnit, UnitKind, UNGROUPED};
 use crate::layout::rects_overlap;
 use crate::multi_select::extend_selection;
@@ -240,7 +240,12 @@ impl Model {
         let Some(p) = self.selection.phantom.clone() else {
             return;
         };
-        let size = self.default_size();
+        // The phantom's own size, so a chain of slots beside a quarter card
+        // is a chain of quarters, the way `card.swap` moves the card as is.
+        let size = Size {
+            w: p.rect.w,
+            h: p.rect.h,
+        };
         let back_rect = empty_slot_beside(p.rect, dir, GUTTER, &[], size);
         if let Some(i) = self
             .selection
@@ -268,7 +273,11 @@ impl Model {
         let here = self.here();
         let placed = self.placed(&here);
         let occupied = self.occupied_here();
-        let size = self.default_size();
+        // A slot beside a card is the card's size, not the default: beside a
+        // quarter card (a split kept after `card.close.leave`) it is the
+        // quarter that was freed, which a default-sized slot could not
+        // reach, and `card.swap` already measures the same way.
+        let beside = |r: Rect| Size { w: r.w, h: r.h };
 
         // Picking a slot: the arrows walk the lettered slots, nothing else.
         if let (Some(p), false) = (
@@ -309,7 +318,7 @@ impl Model {
 
         // From a phantom: the same rules, with the phantom standing in for a card.
         if let Some(p) = self.selection.phantom.clone() {
-            if let Some(hole) = empty_slot_beside(p.rect, dir, GUTTER, &occupied, size) {
+            if let Some(hole) = empty_slot_beside(p.rect, dir, GUTTER, &occupied, beside(p.rect)) {
                 self.show_phantom(hole, p.group_id, false);
                 return;
             }
@@ -338,7 +347,9 @@ impl Model {
             return;
         };
         if let Some(card) = self.card(&focused).cloned() {
-            if let Some(hole) = empty_slot_beside(card.rect, dir, GUTTER, &occupied, size) {
+            if let Some(hole) =
+                empty_slot_beside(card.rect, dir, GUTTER, &occupied, beside(card.rect))
+            {
                 self.show_phantom(hole, card.group_id, false);
                 return;
             }
