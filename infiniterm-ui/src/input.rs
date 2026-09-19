@@ -148,6 +148,13 @@ impl AppView {
         }
         match self.hit(p) {
             Hit::Nothing => {
+                // A double-click on bare canvas fits everything, Cmd+2 for
+                // the mouse, the way a double-click on a frame is Cmd+1.
+                if e.click_count >= 2 {
+                    self.run_command("canvas.zoom.fitAll");
+                    self.perform_effects();
+                    return;
+                }
                 // A left press that missed every card deselects. It does not
                 // pan: a plain drag means text selection on a card.
                 self.model.set_focus(None);

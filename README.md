@@ -68,6 +68,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | --- | --- |
 | `Cmd + T` / `Cmd + W` | new card / close card (a dirty editor asks for a second press) |
 | `Cmd + Ctrl + W` | close card and leave its space free: the split partner keeps its size |
+| double-click | on a card's frame or label fits it (`Cmd + 1`); on empty canvas fits everything (`Cmd + 2`) |
 | | every card wears a number (`#7`) ahead of its label, for naming it to somebody: given once, kept across restarts, in `ift ls` as the last column |
 | `Cmd + S` / `Cmd + N` | save the editor card's file / new empty editor |
 | `Cmd + F`, `Cmd + G`, `Cmd + Alt + F`, `Cmd + /` | in an editor: find, next, replace, comment (elsewhere these are hints, group, and the shortcut list) |
