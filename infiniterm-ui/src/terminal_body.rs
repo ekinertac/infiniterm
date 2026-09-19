@@ -24,7 +24,7 @@
 use crate::body::{BodyAction, CardBody};
 use gpui::{
     fill, font, outline, point, px, size, App, Bounds, ClipboardItem, FontStyle, FontWeight, Hsla,
-    Keystroke, Pixels, SharedString, TextRun, UnderlineStyle, Window,
+    Keystroke, Pixels, SharedString, TextRun, Window,
 };
 use infiniterm_core::backend::PaneId;
 use infiniterm_core::grid::{Point, Size};
@@ -137,17 +137,46 @@ pub struct TerminalBody {
     scale: f64,
     cols: usize,
     rows: usize,
-    /// Shaped chunks per row, keyed by what they were shaped from, so a row
+    /// Each row shaped ONCE, keyed by what it was shaped from, so a row
     /// that did not change is not shaped again. htop repaints every second;
     /// the other 39 rows of the other 24 cards do not.
-    shaped: Vec<(u64, Vec<(usize, gpui::ShapedLine)>)>,
+    shaped: Vec<(u64, ShapedRow)>,
 }
 
-/// How many cells one shaped chunk covers. Glyph advances at a fractional
-/// pixel size round per glyph, so a 200-cell row shaped as one line drifts
-/// tens of pixels from the grid by its end; positioning every chunk at its
-/// cell's x bounds the drift to a chunk.
-const CHUNK: usize = 24;
+/// A row shaped as one line, with what the painter needs to put every
+/// glyph at ITS CELL rather than where the shaper left it: the shaper's
+/// advances are the font's (a Nerd Font icon or an emoji has its fallback
+/// font's width, a ligature has one glyph for two cells), and following
+/// them drifted a long row tens of pixels off the grid. The row used to be
+/// shaped in 24-cell ASCII chunks with every other glyph shaped alone for
+/// that reason, which made a Claude card row fifteen-plus `shape_line`
+/// calls and a zoom over a dense canvas 30 ms a frame. One call, then each
+/// glyph goes to `cell_w * col` plus its offset from the first glyph of
+/// its own character, so a combining mark stays on its base and a
+/// ligature keeps its shape.
+#[derive(Default)]
+struct ShapedRow {
+    line: Option<gpui::ShapedLine>,
+    /// One per byte of the shaped text: which character slot it belongs to.
+    slot_of_byte: Vec<u32>,
+    slots: Vec<CharSlot>,
+    /// Cell spans wearing a line, in columns: (start, len, colour, kind).
+    decorations: Vec<(usize, usize, Hsla, Decoration)>,
+}
+
+#[derive(Clone, Copy)]
+struct CharSlot {
+    col: usize,
+    color: Hsla,
+    /// Whitespace paints nothing; skipping it is most of a sparse row.
+    blank: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Decoration {
+    Underline,
+    Strikethrough,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Metrics {
@@ -701,23 +730,22 @@ impl CardBody for TerminalBody {
             }
             let key = hasher.finish();
             if self.shaped.len() <= r {
-                self.shaped.resize(r + 1, (0, vec![]));
+                self.shaped.resize_with(r + 1, || (0, ShapedRow::default()));
             }
             if self.shaped[r].0 != key {
                 let t = std::time::Instant::now();
-                let chunks = shape_row(row, &base, bold_weight, font_size, window);
-                self.shaped[r] = (key, chunks);
+                let shaped = shape_row(row, &base, bold_weight, font_size, window);
+                self.shaped[r] = (key, shaped);
                 timing_add(2, t);
             }
             let t = std::time::Instant::now();
-            for (col, line) in &self.shaped[r].1 {
-                let _ = line.paint(
-                    point(origin.x + cell_w * *col as f32, y),
-                    line_h,
-                    window,
-                    cx,
-                );
-            }
+            paint_row(
+                &self.shaped[r].1,
+                point(origin.x, y),
+                cell_w,
+                line_h,
+                window,
+            );
             timing_add(3, t);
         }
         self.frame = frame;
@@ -974,117 +1002,149 @@ impl CardBody for TerminalBody {
     }
 }
 
-/// A row as chunks of `CHUNK` cells, each shaped on its own with the run
-/// attributes that fall inside it.
+/// The row as one shaped line, with the cell of every character. See
+/// `ShapedRow` for why the shaper's positions are not the ones painted.
 fn shape_row(
     row: &infiniterm_term::grid::Row,
     base: &gpui::Font,
     bold_weight: FontWeight,
     font_size: Pixels,
     window: &Window,
-) -> Vec<(usize, gpui::ShapedLine)> {
-    // Per-cell attributes, then regrouped per chunk.
-    let mut cells: Vec<(char, &infiniterm_term::grid::Run)> = Vec::with_capacity(row.text.len());
+) -> ShapedRow {
+    let mut text = String::with_capacity(row.text.len());
+    let mut runs: Vec<TextRun> = vec![];
+    let mut slot_of_byte: Vec<u32> = Vec::with_capacity(row.text.len());
+    let mut slots: Vec<CharSlot> = Vec::with_capacity(row.text.len());
+    let mut decorations: Vec<(usize, usize, Hsla, Decoration)> = vec![];
+    let mut col = 0usize;
     for run in &row.runs {
-        for ch in run.text.chars() {
-            cells.push((ch, run));
-        }
-    }
-    let mut out = vec![];
-    let mut col = 0;
-    while col < cells.len() {
-        // A chunk is at most CHUNK cells of ASCII, whose advance in a
-        // monospace font is the cell; anything else (an icon from a Nerd
-        // Font, an emoji, a wide character) is shaped on its own and put
-        // at its cell, because its advance is whatever the fallback font
-        // says and everything shaped after it in the same line would drift.
-        let end = if cells[col].0.is_ascii() {
-            let mut e = col;
-            while e < cells.len() && e - col < CHUNK && cells[e].0.is_ascii() {
-                e += 1;
-            }
-            e
+        let color = if run.dim {
+            crate::chrome::with_alpha(rgb(run.fg), TERM_DIM_ALPHA)
         } else {
-            let mut e = col + 1;
-            while e < cells.len() && cells[e].0 == infiniterm_term::grid::SPACER {
-                e += 1;
-            }
-            e
+            rgb(run.fg)
         };
-        let slice = &cells[col..end];
-        if slice
-            .iter()
-            .all(|(c, _)| c.is_whitespace() || *c == infiniterm_term::grid::SPACER)
-        {
-            col = end;
-            continue;
+        let mut f = base.clone();
+        if run.bold {
+            f.weight = bold_weight;
         }
-        let mut text = String::new();
-        let mut runs: Vec<TextRun> = vec![];
-        for (ch, run) in slice {
-            if *ch == infiniterm_term::grid::SPACER {
+        if run.italic {
+            f.style = FontStyle::Italic;
+        }
+        let run_start_col = col;
+        let mut run_len = 0usize;
+        for ch in run.text.chars() {
+            // A wide character's second cell: a column, not a character.
+            if ch == infiniterm_term::grid::SPACER {
+                col += 1;
                 continue;
             }
             let len = ch.len_utf8();
-            text.push(*ch);
-            let same = runs.last().is_some_and(|last: &TextRun| {
-                let color = if run.dim {
-                    crate::chrome::with_alpha(rgb(run.fg), TERM_DIM_ALPHA)
-                } else {
-                    rgb(run.fg)
-                };
-                last.color == color
-                    && last.font.weight == if run.bold { bold_weight } else { base.weight }
-                    && last.font.style
-                        == if run.italic {
-                            FontStyle::Italic
-                        } else {
-                            base.style
-                        }
-                    && last.underline.is_some() == run.underline
-                    && last.strikethrough.is_some() == run.strikeout
+            text.push(ch);
+            slot_of_byte.extend(std::iter::repeat_n(slots.len() as u32, len));
+            slots.push(CharSlot {
+                col,
+                color,
+                blank: ch.is_whitespace(),
             });
-            if same {
-                runs.last_mut().unwrap().len += len;
+            run_len += len;
+            col += 1;
+        }
+        if run_len == 0 {
+            continue;
+        }
+        // A run's text shares one font and colour; gpui splits fallback
+        // fonts inside it on its own.
+        runs.push(TextRun {
+            len: run_len,
+            font: f,
+            color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+        let cells = col - run_start_col;
+        if run.underline {
+            decorations.push((run_start_col, cells, color, Decoration::Underline));
+        }
+        if run.strikeout {
+            decorations.push((run_start_col, cells, color, Decoration::Strikethrough));
+        }
+    }
+    if slots.iter().all(|s| s.blank) {
+        return ShapedRow {
+            line: None,
+            slot_of_byte,
+            slots,
+            decorations,
+        };
+    }
+    let line = window
+        .text_system()
+        .shape_line(SharedString::from(text), font_size, &runs, None);
+    ShapedRow {
+        line: Some(line),
+        slot_of_byte,
+        slots,
+        decorations,
+    }
+}
+
+/// The row's glyphs, each at its cell. gpui's own `ShapedLine::paint`
+/// does the same walk with the shaper's x; this one swaps in the cell's.
+fn paint_row(
+    shaped: &ShapedRow,
+    origin: gpui::Point<Pixels>,
+    cell_w: Pixels,
+    line_h: Pixels,
+    window: &mut Window,
+) {
+    let hairline = px(crate::chrome::HAIRLINE_PX as f32);
+    let Some(line) = &shaped.line else {
+        return;
+    };
+    // gpui's baseline rule, so glyphs sit where `ShapedLine::paint` put
+    // them before this and the cursor block still covers them.
+    let padding_top = (line_h - line.ascent - line.descent) / 2.;
+    let baseline = origin.y + padding_top + line.ascent;
+    // The shaper's x of the first glyph of each character: a later glyph
+    // of the same character (a combining mark) keeps its offset from it.
+    let mut first_x: Vec<Option<Pixels>> = vec![None; shaped.slots.len()];
+    let font_size = line.font_size;
+    for run in &line.runs {
+        for glyph in &run.glyphs {
+            let Some(&slot_i) = shaped.slot_of_byte.get(glyph.index) else {
+                continue;
+            };
+            let slot = shaped.slots[slot_i as usize];
+            if slot.blank {
                 continue;
             }
-            let mut f = base.clone();
-            if run.bold {
-                f.weight = bold_weight;
-            }
-            if run.italic {
-                f.style = FontStyle::Italic;
-            }
-            let color = if run.dim {
-                crate::chrome::with_alpha(rgb(run.fg), TERM_DIM_ALPHA)
+            let anchor = *first_x[slot_i as usize].get_or_insert(glyph.position.x);
+            let x = origin.x + cell_w * slot.col as f32 + (glyph.position.x - anchor);
+            let at = point(x, baseline + glyph.position.y);
+            let _ = if glyph.is_emoji {
+                window.paint_emoji(at, run.font_id, glyph.id, font_size)
             } else {
-                rgb(run.fg)
+                window.paint_glyph(at, run.font_id, glyph.id, font_size, slot.color)
             };
-            runs.push(TextRun {
-                len,
-                font: f,
-                color,
-                background_color: None,
-                underline: run.underline.then_some(UnderlineStyle {
-                    thickness: px(crate::chrome::HAIRLINE_PX as f32),
-                    color: Some(color),
-                    wavy: false,
-                }),
-                strikethrough: run.strikeout.then_some(gpui::StrikethroughStyle {
-                    thickness: px(crate::chrome::HAIRLINE_PX as f32),
-                    color: Some(color),
-                }),
-            });
         }
-        out.push((
-            col,
-            window
-                .text_system()
-                .shape_line(SharedString::from(text), font_size, &runs, None),
-        ));
-        col = end;
     }
-    out
+    for &(start, len, color, kind) in &shaped.decorations {
+        // gpui's own offsets for the two lines, so they land where they did.
+        let y = match kind {
+            Decoration::Underline => baseline + line.descent * 0.618,
+            Decoration::Strikethrough => {
+                (line.ascent * 0.5 + (baseline - origin.y)) * 0.5 + origin.y
+            }
+        };
+        window.paint_quad(fill(
+            Bounds::new(
+                point(origin.x + cell_w * start as f32, y),
+                size(cell_w * len as f32, hairline),
+            ),
+            color,
+        ));
+    }
 }
 
 /// Whether a link occupying `len` cells from `start` on row `r` is the one
