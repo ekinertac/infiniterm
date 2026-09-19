@@ -23,7 +23,7 @@
 //!
 //! Without CEF (the bare binary outside a bundle) the card says so and
 //! stays a rectangle, with one placeholder tab.
-use crate::body::{BodyAction, CardBody};
+use crate::body::{BodyAction, CardBody, TabClick};
 use gpui::{
     fill, font, point, px, size, App, Bounds, CursorStyle, Hsla, Keystroke, Pixels, RenderImage,
     Window,
@@ -59,6 +59,10 @@ const TAB_STRIP_HEIGHT_PX: f64 = 28.;
 const TAB_STRIP_TAB_WIDTH_PX: f64 = 140.;
 const TAB_STRIP_FONT_PX: f64 = 11.;
 const TAB_STRIP_LABEL_PAD_PX: f64 = 8.;
+/// The close button's width within a tab's own band, screen pixels: the
+/// rightmost slice of every tab is its `×`, everything left of that
+/// switches to it.
+const TAB_STRIP_CLOSE_WIDTH_PX: f64 = 20.;
 
 /// One tab: everything that was a single field on `BrowserBody` before
 /// tabs existed, once per open page.
@@ -429,6 +433,37 @@ impl Drop for BrowserBody {
     }
 }
 
+/// Which of the strip's affordances a click at `local` lands on, or `None`
+/// below the strip (a page click). `local` is `CardBody::mouse_down`'s own
+/// space: card pixels, the zoom (`scale`) already undone. `paint` computes
+/// the strip's screen-pixel sizes as `PX * ui_scale * scale` because it
+/// draws into `Bounds<Pixels>`, already at `scale`; here that last
+/// multiplication is skipped because `local` is one step earlier, world
+/// units, not screen ones. Get the two out of step and a click lands on the
+/// tab next to the one drawn under the cursor.
+fn strip_hit(local: Point, ui_scale: f32, tab_count: usize) -> Option<TabClick> {
+    let strip_h = TAB_STRIP_HEIGHT_PX * ui_scale as f64;
+    if local.y < 0. || local.y >= strip_h {
+        return None;
+    }
+    let tab_w = TAB_STRIP_TAB_WIDTH_PX * ui_scale as f64;
+    let index = (local.x / tab_w).floor().max(0.) as usize;
+    if index == tab_count {
+        return Some(TabClick::New);
+    }
+    if index > tab_count {
+        // Past the "+" button: empty strip, same as clicking dead space.
+        return None;
+    }
+    let close_w = TAB_STRIP_CLOSE_WIDTH_PX * ui_scale as f64;
+    let x_in_tab = local.x - (index as f64) * tab_w;
+    if x_in_tab >= tab_w - close_w {
+        Some(TabClick::Close(index))
+    } else {
+        Some(TabClick::Switch(index))
+    }
+}
+
 impl CardBody for BrowserBody {
     fn paint(
         &mut self,
@@ -614,6 +649,18 @@ impl CardBody for BrowserBody {
         modifiers: &gpui::Modifiers,
         clicks: usize,
     ) -> BodyAction {
+        // The strip is chrome, not page content: a click on it is ours to
+        // handle before anything about the page (its surface, its focus
+        // scrim) is even considered. A non-left click here does nothing
+        // rather than falling through to the page below (the page didn't
+        // paint under it; the strip is drawn over it, see `paint`).
+        if let Some(hit) = strip_hit(local, self.ui_scale, self.tabs.len()) {
+            return if button == gpui::MouseButton::Left {
+                BodyAction::BrowserTab(hit)
+            } else {
+                BodyAction::None
+            };
+        }
         if self.active_surface().is_none() {
             return BodyAction::None;
         }
@@ -794,6 +841,68 @@ mod tab_label_tests {
         assert_eq!(tab_label(&tab), "https://a.example");
         tab.title = Some("Example Domain".into());
         assert_eq!(tab_label(&tab), "Example Domain");
+    }
+}
+
+#[cfg(test)]
+mod tab_strip_hit_tests {
+    use super::*;
+    use crate::body::TabClick;
+
+    #[test]
+    fn a_point_below_the_strip_height_is_a_page_click_not_a_strip_one() {
+        assert!(strip_hit(Point { x: 5., y: 5. }, 1., 2).is_some());
+        assert!(strip_hit(Point { x: 5., y: 50. }, 1., 2).is_none());
+    }
+
+    #[test]
+    fn a_point_in_a_tabs_main_band_switches_to_it() {
+        // Tab width 140px at ui_scale 1: well left of tab 0's and tab 1's
+        // own close sub-regions.
+        assert_eq!(
+            strip_hit(Point { x: 30., y: 5. }, 1., 2),
+            Some(TabClick::Switch(0))
+        );
+        assert_eq!(
+            strip_hit(Point { x: 170., y: 5. }, 1., 2),
+            Some(TabClick::Switch(1))
+        );
+    }
+
+    #[test]
+    fn a_point_in_a_tabs_close_sub_region_closes_it_instead_of_switching() {
+        // Tab 0 spans 0..140; its close band is the rightmost 20px, so 125
+        // is inside the tab but past where a switch click stops.
+        assert_eq!(
+            strip_hit(Point { x: 125., y: 5. }, 1., 2),
+            Some(TabClick::Close(0))
+        );
+    }
+
+    #[test]
+    fn a_point_past_the_last_tab_is_the_new_tab_button() {
+        // 2 tabs, 140px each: the "+" is the next 140px band, 280..420.
+        assert_eq!(
+            strip_hit(Point { x: 300., y: 5. }, 1., 2),
+            Some(TabClick::New)
+        );
+    }
+
+    #[test]
+    fn a_point_past_the_new_tab_button_hits_nothing() {
+        assert_eq!(strip_hit(Point { x: 450., y: 5. }, 1., 2), None);
+    }
+
+    #[test]
+    fn ui_scale_stretches_the_strips_geometry_like_paint_does() {
+        // At 2x ui_scale the strip is twice as tall and each tab twice as
+        // wide, mirroring the same multiplication `paint` applies.
+        assert!(strip_hit(Point { x: 5., y: 50. }, 1., 2).is_none());
+        assert!(strip_hit(Point { x: 5., y: 50. }, 2., 2).is_some());
+        assert_eq!(
+            strip_hit(Point { x: 100., y: 5. }, 2., 2),
+            Some(TabClick::Switch(0))
+        );
     }
 }
 

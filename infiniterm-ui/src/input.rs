@@ -715,6 +715,23 @@ impl AppView {
                     self.model.notify(format!("could not open: {e}"));
                 }
             }
+            // Routed through the model, not the body: `Card.tabs` is the
+            // authority `browsers.rs::reconcile_browsers` syncs the body
+            // from, the same commands a keyboard shortcut already calls.
+            crate::body::BodyAction::BrowserTab(hit) => match hit {
+                crate::body::TabClick::Switch(index) => {
+                    self.model.browser_tab_jump(id, index);
+                }
+                crate::body::TabClick::New => {
+                    self.model.browser_tab_open(id, None);
+                }
+                crate::body::TabClick::Close(index) => {
+                    // `browser_tab_close` always closes the ACTIVE tab; a
+                    // click on a tab that isn't active jumps to it first.
+                    self.model.browser_tab_jump(id, index);
+                    self.model.browser_tab_close(id);
+                }
+            },
         }
     }
 }

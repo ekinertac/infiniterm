@@ -6,6 +6,24 @@
 use gpui::{fill, App, Bounds, Hsla, Keystroke, Pixels, Window};
 use infiniterm_core::grid::{Point, Size};
 
+/// A click on a browser card's tab strip: which of its three affordances
+/// (switch, close, open) it landed on, and which tab index. Carried out
+/// through the model (`Model::browser_tab_*`, `infiniterm-core/src/model/
+/// tabs_cmd.rs`), the same commands a keyboard shortcut already calls,
+/// rather than the body mutating its own `tabs`/`active` mirror directly:
+/// `Card.tabs` is authoritative and `browsers.rs::reconcile_browsers`
+/// already owns the card-to-body sync, so a second, opposite-direction path
+/// would fight it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabClick {
+    /// Switch to the tab at this index.
+    Switch(usize),
+    /// Close the tab at this index (closes the card if it was the last tab).
+    Close(usize),
+    /// Open a new tab at `about:blank`.
+    New,
+}
+
 /// What a body hands back from a click: something for the model to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum BodyAction {
@@ -25,6 +43,8 @@ pub enum BodyAction {
     },
     /// A click on a spawn error: start the shell again.
     Retry,
+    /// A click on a browser card's tab strip.
+    BrowserTab(TabClick),
 }
 
 pub trait CardBody {
