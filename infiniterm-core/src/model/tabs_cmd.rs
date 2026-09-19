@@ -87,6 +87,7 @@ impl Model {
         let n = card.tabs.len() as i32;
         card.active_tab = ((card.active_tab as i32 + delta).rem_euclid(n)) as usize;
         card.url = card.tabs.get(card.active_tab).cloned();
+        self.dirty_layout = true;
     }
 
     /// 0-based `index`; out of range is a no-op, matching Chrome's
@@ -101,6 +102,7 @@ impl Model {
         }
         card.active_tab = index;
         card.url = card.tabs.get(index).cloned();
+        self.dirty_layout = true;
     }
 
     pub fn browser_tab_jump_last(&mut self, card_id: &str) {
@@ -111,6 +113,7 @@ impl Model {
         if let Some(last) = card.tabs.len().checked_sub(1) {
             card.active_tab = last;
             card.url = card.tabs.get(last).cloned();
+            self.dirty_layout = true;
         }
     }
 }
@@ -234,8 +237,13 @@ mod tests {
     fn next_and_prev_wrap() {
         let (mut m, id) = browser_card();
         m.browser_tab_open(&id, Some("https://b.example"));
+        m.dirty_layout = false; // opening already dirtied it; isolate the step
         m.browser_tab_step(&id, 1);
         assert_eq!(m.card(&id).unwrap().active_tab, 0, "wrapped past the end");
+        assert!(
+            m.dirty_layout,
+            "a tab switch must reach the save file or a restart loses it"
+        );
         m.browser_tab_step(&id, -1);
         assert_eq!(m.card(&id).unwrap().active_tab, 1, "wrapped past the start");
     }
@@ -243,8 +251,12 @@ mod tests {
     #[test]
     fn jump_out_of_range_is_a_no_op() {
         let (mut m, id) = browser_card();
+        m.dirty_layout = false; // set_focus in the fixture already dirtied it
         m.browser_tab_jump(&id, 5);
         assert_eq!(m.card(&id).unwrap().active_tab, 0);
+        assert!(!m.dirty_layout, "a no-op jump changed nothing to save");
+        m.browser_tab_jump(&id, 0);
+        assert!(m.dirty_layout, "a real jump does");
     }
 
     #[test]
