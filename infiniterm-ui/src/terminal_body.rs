@@ -128,6 +128,14 @@ pub struct TerminalBody {
     /// text is drawn as bars for the duration so the motion stays smooth,
     /// and the glyphs come back the frame it stops. Set by `terminals.rs`.
     pub in_motion: bool,
+    /// A selection drag has left the card by the top (negative) or bottom
+    /// (positive) edge: the grid scrolls this many lines a frame, growing
+    /// with the distance, and the selection follows to the edge row. Set
+    /// by `mouse_move`, applied in `paint`, cleared on the release.
+    autoscroll: f64,
+    /// The last pointer position of a selection drag, for the autoscroll's
+    /// column.
+    drag_local: Point,
     /// When the blink clock last restarted (a key), and the phase and focus
     /// of the last paint, so `wants_frame` can say when the next flip is due.
     blink_epoch: f64,
@@ -247,6 +255,8 @@ impl TerminalBody {
             cwd,
             error: None,
             in_motion: false,
+            autoscroll: 0.,
+            drag_local: Point { x: 0., y: 0. },
             displaced: false,
             readopt_due: 0.,
             outgoing: vec![],
@@ -567,6 +577,11 @@ impl TerminalBody {
     }
 }
 
+/// The most lines a selection drag scrolls per frame when held far past
+/// the edge: quick enough to reach old history, slow enough to stop on
+/// the line you want.
+const AUTOSCROLL_MAX_LINES: f64 = 4.;
+
 /// How often a displaced card asks whether `ift attach` has let go.
 pub const READOPT_POLL_MS: f64 = 1000.;
 
@@ -632,6 +647,23 @@ impl CardBody for TerminalBody {
         }
         if self.displaced {
             self.paint_displaced(bounds, scale, window, cx);
+        }
+        // A selection drag held past the edge: one step of scroll a frame,
+        // and the selection's end follows to the edge row, so what scrolls
+        // into view is selected as it arrives.
+        if self.selecting && self.autoscroll != 0. {
+            // Positive `scroll` is up into history; the drag above the top
+            // edge is negative.
+            self.grid.scroll(-(self.autoscroll as i32));
+            let (col, _) = self.cell_at(self.drag_local);
+            let row = if self.autoscroll < 0. {
+                0
+            } else {
+                self.rows.saturating_sub(1)
+            };
+            self.grid
+                .update_selection(col, row, self.right_half(self.drag_local));
+            self.dirty = true;
         }
         let t = std::time::Instant::now();
         let mut frame = std::mem::take(&mut self.frame);
@@ -956,14 +988,22 @@ impl CardBody for TerminalBody {
         }
         // A plain press: the start of a text selection. Shift over a mouse
         // program gets here too, the override every terminal gives it.
+        // Shift+click with a selection already there EXTENDS it to the
+        // click, the way every Mac text view does, and the drag that may
+        // follow keeps extending.
         if b == MouseButton::Left {
-            let kind = match clicks {
-                1 => SelectKind::Cells,
-                2 => SelectKind::Words,
-                _ => SelectKind::Lines,
-            };
-            self.grid.start_selection(col, row, kind);
+            if modifiers.shift && self.grid.has_selection() {
+                self.grid.update_selection(col, row, self.right_half(local));
+            } else {
+                let kind = match clicks {
+                    1 => SelectKind::Cells,
+                    2 => SelectKind::Words,
+                    _ => SelectKind::Lines,
+                };
+                self.grid.start_selection(col, row, kind);
+            }
             self.selecting = true;
+            self.drag_local = local;
             self.dirty = true;
         }
         BodyAction::None
@@ -972,6 +1012,7 @@ impl CardBody for TerminalBody {
     fn mouse_up(&mut self, local: Point, button: gpui::MouseButton, modifiers: &gpui::Modifiers) {
         if self.selecting {
             self.selecting = false;
+            self.autoscroll = 0.;
             // A click that did not move selects nothing, and a lone click
             // must leave no one-cell selection behind for Cmd+C to copy.
             if !self.grid.has_selection() {
@@ -1000,6 +1041,21 @@ impl CardBody for TerminalBody {
         }
         if self.selecting {
             self.grid.update_selection(col, row, self.right_half(local));
+            self.drag_local = local;
+            // Past the top or bottom edge the grid scrolls under the drag,
+            // faster the further out, so history can be selected without
+            // letting go. Applied per frame in `paint`.
+            let line_h = self.font_px * self.line_height;
+            let height = self.rows as f64 * line_h;
+            self.autoscroll = if local.y < PAD {
+                -(((PAD - local.y) / line_h).ceil().min(AUTOSCROLL_MAX_LINES))
+            } else if local.y > PAD + height {
+                ((local.y - PAD - height) / line_h)
+                    .ceil()
+                    .min(AUTOSCROLL_MAX_LINES)
+            } else {
+                0.
+            };
             self.dirty = true;
             return;
         }
@@ -1059,6 +1115,7 @@ impl CardBody for TerminalBody {
 
     fn wants_frame(&self, now: f64) -> bool {
         self.dirty
+            || (self.selecting && self.autoscroll != 0.)
             || (self.displaced && now >= self.readopt_due)
             || (self.painted_focused
                 && self.blink
@@ -1399,6 +1456,60 @@ mod tests {
         assert!(!under_hover(Some((9, 3)), 3, 5, 4));
         assert!(!under_hover(Some((5, 2)), 3, 5, 4));
         assert!(!under_hover(Some((4, 3)), 3, 5, 4));
+    }
+
+    // Shift+click grows the selection to the click instead of starting a
+    // new one, and a drag held past the edge asks to scroll, faster the
+    // further out, until the pointer comes back in or lets go.
+    #[test]
+    fn shift_click_extends_and_a_drag_past_the_edge_scrolls() {
+        let mut b = body();
+        b.feed(b"one two three four five\r\nsix seven eight nine ten\r\n");
+        let at = |col: f64, row: f64| Point {
+            x: PAD + col * 8.4 + 1.,
+            y: PAD + row * 14. * 1.2 + 1.,
+        };
+        // The right half of a cell, so a drag ending on a character takes it.
+        let onto = |col: f64, row: f64| Point {
+            x: PAD + col * 8.4 + 7.,
+            y: PAD + row * 14. * 1.2 + 1.,
+        };
+        let plain = gpui::Modifiers::default();
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        b.mouse_down(at(0., 0.), gpui::MouseButton::Left, &plain, 1);
+        b.mouse_move(onto(2., 0.), &plain);
+        b.mouse_up(onto(2., 0.), gpui::MouseButton::Left, &plain);
+        assert_eq!(b.grid.selection_text().as_deref(), Some("one"));
+        b.mouse_down(onto(6., 0.), gpui::MouseButton::Left, &shift, 1);
+        b.mouse_up(onto(6., 0.), gpui::MouseButton::Left, &shift);
+        assert_eq!(b.grid.selection_text().as_deref(), Some("one two"));
+        // Without Shift a click starts over (and a click alone selects nothing).
+        b.mouse_down(at(4., 1.), gpui::MouseButton::Left, &plain, 1);
+        b.mouse_up(at(4., 1.), gpui::MouseButton::Left, &plain);
+        assert_eq!(b.grid.selection_text(), None);
+        // A drag above the card: negative, capped; below: positive; inside: none.
+        b.mouse_down(at(0., 1.), gpui::MouseButton::Left, &plain, 1);
+        b.mouse_move(Point { x: 10., y: -200. }, &plain);
+        assert_eq!(b.autoscroll, -AUTOSCROLL_MAX_LINES);
+        assert!(b.wants_frame(0.));
+        b.mouse_move(
+            Point {
+                x: 10.,
+                y: 600. + 20.,
+            },
+            &plain,
+        );
+        assert!(
+            b.autoscroll > 0. && b.autoscroll <= AUTOSCROLL_MAX_LINES,
+            "{}",
+            b.autoscroll
+        );
+        b.mouse_move(at(3., 1.), &plain);
+        assert_eq!(b.autoscroll, 0.);
+        b.mouse_up(at(3., 1.), gpui::MouseButton::Left, &plain);
     }
 
     #[test]
