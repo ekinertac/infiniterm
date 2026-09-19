@@ -184,6 +184,7 @@ impl AppView {
                     start_px: p,
                     start_rect,
                     start_rects,
+                    ghost: None,
                 });
             }
             Hit::CardEdge { id, edge } => {
@@ -212,6 +213,7 @@ impl AppView {
                     start_px: p,
                     start_rect,
                     start_rects: vec![],
+                    ghost: None,
                 });
             }
             Hit::CardBody { id, local } => {
@@ -289,18 +291,20 @@ impl AppView {
             let dy = snap((p.y - g.start_px.y) / scale);
             let card = g.card.clone();
             match &g.kind {
+                // The ghost follows; the card waits for the drop.
                 GestureKind::Move => {
                     let r = Rect {
                         x: g.start_rect.x + dx,
                         y: g.start_rect.y + dy,
                         ..g.start_rect
                     };
-                    if let Some(c) = self.model.card_mut(&card) {
-                        c.rect = r;
-                        if std::env::var_os("INFINITERM_KEYLOG").is_some() {
-                            eprintln!("[gesture] rect now {:?} (dx {dx} dy {dy})", c.rect);
-                        }
+                    if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                        eprintln!("[gesture] ghost now {r:?} (dx {dx} dy {dy})");
                     }
+                    if let Some(g) = self.gesture.as_mut() {
+                        g.ghost = Some(r);
+                    }
+                    self.redraw = true;
                 }
                 GestureKind::Resize(edge) => {
                     let r = apply_resize(g.start_rect, *edge, dx, dy);
@@ -431,6 +435,12 @@ impl AppView {
             return;
         }
         if let Some(g) = self.gesture.take() {
+            // A single card's drop: to the ghost, if the space is free.
+            if let (GestureKind::Move, Some(ghost)) = (&g.kind, g.ghost) {
+                self.model.drop_card(&g.card, ghost);
+                self.perform_effects();
+                return;
+            }
             // The drop: snapped, or put back if it landed on another card.
             let (ids, start): (Vec<String>, Vec<(String, Rect)>) = match &g.kind {
                 GestureKind::MoveGroup(_) => (

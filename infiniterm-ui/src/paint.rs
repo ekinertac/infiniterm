@@ -40,6 +40,10 @@ const CENTERED_LABEL_HEIGHT_SCALE: f32 = 2.;
 /// The slot hint's badge is also widened to twice its text, for a click
 /// target bigger than the letter itself.
 const HINT_BOX_WIDTH_PAD_SCALE: f32 = 2.;
+/// The ghost's fill: enough to read as a slot, not enough to hide what is
+/// under it.
+const GHOST_FILL_ALPHA: f32 = 0.08;
+
 /// An alignment guide is a hint, not a border: visible but not shouting.
 const ALIGNMENT_GUIDE_ALPHA: f32 = 0.8;
 /// A phantom's key label is larger than the corner labels, since it is the
@@ -323,12 +327,19 @@ impl AppView {
         }
 
         // A live drag or resize: the cards moving, whether they overlap, and
-        // the lines they align with.
+        // the lines they align with. A single card's drag moves its GHOST
+        // (`Gesture::ghost`), so the card itself is not "moving" here; the
+        // ghost is drawn after the cards and the guides follow it.
+        let ghost: Option<(String, Rect)> = self
+            .gesture
+            .as_ref()
+            .and_then(|g| g.ghost.map(|r| (g.card.clone(), r)));
         let moving: Vec<String> = match &self.gesture {
             Some(g) => match &g.kind {
                 crate::GestureKind::MoveGroup(_) => {
                     g.start_rects.iter().map(|(id, _)| id.clone()).collect()
                 }
+                _ if ghost.is_some() => vec![],
                 _ => vec![g.card.clone()],
             },
             None => vec![],
@@ -461,17 +472,37 @@ impl AppView {
             }
         }
 
+        // The ghost: an outline where the dragged card would land, in the
+        // focus ring's colour when the space is free and the warning colour
+        // when a card is in the way, so the answer is known before the drop.
+        if let Some((id, r)) = &ghost {
+            let free = self
+                .model
+                .rect_free_for(id, infiniterm_core::grid::snap_rect(*r));
+            let color = if free { chrome.focus_ring } else { chrome.warn };
+            let b = at(*r);
+            window.paint_quad(outline(b, color, BorderStyle::Solid).border_widths(border_w));
+            window.paint_quad(fill(b, crate::chrome::with_alpha(color, GHOST_FILL_ALPHA)));
+        }
+
         // Alignment guides, over everything: one screen pixel, the focus
         // ring's colour, where a moving edge or centre lines up with another
-        // card's.
-        if let Some(first) = moving.first().and_then(|id| self.model.card(id)) {
+        // card's (or the ghost's).
+        let guided: Option<(String, Rect)> = ghost.clone().or_else(|| {
+            moving
+                .first()
+                .and_then(|id| self.model.card(id))
+                .map(|c| (c.id.clone(), c.rect))
+        });
+        if let Some((moving_id, moving_rect)) = guided {
             let others: Vec<Rect> = cards
                 .iter()
-                .filter(|c| !moving.contains(&c.id))
+                .filter(|c| c.id != moving_id && !moving.contains(&c.id))
                 .map(|c| c.rect)
                 .collect();
+            let first_rect = moving_rect;
             let hairline = px(crate::chrome::HAIRLINE_PX as f32);
-            for g in infiniterm_core::alignment::guides(first.rect, &others) {
+            for g in infiniterm_core::alignment::guides(first_rect, &others) {
                 let sx = |x: f64| origin.x + px(((x - vp.x) * vp.scale) as f32);
                 let sy = |y: f64| origin.y + px(((y - vp.y) * vp.scale) as f32);
                 let line = match g.axis {

@@ -91,6 +91,12 @@ pub struct Gesture {
     pub start_px: Point,
     pub start_rect: Rect,
     pub start_rects: Vec<(String, Rect)>,
+    /// A single card's drag moves a GHOST, not the card: the outline where
+    /// it would land, snapped to the grid, and the card goes there on the
+    /// drop if the space is free (`Model::drop_card`). The card sliding
+    /// under the pointer from the first pixel felt like a mistake being
+    /// made rather than a choice being offered.
+    pub ghost: Option<Rect>,
 }
 
 /// A card mid-glide after a swap or a split, from its old rect.

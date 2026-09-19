@@ -472,6 +472,48 @@ impl Model {
     }
 
     /// While a gesture is live: whether the moving cards overlap anything.
+    /// Whether `rect` is free for `id` on its canvas: no other card, no
+    /// other group's frame. What the drag's ghost is coloured by.
+    pub fn rect_free_for(&self, id: &str, rect: Rect) -> bool {
+        let Some(card) = self.card(id) else {
+            return false;
+        };
+        let ws = card.workspace_id.clone();
+        let mut occupied: Vec<Rect> = self
+            .cards
+            .iter()
+            .filter(|c| c.workspace_id == ws && c.id != id)
+            .map(|c| c.rect)
+            .collect();
+        occupied.extend(self.other_frames(card.group_id.as_deref(), &ws));
+        !occupied.iter().any(|o| rects_overlap(rect, *o))
+    }
+
+    /// The end of a single card's drag: the card goes to where the ghost
+    /// was, gliding from where it is, if that space is free; else it stays
+    /// where it never left and the status bar says why.
+    pub fn drop_card(&mut self, id: &str, ghost: Rect) -> bool {
+        let ghost = snap_rect(ghost);
+        let Some(card) = self.card(id).cloned() else {
+            return false;
+        };
+        if ghost == card.rect {
+            return true;
+        }
+        if !self.rect_free_for(id, ghost) {
+            self.notify("cards cannot overlap");
+            return false;
+        }
+        self.mark_swap(std::slice::from_ref(&id.to_string()));
+        if let Some(c) = self.card_mut(id) {
+            c.rect = ghost;
+            // Moved away from whatever it was split from.
+            c.soft_group_id = None;
+        }
+        self.dirty_layout = true;
+        true
+    }
+
     pub fn gesture_overlaps(&self, ids: &[String]) -> bool {
         let ws = self.active_workspace.clone().unwrap_or_default();
         let group = ids

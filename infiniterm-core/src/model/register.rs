@@ -502,6 +502,38 @@ mod tests {
         assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("no room")));
     }
 
+    // A dragged card stays put until the drop: the ghost goes where the
+    // pointer says, and the card follows only onto free space.
+    #[test]
+    fn a_drop_moves_the_card_only_onto_free_space() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        let a_rect = h.focused().rect;
+        h.run("card.new.terminal");
+        let b_rect = h.focused().rect;
+        // Onto b: refused, a is where it was, and it says so.
+        assert!(!h.m.drop_card(&a, b_rect));
+        assert_eq!(h.m.card(&a).unwrap().rect, a_rect);
+        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("overlap")));
+        // Onto free canvas, off-grid by a little: snapped there, animated.
+        let target = Rect {
+            x: a_rect.x + 7.,
+            y: a_rect.y + a_rect.h + 3000.,
+            ..a_rect
+        };
+        assert!(h.m.drop_card(&a, target));
+        let landed = h.m.card(&a).unwrap().rect;
+        assert_eq!(landed, crate::grid::snap_rect(target));
+        assert!(h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::MarkSwap(_))));
+        // Back where it is: nothing to do.
+        assert!(h.m.drop_card(&a, landed));
+        assert!(h.m.rect_free_for(&a, landed));
+    }
+
     // Grouping moves the selection to a free block right of the grid, as one block.
     #[test]
     fn grouping_names_the_group_and_moves_the_cards_together() {
