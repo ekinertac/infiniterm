@@ -533,6 +533,12 @@ impl AppView {
         window: &mut Window,
         cx: &mut App,
     ) {
+        // A browser card wears no label: the page has its own title and a
+        // tab strip is coming to carry it, and a chip over a page covered
+        // the corner of every site. The frame band still drags and fits.
+        if card.kind == infiniterm_core::saved_layout::CardKind::Browser {
+            return;
+        }
         let chrome = &self.chrome;
         let inv = inverse_scale(scale, self.model.ui_scale) as f32;
         // Screen-sized, so it never shrinks with the canvas, and stepped
