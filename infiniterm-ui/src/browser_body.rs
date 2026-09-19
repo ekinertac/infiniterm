@@ -41,9 +41,6 @@ const DEVICE_SCALE_STEPS_PER_UNIT: f64 = 2.;
 /// CEF is never asked to render past this device scale: a sanity ceiling
 /// on how many pixels a zoomed-in browser card can demand.
 const DEVICE_SCALE_MAX: f64 = 3.;
-/// Below this the device scale hasn't really changed, just drifted in
-/// floating point; resizing the surface for it would be wasted work.
-const SCALE_CHANGE_EPSILON: f32 = 0.01;
 /// The "loading"/"unavailable" placeholder text's font size.
 const STATUS_FONT_PX: f64 = 13.;
 /// The placeholder text's inset from the card's corner.
@@ -63,6 +60,10 @@ const TAB_STRIP_LABEL_PAD_PX: f64 = 8.;
 /// rightmost slice of every tab is its `×`, everything left of that
 /// switches to it.
 const TAB_STRIP_CLOSE_WIDTH_PX: f64 = 20.;
+/// The hairline under the strip and between tabs: without it the strip
+/// blended into whatever the active tab's page painted right below it,
+/// and one tab's label ran into the next with nothing to tell them apart.
+const TAB_STRIP_BORDER_PX: f64 = 1.;
 
 /// One tab: everything that was a single field on `BrowserBody` before
 /// tabs existed, once per open page.
@@ -165,6 +166,22 @@ pub struct BrowserBody {
     pub ui_scale: f32,
     pub card_bg: Hsla,
     pub text: Hsla,
+    /// The strip's own background, distinct from `card_bg`: chrome that
+    /// looks like the page behind it is chrome nobody can tell is there.
+    pub strip_bg: Hsla,
+    /// The hairline under the strip and between tabs.
+    pub strip_border: Hsla,
+    /// The active tab's label and the strip's own glyphs (the `+`, the
+    /// card number): full brightness, so the active tab visibly outranks
+    /// the rest rather than blending into them.
+    pub text_bright: Hsla,
+    /// An inactive tab's label: dimmer than the active one on purpose,
+    /// the same contrast trick a real browser's tab strip uses.
+    pub text_muted: Hsla,
+    /// The active tab's own band, filled solid rather than the faint
+    /// tint tried first: at this strip's height a few percent of alpha
+    /// read as noise, not as "this one is selected".
+    pub active_tab_bg: Hsla,
     pub font_family: String,
     dirty: bool,
     pub popups: Vec<String>,
@@ -187,7 +204,14 @@ impl BrowserBody {
     ) -> BrowserBody {
         BrowserBody {
             card_id: card_id.to_string(),
-            tabs: vec![Tab::open(url, world, scale, cef_running)],
+            // ui_scale defaults to 1. below, same as every other mirrored
+            // field, until `reconcile_browsers` pushes the real one.
+            tabs: vec![Tab::open(
+                url,
+                page_world_size(world, 1.),
+                scale,
+                cef_running,
+            )],
             active: 0,
             locked: false,
             focused_tab: None,
@@ -203,6 +227,14 @@ impl BrowserBody {
             ui_scale: 1.,
             card_bg: gpui::rgb(0x0e101a).into(),
             text: gpui::rgb(0xb9c4d2).into(),
+            // Chrome::default_chrome's own values, mirrored properly once
+            // `reconcile_browsers` runs; same convention as `card_bg`/`text`
+            // above, so the very first frame still looks right.
+            strip_bg: gpui::rgb(0x0f1115).into(),
+            strip_border: gpui::rgb(0x1e2430).into(),
+            text_bright: gpui::rgb(0xe6ebf2).into(),
+            text_muted: gpui::rgb(0x7b8794).into(),
+            active_tab_bg: gpui::rgb(0x2b3442).into(),
             font_family: "Menlo".into(),
             dirty: true,
             popups: vec![],
@@ -230,8 +262,9 @@ impl BrowserBody {
     /// appends one. It does NOT become active on its own: the active index
     /// arrives from `card.active_tab` like everything else.
     pub fn open_tab(&mut self, url: &str) {
+        let page = page_world_size(self.world, self.ui_scale);
         self.tabs
-            .push(Tab::open(url, self.world, self.scale, self.cef_running));
+            .push(Tab::open(url, page, self.scale, self.cef_running));
         self.dirty = true;
     }
 
@@ -246,10 +279,11 @@ impl BrowserBody {
         // are asked for, rather than twice the browsers alive at once.
         self.tabs.clear();
         self.focused_tab = None;
-        let (world, scale, cef) = (self.world, self.scale, self.cef_running);
+        let page = page_world_size(self.world, self.ui_scale);
+        let (scale, cef) = (self.scale, self.cef_running);
         self.tabs = urls
             .iter()
-            .map(|u| Tab::open(u, world, scale, cef))
+            .map(|u| Tab::open(u, page, scale, cef))
             .collect();
         self.active = 0;
         self.apply_focus();
@@ -473,6 +507,28 @@ fn close_band_left_px() -> f64 {
     TAB_STRIP_TAB_WIDTH_PX - TAB_STRIP_CLOSE_WIDTH_PX
 }
 
+/// The strip's own height in WORLD units — `local`'s space in every mouse
+/// handler, and `Tab::open`/`Surface::resize`'s inputs, all pre-`scale`.
+fn strip_world_h(ui_scale: f32) -> f64 {
+    TAB_STRIP_HEIGHT_PX * ui_scale as f64
+}
+
+/// What CEF actually renders into: the card's world size minus the strip's
+/// own band. The strip used to be an overlay painted OVER the page after it
+/// painted at the full card height, which covered real page content under
+/// the top `TAB_STRIP_HEIGHT_PX` rather than making room for the strip —
+/// tabs read as though they were slicing the top off every page, because
+/// they were. This is real space instead: the page is laid out and painted
+/// into the band below the strip, and every mouse coordinate forwarded to a
+/// surface is shifted by the same amount (see `mouse_down` and friends), so
+/// what is under the cursor on screen is what the page sees.
+fn page_world_size(world: Size, ui_scale: f32) -> Size {
+    Size {
+        w: world.w,
+        h: (world.h - strip_world_h(ui_scale)).max(1.),
+    }
+}
+
 impl CardBody for BrowserBody {
     fn paint(
         &mut self,
@@ -494,37 +550,38 @@ impl CardBody for BrowserBody {
         let device = (self.scale as f64 * scale * DEVICE_SCALE_STEPS_PER_UNIT).ceil()
             / DEVICE_SCALE_STEPS_PER_UNIT;
         let device = device.clamp(self.scale as f64, DEVICE_SCALE_MAX) as f32;
-        // Every tab follows the zoom, not just the visible one: a background
-        // tab has to be the right size the moment it becomes active, or the
-        // first frame after the switch is a stretched page.
+        // Every tab follows the zoom and the strip's own share of the card,
+        // not just the visible one: a background tab has to be the right
+        // size the moment it becomes active, or the first frame after the
+        // switch is a stretched page. `Surface::resize` no-ops when nothing
+        // actually changed, so calling it every frame (rather than only on
+        // a scale change, as before) is what also picks up a live
+        // `ui.scale` change without a second code path to keep in step.
+        let page = page_world_size(self.world, self.ui_scale);
+        let (page_w, page_h) = (page.w.round() as i32, page.h.round() as i32);
         for tab in &self.tabs {
             if let Some(s) = &tab.surface {
-                if (s.shared.borrow().scale - device).abs() > SCALE_CHANGE_EPSILON {
-                    s.resize(
-                        self.world.w.round() as i32,
-                        self.world.h.round() as i32,
-                        device,
-                    );
-                }
+                s.resize(page_w, page_h, device);
             }
         }
-        // The page paints at the FULL `bounds`, unchanged from before the
-        // strip existed: `local` in `mouse_down`/`mouse_move`/`wheel` is
-        // computed by `input.rs::hit()` from the card's WORLD rect and
-        // forwarded straight to `Surface::mouse_button`/`mouse_move`/`wheel`
-        // with no strip awareness, so if the page were painted into a
-        // shorter box here, what the user clicked and what they saw under
-        // the cursor would disagree (worst near the top, by the strip's own
-        // height). Squeezing the texture into a shorter `page_bounds` was
-        // tried and reverted for exactly this: it fixed nothing CEF-side
-        // and broke every click's y-coordinate against what was on screen.
-        // The strip is painted AFTER the page instead (below), covering its
-        // own band of page content the way a real browser's toolbar does,
-        // which is what the design doc actually asked for.
+        // The strip is real space now, not an overlay: the page is laid out
+        // and painted into the band BELOW it, matching what `page_world_size`
+        // asked CEF to render. `mouse_down`/`mouse_up`/`mouse_move`/`wheel`
+        // shift every coordinate they forward by the same amount, so what is
+        // under the cursor on screen is what the page sees. Painting the
+        // page at the full card height and covering its top rows with an
+        // opaque strip was tried first and read as tabs slicing the top off
+        // every page, which is exactly what it was doing.
+        let strip_h =
+            px((TAB_STRIP_HEIGHT_PX * self.ui_scale as f64 * scale) as f32).min(bounds.size.height);
+        let page_bounds = Bounds::new(
+            point(bounds.origin.x, bounds.origin.y + strip_h),
+            size(bounds.size.width, bounds.size.height - strip_h),
+        );
         window.paint_quad(fill(bounds, self.card_bg));
         match self.active_tab().and_then(|t| t.texture.clone()) {
             Some(img) => {
-                let _ = window.paint_image(bounds, Default::default(), img, 0, false);
+                let _ = window.paint_image(page_bounds, Default::default(), img, 0, false);
             }
             None => {
                 let font_size = px((STATUS_FONT_PX * scale) as f32);
@@ -542,8 +599,8 @@ impl CardBody for BrowserBody {
                     );
                     let _ = line.paint(
                         point(
-                            bounds.origin.x + px((STATUS_TEXT_PAD_PX * scale) as f32),
-                            bounds.origin.y + px((STATUS_TEXT_PAD_PX * scale) as f32),
+                            page_bounds.origin.x + px((STATUS_TEXT_PAD_PX * scale) as f32),
+                            page_bounds.origin.y + px((STATUS_TEXT_PAD_PX * scale) as f32),
                         ),
                         font_size * STATUS_LINE_HEIGHT_RATIO,
                         window,
@@ -558,19 +615,15 @@ impl CardBody for BrowserBody {
                 crate::chrome::with_alpha(self.card_bg, self.inactive_dim as f32),
             ));
         }
-        // The strip's height in screen pixels, `ui_scale`-aware like every
-        // other piece of chrome, clamped to the card's own height so a
-        // tiny/zoomed-out card cannot make it taller than the card itself.
-        let strip_h =
-            px((TAB_STRIP_HEIGHT_PX * self.ui_scale as f64 * scale) as f32).min(bounds.size.height);
         let strip = Bounds::new(bounds.origin, size(bounds.size.width, strip_h));
-        // The strip itself, painted last so it sits OVER the page rather
-        // than under it: each tab's elided title, the active one visually
-        // distinct, the card's number where the corner label used to be.
-        // This covers the top `strip_h` of page content until Task 8b gives
-        // the strip its own clicks; a bounded, known cost rather than the
-        // whole-page click-accuracy regression the `page_bounds` approach had.
-        window.paint_quad(fill(strip, self.card_bg));
+        // The strip itself: each tab's elided title, the active one filled
+        // solid rather than tinted (a few percent of alpha over a dark page
+        // read as noise, not as "selected"), the card's number where the
+        // corner label used to carry it. `strip_bg` is its own colour, not
+        // `card_bg`, so the strip reads as chrome against the page rather
+        // than blending into whatever the active tab happens to be showing.
+        window.paint_quad(fill(strip, self.strip_bg));
+        let border_h = px((TAB_STRIP_BORDER_PX * self.ui_scale as f64 * scale) as f32);
         let tab_w = px((TAB_STRIP_TAB_WIDTH_PX * self.ui_scale as f64 * scale) as f32);
         let strip_font = px((TAB_STRIP_FONT_PX * self.ui_scale as f64 * scale) as f32);
         // Screen pixels, same convention as `tab_w`/`strip_font` above:
@@ -586,9 +639,21 @@ impl CardBody for BrowserBody {
                     point(strip.origin.x + tab_w * (i as f32), strip.origin.y),
                     size(tab_w, strip_h),
                 );
-                if i == self.active {
-                    window.paint_quad(fill(tab_bounds, crate::chrome::with_alpha(self.text, 0.08)));
-                }
+                let label_color = if i == self.active {
+                    window.paint_quad(fill(tab_bounds, self.active_tab_bg));
+                    self.text_bright
+                } else {
+                    self.text_muted
+                };
+                // A hairline at the tab's right edge, the strip's own colour:
+                // without it one tab's label ran straight into the next
+                // with nothing to say where it ended, worst with several
+                // same-length titles in a row.
+                let sep = Bounds::new(
+                    point(tab_bounds.origin.x + tab_w - border_h, tab_bounds.origin.y),
+                    size(border_h, strip_h),
+                );
+                window.paint_quad(fill(sep, self.strip_border));
                 // Stops short of the close glyph's band, not the tab's own
                 // edge, or a long title runs under the `×`.
                 let room = f32::from(close_left) - f32::from(pad) * 2.;
@@ -599,7 +664,7 @@ impl CardBody for BrowserBody {
                             t,
                             strip_font,
                             &font(self.font_family.clone()),
-                            self.text,
+                            label_color,
                         )
                         .width,
                     )
@@ -609,7 +674,7 @@ impl CardBody for BrowserBody {
                     &label,
                     strip_font,
                     &font(self.font_family.clone()),
-                    self.text,
+                    label_color,
                 );
                 crate::text::paint_in(window, cx, &line, tab_bounds, pad);
 
@@ -621,7 +686,7 @@ impl CardBody for BrowserBody {
                     "×",
                     strip_font,
                     &font(self.font_family.clone()),
-                    self.text,
+                    label_color,
                 );
                 let close_bounds = Bounds::new(
                     point(
@@ -647,7 +712,7 @@ impl CardBody for BrowserBody {
                 "+",
                 strip_font,
                 &font(self.font_family.clone()),
-                self.text,
+                self.text_muted,
             );
             let plus_bounds = Bounds::new(
                 point(
@@ -666,7 +731,7 @@ impl CardBody for BrowserBody {
                     &number,
                     strip_font,
                     &font(self.font_family.clone()),
-                    self.text,
+                    self.text_muted,
                 );
                 let number_bounds = Bounds::new(
                     point(
@@ -678,14 +743,24 @@ impl CardBody for BrowserBody {
                 crate::text::paint_in(window, cx, &line, number_bounds, px(0.));
             }
         }
+        // The seam between the strip and the page: without it the strip's
+        // bottom edge was just wherever the page's own pixels started,
+        // which read as the strip floating over the page rather than
+        // sitting above it.
+        let bottom_border = Bounds::new(
+            point(strip.origin.x, strip.origin.y + strip_h - border_h),
+            size(strip.size.width, border_h),
+        );
+        window.paint_quad(fill(bottom_border, self.strip_border));
     }
 
     fn resized(&mut self, world: Size) {
         self.world = world;
+        let page = page_world_size(world, self.ui_scale);
         for tab in &self.tabs {
             if let Some(s) = &tab.surface {
                 let device = s.shared.borrow().scale;
-                s.resize(world.w.round() as i32, world.h.round() as i32, device);
+                s.resize(page.w.round() as i32, page.h.round() as i32, device);
             }
         }
         self.dirty = true;
@@ -728,16 +803,14 @@ impl CardBody for BrowserBody {
         modifiers: &gpui::Modifiers,
         clicks: usize,
     ) -> BodyAction {
-        // The strip is chrome, not page content: a click on it is ours to
-        // handle before anything about the page (its surface, its focus
-        // scrim) is even considered. A non-left click here does nothing
-        // rather than falling through to the page below (the page didn't
-        // paint under it; the strip is drawn over it, see `paint`).
-        if let Some(hit) = strip_hit(local, self.ui_scale, self.tabs.len()) {
-            return if button == gpui::MouseButton::Left {
-                BodyAction::BrowserTab(hit)
-            } else {
-                BodyAction::None
+        // The strip is chrome, not page content, and the page no longer
+        // paints under it (see `page_world_size`): anywhere in its row is
+        // ours, a live button or dead space between them, never the page's.
+        let strip_h = strip_world_h(self.ui_scale);
+        if local.y < strip_h {
+            return match strip_hit(local, self.ui_scale, self.tabs.len()) {
+                Some(hit) if button == gpui::MouseButton::Left => BodyAction::BrowserTab(hit),
+                _ => BodyAction::None,
             };
         }
         if self.active_surface().is_none() {
@@ -762,7 +835,7 @@ impl CardBody for BrowserBody {
         if let Some(surface) = self.active_surface() {
             surface.mouse_button(
                 local.x as f32,
-                local.y as f32,
+                (local.y - strip_h) as f32,
                 Self::mods(modifiers),
                 b,
                 false,
@@ -785,10 +858,15 @@ impl CardBody for BrowserBody {
         if b == Button::Left {
             self.left_down = false;
         }
+        // A drag that started on the page (the only kind that reaches here:
+        // `captures_drag` is `left_down`, only ever set below the strip) can
+        // still end with the pointer dragged back up over the strip's row;
+        // clamped rather than sent negative, off the top of what CEF laid out.
+        let page_y = (local.y - strip_world_h(self.ui_scale)).max(0.);
         if let Some(surface) = self.active_surface() {
             surface.mouse_button(
                 local.x as f32,
-                local.y as f32,
+                page_y as f32,
                 Self::mods(modifiers),
                 b,
                 true,
@@ -798,8 +876,16 @@ impl CardBody for BrowserBody {
     }
 
     fn mouse_move(&mut self, local: Point, modifiers: &gpui::Modifiers) {
+        let strip_h = strip_world_h(self.ui_scale);
+        if local.y < strip_h {
+            return;
+        }
         if let Some(surface) = self.active_surface() {
-            surface.mouse_move(local.x as f32, local.y as f32, Self::mods(modifiers));
+            surface.mouse_move(
+                local.x as f32,
+                (local.y - strip_h) as f32,
+                Self::mods(modifiers),
+            );
         }
     }
 
@@ -810,10 +896,14 @@ impl CardBody for BrowserBody {
     }
 
     fn wheel(&mut self, local: Point, dx: f64, dy: f64, modifiers: &gpui::Modifiers) {
+        let strip_h = strip_world_h(self.ui_scale);
+        if local.y < strip_h {
+            return;
+        }
         if let Some(surface) = self.active_surface() {
             surface.wheel(
                 local.x as f32,
-                local.y as f32,
+                (local.y - strip_h) as f32,
                 Self::mods(modifiers),
                 dx as f32,
                 dy as f32,
@@ -920,6 +1010,64 @@ mod tab_label_tests {
         assert_eq!(tab_label(&tab), "https://a.example");
         tab.title = Some("Example Domain".into());
         assert_eq!(tab_label(&tab), "Example Domain");
+    }
+}
+
+#[cfg(test)]
+mod mouse_down_strip_tests {
+    use super::*;
+    use crate::body::CardBody;
+    use gpui::Modifiers;
+
+    // Past the "+" button but still inside the strip's row, `strip_hit`
+    // returns `None` (dead chrome space); this must be swallowed rather
+    // than falling through as a page click, since the page no longer
+    // paints under the strip at all.
+    #[test]
+    fn dead_space_in_the_strips_row_is_swallowed_not_forwarded_to_the_page() {
+        let mut body = BrowserBody::new(
+            "card-1",
+            "https://a.example",
+            Size { w: 800., h: 600. },
+            1.,
+            false,
+        );
+        let action = body.mouse_down(
+            Point { x: 1000., y: 5. },
+            gpui::MouseButton::Left,
+            &Modifiers::default(),
+            1,
+        );
+        assert_eq!(action, BodyAction::None);
+    }
+}
+
+#[cfg(test)]
+mod page_world_size_tests {
+    use super::*;
+
+    // What CEF is actually asked to render: the strip's band comes off the
+    // card's own height, never its width, and never at `ui_scale` 1's cost
+    // alone — a bigger interface takes a bigger bite.
+    #[test]
+    fn the_strips_band_comes_off_the_cards_height_only() {
+        let world = Size { w: 800., h: 600. };
+        let page = page_world_size(world, 1.);
+        assert_eq!(page.w, 800.);
+        assert_eq!(page.h, 600. - TAB_STRIP_HEIGHT_PX);
+
+        let scaled = page_world_size(world, 2.);
+        assert_eq!(scaled.h, 600. - TAB_STRIP_HEIGHT_PX * 2.);
+    }
+
+    // A card shorter than the strip itself must not ask CEF for a negative
+    // or zero height: `Surface::open`/`resize` already floor at 1px on
+    // their own side, but a page-space calculation going negative would
+    // send mouse coordinates the wrong direction first.
+    #[test]
+    fn a_card_shorter_than_the_strip_still_gets_a_positive_page_height() {
+        let tiny = Size { w: 100., h: 10. };
+        assert!(page_world_size(tiny, 1.).h > 0.);
     }
 }
 

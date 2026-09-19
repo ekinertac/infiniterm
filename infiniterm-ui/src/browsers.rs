@@ -120,6 +120,11 @@ impl AppView {
         let scale = self.scale_factor;
         let card_bg = self.chrome.card_bg;
         let text = self.chrome.text;
+        let strip_bg = self.chrome.bar_bg;
+        let strip_border = self.chrome.bar_border;
+        let text_bright = self.chrome.text_bright;
+        let text_muted = self.chrome.text_muted;
+        let active_tab_bg = self.chrome.row_selected;
         let family = crate::terminals::family_of(&self.model.config.terminal.font_family);
         let inactive_dim = self.model.config.ui.inactive_dim;
         let ui_scale = self.model.ui_scale as f32;
@@ -160,6 +165,11 @@ impl AppView {
             };
             body.card_bg = card_bg;
             body.text = text;
+            body.strip_bg = strip_bg;
+            body.strip_border = strip_border;
+            body.text_bright = text_bright;
+            body.text_muted = text_muted;
+            body.active_tab_bg = active_tab_bg;
             body.font_family = family.clone();
             body.inactive_dim = inactive_dim;
             body.card_number = card.number;
