@@ -534,7 +534,21 @@ impl AppView {
         if crate::keycode::last_dead() && !m.platform && !m.control {
             return false;
         }
-        if k.key == "escape" && !m.platform && !m.control && !m.alt {
+        // Cmd+F is in `browser_override`'s always-on list, so it opens the
+        // app's find bar over a LOCKED browser card too (lock only gates
+        // the tab-strip chords, `browser_keys::lock_override`'s list).
+        // Without this guard a double-Escape meant for the find bar would
+        // be claimed here first and unlock the card instead, leaving the
+        // bar open and unresponsive. `find.open` is checked on its own
+        // because it deliberately does not join `overlay_open()` (see
+        // `overlays.rs::render_find_bar`).
+        if k.key == "escape"
+            && !m.platform
+            && !m.control
+            && !m.alt
+            && !self.model.overlay_open()
+            && !self.model.find.open
+        {
             if let Some(id) = self.model.selection.focused_id.clone() {
                 if self.model.card(&id).is_some_and(|c| c.locked) {
                     let now = now_ms();
