@@ -1,10 +1,14 @@
 //! Browser cards and their surfaces: one `BrowserBody` per browser card,
-//! opened on the card's url at the card's size, kept in step each frame
-//! (new pixels, the page's own zoom from `card.zoom`, a url typed into
-//! `browser.navigate`), and what the page did written back: the address
-//! it moved to onto the card, popups opened as cards beside it, a
-//! right-click turned into the slim menu overlay. CEF itself is started
-//! once in `main.rs`; `cef_running` says whether it is.
+//! holding one CEF surface per tab, opened on the card's url at the card's
+//! size and kept in step each frame (new pixels, the page's own zoom from
+//! `card.zoom`, a url typed into `browser.navigate`, and `card.tabs`
+//! against the body's own list), with what the page did written back: the
+//! address it moved to onto the card, popups opened as TABS on the same
+//! card, a right-click turned into the slim menu overlay, the page's own
+//! focus mirrored onto `card.locked`. A tab command is plain `Card`
+//! mutation in `tabs_cmd.rs` with no `Effect` behind it, so the diff here
+//! is the whole of how one becomes a surface. CEF itself is started once
+//! in `main.rs`; `cef_running` says whether it is.
 use crate::browser_body::BrowserBody;
 use crate::overlays::OVERLAY_BODY_FONT_PX;
 use crate::{now_ms, AppView};
@@ -41,6 +45,32 @@ pub enum ContextMenuAction {
     Paste,
     CopyLinkAddress,
     OpenLinkInNewCard,
+    OpenLinkInNewTab,
+}
+
+/// The one url `new` has that `old` does not, assuming at most one tab was
+/// appended since the last frame (every `tabs_cmd.rs` command that grows the
+/// list appends). `None` when the lengths do not differ by exactly +1.
+fn diff_added(old: &[String], new: &[String]) -> Option<String> {
+    if new.len() != old.len() + 1 {
+        return None;
+    }
+    new.last().cloned()
+}
+
+/// Which position in `old` is missing from `new`, assuming at most one was
+/// removed and every url that survived kept its order. `close_tab` needs the
+/// exact index: the closed tab is not always the last one.
+fn diff_removed_index(old: &[String], new: &[String]) -> Option<usize> {
+    if old.len() != new.len() + 1 {
+        return None;
+    }
+    Some(
+        old.iter()
+            .zip(new.iter())
+            .position(|(a, b)| a != b)
+            .unwrap_or(new.len()),
+    )
 }
 
 impl AppView {
@@ -67,6 +97,8 @@ impl AppView {
         let mut opens: Vec<(String, String)> = vec![];
         let mut moved: Vec<(String, String)> = vec![];
         let mut titles: Vec<(String, String)> = vec![];
+        let mut retabs: Vec<(String, Vec<String>)> = vec![];
+        let mut locks: Vec<(String, bool)> = vec![];
         let mut menu: Option<(String, Point, infiniterm_browser::ContextMenuRequest)> = None;
         for card in cards {
             let world = Size {
@@ -75,7 +107,15 @@ impl AppView {
             };
             let url = card.url.clone().unwrap_or_else(|| "about:blank".into());
             if self.browser_for(&card.id).is_none() {
-                let body = BrowserBody::new(&card.id, &url, world, scale, cef);
+                // A restored card arrives with every tab it was saved with,
+                // so the body is built holding all of them: the diff below
+                // moves one tab per frame and would never catch up, and the
+                // write-back would read the shortfall as tabs having closed.
+                let first = card.tabs.first().unwrap_or(&url);
+                let mut body = BrowserBody::new(&card.id, first, world, scale, cef);
+                for later in card.tabs.iter().skip(1) {
+                    body.open_tab(later);
+                }
                 self.bodies.insert(card.id.clone(), Box::new(body));
             }
             let Some(body) = self.browser_for(&card.id) else {
@@ -86,17 +126,68 @@ impl AppView {
             body.font_family = family.clone();
             body.inactive_dim = inactive_dim;
             body.zoom = card.zoom;
-            // `browser.navigate` changed the card's url: the page follows.
-            if body.url != url && url != "about:blank" {
+
+            // Tabs: the card's list of urls against the body's list of
+            // surfaces. A `tabs_cmd.rs` command only ever changes the list
+            // by one (append for new and reopen, remove-at-index for close),
+            // so a length difference of exactly one says which structural
+            // change happened and an equal length says none did. A
+            // single-tab card keeps `tabs` empty, so it stands in as the
+            // card's one url and nothing about it changes.
+            let desired: Vec<String> = if card.tabs.is_empty() {
+                vec![url.clone()]
+            } else {
+                card.tabs.clone()
+            };
+            let actual: Vec<String> = body.tabs.iter().map(|t| t.url.clone()).collect();
+            if let Some(added) = diff_added(&actual, &desired) {
+                body.open_tab(&added);
+            } else if let Some(removed_at) = diff_removed_index(&actual, &desired) {
+                body.close_tab(removed_at);
+            }
+            // The active index arrives from the card the way `card.zoom`
+            // does; it has to be applied after the open or close, or it
+            // would name a tab the body does not have yet.
+            body.set_active(if card.tabs.is_empty() {
+                0
+            } else {
+                card.active_tab
+            });
+
+            // `browser.navigate` or the omnibox changed the card's url: the
+            // active tab follows, exactly as a single-tab card always has.
+            if body.active_url() != url && url != "about:blank" {
                 body.navigate(&url);
             }
             if let Some(new_url) = body.sync() {
                 moved.push((card.id.clone(), new_url));
             }
             if let Some(title) = body.take_title() {
-                titles.push((body.url.clone(), title));
+                titles.push((body.active_url().to_string(), title));
             }
+            // Where the tabs actually are now, written back onto the card:
+            // a BACKGROUND tab that redirected itself moves no card url
+            // through `moved`, and without this the card would send it back
+            // to the old address the moment you switched to it. Only ever an
+            // address-for-address swap: a body of a different length is one
+            // that has not caught up with a structural change yet, and
+            // writing that back would drop a tab the card still holds.
+            let after: Vec<String> = body.tabs.iter().map(|t| t.url.clone()).collect();
+            if !card.tabs.is_empty() && after.len() == card.tabs.len() && after != card.tabs {
+                retabs.push((card.id.clone(), after));
+            }
+
+            // Lock, mirrored one way only, body to card: `page_focused` IS
+            // the lock. Not saved (see `Card.locked`), so no dirty_layout.
+            let locked = body.page_focused;
+            body.locked = locked;
+            if card.locked != locked {
+                locks.push((card.id.clone(), locked));
+            }
+
             for popup in std::mem::take(&mut body.popups) {
+                // The point of tabs: a popup, a target=_blank link or a
+                // Cmd+click opens a tab on the SAME card, not a new card.
                 opens.push((card.id.clone(), popup));
             }
             if let Some(request) = body.context_menu.take() {
@@ -125,6 +216,26 @@ impl AppView {
                 has_selection: request.has_selection,
             });
         }
+        for (id, urls) in retabs {
+            if let Some(c) = self.model.card_mut(&id) {
+                c.tabs = urls;
+                // `card.url` stays what it has always been, the active
+                // tab's page, so the label, the omnibox's prefill and the
+                // save file need know nothing about tabs.
+                c.url = c.tabs.get(c.active_tab).cloned();
+            }
+            self.model.dirty_layout = true;
+            self.redraw = true;
+        }
+        for (id, locked) in locks {
+            if let Some(c) = self.model.card_mut(&id) {
+                c.locked = locked;
+            }
+            // The status bar was built from the old lock state before this
+            // ran, and a locked page that is done painting asks for no
+            // further frames.
+            self.redraw = true;
+        }
         for (id, url) in moved {
             // Every navigation passes through here, which is the only place
             // the app sees one: history is recorded here rather than in the
@@ -144,8 +255,7 @@ impl AppView {
             self.model.history.set_title(&url, &title);
         }
         for (id, url) in opens {
-            let plan = url_plan(&url, "");
-            self.model.open_in_card(plan, Some(&id));
+            self.model.browser_tab_open(&id, Some(&url));
         }
     }
 
@@ -171,11 +281,17 @@ impl AppView {
                 }
                 return;
             }
+            ContextMenuAction::OpenLinkInNewTab => {
+                if let Some(url) = menu.link_url {
+                    self.model.browser_tab_open(&menu.card_id, Some(&url));
+                }
+                return;
+            }
             _ => {}
         }
         let Some(surface) = self
             .browser_for(&menu.card_id)
-            .and_then(|b| b.surface.as_ref())
+            .and_then(|b| b.active_surface())
         else {
             return;
         };
@@ -192,7 +308,9 @@ impl AppView {
             ContextMenuAction::Paste => {
                 surface.edit_chord("v", false);
             }
-            ContextMenuAction::CopyLinkAddress | ContextMenuAction::OpenLinkInNewCard => {
+            ContextMenuAction::CopyLinkAddress
+            | ContextMenuAction::OpenLinkInNewCard
+            | ContextMenuAction::OpenLinkInNewTab => {
                 unreachable!("handled above, before the surface borrow")
             }
         }
@@ -223,6 +341,7 @@ impl AppView {
         }
         if menu.link_url.is_some() {
             items.push(("Copy link address", ContextMenuAction::CopyLinkAddress));
+            items.push(("Open link in new tab", ContextMenuAction::OpenLinkInNewTab));
             items.push((
                 "Open link in new card",
                 ContextMenuAction::OpenLinkInNewCard,
@@ -293,7 +412,9 @@ impl AppView {
         else {
             return;
         };
-        let Some(surface) = &body.surface else { return };
+        let Some(surface) = body.active_surface() else {
+            return;
+        };
         match action {
             BrowserAction::Back => surface.back(),
             BrowserAction::Forward => surface.forward(),
@@ -311,7 +432,9 @@ impl AppView {
         else {
             return;
         };
-        let Some(surface) = &body.surface else { return };
+        let Some(surface) = body.active_surface() else {
+            return;
+        };
         match request {
             Some(r) => surface.find(&r.text, r.forward, r.next),
             None => surface.stop_find(),
@@ -344,12 +467,50 @@ impl AppView {
             .bodies
             .get_mut(&card_id)
             .and_then(|b| b.as_any_mut().downcast_mut::<BrowserBody>())
-            .and_then(|b| b.surface.as_ref())
+            .and_then(|b| b.active_surface())
             .map(|s| s.find_result());
         if let Some((matches, active)) = result {
             let before = (self.model.find.matches, self.model.find.active);
             self.model.find_result(&card_id, matches, active);
             self.redraw |= (self.model.find.matches, self.model.find.active) != before;
         }
+    }
+}
+
+#[cfg(test)]
+mod tab_diff_tests {
+    use super::*;
+
+    #[test]
+    fn added_is_the_new_last_entry() {
+        let old = vec!["a".to_string(), "b".to_string()];
+        let new = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        assert_eq!(diff_added(&old, &new), Some("c".to_string()));
+        assert_eq!(diff_removed_index(&old, &new), None);
+    }
+
+    #[test]
+    fn removed_from_the_middle_is_found_by_its_index() {
+        let old = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let new = vec!["a".to_string(), "c".to_string()];
+        assert_eq!(diff_removed_index(&old, &new), Some(1));
+        assert_eq!(diff_added(&old, &new), None);
+    }
+
+    #[test]
+    fn removed_from_the_end_is_found_too() {
+        let old = vec!["a".to_string(), "b".to_string()];
+        let new = vec!["a".to_string()];
+        assert_eq!(diff_removed_index(&old, &new), Some(1));
+    }
+
+    #[test]
+    fn an_unchanged_or_multiply_changed_list_reports_neither() {
+        let old = vec!["a".to_string()];
+        let new = vec!["a".to_string()];
+        assert_eq!(diff_added(&old, &new), None);
+        assert_eq!(diff_removed_index(&old, &new), None);
+        let two_more = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        assert_eq!(diff_added(&old, &two_more), None);
     }
 }

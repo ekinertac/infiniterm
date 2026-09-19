@@ -1,20 +1,28 @@
-//! The browser card: a CEF surface painted as a texture inside the card.
-//! Port of `BrowserCard.svelte` on `infiniterm-browser`, which is the
-//! spike's `browser.rs` made permanent.
+//! The browser card: one CEF surface per tab, the active one painted as a
+//! texture inside the card. Port of `BrowserCard.svelte` on
+//! `infiniterm-browser`, which is the spike's `browser.rs` made permanent,
+//! extended for tabs per
+//! `docs/superpowers/specs/2026-09-19-browser-tabs-design.md`.
 //!
-//! The page lays out at the card's size in world units and is drawn at
+//! Every tab lays out at the card's size in world units and is drawn at
 //! whatever the zoom makes of it, so labels, rings and the palette paint
-//! over it like over any card and it scales with the canvas. Every frame
-//! CEF paints is copied into a gpui image when it changed; an idle page
-//! costs nothing. Keys: the app owns Cmd except the edit chords a page
-//! needs (copy, paste, cut, select all, undo) and the page-zoom chords
-//! the model rebinds (`browser_keys.rs`); everything else goes to the
-//! page once it has focus. Focus is deliberate: a click on an UNFOCUSED
-//! card only focuses it (the scrim takes it), the next reaches the page;
-//! arrow-focusing a card never gives the page focus.
+//! over it like over any card and it scales with the canvas. Only the
+//! active tab's pixels are kept, but every tab's surface stays LIVE the
+//! way Chrome's do: a background tab keeps loading, keeps its scroll
+//! position, keeps its size, so switching to it shows the page rather
+//! than a blank waiting to re-render. Keys: the app owns Cmd except the
+//! edit chords a page needs (copy, paste, cut, select all, undo) and the
+//! page-zoom chords the model rebinds (`browser_keys.rs`); everything
+//! else goes to the page once it has focus. Focus is deliberate: a click
+//! on an UNFOCUSED card only focuses it (the scrim takes it), the next
+//! reaches the page; arrow-focusing a card never gives the page focus.
+//! That same `page_focused` IS the keyboard lock the tab chords need, so
+//! the tab-management chords never reach a surface at all: they are
+//! `Model::browser_tab_*` (`tabs_cmd.rs`), and what arrives here is the
+//! changed `card.tabs` that `browsers.rs` reconciles against `self.tabs`.
 //!
 //! Without CEF (the bare binary outside a bundle) the card says so and
-//! stays a rectangle.
+//! stays a rectangle, with one placeholder tab.
 use crate::body::{BodyAction, CardBody};
 use gpui::{
     fill, font, point, px, size, App, Bounds, CursorStyle, Hsla, Keystroke, Pixels, RenderImage,
@@ -43,21 +51,83 @@ const STATUS_TEXT_PAD_PX: f64 = 12.;
 /// The placeholder text's line height, looser than its font size.
 const STATUS_LINE_HEIGHT_RATIO: f32 = 1.5;
 
-pub struct BrowserBody {
-    pub card_id: String,
+/// One tab: everything that was a single field on `BrowserBody` before
+/// tabs existed, once per open page.
+pub struct Tab {
     pub url: String,
     pub surface: Option<Surface>,
     /// Why there is no surface, for the card to say.
     pub unavailable: Option<String>,
     texture: Option<Arc<RenderImage>>,
-    /// The page's own zoom the card carries (`card.zoom`), applied once.
-    pub zoom: Option<f64>,
+    /// The page title as last reported, so a change can be told from the
+    /// same title arriving every frame. Not the card's title: that is a
+    /// name somebody CHOSE, and a page must never overwrite it.
+    title: Option<String>,
+    /// The card's page zoom as last pushed to THIS surface. Per tab
+    /// because a tab opened after the zoom was set has not had it yet.
     applied_zoom: Option<f64>,
+}
+
+impl Tab {
+    fn open(url: &str, world: Size, scale: f32, cef_running: bool) -> Tab {
+        let (surface, unavailable) = if cef_running {
+            match Surface::open(url, world.w.round() as i32, world.h.round() as i32, scale) {
+                Some(s) => (Some(s), None),
+                None => (None, Some("could not create the browser".to_string())),
+            }
+        } else {
+            (
+                None,
+                Some("browser cards need the app bundle (CEF is not loaded)".to_string()),
+            )
+        };
+        Tab {
+            url: url.to_string(),
+            surface,
+            unavailable,
+            texture: None,
+            title: None,
+            applied_zoom: None,
+        }
+    }
+
+    fn close(&mut self) {
+        if let Some(s) = self.surface.take() {
+            s.close();
+        }
+    }
+}
+
+/// A closed tab's surface has to be told to go: `Surface` has no `Drop` of
+/// its own, and a `Vec::remove` is the only thing that closes a tab.
+impl Drop for Tab {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+pub struct BrowserBody {
+    pub card_id: String,
+    pub tabs: Vec<Tab>,
+    pub active: usize,
+    /// Mirrors `card.locked`, written by `browsers.rs` every frame, so the
+    /// tab strip can draw the lock state without a `Card` to read.
+    pub locked: bool,
+    /// Which tab was last told it has CEF's keyboard focus, so the handover
+    /// on a tab switch takes it off exactly one surface. CEF keeps focus per
+    /// browser and a fresh one has never had it, so without this a new tab
+    /// would take no typing at all.
+    focused_tab: Option<usize>,
+    /// The page's own zoom the card carries (`card.zoom`), applied to every
+    /// tab: a background tab must already be at the card's zoom when it
+    /// becomes the visible one.
+    pub zoom: Option<f64>,
     world: Size,
     scale: f32,
     painted_focused: bool,
     /// The page has keyboard focus: a click reached it since the card
-    /// was focused.
+    /// was focused. This is also what the keyboard lock IS (see the
+    /// design doc); `browsers.rs` mirrors it onto `card.locked`.
     pub page_focused: bool,
     /// The last Escape's timestamp while locked, for double-Escape
     /// detection; `None` after any other key, after unlocking, or before
@@ -70,13 +140,13 @@ pub struct BrowserBody {
     pub font_family: String,
     dirty: bool,
     pub popups: Vec<String>,
-    /// The page title as last reported, so a change can be told from the
-    /// same title arriving every frame. Not the card's title: that is a
-    /// name somebody CHOSE, and a page must never overwrite it.
-    title: Option<String>,
     /// A right-click since the last drain, for `browsers.rs` to turn into
-    /// the app-level menu overlay.
+    /// the app-level menu overlay. Aggregated across tabs rather than kept
+    /// per tab: a menu only ever opens from a click on the visible page.
     pub context_menu: Option<infiniterm_browser::ContextMenuRequest>,
+    /// Remembered so a tab opened later is built the same way the first
+    /// one was.
+    cef_running: bool,
 }
 
 impl BrowserBody {
@@ -87,25 +157,13 @@ impl BrowserBody {
         scale: f32,
         cef_running: bool,
     ) -> BrowserBody {
-        let (surface, unavailable) = if cef_running {
-            match Surface::open(url, world.w.round() as i32, world.h.round() as i32, scale) {
-                Some(s) => (Some(s), None),
-                None => (None, Some("could not create the browser".to_string())),
-            }
-        } else {
-            (
-                None,
-                Some("browser cards need the app bundle (CEF is not loaded)".to_string()),
-            )
-        };
         BrowserBody {
             card_id: card_id.to_string(),
-            url: url.to_string(),
-            surface,
-            unavailable,
-            texture: None,
+            tabs: vec![Tab::open(url, world, scale, cef_running)],
+            active: 0,
+            locked: false,
+            focused_tab: None,
             zoom: None,
-            applied_zoom: None,
             world,
             scale,
             painted_focused: false,
@@ -118,57 +176,174 @@ impl BrowserBody {
             font_family: "Menlo".into(),
             dirty: true,
             popups: vec![],
-            title: None,
             context_menu: None,
+            cef_running,
         }
     }
 
-    /// Each frame: new pixels, popups, the address the page moved to.
-    /// Returns the current url when the page changed it.
-    pub fn sync(&mut self) -> Option<String> {
-        let Some(surface) = &self.surface else {
-            return None;
+    fn active_tab(&self) -> Option<&Tab> {
+        self.tabs.get(self.active)
+    }
+
+    /// The surface every key, click and command goes to: the visible tab's.
+    pub fn active_surface(&self) -> Option<&Surface> {
+        self.active_tab().and_then(|t| t.surface.as_ref())
+    }
+
+    /// The active tab's url, for `browsers.rs` to compare against
+    /// `card.tabs[card.active_tab]`.
+    pub fn active_url(&self) -> &str {
+        self.active_tab().map_or("", |t| t.url.as_str())
+    }
+
+    /// Opens a tab at `url`, at the end, the way `Model::browser_tab_open`
+    /// appends one. It does NOT become active on its own: the active index
+    /// arrives from `card.active_tab` like everything else.
+    pub fn open_tab(&mut self, url: &str) {
+        self.tabs
+            .push(Tab::open(url, self.world, self.scale, self.cef_running));
+        self.dirty = true;
+    }
+
+    /// Closes the tab at `index`, which closes its surface with it. Out of
+    /// range is a no-op rather than a panic: the index comes from a diff
+    /// against `card.tabs`, and a painter must not be able to kill the app.
+    pub fn close_tab(&mut self, index: usize) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        self.tabs.remove(index);
+        // Both remembered indices move when a tab before them goes; the
+        // focused one has to follow or the handover would take the keyboard
+        // off a tab that still has it. Closing the active tab leaves the
+        // index where it was, so the next tab along takes the slot, which is
+        // what Chrome does.
+        if index < self.active {
+            self.active -= 1;
+        } else if self.active >= self.tabs.len() {
+            self.active = self.tabs.len().saturating_sub(1);
+        }
+        self.focused_tab = match self.focused_tab {
+            Some(f) if f == index => None,
+            Some(f) if f > index => Some(f - 1),
+            other => other,
         };
-        if let Some(frame) = surface.take_frame() {
-            if let Some(img) = RgbaImage::from_raw(frame.width, frame.height, frame.bgra.clone()) {
-                // CEF hands BGRA and gpui stores BGRA: the bytes go in as they are.
-                self.texture = Some(Arc::new(RenderImage::new(SmallVec::from_elem(
-                    ImageFrame::new(img),
-                    1,
-                ))));
-                self.dirty = true;
+        self.apply_focus();
+        self.dirty = true;
+    }
+
+    /// Switches to the tab at `index`. Out of range is a no-op: a card whose
+    /// tabs the body has not caught up with yet asks for one for a frame.
+    pub fn set_active(&mut self, index: usize) {
+        if index == self.active || index >= self.tabs.len() {
+            return;
+        }
+        self.active = index;
+        self.apply_focus();
+        self.dirty = true;
+    }
+
+    /// Exactly the active tab's surface holds CEF's keyboard focus, and only
+    /// while the card's page is focused. Enforced in one place because three
+    /// things move it: a click, a tab switch, and a closed tab shifting the
+    /// indices under both.
+    fn apply_focus(&mut self) {
+        let want = self.page_focused.then_some(self.active);
+        if want == self.focused_tab {
+            return;
+        }
+        if let Some(s) = self
+            .focused_tab
+            .and_then(|i| self.tabs.get(i))
+            .and_then(|t| t.surface.as_ref())
+        {
+            s.focus(false);
+        }
+        if let Some(s) = want
+            .and_then(|i| self.tabs.get(i))
+            .and_then(|t| t.surface.as_ref())
+        {
+            s.focus(true);
+        }
+        self.focused_tab = want;
+    }
+
+    /// Each frame, for EVERY tab: new pixels, popups, the address it moved
+    /// to. A background tab still runs and can still navigate itself, so its
+    /// url and title have to stay in step while it is not the one painting.
+    ///
+    /// Returns the url when the ACTIVE tab moved, the one case `browsers.rs`
+    /// needs to hear about (history, `card.url`).
+    pub fn sync(&mut self) -> Option<String> {
+        let mut active_moved = None;
+        let zoom = self.zoom;
+        for (i, tab) in self.tabs.iter_mut().enumerate() {
+            let Some(surface) = &tab.surface else {
+                continue;
+            };
+            let is_active = i == self.active;
+            if let Some(frame) = surface.take_frame() {
+                // Only the visible tab's pixels are kept: a background tab's
+                // texture would be a card-sized image nothing paints.
+                if is_active {
+                    if let Some(img) =
+                        RgbaImage::from_raw(frame.width, frame.height, frame.bgra.clone())
+                    {
+                        // CEF hands BGRA and gpui stores BGRA: the bytes go in as they are.
+                        tab.texture = Some(Arc::new(RenderImage::new(SmallVec::from_elem(
+                            ImageFrame::new(img),
+                            1,
+                        ))));
+                        self.dirty = true;
+                    }
+                }
+            }
+            if is_active {
+                self.popups.extend(surface.take_popups());
+                if let Some(request) = surface.take_context_menu() {
+                    self.context_menu = Some(request);
+                }
+            } else {
+                // A background tab's queues are still drained so they cannot
+                // grow: a popup from a tab you are not looking at has nowhere
+                // to land, and a menu belongs to the click that opened it.
+                let _ = surface.take_popups();
+                let _ = surface.take_context_menu();
+            }
+            if tab.applied_zoom != zoom {
+                surface.set_zoom(zoom.unwrap_or(1.));
+                tab.applied_zoom = zoom;
+            }
+            if let Some(url) = surface.url() {
+                if url != tab.url && url != "about:blank" {
+                    tab.url = url.clone();
+                    if is_active {
+                        active_moved = Some(url);
+                    }
+                }
             }
         }
-        self.popups.extend(surface.take_popups());
-        if let Some(request) = surface.take_context_menu() {
-            self.context_menu = Some(request);
-        }
-        if self.zoom != self.applied_zoom {
-            surface.set_zoom(self.zoom.unwrap_or(1.));
-            self.applied_zoom = self.zoom;
-        }
-        let url = surface.url()?;
-        if url != self.url && url != "about:blank" {
-            self.url = url.clone();
-            return Some(url);
-        }
-        None
+        active_moved
     }
 
-    /// The page title, but only when it has changed since the last call.
-    /// The omnibox's history wants it; nothing else does.
+    /// The active tab's page title, but only when it has changed since the
+    /// last call. The omnibox's history wants it; nothing else does yet.
     pub fn take_title(&mut self) -> Option<String> {
-        let t = self.surface.as_ref()?.title()?;
-        if Some(&t) == self.title.as_ref() {
+        let tab = self.tabs.get_mut(self.active)?;
+        let t = tab.surface.as_ref()?.title()?;
+        if Some(&t) == tab.title.as_ref() {
             return None;
         }
-        self.title = Some(t.clone());
+        tab.title = Some(t.clone());
         Some(t)
     }
 
     pub fn navigate(&mut self, url: &str) {
-        self.url = url.to_string();
-        if let Some(s) = &self.surface {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        tab.url = url.to_string();
+        if let Some(s) = &tab.surface {
             s.navigate(url);
         }
     }
@@ -176,22 +351,20 @@ impl BrowserBody {
     pub fn set_focus(&mut self, on: bool) {
         if self.page_focused != on {
             self.page_focused = on;
-            if let Some(s) = &self.surface {
-                s.focus(on);
-            }
+            self.apply_focus();
         }
     }
 
     pub fn close(&mut self) {
-        if let Some(s) = self.surface.take() {
-            s.close();
+        for tab in &mut self.tabs {
+            tab.close();
         }
     }
 
-    /// The OS cursor the page last asked for (a pointer over a link, an
-    /// I-beam over an input), or `Arrow` before it has said anything.
+    /// The OS cursor the active page last asked for (a pointer over a link,
+    /// an I-beam over an input), or `Arrow` before it has said anything.
     pub fn cursor_style(&self) -> CursorStyle {
-        cursor_style_for(self.surface.as_ref().map_or("default", |s| s.cursor()))
+        cursor_style_for(self.active_surface().map_or("default", |s| s.cursor()))
     }
 
     fn mods(m: &gpui::Modifiers) -> Mods {
@@ -230,27 +403,32 @@ impl CardBody for BrowserBody {
         let device = (self.scale as f64 * scale * DEVICE_SCALE_STEPS_PER_UNIT).ceil()
             / DEVICE_SCALE_STEPS_PER_UNIT;
         let device = device.clamp(self.scale as f64, DEVICE_SCALE_MAX) as f32;
-        if let Some(s) = &self.surface {
-            if (s.shared.borrow().scale - device).abs() > SCALE_CHANGE_EPSILON {
-                s.resize(
-                    self.world.w.round() as i32,
-                    self.world.h.round() as i32,
-                    device,
-                );
+        // Every tab follows the zoom, not just the visible one: a background
+        // tab has to be the right size the moment it becomes active, or the
+        // first frame after the switch is a stretched page.
+        for tab in &self.tabs {
+            if let Some(s) = &tab.surface {
+                if (s.shared.borrow().scale - device).abs() > SCALE_CHANGE_EPSILON {
+                    s.resize(
+                        self.world.w.round() as i32,
+                        self.world.h.round() as i32,
+                        device,
+                    );
+                }
             }
         }
         window.paint_quad(fill(bounds, self.card_bg));
-        match &self.texture {
+        match self.active_tab().and_then(|t| t.texture.clone()) {
             Some(img) => {
-                let _ = window.paint_image(bounds, Default::default(), img.clone(), 0, false);
+                let _ = window.paint_image(bounds, Default::default(), img, 0, false);
             }
             None => {
                 let font_size = px((STATUS_FONT_PX * scale) as f32);
                 if font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32) {
                     let text = self
-                        .unavailable
-                        .clone()
-                        .unwrap_or_else(|| format!("loading {}", self.url));
+                        .active_tab()
+                        .and_then(|t| t.unavailable.clone())
+                        .unwrap_or_else(|| format!("loading {}", self.active_url()));
                     let line = crate::text::shape(
                         window,
                         &text,
@@ -281,15 +459,17 @@ impl CardBody for BrowserBody {
 
     fn resized(&mut self, world: Size) {
         self.world = world;
-        if let Some(s) = &self.surface {
-            let device = s.shared.borrow().scale;
-            s.resize(world.w.round() as i32, world.h.round() as i32, device);
+        for tab in &self.tabs {
+            if let Some(s) = &tab.surface {
+                let device = s.shared.borrow().scale;
+                s.resize(world.w.round() as i32, world.h.round() as i32, device);
+            }
         }
         self.dirty = true;
     }
 
     fn key(&mut self, k: &Keystroke, _now: f64, _cx: &mut App) -> BodyAction {
-        let Some(surface) = &self.surface else {
+        let Some(surface) = self.active_surface() else {
             return BodyAction::None;
         };
         if k.modifiers.platform {
@@ -307,7 +487,7 @@ impl CardBody for BrowserBody {
         modifiers: &gpui::Modifiers,
         clicks: usize,
     ) -> BodyAction {
-        if self.surface.is_none() {
+        if self.active_surface().is_none() {
             return BodyAction::None;
         }
         // The scrim takes the first click: it focused the card.
@@ -326,7 +506,7 @@ impl CardBody for BrowserBody {
         if b == Button::Left {
             self.left_down = true;
         }
-        if let Some(surface) = &self.surface {
+        if let Some(surface) = self.active_surface() {
             surface.mouse_button(
                 local.x as f32,
                 local.y as f32,
@@ -340,40 +520,44 @@ impl CardBody for BrowserBody {
     }
 
     fn mouse_up(&mut self, local: Point, button: gpui::MouseButton, modifiers: &gpui::Modifiers) {
-        let Some(surface) = &self.surface else { return };
         let b = match button {
             gpui::MouseButton::Left => Button::Left,
             gpui::MouseButton::Middle => Button::Middle,
             gpui::MouseButton::Right => Button::Right,
             _ => return,
         };
+        // Released before the surface is looked up: a card whose tab has no
+        // surface must still end the drag it captured, or the pointer stays
+        // owned by a body that will never let go.
         if b == Button::Left {
             self.left_down = false;
         }
-        surface.mouse_button(
-            local.x as f32,
-            local.y as f32,
-            Self::mods(modifiers),
-            b,
-            true,
-            1,
-        );
+        if let Some(surface) = self.active_surface() {
+            surface.mouse_button(
+                local.x as f32,
+                local.y as f32,
+                Self::mods(modifiers),
+                b,
+                true,
+                1,
+            );
+        }
     }
 
     fn mouse_move(&mut self, local: Point, modifiers: &gpui::Modifiers) {
-        if let Some(surface) = &self.surface {
+        if let Some(surface) = self.active_surface() {
             surface.mouse_move(local.x as f32, local.y as f32, Self::mods(modifiers));
         }
     }
 
     fn mouse_leave(&mut self) {
-        if let Some(surface) = &self.surface {
+        if let Some(surface) = self.active_surface() {
             surface.mouse_leave();
         }
     }
 
     fn wheel(&mut self, local: Point, dx: f64, dy: f64, modifiers: &gpui::Modifiers) {
-        if let Some(surface) = &self.surface {
+        if let Some(surface) = self.active_surface() {
             surface.wheel(
                 local.x as f32,
                 local.y as f32,
@@ -385,7 +569,13 @@ impl CardBody for BrowserBody {
     }
 
     fn wants_frame(&self, _now: f64) -> bool {
-        self.dirty || self.surface.as_ref().is_some_and(|s| s.has_new_frame())
+        // Any tab's new frame asks for one: a background tab's pixels are
+        // dropped, but `sync` is what drops them, and it runs per frame.
+        self.dirty
+            || self
+                .tabs
+                .iter()
+                .any(|t| t.surface.as_ref().is_some_and(|s| s.has_new_frame()))
     }
 
     fn captures_drag(&self) -> bool {
@@ -425,6 +615,38 @@ fn cursor_style_for(name: &str) -> CursorStyle {
         "vertical-text" => CursorStyle::IBeamCursorForVerticalLayout,
         "none" => CursorStyle::None,
         _ => CursorStyle::Arrow,
+    }
+}
+
+#[cfg(test)]
+mod tab_tests {
+    use super::*;
+
+    #[test]
+    fn a_body_with_no_cef_still_reports_one_unavailable_tab() {
+        let body = BrowserBody::new(
+            "card-1",
+            "https://a.example",
+            Size { w: 10., h: 10. },
+            1.,
+            false,
+        );
+        assert_eq!(body.tabs.len(), 1);
+        assert!(body.tabs[0].surface.is_none());
+        assert!(body.tabs[0].unavailable.is_some());
+        assert_eq!(body.active, 0);
+    }
+
+    #[test]
+    fn a_closed_tab_before_the_active_one_pulls_the_active_index_down() {
+        let mut body = BrowserBody::new("card-1", "a", Size { w: 10., h: 10. }, 1., false);
+        body.open_tab("b");
+        body.open_tab("c");
+        body.set_active(2);
+        body.close_tab(0);
+        assert_eq!(body.tabs.len(), 2);
+        assert_eq!(body.active, 1);
+        assert_eq!(body.active_url(), "c");
     }
 }
 
