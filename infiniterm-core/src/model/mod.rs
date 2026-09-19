@@ -72,6 +72,23 @@ pub struct Card {
     pub url: Option<String>,
     /// A browser card's page zoom, or `None` for the config default.
     pub zoom: Option<f64>,
+    /// Every tab's url, active one included. Empty for a single-tab card:
+    /// `url` alone still says where it is, the way it always has. SAVED
+    /// only when there are more than one (`saved_layout::SavedCard::tabs`).
+    pub tabs: Vec<String>,
+    /// Index into `tabs`. Meaningless while `tabs` is empty. SAVED
+    /// alongside `tabs`.
+    pub active_tab: usize,
+    /// Urls closed since the card opened, most recent last, for
+    /// `browser.tab.reopenClosed`. Runtime-only: closed tabs do not
+    /// survive a restart.
+    pub closed_tabs: Vec<String>,
+    /// Whether this browser card's keyboard is locked to the page (real
+    /// Chrome shortcuts) rather than the app's. Mirrored from
+    /// `BrowserBody`'s own focus state every frame (`browsers.rs`); never
+    /// written by core itself except through that mirror, and never
+    /// saved, the way `osc_title` and `dirty` are not.
+    pub locked: bool,
     /// A program for a terminal card to run INSTEAD of the shell (through
     /// `$SHELL -lc`); the card closes when it exits. Runtime-only: a restored
     /// card is a plain shell, because relaunching an agent nobody asked for
@@ -615,6 +632,10 @@ impl Model {
             sidebar_top: opts.sidebar_top,
             url: opts.url,
             zoom: opts.zoom,
+            tabs: vec![],
+            active_tab: 0,
+            closed_tabs: vec![],
+            locked: false,
             command: opts.command,
             transcript_path: None,
             agent_session: None,
@@ -953,4 +974,22 @@ pub struct NewCard {
     pub line: Option<u64>,
     /// The card this one is opened from: placement starts just past it.
     pub after: Option<Rect>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_card_starts_with_no_tabs_and_unlocked() {
+        let mut m = Model::new();
+        m.home = "/h".into();
+        m.start_dir = "/h".into();
+        let id = m.add_card("/h", NewCard::default());
+        let card = m.card(&id).unwrap();
+        assert!(card.tabs.is_empty());
+        assert_eq!(card.active_tab, 0);
+        assert!(card.closed_tabs.is_empty());
+        assert!(!card.locked);
+    }
 }
