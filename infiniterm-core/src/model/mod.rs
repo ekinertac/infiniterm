@@ -33,6 +33,7 @@ pub mod palette_state;
 pub mod persist;
 pub mod register;
 pub mod settings_in;
+pub mod tabs_cmd;
 pub mod workspaces_cmd;
 
 use crate::agent_state::AgentState;

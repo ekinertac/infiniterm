@@ -11,6 +11,7 @@ pub fn register_commands(r: &mut CommandRegistry<Model>) {
     super::workspaces_cmd::register(r);
     super::groups_cmd::register(r);
     super::dev_cmd::register(r);
+    super::tabs_cmd::register(r);
 }
 
 /// What the command trace says about each command: the card it acted on.
