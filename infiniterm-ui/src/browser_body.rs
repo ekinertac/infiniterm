@@ -535,13 +535,6 @@ impl CardBody for BrowserBody {
                     point(strip.origin.x + tab_w * (i as f32), strip.origin.y),
                     size(tab_w, strip_h),
                 );
-                if !tab_bounds.intersects(&strip) {
-                    // Off the visible strip: nothing to paint, and shaping
-                    // its label would be wasted work on a card with many
-                    // tabs (the strip does not scroll yet, see the const's
-                    // own comment).
-                    continue;
-                }
                 if i == self.active {
                     window.paint_quad(fill(tab_bounds, crate::chrome::with_alpha(self.text, 0.08)));
                 }
