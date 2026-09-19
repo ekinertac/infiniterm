@@ -157,6 +157,14 @@ impl Model {
     /// presses rather than a dialog, since a modal would stop a hand that was
     /// closing five cards in a row.
     pub fn close_selected(&mut self) {
+        self.close_selected_with(true);
+    }
+
+    /// `reclaim` is whether a split partner grows into the closed card's
+    /// space. Cmd+W says yes; `card.close.leave` says no, for the case of
+    /// splitting a card down to a quarter and wanting only that quarter:
+    /// the rest of the space is left free, for whatever comes next.
+    pub fn close_selected_with(&mut self, reclaim: bool) {
         let mut ids = self.selected_ids();
         let pair = if ids.len() == 1 {
             self.config_pairs
@@ -187,10 +195,10 @@ impl Model {
         }
         self.discard_armed = None;
         for id in ids.iter().skip(1).rev() {
-            self.close_card(id, false);
+            self.close_card_with(id, false, reclaim);
         }
         if let Some(first) = ids.first() {
-            self.close_card(first, false);
+            self.close_card_with(first, false, reclaim);
         }
         if let Some(p) = pair {
             self.config_pairs.retain(|q| q.ids != p.ids);
@@ -616,6 +624,11 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         |m| m.new_card(false),
     );
     r.register("card.close", "Card: close", Model::close_selected);
+    r.register(
+        "card.close.leave",
+        "Card: close, leave the space free",
+        |m| m.close_selected_with(false),
+    );
     r.register("card.save", "Editor: save the file", |m| {
         m.for_selected(|m, id| {
             let Some(card) = m.card(&id) else { return };

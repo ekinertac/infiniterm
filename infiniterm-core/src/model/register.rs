@@ -323,6 +323,31 @@ mod tests {
         assert_eq!(h.m.card(&kept_id).unwrap().soft_group_id, None);
     }
 
+    // Split down to a quarter and keep only the quarter: the other three
+    // close without the survivor growing, the space stays free, and the
+    // survivor is no longer half of a pair.
+    #[test]
+    fn close_leave_keeps_the_partner_at_its_size() {
+        let mut h = Harness::new();
+        let kept_id = h.focused().id.clone();
+        h.run("card.split.right");
+        let half = h.m.card(&kept_id).unwrap().rect;
+        let made = h.focused().id.clone();
+        let effects = h.run("card.close.leave");
+        assert!(h.m.card(&made).is_none());
+        assert_eq!(h.m.card(&kept_id).unwrap().rect, half, "not reclaimed");
+        assert!(!effects.iter().any(|e| matches!(e, Effect::MarkSwap(_))));
+        assert_eq!(h.focused().id, kept_id);
+        assert_eq!(h.m.card(&kept_id).unwrap().soft_group_id, None);
+        // The space is free: the survivor can be moved into it.
+        h.run("card.swap.right");
+        let moved = h.m.card(&kept_id).unwrap().rect;
+        assert!(
+            moved.x > half.x && (moved.y - half.y).abs() < 1.,
+            "{moved:?} right of {half:?}"
+        );
+    }
+
     // Grouping moves the selection to a free block right of the grid, as one block.
     #[test]
     fn grouping_names_the_group_and_moves_the_cards_together() {

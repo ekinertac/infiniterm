@@ -15,7 +15,6 @@ use crate::cards::{CardRect, GUTTER};
 use crate::grid::Rect;
 use crate::navigate::nearest_to;
 use crate::saved_layout::CardKind;
-use crate::split::reclaim;
 
 /// Cells, not pixels: what a person reads a layout in.
 fn rect_of(r: Rect) -> String {
@@ -39,6 +38,14 @@ pub const CLOSED_RING: usize = 10;
 impl Model {
     /// `already_exited` says the shell is gone, so there is nothing to kill.
     pub fn close_card(&mut self, id: &str, already_exited: bool) {
+        self.close_card_with(id, already_exited, true);
+    }
+
+    /// `reclaim` false leaves the closed card's space free instead of handing
+    /// it to the split partner (`card.close.leave`); the soft group is still
+    /// dropped when one card is left of it, so the survivor's own Cmd+W
+    /// later does not look for a partner that is gone.
+    pub fn close_card_with(&mut self, id: &str, already_exited: bool, reclaim: bool) {
         let Some(card) = self.card(id).cloned() else {
             return;
         };
@@ -99,7 +106,12 @@ impl Model {
                     })
                     .map(|c| c.id.clone())
             });
-        let grown = reclaim(card.rect, &siblings, GUTTER, partner.as_deref()).unwrap_or_default();
+        let grown = if reclaim {
+            crate::split::reclaim(card.rect, &siblings, GUTTER, partner.as_deref())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         self.log(format!(
             "close {} {}rect={} soft={} siblings={} grown={}",
             short(&card.id),
