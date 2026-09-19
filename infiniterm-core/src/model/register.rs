@@ -602,6 +602,32 @@ mod tests {
         assert!(h.m.selection.phantom.is_none());
     }
 
+    // "Browser" in the phantom's kind picker used to open the old text
+    // prompt; it opens the omnibox now, and Enter has to land the result in
+    // the SAME phantom rect the picker was opened from, not beside whatever
+    // was active before the arrow key ever moved focus off it.
+    #[test]
+    fn choosing_browser_in_the_phantom_kind_picker_opens_the_omnibox_and_lands_in_the_phantom() {
+        let mut h = Harness::new();
+        h.run("focus.move.right");
+        let phantom = h.m.selection.phantom.clone().expect("a phantom");
+        h.m.handle_bare_key(focus_cmd::BareKey::Enter);
+        h.m.close_palette(true);
+        h.m.palette_run(Source::SlotKind, "browser");
+        assert!(h.m.omni.open);
+        assert!(h.m.omni.phantom);
+        assert!(h.m.omni.target.is_none());
+        h.m.omni_type("example.com");
+        h.m.omni_enter();
+        assert!(!h.m.omni.open);
+        assert_eq!(h.m.cards.len(), 2);
+        assert!(h.m.selection.phantom.is_none());
+        let made = h.focused();
+        assert_eq!(made.kind, CardKind::Browser);
+        assert_eq!(made.url.as_deref(), Some("https://example.com"));
+        assert_eq!(made.rect, phantom.rect);
+    }
+
     #[test]
     fn escape_on_a_phantom_returns_to_the_nearest_card() {
         let mut h = Harness::new();
@@ -1328,6 +1354,32 @@ mod tests {
         let made = h.m.cards.last().unwrap();
         assert_eq!(made.kind, CardKind::Browser);
         assert_eq!(made.url.as_deref(), Some("https://example.com"));
+    }
+
+    // The placement menu's "browser" always makes a NEW card, even when a
+    // browser card is the one focused: `card.omnibox` (Cmd+L) would edit it
+    // in place, which is the wrong thing here, so this is its own command
+    // rather than `card.omnibox` reused with different state.
+    #[test]
+    fn card_new_browser_never_edits_the_focused_browser_card() {
+        let mut h = Harness::new();
+        let editing = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].url = Some("https://a.example".into());
+        h.m.set_focus(Some(&editing));
+        h.run("card.new.browser");
+        assert!(h.m.omni.open);
+        assert_eq!(h.m.omni.query, "");
+        assert!(h.m.omni.target.is_none());
+        assert!(!h.m.omni.phantom);
+        h.m.omni_type("b.example");
+        h.m.omni_enter();
+        assert_eq!(h.m.cards.len(), 2, "a second card, the first left alone");
+        assert_eq!(
+            h.m.card(&editing).unwrap().url.as_deref(),
+            Some("https://a.example")
+        );
+        assert_eq!(h.focused().url.as_deref(), Some("https://b.example"));
     }
 
     // A card result focuses, it does not navigate: the page is already open.

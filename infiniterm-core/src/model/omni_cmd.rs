@@ -28,6 +28,10 @@ pub struct OmniState {
     pub suggestions: Vec<String>,
     /// The browser card being edited, when Cmd+L was pressed on one.
     pub target: Option<String>,
+    /// This omnibox is making a card for the phantom slot Enter opened it
+    /// from, not one beside whatever is active: `open_omnibox_for_new_card`
+    /// with `phantom: true`. Meaningless while `target` is `Some`.
+    pub phantom: bool,
 }
 
 impl Model {
@@ -43,6 +47,20 @@ impl Model {
                 .and_then(|c| c.url.clone())
                 .unwrap_or_default(),
             target: browser.map(|c| c.id),
+            ..OmniState::default()
+        };
+    }
+
+    /// Cmd+Shift+T's placement menu and a phantom's kind picker both make a
+    /// NEW card rather than edit whatever is focused, so `target` is always
+    /// `None` here even when a browser card happens to be active — unlike
+    /// `open_omnibox`, which edits it. `phantom` says where Enter lands the
+    /// result: `fill_phantom` for the slot Enter was pressed on, else
+    /// beside the active card, `open_omnibox`'s own rule.
+    pub fn open_omnibox_for_new_card(&mut self, phantom: bool) {
+        self.omni = OmniState {
+            open: true,
+            phantom,
             ..OmniState::default()
         };
     }
@@ -139,6 +157,7 @@ impl Model {
     pub fn omni_enter(&mut self) {
         let chosen = self.omni_flat().into_iter().nth(self.omni.index);
         let target = self.omni.target.clone();
+        let phantom = self.omni.phantom;
         self.close_omnibox();
         let Some(result) = chosen else { return };
         match result.action {
@@ -146,10 +165,10 @@ impl Model {
                 self.set_focus(Some(&id));
                 self.reveal_focused();
             }
-            OmniAction::Navigate(url) => self.omni_go(url, target),
+            OmniAction::Navigate(url) => self.omni_go(url, target, phantom),
             OmniAction::Search(query) => {
                 let url = search_url(&self.config.browser.search_engine, &query);
-                self.omni_go(url, target);
+                self.omni_go(url, target, phantom);
             }
         }
     }
@@ -180,12 +199,18 @@ impl Model {
         self.browser_tab_open(&target, Some(&url));
     }
 
-    /// Navigates the card Cmd+L was opened on, or makes one where a new card
-    /// would go.
-    fn omni_go(&mut self, url: String, target: Option<String>) {
+    /// Navigates the card Cmd+L was opened on, fills the phantom slot Enter
+    /// was pressed on, or makes a card beside the active one: in that
+    /// order, the same precedence `open_omnibox`/`open_omnibox_for_new_card`
+    /// set up when this omnibox opened.
+    fn omni_go(&mut self, url: String, target: Option<String>, phantom: bool) {
         if let Some(card) = target.and_then(|id| self.card_mut(&id)) {
             card.url = Some(url);
             self.dirty_layout = true;
+            return;
+        }
+        if phantom {
+            self.fill_phantom(CardKind::Browser, Some(url));
             return;
         }
         self.new_beside_active(CardKind::Browser, None, Some(url));

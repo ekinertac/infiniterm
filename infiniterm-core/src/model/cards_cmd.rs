@@ -340,17 +340,6 @@ impl Model {
                 }
                 self.open_in_card(open_plan(&full, PathKind::File, None), from.as_deref());
             }
-            Pending::NewBrowserUrl { from, fill_phantom } => {
-                let Some(url) = Model::normalise_url(text.as_deref()) else {
-                    return;
-                };
-                if fill_phantom {
-                    self.fill_phantom(CardKind::Browser, Some(url));
-                } else {
-                    let _ = from;
-                    self.new_beside_active(CardKind::Browser, None, Some(url));
-                }
-            }
             Pending::NavigateBrowser(id) => {
                 if let (Some(url), Some(card)) =
                     (Model::normalise_url(text.as_deref()), self.card_mut(&id))
@@ -635,14 +624,7 @@ impl Model {
                     self.fill_phantom(CardKind::Editor, None);
                 }
                 _ => {
-                    self.prompt.ask(
-                        "url",
-                        "https://",
-                        Pending::NewBrowserUrl {
-                            from: None,
-                            fill_phantom: true,
-                        },
-                    );
+                    self.open_omnibox_for_new_card(true);
                 }
             },
         }
@@ -732,18 +714,14 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.new_beside_active(CardKind::Editor, None, None)
     });
     // Cmd+L. Not a prompt: the omnibox ranks history, open cards and what
-    // you typed, and `card.new.browser` stays for the palette's plain ask.
+    // you typed.
     r.register("card.omnibox", "Browser: address bar", Model::open_omnibox);
+    // The placement menu's "browser": a NEW card beside the active one,
+    // never editing it even when the active card is itself a browser
+    // (`open_omnibox`'s own rule, and wrong here), so this is its own
+    // entry point rather than `card.omnibox` with different arguments.
     r.register("card.new.browser", "Browser: open a URL", |m| {
-        let from = m.selection.focused_id.clone();
-        m.prompt.ask(
-            "url",
-            "https://",
-            Pending::NewBrowserUrl {
-                from,
-                fill_phantom: false,
-            },
-        );
+        m.open_omnibox_for_new_card(false);
     });
     r.register("browser.navigate", "Browser: go to a URL", |m| {
         m.with_active_card(|m, id| {

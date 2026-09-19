@@ -334,11 +334,6 @@ pub enum Pending {
     OpenFile {
         from: Option<String>,
     },
-    /// A url for a new browser card beside `from`, or for the phantom.
-    NewBrowserUrl {
-        from: Option<String>,
-        fill_phantom: bool,
-    },
     NavigateBrowser(String),
     /// An untitled editor's first save: the path typed becomes the card's,
     /// then the save runs.
