@@ -31,7 +31,7 @@ use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::ift::{open_plan, url_plan, PathKind};
 use infiniterm_core::links::{find_links, Found, LinkKind};
 use infiniterm_core::links_fs::path_kinds;
-use infiniterm_term::grid::{CursorKind, Frame, Grid, SelectKind, TermEvent};
+use infiniterm_term::grid::{CursorKind, Frame, Grid, SelectKind, TermEvent, SPACER};
 use infiniterm_term::keys::{encode, encode_with, paste, Key};
 use infiniterm_term::mouse::{self, Mods, MouseButton};
 use infiniterm_term::palette::Palette;
@@ -689,58 +689,48 @@ impl CardBody for TerminalBody {
             }
         }
         if !legible {
-            // Too small for glyphs, not for shape: each row is drawn as
-            // its silhouette (greeking.rs), a quad per run of characters
-            // that reach the same height, so a full card reads as full
-            // from across the canvas, an empty one as empty, and prose as
-            // words rather than as bars.
+            // Too small for glyphs, not for texture: each run of text is a
+            // faint bar the width of its characters, so a full card reads
+            // as full from across the canvas and an empty one as empty.
             let ink = crate::chrome::with_alpha(
                 rgb(self.palette.foreground),
                 crate::chrome::TEXTURE_BAR_ALPHA,
             );
-            let hairline = px(crate::chrome::HAIRLINE_PX as f32);
-            // The baseline sits at the same fraction of the line the real
-            // text's does, so a zoom in lands the letters on their bars.
-            let baseline = line_h * crate::chrome::GREEK_BASELINE_RATIO;
-            let heights = |reach: crate::greeking::Reach| -> (Pixels, Pixels) {
-                use crate::greeking::Reach;
-                let (top, bottom) = match reach {
-                    Reach::Low => (crate::chrome::GREEK_X_HEIGHT, 0.),
-                    Reach::Tall => (crate::chrome::GREEK_ASCENDER, 0.),
-                    Reach::Deep => (
-                        crate::chrome::GREEK_X_HEIGHT,
-                        crate::chrome::GREEK_DESCENDER,
-                    ),
-                    Reach::Mark => (crate::chrome::GREEK_MARK, 0.),
-                };
-                ((line_h * top).max(hairline), line_h * bottom)
-            };
+            let bar_h = (line_h * crate::chrome::TEXTURE_BAR_HEIGHT_RATIO)
+                .max(px(crate::chrome::HAIRLINE_PX as f32));
             for (r, row) in frame.rows.iter().enumerate() {
                 if row_paints_nothing(row) {
                     continue;
                 }
-                let y = origin.y + line_h * r as f32;
-                // Colour per run: the run's own foreground (dimmed) so a
-                // coloured prompt or a diff still reads as such.
+                let y = origin.y + line_h * r as f32 + (line_h - bar_h) / 2.;
                 let mut col = 0usize;
                 for run in &row.runs {
-                    let colour = if run.bg.is_some() {
-                        run.bg.map(rgb).unwrap_or(ink)
-                    } else {
-                        crate::chrome::with_alpha(rgb(run.fg), crate::chrome::TEXTURE_BAR_ALPHA)
-                    };
+                    let mut start: Option<usize> = None;
+                    for (i, ch) in run.text.chars().enumerate() {
+                        let blank = ch == ' ' || ch == SPACER;
+                        match (blank, start) {
+                            (false, None) => start = Some(col + i),
+                            (true, Some(s)) => {
+                                window.paint_quad(fill(
+                                    Bounds::new(
+                                        point(origin.x + cell_w * s as f32, y),
+                                        size(cell_w * (col + i - s) as f32, bar_h),
+                                    ),
+                                    run.bg.map(rgb).unwrap_or(ink),
+                                ));
+                                start = None;
+                            }
+                            _ => {}
+                        }
+                    }
                     let n = run.text.chars().count();
-                    for stroke in crate::greeking::strokes(run.text.chars()) {
-                        let (up, down) = heights(stroke.reach);
+                    if let Some(s) = start {
                         window.paint_quad(fill(
                             Bounds::new(
-                                point(
-                                    origin.x + cell_w * (col + stroke.col) as f32,
-                                    y + baseline - up,
-                                ),
-                                size(cell_w * stroke.len as f32, up + down),
+                                point(origin.x + cell_w * s as f32, y),
+                                size(cell_w * (col + n - s) as f32, bar_h),
                             ),
-                            colour,
+                            run.bg.map(rgb).unwrap_or(ink),
                         ));
                     }
                     col += n;

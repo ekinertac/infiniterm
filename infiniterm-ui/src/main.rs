@@ -21,7 +21,6 @@ mod diff_body;
 mod editor_body;
 mod editors;
 mod field;
-mod greeking;
 mod ime;
 mod input;
 mod keycode;

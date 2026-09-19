@@ -118,16 +118,6 @@ mod wheel_tests {
 pub const TEXTURE_BAR_HEIGHT_RATIO: f32 = 0.55;
 /// A texture bar's alpha: a hint of ink, not a glyph.
 pub const TEXTURE_BAR_ALPHA: f32 = 0.45;
-/// Greeking (greeking.rs): where the baseline sits in the line, and how
-/// far each reach goes from it, as fractions of the line height. A real
-/// Menlo line at 1.2 line height has its baseline about three quarters
-/// down, x-height about a third of the line, ascenders about half, and
-/// descenders a fifth below.
-pub const GREEK_BASELINE_RATIO: f32 = 0.78;
-pub const GREEK_X_HEIGHT: f32 = 0.34;
-pub const GREEK_ASCENDER: f32 = 0.52;
-pub const GREEK_DESCENDER: f32 = 0.18;
-pub const GREEK_MARK: f32 = 0.12;
 /// `ui.inactiveDim`'s default, before a settings read overwrites it: how
 /// much an unfocused card's scrim dims it. Every body with one starts here.
 pub const INACTIVE_DIM_DEFAULT: f64 = 0.45;
