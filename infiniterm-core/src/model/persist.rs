@@ -80,6 +80,8 @@ impl Model {
                         // fallen out of the ring we replay.
                         card.kitty_keys = c.kitty_keys;
                         card.agent_session = c.agent_session.clone();
+                        card.tabs = c.tabs;
+                        card.active_tab = c.active_tab;
                     }
                 }
                 // Numbers the file did not have go above every one it did,
@@ -131,6 +133,8 @@ impl Model {
                 sidebar: c.sidebar,
                 sidebar_top: c.sidebar_top,
                 zoom: c.zoom,
+                tabs: c.tabs.clone(),
+                active_tab: c.active_tab,
                 session: c.session.clone(),
                 kitty_keys: c.kitty_keys,
                 agent_session: c.agent_session.clone(),

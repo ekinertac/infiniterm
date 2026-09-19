@@ -85,6 +85,10 @@ pub struct SavedCard {
     pub sidebar_top: bool,
     /// A browser card's page zoom; `None` means the config default.
     pub zoom: Option<f64>,
+    /// Every tab's url. Empty for a single-tab card. Written only when
+    /// there is more than one, same rule as `card_value` below.
+    pub tabs: Vec<String>,
+    pub active_tab: usize,
     /// This card's shell, as an opaque handle in whichever backend holds it
     /// (a tmux window id like `@7`, or a daemon session id).
     ///
@@ -217,6 +221,18 @@ fn card_value(c: &SavedCard) -> Value {
             map.insert("number".into(), Value::from(c.number));
         }
     }
+    // Same rule as `session`/`kittyKeys`/`agentSession`: written only when
+    // there is more than one tab, so a card that never opened a second one
+    // round-trips byte for byte.
+    if c.tabs.len() > 1 {
+        if let Some(map) = card.as_object_mut() {
+            map.insert(
+                "tabs".into(),
+                Value::Array(c.tabs.iter().cloned().map(Value::String).collect()),
+            );
+            map.insert("activeTab".into(), Value::from(c.active_tab as u64));
+        }
+    }
     card
 }
 
@@ -304,6 +320,23 @@ fn as_card(v: &Value) -> Option<SavedCard> {
     let kitty_keys = c.get("kittyKeys").and_then(Value::as_bool).unwrap_or(false);
     let agent_session = non_empty(c.get("agentSession"));
     let number = c.get("number").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let tabs: Vec<String> = c
+        .get("tabs")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    // Out of range means the file was hand-edited or truncated; fall back
+    // to the first tab rather than restoring a card pointing at nothing.
+    let active_tab = c
+        .get("activeTab")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .filter(|&n| tabs.is_empty() || n < tabs.len())
+        .unwrap_or(0);
     // A card is a terminal unless it says otherwise; an editor without a
     // path is an untitled buffer, whose text lives in its draft. A browser
     // without a url or a transcript without a path has nothing to show and
@@ -358,6 +391,8 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         } else {
             None
         },
+        tabs,
+        active_tab,
         session,
         kitty_keys,
         agent_session,
@@ -559,6 +594,8 @@ mod tests {
             sidebar: None,
             sidebar_top: false,
             zoom: None,
+            tabs: vec![],
+            active_tab: 0,
             session: None,
         }
     }
@@ -726,6 +763,49 @@ mod tests {
             .as_object()
             .unwrap()
             .contains_key("agentSession"));
+    }
+
+    // Same rule as session, kittyKeys and agentSession: a card that never
+    // opened a second tab writes neither key, and the file is byte for byte
+    // what it always was.
+    #[test]
+    fn tabs_round_trip_and_are_written_only_when_there_is_more_than_one() {
+        let one = SavedCard {
+            tabs: vec!["https://a.example".into()],
+            active_tab: 0,
+            ..card()
+        };
+        let json = card_value(&one);
+        assert!(
+            json.get("tabs").is_none(),
+            "a single tab writes no tabs key"
+        );
+        assert!(json.get("activeTab").is_none());
+
+        let two = SavedCard {
+            tabs: vec!["https://a.example".into(), "https://b.example".into()],
+            active_tab: 1,
+            ..card()
+        };
+        let json = card_value(&two);
+        assert_eq!(
+            json.get("tabs").and_then(Value::as_array).map(|a| a.len()),
+            Some(2)
+        );
+        assert_eq!(json.get("activeTab").and_then(Value::as_u64), Some(1));
+
+        let parsed = as_card(&json).unwrap();
+        assert_eq!(parsed.tabs, two.tabs);
+        assert_eq!(parsed.active_tab, 1);
+    }
+
+    // An old file has neither key; it comes back as a single tab, same as
+    // the card that never wrote them.
+    #[test]
+    fn a_file_with_no_tabs_key_loads_as_a_single_tab_card() {
+        let parsed = as_card(&card_json()).unwrap();
+        assert!(parsed.tabs.is_empty());
+        assert_eq!(parsed.active_tab, 0);
     }
 
     // Written only when true, like `session`, so a canvas of plain shells
