@@ -692,6 +692,24 @@ impl CardBody for BrowserBody {
     }
 
     fn key(&mut self, k: &Keystroke, _now: f64, _cx: &mut App) -> BodyAction {
+        // The keyboard's way into focus lock: arrow-focusing a card never
+        // gives the page focus, and until now there was no way to lock one
+        // without reaching for the mouse. A bare Enter on a focused-but-
+        // unlocked card is the keyboard's scrim click — it activates the
+        // card the same way Enter already does everywhere else in this
+        // app (a phantom slot, an omnibox result), and is swallowed rather
+        // than forwarded, so the page never sees the Enter that opened it.
+        if !self.page_focused
+            && k.key == "enter"
+            && !k.modifiers.platform
+            && !k.modifiers.control
+            && !k.modifiers.alt
+            && !k.modifiers.shift
+        {
+            self.set_focus(true);
+            self.dirty = true;
+            return BodyAction::None;
+        }
         let Some(surface) = self.active_surface() else {
             return BodyAction::None;
         };
