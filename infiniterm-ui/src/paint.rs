@@ -544,7 +544,7 @@ impl AppView {
             * inv
             * scale as f32);
         let border = px(CARD_BORDER_SCREEN_PX as f32);
-        let label = self.model.label_of(card);
+        let label = self.model.numbered_label(card);
         let identity = label_color(&card.id, chrome.theme.as_ref()).and_then(crate::chrome::hex);
         // While an agent is in the card the chip carries its STATE rather
         // than the card's identity colour. The chip is the largest piece of

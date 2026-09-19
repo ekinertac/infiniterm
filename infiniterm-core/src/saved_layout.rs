@@ -111,6 +111,8 @@ pub struct SavedCard {
     /// The last Claude Code session the card ran, for `claude --resume`
     /// after a reboot. Written only when there is one.
     pub agent_session: Option<String>,
+    /// The card's `#7`. Zero when the file predates it; written when set.
+    pub number: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -210,6 +212,11 @@ fn card_value(c: &SavedCard) -> Value {
             map.insert("agentSession".into(), Value::String(agent.clone()));
         }
     }
+    if c.number > 0 {
+        if let Some(map) = card.as_object_mut() {
+            map.insert("number".into(), Value::from(c.number));
+        }
+    }
     card
 }
 
@@ -296,6 +303,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
     let session = non_empty(c.get("session")).or_else(|| non_empty(c.get("tmuxWindow")));
     let kitty_keys = c.get("kittyKeys").and_then(Value::as_bool).unwrap_or(false);
     let agent_session = non_empty(c.get("agentSession"));
+    let number = c.get("number").and_then(Value::as_u64).unwrap_or(0) as u32;
     // A card is a terminal unless it says otherwise; an editor without a
     // path is an untitled buffer, whose text lives in its draft. A browser
     // without a url or a transcript without a path has nothing to show and
@@ -353,6 +361,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         session,
         kitty_keys,
         agent_session,
+        number,
     })
 }
 
@@ -536,6 +545,7 @@ mod tests {
             z: 0.,
             kitty_keys: false,
             agent_session: None,
+            number: 0,
             title: "api".into(),
             cwd: "/Users/ekinertac/Code/api".into(),
             group_id: None,
@@ -678,6 +688,25 @@ mod tests {
         )
         .unwrap();
         assert!(saved.cards[0].kitty_keys);
+    }
+
+    // The number a card is called by is the same after a restart, and a
+    // file from before numbers writes none rather than a column of zeros.
+    #[test]
+    fn the_card_number_survives_the_save_file_and_zero_is_not_written() {
+        let saved = round_trip(
+            &[SavedCard {
+                number: 7,
+                ..card()
+            }],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(saved.cards[0].number, 7);
+        assert!(!card_value(&card())
+            .as_object()
+            .unwrap()
+            .contains_key("number"));
     }
 
     // After a reboot the shell is new and the ring is all that is left of

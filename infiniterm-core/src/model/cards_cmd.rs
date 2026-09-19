@@ -24,6 +24,17 @@ const DISCARD_ARM_MS: f64 = 3000.;
 pub const ZOOM_STEP: f64 = 1.1;
 
 impl Model {
+    /// The label with the card's number ahead of it: what the corner chip,
+    /// the palette and the status bar show, so "#7" is enough to name a
+    /// card to somebody else. `label_of` is the bare one, for a name that
+    /// becomes something else (a group's name, a rename prompt's default).
+    pub fn numbered_label(&self, card: &Card) -> String {
+        if card.number == 0 {
+            return self.label_of(card);
+        }
+        format!("#{} {}", card.number, self.label_of(card))
+    }
+
     pub fn label_of(&self, card: &Card) -> String {
         card_label(
             &Labelled {

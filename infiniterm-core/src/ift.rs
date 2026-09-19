@@ -20,15 +20,19 @@ pub struct ListedCard<'a> {
     /// The agent state's kind: `none`, `working`, `idle`.
     pub agent: &'a str,
     pub remote: Option<&'a str>,
+    /// The card's `#7`, as shown on its label.
+    pub number: u32,
 }
 
 /// The stand-in for a column with nothing in it, so field counts never vary.
 pub const EMPTY: &str = "-";
 
-/// One row per card: id, group, directory, agent state, remote. The id
-/// first because it is what every other verb takes, so `ift ls | cut -f1`
-/// is the list of things you can act on. Paths keep `~`: read by a person
-/// as often as by a script, and a script can expand one prefix.
+/// One row per card: id, group, directory, agent state, remote, number.
+/// The id first because it is what every other verb takes, so `ift ls |
+/// cut -f1` is the list of things you can act on. Paths keep `~`: read by a
+/// person as often as by a script, and a script can expand one prefix. The
+/// number came last, as a trailing column: the five before it are what
+/// scripts already cut.
 pub fn format_card_list(
     cards: &[ListedCard],
     group_name: impl Fn(&str) -> Option<String>,
@@ -52,6 +56,11 @@ pub fn format_card_list(
                     .filter(|r| !r.is_empty())
                     .unwrap_or(EMPTY)
                     .to_string(),
+                if c.number > 0 {
+                    c.number.to_string()
+                } else {
+                    EMPTY.to_string()
+                },
             ]
             .join("\t")
         })
@@ -178,6 +187,7 @@ mod tests {
             group_id: None,
             agent: "none",
             remote: None,
+            number: 7,
         }
     }
 
@@ -213,9 +223,19 @@ mod tests {
     #[test]
     fn fills_an_absent_value_rather_than_leaving_it_blank() {
         let r = format_card_list(&[card()], names, "");
-        assert_eq!(row(&r).len(), 5);
+        assert_eq!(row(&r).len(), 6);
         assert_eq!(row(&r)[1], EMPTY);
         assert_eq!(row(&r)[4], EMPTY);
+        assert_eq!(row(&r)[5], "7");
+        let unnumbered = format_card_list(
+            &[ListedCard {
+                number: 0,
+                ..card()
+            }],
+            names,
+            "",
+        );
+        assert_eq!(row(&unnumbered)[5], EMPTY);
     }
 
     #[test]
@@ -230,7 +250,7 @@ mod tests {
         let rows = format_card_list(&[card(), full], names, "");
         assert_eq!(
             rows.lines().map(|r| row(r).len()).collect::<Vec<_>>(),
-            [5, 5]
+            [6, 6]
         );
     }
 

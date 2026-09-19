@@ -497,7 +497,7 @@ impl AppView {
             if m.cards.len() == 1 { "" } else { "s" }
         );
         if let Some(c) = m.focused() {
-            left.push_str(&format!("   {}", m.label_of(c)));
+            left.push_str(&format!("   {}", m.numbered_label(c)));
         }
         if m.selection.maximized {
             left.push_str("   maximised");

@@ -34,7 +34,8 @@ ift — drive infiniterm from a shell
   ift diff [path]            changes against git HEAD, as a card: a tree of the
                              changed files under path (the current directory
                              without one) and each file's diff
-  ift ls                     cards as TSV: id, group, directory, state, remote
+  ift ls                     cards as TSV: id, group, directory, state, remote,
+                             number (the #7 on the card's label)
   ift sessions               session daemons still running, app or no app:
                              id, pid, cwd, command, started, tab separated
   ift attach <id>            connect a session's shell to this terminal;

@@ -67,6 +67,9 @@ impl Model {
                     if let Some(card) = self.card_mut(&id) {
                         card.title = c.title;
                         card.z = c.z;
+                        // Zero from a file before numbers; given below,
+                        // above every number the file does have.
+                        card.number = c.number;
                         // The session this card's shell was in. The ui checks
                         // whether the backend still has it: if so the card is
                         // adopted, and if not it spawns as any card does.
@@ -79,6 +82,15 @@ impl Model {
                         card.agent_session = c.agent_session.clone();
                     }
                 }
+                // Numbers the file did not have go above every one it did,
+                // in file order, and the counter continues past them all,
+                // so a new card never repeats a loaded one.
+                let mut next = self.cards.iter().map(|c| c.number).max().unwrap_or(0) + 1;
+                for card in self.cards.iter_mut().filter(|c| c.number == 0) {
+                    card.number = next;
+                    next += 1;
+                }
+                self.next_number = next;
                 self.viewport = saved.viewport;
                 self.ui_scale = saved.ui_scale;
                 self.selection.focused_id = saved.focused_id;
@@ -122,6 +134,7 @@ impl Model {
                 session: c.session.clone(),
                 kitty_keys: c.kitty_keys,
                 agent_session: c.agent_session.clone(),
+                number: c.number,
             })
             .collect();
         let groups: Vec<SavedGroup> = self

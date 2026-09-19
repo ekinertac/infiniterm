@@ -86,6 +86,12 @@ pub struct Card {
     /// `claude --resume <id>` ready to paste. Never cleared by the app;
     /// the next hook event overwrites it.
     pub agent_session: Option<String>,
+    /// A short handle for talking about the card ("close #7"), shown ahead
+    /// of the label. Given once, at creation, from a counter that only
+    /// grows within a session, so two cards never share one while you look
+    /// at them; SAVED, so it is the same after a restart. Zero in a file
+    /// from before the field, and assigned on load.
+    pub number: u32,
     /// This card's shell, as an opaque handle in whichever backend holds it
     /// (a tmux window id like `@7`, or a daemon session id). SAVED, unlike
     /// every other runtime fact about a shell: it is the only thing that
@@ -328,6 +334,8 @@ pub struct Model {
     /// the focused card goes back along it; not saved, a restart has no
     /// "before".
     pub focus_trail: Vec<String>,
+    /// The next card's `number`; set past the highest loaded one.
+    pub next_number: u32,
     pub viewport: Viewport,
     /// The CONTENT area, not the window.
     pub view_size: Size,
@@ -407,6 +415,7 @@ impl Model {
             selection: Selection::default(),
             last_focused: HashMap::new(),
             focus_trail: Vec::new(),
+            next_number: 1,
             viewport: INITIAL_VIEWPORT,
             view_size: Size { w: 0., h: 0. },
             framing: false,
@@ -609,6 +618,7 @@ impl Model {
             command: opts.command,
             transcript_path: None,
             agent_session: None,
+            number: self.take_number(),
             session: None,
             kitty_keys: false,
             osc_title: None,
@@ -638,6 +648,13 @@ impl Model {
         self.cards.push(card);
         self.dirty_layout = true;
         id
+    }
+
+    /// The next card number, never handed out twice in a session.
+    pub fn take_number(&mut self) -> u32 {
+        let n = self.next_number;
+        self.next_number += 1;
+        n
     }
 
     /// The one door for a mask. The ui reconciles its decoy panes from

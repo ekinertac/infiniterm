@@ -323,6 +323,27 @@ mod tests {
         assert_eq!(h.m.card(&kept_id).unwrap().soft_group_id, None);
     }
 
+    // "#7" is how a card is named to somebody else: given once, shown ahead
+    // of the label, never repeated within a session even after a close.
+    #[test]
+    fn cards_are_numbered_once_and_the_number_leads_the_label() {
+        let mut h = Harness::new();
+        let first = h.focused().clone();
+        assert_eq!(first.number, 1);
+        assert!(h.m.numbered_label(&first).starts_with("#1 "));
+        h.run("card.new.terminal");
+        assert_eq!(h.focused().number, 2);
+        h.run("card.close");
+        h.run("card.new.terminal");
+        assert_eq!(
+            h.focused().number,
+            3,
+            "a closed card's number is not reused"
+        );
+        // The bare label is for names that become something else.
+        assert!(!h.m.label_of(h.focused()).starts_with('#'));
+    }
+
     // Split down to a quarter and keep only the quarter: the other three
     // close without the survivor growing, the space stays free, and the
     // survivor is no longer half of a pair.
@@ -619,6 +640,27 @@ mod tests {
         assert_eq!(again.selection.focused_id, h.m.selection.focused_id);
         assert!(again.loaded && !again.read_only);
         assert_eq!(again.save_text().unwrap(), text);
+        // Numbers come back as they were and the counter continues past
+        // them; a file with none (before the field) gets them in file
+        // order, above whichever it does have.
+        assert_eq!(
+            again.cards.iter().map(|c| c.number).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert_eq!(again.next_number, 3);
+        let mixed = text.replacen("\"number\": 1", "\"number\": 9", 1).replacen(
+            "\"number\": 2",
+            "\"nope\": 2",
+            1,
+        );
+        let mut old = Model::new();
+        old.view_size = Size { w: 1600., h: 1000. };
+        old.load_layout(Some(&mixed));
+        assert_eq!(
+            old.cards.iter().map(|c| c.number).collect::<Vec<_>>(),
+            [9, 10]
+        );
+        assert_eq!(old.next_number, 11);
     }
 
     #[test]
@@ -1262,7 +1304,7 @@ mod tests {
             .iter()
             .find(|i| i.id == format!("{CARD_ROW}{first}"))
             .expect("the card is a row");
-        assert!(row.label.starts_with("Card: embers"), "{}", row.label);
+        assert!(row.label.starts_with("Card: #1 embers"), "{}", row.label);
         assert!(
             row.label.contains("workspace 1") || row.label.contains("\u{b7}"),
             "a card elsewhere says which workspace: {}",

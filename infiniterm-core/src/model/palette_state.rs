@@ -133,7 +133,7 @@ impl Model {
                 // workspace says which, because choosing it switches there.
                 let here = self.active_workspace.as_deref();
                 for card in &self.cards {
-                    let mut label = format!("Card: {}", self.label_of(card));
+                    let mut label = format!("Card: {}", self.numbered_label(card));
                     if Some(card.workspace_id.as_str()) != here {
                         if let Some(ws) = self.workspaces.iter().find(|w| w.id == card.workspace_id)
                         {

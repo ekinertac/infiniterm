@@ -40,6 +40,7 @@ impl Model {
                         group_id: c.group_id.as_deref(),
                         agent: c.agent.name(),
                         remote: c.remote.as_deref(),
+                        number: c.number,
                     })
                     .collect();
                 ok(format_card_list(
