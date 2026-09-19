@@ -4,11 +4,14 @@
 //! in the module whose prefix it carries, and `card.clear` is `Terminal:`.
 use super::palette_state::Source;
 use super::palette_state::{CARD_ROW, SIZES, WORKSPACE_ROW};
-use super::{BrowserAction, Card, EditorAction, Effect, Model, NewCard, Pending};
+use super::{
+    BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
+    LAYOUT_UNDO_DEPTH,
+};
 use crate::card_label::{card_label, Labelled};
 use crate::cards::GUTTER;
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
-use crate::grid::{snap_rect, Rect};
+use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
 use crate::ift::{diff_plan, open_plan, transcript_plan, PathKind};
 use crate::layout::rects_overlap;
 use crate::navigate::{nearest_to, Direction};
@@ -39,6 +42,7 @@ impl Model {
             if next == card.rect {
                 return;
             }
+            m.remember_layout();
             let mut taken: Vec<Rect> = m
                 .here()
                 .iter()
@@ -472,6 +476,135 @@ impl Model {
     }
 
     /// While a gesture is live: whether the moving cards overlap anything.
+    /// The active canvas's rects, kept before a change so Cmd+Z can put
+    /// them back. Every command that moves or resizes a card calls this
+    /// first; a new change forgets the redo trail.
+    pub fn remember_layout(&mut self) {
+        let ws = self.active_workspace.clone().unwrap_or_default();
+        let snap = LayoutSnapshot {
+            workspace_id: ws.clone(),
+            rects: self
+                .cards
+                .iter()
+                .filter(|c| c.workspace_id == ws)
+                .map(|c| (c.id.clone(), c.rect))
+                .collect(),
+        };
+        if self.layout_undo.last() == Some(&snap) {
+            return;
+        }
+        self.layout_undo.push(snap);
+        if self.layout_undo.len() > LAYOUT_UNDO_DEPTH {
+            self.layout_undo.remove(0);
+        }
+        self.layout_redo.clear();
+    }
+
+    /// A change that already happened, with the rects from before it (a
+    /// resize or group drag reports its start rects at the drop): the
+    /// snapshot is the present with those put back.
+    pub fn remember_layout_from(&mut self, before: &[(String, Rect)]) {
+        let ws = self.active_workspace.clone().unwrap_or_default();
+        let snap = LayoutSnapshot {
+            workspace_id: ws.clone(),
+            rects: self
+                .cards
+                .iter()
+                .filter(|c| c.workspace_id == ws)
+                .map(|c| {
+                    let was = before.iter().find(|(id, _)| *id == c.id).map(|(_, r)| *r);
+                    (c.id.clone(), was.unwrap_or(c.rect))
+                })
+                .collect(),
+        };
+        if snap
+            .rects
+            .iter()
+            .all(|(id, r)| self.card(id).is_some_and(|c| c.rect == *r))
+        {
+            return;
+        }
+        self.layout_undo.push(snap);
+        if self.layout_undo.len() > LAYOUT_UNDO_DEPTH {
+            self.layout_undo.remove(0);
+        }
+        self.layout_redo.clear();
+    }
+
+    /// Cmd+Z: the canvas as it was before the last change; Cmd+Shift+Z
+    /// the other way. Cards glide back.
+    pub fn undo_layout(&mut self, redo: bool) {
+        let popped = if redo {
+            self.layout_redo.pop()
+        } else {
+            self.layout_undo.pop()
+        };
+        let Some(snap) = popped else {
+            self.notify(if redo {
+                "nothing to redo"
+            } else {
+                "nothing to undo"
+            });
+            return;
+        };
+        let present = LayoutSnapshot {
+            workspace_id: snap.workspace_id.clone(),
+            rects: self
+                .cards
+                .iter()
+                .filter(|c| c.workspace_id == snap.workspace_id)
+                .map(|c| (c.id.clone(), c.rect))
+                .collect(),
+        };
+        if redo {
+            self.layout_undo.push(present);
+        } else {
+            self.layout_redo.push(present);
+        }
+        let moved: Vec<String> = snap
+            .rects
+            .iter()
+            .filter(|(id, r)| self.card(id).is_some_and(|c| c.rect != *r))
+            .map(|(id, _)| id.clone())
+            .collect();
+        self.mark_swap(&moved);
+        for (id, r) in &snap.rects {
+            if let Some(c) = self.card_mut(id) {
+                c.rect = *r;
+            }
+        }
+        if self.active_workspace.as_deref() != Some(&snap.workspace_id) {
+            self.show_workspace(&snap.workspace_id);
+        }
+        self.dirty_layout = true;
+        self.reveal_focused();
+    }
+
+    /// The ghost of a dragged card, snapped to the slots the cards around
+    /// it offer (`slot_snap`), for the ui to draw and to drop.
+    pub fn snap_ghost(&self, id: &str, free: Rect) -> Rect {
+        let Some(card) = self.card(id) else {
+            return free;
+        };
+        let ws = card.workspace_id.clone();
+        let others: Vec<Rect> = self
+            .cards
+            .iter()
+            .filter(|c| c.workspace_id == ws && c.id != id)
+            .map(|c| c.rect)
+            .collect();
+        crate::slot_snap::snap_ghost(
+            free,
+            &others,
+            self.default_size(),
+            Point {
+                x: HALF_CELL,
+                y: HALF_CELL,
+            },
+            GUTTER,
+        )
+    }
+
     /// Whether `rect` is free for `id` on its canvas: no other card, no
     /// other group's frame. What the drag's ghost is coloured by.
     pub fn rect_free_for(&self, id: &str, rect: Rect) -> bool {
@@ -489,9 +622,11 @@ impl Model {
         !occupied.iter().any(|o| rects_overlap(rect, *o))
     }
 
-    /// The end of a single card's drag: the card goes to where the ghost
-    /// was, gliding from where it is, if that space is free; else it stays
-    /// where it never left and the status bar says why.
+    /// The end of a single card's drag. Onto free space: the card goes to
+    /// where the ghost was, gliding. Onto another card (the ghost's centre
+    /// inside it): the two swap rects, the way Cmd+Alt+Shift+Arrow swaps
+    /// neighbours. Half over a card and half over space: nothing moves and
+    /// the status bar says why.
     pub fn drop_card(&mut self, id: &str, ghost: Rect) -> bool {
         let ghost = snap_rect(ghost);
         let Some(card) = self.card(id).cloned() else {
@@ -500,15 +635,46 @@ impl Model {
         if ghost == card.rect {
             return true;
         }
-        if !self.rect_free_for(id, ghost) {
+        if self.rect_free_for(id, ghost) {
+            self.remember_layout();
+            self.mark_swap(std::slice::from_ref(&id.to_string()));
+            if let Some(c) = self.card_mut(id) {
+                c.rect = ghost;
+                // Moved away from whatever it was split from.
+                c.soft_group_id = None;
+            }
+            self.dirty_layout = true;
+            return true;
+        }
+        let centre = Point {
+            x: ghost.x + ghost.w / 2.,
+            y: ghost.y + ghost.h / 2.,
+        };
+        let under = self
+            .cards
+            .iter()
+            .find(|c| {
+                c.workspace_id == card.workspace_id
+                    && c.id != id
+                    && centre.x >= c.rect.x
+                    && centre.x < c.rect.x + c.rect.w
+                    && centre.y >= c.rect.y
+                    && centre.y < c.rect.y + c.rect.h
+            })
+            .cloned();
+        let Some(other) = under else {
             self.notify("cards cannot overlap");
             return false;
-        }
-        self.mark_swap(std::slice::from_ref(&id.to_string()));
+        };
+        self.remember_layout();
+        self.mark_swap(&[id.to_string(), other.id.clone()]);
         if let Some(c) = self.card_mut(id) {
-            c.rect = ghost;
-            // Moved away from whatever it was split from.
+            c.rect = other.rect;
             c.soft_group_id = None;
+        }
+        if let Some(o) = self.card_mut(&other.id) {
+            o.rect = card.rect;
+            o.soft_group_id = None;
         }
         self.dirty_layout = true;
         true
@@ -584,6 +750,7 @@ impl Model {
             let Some(card) = m.card(&id).cloned() else {
                 return;
             };
+            m.remember_layout();
             let here = m.here();
             let placed = m.placed(&here);
             let ws = m.active_workspace.clone().unwrap_or_default();
@@ -959,6 +1126,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             &format!("Card: nudge {}", super::context::where_(dir)),
             move |m| {
                 m.with_active_card(|m, id| {
+                    m.remember_layout();
                     if let Some(c) = m.card_mut(&id) {
                         c.rect = moved_by(c.rect, dx, dy);
                     }
@@ -975,6 +1143,10 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     });
     // One chord and one Enter to a quarter, instead of two splits and two
     // Cmd+Ctrl+W. Shrinking leaves the freed space free.
+    r.register("layout.undo", "Layout: undo the last move or resize", |m| {
+        m.undo_layout(false)
+    });
+    r.register("layout.redo", "Layout: redo", |m| m.undo_layout(true));
     r.register("card.size", "Card: resize to…", |m| {
         if m.palette.source == Some(Source::Sizes) {
             m.close_palette(false);
@@ -994,6 +1166,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             &format!("Card: make {name}"),
             move |m| {
                 m.with_active_card(|m, id| {
+                    m.remember_layout();
                     if let Some(c) = m.card_mut(&id) {
                         c.rect = resized_by(c.rect, dw, dh);
                     }

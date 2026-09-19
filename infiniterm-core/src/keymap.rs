@@ -199,6 +199,12 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "back to the default size from a split, when the space is free",
     ),
     (
+        "cmd+z",
+        "layout.undo",
+        "moves, swaps, drops, resizes; not closes",
+    ),
+    ("cmd+shift+z", "layout.redo", ""),
+    (
         "cmd+alt+s",
         "card.size",
         "a size from the default's fractions: full, halves, quarter, doubles",

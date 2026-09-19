@@ -345,6 +345,17 @@ pub enum Pending {
 /// How long a notice stays up after the last one.
 pub const NOTICE_MS: f64 = 5000.;
 
+/// Every card's rect on one canvas at one moment. Cards closed since are
+/// skipped on the way back; cards made since are left where they are.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayoutSnapshot {
+    pub workspace_id: String,
+    pub rects: Vec<(String, Rect)>,
+}
+
+/// How many layout changes Cmd+Z can walk back.
+pub const LAYOUT_UNDO_DEPTH: usize = 100;
+
 pub struct Model {
     pub cards: Vec<Card>,
     pub groups: Vec<Group>,
@@ -360,6 +371,13 @@ pub struct Model {
     pub focus_trail: Vec<String>,
     /// The next card's `number`; set past the highest loaded one.
     pub next_number: u32,
+    /// Layout undo (Cmd+Z / Cmd+Shift+Z): every card's rect on the active
+    /// canvas as it was before each move, swap, drop, split or resize.
+    /// Session-only. A snapshot is taken by `remember_layout` at the top
+    /// of each of those; undo applies one and pushes the present onto
+    /// `redo`, which a new change empties.
+    pub layout_undo: Vec<LayoutSnapshot>,
+    pub layout_redo: Vec<LayoutSnapshot>,
     pub viewport: Viewport,
     /// The CONTENT area, not the window.
     pub view_size: Size,
@@ -440,6 +458,8 @@ impl Model {
             last_focused: HashMap::new(),
             focus_trail: Vec::new(),
             next_number: 1,
+            layout_undo: Vec::new(),
+            layout_redo: Vec::new(),
             viewport: INITIAL_VIEWPORT,
             view_size: Size { w: 0., h: 0. },
             framing: false,

@@ -10,7 +10,9 @@
 //! chords; hints, groups and the shortcuts panel give them up here. The
 //! app consults this before the keymap. Chords are spelled as the keymap
 //! normalises them.
-const KEPT: [&str; 9] = [
+/// Undo and redo are the buffer's inside an editor; the layout's undo
+/// (`layout.undo`) is for the other cards.
+const KEPT: [&str; 11] = [
     "cmd+shift+arrowleft",
     "cmd+shift+arrowright",
     "cmd+shift+arrowup",
@@ -20,6 +22,8 @@ const KEPT: [&str; 9] = [
     "cmd+shift+g",
     "cmd+alt+f",
     "cmd+/",
+    "cmd+z",
+    "cmd+shift+z",
 ];
 
 pub fn editor_keeps(chord: &str) -> bool {
@@ -36,6 +40,7 @@ mod tests {
         assert!(editor_keeps("cmd+shift+arrowdown"));
         assert!(editor_keeps("cmd+f")); // find, not hints
         assert!(editor_keeps("cmd+/")); // comment, not the shortcuts panel
+        assert!(editor_keeps("cmd+z")); // the buffer's undo, not the layout's
     }
 
     #[test]

@@ -511,8 +511,13 @@ mod tests {
         let a_rect = h.focused().rect;
         h.run("card.new.terminal");
         let b_rect = h.focused().rect;
-        // Onto b: refused, a is where it was, and it says so.
-        assert!(!h.m.drop_card(&a, b_rect));
+        // Half over b and half over space: refused, a is where it was, and
+        // it says so. (Squarely on b it would swap; see the test below.)
+        let straddle = Rect {
+            x: b_rect.x - b_rect.w / 2. - 25., // centred on the gutter: on neither card
+            ..b_rect
+        };
+        assert!(!h.m.drop_card(&a, straddle));
         assert_eq!(h.m.card(&a).unwrap().rect, a_rect);
         assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("overlap")));
         // Onto free canvas, off-grid by a little: snapped there, animated.
@@ -532,6 +537,79 @@ mod tests {
         // Back where it is: nothing to do.
         assert!(h.m.drop_card(&a, landed));
         assert!(h.m.rect_free_for(&a, landed));
+    }
+
+    // Dropped with its centre on another card, the two swap places, the
+    // way Cmd+Alt+Shift+Arrow does; straddling two, nothing moves.
+    #[test]
+    fn a_drop_on_a_card_swaps_the_two() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        let a_rect = h.focused().rect;
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        let b_rect = h.focused().rect;
+        let onto_b = Rect {
+            x: b_rect.x + 40.,
+            y: b_rect.y + 25.,
+            ..a_rect
+        };
+        assert!(h.m.drop_card(&a, onto_b));
+        assert_eq!(h.m.card(&a).unwrap().rect, b_rect);
+        assert_eq!(h.m.card(&b).unwrap().rect, a_rect);
+        // Cmd+Z puts both back; Cmd+Shift+Z swaps them again.
+        h.run("layout.undo");
+        assert_eq!(h.m.card(&a).unwrap().rect, a_rect);
+        assert_eq!(h.m.card(&b).unwrap().rect, b_rect);
+        h.run("layout.redo");
+        assert_eq!(h.m.card(&a).unwrap().rect, b_rect);
+        // Nothing left to redo, and it says so rather than doing nothing.
+        h.run("layout.redo");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("nothing to redo")));
+    }
+
+    // The undo trail covers swaps, nudges and the size picker, in order,
+    // and a new change after an undo forgets the redo.
+    #[test]
+    fn layout_undo_walks_back_through_moves_and_resizes() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        let r0 = h.focused().rect;
+        h.run("card.move.right");
+        let r1 = h.focused().rect;
+        h.m.palette_run(Source::Sizes, "quarter");
+        let r2 = h.focused().rect;
+        assert!(r0 != r1 && r1 != r2);
+        h.run("layout.undo");
+        assert_eq!(h.m.card(&id).unwrap().rect, r1);
+        h.run("layout.undo");
+        assert_eq!(h.m.card(&id).unwrap().rect, r0);
+        h.run("layout.undo");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("nothing to undo")));
+        h.run("layout.redo");
+        assert_eq!(h.m.card(&id).unwrap().rect, r1);
+        h.run("card.move.down");
+        assert!(h.m.layout_redo.is_empty(), "a new change forgets the redo");
+        // One card alone: the ghost snaps to the placement lattice.
+        let free = Rect {
+            x: r0.x + 30.,
+            y: r0.y + r0.h + 40.,
+            ..r0
+        };
+        let snapped = h.m.snap_ghost(&id, free);
+        assert_eq!(
+            (snapped.x, snapped.y),
+            (r0.x, r0.y + r0.h + 25.),
+            "{snapped:?}"
+        );
     }
 
     // Grouping moves the selection to a free block right of the grid, as one block.
@@ -955,7 +1033,7 @@ mod tests {
         let mut h = Harness::new();
         assert!(handle_chord(&mut h.m, &h.r, "cmd+t"));
         assert_eq!(h.m.cards.len(), 2);
-        assert!(!handle_chord(&mut h.m, &h.r, "cmd+shift+z"), "unbound");
+        assert!(!handle_chord(&mut h.m, &h.r, "cmd+alt+shift+z"), "unbound");
         // An editor keeps Cmd+F; a terminal gives it to hints.
         h.m.take_effects();
         let id = h.focused().id.clone();

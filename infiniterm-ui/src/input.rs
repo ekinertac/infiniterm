@@ -291,13 +291,15 @@ impl AppView {
             let dy = snap((p.y - g.start_px.y) / scale);
             let card = g.card.clone();
             match &g.kind {
-                // The ghost follows; the card waits for the drop.
+                // The ghost follows, snapped to the slots around it; the
+                // card waits for the drop.
                 GestureKind::Move => {
-                    let r = Rect {
+                    let free = Rect {
                         x: g.start_rect.x + dx,
                         y: g.start_rect.y + dy,
                         ..g.start_rect
                     };
+                    let r = self.model.snap_ghost(&card, free);
                     if std::env::var_os("INFINITERM_KEYLOG").is_some() {
                         eprintln!("[gesture] ghost now {r:?} (dx {dx} dy {dy})");
                     }
@@ -435,13 +437,15 @@ impl AppView {
             return;
         }
         if let Some(g) = self.gesture.take() {
-            // A single card's drop: to the ghost, if the space is free.
+            // A single card's drop: to the ghost, or a swap with the card
+            // under it.
             if let (GestureKind::Move, Some(ghost)) = (&g.kind, g.ghost) {
                 self.model.drop_card(&g.card, ghost);
                 self.perform_effects();
                 return;
             }
             // The drop: snapped, or put back if it landed on another card.
+            // Remembered from the start rects, so Cmd+Z has the "before".
             let (ids, start): (Vec<String>, Vec<(String, Rect)>) = match &g.kind {
                 GestureKind::MoveGroup(_) => (
                     g.start_rects.iter().map(|(id, _)| id.clone()).collect(),
@@ -449,7 +453,9 @@ impl AppView {
                 ),
                 _ => (vec![g.card.clone()], vec![(g.card.clone(), g.start_rect)]),
             };
-            self.model.end_gesture(&ids, &start);
+            if self.model.end_gesture(&ids, &start) {
+                self.model.remember_layout_from(&start);
+            }
             return;
         }
         if let Some(id) = self.body_drag.take() {
@@ -627,6 +633,24 @@ impl AppView {
         let chord = chord_for(&press);
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
             eprintln!("[chord] {chord} (key {:?}, code {:?})", k.key, code);
+        }
+        // Escape mid-drag: the ghost goes, the card never moved; a group
+        // drag or a resize goes back to where it started.
+        if k.key == "escape" && !m.platform && !m.control && !m.alt {
+            if let Some(g) = self.gesture.take() {
+                for (id, r) in &g.start_rects {
+                    if let Some(c) = self.model.card_mut(id) {
+                        c.rect = *r;
+                    }
+                }
+                if matches!(g.kind, GestureKind::Resize(_)) {
+                    if let Some(c) = self.model.card_mut(&g.card) {
+                        c.rect = g.start_rect;
+                    }
+                }
+                self.redraw = true;
+                return true;
+            }
         }
         if (m.platform || m.control) && handle_chord(&mut self.model, &self.registry, &chord) {
             self.perform_effects();
