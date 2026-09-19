@@ -122,6 +122,7 @@ impl AppView {
         let text = self.chrome.text;
         let family = crate::terminals::family_of(&self.model.config.terminal.font_family);
         let inactive_dim = self.model.config.ui.inactive_dim;
+        let ui_scale = self.model.ui_scale as f32;
         let cards: Vec<_> = self
             .model
             .cards
@@ -161,6 +162,8 @@ impl AppView {
             body.text = text;
             body.font_family = family.clone();
             body.inactive_dim = inactive_dim;
+            body.card_number = card.number;
+            body.ui_scale = ui_scale;
             body.zoom = card.zoom;
 
             // Tabs: the card's list of urls against the body's list of

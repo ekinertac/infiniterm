@@ -50,6 +50,15 @@ const STATUS_FONT_PX: f64 = 13.;
 const STATUS_TEXT_PAD_PX: f64 = 12.;
 /// The placeholder text's line height, looser than its font size.
 const STATUS_LINE_HEIGHT_RATIO: f32 = 1.5;
+/// The tab strip's height in screen pixels, divided by zoom like every
+/// other piece of chrome.
+const TAB_STRIP_HEIGHT_PX: f64 = 28.;
+/// A tab's width, same units. Fixed rather than proportional: a card with
+/// many tabs scrolls the strip in a later slice rather than shrinking
+/// every tab to a sliver, which is not in this one (see the design doc).
+const TAB_STRIP_TAB_WIDTH_PX: f64 = 140.;
+const TAB_STRIP_FONT_PX: f64 = 11.;
+const TAB_STRIP_LABEL_PAD_PX: f64 = 8.;
 
 /// One tab: everything that was a single field on `BrowserBody` before
 /// tabs existed, once per open page.
@@ -98,6 +107,13 @@ impl Tab {
     }
 }
 
+/// A tab's strip label: the page title once it has one, else the url it was
+/// opened on. Matches `paint`'s existing `format!("loading {}", ...)`
+/// fallback in spirit: something to show before the page has said anything.
+fn tab_label(tab: &Tab) -> &str {
+    tab.title.as_deref().unwrap_or(&tab.url)
+}
+
 /// A closed tab's surface has to be told to go: `Surface` has no `Drop` of
 /// its own, and a `Vec::remove` is the only thing that closes a tab.
 impl Drop for Tab {
@@ -135,6 +151,14 @@ pub struct BrowserBody {
     pub last_escape_ms: Option<f64>,
     left_down: bool,
     pub inactive_dim: f64,
+    /// The card's number, mirrored from `card.number` by `reconcile_browsers`
+    /// so the strip can paint it: the corner label used to carry this, and
+    /// was removed when the strip took over the job.
+    pub card_number: u32,
+    /// Mirrors `Model::ui_scale`, the same way `card_bg`/`text` do, so the
+    /// strip's screen-pixel sizes scale with the interface multiplier like
+    /// every other piece of chrome.
+    pub ui_scale: f32,
     pub card_bg: Hsla,
     pub text: Hsla,
     pub font_family: String,
@@ -171,6 +195,8 @@ impl BrowserBody {
             last_escape_ms: None,
             left_down: false,
             inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
+            card_number: 0,
+            ui_scale: 1.,
             card_bg: gpui::rgb(0x0e101a).into(),
             text: gpui::rgb(0xb9c4d2).into(),
             font_family: "Menlo".into(),
@@ -427,6 +453,17 @@ impl CardBody for BrowserBody {
         // Every tab follows the zoom, not just the visible one: a background
         // tab has to be the right size the moment it becomes active, or the
         // first frame after the switch is a stretched page.
+        //
+        // This still resizes CEF to `self.world`, the CARD's full size, not
+        // `page_bounds` below: `self.world` is set from `card.rect` by
+        // `resized`, and `card.rect` means the same thing everywhere else
+        // that reads it (placement, restore, the save file). Shrinking it
+        // here to dodge the strip would make this body the one reader with
+        // its own idea of the card's size. The strip is chrome painted OVER
+        // the page instead, which costs a sliver of the topmost rendered
+        // pixels under the strip and a slight vertical scale to fit the
+        // texture into the shorter `page_bounds` below; not pixel-perfect,
+        // but the alternative desyncs `self.world` from `card.rect`.
         for tab in &self.tabs {
             if let Some(s) = &tab.surface {
                 if (s.shared.borrow().scale - device).abs() > SCALE_CHANGE_EPSILON {
@@ -438,10 +475,20 @@ impl CardBody for BrowserBody {
                 }
             }
         }
+        // The strip's height in screen pixels, `ui_scale`-aware like every
+        // other piece of chrome, clamped to the card's own height so a
+        // tiny/zoomed-out card cannot push `page_bounds` negative.
+        let strip_h =
+            px((TAB_STRIP_HEIGHT_PX * self.ui_scale as f64 * scale) as f32).min(bounds.size.height);
+        let strip = Bounds::new(bounds.origin, size(bounds.size.width, strip_h));
+        let page_bounds = Bounds::new(
+            point(bounds.origin.x, bounds.origin.y + strip_h),
+            size(bounds.size.width, bounds.size.height - strip_h),
+        );
         window.paint_quad(fill(bounds, self.card_bg));
         match self.active_tab().and_then(|t| t.texture.clone()) {
             Some(img) => {
-                let _ = window.paint_image(bounds, Default::default(), img, 0, false);
+                let _ = window.paint_image(page_bounds, Default::default(), img, 0, false);
             }
             None => {
                 let font_size = px((STATUS_FONT_PX * scale) as f32);
@@ -459,8 +506,8 @@ impl CardBody for BrowserBody {
                     );
                     let _ = line.paint(
                         point(
-                            bounds.origin.x + px((STATUS_TEXT_PAD_PX * scale) as f32),
-                            bounds.origin.y + px((STATUS_TEXT_PAD_PX * scale) as f32),
+                            page_bounds.origin.x + px((STATUS_TEXT_PAD_PX * scale) as f32),
+                            page_bounds.origin.y + px((STATUS_TEXT_PAD_PX * scale) as f32),
                         ),
                         font_size * STATUS_LINE_HEIGHT_RATIO,
                         window,
@@ -471,11 +518,76 @@ impl CardBody for BrowserBody {
         }
         if !focused && self.inactive_dim > 0. {
             window.paint_quad(fill(
-                bounds,
+                page_bounds,
                 crate::chrome::with_alpha(self.card_bg, self.inactive_dim as f32),
             ));
         }
-        let _ = size(px(0.), px(0.));
+        // The strip itself, painted last so it sits over the page rather
+        // than under it: each tab's elided title, the active one visually
+        // distinct, the card's number where the corner label used to be.
+        window.paint_quad(fill(strip, self.card_bg));
+        let tab_w = px((TAB_STRIP_TAB_WIDTH_PX * self.ui_scale as f64 * scale) as f32);
+        let strip_font = px((TAB_STRIP_FONT_PX * self.ui_scale as f64 * scale) as f32);
+        if strip_font >= px(crate::chrome::LEGIBLE_FONT_PX as f32) {
+            let pad = px((TAB_STRIP_LABEL_PAD_PX * self.ui_scale as f64 * scale) as f32);
+            for (i, tab) in self.tabs.iter().enumerate() {
+                let tab_bounds = Bounds::new(
+                    point(strip.origin.x + tab_w * (i as f32), strip.origin.y),
+                    size(tab_w, strip_h),
+                );
+                if !tab_bounds.intersects(&strip) {
+                    // Off the visible strip: nothing to paint, and shaping
+                    // its label would be wasted work on a card with many
+                    // tabs (the strip does not scroll yet, see the const's
+                    // own comment).
+                    continue;
+                }
+                if i == self.active {
+                    window.paint_quad(fill(tab_bounds, crate::chrome::with_alpha(self.text, 0.08)));
+                }
+                let room = f32::from(tab_w) - f32::from(pad) * 2.;
+                let label = crate::text::elide(tab_label(tab), room, |t| {
+                    f32::from(
+                        crate::text::shape(
+                            window,
+                            t,
+                            strip_font,
+                            &font(self.font_family.clone()),
+                            self.text,
+                        )
+                        .width,
+                    )
+                });
+                let line = crate::text::shape(
+                    window,
+                    &label,
+                    strip_font,
+                    &font(self.font_family.clone()),
+                    self.text,
+                );
+                crate::text::paint_in(window, cx, &line, tab_bounds, pad);
+            }
+            // The card's number, right-aligned in the strip: the corner
+            // label used to carry it and was removed for exactly this.
+            if self.card_number > 0 {
+                let number = format!("#{}", self.card_number);
+                let line = crate::text::shape(
+                    window,
+                    &number,
+                    strip_font,
+                    &font(self.font_family.clone()),
+                    self.text,
+                );
+                let number_bounds = Bounds::new(
+                    point(
+                        strip.origin.x + strip.size.width - line.width - pad,
+                        strip.origin.y,
+                    ),
+                    size(line.width + pad, strip_h),
+                );
+                crate::text::paint_in(window, cx, &line, number_bounds, px(0.));
+            }
+        }
     }
 
     fn resized(&mut self, world: Size) {
@@ -668,6 +780,26 @@ mod tab_tests {
         assert_eq!(body.tabs.len(), 2);
         assert_eq!(body.active, 1);
         assert_eq!(body.active_url(), "c");
+    }
+}
+
+#[cfg(test)]
+mod tab_label_tests {
+    use super::*;
+
+    #[test]
+    fn a_tab_shows_its_title_or_falls_back_to_its_url() {
+        let mut tab = Tab {
+            url: "https://a.example".into(),
+            surface: None,
+            unavailable: None,
+            texture: None,
+            title: None,
+            applied_zoom: None,
+        };
+        assert_eq!(tab_label(&tab), "https://a.example");
+        tab.title = Some("Example Domain".into());
+        assert_eq!(tab_label(&tab), "Example Domain");
     }
 }
 
