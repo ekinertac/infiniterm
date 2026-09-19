@@ -3,7 +3,7 @@
 //! `commands/cards.ts`. Labels read `Domain: what it does`; a command lives
 //! in the module whose prefix it carries, and `card.clear` is `Terminal:`.
 use super::palette_state::Source;
-use super::palette_state::{CARD_ROW, WORKSPACE_ROW};
+use super::palette_state::{CARD_ROW, SIZES, WORKSPACE_ROW};
 use super::{BrowserAction, Card, EditorAction, Effect, Model, NewCard, Pending};
 use crate::card_label::{card_label, Labelled};
 use crate::cards::GUTTER;
@@ -12,7 +12,7 @@ use crate::grid::{snap_rect, Rect};
 use crate::ift::{diff_plan, open_plan, transcript_plan, PathKind};
 use crate::layout::rects_overlap;
 use crate::navigate::{nearest_to, Direction};
-use crate::resize::{moved_by, resized_by, MOVE_STEP, RESIZE_STEP};
+use crate::resize::{moved_by, resized_by, sized, Fraction, MOVE_STEP, RESIZE_STEP};
 use crate::saved_layout::CardKind;
 use crate::sidebar::{clamp_sidebar, sidebar_extent, sidebar_width};
 use crate::split::{split_rect, SplitSide};
@@ -24,6 +24,42 @@ const DISCARD_ARM_MS: f64 = 3000.;
 pub const ZOOM_STEP: f64 = 1.1;
 
 impl Model {
+    /// The active card at a size chosen from the default's fractions, from
+    /// its own top-left corner, if that space is free. Cards may not
+    /// overlap, so a card in the way means nothing moves and the status
+    /// bar says why; the space it needs is what Cmd+Ctrl+W leaves behind.
+    /// Shrinking always fits and leaves the rest free. Either way the card
+    /// stops being half of a split pair.
+    pub fn resize_active(&mut self, w: Fraction, h: Fraction) {
+        self.with_active_card(|m, id| {
+            let Some(card) = m.card(&id).cloned() else {
+                return;
+            };
+            let next = sized(card.rect, m.default_size(), w, h, GUTTER);
+            if next == card.rect {
+                return;
+            }
+            let mut taken: Vec<Rect> = m
+                .here()
+                .iter()
+                .filter(|c| c.id != id)
+                .map(|c| c.rect)
+                .collect();
+            taken.extend(m.other_frames(Some(&id), &card.workspace_id));
+            if taken.iter().any(|r| rects_overlap(next, *r)) {
+                m.notify("no room: a card is in the way");
+                return;
+            }
+            m.mark_swap(std::slice::from_ref(&id));
+            if let Some(c) = m.card_mut(&id) {
+                c.rect = next;
+                c.soft_group_id = None;
+            }
+            m.dirty_layout = true;
+            m.reveal_focused();
+        })
+    }
+
     /// The label with the card's number ahead of it: what the corner chip,
     /// the palette and the status bar show, so "#7" is enough to name a
     /// card to somebody else. `label_of` is the bare one, for a name that
@@ -616,6 +652,11 @@ impl Model {
                     .effects
                     .push(Effect::RunCommand("card.new.ungrouped".into())),
             },
+            Source::Sizes => {
+                if let Some((_, _, w, h)) = SIZES.iter().find(|(sid, ..)| *sid == id) {
+                    self.resize_active(*w, *h);
+                }
+            }
             Source::SlotKind => match id {
                 "terminal" => {
                     self.fill_phantom(CardKind::Terminal, None);
@@ -885,45 +926,19 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             },
         );
     }
-    // The way back up from a quarter: the default size again, from the
-    // same top-left corner, if that space is free. Cards may not overlap,
-    // so a card in the way means nothing happens and the status bar says
-    // why; the space it needs is what Cmd+Ctrl+W leaves behind.
+    // The way back up from a quarter, without the picker: the default size
+    // again. The picker (Cmd+Alt+S) has this as its first row.
     r.register("card.size.reset", "Card: full size", |m| {
-        m.with_active_card(|m, id| {
-            let Some(card) = m.card(&id).cloned() else {
-                return;
-            };
-            let size = m.default_size();
-            let full = Rect {
-                x: card.rect.x,
-                y: card.rect.y,
-                w: size.w,
-                h: size.h,
-            };
-            if full == card.rect {
-                return;
-            }
-            let mut taken: Vec<Rect> = m
-                .here()
-                .iter()
-                .filter(|c| c.id != id)
-                .map(|c| c.rect)
-                .collect();
-            taken.extend(m.other_frames(Some(&id), &card.workspace_id));
-            if taken.iter().any(|r| rects_overlap(full, *r)) {
-                m.notify("no room: a card is in the way");
-                return;
-            }
-            m.mark_swap(std::slice::from_ref(&id));
-            if let Some(c) = m.card_mut(&id) {
-                c.rect = full;
-                // Whatever pair it was carved from, it is its own card now.
-                c.soft_group_id = None;
-            }
-            m.dirty_layout = true;
-            m.reveal_focused();
-        })
+        m.resize_active(Fraction::Full, Fraction::Full)
+    });
+    // One chord and one Enter to a quarter, instead of two splits and two
+    // Cmd+Ctrl+W. Shrinking leaves the freed space free.
+    r.register("card.size", "Card: resize to…", |m| {
+        if m.palette.source == Some(Source::Sizes) {
+            m.close_palette(false);
+        } else if m.selection.focused_id.is_some() {
+            m.open_palette(Source::Sizes);
+        }
     });
     // Grows and shrinks from the bottom-right, so the top-left corner stays put.
     for (name, dw, dh) in [

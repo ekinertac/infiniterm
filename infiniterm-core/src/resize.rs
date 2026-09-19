@@ -17,6 +17,41 @@ pub enum Edge {
     Se,
     Sw,
 }
+/// A card's size as a fraction of the default, per axis, for the size
+/// picker (`card.size`, Cmd+Alt+S). `Half` is what a split makes, so a
+/// half chosen here and a half made by splitting tile the same; `Double`
+/// is two of those side by side with the gutter between.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fraction {
+    Half,
+    Full,
+    Double,
+}
+
+pub fn fraction_of(default: f64, f: Fraction, gutter: f64) -> f64 {
+    match f {
+        Fraction::Half => ((default - gutter) / 2. / GRID_SIZE).floor() * GRID_SIZE,
+        Fraction::Full => default,
+        Fraction::Double => default * 2. + gutter,
+    }
+}
+
+/// `rect` resized to the fractions from its own top-left corner.
+pub fn sized(
+    rect: Rect,
+    default: crate::grid::Size,
+    w: Fraction,
+    h: Fraction,
+    gutter: f64,
+) -> Rect {
+    Rect {
+        x: rect.x,
+        y: rect.y,
+        w: fraction_of(default.w, w, gutter),
+        h: fraction_of(default.h, h, gutter),
+    }
+}
+
 pub fn apply_resize(start: Rect, edge: Edge, dx: f64, dy: f64) -> Rect {
     let mut r = start;
     if matches!(edge, Edge::E | Edge::Ne | Edge::Se) {
@@ -212,5 +247,25 @@ mod tests {
                 ..CARD
             }
         );
+    }
+
+    // A half from the picker is a half from a split: two of them plus the
+    // gutter make the default again, and a double is two defaults.
+    #[test]
+    fn fractions_tile_with_splits() {
+        let d = crate::grid::Size { w: 1725., h: 1000. };
+        let g = 25.;
+        let half = fraction_of(d.w, Fraction::Half, g);
+        assert_eq!(half, 850.);
+        assert_eq!(half * 2. + g, d.w);
+        assert_eq!(fraction_of(d.w, Fraction::Double, g), 3475.);
+        let r = Rect {
+            x: 100.,
+            y: 200.,
+            w: 1.,
+            h: 1.,
+        };
+        let q = sized(r, d, Fraction::Half, Fraction::Half, g);
+        assert_eq!((q.x, q.y, q.w, q.h), (100., 200., 850., 475.));
     }
 }

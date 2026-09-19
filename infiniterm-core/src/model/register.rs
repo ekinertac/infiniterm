@@ -474,6 +474,34 @@ mod tests {
         );
     }
 
+    // Cmd+Alt+R: one Enter to a quarter, and the rows stay in their order.
+    // Growing needs the room; shrinking always fits.
+    #[test]
+    fn the_size_picker_resizes_from_the_corner_and_keeps_its_order() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        let full = h.focused().rect;
+        h.run("card.size");
+        assert_eq!(h.m.palette.source, Some(Source::Sizes));
+        assert!(Source::Sizes.keeps_its_order());
+        let items = h.m.palette_items(Source::Sizes, &[]);
+        assert_eq!(items[0].id, "full");
+        assert_eq!(items[3].id, "quarter");
+        h.m.palette_run(Source::Sizes, "quarter");
+        let q = h.m.card(&id).unwrap().rect;
+        assert_eq!((q.x, q.y), (full.x, full.y));
+        assert!(q.w < full.w / 2. + 1. && q.h < full.h / 2. + 1., "{q:?}");
+        // Back to full: the space is still free, so it grows.
+        h.m.palette_run(Source::Sizes, "full");
+        assert_eq!(h.m.card(&id).unwrap().rect, full);
+        // Double wide, with a card in the way: stays, and says so.
+        h.run("card.new.terminal");
+        h.m.set_focus(Some(&id));
+        h.m.palette_run(Source::Sizes, "double-wide");
+        assert_eq!(h.m.card(&id).unwrap().rect, full);
+        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("no room")));
+    }
+
     // Grouping moves the selection to a free block right of the grid, as one block.
     #[test]
     fn grouping_names_the_group_and_moves_the_cards_together() {

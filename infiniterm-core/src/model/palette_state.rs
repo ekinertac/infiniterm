@@ -10,6 +10,7 @@
 use super::Model;
 use crate::palette::PaletteItem;
 use crate::palette_usage::{prune_usage, record_use, use_key, USAGE_LIMIT};
+use crate::resize::Fraction;
 use crate::shortcuts::format_chord;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +19,8 @@ pub enum Source {
     Themes,
     Placement,
     SlotKind,
+    /// `card.size` (Cmd+Alt+S): the card's size as fractions of the default.
+    Sizes,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
@@ -32,6 +35,7 @@ impl Source {
             Source::Themes => "themes",
             Source::Placement => "placement",
             Source::SlotKind => "slotKind",
+            Source::Sizes => "sizes",
         }
     }
 
@@ -45,7 +49,7 @@ impl Source {
     /// tomorrow. Ranking those by use moved the rows under the hand that had
     /// learned them.
     pub fn keeps_its_order(self) -> bool {
-        matches!(self, Source::Placement | Source::SlotKind)
+        matches!(self, Source::Placement | Source::SlotKind | Source::Sizes)
     }
 
     /// Prompt text in the empty input.
@@ -55,9 +59,45 @@ impl Source {
             Source::Themes => "Switch theme",
             Source::Placement => "New terminal…",
             Source::SlotKind => "New card in this slot…",
+            Source::Sizes => "Resize the card to…",
         }
     }
 }
+
+/// The size picker's rows: id, label, width fraction, height fraction.
+pub const SIZES: &[(&str, &str, Fraction, Fraction)] = &[
+    (
+        "full",
+        "Full: the default size",
+        Fraction::Full,
+        Fraction::Full,
+    ),
+    (
+        "half-wide",
+        "Half: as a split to the right makes",
+        Fraction::Half,
+        Fraction::Full,
+    ),
+    (
+        "half-tall",
+        "Half: as a split down makes",
+        Fraction::Full,
+        Fraction::Half,
+    ),
+    ("quarter", "Quarter", Fraction::Half, Fraction::Half),
+    (
+        "double-wide",
+        "Double wide: two cards side by side",
+        Fraction::Double,
+        Fraction::Full,
+    ),
+    (
+        "double-tall",
+        "Double tall: two cards stacked",
+        Fraction::Full,
+        Fraction::Double,
+    ),
+];
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PaletteState {
@@ -231,6 +271,16 @@ impl Model {
                 hint: None,
             })
             .collect(),
+            // Sizes as fractions of the default card, from the card's own
+            // corner. A menu, in a fixed order: the splits' shapes first.
+            Source::Sizes => SIZES
+                .iter()
+                .map(|(id, label, _, _)| PaletteItem {
+                    id: (*id).into(),
+                    label: (*label).into(),
+                    hint: None,
+                })
+                .collect(),
         }
     }
 
