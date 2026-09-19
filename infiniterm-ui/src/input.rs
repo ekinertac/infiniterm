@@ -726,10 +726,12 @@ impl AppView {
                     self.model.browser_tab_open(id, None);
                 }
                 crate::body::TabClick::Close(index) => {
-                    // `browser_tab_close` always closes the ACTIVE tab; a
-                    // click on a tab that isn't active jumps to it first.
-                    self.model.browser_tab_jump(id, index);
-                    self.model.browser_tab_close(id);
+                    // Closes the CLICKED tab without moving the active one,
+                    // matching Chrome: closing a background tab's `x` must
+                    // not first jump you onto it. `browser_tab_close` (the
+                    // keyboard `Cmd+W` path) stays jump-then-close-active
+                    // on purpose, since Cmd+W has no index of its own.
+                    self.model.browser_tab_close_at(id, index);
                 }
             },
         }
