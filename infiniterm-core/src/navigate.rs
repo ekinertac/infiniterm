@@ -45,13 +45,51 @@ pub fn nearest_in_direction<'a>(
         if !inside {
             continue;
         }
-        let dist = dx.hypot(dy);
+        // Not centre to centre: a small card diagonally below-left had a
+        // nearer centre than the full-size card in the same row, and Left
+        // landed on it. A card that overlaps this one on the cross axis (the
+        // same row, for Left) is the one a person means, however large or
+        // small; the gap between the facing edges orders those, and the
+        // cross-axis gap counts double for the rest.
+        let (along, cross) = match dir {
+            Direction::Left => (
+                from.rect.x - (card.rect.x + card.rect.w),
+                gap_y(from.rect, card.rect),
+            ),
+            Direction::Right => (
+                card.rect.x - (from.rect.x + from.rect.w),
+                gap_y(from.rect, card.rect),
+            ),
+            Direction::Up => (
+                from.rect.y - (card.rect.y + card.rect.h),
+                gap_x(from.rect, card.rect),
+            ),
+            Direction::Down => (
+                card.rect.y - (from.rect.y + from.rect.h),
+                gap_x(from.rect, card.rect),
+            ),
+        };
+        let dist = along.max(0.) + cross * CROSS_AXIS_WEIGHT;
         if dist < best_dist {
             best_dist = dist;
             best = Some(card);
         }
     }
     best
+}
+
+/// How much harder a card off the row (or column) is to reach than one
+/// the same distance along it. Two: a card one gutter away sideways and a
+/// row down must lose to one a whole card away in the row.
+const CROSS_AXIS_WEIGHT: f64 = 2.;
+
+/// The vertical gap between two rects; zero when they share any row.
+fn gap_y(a: Rect, b: Rect) -> f64 {
+    (a.y.max(b.y) - (a.y + a.h).min(b.y + b.h)).max(0.)
+}
+
+fn gap_x(a: Rect, b: Rect) -> f64 {
+    (a.x.max(b.x) - (a.x + a.w).min(b.x + b.w)).max(0.)
 }
 pub fn nearest_to(cards: &[PlacedCard], rect: Rect) -> Option<&PlacedCard> {
     let a = centre(rect);
@@ -193,6 +231,43 @@ mod tests {
             Some("near")
         );
     }
+    // Ekin's canvas, 2026-09-19: #5 full size, #12 full size in the same
+    // row to its left, #16 a quarter card below-left. #16's centre was the
+    // nearer one and Left landed there. The row wins.
+    #[test]
+    fn a_card_in_the_same_row_beats_a_nearer_centre_off_it() {
+        let c = vec![
+            PlacedCard {
+                id: "five".into(),
+                rect: r(-1737., 1037., 1725., 975.),
+                group_id: None,
+            },
+            PlacedCard {
+                id: "twelve".into(),
+                rect: r(-3487., 1037., 1725., 975.),
+                group_id: None,
+            },
+            PlacedCard {
+                id: "sixteen".into(),
+                rect: r(-2612., 2037., 850., 1000.),
+                group_id: None,
+            },
+        ];
+        assert_eq!(
+            id(nearest_in_direction(&c, "five", Direction::Left)),
+            Some("twelve")
+        );
+        // With no card in the row, the quarter is what Left finds.
+        assert_eq!(
+            id(nearest_in_direction(
+                &c[..1].iter().chain(&c[2..]).cloned().collect::<Vec<_>>(),
+                "five",
+                Direction::Left
+            )),
+            Some("sixteen")
+        );
+    }
+
     #[test]
     fn exact_diagonal_has_no_direction() {
         let c = vec![cards()[0].clone(), cards()[5].clone()];
