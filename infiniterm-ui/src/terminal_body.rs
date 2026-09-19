@@ -124,6 +124,10 @@ pub struct TerminalBody {
     /// `terminal.cursorBlink`, `ui.inactiveDim`; the ui keeps them current.
     pub blink: bool,
     pub inactive_dim: f64,
+    /// The viewport is moving (zoom, pan, a drag): under `FAR_FONT_PX` the
+    /// text is drawn as bars for the duration so the motion stays smooth,
+    /// and the glyphs come back the frame it stops. Set by `terminals.rs`.
+    pub in_motion: bool,
     /// When the blink clock last restarted (a key), and the phase and focus
     /// of the last paint, so `wants_frame` can say when the next flip is due.
     blink_epoch: f64,
@@ -242,6 +246,7 @@ impl TerminalBody {
             cell_w: metrics.cell_w,
             cwd,
             error: None,
+            in_motion: false,
             displaced: false,
             readopt_due: 0.,
             outgoing: vec![],
@@ -644,9 +649,11 @@ impl CardBody for TerminalBody {
         let mut base = font(self.font_family.clone());
         base.weight = self.weight;
         let bold_weight = self.bold_weight;
-        // Too small to read: skip the glyphs, keep the ground. The mid-zoom
-        // label names the card instead.
-        let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32);
+        // Too small to read: skip the glyphs, keep the ground. The corner
+        // label names the card instead. Small-and-moving counts as too
+        // small: see `in_motion`.
+        let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32)
+            && !(self.in_motion && font_size < px(crate::chrome::FAR_FONT_PX as f32));
         // The cursor under the text: solid when focused and on, hollow when
         // the card is not focused, nothing while scrolled into history.
         if frame.cursor_kind != CursorKind::Hidden

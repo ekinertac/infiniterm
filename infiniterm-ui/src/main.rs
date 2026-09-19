@@ -163,6 +163,8 @@ pub struct AppView {
     /// so anything drained there (a find count, the omnibox's suggestions)
     /// is a frame behind and would sit unseen until the next keystroke.
     pub redraw: bool,
+    /// When the last frame was painted (ms), for the far-zoom refresh gate.
+    pub last_paint_ms: f64,
     pub prompt_was_open: bool,
     /// Text an effect asked to put on the clipboard, written on the next
     /// frame: only a frame has an App to write through.

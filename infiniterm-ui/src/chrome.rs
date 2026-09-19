@@ -18,10 +18,19 @@ pub const HAIRLINE_PX: f64 = 1.;
 /// The alpha a gutter or panel hairline is drawn at against its card's
 /// background: visible as a seam, not a border.
 pub const HAIRLINE_ALPHA: f32 = 0.4;
-/// Below this font size a glyph costs more to shape than it is worth
-/// looking at (about 1 microsecond each in gpui); card bodies paint texture
-/// bars instead. Shared by every body that draws text.
-pub const LEGIBLE_FONT_PX: f64 = 3.;
+/// Below this font size a glyph costs more to paint than it is worth
+/// looking at (1.7 microseconds each in gpui, measured 2026-09-19: eleven
+/// cards at fit-all, about 4 px, cost 85 ms a frame in glyphs alone); card
+/// bodies paint texture bars instead. Shared by every body that draws text.
+/// Was 3 px; at 4 px nothing was readable and everything was paid for.
+pub const LEGIBLE_FONT_PX: f64 = 5.;
+/// Below this, text is "far": while the viewport MOVES the terminal draws
+/// bars so the animation stays smooth, and at rest a frame asked for by
+/// output or the cursor blink is painted at most every `FAR_REFRESH_MS`,
+/// since nobody reads a 7 px stream frame by frame. Zoomed in, nothing
+/// changes.
+pub const FAR_FONT_PX: f64 = 9.;
+pub const FAR_REFRESH_MS: f64 = 250.;
 /// Lines scrolled per wheel tick, shared by every card body with a text
 /// buffer, so the terminal, editor, diff and transcript all feel the same
 /// under the mouse wheel.

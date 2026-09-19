@@ -56,6 +56,7 @@ impl AppView {
             omni_field: crate::field::Field::default(),
             find_field: crate::field::Field::default(),
             redraw: false,
+            last_paint_ms: 0.,
             clipboard_out: None,
             live_sessions: vec![],
             prompt_was_open: false,
@@ -321,21 +322,32 @@ impl AppView {
         }
     }
 
+    /// Whether the text is too small to be worth a frame per change:
+    /// see `chrome::FAR_FONT_PX`.
+    pub fn far(&self) -> bool {
+        self.model.config.terminal.font_size * self.model.viewport.scale
+            < crate::chrome::FAR_FONT_PX
+    }
+
     pub fn needs_frame(&self) -> bool {
         self.redraw
             || self.animator.is_running()
             || self.pan.is_some()
             || self.gesture.is_some()
-            || self.scheduler.pending()
             || !self.glides.is_empty()
             || {
                 let now = crate::now_ms();
-                self.bodies.values().any(|b| b.wants_frame(now))
+                // Content frames (output, blink) are gated when far: at
+                // most one every FAR_REFRESH_MS. The output waits in the
+                // scheduler meanwhile, under its usual backpressure.
+                let content = self.scheduler.pending()
+                    || self.bodies.values().any(|b| b.wants_frame(now))
                     || self
                         .decoys
                         .values()
-                        .any(|d| crate::body::CardBody::wants_frame(d, now))
-                    || self.model.notice_expired(now)
+                        .any(|d| crate::body::CardBody::wants_frame(d, now));
+                let due = !self.far() || now - self.last_paint_ms >= crate::chrome::FAR_REFRESH_MS;
+                (content && due) || self.model.notice_expired(now)
             }
     }
 

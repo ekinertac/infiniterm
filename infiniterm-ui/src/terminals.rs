@@ -73,6 +73,10 @@ impl AppView {
         let palette = self.palette.clone();
         let blink = self.model.config.terminal.cursor_blink;
         let inactive_dim = self.model.config.ui.inactive_dim;
+        let in_motion = self.animator.is_running()
+            || self.pan.is_some()
+            || self.gesture.is_some()
+            || !self.glides.is_empty();
         let cards: Vec<_> = self
             .model
             .cards
@@ -122,6 +126,10 @@ impl AppView {
             }
             body.blink = blink;
             body.inactive_dim = inactive_dim;
+            if body.in_motion != in_motion {
+                body.in_motion = in_motion;
+                body.mark_dirty();
+            }
             let metrics_changed = body.font_family != metrics.family
                 || body.weight != metrics.weight
                 || body.bold_weight != metrics.bold_weight
