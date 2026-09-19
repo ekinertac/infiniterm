@@ -13,6 +13,14 @@
 //! shell running inside iftd expects to see raw keystrokes, not a line at a
 //! time with local echo doubling every character.
 //!
+//! A session id is the DAEMON's, and a daemon is new after every reboot, so
+//! `ift attach 7` (or `#7`) takes the card's number instead: `cards_by_
+//! session` reads the save file (`paths::layout_path`), which maps each
+//! card's number and label to the session it holds right now, and `ift
+//! sessions` prints both as trailing columns so the id never has to be
+//! read off the screen. The save file is written on the layout's debounce,
+//! so the map is at most a couple of seconds behind the app.
+//!
 //! Called by `main.rs`, which owns argument dispatch; this file owns the
 //! session listing and the raw-mode plumbing. Related:
 //! `infiniterm-core/src/backend/session_protocol.rs` (the frames),
@@ -33,6 +41,9 @@
 //!   by a unit test; `list_sessions` and the id-lookup logic can, and are.
 
 use infiniterm_core::backend::session_protocol::{Frame, FrameReader};
+use infiniterm_core::card_label::{card_label, Labelled};
+use infiniterm_core::saved_layout::{parse_layout, SavedCard};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::io::RawFd;
 use std::os::unix::net::UnixStream;
@@ -121,24 +132,92 @@ pub fn list_sessions(dir: &Path) -> Vec<SessionRow> {
     rows
 }
 
+/// The card holding each session, by session id: its number and label,
+/// from the save file. Empty when there is no save file to read, which
+/// only means the two trailing columns print as `-`.
+pub fn cards_by_session(layout_text: Option<&str>, home: &str) -> HashMap<String, (u32, String)> {
+    let Some(layout) = layout_text.and_then(parse_layout) else {
+        return HashMap::new();
+    };
+    layout
+        .cards
+        .iter()
+        .filter_map(|c| {
+            let session = c.session.clone()?;
+            Some((session, (c.number, label_of(c, home))))
+        })
+        .collect()
+}
+
+/// The label the card wears on the canvas, from what the save file knows
+/// (no process, no agent title: those are runtime).
+fn label_of(c: &SavedCard, home: &str) -> String {
+    card_label(
+        &Labelled {
+            title: &c.title,
+            session: None,
+            proc: None,
+            cwd: &c.cwd,
+            path: c.path.as_deref(),
+            kind: Some(c.kind),
+            url: c.url.as_deref(),
+            root: c.root.as_deref(),
+        },
+        home,
+    )
+}
+
+/// What `ift attach <target>` means: a session id as given, or a card
+/// number (`7` or `#7`) turned into the session that card holds now.
+pub fn resolve_target(target: &str, cards: &HashMap<String, (u32, String)>) -> Option<String> {
+    let digits = target.strip_prefix('#').unwrap_or(target);
+    match digits.parse::<u32>() {
+        Ok(n) if n > 0 => cards
+            .iter()
+            .find(|(_, (number, _))| *number == n)
+            .map(|(session, _)| session.clone()),
+        _ => Some(target.to_string()),
+    }
+}
+
+fn layout_text() -> Option<String> {
+    std::fs::read_to_string(infiniterm_core::paths::layout_path()).ok()
+}
+
+fn home() -> String {
+    std::env::var("HOME").unwrap_or_default()
+}
+
 /// `ift sessions`. Tab separated, because that is what the rest of `ift`
 /// prints (`ift ls`) and it pipes into `cut`/`awk` without a flag to ask for.
+/// The card's number and label come last, as trailing columns, so the five
+/// before them are what scripts already cut.
 pub fn sessions_cmd() -> ExitCode {
-    print_sessions(&list_sessions(&infiniterm_core::paths::sessions_dir()));
+    let cards = cards_by_session(layout_text().as_deref(), &home());
+    print_sessions(&list_sessions(&infiniterm_core::paths::sessions_dir()), &cards);
     ExitCode::SUCCESS
 }
 
-fn print_sessions(rows: &[SessionRow]) {
+fn print_sessions(rows: &[SessionRow], cards: &HashMap<String, (u32, String)>) {
     for r in rows {
-        println!("{}\t{}\t{}\t{}\t{}", r.id, r.pid, r.cwd, r.cmd, r.started);
+        let (number, label) = match cards.get(&r.id) {
+            Some((n, label)) if *n > 0 => (format!("#{n}"), label.clone()),
+            Some((_, label)) => ("-".to_string(), label.clone()),
+            None => ("-".to_string(), "-".to_string()),
+        };
+        println!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            r.id, r.pid, r.cwd, r.cmd, r.started, number, label
+        );
     }
 }
 
 /// `ift attach` with no id at all: the id was the whole point, so this is a
 /// usage error, not "nothing is running".
 pub fn no_id() -> ExitCode {
-    eprintln!("ift: attach needs a session id\n");
-    print_sessions(&list_sessions(&infiniterm_core::paths::sessions_dir()));
+    eprintln!("ift: attach needs a session id or a card number (#7)\n");
+    let cards = cards_by_session(layout_text().as_deref(), &home());
+    print_sessions(&list_sessions(&infiniterm_core::paths::sessions_dir()), &cards);
     ExitCode::from(2)
 }
 
@@ -150,12 +229,19 @@ pub fn no_id() -> ExitCode {
 /// is a daemon that died without cleaning up (a crash, `kill -9`) — that is
 /// not "which one did you mean", it is "this one is gone", so it gets a
 /// plain statement and a pointer rather than the whole table.
-pub fn attach(id: &str) -> ExitCode {
+pub fn attach(target: &str) -> ExitCode {
     let dir = infiniterm_core::paths::sessions_dir();
     let rows = list_sessions(&dir);
+    let cards = cards_by_session(layout_text().as_deref(), &home());
+    let Some(id) = resolve_target(target, &cards) else {
+        eprintln!("ift: no card {target}\n");
+        print_sessions(&rows, &cards);
+        return ExitCode::from(2);
+    };
+    let id = id.as_str();
     if !rows.iter().any(|r| r.id == id) {
         eprintln!("ift: no session {id:?}\n");
-        print_sessions(&rows);
+        print_sessions(&rows, &cards);
         return ExitCode::from(2);
     }
 
@@ -543,5 +629,30 @@ mod tests {
         let rows = list_sessions(&dir);
         assert!(!rows.iter().any(|r| r.id == "nonexistent"));
         assert!(rows.iter().any(|r| r.id == "real"));
+    }
+
+    // A daemon's id changes with every reboot; the card's number does not.
+    // `ift attach 7` and `#7` find the session that card holds now, a bare
+    // id passes through, and a number nobody wears is nothing.
+    #[test]
+    fn a_card_number_resolves_to_its_current_session() {
+        let layout = r#"{"version": 2, "cards": [
+            {"id": "c1", "workspaceId": "w", "rect": {"x":0,"y":0,"w":10,"h":10}, "z": 0,
+             "title": "", "cwd": "/Users/me/Code/api", "session": "aaaa", "number": 7},
+            {"id": "c2", "workspaceId": "w", "rect": {"x":0,"y":0,"w":10,"h":10}, "z": 0,
+             "title": "deploy", "cwd": "/tmp", "session": "bbbb", "number": 8},
+            {"id": "c3", "workspaceId": "w", "rect": {"x":0,"y":0,"w":10,"h":10}, "z": 0,
+             "title": "", "cwd": "/tmp", "number": 9}
+        ]}"#;
+        let cards = cards_by_session(Some(layout), "/Users/me");
+        assert_eq!(cards.get("aaaa"), Some(&(7, "~/Code/api".to_string())));
+        assert_eq!(cards.get("bbbb"), Some(&(8, "deploy".to_string())));
+        assert_eq!(cards.len(), 2, "a card with no session is not listed");
+        assert_eq!(resolve_target("7", &cards).as_deref(), Some("aaaa"));
+        assert_eq!(resolve_target("#8", &cards).as_deref(), Some("bbbb"));
+        assert_eq!(resolve_target("9", &cards), None);
+        assert_eq!(resolve_target("cccc", &cards).as_deref(), Some("cccc"));
+        assert!(cards_by_session(None, "/").is_empty());
+        assert!(cards_by_session(Some("not json"), "/").is_empty());
     }
 }

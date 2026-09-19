@@ -37,8 +37,11 @@ ift — drive infiniterm from a shell
   ift ls                     cards as TSV: id, group, directory, state, remote,
                              number (the #7 on the card's label)
   ift sessions               session daemons still running, app or no app:
-                             id, pid, cwd, command, started, tab separated
-  ift attach <id>            connect a session's shell to this terminal;
+                             id, pid, cwd, command, started, card number,
+                             card label, tab separated
+  ift attach <id|#N>         connect a session's shell to this terminal, by
+                             its id or by the card's number (#7 on its
+                             label, the same after a reboot; the id is not);
                              Ctrl-\\ (0x1c) detaches, leaving it running
   ift omni <term>            what the omnibox (Cmd+L) would show for a term,
                              ranked against the real history and open cards
