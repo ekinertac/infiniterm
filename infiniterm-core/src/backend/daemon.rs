@@ -385,6 +385,16 @@ impl DaemonBackend {
         }
     }
 
+    /// The `attached` flag in a session's meta file, which `iftd` rewrites
+    /// on every attach and detach. A meta from before the flag reads as
+    /// not attached, which errs toward taking the session back.
+    pub fn session_attached(&self, session_id: &str) -> Option<bool> {
+        let path = self.sessions_dir.join(format!("{session_id}.meta"));
+        let text = std::fs::read_to_string(path).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+        Some(v.get("attached").and_then(|a| a.as_bool()).unwrap_or(false))
+    }
+
     /// The scrollback a dead session's daemon last wrote to disk
     /// (`<id>.ring`, see `iftd`'s SNAPSHOT_INTERVAL), taken: the file is
     /// removed, so a card replays it once and a later launch does not
@@ -505,6 +515,7 @@ fn run_reader(
     credit: Arc<Credit>,
 ) {
     let mut buf = vec![0u8; 8192];
+    let mut exited = false;
     'outer: loop {
         loop {
             match reader.next() {
@@ -523,6 +534,7 @@ fn run_reader(
                 Ok(Some(Frame::ReplayEnd)) => nudge_resize(&panes, id),
                 Ok(Some(Frame::Exited(code))) => {
                     let _ = tx.send((id, PaneEvent::Exited { code }));
+                    exited = true;
                     break 'outer;
                 }
                 // Hello only ever arrives once, consumed by read_hello
@@ -552,6 +564,11 @@ fn run_reader(
         // reader per pane here, but closing is idempotent and cheap, and
         // matches local_pty's exit watcher doing the same for symmetry).
         p.credit.close();
+    }
+    // EOF without Exited: the daemon evicted us for another client. Said,
+    // or the card sits frozen with nobody knowing why (it did, once).
+    if !exited {
+        let _ = tx.send((id, PaneEvent::Detached));
     }
 }
 

@@ -138,6 +138,10 @@ pub struct Card {
     /// A decoy is drawn over this card (`card.mask`): somebody is reading
     /// your screen. Runtime-only; a restart shows the card.
     pub masked: bool,
+    /// `ift attach` took this card's session from under the app. The shell
+    /// runs on; the card shows so and takes no keys, and `terminals.rs`
+    /// takes the session back when that client lets go. Runtime-only.
+    pub displaced: bool,
     pub rect: Rect,
     pub z: f64,
     /// A name somebody CHOSE. Never seeded from the directory or the OSC
@@ -656,6 +660,7 @@ impl Model {
             language: None,
             read_only: false,
             masked: false,
+            displaced: false,
             rect,
             z: self.cards.len() as f64,
             title: String::new(),

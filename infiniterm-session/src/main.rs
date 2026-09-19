@@ -316,14 +316,17 @@ fn run(listener: UnixListener, opts: Options) -> ! {
     };
     let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(pair.master));
 
-    let meta = serde_json::json!({
-        "pid": pid,
-        "cwd": opts.cwd.display().to_string(),
-        "cmd": opts.cmd.clone().unwrap_or_else(default_shell),
-        "started": rfc3339_now(),
-    })
-    .to_string();
-    if let Err(e) = std::fs::write(&meta_path, meta) {
+    // Rewritten with `attached` flipped on every attach and detach: the app
+    // reads it to know when an `ift attach` that displaced it has let go,
+    // so it can take the session back (see `DaemonBackend::session_attached`).
+    let meta = Arc::new(Meta {
+        path: meta_path.clone(),
+        pid,
+        cwd: opts.cwd.display().to_string(),
+        cmd: opts.cmd.clone().unwrap_or_else(default_shell),
+        started: rfc3339_now(),
+    });
+    if let Err(e) = meta.write(false) {
         fail_startup(&meta_path, &opts.socket, format!("writing meta: {e}"));
     }
 
@@ -459,14 +462,23 @@ fn run(listener: UnixListener, opts: Options) -> ! {
             Err(_) => continue,
         };
         *client.lock().unwrap() = Some(ClientSlot { epoch, stream });
+        let _ = meta.write(true);
 
         let client = client.clone();
         let pty_writer = pty_writer.clone();
         let master = master.clone();
         let size = size.clone();
         let killer = killer.clone();
+        let meta = meta.clone();
+        let epochs = next_epoch.clone();
         std::thread::spawn(move || {
             run_client_reader(read_handle, epoch, client, pty_writer, master, size, killer);
+            // Only when no newer attach has begun: the slot is empty during
+            // a newcomer's handshake too, so the slot cannot say, but the
+            // epoch counter can. A newer attach writes `true` for itself.
+            if epochs.load(Ordering::SeqCst) == epoch + 1 {
+                let _ = meta.write(false);
+            }
         });
     }
 
@@ -581,6 +593,33 @@ fn run_client_reader(
     let mut slot = client.lock().unwrap();
     if slot.as_ref().is_some_and(|c| c.epoch == epoch) {
         *slot = None;
+    }
+}
+
+/// The `.meta` file beside the socket: what `ift sessions` lists with no
+/// app running, plus `attached`, which the app polls after being displaced.
+struct Meta {
+    path: PathBuf,
+    pid: u32,
+    cwd: String,
+    cmd: String,
+    started: String,
+}
+
+impl Meta {
+    fn write(&self, attached: bool) -> std::io::Result<()> {
+        let text = serde_json::json!({
+            "pid": self.pid,
+            "cwd": self.cwd,
+            "cmd": self.cmd,
+            "started": self.started,
+            "attached": attached,
+        })
+        .to_string();
+        // Whole or not at all: `ift sessions` reads this at any moment.
+        let tmp = self.path.with_extension("meta.tmp");
+        std::fs::write(&tmp, text)?;
+        std::fs::rename(&tmp, &self.path)
     }
 }
 

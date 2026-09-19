@@ -35,6 +35,11 @@ pub enum PaneEvent {
     Exited {
         code: i32,
     },
+    /// The daemon closed our socket without the shell exiting: another
+    /// client attached (`ift attach`) and displaced us. The shell is fine
+    /// and the session is still ours to take back once that client lets go
+    /// (`Panes::session_attached`). Only the daemon backend emits it.
+    Detached,
     TitleChanged(String),
     CwdChanged(PathBuf),
 }
@@ -166,6 +171,15 @@ impl Panes {
     }
 
     /// Which sessions are still there to adopt.
+    /// Whether a daemon session has a client on it right now, from its
+    /// meta file; `None` when there is no such session or no daemon backend.
+    pub fn session_attached(&self, session_id: &str) -> Option<bool> {
+        match self {
+            Panes::Daemon(b) => b.session_attached(session_id),
+            Panes::Local(_) | Panes::Tmux(_) => None,
+        }
+    }
+
     /// A dead session's scrollback from disk, daemon backend only: the
     /// local pty has no daemon to have written one and tmux keeps its own.
     pub fn take_ring(&self, session_id: &str) -> Option<(Vec<u8>, String)> {

@@ -5,7 +5,7 @@
 //! backpressure), what the programs wrote back goes to the PTYs, and a card
 //! whose rect or metrics changed re-counts its grid and tells the PTY.
 //! Port of `paneRegistry.ts`'s routing and `TerminalCard.svelte`'s start.
-use crate::terminal_body::{weight_of, Metrics, TerminalBody};
+use crate::terminal_body::{weight_of, Metrics, TerminalBody, READOPT_POLL_MS};
 use crate::AppView;
 use gpui::{font, px, TextRun, Window};
 use infiniterm_core::backend::Panes;
@@ -133,6 +133,51 @@ impl AppView {
             } else {
                 body.refit_to(world)
             };
+            // Displaced by `ift attach`: once a second, ask the daemon's
+            // meta whether that client is still there, and take the session
+            // back the moment it is not. The replay that comes with an
+            // adopt is what fills in whatever the card missed meanwhile.
+            if card.displaced {
+                let now = crate::now_ms();
+                if !body.displaced {
+                    body.displaced = true;
+                    body.readopt_due = now + READOPT_POLL_MS;
+                    body.mark_dirty();
+                }
+                if now >= body.readopt_due {
+                    body.readopt_due = now + READOPT_POLL_MS;
+                    let free = card
+                        .session
+                        .as_deref()
+                        .and_then(|s| self.backend.pty.session_attached(s))
+                        == Some(false);
+                    let adopted = free
+                        .then_some(card.session.as_deref())
+                        .flatten()
+                        .and_then(|s| self.backend.pty.adopt(s));
+                    if let Some(pane) = adopted {
+                        // The adopt replays the whole ring; onto the copy
+                        // the grid already holds it would show twice.
+                        body.reset_for_replay();
+                        body.pane = Some(pane);
+                        body.displaced = false;
+                        body.mark_dirty();
+                        if card.kitty_keys {
+                            body.assume_kitty_keys();
+                        }
+                        self.backend.pty.resize_now(pane, body.cols(), body.rows());
+                        if let Some(c) = self.model.card_mut(&card.id) {
+                            c.pane_id = Some(pane);
+                            c.displaced = false;
+                        }
+                        self.model.log(format!(
+                            "readopted {} after the outside attach let go",
+                            &card.id[..8.min(card.id.len())]
+                        ));
+                    }
+                }
+                continue;
+            }
             if card.pane_id.is_none() && body.error.is_none() {
                 // A card that was here before and whose session is still
                 // running takes it back rather than starting a second shell

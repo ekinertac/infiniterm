@@ -98,6 +98,14 @@ pub struct TerminalBody {
     pub cwd: String,
     /// The card's directory, for resolving paths in the output.
     pub error: Option<String>,
+    /// `ift attach` holds this card's session (`Card.displaced`): a banner
+    /// says so and keys are swallowed, since they would reach nothing. The
+    /// next check of the daemon's meta is due at `readopt_due`, in ms;
+    /// `wants_frame` asks for a frame then, and `terminals.rs` does the
+    /// check in its reconcile. Once a second: a file read per displaced
+    /// card, and a second's lag after Ctrl+\ is not felt.
+    pub displaced: bool,
+    pub readopt_due: f64,
     /// Bytes to write to the pty: the ui drains them after each event.
     pub outgoing: Vec<Vec<u8>>,
     /// What the EMULATOR answered a program with: a colour query, device
@@ -234,6 +242,8 @@ impl TerminalBody {
             cell_w: metrics.cell_w,
             cwd,
             error: None,
+            displaced: false,
+            readopt_due: 0.,
             outgoing: vec![],
             replies: vec![],
             dirty: true,
@@ -353,6 +363,14 @@ impl TerminalBody {
     /// telling.
     pub fn refit_to(&mut self, world: Size) -> bool {
         self.refit(world)
+    }
+
+    /// A fresh screen for a replay that starts from the ring's beginning.
+    pub fn reset_for_replay(&mut self) {
+        self.grid.reset();
+        self.links.clear();
+        self.shaped.clear();
+        self.dirty = true;
     }
 
     fn refit(&mut self, world: Size) -> bool {
@@ -544,6 +562,46 @@ impl TerminalBody {
     }
 }
 
+/// How often a displaced card asks whether `ift attach` has let go.
+pub const READOPT_POLL_MS: f64 = 1000.;
+
+impl TerminalBody {
+    /// One line across the top, over the frozen screen: what happened and
+    /// that nothing needs doing.
+    fn paint_displaced(
+        &self,
+        bounds: Bounds<Pixels>,
+        scale: f64,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let size_px = px((ERROR_FONT_PX * scale) as f32);
+        if size_px < px(crate::chrome::LEGIBLE_FONT_PX as f32) {
+            return;
+        }
+        let pad = px((ERROR_PAD_PX * scale) as f32);
+        let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
+        window.paint_quad(fill(
+            Bounds::new(bounds.origin, size(bounds.size.width, line_h + pad * 2.)),
+            gpui::rgb(0x1a0f0f),
+        ));
+        let f = font(self.font_family.clone());
+        let line = crate::text::shape(
+            window,
+            "attached from outside (ift attach); the card takes the shell back when that terminal detaches",
+            size_px,
+            &f,
+            gpui::rgb(0xfca5a5).into(),
+        );
+        let _ = line.paint(
+            point(bounds.origin.x + pad, bounds.origin.y + pad),
+            line_h,
+            window,
+            cx,
+        );
+    }
+}
+
 fn rgb(c: [u8; 3]) -> Hsla {
     gpui::rgb(((c[0] as u32) << 16) | ((c[1] as u32) << 8) | c[2] as u32).into()
 }
@@ -566,6 +624,9 @@ impl CardBody for TerminalBody {
         if let Some(error) = self.error.clone() {
             self.paint_error(&error, bounds, scale, window, cx);
             return;
+        }
+        if self.displaced {
+            self.paint_displaced(bounds, scale, window, cx);
         }
         let t = std::time::Instant::now();
         let mut frame = std::mem::take(&mut self.frame);
@@ -758,6 +819,10 @@ impl CardBody for TerminalBody {
     }
 
     fn key(&mut self, k: &Keystroke, now: f64, cx: &mut App) -> BodyAction {
+        // Nothing is listening at the other end of a displaced pane.
+        if self.displaced {
+            return BodyAction::None;
+        }
         let m = &k.modifiers;
         // The app owns Cmd; the Cmd keys a terminal answers are copy, paste
         // and the line-movement arrows the encoder knows.
@@ -987,6 +1052,7 @@ impl CardBody for TerminalBody {
 
     fn wants_frame(&self, now: f64) -> bool {
         self.dirty
+            || (self.displaced && now >= self.readopt_due)
             || (self.painted_focused
                 && self.blink
                 && self.error.is_none()

@@ -352,6 +352,16 @@ impl Grid {
             .advance(&mut self.term, b"\x1b[H\x1b[2J\x1b[3J");
     }
 
+    /// Everything back to a fresh emulator at the same size: screen,
+    /// scrollback and every mode (ESC c). For a re-adopt, whose replay is
+    /// the whole ring again and must not land on top of the copy the grid
+    /// already holds.
+    pub fn reset(&mut self) {
+        self.processor.advance(&mut self.term, b"\x1bc\x1b[3J");
+        self.kitty_asked = false;
+        self.full_dirty = true;
+    }
+
     /// The visible rows with resolved colours, built from scratch. `palette`
     /// decides what every named and indexed colour paints as; a cell's own
     /// RGB stays its own. Tests and one-off callers; the body keeps a

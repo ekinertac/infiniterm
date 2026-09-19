@@ -89,6 +89,17 @@ impl Model {
                 }
             }
             PaneEvent::Exited { .. } => self.close_card(&id, true),
+            // Not an exit: the pane id stays, so nothing spawns a second
+            // shell under the one that is still running.
+            PaneEvent::Detached => {
+                if let Some(c) = self.card_mut(&id) {
+                    c.displaced = true;
+                }
+                self.log(format!(
+                    "displaced {} by an outside attach",
+                    &id[..8.min(id.len())]
+                ));
+            }
             PaneEvent::TitleChanged(_) | PaneEvent::CwdChanged(_) => {}
         }
     }

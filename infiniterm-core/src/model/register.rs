@@ -338,6 +338,20 @@ mod tests {
         assert!(!h.m.card(&id).unwrap().masked);
     }
 
+    // `ift attach` displacing the app is not an exit: the card stays, with
+    // its pane, marked so the ui can take the session back later.
+    #[test]
+    fn a_detached_pane_marks_the_card_and_closes_nothing() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().pane_id = Some(7);
+        h.m.apply_pane_event(7, &PaneEvent::Detached);
+        let card = h.m.card(&id).unwrap();
+        assert!(card.displaced);
+        assert_eq!(card.pane_id, Some(7));
+        assert_eq!(h.m.cards.len(), 1);
+    }
+
     #[test]
     fn a_shell_exit_closes_the_card_the_same_way() {
         let mut h = Harness::new();

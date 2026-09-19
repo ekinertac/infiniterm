@@ -351,6 +351,34 @@ fn the_ring_is_written_to_disk_and_removed_on_exit() {
     assert!(wait_until(|| !dir.path().join("r.sock").exists()));
 }
 
+// The meta says whether a client holds the session: the app polls it after
+// `ift attach` displaces it, to know when to take the session back.
+#[test]
+fn the_meta_says_whether_a_client_is_attached() {
+    let dir = tempdir();
+    let meta = dir.path().join("m.meta");
+    let attached = || {
+        std::fs::read_to_string(&meta)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v.get("attached")?.as_bool())
+    };
+    let mut c = Conn::new(start(dir.path(), "m"));
+    c.recv_matching(|f| matches!(f, Frame::Hello { .. }));
+    assert!(wait_until(|| attached() == Some(true)), "attached once a client is on");
+    // A second client evicts the first: still attached, by the newcomer.
+    let mut again = Conn::new(UnixStream::connect(dir.path().join("m.sock")).unwrap());
+    again.recv_matching(|f| matches!(f, Frame::Hello { .. }));
+    drop(c);
+    std::thread::sleep(POLL);
+    assert_eq!(attached(), Some(true), "the eviction of the first must not clear the second");
+    drop(again);
+    assert!(wait_until(|| attached() == Some(false)), "free once the last client detaches");
+    let mut back = Conn::new(UnixStream::connect(dir.path().join("m.sock")).unwrap());
+    back.recv_matching(|f| matches!(f, Frame::Hello { .. }));
+    stop(dir.path(), "m", &mut back);
+}
+
 #[test]
 fn kill_ends_the_child_and_removes_the_socket() {
     let dir = tempdir();
