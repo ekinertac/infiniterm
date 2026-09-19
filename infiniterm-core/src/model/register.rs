@@ -1112,6 +1112,25 @@ mod tests {
         assert!(handle_chord(&mut h.m, &h.r, "ctrl+2"));
     }
 
+    // A chord neither table knows is still consumed: a Chrome window
+    // ignores a binding it does not have rather than leaking the key to
+    // whatever is behind it, and a locked card must not either (the app's
+    // own keymap, or the literal keystroke reaching the page).
+    #[test]
+    fn a_locked_card_swallows_a_chord_neither_table_knows() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].locked = true;
+        h.m.set_focus(Some(&id));
+        let before = h.m.cards.len();
+        assert!(
+            handle_chord(&mut h.m, &h.r, "cmd+shift+z"),
+            "consumed, not left for the page or the app"
+        );
+        assert_eq!(h.m.cards.len(), before, "the app's keymap did not run");
+    }
+
     #[test]
     fn workspace_switch_detection_is_ctrl_plus_one_digit_only() {
         assert!(is_workspace_switch("ctrl+5"));
