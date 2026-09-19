@@ -32,6 +32,37 @@ pub fn browser_override(chord: &str) -> Option<&'static str> {
         .map(|(_, id)| *id)
 }
 
+/// Chords a LOCKED browser card claims beyond `browser_override`'s
+/// always-on list: the ones a real Chrome window binds to its own tab
+/// strip rather than to a page. `Ctrl+1..9` is deliberately absent —
+/// workspace switching, never a Chrome shortcut, is unaffected by lock.
+const LOCK_OVERRIDES: [(&str, &str); 12] = [
+    ("cmd+t", "browser.tab.new"),
+    ("cmd+w", "browser.tab.close"),
+    ("cmd+shift+t", "browser.tab.reopenClosed"),
+    ("cmd+1", "browser.tab.jump.1"),
+    ("cmd+2", "browser.tab.jump.2"),
+    ("cmd+3", "browser.tab.jump.3"),
+    ("cmd+4", "browser.tab.jump.4"),
+    ("cmd+5", "browser.tab.jump.5"),
+    ("cmd+6", "browser.tab.jump.6"),
+    ("cmd+7", "browser.tab.jump.7"),
+    ("cmd+8", "browser.tab.jump.8"),
+    ("cmd+9", "browser.tab.jump.last"),
+];
+
+pub fn lock_override(chord: &str) -> Option<&'static str> {
+    LOCK_OVERRIDES
+        .iter()
+        .find(|(c, _)| *c == chord)
+        .map(|(_, id)| *id)
+        .or(match chord {
+            "ctrl+tab" => Some("browser.tab.next"),
+            "ctrl+shift+tab" => Some("browser.tab.prev"),
+            _ => None,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,5 +86,32 @@ mod tests {
             None,
             "moving a card between groups is not the page's"
         );
+    }
+
+    #[test]
+    fn the_lock_table_covers_new_close_reopen_jump_and_tab_stepping() {
+        assert_eq!(lock_override("cmd+t"), Some("browser.tab.new"));
+        assert_eq!(lock_override("cmd+w"), Some("browser.tab.close"));
+        assert_eq!(
+            lock_override("cmd+shift+t"),
+            Some("browser.tab.reopenClosed")
+        );
+        assert_eq!(lock_override("cmd+1"), Some("browser.tab.jump.1"));
+        assert_eq!(lock_override("cmd+8"), Some("browser.tab.jump.8"));
+        assert_eq!(lock_override("cmd+9"), Some("browser.tab.jump.last"));
+        assert_eq!(lock_override("ctrl+tab"), Some("browser.tab.next"));
+        assert_eq!(lock_override("ctrl+shift+tab"), Some("browser.tab.prev"));
+    }
+
+    #[test]
+    fn ctrl_digit_is_not_in_the_lock_table_workspace_switching_stays_the_apps() {
+        assert_eq!(lock_override("ctrl+5"), None);
+    }
+
+    #[test]
+    fn a_chord_the_lock_table_does_not_know_falls_through_to_the_page_zoom_list() {
+        // cmd+= is already browser_override's, unaffected by locking
+        assert_eq!(lock_override("cmd+="), None);
+        assert_eq!(browser_override("cmd+="), Some("browser.zoom.in"));
     }
 }

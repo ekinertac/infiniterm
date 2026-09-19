@@ -37,13 +37,32 @@ pub fn describe_context(m: &Model) -> String {
 
 /// A chord, resolved the way `App.svelte`'s key handler resolves it: inside
 /// an editor the chords it keeps are its own; inside a browser the zoom
-/// chords are the page's; then the keymap. True when a command ran.
+/// chords are the page's; a LOCKED browser card widens that to real
+/// Chrome tab shortcuts; then the keymap. True when a command ran.
 pub fn handle_chord(m: &mut Model, r: &CommandRegistry<Model>, chord: &str) -> bool {
-    let kind = m.focused().map(|c| c.kind);
+    let card = m.focused();
+    let kind = card.map(|c| c.kind);
     if kind == Some(crate::saved_layout::CardKind::Editor)
         && crate::editor_keys::editor_keeps(chord)
     {
         return false;
+    }
+    let locked =
+        kind == Some(crate::saved_layout::CardKind::Browser) && card.is_some_and(|c| c.locked);
+    // A locked browser card claims everything except Ctrl+1..9: real
+    // Chrome shortcuts shadow this app's own bindings on the same keys,
+    // the whole point of locking. Workspace switching is not a Chrome
+    // shortcut, so it alone keeps working.
+    if locked && !is_workspace_switch(chord) {
+        let id = crate::browser_keys::lock_override(chord)
+            .or_else(|| crate::browser_keys::browser_override(chord));
+        return match id {
+            Some(id) => {
+                run_with_effects(m, r, id);
+                true
+            }
+            None => true, // swallowed: a Chrome window ignores an unbound chord too
+        };
     }
     let override_ = (kind == Some(crate::saved_layout::CardKind::Browser))
         .then(|| crate::browser_keys::browser_override(chord))
@@ -56,6 +75,16 @@ pub fn handle_chord(m: &mut Model, r: &CommandRegistry<Model>, chord: &str) -> b
     };
     run_with_effects(m, r, &id);
     true
+}
+
+/// `Ctrl` plus a single digit, the one Ctrl range a locked browser card
+/// does not claim (see `handle_chord`).
+fn is_workspace_switch(chord: &str) -> bool {
+    let parts: Vec<&str> = chord.split('+').collect();
+    parts.len() == 2
+        && parts[0] == "ctrl"
+        && parts[1].len() == 1
+        && parts[1].chars().all(|c| c.is_ascii_digit())
 }
 
 /// Runs a command and then any `RunCommand` effects it queued, so a palette
@@ -1041,6 +1070,54 @@ mod tests {
             card_id: id,
             action: crate::model::BrowserAction::Forward,
         }));
+    }
+
+    // Locking a browser card hands Chrome's own tab shortcuts to the page's
+    // chrome instead of the app's: Cmd+T stops making a new card and starts
+    // a tab on the one that is locked.
+    #[test]
+    fn a_locked_browser_card_gets_chrome_shortcuts_an_unlocked_one_does_not() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.set_focus(Some(&id));
+
+        // Unlocked: cmd+t is the app's "new card", not a tab.
+        let before = h.m.cards.len();
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+t"));
+        assert_eq!(
+            h.m.cards.len(),
+            before + 1,
+            "unlocked cmd+t made a new card"
+        );
+        h.m.cards.pop(); // undo, keep the harness on the browser card for the next part
+        h.m.set_focus(Some(&id));
+
+        // Locked: cmd+t opens a tab on the SAME card instead.
+        h.m.cards[0].locked = true;
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+t"));
+        assert_eq!(h.m.cards.len(), before, "no new card");
+        assert_eq!(h.m.card(&id).unwrap().tabs.len(), 2, "a tab instead");
+    }
+
+    // Ctrl+digit is workspace switching, never a Chrome shortcut, so lock
+    // does not touch it.
+    #[test]
+    fn ctrl_digit_still_switches_workspaces_while_locked() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].locked = true;
+        h.m.set_focus(Some(&id));
+        assert!(handle_chord(&mut h.m, &h.r, "ctrl+2"));
+    }
+
+    #[test]
+    fn workspace_switch_detection_is_ctrl_plus_one_digit_only() {
+        assert!(is_workspace_switch("ctrl+5"));
+        assert!(!is_workspace_switch("ctrl+55"));
+        assert!(!is_workspace_switch("cmd+5"));
+        assert!(!is_workspace_switch("ctrl+shift+5"));
     }
 
     // Cmd+L on a browser card edits THAT card's address; anywhere else it
