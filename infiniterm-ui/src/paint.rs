@@ -399,7 +399,15 @@ impl AppView {
                 // card the next extend grows from. The rest take blue, all
                 // at one strength.
                 let multi = !sel.extra.is_empty();
-                let ring_color = if multi && !focused {
+                // A locked browser card's ring says the keyboard means
+                // something different than it did a keystroke ago, the
+                // same fact the status bar's "locked: browser" reads off
+                // `card.locked` — the ring is the one place on the card
+                // itself that shows it, since nothing else changes there.
+                let locked = focused && card.kind == CardKind::Browser && card.locked;
+                let ring_color = if locked {
+                    chrome.warn
+                } else if multi && !focused {
                     chrome.selection_ring
                 } else {
                     chrome.focus_ring
