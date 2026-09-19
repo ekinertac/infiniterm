@@ -455,13 +455,22 @@ fn strip_hit(local: Point, ui_scale: f32, tab_count: usize) -> Option<TabClick> 
         // Past the "+" button: empty strip, same as clicking dead space.
         return None;
     }
-    let close_w = TAB_STRIP_CLOSE_WIDTH_PX * ui_scale as f64;
     let x_in_tab = local.x - (index as f64) * tab_w;
-    if x_in_tab >= tab_w - close_w {
+    if x_in_tab >= close_band_left_px() * ui_scale as f64 {
         Some(TabClick::Close(index))
     } else {
         Some(TabClick::Switch(index))
     }
+}
+
+/// Where a tab's close band starts, counted from the tab's own left edge,
+/// in the same pre-`ui_scale`/`scale` PX units as `TAB_STRIP_TAB_WIDTH_PX`.
+/// One subtraction, shared by `strip_hit` (the hit test) and `paint` (the
+/// glyph's position), so the clickable region and the painted `×` are
+/// computed from the same number rather than two numbers that could drift
+/// apart the way the click-accuracy bug in this feature already did once.
+fn close_band_left_px() -> f64 {
+    TAB_STRIP_TAB_WIDTH_PX - TAB_STRIP_CLOSE_WIDTH_PX
 }
 
 impl CardBody for BrowserBody {
@@ -564,6 +573,12 @@ impl CardBody for BrowserBody {
         window.paint_quad(fill(strip, self.card_bg));
         let tab_w = px((TAB_STRIP_TAB_WIDTH_PX * self.ui_scale as f64 * scale) as f32);
         let strip_font = px((TAB_STRIP_FONT_PX * self.ui_scale as f64 * scale) as f32);
+        // Screen pixels, same convention as `tab_w`/`strip_font` above:
+        // `close_left` is the same boundary `strip_hit` compares against
+        // (`close_band_left_px`), so the glyph and the clickable region
+        // always agree.
+        let close_w = px((TAB_STRIP_CLOSE_WIDTH_PX * self.ui_scale as f64 * scale) as f32);
+        let close_left = px((close_band_left_px() * self.ui_scale as f64 * scale) as f32);
         if strip_font >= px(crate::chrome::LEGIBLE_FONT_PX as f32) {
             let pad = px((TAB_STRIP_LABEL_PAD_PX * self.ui_scale as f64 * scale) as f32);
             for (i, tab) in self.tabs.iter().enumerate() {
@@ -574,7 +589,9 @@ impl CardBody for BrowserBody {
                 if i == self.active {
                     window.paint_quad(fill(tab_bounds, crate::chrome::with_alpha(self.text, 0.08)));
                 }
-                let room = f32::from(tab_w) - f32::from(pad) * 2.;
+                // Stops short of the close glyph's band, not the tab's own
+                // edge, or a long title runs under the `×`.
+                let room = f32::from(close_left) - f32::from(pad) * 2.;
                 let label = crate::text::elide(tab_label(tab), room, |t| {
                     f32::from(
                         crate::text::shape(
@@ -595,7 +612,51 @@ impl CardBody for BrowserBody {
                     self.text,
                 );
                 crate::text::paint_in(window, cx, &line, tab_bounds, pad);
+
+                // The close glyph, centred in the close band (`close_left`
+                // to the tab's right edge): exactly the region `strip_hit`
+                // treats as `TabClick::Close(i)`.
+                let close_line = crate::text::shape(
+                    window,
+                    "×",
+                    strip_font,
+                    &font(self.font_family.clone()),
+                    self.text,
+                );
+                let close_bounds = Bounds::new(
+                    point(
+                        tab_bounds.origin.x + close_left + (close_w - close_line.width) / 2.,
+                        tab_bounds.origin.y,
+                    ),
+                    size(close_line.width, strip_h),
+                );
+                crate::text::paint_in(window, cx, &close_line, close_bounds, px(0.));
             }
+            // The "+" for a new tab, in the band right after the last tab:
+            // exactly the region `strip_hit` treats as `TabClick::New`
+            // (`index == tab_count`).
+            let new_tab_bounds = Bounds::new(
+                point(
+                    strip.origin.x + tab_w * (self.tabs.len() as f32),
+                    strip.origin.y,
+                ),
+                size(tab_w, strip_h),
+            );
+            let plus_line = crate::text::shape(
+                window,
+                "+",
+                strip_font,
+                &font(self.font_family.clone()),
+                self.text,
+            );
+            let plus_bounds = Bounds::new(
+                point(
+                    new_tab_bounds.origin.x + tab_w / 2. - plus_line.width / 2.,
+                    new_tab_bounds.origin.y,
+                ),
+                size(plus_line.width, strip_h),
+            );
+            crate::text::paint_in(window, cx, &plus_line, plus_bounds, px(0.));
             // The card's number, right-aligned in the strip: the corner
             // label used to carry it and was removed for exactly this.
             if self.card_number > 0 {
@@ -891,6 +952,26 @@ mod tab_strip_hit_tests {
     #[test]
     fn a_point_past_the_new_tab_button_hits_nothing() {
         assert_eq!(strip_hit(Point { x: 450., y: 5. }, 1., 2), None);
+    }
+
+    #[test]
+    fn the_close_bands_left_edge_is_the_number_paint_also_multiplies() {
+        // 140px tabs, 20px close band: paint's glyph and strip_hit's
+        // boundary both derive from this one subtraction, so a point just
+        // inside it still switches and a point just past it still closes,
+        // matching the existing boundary tests above.
+        assert_eq!(
+            close_band_left_px(),
+            TAB_STRIP_TAB_WIDTH_PX - TAB_STRIP_CLOSE_WIDTH_PX
+        );
+        assert_eq!(
+            strip_hit(Point { x: 119., y: 5. }, 1., 2),
+            Some(TabClick::Switch(0))
+        );
+        assert_eq!(
+            strip_hit(Point { x: 120., y: 5. }, 1., 2),
+            Some(TabClick::Close(0))
+        );
     }
 
     #[test]
