@@ -49,11 +49,11 @@ pub fn handle_chord(m: &mut Model, r: &CommandRegistry<Model>, chord: &str) -> b
     }
     let locked =
         kind == Some(crate::saved_layout::CardKind::Browser) && card.is_some_and(|c| c.locked);
-    // A locked browser card claims everything except Ctrl+1..9: real
-    // Chrome shortcuts shadow this app's own bindings on the same keys,
-    // the whole point of locking. Workspace switching is not a Chrome
-    // shortcut, so it alone keeps working.
-    if locked && !is_workspace_switch(chord) {
+    // A locked browser card claims everything except Ctrl+1..9 and the two
+    // app-carve-out chords below: real Chrome shortcuts shadow this app's
+    // own bindings on the same keys, the whole point of locking. Workspace
+    // switching is not a Chrome shortcut, so it alone keeps working.
+    if locked && !is_workspace_switch(chord) && !is_locked_carveout(chord) {
         let id = crate::browser_keys::lock_override(chord)
             .or_else(|| crate::browser_keys::browser_override(chord));
         return match id {
@@ -61,7 +61,13 @@ pub fn handle_chord(m: &mut Model, r: &CommandRegistry<Model>, chord: &str) -> b
                 run_with_effects(m, r, id);
                 true
             }
-            None => true, // swallowed: a Chrome window ignores an unbound chord too
+            // Neither table knows it: not consumed, so `key_down` carries
+            // on to `body.key()`, which forwards a Cmd chord to
+            // `Surface::edit_chord` (copy, paste, cut, select-all, undo,
+            // redo) exactly as an unlocked browser card already does. A
+            // Chrome window has no app keymap behind it to fall back to;
+            // this one does, and swallowing here used to hide it.
+            None => false,
         };
     }
     let override_ = (kind == Some(crate::saved_layout::CardKind::Browser))
@@ -85,6 +91,20 @@ fn is_workspace_switch(chord: &str) -> bool {
         && parts[0] == "ctrl"
         && parts[1].len() == 1
         && parts[1].chars().all(|c| c.is_ascii_digit())
+}
+
+/// The other carve-out a locked browser card does not claim: the omnibox
+/// (`cmd+l`, an app overlay, not the page — the design doc: "the omnibox
+/// already does this") and the way out of a locked page (`browser.leave`,
+/// bound to `cmd+escape` in the default keymap). Both are app-level, not
+/// Chrome shortcuts a real browser window would bind, and `browser.leave`
+/// in particular has to stay reachable or a locked card's own way out
+/// becomes unreachable now that plain Escape's separate meaning
+/// (double-Escape to unlock) sits on the same key. Hardcoded rather than a
+/// keymap lookup, the same way `is_workspace_switch` is: this is about
+/// what these two chords MEAN to the app, not about tracking a rebind.
+fn is_locked_carveout(chord: &str) -> bool {
+    matches!(chord, "cmd+l" | "cmd+escape")
 }
 
 /// Runs a command and then any `RunCommand` effects it queued, so a palette
@@ -1112,12 +1132,15 @@ mod tests {
         assert!(handle_chord(&mut h.m, &h.r, "ctrl+2"));
     }
 
-    // A chord neither table knows is still consumed: a Chrome window
-    // ignores a binding it does not have rather than leaking the key to
-    // whatever is behind it, and a locked card must not either (the app's
-    // own keymap, or the literal keystroke reaching the page).
+    // A chord neither table knows falls through to the page instead of
+    // being swallowed: `browser_body::key` forwards a Cmd chord to
+    // `Surface::edit_chord` (copy, paste, cut, select-all, undo, redo), and
+    // that is real Chrome parity for a locked card, matching an unlocked
+    // one. `handle_chord` itself has no page to hand it to, so the contract
+    // is just that it reports "not consumed" and lets `key_down` carry on
+    // to `body.key()`.
     #[test]
-    fn a_locked_card_swallows_a_chord_neither_table_knows() {
+    fn a_locked_card_lets_an_unmatched_chord_fall_through_to_the_page() {
         let mut h = Harness::new();
         let id = h.m.cards[0].id.clone();
         h.m.cards[0].kind = CardKind::Browser;
@@ -1125,10 +1148,69 @@ mod tests {
         h.m.set_focus(Some(&id));
         let before = h.m.cards.len();
         assert!(
-            handle_chord(&mut h.m, &h.r, "cmd+shift+z"),
-            "consumed, not left for the page or the app"
+            !handle_chord(&mut h.m, &h.r, "cmd+shift+z"),
+            "not consumed: falls through to the body"
         );
         assert_eq!(h.m.cards.len(), before, "the app's keymap did not run");
+    }
+
+    // Cmd+C (and the rest of edit_chord's set) must reach the body the same
+    // way on a locked card: `handle_chord` returning true here would mean
+    // copy/paste/cut/select-all/undo/redo silently stop working the moment
+    // a browser card locks, which is the opposite of "real Chrome".
+    #[test]
+    fn a_locked_card_lets_edit_chords_fall_through_to_the_page() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].locked = true;
+        h.m.set_focus(Some(&id));
+        for chord in ["cmd+c", "cmd+v", "cmd+x", "cmd+a", "cmd+z", "cmd+shift+z"] {
+            assert!(
+                !handle_chord(&mut h.m, &h.r, chord),
+                "{chord} must fall through to the body, not be swallowed"
+            );
+        }
+    }
+
+    // Two chords stay the app's even on a locked card: the omnibox (an app
+    // overlay, not the page) and the way out of a locked page
+    // (`browser.leave`, `cmd+escape` in the default keymap). Neither is in
+    // `lock_override` or `browser_override`, so without an explicit
+    // carve-out they would fall into the "unmatched, swallowed" branch
+    // before this fix and now would fall through to the page instead of
+    // running: both wrong, and this is the regression guard for either.
+    #[test]
+    fn cmd_l_and_browser_leave_stay_the_apps_even_while_locked() {
+        let mut h = Harness::new();
+        // A second card for `browser.leave` to hand focus back to.
+        h.run("card.new.terminal");
+        let other = h.focused().id.clone();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].url = Some("https://a.example".into());
+        h.m.cards[0].locked = true;
+        h.m.set_focus(Some(&id));
+
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+l"), "the omnibox opened");
+        assert!(h.m.omni.open);
+        h.m.close_omnibox();
+        h.m.set_focus(Some(&id));
+
+        let leave_chord = crate::keymap::default_keymap()
+            .iter()
+            .find(|(_, cmd_id)| cmd_id == "browser.leave")
+            .map(|(c, _)| c.clone())
+            .expect("browser.leave is bound");
+        assert!(
+            handle_chord(&mut h.m, &h.r, &leave_chord),
+            "browser.leave ran, reaching the app's keymap rather than the page"
+        );
+        assert_eq!(
+            h.m.selection.focused_id.as_deref(),
+            Some(other.as_str()),
+            "left the locked card's page for the nearest other card"
+        );
     }
 
     #[test]
