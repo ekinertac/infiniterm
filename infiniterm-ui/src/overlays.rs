@@ -493,8 +493,12 @@ impl AppView {
     fn browser_lock_indicator(&self) -> Option<&'static str> {
         self.model
             .focused()
-            .filter(|c| c.kind == CardKind::Browser && c.locked)
-            .map(|_| "locked: browser")
+            .filter(|c| c.locked)
+            .and_then(|c| match c.kind {
+                CardKind::Browser => Some("locked: browser"),
+                CardKind::Editor => Some("locked: editor"),
+                _ => None,
+            })
     }
 
     fn render_status_bar(&self) -> impl IntoElement {

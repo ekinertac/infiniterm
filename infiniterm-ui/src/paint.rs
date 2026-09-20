@@ -416,7 +416,9 @@ impl AppView {
                 // same fact the status bar's "locked: browser" reads off
                 // `card.locked` — the ring is the one place on the card
                 // itself that shows it, since nothing else changes there.
-                let locked = focused && card.kind == CardKind::Browser && card.locked;
+                let locked = focused
+                    && matches!(card.kind, CardKind::Browser | CardKind::Editor)
+                    && card.locked;
                 let ring_color = if locked {
                     chrome.warn
                 } else if multi && !focused {
@@ -573,10 +575,14 @@ impl AppView {
         window: &mut Window,
         cx: &mut App,
     ) {
-        // A browser card wears no label: the page has its own title and a
-        // tab strip is coming to carry it, and a chip over a page covered
-        // the corner of every site. The frame band still drags and fits.
-        if card.kind == infiniterm_core::saved_layout::CardKind::Browser {
+        // A browser or editor card wears no label: its tab strip carries
+        // the title and the number, and a chip over a page covered the
+        // corner of every site. The frame band still drags and fits.
+        if matches!(
+            card.kind,
+            infiniterm_core::saved_layout::CardKind::Browser
+                | infiniterm_core::saved_layout::CardKind::Editor
+        ) {
             return;
         }
         let chrome = &self.chrome;

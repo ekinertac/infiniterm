@@ -35,7 +35,6 @@ use infiniterm_core::files::{
     dir_list, draft_delete, draft_read, draft_write, file_mtime, file_read, file_write,
 };
 use infiniterm_core::grid::{Point, Size};
-use infiniterm_core::ift::{open_plan, PathKind};
 use infiniterm_editor::buffer::Buffer;
 use infiniterm_editor::explorer::{Entry, Tree, TreeAction};
 use infiniterm_editor::highlight::{Highlighting, Span};
@@ -137,11 +136,15 @@ pub enum EditorEvent {
     None,
     /// A line for the status bar.
     Notice(String),
-    /// The card's path and directory changed (a file picked from the tree).
+    /// The card's path and directory changed (a save-as, a picture the
+    /// tree's cursor landed on).
     PathChanged {
         path: String,
         cwd: String,
     },
+    /// Enter on a file in the tree: a tab for it, or a switch to the tab
+    /// that already shows it. `editor_tabs.rs` turns it into `Card.tabs`.
+    OpenTab(String),
 }
 
 pub struct EditorBody {
@@ -582,19 +585,48 @@ impl EditorBody {
     /// a dirty buffer is left alone and the file opens beside, because
     /// replacing text you have not saved is the one thing a tree click
     /// must not do.
-    fn open_from_tree(&mut self, path: String, now: f64) -> BodyAction {
-        if self.is_dirty() && self.path.is_some() {
-            return BodyAction::Open(open_plan(&path, PathKind::File, None));
-        }
-        let _ = draft_delete(&self.card_id);
-        self.load(&path, false, now);
+    /// Enter on a file in the tree: always a tab (Ekin's rule), never a
+    /// swap of this buffer, so nothing unsaved is ever in the way.
+    fn open_from_tree(&mut self, path: String, _now: f64) -> BodyAction {
         self.tree_focused = false;
         self.focus = Focus::Buffer;
-        self.events.push(EditorEvent::PathChanged {
-            path: path.clone(),
-            cwd: self.cwd.clone(),
-        });
+        self.events.push(EditorEvent::OpenTab(path));
         BodyAction::None
+    }
+
+    /// The tree moves to the tab that becomes active (`editor_tabs.rs`):
+    /// taken from the one that was, with whether it had the focus.
+    pub fn take_tree(&mut self) -> Option<(Tree, bool, f64, bool)> {
+        let tree = self.tree.take()?;
+        let focused = self.tree_focused;
+        self.tree_focused = false;
+        if self.focus == Focus::Tree {
+            self.focus = Focus::Buffer;
+        }
+        self.dirty = true;
+        Some((tree, focused, self.sidebar_w, self.sidebar_top))
+    }
+
+    pub fn put_tree(&mut self, tree: Tree, focused: bool, sidebar_w: f64, sidebar_top: bool) {
+        self.tree = Some(tree);
+        self.tree_focused = focused;
+        self.sidebar_w = sidebar_w;
+        self.sidebar_top = sidebar_top;
+        if focused {
+            self.focus = Focus::Tree;
+        }
+        self.dirty = true;
+    }
+
+    /// Whether a point in the text area (below any strip) is on the tree
+    /// rather than the text, for the lock: clicking the tree must not lock.
+    pub fn is_on_tree(&self, local: Point) -> bool {
+        self.tree.is_some()
+            && if self.sidebar_top {
+                local.y < self.sidebar_w
+            } else {
+                local.x < self.sidebar_w
+            }
     }
 
     fn blink_on(&self, now: f64) -> bool {

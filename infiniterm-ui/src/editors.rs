@@ -1,14 +1,18 @@
-//! Editor cards and their bodies: one `EditorBody` per editor card, kept
-//! in step with the card (path, root, sidebar), the settings (font, wrap,
-//! line wash, cursor blink) and the theme (colours, syntax rules) each
-//! frame, the way `terminals.rs` does for shells. The body reports back
-//! what only it knows: dirty, the language, read-only, a file picked from
-//! the tree; the card carries those for the badges and the save file.
+//! Editor cards and their bodies: one `EditorTabs` per editor card (a
+//! tab strip over one `EditorBody` per tab), kept in step with the card
+//! (tabs, path, root, sidebar, lock), the settings (font, wrap, line
+//! wash, cursor blink) and the theme (colours, syntax rules) each frame,
+//! the way `terminals.rs` does for shells. The active tab's body reports
+//! back what only it knows: dirty, the language, read-only, a file the
+//! tree asked to open; the card carries those for the badges and the
+//! save file. `Card.tabs` is the authority, the browser's rule.
 //!
 //! The editor actions the model queues (`Effect::Editor`) land here too:
 //! save, find, go to line, the tree's three states.
 use crate::diff_body::DiffBody;
 use crate::editor_body::{EditorBody, EditorEvent};
+use crate::editor_tabs::EditorTabs;
+use crate::tab_strip::StripStyle;
 
 use crate::transcript_body::{TranscriptBody, TranscriptColors};
 use crate::AppView;
@@ -28,10 +32,15 @@ fn is_generated(path: &str) -> bool {
 }
 
 impl AppView {
+    /// The ACTIVE tab's body of an editor card.
     pub fn editor_for(&mut self, id: &str) -> Option<&mut EditorBody> {
+        self.editor_tabs_for(id).and_then(|t| t.active_body())
+    }
+
+    pub fn editor_tabs_for(&mut self, id: &str) -> Option<&mut EditorTabs> {
         self.bodies
             .get_mut(id)
-            .and_then(|b| b.as_any_mut().downcast_mut::<EditorBody>())
+            .and_then(|b| b.as_any_mut().downcast_mut::<EditorTabs>())
     }
 
     pub fn diff_for(&mut self, id: &str) -> Option<&mut DiffBody> {
@@ -57,6 +66,15 @@ impl AppView {
             &cfg.editor.selection_text_color,
         );
         let rules = syntax_rules(self.chrome.theme.as_ref());
+        let style = StripStyle {
+            bg: self.chrome.bar_bg,
+            border: self.chrome.bar_border,
+            active_bg: self.chrome.row_selected,
+            text_bright: self.chrome.text_bright,
+            text_muted: self.chrome.text_muted,
+            font_family: crate::terminals::family_of(&cfg.terminal.font_family),
+        };
+        let ui_scale = self.model.ui_scale as f32;
         let now = crate::now_ms();
         let cards: Vec<_> = self
             .model
@@ -65,30 +83,53 @@ impl AppView {
             .filter(|c| c.kind == CardKind::Editor)
             .cloned()
             .collect();
+        let mut locks: Vec<(String, bool)> = vec![];
         for card in cards {
             let world = Size {
                 w: card.rect.w,
                 h: card.rect.h,
             };
-            let is_editor = self.editor_for(&card.id).is_some();
-            if !is_editor {
-                let mut body = EditorBody::new(
-                    &card.id,
-                    card.path.clone(),
-                    card.cwd.clone(),
-                    &metrics,
-                    world,
-                );
-                body.pending_line = card.line;
-                match card.path.clone() {
-                    Some(path) => body.load(&path, true, now),
-                    None => body.load_untitled(),
-                }
-                self.bodies.insert(card.id.clone(), Box::new(body));
+            let fresh = self.editor_tabs_for(&card.id).is_none();
+            if fresh {
+                let tabs = EditorTabs::new(&card.id, &metrics, world, style.clone());
+                self.bodies.insert(card.id.clone(), Box::new(tabs));
+            }
+            let Some(tabs) = self.editor_tabs_for(&card.id) else {
+                continue;
+            };
+            tabs.ui_scale = ui_scale;
+            if tabs.card_number != card.number {
+                tabs.card_number = card.number;
+                tabs.mark_dirty();
+            }
+            if tabs.style != style {
+                tabs.style = style.clone();
+                tabs.mark_dirty();
+            }
+            // The card's tabs, or its one path before it had any: the
+            // bodies follow. A fresh card restores drafts; a tab opened
+            // later starts from the file.
+            let handles: Vec<String> = if card.tabs.is_empty() {
+                vec![card.path.clone().unwrap_or_default()]
+            } else {
+                card.tabs.clone()
+            };
+            tabs.rebuild_tabs(&handles, card.active_tab, &card.cwd, now, fresh);
+            // The lock, mirrored the way browsers.rs does: the body owns
+            // it (a click into the text, Enter), the card shows it.
+            let locked = tabs.locked;
+            if card.locked != locked {
+                locks.push((card.id.clone(), locked));
             }
             let Some(body) = self.editor_for(&card.id) else {
                 continue;
             };
+            if fresh {
+                body.pending_line = card.line;
+                if let Some(line) = card.line {
+                    body.go_to_line(line as usize);
+                }
+            }
             if body.metrics != metrics {
                 body.metrics = metrics.clone();
                 body.mark_dirty();
@@ -118,7 +159,10 @@ impl AppView {
             let dirty = body.is_dirty();
             let language = body.language.map(|l| l.badge().to_string());
             let read_only = body.read_only;
-            let events = body.take_events();
+            let events = self
+                .editor_tabs_for(&card.id)
+                .map(|t| t.take_events())
+                .unwrap_or_default();
             if let Some(c) = self.model.card_mut(&card.id) {
                 c.dirty = dirty;
                 c.language = language;
@@ -128,15 +172,39 @@ impl AppView {
                 match event {
                     EditorEvent::None => {}
                     EditorEvent::Notice(text) => self.model.notify(text),
+                    // The active tab's file changed under it (a save-as, a
+                    // picture the tree landed on): the card's path and, when
+                    // it has tabs, the active tab's handle follow.
                     EditorEvent::PathChanged { path, cwd } => {
                         if let Some(c) = self.model.card_mut(&card.id) {
-                            c.path = Some(path);
+                            c.path = Some(path.clone());
                             c.cwd = cwd;
+                            if let Some(h) = c.tabs.get_mut(c.active_tab) {
+                                *h = path;
+                            }
                             self.model.dirty_layout = true;
+                        }
+                    }
+                    // Enter on a file in the tree: the tab that shows it,
+                    // else a new one. Through the model, the authority.
+                    EditorEvent::OpenTab(path) => {
+                        let already = self
+                            .model
+                            .card(&card.id)
+                            .and_then(|c| c.tabs.iter().position(|h| *h == path));
+                        match already {
+                            Some(i) => self.model.browser_tab_jump(&card.id, i),
+                            None => self.model.browser_tab_open(&card.id, Some(&path)),
                         }
                     }
                 }
             }
+        }
+        for (id, locked) in locks {
+            if let Some(c) = self.model.card_mut(&id) {
+                c.locked = locked;
+            }
+            self.redraw = true;
         }
     }
 
@@ -294,6 +362,7 @@ impl AppView {
                 match event {
                     EditorEvent::None => {}
                     EditorEvent::Notice(text) => self.model.notify(text),
+                    EditorEvent::OpenTab(_) => {}
                     EditorEvent::PathChanged { path, cwd } => {
                         if let Some(c) = self.model.card_mut(&card.id) {
                             c.path = Some(path);

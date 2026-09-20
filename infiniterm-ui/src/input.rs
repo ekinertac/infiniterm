@@ -571,15 +571,26 @@ impl AppView {
             if let Some(id) = self.model.selection.focused_id.clone() {
                 if self.model.card(&id).is_some_and(|c| c.locked) {
                     let now = now_ms();
-                    let double = self.browser_for(&id).is_some_and(|b| {
-                        let was =
-                            infiniterm_core::browser_keys::is_double_escape(b.last_escape_ms, now);
-                        b.last_escape_ms = if was { None } else { Some(now) };
+                    let step = |last: &mut Option<f64>| {
+                        let was = infiniterm_core::browser_keys::is_double_escape(*last, now);
+                        *last = if was { None } else { Some(now) };
                         was
-                    });
+                    };
+                    // The same double-Escape for a locked editor card as
+                    // for a browser: whichever body the card has.
+                    let double = match self.browser_for(&id) {
+                        Some(b) => step(&mut b.last_escape_ms),
+                        None => self
+                            .editor_tabs_for(&id)
+                            .is_some_and(|t| step(&mut t.last_escape_ms)),
+                    };
                     if double {
                         if let Some(body) = self.browser_for(&id) {
                             body.set_focus(false);
+                        }
+                        if let Some(t) = self.editor_tabs_for(&id) {
+                            t.locked = false;
+                            t.mark_dirty();
                         }
                         if let Some(c) = self.model.card_mut(&id) {
                             c.locked = false;
