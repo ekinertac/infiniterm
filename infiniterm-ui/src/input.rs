@@ -666,6 +666,27 @@ impl AppView {
                 return true;
             }
         }
+        // Cmd+Alt+Arrow on an editor card first tries to move between the
+        // text and the tree; only at the card's edge does it go on to the
+        // next card, like every other Cmd+Alt+Arrow.
+        if m.platform && m.alt && !m.control && !m.shift {
+            let dir = match k.key.as_str() {
+                "left" => Some(infiniterm_core::navigate::Direction::Left),
+                "right" => Some(infiniterm_core::navigate::Direction::Right),
+                "up" => Some(infiniterm_core::navigate::Direction::Up),
+                "down" => Some(infiniterm_core::navigate::Direction::Down),
+                _ => None,
+            };
+            if let (Some(dir), Some(id)) = (dir, self.model.selection.focused_id.clone()) {
+                if self
+                    .editor_for(&id)
+                    .is_some_and(|b| b.move_focus_within(dir))
+                {
+                    self.redraw = true;
+                    return true;
+                }
+            }
+        }
         if (m.platform || m.control) && handle_chord(&mut self.model, &self.registry, &chord) {
             self.perform_effects();
             return true;

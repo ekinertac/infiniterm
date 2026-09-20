@@ -594,6 +594,36 @@ impl EditorBody {
         BodyAction::None
     }
 
+    /// Cmd+Alt+Arrow inside the card: between the text and the tree, in
+    /// the direction the tree lies (left of the text, or above it). True
+    /// when the focus moved; false at the card's edge, where the same key
+    /// moves to the next CARD, the app's own rule one level down. Ekin's
+    /// ask: one fewer key to remember than a chord for the tree.
+    pub fn move_focus_within(&mut self, dir: infiniterm_core::navigate::Direction) -> bool {
+        use infiniterm_core::navigate::Direction;
+        if self.tree.is_none() {
+            return false;
+        }
+        let toward_tree = match (self.sidebar_top, dir) {
+            (false, Direction::Left) | (true, Direction::Up) => true,
+            (false, Direction::Right) | (true, Direction::Down) => false,
+            _ => return false,
+        };
+        match (toward_tree, self.tree_focused) {
+            (true, false) => {
+                self.tree_focused = true;
+                self.focus = Focus::Tree;
+            }
+            (false, true) => {
+                self.tree_focused = false;
+                self.focus = Focus::Buffer;
+            }
+            _ => return false,
+        }
+        self.dirty = true;
+        true
+    }
+
     /// The tree moves to the tab that becomes active (`editor_tabs.rs`):
     /// taken from the one that was, with whether it had the focus.
     pub fn take_tree(&mut self) -> Option<(Tree, bool, f64, bool)> {
@@ -2149,6 +2179,35 @@ mod tests {
             bold_weight: gpui::FontWeight::BOLD,
         };
         EditorBody::new("c1", None, "/".into(), &metrics, Size { w: 400., h: 300. })
+    }
+
+    // Cmd+Alt+Left from the text goes into a tree on the left, Right comes
+    // back; at the edge (Left again from the tree) the key is not taken, so
+    // it goes on to the next card. A tree on top answers to Up and Down.
+    #[test]
+    fn cmd_alt_arrows_move_between_text_and_tree_then_leave() {
+        use infiniterm_core::navigate::Direction;
+        let mut b = body();
+        assert!(
+            !b.move_focus_within(Direction::Left),
+            "no tree: nothing to enter"
+        );
+        let dir = std::env::temp_dir();
+        b.show_tree(dir.to_str().unwrap());
+        b.tree_focused = false;
+        b.focus = Focus::Buffer;
+        assert!(b.move_focus_within(Direction::Left));
+        assert_eq!(b.focus, Focus::Tree);
+        assert!(!b.move_focus_within(Direction::Left), "the card's edge");
+        assert!(!b.move_focus_within(Direction::Up), "not that way");
+        assert!(b.move_focus_within(Direction::Right));
+        assert_eq!(b.focus, Focus::Buffer);
+        b.sidebar_top = true;
+        assert!(!b.move_focus_within(Direction::Left));
+        assert!(b.move_focus_within(Direction::Up));
+        assert_eq!(b.focus, Focus::Tree);
+        assert!(b.move_focus_within(Direction::Down));
+        assert_eq!(b.focus, Focus::Buffer);
     }
 
     // On a wrapped line Down goes to the next visual row of the SAME line,
