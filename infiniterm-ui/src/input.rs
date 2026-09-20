@@ -217,12 +217,15 @@ impl AppView {
                 });
             }
             Hit::CardBody { id, local } => {
-                if e.modifiers.shift {
-                    // The text-field rule; and it must not reach the body,
-                    // where it would extend a TEXT selection.
+                let already = self.model.selection.focused_id.as_deref() == Some(&id);
+                // Shift+click on ANOTHER card adds it to the card selection
+                // (the text-field rule). On the focused card it reaches the
+                // body, where Shift+click extends the TEXT selection, the
+                // same rule one level down; a text selection can only live
+                // in the focused card, so the two never compete.
+                if e.modifiers.shift && !already {
                     self.model.extend_to(&id);
                 } else {
-                    let already = self.model.selection.focused_id.as_deref() == Some(&id);
                     if !already {
                         self.model.set_focus(Some(&id));
                         // Revealed on the RELEASE, if the press turns out to
