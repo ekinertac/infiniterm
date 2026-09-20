@@ -157,7 +157,12 @@ pub struct EditorBody {
     draft_due: Option<f64>,
     pub language: Option<Language>,
     highlighting: Highlighting,
-    spans: (u64, Vec<Span>),
+    /// Keyed by the buffer's version AND a load count: every loaded file
+    /// starts a fresh buffer at version 0, and a cache keyed by version
+    /// alone handed the previous file's spans (or none) to the next one.
+    spans: (u64, u64, Vec<Span>),
+    /// Bumped by every load, for the span cache's key.
+    loads: u64,
     pub search: Option<Search>,
     query: Field,
     replacement: Field,
@@ -225,7 +230,8 @@ impl EditorBody {
             last_disk_check: 0.,
             draft_due: None,
             highlighting: Highlighting::default(),
-            spans: (u64::MAX, vec![]),
+            spans: (u64::MAX, 0, vec![]),
+            loads: 0,
             search: None,
             query: Field::default(),
             replacement: Field::default(),
@@ -300,6 +306,7 @@ impl EditorBody {
         self.scroll_line = 0;
         self.scroll_x = 0.;
         self.shaped.clear();
+        self.loads += 1;
         self.image = Language::is_image(path).then(|| path.to_string());
         if self.image.is_some() {
             // Nothing to read: the decoder reads the file at paint time.
@@ -341,6 +348,7 @@ impl EditorBody {
         if let Ok(Some(draft)) = draft_read(&self.card_id) {
             self.buffer = Buffer::new(&draft);
         }
+        self.loads += 1;
         self.dirty = true;
     }
 
@@ -354,6 +362,8 @@ impl EditorBody {
             self.path = Some(path.to_string());
             self.cwd = parent_of(path);
             self.language = Language::for_path(path);
+            // A save-as can change the grammar without changing the text.
+            self.loads += 1;
         }
         let text = self.buffer.text();
         match file_write(path, &text) {
@@ -1114,14 +1124,14 @@ impl EditorBody {
     // ----- paint -----
 
     fn spans_for(&mut self) -> &[Span] {
-        if self.spans.0 != self.buffer.version {
+        if (self.spans.0, self.spans.1) != (self.buffer.version, self.loads) {
             let spans = match self.language {
                 Some(l) => self.highlighting.spans(l, &self.buffer.text()),
                 None => vec![],
             };
-            self.spans = (self.buffer.version, spans);
+            self.spans = (self.buffer.version, self.loads, spans);
         }
-        &self.spans.1
+        &self.spans.2
     }
 
     fn rule_for(&self, capture: &str) -> Option<&SyntaxRule> {
@@ -2039,6 +2049,28 @@ mod tests {
             bold_weight: gpui::FontWeight::BOLD,
         };
         EditorBody::new("c1", None, "/".into(), &metrics, Size { w: 400., h: 300. })
+    }
+
+    // The span cache is keyed by the buffer's version, and every loaded
+    // file starts at version 0: the second file opened in a card got the
+    // first one's highlighting, or none. Ekin: "the syntax highlighting is
+    // not loaded all the times".
+    #[test]
+    fn each_loaded_file_gets_its_own_highlighting() {
+        let dir = std::env::temp_dir().join(format!("ift-hl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rs = dir.join("a.rs");
+        let txt = dir.join("b.txt");
+        std::fs::write(&rs, "fn main() { let x = 1; }\n").unwrap();
+        std::fs::write(&txt, "just words\n").unwrap();
+        let mut b = body();
+        b.load(rs.to_str().unwrap(), false, 0.);
+        assert!(!b.spans_for().is_empty(), "rust is highlighted");
+        b.load(txt.to_str().unwrap(), false, 0.);
+        assert!(b.spans_for().is_empty(), "plain text is not");
+        b.load(rs.to_str().unwrap(), false, 0.);
+        assert!(!b.spans_for().is_empty(), "and back");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // Cmd+End in a long file: the view lands with the last line at the
