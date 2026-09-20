@@ -47,15 +47,25 @@ pub fn handle_chord(m: &mut Model, r: &CommandRegistry<Model>, chord: &str) -> b
     {
         return false;
     }
-    let locked =
-        kind == Some(crate::saved_layout::CardKind::Browser) && card.is_some_and(|c| c.locked);
-    // A locked browser card claims everything except Ctrl+1..9 and the two
+    let locked = card.is_some_and(|c| c.locked)
+        && matches!(
+            kind,
+            Some(crate::saved_layout::CardKind::Browser | crate::saved_layout::CardKind::Editor)
+        );
+    // A locked card claims everything except Ctrl+1..9 and the two
     // app-carve-out chords below: real Chrome shortcuts shadow this app's
     // own bindings on the same keys, the whole point of locking. Workspace
-    // switching is not a Chrome shortcut, so it alone keeps working.
+    // switching is not a Chrome shortcut, so it alone keeps working. An
+    // editor card locks the same way with its own tab commands behind the
+    // same chords (`editor_keys::lock_override`); what neither table
+    // knows falls through to the body, where the editor's own keys live.
     if locked && !is_workspace_switch(chord) && !is_locked_carveout(chord) {
-        let id = crate::browser_keys::lock_override(chord)
-            .or_else(|| crate::browser_keys::browser_override(chord));
+        let id = if kind == Some(crate::saved_layout::CardKind::Editor) {
+            crate::editor_keys::lock_override(chord)
+        } else {
+            crate::browser_keys::lock_override(chord)
+                .or_else(|| crate::browser_keys::browser_override(chord))
+        };
         return match id {
             Some(id) => {
                 run_with_effects(m, r, id);
@@ -1053,6 +1063,39 @@ mod tests {
             .take_effects()
             .iter()
             .all(|e| !matches!(e, Effect::AnimateZoom { .. })));
+    }
+
+    // A locked editor card's Cmd+T is a tab, its Cmd+W the tab; unlocked,
+    // both are the app's. Cmd+F stays the editor's either way, and Ctrl+1
+    // the workspace's.
+    #[test]
+    fn a_locked_editor_card_gets_tab_chords_an_unlocked_one_does_not() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        h.m.card_mut(&id).unwrap().path = Some("/h/a.rs".into());
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+t"));
+        assert_eq!(h.m.cards.len(), 2, "unlocked: a new card");
+        h.m.set_focus(Some(&id));
+        h.m.card_mut(&id).unwrap().locked = true;
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+t"));
+        assert_eq!(h.m.cards.len(), 2, "locked: no new card");
+        assert_eq!(h.m.card(&id).unwrap().tabs.len(), 2, "a new tab instead");
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+w"));
+        assert_eq!(
+            h.m.card(&id).unwrap().tabs.len(),
+            1,
+            "the tab closed, the card stays"
+        );
+        assert_eq!(h.m.cards.len(), 2);
+        assert!(
+            !handle_chord(&mut h.m, &h.r, "cmd+f"),
+            "find is the editor's"
+        );
+        assert!(
+            handle_chord(&mut h.m, &h.r, "ctrl+1"),
+            "workspaces switch through a lock"
+        );
     }
 
     // A card dropped over another goes back where it was: nothing may end

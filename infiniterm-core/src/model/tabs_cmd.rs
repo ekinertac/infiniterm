@@ -1,11 +1,43 @@
-//! Tab commands for a browser card: new, close, next/prev, jump to N,
-//! reopen the last closed one. Plain `Card` field mutation, no `Effect`:
-//! `browsers.rs::reconcile_browsers` already turns a changed `card.url`
-//! into ui action every frame, and is extended (Task 7) to do the same
-//! for `card.tabs`.
+//! Tab commands for a card that holds tabs: new, close, next/prev, jump
+//! to N, reopen the last closed one. Plain `Card` field mutation, no
+//! `Effect`: `browsers.rs::reconcile_browsers` and `editors.rs::
+//! reconcile_editors` turn a changed `card.tabs` into ui action every
+//! frame. A tab is a HANDLE: a browser card's is a url and its active one
+//! is mirrored into `card.url`; an editor card's is a file path (empty for
+//! an untitled buffer) mirrored into `card.path`, so everything downstream
+//! that reads `url` or `path` keeps working without knowing about tabs.
+//! The functions keep their `browser_tab_` names from the day they were
+//! browser-only; they serve both kinds now (2026-09-20, editor tabs).
 use super::{Card, Model};
 use crate::commands::CommandRegistry;
 use crate::saved_layout::CardKind;
+
+/// What an EMPTY tab handle opens as: a browser's blank page; an editor's
+/// untitled buffer is the empty string, since `card.path` is `None` then.
+fn blank_handle(kind: CardKind) -> &'static str {
+    match kind {
+        CardKind::Browser => "about:blank",
+        _ => "",
+    }
+}
+
+/// The active tab's handle back into the field the rest of the app reads.
+fn sync_handle(card: &mut Card) {
+    let handle = card.tabs.get(card.active_tab).cloned();
+    match card.kind {
+        CardKind::Browser => card.url = handle,
+        CardKind::Editor => card.path = handle.filter(|p| !p.is_empty()),
+        _ => {}
+    }
+}
+
+/// The handle a card without `tabs` is showing: its url or its path.
+fn current_handle(card: &Card) -> String {
+    match card.kind {
+        CardKind::Browser => card.url.clone().unwrap_or_else(|| "about:blank".into()),
+        _ => card.path.clone().unwrap_or_default(),
+    }
+}
 
 /// `closed_tabs` is a ring of the last few, not a full history: the reopen
 /// command only ever wants the most recent one back.
@@ -28,8 +60,7 @@ fn remember_closed(card: &mut Card, url: String) {
 fn ensure_tabs(m: &mut Model, id: &str) {
     let Some(card) = m.card_mut(id) else { return };
     if card.tabs.is_empty() {
-        let url = card.url.clone().unwrap_or_else(|| "about:blank".into());
-        card.tabs = vec![url];
+        card.tabs = vec![current_handle(card)];
         card.active_tab = 0;
     }
 }
@@ -42,9 +73,10 @@ impl Model {
         let Some(card) = self.card_mut(card_id) else {
             return;
         };
-        card.tabs.push(url.unwrap_or("about:blank").to_string());
+        card.tabs
+            .push(url.unwrap_or(blank_handle(card.kind)).to_string());
         card.active_tab = card.tabs.len() - 1;
-        card.url = card.tabs.last().cloned();
+        sync_handle(card);
         self.dirty_layout = true;
     }
 
@@ -70,7 +102,7 @@ impl Model {
         if card.active_tab >= card.tabs.len() {
             card.active_tab = card.tabs.len() - 1;
         }
-        card.url = card.tabs.get(card.active_tab).cloned();
+        sync_handle(card);
         self.dirty_layout = true;
     }
 
@@ -108,7 +140,7 @@ impl Model {
         } else if card.active_tab >= card.tabs.len() {
             card.active_tab = card.tabs.len() - 1;
         }
-        card.url = card.tabs.get(card.active_tab).cloned();
+        sync_handle(card);
         self.dirty_layout = true;
     }
 
@@ -134,7 +166,7 @@ impl Model {
         }
         let n = card.tabs.len() as i32;
         card.active_tab = ((card.active_tab as i32 + delta).rem_euclid(n)) as usize;
-        card.url = card.tabs.get(card.active_tab).cloned();
+        sync_handle(card);
         self.dirty_layout = true;
     }
 
@@ -149,7 +181,7 @@ impl Model {
             return;
         }
         card.active_tab = index;
-        card.url = card.tabs.get(index).cloned();
+        sync_handle(card);
         self.dirty_layout = true;
     }
 
@@ -160,7 +192,7 @@ impl Model {
         };
         if let Some(last) = card.tabs.len().checked_sub(1) {
             card.active_tab = last;
-            card.url = card.tabs.get(last).cloned();
+            sync_handle(card);
             self.dirty_layout = true;
         }
     }
@@ -208,6 +240,48 @@ pub fn register(r: &mut CommandRegistry<Model>) {
     }
     r.register("browser.tab.jump.last", "Browser: last tab", |m| {
         with_focused_browser(m, |m, id| m.browser_tab_jump_last(&id));
+    });
+    // The editor's, the same functions behind an editor-only guard, so a
+    // locked editor card's Cmd+T/W/1..9 mean what a locked browser's do.
+    r.register("editor.tab.new", "Editor: new tab", |m| {
+        with_focused_editor(m, |m, id| m.browser_tab_open(&id, None));
+    });
+    r.register("editor.tab.close", "Editor: close tab", |m| {
+        with_focused_editor(m, |m, id| m.browser_tab_close(&id));
+    });
+    r.register(
+        "editor.tab.reopenClosed",
+        "Editor: reopen closed tab",
+        |m| {
+            with_focused_editor(m, |m, id| m.browser_tab_reopen_closed(&id));
+        },
+    );
+    r.register("editor.tab.next", "Editor: next tab", |m| {
+        with_focused_editor(m, |m, id| m.browser_tab_step(&id, 1));
+    });
+    r.register("editor.tab.prev", "Editor: previous tab", |m| {
+        with_focused_editor(m, |m, id| m.browser_tab_step(&id, -1));
+    });
+    for n in 1..=8 {
+        r.register(
+            &format!("editor.tab.jump.{n}"),
+            &format!("Editor: tab {n}"),
+            move |m| with_focused_editor(m, |m, id| m.browser_tab_jump(&id, n - 1)),
+        );
+    }
+    r.register("editor.tab.jump.last", "Editor: last tab", |m| {
+        with_focused_editor(m, |m, id| m.browser_tab_jump_last(&id));
+    });
+}
+
+fn with_focused_editor(m: &mut Model, f: impl FnOnce(&mut Model, String)) {
+    m.with_active_card(|m, id| {
+        let Some(card) = m.card(&id) else { return };
+        if card.kind != CardKind::Editor {
+            m.notify("not an editor card");
+            return;
+        }
+        f(m, id);
     });
 }
 
@@ -380,6 +454,43 @@ mod tests {
         assert!(!m.dirty_layout, "a no-op jump changed nothing to save");
         m.browser_tab_jump(&id, 0);
         assert!(m.dirty_layout, "a real jump does");
+    }
+
+    // An editor card's tabs are paths: the active one is `card.path`, an
+    // empty handle is an untitled buffer, and the closed-tab ring, the
+    // stepping and the jumps are the browser's.
+    #[test]
+    fn an_editor_cards_tabs_are_paths_mirrored_into_its_path() {
+        let mut m = Model::new();
+        m.home = "/h".into();
+        m.start_dir = "/h".into();
+        m.active_workspace = Some(String::new());
+        let id = m.add_card(
+            "/h",
+            NewCard {
+                kind: CardKind::Editor,
+                path: Some("/h/a.rs".into()),
+                ..Default::default()
+            },
+        );
+        m.set_focus(Some(&id));
+        m.browser_tab_open(&id, Some("/h/b.rs"));
+        let card = m.card(&id).unwrap();
+        assert_eq!(card.tabs, vec!["/h/a.rs", "/h/b.rs"]);
+        assert_eq!(card.path.as_deref(), Some("/h/b.rs"));
+        assert_eq!(card.url, None, "a path is not a url");
+        m.browser_tab_open(&id, None);
+        assert_eq!(
+            m.card(&id).unwrap().path,
+            None,
+            "an empty handle is untitled"
+        );
+        m.browser_tab_step(&id, -1);
+        assert_eq!(m.card(&id).unwrap().path.as_deref(), Some("/h/b.rs"));
+        m.browser_tab_close(&id);
+        assert_eq!(m.card(&id).unwrap().tabs, vec!["/h/a.rs", ""]);
+        m.browser_tab_reopen_closed(&id);
+        assert_eq!(m.card(&id).unwrap().path.as_deref(), Some("/h/b.rs"));
     }
 
     #[test]

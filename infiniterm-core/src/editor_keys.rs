@@ -30,6 +30,31 @@ pub fn editor_keeps(chord: &str) -> bool {
     KEPT.contains(&chord)
 }
 
+/// Chords a LOCKED editor card claims, the browser's lock table with the
+/// editor's tab commands behind it (`browser_keys::lock_override` is the
+/// model): Cmd+T for a tab instead of a card, Cmd+W for the tab, Cmd+1..9
+/// to jump, Cmd+Shift+[ and ] to step, Cmd+Shift+T to reopen. Same chords
+/// on both kinds, so locking means one thing.
+pub fn lock_override(chord: &str) -> Option<&'static str> {
+    Some(match chord {
+        "cmd+t" => "editor.tab.new",
+        "cmd+w" => "editor.tab.close",
+        "cmd+shift+t" => "editor.tab.reopenClosed",
+        "cmd+shift+]" => "editor.tab.next",
+        "cmd+shift+[" => "editor.tab.prev",
+        "cmd+1" => "editor.tab.jump.1",
+        "cmd+2" => "editor.tab.jump.2",
+        "cmd+3" => "editor.tab.jump.3",
+        "cmd+4" => "editor.tab.jump.4",
+        "cmd+5" => "editor.tab.jump.5",
+        "cmd+6" => "editor.tab.jump.6",
+        "cmd+7" => "editor.tab.jump.7",
+        "cmd+8" => "editor.tab.jump.8",
+        "cmd+9" => "editor.tab.jump.last",
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -41,6 +66,10 @@ mod tests {
         assert!(editor_keeps("cmd+f")); // find, not hints
         assert!(editor_keeps("cmd+/")); // comment, not the shortcuts panel
         assert!(editor_keeps("cmd+z")); // the buffer's undo, not the layout's
+        assert_eq!(lock_override("cmd+t"), Some("editor.tab.new"));
+        assert_eq!(lock_override("cmd+9"), Some("editor.tab.jump.last"));
+        assert_eq!(lock_override("cmd+shift+]"), Some("editor.tab.next"));
+        assert_eq!(lock_override("cmd+k"), None);
     }
 
     #[test]
