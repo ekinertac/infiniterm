@@ -26,16 +26,18 @@ pub fn find_all(text: &str, query: &str) -> Vec<(usize, usize)> {
         return vec![];
     }
     let sensitive = smart_case(query);
-    let hay: Vec<char> = if sensitive {
-        text.chars().collect()
-    } else {
-        text.chars().flat_map(|c| c.to_lowercase()).collect()
+    // One char in, one char out: `to_lowercase` can return two ('İ' gives
+    // 'i' plus a combining dot), and a hay that grew would put every
+    // match after it at the wrong index. Ekin writes Turkish.
+    let fold = |c: char| {
+        if sensitive {
+            c
+        } else {
+            c.to_lowercase().next().unwrap_or(c)
+        }
     };
-    let needle: Vec<char> = if sensitive {
-        query.chars().collect()
-    } else {
-        query.chars().flat_map(|c| c.to_lowercase()).collect()
-    };
+    let hay: Vec<char> = text.chars().map(fold).collect();
+    let needle: Vec<char> = query.chars().map(fold).collect();
     let mut out = vec![];
     let mut i = 0;
     while i + needle.len() <= hay.len() {
@@ -100,6 +102,14 @@ mod tests {
     #[test]
     fn positions_are_chars_and_matches_do_not_overlap() {
         assert_eq!(find_all("héé aa aaa", "aa"), vec![(4, 6), (7, 9)]);
+    }
+
+    // A capital dotted I lowercases to two chars; a match after one must
+    // still be reported where it is in the text.
+    #[test]
+    fn a_turkish_capital_before_the_match_does_not_shift_it() {
+        assert_eq!(find_all("İstanbul ve ankara", "ankara"), vec![(12, 18)]);
+        assert_eq!(find_all("İİİ x", "x"), vec![(4, 5)]);
     }
 
     #[test]

@@ -22,6 +22,11 @@ pub const INDENT: &str = "  ";
 /// CodeMirror's `newGroupDelay`.
 const GROUP_MS: f64 = 500.;
 
+/// How far `matching_bracket` looks: a few thousand lines, well past any
+/// bracket a person is matching by eye. shortcut: O(n) per frame while
+/// the caret is on a bracket, fine under this cap.
+const BRACKET_SCAN: usize = 200_000;
+
 #[derive(Clone, Debug, PartialEq)]
 struct Edit {
     at: usize,
@@ -638,7 +643,10 @@ impl Buffer {
     }
 
     /// The bracket matching the one at or just before the cursor, for the
-    /// view to light up.
+    /// view to light up. The scan stops after `BRACKET_SCAN` chars each
+    /// way: the view asks every frame, a rope char read is a tree walk,
+    /// and an unmatched bracket in a megabyte file would otherwise cost a
+    /// full pass per frame for as long as the caret sat on it.
     pub fn matching_bracket(&self) -> Option<(usize, usize)> {
         let n = self.len_chars();
         let candidates = [self.cursor, self.cursor.wrapping_sub(1)];
@@ -658,7 +666,7 @@ impl Buffer {
             };
             let mut depth = 0i32;
             if forward {
-                for j in i..n {
+                for j in i..n.min(i + BRACKET_SCAN) {
                     let ch = self.text.char(j);
                     if ch == open {
                         depth += 1;
@@ -670,7 +678,7 @@ impl Buffer {
                     }
                 }
             } else {
-                for j in (0..=i).rev() {
+                for j in (i.saturating_sub(BRACKET_SCAN)..=i).rev() {
                     let ch = self.text.char(j);
                     if ch == close {
                         depth += 1;

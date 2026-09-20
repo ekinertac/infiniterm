@@ -486,18 +486,24 @@ impl EditorBody {
         if line < self.scroll_line {
             self.scroll_line = line;
         } else {
-            // Scroll until the cursor's line fits within the visible rows,
-            // counting the rows wrapped lines take.
+            // The first line that still lets the cursor's line fit, found
+            // by walking BACK from the cursor's line summing the rows
+            // wrapped lines take: a walk of at most one screen. Walking
+            // forward from `scroll_line` and re-summing each step was
+            // quadratic, and Cmd+End in a long file hung for it.
             let cols = self.cols_visible(self.world);
-            loop {
-                let mut rows = 0;
-                for l in self.scroll_line..=line {
-                    rows += self.rows_of(l, cols);
-                }
-                if rows <= self.rows_visible || self.scroll_line >= line {
+            let mut rows = self.rows_of(line, cols);
+            let mut first = line;
+            while first > self.scroll_line {
+                let above = self.rows_of(first - 1, cols);
+                if rows + above > self.rows_visible {
                     break;
                 }
-                self.scroll_line += 1;
+                rows += above;
+                first -= 1;
+            }
+            if first > self.scroll_line {
+                self.scroll_line = first;
             }
         }
         // Horizontal: the cursor's column, when lines do not wrap.
@@ -2033,6 +2039,35 @@ mod tests {
             bold_weight: gpui::FontWeight::BOLD,
         };
         EditorBody::new("c1", None, "/".into(), &metrics, Size { w: 400., h: 300. })
+    }
+
+    // Cmd+End in a long file: the view lands with the last line at the
+    // bottom, by a walk of one screen, not a quadratic re-sum (which hung
+    // for seconds at fifty thousand lines).
+    #[test]
+    fn scrolling_the_cursor_into_view_walks_one_screen() {
+        let mut b = body();
+        let text: String = (0..50_000).map(|i| format!("line {i}\n")).collect();
+        b.buffer = Buffer::new(&text);
+        b.rows_visible = 40;
+        let started = std::time::Instant::now();
+        b.buffer.move_doc_end(false);
+        b.ensure_cursor_visible();
+        assert!(
+            started.elapsed().as_millis() < 200,
+            "{:?}",
+            started.elapsed()
+        );
+        let last = b.buffer.line_of(b.buffer.cursor());
+        assert_eq!(b.scroll_line, last + 1 - 40);
+        // Back up a little: the view stays, the line is already on screen.
+        b.buffer.move_up(false);
+        b.ensure_cursor_visible();
+        assert_eq!(b.scroll_line, last + 1 - 40);
+        // Far up: the view follows to the line.
+        b.buffer.go_to_line(10);
+        b.ensure_cursor_visible();
+        assert_eq!(b.scroll_line, 9);
     }
 
     // A picture is shown, never read into the buffer, and a save must not
