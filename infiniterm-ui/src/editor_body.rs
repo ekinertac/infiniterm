@@ -163,6 +163,9 @@ pub struct EditorBody {
     spans: (u64, u64, Vec<Span>),
     /// Bumped by every load, for the span cache's key.
     loads: u64,
+    /// The column a visual up/down keeps aiming at, with the caret it was
+    /// set for: a caret moved by anything else forgets it.
+    visual_goal: Option<(usize, usize)>,
     pub search: Option<Search>,
     query: Field,
     replacement: Field,
@@ -232,6 +235,7 @@ impl EditorBody {
             highlighting: Highlighting::default(),
             spans: (u64::MAX, 0, vec![]),
             loads: 0,
+            visual_goal: None,
             search: None,
             query: Field::default(),
             replacement: Field::default(),
@@ -678,6 +682,70 @@ impl EditorBody {
         }
     }
 
+    /// Up and down by VISUAL row: on a wrapped line the caret moves to the
+    /// row above or below within the line, and only past the line's first
+    /// or last row to the neighbouring line, which is how every wrapping
+    /// editor behaves. Ekin: "it treats multiline wrapped text as a single
+    /// line". Unwrapped, this is the buffer's own move. The column aimed
+    /// at is kept across rows (`visual_goal`) the way the buffer keeps it
+    /// across lines, and forgotten when anything else moves the caret.
+    fn move_visual(&mut self, delta: i64, select: bool) {
+        if !self.wrap {
+            if delta < 0 {
+                self.buffer.move_up(select);
+            } else {
+                self.buffer.move_down(select);
+            }
+            return;
+        }
+        let cols = self.cols_visible(self.world);
+        let cursor = self.buffer.cursor();
+        let line = self.buffer.line_of(cursor);
+        let col = self.buffer.col_of(cursor);
+        let rows = wrap_line(&self.buffer.line(line), cols);
+        // The row the caret is on: the one whose range holds the column,
+        // the last row taking the column at the line's very end.
+        let r = rows
+            .iter()
+            .position(|(a, b)| col >= *a && col < *b)
+            .unwrap_or(rows.len() - 1);
+        let goal = match self.visual_goal {
+            Some((at, g)) if at == cursor => g,
+            _ => col - rows[r].0,
+        };
+        let (target_line, target_row) = if delta < 0 {
+            if r > 0 {
+                (line, r - 1)
+            } else if line == 0 {
+                self.place_visual(0, select, goal);
+                return;
+            } else {
+                let prev = wrap_line(&self.buffer.line(line - 1), cols);
+                (line - 1, prev.len() - 1)
+            }
+        } else if r + 1 < rows.len() {
+            (line, r + 1)
+        } else if line + 1 >= self.buffer.line_count() {
+            self.place_visual(self.buffer.len_chars(), select, goal);
+            return;
+        } else {
+            (line + 1, 0)
+        };
+        let target = wrap_line(&self.buffer.line(target_line), cols)[target_row];
+        let len = target.1 - target.0;
+        let idx = self.buffer.line_start(target_line) + target.0 + goal.min(len);
+        self.place_visual(idx, select, goal);
+    }
+
+    fn place_visual(&mut self, idx: usize, select: bool, goal: usize) {
+        if select {
+            self.buffer.select_to(idx);
+        } else {
+            self.buffer.set_cursor(idx);
+        }
+        self.visual_goal = Some((self.buffer.cursor(), goal));
+    }
+
     /// The char index under a point in the text area.
     fn index_at(&self, local: Point, world: Size) -> usize {
         let (origin, _) = self.text_area(world);
@@ -865,8 +933,8 @@ impl EditorBody {
             match key {
                 "left" => self.buffer.move_left(shift),
                 "right" => self.buffer.move_right(shift),
-                "up" => self.buffer.move_up(shift),
-                "down" => self.buffer.move_down(shift),
+                "up" => self.move_visual(-1, shift),
+                "down" => self.move_visual(1, shift),
                 "home" => self.buffer.move_line_start(shift),
                 "end" => self.buffer.move_line_end(shift),
                 "pageup" => self.buffer.move_page(self.rows_visible, false, shift),
@@ -2049,6 +2117,47 @@ mod tests {
             bold_weight: gpui::FontWeight::BOLD,
         };
         EditorBody::new("c1", None, "/".into(), &metrics, Size { w: 400., h: 300. })
+    }
+
+    // On a wrapped line Down goes to the next visual row of the SAME line,
+    // and only from the last row to the line below; Up the reverse. The
+    // column aimed at survives the rows between.
+    #[test]
+    fn up_and_down_move_by_visual_row_when_wrapping() {
+        let mut b = body();
+        b.wrap = true;
+        let cols = b.cols_visible(b.world);
+        assert!(cols >= 8, "{cols}");
+        let word = "ab ";
+        let long: String = word.repeat(cols); // three rows and change
+        let text = format!("{long}\nshort\n");
+        b.buffer = Buffer::new(&text);
+        b.buffer.set_cursor(4);
+        b.move_visual(1, false);
+        let c = b.buffer.cursor();
+        assert_eq!(b.buffer.line_of(c), 0, "still the first line");
+        assert!(
+            b.buffer.col_of(c) > 4 && b.buffer.col_of(c) <= cols + 4,
+            "{}",
+            b.buffer.col_of(c)
+        );
+        b.move_visual(-1, false);
+        assert_eq!(b.buffer.cursor(), 4, "back where it was");
+        // Down through every row lands on the second line.
+        let rows = wrap_line(&b.buffer.line(0), cols).len();
+        for _ in 0..rows {
+            b.move_visual(1, false);
+        }
+        assert_eq!(b.buffer.line_of(b.buffer.cursor()), 1);
+        // Shift+Down selects along the way.
+        b.buffer.set_cursor(0);
+        b.move_visual(1, true);
+        assert!(b.buffer.selection().is_some());
+        // Unwrapped, a line is a row.
+        b.wrap = false;
+        b.buffer.set_cursor(0);
+        b.move_visual(1, false);
+        assert_eq!(b.buffer.line_of(b.buffer.cursor()), 1);
     }
 
     // The span cache is keyed by the buffer's version, and every loaded
