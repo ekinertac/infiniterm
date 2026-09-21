@@ -225,6 +225,8 @@ pub enum Effect {
     CancelAnimation,
     KillPane(PaneId),
     KillAllPanes,
+    /// `app.keycast`: the ui owns the overlay and its clock.
+    ToggleKeycast,
     ClearPane(PaneId),
     WritePane(PaneId, Vec<u8>),
     DraftDelete(String),

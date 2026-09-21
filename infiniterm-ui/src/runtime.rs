@@ -56,6 +56,8 @@ impl AppView {
             omni_field: crate::field::Field::default(),
             find_field: crate::field::Field::default(),
             redraw: false,
+            keycast_on: false,
+            keycasts: Vec::new(),
             last_paint_ms: 0.,
             clipboard_out: None,
             live_sessions: vec![],
@@ -253,6 +255,16 @@ impl AppView {
                 // Needs the Window, which effects do not have; the frame
                 // makes the call. Same shape as the owed-frame flag.
                 Effect::ShowCharacterPalette => self.show_character_palette = true,
+                Effect::ToggleKeycast => {
+                    self.keycast_on = !self.keycast_on;
+                    self.keycasts.clear();
+                    self.model.notify(if self.keycast_on {
+                        "showing pressed shortcuts"
+                    } else {
+                        "pressed shortcuts hidden"
+                    });
+                    self.redraw = true;
+                }
                 Effect::Restart => {
                     self.flush_save();
                     match relaunch_after_exit() {
@@ -348,7 +360,12 @@ impl AppView {
                         .values()
                         .any(|d| crate::body::CardBody::wants_frame(d, now));
                 let due = !self.far() || now - self.last_paint_ms >= crate::chrome::FAR_REFRESH_MS;
-                (content && due) || self.model.notice_expired(now)
+                (content && due)
+                    || self.model.notice_expired(now)
+                    || self
+                        .keycasts
+                        .iter()
+                        .any(|k| crate::keycast::keycast_alpha(k.at, now) > 0.)
             }
     }
 

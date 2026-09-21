@@ -214,6 +214,11 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // Deliberately a four-key chord. It ends every process in every card,
     // and a restart you did not mean to ask for is expensive in a way that
     // no other binding here is.
+    r.register(
+        "app.keycast",
+        "App: show pressed shortcuts on screen",
+        |m| m.effects.push(Effect::ToggleKeycast),
+    );
     r.register("app.restart", "App: restart", |m| {
         // Under the daemon backend quitting DETACHES, so the shells and
         // anything running in them are still there afterwards and the cards

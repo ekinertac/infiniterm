@@ -712,6 +712,13 @@ impl AppView {
             }
         }
         if (m.platform || m.control) && handle_chord(&mut self.model, &self.registry, &chord) {
+            if self.keycast_on {
+                let label = infiniterm_core::keymap::lookup(&self.model.keymap, &chord)
+                    .and_then(|id| self.registry.get(id))
+                    .map(|c| c.label.clone())
+                    .unwrap_or_default();
+                self.note_chord(&chord, &label, now_ms());
+            }
             self.perform_effects();
             return true;
         }

@@ -289,6 +289,9 @@ impl Render for AppView {
             .context_menu
             .is_some()
             .then(|| self.render_context_menu(cx));
+        let keycast = self
+            .keycasts_alive(crate::now_ms())
+            .then(|| self.render_keycast());
 
         div()
             .size_full()
@@ -388,7 +391,8 @@ impl Render for AppView {
                     .children(shortcuts)
                     .children(omnibox)
                     .children(find_bar)
-                    .children(context_menu),
+                    .children(context_menu)
+                    .children(keycast),
             )
             .child(status_bar)
     }

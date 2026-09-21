@@ -24,6 +24,7 @@ mod editors;
 mod field;
 mod ime;
 mod input;
+mod keycast;
 mod keycode;
 mod omnibox;
 mod overlays;
@@ -165,6 +166,10 @@ pub struct AppView {
     /// so anything drained there (a find count, the omnibox's suggestions)
     /// is a frame behind and would sit unseen until the next keystroke.
     pub redraw: bool,
+    /// The pressed-shortcut overlay (`keycast.rs`): on or off, and what
+    /// is showing.
+    pub keycast_on: bool,
+    pub keycasts: Vec<crate::keycast::Keycast>,
     /// When the last frame was painted (ms), for the far-zoom refresh gate.
     pub last_paint_ms: f64,
     pub prompt_was_open: bool,
