@@ -23,7 +23,8 @@
 //!
 //! Without CEF (the bare binary outside a bundle) the card says so and
 //! stays a rectangle, with one placeholder tab.
-use crate::body::{BodyAction, CardBody, TabClick};
+use crate::body::{BodyAction, CardBody};
+use crate::tab_strip::{paint_strip, strip_hit, strip_world_h, StripStyle};
 use gpui::{
     fill, font, point, px, size, App, Bounds, CursorStyle, Hsla, Keystroke, Pixels, RenderImage,
     Window,
@@ -47,23 +48,6 @@ const STATUS_FONT_PX: f64 = 13.;
 const STATUS_TEXT_PAD_PX: f64 = 12.;
 /// The placeholder text's line height, looser than its font size.
 const STATUS_LINE_HEIGHT_RATIO: f32 = 1.5;
-/// The tab strip's height in screen pixels, divided by zoom like every
-/// other piece of chrome.
-const TAB_STRIP_HEIGHT_PX: f64 = 28.;
-/// A tab's width, same units. Fixed rather than proportional: a card with
-/// many tabs scrolls the strip in a later slice rather than shrinking
-/// every tab to a sliver, which is not in this one (see the design doc).
-const TAB_STRIP_TAB_WIDTH_PX: f64 = 140.;
-const TAB_STRIP_FONT_PX: f64 = 11.;
-const TAB_STRIP_LABEL_PAD_PX: f64 = 8.;
-/// The close button's width within a tab's own band, screen pixels: the
-/// rightmost slice of every tab is its `×`, everything left of that
-/// switches to it.
-const TAB_STRIP_CLOSE_WIDTH_PX: f64 = 20.;
-/// The hairline under the strip and between tabs: without it the strip
-/// blended into whatever the active tab's page painted right below it,
-/// and one tab's label ran into the next with nothing to tell them apart.
-const TAB_STRIP_BORDER_PX: f64 = 1.;
 
 /// One tab: everything that was a single field on `BrowserBody` before
 /// tabs existed, once per open page.
@@ -166,22 +150,10 @@ pub struct BrowserBody {
     pub ui_scale: f32,
     pub card_bg: Hsla,
     pub text: Hsla,
-    /// The strip's own background, distinct from `card_bg`: chrome that
-    /// looks like the page behind it is chrome nobody can tell is there.
-    pub strip_bg: Hsla,
-    /// The hairline under the strip and between tabs.
-    pub strip_border: Hsla,
-    /// The active tab's label and the strip's own glyphs (the `+`, the
-    /// card number): full brightness, so the active tab visibly outranks
-    /// the rest rather than blending into them.
-    pub text_bright: Hsla,
-    /// An inactive tab's label: dimmer than the active one on purpose,
-    /// the same contrast trick a real browser's tab strip uses.
-    pub text_muted: Hsla,
-    /// The active tab's own band, filled solid rather than the faint
-    /// tint tried first: at this strip's height a few percent of alpha
-    /// read as noise, not as "this one is selected".
-    pub active_tab_bg: Hsla,
+    /// The strip's colours and font, `tab_strip.rs`'s shared shape: the
+    /// editor's tab strip is the same struct, so the two look and size
+    /// alike (`terminal.fontSize`, not a strip-only constant).
+    pub style: StripStyle,
     pub font_family: String,
     dirty: bool,
     pub popups: Vec<String>,
@@ -201,6 +173,7 @@ impl BrowserBody {
         world: Size,
         scale: f32,
         cef_running: bool,
+        style: StripStyle,
     ) -> BrowserBody {
         BrowserBody {
             card_id: card_id.to_string(),
@@ -208,7 +181,7 @@ impl BrowserBody {
             // field, until `reconcile_browsers` pushes the real one.
             tabs: vec![Tab::open(
                 url,
-                page_world_size(world, 1.),
+                page_world_size(world, style.font_px, 1.),
                 scale,
                 cef_running,
             )],
@@ -227,14 +200,7 @@ impl BrowserBody {
             ui_scale: 1.,
             card_bg: gpui::rgb(0x0e101a).into(),
             text: gpui::rgb(0xb9c4d2).into(),
-            // Chrome::default_chrome's own values, mirrored properly once
-            // `reconcile_browsers` runs; same convention as `card_bg`/`text`
-            // above, so the very first frame still looks right.
-            strip_bg: gpui::rgb(0x0f1115).into(),
-            strip_border: gpui::rgb(0x1e2430).into(),
-            text_bright: gpui::rgb(0xe6ebf2).into(),
-            text_muted: gpui::rgb(0x7b8794).into(),
-            active_tab_bg: gpui::rgb(0x2b3442).into(),
+            style,
             font_family: "Menlo".into(),
             dirty: true,
             popups: vec![],
@@ -262,7 +228,7 @@ impl BrowserBody {
     /// appends one. It does NOT become active on its own: the active index
     /// arrives from `card.active_tab` like everything else.
     pub fn open_tab(&mut self, url: &str) {
-        let page = page_world_size(self.world, self.ui_scale);
+        let page = page_world_size(self.world, self.style.font_px, self.ui_scale);
         self.tabs
             .push(Tab::open(url, page, self.scale, self.cef_running));
         self.dirty = true;
@@ -279,7 +245,7 @@ impl BrowserBody {
         // are asked for, rather than twice the browsers alive at once.
         self.tabs.clear();
         self.focused_tab = None;
-        let page = page_world_size(self.world, self.ui_scale);
+        let page = page_world_size(self.world, self.style.font_px, self.ui_scale);
         let (scale, cef) = (self.scale, self.cef_running);
         self.tabs = urls
             .iter()
@@ -467,65 +433,20 @@ impl Drop for BrowserBody {
     }
 }
 
-/// Which of the strip's affordances a click at `local` lands on, or `None`
-/// below the strip (a page click). `local` is `CardBody::mouse_down`'s own
-/// space: card pixels, the zoom (`scale`) already undone. `paint` computes
-/// the strip's screen-pixel sizes as `PX * ui_scale * scale` because it
-/// draws into `Bounds<Pixels>`, already at `scale`; here that last
-/// multiplication is skipped because `local` is one step earlier, world
-/// units, not screen ones. Get the two out of step and a click lands on the
-/// tab next to the one drawn under the cursor.
-fn strip_hit(local: Point, ui_scale: f32, tab_count: usize) -> Option<TabClick> {
-    let strip_h = TAB_STRIP_HEIGHT_PX * ui_scale as f64;
-    if local.y < 0. || local.y >= strip_h {
-        return None;
-    }
-    let tab_w = TAB_STRIP_TAB_WIDTH_PX * ui_scale as f64;
-    let index = (local.x / tab_w).floor().max(0.) as usize;
-    if index == tab_count {
-        return Some(TabClick::New);
-    }
-    if index > tab_count {
-        // Past the "+" button: empty strip, same as clicking dead space.
-        return None;
-    }
-    let x_in_tab = local.x - (index as f64) * tab_w;
-    if x_in_tab >= close_band_left_px() * ui_scale as f64 {
-        Some(TabClick::Close(index))
-    } else {
-        Some(TabClick::Switch(index))
-    }
-}
-
-/// Where a tab's close band starts, counted from the tab's own left edge,
-/// in the same pre-`ui_scale`/`scale` PX units as `TAB_STRIP_TAB_WIDTH_PX`.
-/// One subtraction, shared by `strip_hit` (the hit test) and `paint` (the
-/// glyph's position), so the clickable region and the painted `×` are
-/// computed from the same number rather than two numbers that could drift
-/// apart the way the click-accuracy bug in this feature already did once.
-fn close_band_left_px() -> f64 {
-    TAB_STRIP_TAB_WIDTH_PX - TAB_STRIP_CLOSE_WIDTH_PX
-}
-
-/// The strip's own height in WORLD units — `local`'s space in every mouse
-/// handler, and `Tab::open`/`Surface::resize`'s inputs, all pre-`scale`.
-fn strip_world_h(ui_scale: f32) -> f64 {
-    TAB_STRIP_HEIGHT_PX * ui_scale as f64
-}
-
 /// What CEF actually renders into: the card's world size minus the strip's
-/// own band. The strip used to be an overlay painted OVER the page after it
-/// painted at the full card height, which covered real page content under
-/// the top `TAB_STRIP_HEIGHT_PX` rather than making room for the strip —
-/// tabs read as though they were slicing the top off every page, because
-/// they were. This is real space instead: the page is laid out and painted
-/// into the band below the strip, and every mouse coordinate forwarded to a
-/// surface is shifted by the same amount (see `mouse_down` and friends), so
-/// what is under the cursor on screen is what the page sees.
-fn page_world_size(world: Size, ui_scale: f32) -> Size {
+/// own band (`tab_strip::strip_world_h`, shared with the editor's strip).
+/// The strip used to be an overlay painted OVER the page after it painted
+/// at the full card height, which covered real page content under the
+/// strip's own rows rather than making room for it — tabs read as though
+/// they were slicing the top off every page, because they were. This is
+/// real space instead: the page is laid out and painted into the band
+/// below the strip, and every mouse coordinate forwarded to a surface is
+/// shifted by the same amount (see `mouse_down` and friends), so what is
+/// under the cursor on screen is what the page sees.
+fn page_world_size(world: Size, font_px: f64, ui_scale: f32) -> Size {
     Size {
         w: world.w,
-        h: (world.h - strip_world_h(ui_scale)).max(1.),
+        h: (world.h - strip_world_h(font_px, ui_scale)).max(1.),
     }
 }
 
@@ -557,7 +478,7 @@ impl CardBody for BrowserBody {
         // actually changed, so calling it every frame (rather than only on
         // a scale change, as before) is what also picks up a live
         // `ui.scale` change without a second code path to keep in step.
-        let page = page_world_size(self.world, self.ui_scale);
+        let page = page_world_size(self.world, self.style.font_px, self.ui_scale);
         let (page_w, page_h) = (page.w.round() as i32, page.h.round() as i32);
         for tab in &self.tabs {
             if let Some(s) = &tab.surface {
@@ -571,12 +492,18 @@ impl CardBody for BrowserBody {
         // under the cursor on screen is what the page sees. Painting the
         // page at the full card height and covering its top rows with an
         // opaque strip was tried first and read as tabs slicing the top off
-        // every page, which is exactly what it was doing.
-        let strip_h =
-            px((TAB_STRIP_HEIGHT_PX * self.ui_scale as f64 * scale) as f32).min(bounds.size.height);
+        // every page, which is exactly what it was doing. `strip_h` here is
+        // the same formula `paint_strip` uses internally (screen pixels:
+        // world height times `scale`), computed ahead of it so the page can
+        // be painted into the right band BEFORE the strip is drawn on top
+        // of it, last, below.
+        let strip_h = px((strip_world_h(self.style.font_px, self.ui_scale) * scale) as f32);
         let page_bounds = Bounds::new(
             point(bounds.origin.x, bounds.origin.y + strip_h),
-            size(bounds.size.width, bounds.size.height - strip_h),
+            size(
+                bounds.size.width,
+                (bounds.size.height - strip_h).max(px(1.)),
+            ),
         );
         window.paint_quad(fill(bounds, self.card_bg));
         match self.active_tab().and_then(|t| t.texture.clone()) {
@@ -615,148 +542,27 @@ impl CardBody for BrowserBody {
                 crate::chrome::with_alpha(self.card_bg, self.inactive_dim as f32),
             ));
         }
-        let strip = Bounds::new(bounds.origin, size(bounds.size.width, strip_h));
-        // The strip itself: each tab's elided title, the active one filled
-        // solid rather than tinted (a few percent of alpha over a dark page
-        // read as noise, not as "selected"), the card's number where the
-        // corner label used to carry it. `strip_bg` is its own colour, not
-        // `card_bg`, so the strip reads as chrome against the page rather
-        // than blending into whatever the active tab happens to be showing.
-        window.paint_quad(fill(strip, self.strip_bg));
-        let border_h = px((TAB_STRIP_BORDER_PX * self.ui_scale as f64 * scale) as f32);
-        let tab_w = px((TAB_STRIP_TAB_WIDTH_PX * self.ui_scale as f64 * scale) as f32);
-        let strip_font = px((TAB_STRIP_FONT_PX * self.ui_scale as f64 * scale) as f32);
-        // Screen pixels, same convention as `tab_w`/`strip_font` above:
-        // `close_left` is the same boundary `strip_hit` compares against
-        // (`close_band_left_px`), so the glyph and the clickable region
-        // always agree.
-        let close_w = px((TAB_STRIP_CLOSE_WIDTH_PX * self.ui_scale as f64 * scale) as f32);
-        let close_left = px((close_band_left_px() * self.ui_scale as f64 * scale) as f32);
-        if strip_font >= px(crate::chrome::LEGIBLE_FONT_PX as f32) {
-            let pad = px((TAB_STRIP_LABEL_PAD_PX * self.ui_scale as f64 * scale) as f32);
-            for (i, tab) in self.tabs.iter().enumerate() {
-                let tab_bounds = Bounds::new(
-                    point(strip.origin.x + tab_w * (i as f32), strip.origin.y),
-                    size(tab_w, strip_h),
-                );
-                let label_color = if i == self.active {
-                    window.paint_quad(fill(tab_bounds, self.active_tab_bg));
-                    self.text_bright
-                } else {
-                    self.text_muted
-                };
-                // A hairline at the tab's right edge, the strip's own colour:
-                // without it one tab's label ran straight into the next
-                // with nothing to say where it ended, worst with several
-                // same-length titles in a row.
-                let sep = Bounds::new(
-                    point(tab_bounds.origin.x + tab_w - border_h, tab_bounds.origin.y),
-                    size(border_h, strip_h),
-                );
-                window.paint_quad(fill(sep, self.strip_border));
-                // Stops short of the close glyph's band, not the tab's own
-                // edge, or a long title runs under the `×`.
-                let room = f32::from(close_left) - f32::from(pad) * 2.;
-                let label = crate::text::elide(tab_label(tab), room, |t| {
-                    f32::from(
-                        crate::text::shape(
-                            window,
-                            t,
-                            strip_font,
-                            &font(self.font_family.clone()),
-                            label_color,
-                        )
-                        .width,
-                    )
-                });
-                let line = crate::text::shape(
-                    window,
-                    &label,
-                    strip_font,
-                    &font(self.font_family.clone()),
-                    label_color,
-                );
-                crate::text::paint_in(window, cx, &line, tab_bounds, pad);
-
-                // The close glyph, centred in the close band (`close_left`
-                // to the tab's right edge): exactly the region `strip_hit`
-                // treats as `TabClick::Close(i)`.
-                let close_line = crate::text::shape(
-                    window,
-                    "×",
-                    strip_font,
-                    &font(self.font_family.clone()),
-                    label_color,
-                );
-                let close_bounds = Bounds::new(
-                    point(
-                        tab_bounds.origin.x + close_left + (close_w - close_line.width) / 2.,
-                        tab_bounds.origin.y,
-                    ),
-                    size(close_line.width, strip_h),
-                );
-                crate::text::paint_in(window, cx, &close_line, close_bounds, px(0.));
-            }
-            // The "+" for a new tab, in the band right after the last tab:
-            // exactly the region `strip_hit` treats as `TabClick::New`
-            // (`index == tab_count`).
-            let new_tab_bounds = Bounds::new(
-                point(
-                    strip.origin.x + tab_w * (self.tabs.len() as f32),
-                    strip.origin.y,
-                ),
-                size(tab_w, strip_h),
-            );
-            let plus_line = crate::text::shape(
-                window,
-                "+",
-                strip_font,
-                &font(self.font_family.clone()),
-                self.text_muted,
-            );
-            let plus_bounds = Bounds::new(
-                point(
-                    new_tab_bounds.origin.x + tab_w / 2. - plus_line.width / 2.,
-                    new_tab_bounds.origin.y,
-                ),
-                size(plus_line.width, strip_h),
-            );
-            crate::text::paint_in(window, cx, &plus_line, plus_bounds, px(0.));
-            // The card's number, right-aligned in the strip: the corner
-            // label used to carry it and was removed for exactly this.
-            if self.card_number > 0 {
-                let number = format!("#{}", self.card_number);
-                let line = crate::text::shape(
-                    window,
-                    &number,
-                    strip_font,
-                    &font(self.font_family.clone()),
-                    self.text_muted,
-                );
-                let number_bounds = Bounds::new(
-                    point(
-                        strip.origin.x + strip.size.width - line.width - pad,
-                        strip.origin.y,
-                    ),
-                    size(line.width + pad, strip_h),
-                );
-                crate::text::paint_in(window, cx, &line, number_bounds, px(0.));
-            }
-        }
-        // The seam between the strip and the page: without it the strip's
-        // bottom edge was just wherever the page's own pixels started,
-        // which read as the strip floating over the page rather than
-        // sitting above it.
-        let bottom_border = Bounds::new(
-            point(strip.origin.x, strip.origin.y + strip_h - border_h),
-            size(strip.size.width, border_h),
+        // The strip, painted LAST so it sits over the page rather than
+        // under it: shared with the editor's strip, so the two look and
+        // size alike (the font is `terminal.fontSize`, times `ui_scale`,
+        // times the zoom, not a strip-only constant).
+        let labels: Vec<String> = self.tabs.iter().map(|t| tab_label(t).to_string()).collect();
+        paint_strip(
+            bounds,
+            scale,
+            self.ui_scale,
+            &labels,
+            self.active,
+            self.card_number,
+            &self.style,
+            window,
+            cx,
         );
-        window.paint_quad(fill(bottom_border, self.strip_border));
     }
 
     fn resized(&mut self, world: Size) {
         self.world = world;
-        let page = page_world_size(world, self.ui_scale);
+        let page = page_world_size(world, self.style.font_px, self.ui_scale);
         for tab in &self.tabs {
             if let Some(s) = &tab.surface {
                 let device = s.shared.borrow().scale;
@@ -806,9 +612,9 @@ impl CardBody for BrowserBody {
         // The strip is chrome, not page content, and the page no longer
         // paints under it (see `page_world_size`): anywhere in its row is
         // ours, a live button or dead space between them, never the page's.
-        let strip_h = strip_world_h(self.ui_scale);
+        let strip_h = strip_world_h(self.style.font_px, self.ui_scale);
         if local.y < strip_h {
-            return match strip_hit(local, self.ui_scale, self.tabs.len()) {
+            return match strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
                 Some(hit) if button == gpui::MouseButton::Left => BodyAction::BrowserTab(hit),
                 _ => BodyAction::None,
             };
@@ -862,7 +668,7 @@ impl CardBody for BrowserBody {
         // `captures_drag` is `left_down`, only ever set below the strip) can
         // still end with the pointer dragged back up over the strip's row;
         // clamped rather than sent negative, off the top of what CEF laid out.
-        let page_y = (local.y - strip_world_h(self.ui_scale)).max(0.);
+        let page_y = (local.y - strip_world_h(self.style.font_px, self.ui_scale)).max(0.);
         if let Some(surface) = self.active_surface() {
             surface.mouse_button(
                 local.x as f32,
@@ -876,7 +682,7 @@ impl CardBody for BrowserBody {
     }
 
     fn mouse_move(&mut self, local: Point, modifiers: &gpui::Modifiers) {
-        let strip_h = strip_world_h(self.ui_scale);
+        let strip_h = strip_world_h(self.style.font_px, self.ui_scale);
         if local.y < strip_h {
             return;
         }
@@ -896,7 +702,7 @@ impl CardBody for BrowserBody {
     }
 
     fn wheel(&mut self, local: Point, dx: f64, dy: f64, modifiers: &gpui::Modifiers) {
-        let strip_h = strip_world_h(self.ui_scale);
+        let strip_h = strip_world_h(self.style.font_px, self.ui_scale);
         if local.y < strip_h {
             return;
         }
@@ -961,6 +767,21 @@ fn cursor_style_for(name: &str) -> CursorStyle {
     }
 }
 
+/// The strip style tests build a body with: exact colours don't matter to
+/// any of them, only `font_px`, which every strip-geometry test needs.
+#[cfg(test)]
+fn test_strip_style() -> StripStyle {
+    StripStyle {
+        bg: gpui::black(),
+        border: gpui::black(),
+        active_bg: gpui::black(),
+        text_bright: gpui::white(),
+        text_muted: gpui::white(),
+        font_family: "Menlo".into(),
+        font_px: 14.,
+    }
+}
+
 #[cfg(test)]
 mod tab_tests {
     use super::*;
@@ -973,6 +794,7 @@ mod tab_tests {
             Size { w: 10., h: 10. },
             1.,
             false,
+            test_strip_style(),
         );
         assert_eq!(body.tabs.len(), 1);
         assert!(body.tabs[0].surface.is_none());
@@ -982,7 +804,14 @@ mod tab_tests {
 
     #[test]
     fn a_closed_tab_before_the_active_one_pulls_the_active_index_down() {
-        let mut body = BrowserBody::new("card-1", "a", Size { w: 10., h: 10. }, 1., false);
+        let mut body = BrowserBody::new(
+            "card-1",
+            "a",
+            Size { w: 10., h: 10. },
+            1.,
+            false,
+            test_strip_style(),
+        );
         body.open_tab("b");
         body.open_tab("c");
         body.set_active(2);
@@ -1031,6 +860,7 @@ mod mouse_down_strip_tests {
             Size { w: 800., h: 600. },
             1.,
             false,
+            test_strip_style(),
         );
         let action = body.mouse_down(
             Point { x: 1000., y: 5. },
@@ -1052,12 +882,12 @@ mod page_world_size_tests {
     #[test]
     fn the_strips_band_comes_off_the_cards_height_only() {
         let world = Size { w: 800., h: 600. };
-        let page = page_world_size(world, 1.);
+        let page = page_world_size(world, 14., 1.);
         assert_eq!(page.w, 800.);
-        assert_eq!(page.h, 600. - TAB_STRIP_HEIGHT_PX);
+        assert_eq!(page.h, 600. - strip_world_h(14., 1.));
 
-        let scaled = page_world_size(world, 2.);
-        assert_eq!(scaled.h, 600. - TAB_STRIP_HEIGHT_PX * 2.);
+        let scaled = page_world_size(world, 14., 2.);
+        assert_eq!(scaled.h, 600. - strip_world_h(14., 2.));
     }
 
     // A card shorter than the strip itself must not ask CEF for a negative
@@ -1067,89 +897,7 @@ mod page_world_size_tests {
     #[test]
     fn a_card_shorter_than_the_strip_still_gets_a_positive_page_height() {
         let tiny = Size { w: 100., h: 10. };
-        assert!(page_world_size(tiny, 1.).h > 0.);
-    }
-}
-
-#[cfg(test)]
-mod tab_strip_hit_tests {
-    use super::*;
-    use crate::body::TabClick;
-
-    #[test]
-    fn a_point_below_the_strip_height_is_a_page_click_not_a_strip_one() {
-        assert!(strip_hit(Point { x: 5., y: 5. }, 1., 2).is_some());
-        assert!(strip_hit(Point { x: 5., y: 50. }, 1., 2).is_none());
-    }
-
-    #[test]
-    fn a_point_in_a_tabs_main_band_switches_to_it() {
-        // Tab width 140px at ui_scale 1: well left of tab 0's and tab 1's
-        // own close sub-regions.
-        assert_eq!(
-            strip_hit(Point { x: 30., y: 5. }, 1., 2),
-            Some(TabClick::Switch(0))
-        );
-        assert_eq!(
-            strip_hit(Point { x: 170., y: 5. }, 1., 2),
-            Some(TabClick::Switch(1))
-        );
-    }
-
-    #[test]
-    fn a_point_in_a_tabs_close_sub_region_closes_it_instead_of_switching() {
-        // Tab 0 spans 0..140; its close band is the rightmost 20px, so 125
-        // is inside the tab but past where a switch click stops.
-        assert_eq!(
-            strip_hit(Point { x: 125., y: 5. }, 1., 2),
-            Some(TabClick::Close(0))
-        );
-    }
-
-    #[test]
-    fn a_point_past_the_last_tab_is_the_new_tab_button() {
-        // 2 tabs, 140px each: the "+" is the next 140px band, 280..420.
-        assert_eq!(
-            strip_hit(Point { x: 300., y: 5. }, 1., 2),
-            Some(TabClick::New)
-        );
-    }
-
-    #[test]
-    fn a_point_past_the_new_tab_button_hits_nothing() {
-        assert_eq!(strip_hit(Point { x: 450., y: 5. }, 1., 2), None);
-    }
-
-    #[test]
-    fn the_close_bands_left_edge_is_the_number_paint_also_multiplies() {
-        // 140px tabs, 20px close band: paint's glyph and strip_hit's
-        // boundary both derive from this one subtraction, so a point just
-        // inside it still switches and a point just past it still closes,
-        // matching the existing boundary tests above.
-        assert_eq!(
-            close_band_left_px(),
-            TAB_STRIP_TAB_WIDTH_PX - TAB_STRIP_CLOSE_WIDTH_PX
-        );
-        assert_eq!(
-            strip_hit(Point { x: 119., y: 5. }, 1., 2),
-            Some(TabClick::Switch(0))
-        );
-        assert_eq!(
-            strip_hit(Point { x: 120., y: 5. }, 1., 2),
-            Some(TabClick::Close(0))
-        );
-    }
-
-    #[test]
-    fn ui_scale_stretches_the_strips_geometry_like_paint_does() {
-        // At 2x ui_scale the strip is twice as tall and each tab twice as
-        // wide, mirroring the same multiplication `paint` applies.
-        assert!(strip_hit(Point { x: 5., y: 50. }, 1., 2).is_none());
-        assert!(strip_hit(Point { x: 5., y: 50. }, 2., 2).is_some());
-        assert_eq!(
-            strip_hit(Point { x: 100., y: 5. }, 2., 2),
-            Some(TabClick::Switch(0))
-        );
+        assert!(page_world_size(tiny, 14., 1.).h > 0.);
     }
 }
 

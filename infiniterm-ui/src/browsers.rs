@@ -11,6 +11,7 @@
 //! in `main.rs`; `cef_running` says whether it is.
 use crate::browser_body::BrowserBody;
 use crate::overlays::OVERLAY_BODY_FONT_PX;
+use crate::tab_strip::StripStyle;
 use crate::{now_ms, AppView};
 use gpui::prelude::*;
 use gpui::{div, px, MouseButton, MouseDownEvent};
@@ -120,12 +121,19 @@ impl AppView {
         let scale = self.scale_factor;
         let card_bg = self.chrome.card_bg;
         let text = self.chrome.text;
-        let strip_bg = self.chrome.bar_bg;
-        let strip_border = self.chrome.bar_border;
-        let text_bright = self.chrome.text_bright;
-        let text_muted = self.chrome.text_muted;
-        let active_tab_bg = self.chrome.row_selected;
         let family = crate::terminals::family_of(&self.model.config.terminal.font_family);
+        // The same `StripStyle` the editor's strip takes, so the two look
+        // and size alike: `terminal.fontSize` is the strip's font too, not
+        // a strip-only constant.
+        let style = StripStyle {
+            bg: self.chrome.bar_bg,
+            border: self.chrome.bar_border,
+            active_bg: self.chrome.row_selected,
+            text_bright: self.chrome.text_bright,
+            text_muted: self.chrome.text_muted,
+            font_family: family.clone(),
+            font_px: self.model.config.terminal.font_size,
+        };
         let inactive_dim = self.model.config.ui.inactive_dim;
         let ui_scale = self.model.ui_scale as f32;
         let cards: Vec<_> = self
@@ -154,7 +162,7 @@ impl AppView {
                 // it here is a CEF browser opened and closed for nothing on
                 // every restored card, saved.
                 let first = card.tabs.first().unwrap_or(&url);
-                let mut body = BrowserBody::new(&card.id, first, world, scale, cef);
+                let mut body = BrowserBody::new(&card.id, first, world, scale, cef, style.clone());
                 for later in card.tabs.iter().skip(1) {
                     body.open_tab(later);
                 }
@@ -165,11 +173,7 @@ impl AppView {
             };
             body.card_bg = card_bg;
             body.text = text;
-            body.strip_bg = strip_bg;
-            body.strip_border = strip_border;
-            body.text_bright = text_bright;
-            body.text_muted = text_muted;
-            body.active_tab_bg = active_tab_bg;
+            body.style = style.clone();
             body.font_family = family.clone();
             body.inactive_dim = inactive_dim;
             body.card_number = card.number;
