@@ -65,6 +65,10 @@ impl Model {
         if self.closed.len() > CLOSED_RING {
             self.closed.remove(0);
         }
+        // And a step on the undo trail, unless an undo is what closes it.
+        if let Some(kept) = self.closed.last().cloned() {
+            self.record_undo(super::UndoStep::Closed(Box::new(kept)));
+        }
 
         // Kill the PTY explicitly: dropping the body would leave the shell
         // running with nothing reading it.

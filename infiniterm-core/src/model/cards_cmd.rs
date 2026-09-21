@@ -5,7 +5,7 @@
 use super::palette_state::Source;
 use super::palette_state::{CARD_ROW, SIZES, WORKSPACE_ROW};
 use super::{
-    BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
+    BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending, UndoStep,
     LAYOUT_UNDO_DEPTH,
 };
 use crate::card_label::{card_label, Labelled};
@@ -219,16 +219,20 @@ impl Model {
     /// the rest of the space is left free, for whatever comes next.
     pub fn close_selected_with(&mut self, reclaim: bool) {
         let ids = self.selected_ids();
-        // A single browser card holding several tabs is several pages at
-        // once, the same reasoning `workspace.close` already applies to
-        // several shells; a config pair is never a browser card, so it
-        // skips this and keeps its own two-press dirty flow below.
+        // A single card holding several tabs, browser or editor, is
+        // several things at once, the same reasoning `workspace.close`
+        // already applies to several shells: it asks first, unsaved or
+        // not. Ekin closed an editor of tabs meaning to close one tab,
+        // with the card not locked. A config pair never has tabs, so it
+        // keeps its own two-press dirty flow below.
         if let [id] = ids.as_slice() {
             let is_pair = self.config_pairs.iter().any(|p| p.ids.contains(id));
             if !is_pair {
                 if let Some(count) = self
                     .card(id)
-                    .filter(|c| c.kind == CardKind::Browser && c.tabs.len() > 1)
+                    .filter(|c| {
+                        matches!(c.kind, CardKind::Browser | CardKind::Editor) && c.tabs.len() > 1
+                    })
                     .map(|c| c.tabs.len())
                 {
                     let label = format!("close this card and its {count} tabs?");
@@ -492,10 +496,18 @@ impl Model {
                 .map(|c| (c.id.clone(), c.rect))
                 .collect(),
         };
-        if self.layout_undo.last() == Some(&snap) {
+        if self.layout_undo.last() == Some(&UndoStep::Rects(snap.clone())) {
             return;
         }
-        self.layout_undo.push(snap);
+        self.record_undo(UndoStep::Rects(snap));
+    }
+
+    /// One step onto the trail, unless an undo or redo is what caused it.
+    pub fn record_undo(&mut self, step: UndoStep) {
+        if self.undoing {
+            return;
+        }
+        self.layout_undo.push(step);
         if self.layout_undo.len() > LAYOUT_UNDO_DEPTH {
             self.layout_undo.remove(0);
         }
@@ -526,22 +538,18 @@ impl Model {
         {
             return;
         }
-        self.layout_undo.push(snap);
-        if self.layout_undo.len() > LAYOUT_UNDO_DEPTH {
-            self.layout_undo.remove(0);
-        }
-        self.layout_redo.clear();
+        self.record_undo(UndoStep::Rects(snap));
     }
 
-    /// Cmd+Z: the canvas as it was before the last change; Cmd+Shift+Z
-    /// the other way. Cards glide back.
+    /// Cmd+Z: the last step back; Cmd+Shift+Z the other way. A move glides
+    /// back, a closed card comes back to its slot, a card made goes.
     pub fn undo_layout(&mut self, redo: bool) {
         let popped = if redo {
             self.layout_redo.pop()
         } else {
             self.layout_undo.pop()
         };
-        let Some(snap) = popped else {
+        let Some(step) = popped else {
             self.notify(if redo {
                 "nothing to redo"
             } else {
@@ -549,6 +557,44 @@ impl Model {
             });
             return;
         };
+        self.undoing = true;
+        let inverse = match step {
+            UndoStep::Rects(snap) => self.apply_rects(snap),
+            UndoStep::Closed(card) => {
+                let card = *card;
+                let id = card.id.clone();
+                // Out of the reopen ring too, or Cmd+Ctrl+T brings a twin.
+                self.closed.retain(|c| c.id != id);
+                self.reopen_card(card);
+                Some(UndoStep::Created(id))
+            }
+            UndoStep::Created(id) => match self.card(&id).cloned() {
+                Some(card) => {
+                    self.close_card(&id, false);
+                    Some(UndoStep::Closed(Box::new(Card {
+                        pane_id: None,
+                        agent: crate::agent_state::AgentState::None,
+                        dirty: false,
+                        command: None,
+                        transcript_path: None,
+                        ..card
+                    })))
+                }
+                None => None,
+            },
+        };
+        self.undoing = false;
+        if let Some(inverse) = inverse {
+            if redo {
+                self.layout_undo.push(inverse);
+            } else {
+                self.layout_redo.push(inverse);
+            }
+        }
+    }
+
+    /// Puts a snapshot's rects back and returns the step that reverses it.
+    fn apply_rects(&mut self, snap: LayoutSnapshot) -> Option<UndoStep> {
         let present = LayoutSnapshot {
             workspace_id: snap.workspace_id.clone(),
             rects: self
@@ -558,11 +604,6 @@ impl Model {
                 .map(|c| (c.id.clone(), c.rect))
                 .collect(),
         };
-        if redo {
-            self.layout_undo.push(present);
-        } else {
-            self.layout_redo.push(present);
-        }
         let moved: Vec<String> = snap
             .rects
             .iter()
@@ -580,6 +621,37 @@ impl Model {
         }
         self.dirty_layout = true;
         self.reveal_focused();
+        Some(UndoStep::Rects(present))
+    }
+
+    /// A closed card back on the canvas: where it was if that space is
+    /// still free, else beside whatever is there now (the old rect is a
+    /// preference, not a claim). `card.reopen` and an undone close share it.
+    pub fn reopen_card(&mut self, mut card: Card) {
+        let ws = self.active_workspace.clone().unwrap_or_default();
+        card.workspace_id = ws.clone();
+        let taken: Vec<Rect> = self
+            .cards
+            .iter()
+            .filter(|c| c.workspace_id == ws)
+            .map(|c| c.rect)
+            .collect();
+        if taken.iter().any(|r| rects_overlap(*r, card.rect)) {
+            card.rect = self.next_slot(None, &[], &ws, Some(card.rect));
+        }
+        let id = card.id.clone();
+        // A group that was dissolved while the card was away is not a group.
+        if card
+            .group_id
+            .as_ref()
+            .is_some_and(|g| self.group(g).is_none())
+        {
+            card.group_id = None;
+        }
+        self.cards.push(card);
+        self.set_focus(Some(&id));
+        self.reveal_focused();
+        self.dirty_layout = true;
     }
 
     /// The ghost of a dragged card, snapped to the slots the cards around
@@ -1049,32 +1121,18 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // reflex, and a canvas whose cards nobody dares close fills up exactly
     // the way a tab bar does.
     r.register("card.reopen", "Card: reopen the last closed one", |m| {
-        let Some(mut card) = m.closed.pop() else {
+        let Some(card) = m.closed.pop() else {
             m.notify("nothing to reopen");
             return;
         };
-        // Back where it was if that space is still free, else beside
-        // whatever is there now: the old rect is a preference, not a claim.
-        let ws = m.active_workspace.clone().unwrap_or_default();
-        card.workspace_id = ws.clone();
-        let taken: Vec<Rect> = m
-            .cards
-            .iter()
-            .filter(|c| c.workspace_id == ws)
-            .map(|c| c.rect)
-            .collect();
-        if taken.iter().any(|r| rects_overlap(*r, card.rect)) {
-            card.rect = m.next_slot(None, &[], &ws, Some(card.rect));
-        }
+        // Reopened by hand: the close leaves the trail (or a later Cmd+Z
+        // would reopen it a second time) and the reopen joins it, so Cmd+Z
+        // right after undoes the reopen.
         let id = card.id.clone();
-        // A group that was dissolved while the card was away is not a group.
-        if card.group_id.as_ref().is_some_and(|g| m.group(g).is_none()) {
-            card.group_id = None;
-        }
-        m.cards.push(card);
-        m.set_focus(Some(&id));
-        m.reveal_focused();
-        m.dirty_layout = true;
+        m.layout_undo
+            .retain(|s| !matches!(s, UndoStep::Closed(c) if c.id == id));
+        m.reopen_card(card);
+        m.record_undo(UndoStep::Created(id));
     });
     r.register("browser.find", "Browser: find in page", Model::open_find);
     r.register("browser.reload", "Browser: reload the page", |m| {

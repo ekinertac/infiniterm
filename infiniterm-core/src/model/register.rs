@@ -622,6 +622,65 @@ mod tests {
         );
     }
 
+    // One trail: a move, a new card and a close undo in the order they
+    // happened. Undoing a close brings the card back to its slot; undoing
+    // a new card removes it; redo goes the other way; a card reopened by
+    // hand is not reopened again by Cmd+Z.
+    #[test]
+    fn undo_walks_back_through_closes_and_new_cards_too() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        let a_rect = h.focused().rect;
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.move.right");
+        h.m.set_focus(Some(&a));
+        h.run("card.close");
+        assert!(h.m.card(&a).is_none());
+        h.run("layout.undo");
+        assert!(h.m.card(&a).is_some(), "the close undone: a is back");
+        assert_eq!(h.m.card(&a).unwrap().rect, a_rect, "in its slot");
+        assert!(h.m.closed.is_empty(), "and not twice through Cmd+Ctrl+T");
+        h.run("layout.undo");
+        assert_eq!(
+            h.m.card(&b).unwrap().rect.x,
+            a_rect.x + a_rect.w + 25.,
+            "the move undone"
+        );
+        h.run("layout.undo");
+        assert!(h.m.card(&b).is_none(), "the new card undone");
+        h.run("layout.redo");
+        assert!(h.m.card(&b).is_some(), "and redone");
+        // A close reopened by hand: Cmd+Z undoes the reopen, not the close.
+        h.m.set_focus(Some(&b));
+        h.run("card.close");
+        h.run("card.reopen");
+        assert!(h.m.card(&b).is_some());
+        h.run("layout.undo");
+        assert!(h.m.card(&b).is_none(), "the reopen undone");
+        assert!(
+            h.m.closed.iter().any(|c| c.id == b),
+            "and Cmd+Ctrl+T has it again"
+        );
+    }
+
+    // Closing an editor card of several tabs asks first, locked or not,
+    // unsaved or not: closing one tab was meant.
+    #[test]
+    fn closing_an_editor_with_tabs_asks_first() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        h.m.card_mut(&id).unwrap().path = Some("/h/a.rs".into());
+        h.m.browser_tab_open(&id, Some("/h/b.rs"));
+        h.run("card.close");
+        assert!(h.m.card(&id).is_some(), "asked, not closed");
+        assert!(h.m.prompt.is_open() && h.m.prompt.confirm);
+        let (pending, text) = h.m.prompt.settle(Some("")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert!(h.m.card(&id).is_none(), "confirmed: closed");
+    }
+
     // Grouping moves the selection to a free block right of the grid, as one block.
     #[test]
     fn grouping_names_the_group_and_moves_the_cards_together() {

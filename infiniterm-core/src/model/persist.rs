@@ -186,5 +186,7 @@ impl Model {
             },
         );
         self.set_focus(Some(&id));
+        // The seed is the canvas's floor, not something to undo.
+        self.layout_undo.clear();
     }
 }

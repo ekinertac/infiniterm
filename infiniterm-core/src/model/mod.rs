@@ -355,6 +355,20 @@ pub struct LayoutSnapshot {
     pub rects: Vec<(String, Rect)>,
 }
 
+/// One step of the canvas's undo trail (Cmd+Z / Cmd+Shift+Z): a move or
+/// resize, a close, a card made. Undoing a close reopens the card in its
+/// slot (a fresh shell there, the way `card.reopen` does); undoing a new
+/// card or a split closes it. One trail for all three, in the order they
+/// happened, because a close among moves is the thing worth walking back.
+#[derive(Clone, Debug, PartialEq)]
+pub enum UndoStep {
+    Rects(LayoutSnapshot),
+    /// The card as `close_card` kept it: runtime facts stripped. Boxed
+    /// because a Card is ten times a snapshot and the trail is a Vec.
+    Closed(Box<Card>),
+    Created(String),
+}
+
 /// How many layout changes Cmd+Z can walk back.
 pub const LAYOUT_UNDO_DEPTH: usize = 100;
 
@@ -378,8 +392,11 @@ pub struct Model {
     /// Session-only. A snapshot is taken by `remember_layout` at the top
     /// of each of those; undo applies one and pushes the present onto
     /// `redo`, which a new change empties.
-    pub layout_undo: Vec<LayoutSnapshot>,
-    pub layout_redo: Vec<LayoutSnapshot>,
+    pub layout_undo: Vec<UndoStep>,
+    pub layout_redo: Vec<UndoStep>,
+    /// Set while an undo or redo runs, so the close or the create it
+    /// performs is not recorded as a new step.
+    pub undoing: bool,
     pub viewport: Viewport,
     /// The CONTENT area, not the window.
     pub view_size: Size,
@@ -462,6 +479,7 @@ impl Model {
             next_number: 1,
             layout_undo: Vec::new(),
             layout_redo: Vec::new(),
+            undoing: false,
             viewport: INITIAL_VIEWPORT,
             view_size: Size { w: 0., h: 0. },
             framing: false,
@@ -697,6 +715,11 @@ impl Model {
         };
         let id = card.id.clone();
         self.cards.push(card);
+        // Every card made after the layout loaded is a step on the undo
+        // trail; the ones the load itself makes are not.
+        if self.loaded {
+            self.record_undo(UndoStep::Created(id.clone()));
+        }
         self.dirty_layout = true;
         id
     }
