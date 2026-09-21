@@ -19,12 +19,25 @@ pub const INITIAL_VIEWPORT: Viewport = Viewport {
     scale: 1.,
 };
 /// Cards blocked on you. NOT cards that finished: counting those lit the
-/// dot after every turn, and a dot that is always on says nothing.
+/// dot after every turn, and a dot that is always on says nothing; the
+/// ones that finished while you were away are `fresh_done_count`.
 pub fn waiting_count(states: &[AgentState]) -> usize {
     states.iter().filter(|&&s| s == AgentState::Waiting).count()
 }
 pub fn working_count(states: &[AgentState]) -> usize {
     states.iter().filter(|&&s| s == AgentState::Working).count()
+}
+/// Cards that FINISHED after you left the workspace: `(state, when its
+/// last hook event arrived)` against the moment the workspace was last
+/// shown. A Done card stays Done until its next turn, so counting every
+/// one lit the tab for good; counting the ones you have not been back to
+/// see says "something finished while you were away" and clears itself on
+/// the visit.
+pub fn fresh_done_count(states: &[(AgentState, f64)], left_at: f64) -> usize {
+    states
+        .iter()
+        .filter(|(s, at)| *s == AgentState::Done && *at > left_at)
+        .count()
 }
 pub fn next_name(existing: &[String], stem: &str) -> String {
     for i in 1..=existing.len() + 1 {
@@ -74,6 +87,16 @@ mod tests {
         // A finished turn is not a request.
         assert_eq!(waiting_count(&[Done, Done]), 0);
         assert_eq!(waiting_count(&[]), 0);
+    }
+    #[test]
+    fn fresh_done_counts_turns_finished_since_the_workspace_was_left() {
+        use AgentState::*;
+        let cards = [(Done, 10.), (Done, 30.), (Working, 40.), (Waiting, 50.)];
+        assert_eq!(fresh_done_count(&cards, 20.), 1);
+        assert_eq!(fresh_done_count(&cards, 0.), 2);
+        // Seen already: nothing new to report.
+        assert_eq!(fresh_done_count(&cards, 30.), 0);
+        assert_eq!(fresh_done_count(&[], 0.), 0);
     }
     #[test]
     fn names_number_from_one_skip_taken() {

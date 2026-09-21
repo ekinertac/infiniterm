@@ -386,6 +386,10 @@ pub struct Model {
     /// The card last focused inside each group (`UNGROUPED` for the loose
     /// set), so stepping back into a group returns to where you were.
     pub last_focused: HashMap<String, String>,
+    /// When each workspace was last left (`now_ms`), so its tab can show
+    /// the turns that finished while you were elsewhere and stop once you
+    /// have been back. Not saved: after a restart nothing is unseen.
+    pub left_at: HashMap<String, f64>,
     /// Every card focused this session, oldest first, each once. Closing
     /// the focused card goes back along it; not saved, a restart has no
     /// "before".
@@ -480,6 +484,7 @@ impl Model {
             active_workspace: None,
             selection: Selection::default(),
             last_focused: HashMap::new(),
+            left_at: HashMap::new(),
             focus_trail: Vec::new(),
             next_number: 1,
             layout_undo: Vec::new(),
@@ -926,6 +931,7 @@ impl Model {
         {
             leaving.viewport = vp;
             leaving.focused = leaving_focus;
+            self.left_at.insert(leaving.id.clone(), self.now_ms);
         }
         let Some(entering) = self.workspaces.iter().find(|w| w.id == id) else {
             return;
