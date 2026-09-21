@@ -198,17 +198,74 @@ pub fn sessions_cmd() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The listing's cells, one row per session, the order the columns have
+/// always had (id first: what `attach` takes).
+fn session_cells(rows: &[SessionRow], cards: &HashMap<String, (u32, String)>) -> Vec<Vec<String>> {
+    rows.iter()
+        .map(|r| {
+            let (number, label) = match cards.get(&r.id) {
+                Some((n, label)) if *n > 0 => (format!("#{n}"), label.clone()),
+                Some((_, label)) => ("-".to_string(), label.clone()),
+                None => ("-".to_string(), "-".to_string()),
+            };
+            vec![
+                r.id.clone(),
+                r.pid.to_string(),
+                r.cwd.clone(),
+                r.cmd.clone(),
+                r.started.clone(),
+                number,
+                label,
+            ]
+        })
+        .collect()
+}
+
+const SESSION_HEADER: [&str; 7] = ["id", "pid", "cwd", "cmd", "started", "card", "label"];
+
+/// Cells as a table: a header, columns padded to their widest cell, two
+/// spaces between. For eyes; the tab-separated form is for pipes.
+pub fn table(header: &[&str], rows: &[Vec<String>]) -> String {
+    let cols = header.len();
+    let mut width = vec![0usize; cols];
+    for row in std::iter::once(&header.iter().map(|h| h.to_string()).collect::<Vec<_>>())
+        .chain(rows.iter())
+    {
+        for (i, cell) in row.iter().enumerate().take(cols) {
+            width[i] = width[i].max(cell.chars().count());
+        }
+    }
+    let line = |row: &[String]| -> String {
+        let mut out = String::new();
+        for (i, cell) in row.iter().enumerate().take(cols) {
+            out.push_str(cell);
+            if i + 1 < cols {
+                let pad = width[i] - cell.chars().count() + 2;
+                out.extend(std::iter::repeat_n(' ', pad));
+            }
+        }
+        out
+    };
+    let mut text = line(&header.iter().map(|h| h.to_string()).collect::<Vec<_>>());
+    text.push('\n');
+    for row in rows {
+        text.push_str(&line(row));
+        text.push('\n');
+    }
+    text
+}
+
+/// A terminal gets the table, a pipe gets tab-separated rows without a
+/// header: `cut -f1` and `awk` keep working, and a person keeps reading.
 fn print_sessions(rows: &[SessionRow], cards: &HashMap<String, (u32, String)>) {
-    for r in rows {
-        let (number, label) = match cards.get(&r.id) {
-            Some((n, label)) if *n > 0 => (format!("#{n}"), label.clone()),
-            Some((_, label)) => ("-".to_string(), label.clone()),
-            None => ("-".to_string(), "-".to_string()),
-        };
-        println!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            r.id, r.pid, r.cwd, r.cmd, r.started, number, label
-        );
+    use std::io::IsTerminal;
+    let cells = session_cells(rows, cards);
+    if std::io::stdout().is_terminal() {
+        print!("{}", table(&SESSION_HEADER, &cells));
+    } else {
+        for row in cells {
+            println!("{}", row.join("\t"));
+        }
     }
 }
 
@@ -629,6 +686,17 @@ mod tests {
         let rows = list_sessions(&dir);
         assert!(!rows.iter().any(|r| r.id == "nonexistent"));
         assert!(rows.iter().any(|r| r.id == "real"));
+    }
+
+    // The table pads each column to its widest cell; a pipe gets tabs.
+    #[test]
+    fn the_table_aligns_columns_under_a_header() {
+        let rows = vec![
+            vec!["a".to_string(), "10".to_string()],
+            vec!["bbbb".to_string(), "7".to_string()],
+        ];
+        let t = table(&["id", "pid"], &rows);
+        assert_eq!(t, "id    pid\na     10\nbbbb  7\n");
     }
 
     // A daemon's id changes with every reboot; the card's number does not.

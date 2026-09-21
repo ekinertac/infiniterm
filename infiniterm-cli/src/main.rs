@@ -38,7 +38,8 @@ ift — drive infiniterm from a shell
                              number (the #7 on the card's label)
   ift sessions               session daemons still running, app or no app:
                              id, pid, cwd, command, started, card number,
-                             card label, tab separated
+                             card label; a table on a terminal, tab
+                             separated without a header into a pipe
   ift attach <id|#N>         connect a session's shell to this terminal, by
                              its id or by the card's number (#7 on its
                              label, the same after a reboot; the id is not);
