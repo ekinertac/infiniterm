@@ -69,6 +69,42 @@ impl Tree {
         self.load(&root, list);
     }
 
+    /// Re-lists every directory the tree is SHOWING (the root and the
+    /// expanded ones; a collapsed directory is re-listed when it opens
+    /// again, by `load` after it is forgotten here), for the editor's
+    /// disk poll: a file made or removed outside the app appears without
+    /// reopening the tree. Expansion and the cursor are kept, the cursor
+    /// clamped to the rows that remain. True when anything changed.
+    pub fn refresh(&mut self, list: &mut dyn FnMut(&str) -> Vec<Entry>) -> bool {
+        let shown: Vec<String> = self
+            .listed
+            .keys()
+            .filter(|d| **d == self.root || self.is_expanded(d))
+            .cloned()
+            .collect();
+        let mut changed = false;
+        for dir in shown {
+            let fresh = list(&dir);
+            if self.listed.get(&dir) != Some(&fresh) {
+                self.listed.insert(dir, fresh);
+                changed = true;
+            }
+        }
+        if changed {
+            // Directories no longer shown are re-listed when next opened.
+            let expanded: Vec<String> = self.expanded.keys().cloned().collect();
+            for dir in expanded {
+                if !self.listed.values().flatten().any(|e| e.is_dir && e.path == dir) && dir != self.root {
+                    self.listed.remove(&dir);
+                    self.expanded.remove(&dir);
+                }
+            }
+            let last = self.rows().len().saturating_sub(1);
+            self.cursor = self.cursor.min(last);
+        }
+        changed
+    }
+
     pub fn rows(&self) -> Vec<Row> {
         let mut out = vec![];
         self.walk(&self.root, 0, &mut out);
@@ -193,6 +229,46 @@ mod tests {
         t.key("left", &mut list);
         assert_eq!(t.rows().len(), 2);
         assert_eq!(t.key("escape", &mut list), TreeAction::Close);
+    }
+
+    // A file appearing or vanishing on disk shows on the next refresh; a
+    // directory that vanished takes its expansion with it, and the cursor
+    // stays inside the rows that remain. Nothing changed, nothing said.
+    #[test]
+    fn refresh_follows_the_disk_and_keeps_expansion() {
+        let mut t = Tree::new("/r");
+        let mut list = fs();
+        t.ensure_root(&mut list);
+        t.key("right", &mut list); // expand src
+        assert_eq!(t.rows().len(), 3);
+        assert!(!t.refresh(&mut list), "same disk, no change");
+        // A new file in src, and README gone.
+        let mut list2 = |dir: &str| -> Vec<Entry> {
+            let e = |name: &str, is_dir: bool| Entry {
+                name: name.into(),
+                path: format!("{dir}/{name}"),
+                is_dir,
+            };
+            match dir {
+                "/r" => vec![e("src", true)],
+                "/r/src" => vec![e("lib.rs", false), e("main.rs", false)],
+                _ => vec![],
+            }
+        };
+        t.key("down", &mut list);
+        t.key("down", &mut list);
+        assert_eq!(t.cursor, 2);
+        assert!(t.refresh(&mut list2));
+        let rows = t.rows();
+        assert_eq!(rows.len(), 3, "src, lib.rs, main.rs");
+        assert!(rows.iter().any(|r| r.entry.name == "lib.rs"));
+        assert!(t.is_expanded("/r/src"), "expansion kept");
+        // src itself vanishes: its expansion goes and the cursor clamps.
+        let mut list3 = |_dir: &str| -> Vec<Entry> { vec![] };
+        assert!(t.refresh(&mut list3));
+        assert_eq!(t.rows().len(), 0);
+        assert_eq!(t.cursor, 0);
+        assert!(!t.is_expanded("/r/src"));
     }
 
     #[test]

@@ -409,6 +409,13 @@ impl EditorBody {
         if now - self.last_disk_check >= DISK_POLL_MS {
             self.last_disk_check = now;
             self.check_disk(now);
+            // The tree follows the disk too: a file made outside the app
+            // (a build, a download, another card's shell) appears.
+            if let Some(tree) = self.tree.as_mut() {
+                if tree.refresh(&mut list_dir) {
+                    self.dirty = true;
+                }
+            }
         }
     }
 
