@@ -14,15 +14,18 @@ use crate::body::TabClick;
 use gpui::{fill, font, point, px, size, App, Bounds, Hsla, Pixels, Window};
 use infiniterm_core::grid::Point;
 
-/// The strip's height in screen pixels, before `ui_scale` and the zoom.
-pub const TAB_STRIP_HEIGHT_PX: f64 = 28.;
-/// A tab's width, same units. Fixed rather than proportional: a card with
-/// many tabs would otherwise shrink every tab to a sliver.
-pub const TAB_STRIP_TAB_WIDTH_PX: f64 = 140.;
-pub const TAB_STRIP_FONT_PX: f64 = 11.;
-pub const TAB_STRIP_LABEL_PAD_PX: f64 = 8.;
+/// The strip is sized from its FONT, and the font is the terminal's
+/// (`terminal.fontSize`, in screen pixels, times `ui_scale`): an 11 px
+/// strip under 19 px text was unreadable. Everything else is a ratio of
+/// that, so the strip keeps its proportions at any size.
+pub const TAB_STRIP_HEIGHT_RATIO: f64 = 1.9;
+/// A tab's width in font sizes. Fixed rather than proportional to the
+/// card: a card with many tabs would otherwise shrink every tab to a
+/// sliver.
+pub const TAB_STRIP_TAB_WIDTH_RATIO: f64 = 9.;
+pub const TAB_STRIP_LABEL_PAD_RATIO: f64 = 0.6;
 /// The close button's band at a tab's right edge.
-pub const TAB_STRIP_CLOSE_WIDTH_PX: f64 = 20.;
+pub const TAB_STRIP_CLOSE_WIDTH_RATIO: f64 = 1.5;
 pub const TAB_STRIP_BORDER_PX: f64 = 1.;
 
 /// The strip's colours, mirrored from the chrome each frame.
@@ -34,26 +37,30 @@ pub struct StripStyle {
     pub text_bright: Hsla,
     pub text_muted: Hsla,
     pub font_family: String,
+    /// `terminal.fontSize`: the strip's font, in screen pixels.
+    pub font_px: f64,
 }
 
 /// The strip's height in WORLD units: `local`'s space in every mouse
 /// handler, the zoom not yet applied.
-pub fn strip_world_h(ui_scale: f32) -> f64 {
-    TAB_STRIP_HEIGHT_PX * ui_scale as f64
+pub fn strip_world_h(font_px: f64, ui_scale: f32) -> f64 {
+    font_px * TAB_STRIP_HEIGHT_RATIO * ui_scale as f64
 }
 
-fn close_band_left_px() -> f64 {
-    TAB_STRIP_TAB_WIDTH_PX - TAB_STRIP_CLOSE_WIDTH_PX
+/// Where a tab's close band starts, from the tab's left edge, in font sizes.
+fn close_band_left_ratio() -> f64 {
+    TAB_STRIP_TAB_WIDTH_RATIO - TAB_STRIP_CLOSE_WIDTH_RATIO
 }
 
 /// Which of the strip's affordances a click at `local` (world units) lands
 /// on, or `None` below the strip.
-pub fn strip_hit(local: Point, ui_scale: f32, tab_count: usize) -> Option<TabClick> {
-    let strip_h = strip_world_h(ui_scale);
+pub fn strip_hit(local: Point, font_px: f64, ui_scale: f32, tab_count: usize) -> Option<TabClick> {
+    let strip_h = strip_world_h(font_px, ui_scale);
     if local.y < 0. || local.y >= strip_h {
         return None;
     }
-    let tab_w = TAB_STRIP_TAB_WIDTH_PX * ui_scale as f64;
+    let unit = font_px * ui_scale as f64;
+    let tab_w = TAB_STRIP_TAB_WIDTH_RATIO * unit;
     let index = (local.x / tab_w).floor().max(0.) as usize;
     if index == tab_count {
         return Some(TabClick::New);
@@ -62,7 +69,7 @@ pub fn strip_hit(local: Point, ui_scale: f32, tab_count: usize) -> Option<TabCli
         return None;
     }
     let x_in_tab = local.x - (index as f64) * tab_w;
-    if x_in_tab >= close_band_left_px() * ui_scale as f64 {
+    if x_in_tab >= close_band_left_ratio() * unit {
         Some(TabClick::Close(index))
     } else {
         Some(TabClick::Switch(index))
@@ -83,18 +90,19 @@ pub fn paint_strip(
     window: &mut Window,
     cx: &mut App,
 ) -> Pixels {
-    let k = ui_scale as f64 * scale;
-    let strip_h = px((TAB_STRIP_HEIGHT_PX * k) as f32);
+    // One unit is the font size on screen; every measure is a ratio of it.
+    let unit = style.font_px * ui_scale as f64 * scale;
+    let strip_h = px((TAB_STRIP_HEIGHT_RATIO * unit) as f32);
     let strip = Bounds::new(bounds.origin, size(bounds.size.width, strip_h));
     window.paint_quad(fill(strip, style.bg));
-    let border = px((TAB_STRIP_BORDER_PX * k) as f32);
-    let tab_w = px((TAB_STRIP_TAB_WIDTH_PX * k) as f32);
-    let strip_font = px((TAB_STRIP_FONT_PX * k) as f32);
-    let close_w = px((TAB_STRIP_CLOSE_WIDTH_PX * k) as f32);
-    let close_left = px((close_band_left_px() * k) as f32);
+    let border = px((TAB_STRIP_BORDER_PX * ui_scale as f64 * scale) as f32);
+    let tab_w = px((TAB_STRIP_TAB_WIDTH_RATIO * unit) as f32);
+    let strip_font = px(unit as f32);
+    let close_w = px((TAB_STRIP_CLOSE_WIDTH_RATIO * unit) as f32);
+    let close_left = px((close_band_left_ratio() * unit) as f32);
     let f = font(style.font_family.clone());
     if strip_font >= px(crate::chrome::LEGIBLE_FONT_PX as f32) {
-        let pad = px((TAB_STRIP_LABEL_PAD_PX * k) as f32);
+        let pad = px((TAB_STRIP_LABEL_PAD_RATIO * unit) as f32);
         for (i, label) in labels.iter().enumerate() {
             let tab_bounds = Bounds::new(
                 point(strip.origin.x + tab_w * (i as f32), strip.origin.y),
@@ -169,18 +177,31 @@ pub fn paint_strip(
 mod tests {
     use super::*;
 
-    // Hit-test geometry in world units at ui_scale 1: tab n is 140 wide,
-    // its last 20 are the close band, the band after the last tab is "+".
+    // Hit-test geometry in world units at a 10 px font and ui_scale 1: a
+    // tab is 90 wide, its last 15 the close band, the strip 19 tall, the
+    // band after the last tab is "+".
     #[test]
     fn a_click_lands_on_a_tab_its_close_or_the_plus() {
         let at = |x: f64, y: f64| Point { x, y };
-        assert_eq!(strip_hit(at(10., 10.), 1., 2), Some(TabClick::Switch(0)));
-        assert_eq!(strip_hit(at(130., 10.), 1., 2), Some(TabClick::Close(0)));
-        assert_eq!(strip_hit(at(150., 10.), 1., 2), Some(TabClick::Switch(1)));
-        assert_eq!(strip_hit(at(300., 10.), 1., 2), Some(TabClick::New));
-        assert_eq!(strip_hit(at(500., 10.), 1., 2), None, "past the plus");
-        assert_eq!(strip_hit(at(10., 40.), 1., 2), None, "below the strip");
+        assert_eq!(
+            strip_hit(at(10., 10.), 10., 1., 2),
+            Some(TabClick::Switch(0))
+        );
+        assert_eq!(
+            strip_hit(at(80., 10.), 10., 1., 2),
+            Some(TabClick::Close(0))
+        );
+        assert_eq!(
+            strip_hit(at(100., 10.), 10., 1., 2),
+            Some(TabClick::Switch(1))
+        );
+        assert_eq!(strip_hit(at(200., 10.), 10., 1., 2), Some(TabClick::New));
+        assert_eq!(strip_hit(at(400., 10.), 10., 1., 2), None, "past the plus");
+        assert_eq!(strip_hit(at(10., 25.), 10., 1., 2), None, "below the strip");
         // Twice the interface scale: everything twice as big.
-        assert_eq!(strip_hit(at(150., 40.), 2., 2), Some(TabClick::Switch(0)));
+        assert_eq!(
+            strip_hit(at(100., 25.), 10., 2., 2),
+            Some(TabClick::Switch(0))
+        );
     }
 }

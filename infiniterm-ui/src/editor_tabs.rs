@@ -118,7 +118,7 @@ impl EditorTabs {
     fn text_world(&self) -> Size {
         Size {
             w: self.world.w,
-            h: (self.world.h - strip_world_h(self.ui_scale)).max(1.),
+            h: (self.world.h - strip_world_h(self.style.font_px, self.ui_scale)).max(1.),
         }
     }
 
@@ -232,7 +232,7 @@ impl EditorTabs {
     fn below_strip(&self, local: Point) -> Point {
         Point {
             x: local.x,
-            y: local.y - strip_world_h(self.ui_scale),
+            y: local.y - strip_world_h(self.style.font_px, self.ui_scale),
         }
     }
 }
@@ -322,7 +322,7 @@ impl CardBody for EditorTabs {
         modifiers: &gpui::Modifiers,
         clicks: usize,
     ) -> BodyAction {
-        if let Some(hit) = strip_hit(local, self.ui_scale, self.tabs.len()) {
+        if let Some(hit) = strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
             if button == gpui::MouseButton::Left {
                 return BodyAction::BrowserTab(hit);
             }
@@ -402,6 +402,7 @@ mod tests {
             text_bright: gpui::white(),
             text_muted: gpui::white(),
             font_family: "Menlo".into(),
+            font_px: 14.,
         };
         EditorTabs::new("c1", &metrics, Size { w: 800., h: 600. }, style)
     }
@@ -466,7 +467,7 @@ mod tests {
         );
         assert!(!t.locked, "the strip does not lock");
         t.mouse_down(
-            Point { x: 100., y: 200. },
+            Point { x: 400., y: 200. },
             gpui::MouseButton::Left,
             &gpui::Modifiers::default(),
             1,

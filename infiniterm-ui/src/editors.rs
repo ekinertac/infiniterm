@@ -73,6 +73,7 @@ impl AppView {
             text_bright: self.chrome.text_bright,
             text_muted: self.chrome.text_muted,
             font_family: crate::terminals::family_of(&cfg.terminal.font_family),
+            font_px: cfg.terminal.font_size,
         };
         let ui_scale = self.model.ui_scale as f32;
         let now = crate::now_ms();
