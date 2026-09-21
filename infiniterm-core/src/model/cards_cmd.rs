@@ -15,7 +15,9 @@ use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
 use crate::ift::{diff_plan, open_plan, transcript_plan, PathKind};
 use crate::layout::rects_overlap;
 use crate::navigate::{nearest_to, Direction};
-use crate::resize::{moved_by, resized_by, sized, Fraction, MOVE_STEP, RESIZE_STEP};
+use crate::resize::{
+    fill_from_corner, moved_by, resized_by, sized, Fraction, MOVE_STEP, RESIZE_STEP,
+};
 use crate::saved_layout::CardKind;
 use crate::sidebar::{clamp_sidebar, sidebar_extent, sidebar_width};
 use crate::split::{split_rect, SplitSide};
@@ -1136,10 +1138,35 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             },
         );
     }
-    // The way back up from a quarter, without the picker: the default size
-    // again. The picker (Cmd+Alt+S) has this as its first row.
-    r.register("card.size.reset", "Card: full size", |m| {
-        m.resize_active(Fraction::Full, Fraction::Full)
+    // The way back up from a quarter, without the picker: the card grows
+    // from its corner into whatever is free beside and below it, up to
+    // the default size. A quarter next to a half becomes the other half.
+    r.register("card.size.reset", "Card: fill the free space", |m| {
+        m.with_active_card(|m, id| {
+            let Some(card) = m.card(&id).cloned() else {
+                return;
+            };
+            let mut taken: Vec<Rect> = m
+                .here()
+                .iter()
+                .filter(|c| c.id != id)
+                .map(|c| c.rect)
+                .collect();
+            taken.extend(m.other_frames(Some(&id), &card.workspace_id));
+            let next = fill_from_corner(card.rect, m.default_size(), &taken, GUTTER);
+            if next == card.rect {
+                m.notify("no room to grow");
+                return;
+            }
+            m.remember_layout();
+            m.mark_swap(std::slice::from_ref(&id));
+            if let Some(c) = m.card_mut(&id) {
+                c.rect = next;
+                c.soft_group_id = None;
+            }
+            m.dirty_layout = true;
+            m.reveal_focused();
+        })
     });
     // One chord and one Enter to a quarter, instead of two splits and two
     // Cmd+Ctrl+W. Shrinking leaves the freed space free.

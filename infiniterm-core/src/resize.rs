@@ -52,6 +52,62 @@ pub fn sized(
     }
 }
 
+/// The card grown from its top-left corner into the free space beside
+/// and below it, up to the default size (`card.size.reset`, Cmd+Ctrl+
+/// Enter): a quarter next to a half becomes the other half, not a full
+/// card refused for lack of room. Two ways to grow, width first then
+/// height or the reverse, and the larger area wins; each axis stops a
+/// gutter short of the nearest card in its way, on the grid.
+pub fn fill_from_corner(
+    rect: Rect,
+    default: crate::grid::Size,
+    taken: &[Rect],
+    gutter: f64,
+) -> Rect {
+    let snap_down = |v: f64| (v / GRID_SIZE).floor() * GRID_SIZE;
+    // How wide the card can be at height `h`: to the nearest card that
+    // starts right of its left edge and overlaps its rows.
+    let width_at = |h: f64| -> f64 {
+        let limit = taken
+            .iter()
+            .filter(|o| o.x + o.w > rect.x && o.y < rect.y + h && o.y + o.h > rect.y)
+            .filter(|o| o.x >= rect.x + rect.w)
+            .map(|o| o.x - gutter - rect.x)
+            .fold(default.w, f64::min);
+        snap_down(limit).max(rect.w)
+    };
+    let height_at = |w: f64| -> f64 {
+        let limit = taken
+            .iter()
+            .filter(|o| o.y + o.h > rect.y && o.x < rect.x + w && o.x + o.w > rect.x)
+            .filter(|o| o.y >= rect.y + rect.h)
+            .map(|o| o.y - gutter - rect.y)
+            .fold(default.h, f64::min);
+        snap_down(limit).max(rect.h)
+    };
+    let wide = {
+        let w = width_at(rect.h);
+        Rect {
+            w,
+            h: height_at(w),
+            ..rect
+        }
+    };
+    let tall = {
+        let h = height_at(rect.w);
+        Rect {
+            w: width_at(h),
+            h,
+            ..rect
+        }
+    };
+    if wide.w * wide.h >= tall.w * tall.h {
+        wide
+    } else {
+        tall
+    }
+}
+
 pub fn apply_resize(start: Rect, edge: Edge, dx: f64, dy: f64) -> Rect {
     let mut r = start;
     if matches!(edge, Edge::E | Edge::Ne | Edge::Se) {
@@ -247,6 +303,48 @@ mod tests {
                 ..CARD
             }
         );
+    }
+
+    // A quarter beside a half grows into the other half, not into a full
+    // card it has no room for; alone, it grows to the default; boxed in,
+    // it stays.
+    #[test]
+    fn fill_grows_into_the_free_space_up_to_the_default() {
+        let d = crate::grid::Size { w: 1725., h: 2000. };
+        let g = 25.;
+        let quarter = Rect {
+            x: 12.5,
+            y: 12.5,
+            w: 850.,
+            h: 1000.,
+        };
+        let right_half = Rect {
+            x: 887.5,
+            y: 12.5,
+            w: 850.,
+            h: 2000.,
+        };
+        let r = fill_from_corner(quarter, d, &[right_half], g);
+        assert_eq!((r.w, r.h), (850., 2000.), "{r:?}");
+        let alone = fill_from_corner(quarter, d, &[], g);
+        assert_eq!((alone.w, alone.h), (1725., 2000.));
+        let below = Rect {
+            x: 12.5,
+            y: 1037.5,
+            w: 850.,
+            h: 975.,
+        };
+        let boxed = fill_from_corner(quarter, d, &[right_half, below], g);
+        assert_eq!(boxed, quarter);
+        // Room to the right only, wider than tall: width wins.
+        let far_below = Rect {
+            x: 12.5,
+            y: 3000.,
+            w: 1725.,
+            h: 2000.,
+        };
+        let r = fill_from_corner(quarter, d, &[far_below], g);
+        assert_eq!((r.w, r.h), (1725., 2000.));
     }
 
     // A half from the picker is a half from a split: two of them plus the

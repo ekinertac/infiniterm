@@ -196,7 +196,7 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
     (
         "cmd+ctrl+enter",
         "card.size.reset",
-        "back to the default size from a split, when the space is free",
+        "grows into the free space beside and below, up to the default size",
     ),
     (
         "cmd+z",
