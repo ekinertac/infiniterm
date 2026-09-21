@@ -534,15 +534,22 @@ impl Buffer {
             })
             .collect();
         let new = new.join("\n");
-        let cursor = self.cursor;
         let new_len = new.chars().count();
-        let delta = new_len as i64 - old.chars().count() as i64;
-        let after = (cursor as i64 + delta).max(start as i64) as usize;
         let had_selection = self.selection().is_some();
-        self.apply(start, old, new, after, false, now);
+        // Without a selection the caret goes to the NEXT line at the same
+        // column, JetBrains' rule, so Cmd+/ down a block is one key per
+        // line and the caret ends where the eye is; on the last line it
+        // stays put. With a selection the block stays selected.
+        let col = self.col_of(self.cursor);
+        let line = self.line_of(self.cursor);
+        self.apply(start, old, new, start, false, now);
         if had_selection {
             self.select_range(start..start + new_len);
+            return;
         }
+        let target = if line + 1 < self.line_count() { line + 1 } else { line };
+        let len = self.line(target).chars().count();
+        self.set_cursor(self.line_start(target) + col.min(len));
     }
 
     pub fn backspace(&mut self, now: f64) {
@@ -842,12 +849,19 @@ mod tests {
         assert_eq!(b.text(), "fn a() {\n    // x();\n\n    // y();\n}");
         b.toggle_comment("//", 1.);
         assert_eq!(b.text(), "fn a() {\n    x();\n\n    y();\n}");
-        // On one line without a selection, the cursor follows the text.
-        let mut b = Buffer::new("abc");
-        b.set_cursor(3);
+        // Without a selection the caret moves to the next line at the same
+        // column (clamped to it), and stays on the last line.
+        let mut b = Buffer::new("abcdef\nxy\nz");
+        b.set_cursor(4);
         b.toggle_comment("#", 0.);
-        assert_eq!(b.text(), "# abc");
-        assert_eq!(b.cursor(), 5);
+        assert_eq!(b.text(), "# abcdef\nxy\nz");
+        assert_eq!(b.cursor(), 9 + 2, "line 2, column 4 clamped to its length");
+        b.toggle_comment("#", 1.);
+        assert_eq!(b.text(), "# abcdef\n# xy\nz");
+        assert_eq!(b.line_of(b.cursor()), 2);
+        b.toggle_comment("#", 2.);
+        assert_eq!(b.text(), "# abcdef\n# xy\n# z");
+        assert_eq!(b.line_of(b.cursor()), 2, "the last line: stays");
     }
 
     #[test]
