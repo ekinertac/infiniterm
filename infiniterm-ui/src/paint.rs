@@ -40,6 +40,54 @@ const CENTERED_LABEL_HEIGHT_SCALE: f32 = 2.;
 /// The slot hint's badge is also widened to twice its text, for a click
 /// target bigger than the letter itself.
 const HINT_BOX_WIDTH_PAD_SCALE: f32 = 2.;
+/// The hovered frame band's strength: a hint, under the focus ring's.
+const HOVER_BAND_ALPHA: f32 = 0.35;
+
+/// The band `EDGE_HIT` wide along the hovered edge(s) of `b`, or all four
+/// for the move band (`edge` None). Centred on the border, since the hit
+/// band is.
+fn paint_hover_band(
+    b: Bounds<Pixels>,
+    edge: Option<infiniterm_core::resize::Edge>,
+    band: Pixels,
+    color: gpui::Hsla,
+    window: &mut Window,
+) {
+    use infiniterm_core::resize::Edge;
+    let ink = crate::chrome::with_alpha(color, HOVER_BAND_ALPHA);
+    let half = band / 2.;
+    let top = Bounds::new(
+        point(b.origin.x - half, b.origin.y - half),
+        size(b.size.width + band, band),
+    );
+    let bottom = Bounds::new(
+        point(b.origin.x - half, b.origin.y + b.size.height - half),
+        size(b.size.width + band, band),
+    );
+    let left = Bounds::new(
+        point(b.origin.x - half, b.origin.y - half),
+        size(band, b.size.height + band),
+    );
+    let right = Bounds::new(
+        point(b.origin.x + b.size.width - half, b.origin.y - half),
+        size(band, b.size.height + band),
+    );
+    let sides: Vec<Bounds<Pixels>> = match edge {
+        None => vec![top, bottom, left, right],
+        Some(Edge::N) => vec![top],
+        Some(Edge::S) => vec![bottom],
+        Some(Edge::E) => vec![right],
+        Some(Edge::W) => vec![left],
+        Some(Edge::Ne) => vec![top, right],
+        Some(Edge::Nw) => vec![top, left],
+        Some(Edge::Se) => vec![bottom, right],
+        Some(Edge::Sw) => vec![bottom, left],
+    };
+    for s in sides {
+        window.paint_quad(fill(s, ink));
+    }
+}
+
 /// The ghost's fill: enough to read as a slot, not enough to hide what is
 /// under it.
 const GHOST_FILL_ALPHA: f32 = 0.08;
@@ -130,6 +178,22 @@ impl AppView {
         let t1 = std::time::Instant::now();
         self.paint_world(bounds, now, window, cx);
         self.apply_hover_cursor(window);
+        // Over a frame band the cursor says what a press would do: arrows
+        // on an edge or corner, a hand on the band that moves the card.
+        if let Some((_, edge)) = &self.hover_edge {
+            use infiniterm_core::resize::Edge;
+            let style = match edge {
+                None => gpui::CursorStyle::OpenHand,
+                Some(Edge::N | Edge::S) => gpui::CursorStyle::ResizeUpDown,
+                Some(Edge::E | Edge::W) => gpui::CursorStyle::ResizeLeftRight,
+                Some(Edge::Nw | Edge::Se) => gpui::CursorStyle::ResizeUpLeftDownRight,
+                Some(Edge::Ne | Edge::Sw) => gpui::CursorStyle::ResizeUpRightDownLeft,
+            };
+            window.set_window_cursor_style(style);
+        }
+        if self.gesture.is_some() {
+            window.set_window_cursor_style(gpui::CursorStyle::ClosedHand);
+        }
         // Another app is in front: a wash over everything, so a glance says
         // keys are going elsewhere. Over the cards and their labels, under
         // the overlays gpui draws after this canvas, which are not open
@@ -398,6 +462,20 @@ impl AppView {
                 px(state_border_screen_px(vp.scale) as f32)
             };
             window.paint_quad(outline(b, state_color, BorderStyle::Solid).border_widths(state_w));
+            // The frame band under the pointer lights up: the whole band
+            // for a move, the one edge or the two edges of a corner for a
+            // resize, in the focus ring's colour at a hint's strength.
+            if let Some((hid, edge)) = &self.hover_edge {
+                if *hid == card.id {
+                    paint_hover_band(
+                        b,
+                        *edge,
+                        px(crate::EDGE_HIT as f32),
+                        chrome.focus_ring,
+                        window,
+                    );
+                }
+            }
             // The ring sits OUTSIDE the border so the border stays free for agent state.
             if focused || selected {
                 let ring = px(focus_ring_screen_px(vp.scale) as f32);

@@ -358,6 +358,16 @@ impl AppView {
             }
             return;
         }
+        // The frame band under the pointer, for the cursor and the
+        // highlight. Only while nothing is being dragged.
+        let edge = match self.hit(p) {
+            Hit::CardEdge { id, edge } => Some((id, edge)),
+            _ => None,
+        };
+        if self.hover_edge != edge {
+            self.hover_edge = edge;
+            self.redraw = true;
+        }
         let hit_id = if let Hit::CardBody { id, local } = self.hit(p) {
             if let Some(body) = self.live_body(&id) {
                 body.mouse_move(local, &e.modifiers);

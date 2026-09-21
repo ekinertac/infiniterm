@@ -146,6 +146,11 @@ pub struct AppView {
     /// The card body the pointer is currently over, so a body that cares
     /// about hover (the browser) gets told when the pointer leaves it.
     pub hover_body: Option<String>,
+    /// The card frame band the pointer is over, and which edge or corner
+    /// (`None` is the move band): the cursor says what a press would do
+    /// and `paint.rs` lights the band, because a frame you can drag looked
+    /// exactly like one you cannot.
+    pub hover_edge: Option<(String, Option<infiniterm_core::resize::Edge>)>,
     /// A slim right-click menu open over a browser card. The position is
     /// fixed at open time (content-area screen pixels), not re-derived from
     /// the card each frame: simplest thing that works for a menu open for a
