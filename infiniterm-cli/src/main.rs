@@ -34,8 +34,9 @@ ift — drive infiniterm from a shell
   ift diff [path]            changes against git HEAD, as a card: a tree of the
                              changed files under path (the current directory
                              without one) and each file's diff
-  ift ls                     cards as TSV: id, group, directory, state, remote,
-                             number (the #7 on the card's label)
+  ift ls                     cards: id, group, directory, state, remote, number
+                             (the #7 on the card's label); a table on a
+                             terminal, tab separated without a header into a pipe
   ift sessions               session daemons still running, app or no app:
                              id, pid, cwd, command, started, card number,
                              card label; a table on a terminal, tab
@@ -72,7 +73,7 @@ fn main() -> ExitCode {
             args.contains(&"--dry-run".to_string()),
         ),
         Some("install") => install_self(),
-        Some("ls") => send("ls", vec![]),
+        Some("ls") => send_table("ls", &LS_HEADER),
         Some("sessions") => attach::sessions_cmd(),
         Some("attach") => match args.get(1) {
             Some(id) => attach::attach(id),
@@ -211,6 +212,42 @@ fn split_line(arg: &str) -> (&str, Option<u32>) {
         return (path, Some(line));
     }
     (arg, None)
+}
+
+/// `ift ls`'s columns, the order the app answers in (`ift.rs`).
+const LS_HEADER: [&str; 6] = ["id", "group", "directory", "state", "remote", "card"];
+
+/// A listing the app answers tab-separated: a table with a header on a
+/// terminal, the rows as they came into a pipe (`cut -f1` is the list of
+/// ids, and stays so).
+fn send_table(cmd: &str, header: &[&str]) -> ExitCode {
+    use std::io::IsTerminal;
+    match socket::request(cmd, vec![]) {
+        Ok(reply) if reply.ok => {
+            if reply.text.is_empty() {
+                return ExitCode::SUCCESS;
+            }
+            if std::io::stdout().is_terminal() {
+                let rows: Vec<Vec<String>> = reply
+                    .text
+                    .lines()
+                    .map(|l| l.split('\t').map(str::to_string).collect())
+                    .collect();
+                print!("{}", attach::table(header, &rows));
+            } else {
+                println!("{}", reply.text);
+            }
+            ExitCode::SUCCESS
+        }
+        Ok(reply) => {
+            eprintln!("ift: {}", reply.text);
+            ExitCode::from(2)
+        }
+        Err(e) => {
+            eprintln!("ift: {e}");
+            ExitCode::from(1)
+        }
+    }
 }
 
 /// Sends one request and prints the answer.
