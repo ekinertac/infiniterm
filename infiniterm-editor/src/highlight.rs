@@ -122,6 +122,8 @@ mod every_grammar {
             (Language::C, "int main() { return 1; } // c"),
             (Language::Markdown, "# Title\n\nsome *text* and `code`\n"),
             (Language::Svelte, "<script>let a = 1;</script>\n<div>{a}</div>"),
+            (Language::Sql, "SELECT id, name FROM users WHERE id = 1; -- c"),
+            (Language::Scss, "$c: red;\n.a { .b { color: $c; } } // c"),
         ];
         let mut h = Highlighting::default();
         let mut empty = vec![];

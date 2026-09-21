@@ -27,6 +27,8 @@ pub enum Language {
     C,
     Markdown,
     Svelte,
+    Sql,
+    Scss,
 }
 
 /// The capture names the theme knows (`editor_theme.rs`); anything a
@@ -104,6 +106,8 @@ impl Language {
             "c" | "h" => Language::C,
             "md" | "markdown" => Language::Markdown,
             "svelte" => Language::Svelte,
+            "sql" | "psql" | "mysql" => Language::Sql,
+            "scss" => Language::Scss,
             _ => return None,
         })
     }
@@ -126,6 +130,8 @@ impl Language {
             Language::C => "c",
             Language::Markdown => "markdown",
             Language::Svelte => "svelte",
+            Language::Sql => "sql",
+            Language::Scss => "scss",
         }
     }
 
@@ -134,6 +140,7 @@ impl Language {
         match self {
             Language::Python | Language::Toml | Language::Yaml | Language::Bash => "#",
             Language::Css => "/*",
+            Language::Sql => "--",
             Language::Html | Language::Svelte | Language::Markdown => "<!--",
             _ => "//",
         }
@@ -268,6 +275,18 @@ impl Language {
                     tree_sitter_svelte_ng::INJECTIONS_QUERY,
                     "",
                 ),
+                Language::Sql => (
+                    tree_sitter_sequel::LANGUAGE.into(),
+                    tree_sitter_sequel::HIGHLIGHTS_QUERY,
+                    "",
+                    "",
+                ),
+                Language::Scss => (
+                    tree_sitter_scss::language(),
+                    tree_sitter_scss::HIGHLIGHTS_QUERY,
+                    "",
+                    "",
+                ),
             };
         let mut config =
             HighlightConfiguration::new(lang, self.badge(), highlights, injections, locals).ok()?;
@@ -330,6 +349,8 @@ mod tests {
             Language::C,
             Language::Markdown,
             Language::Svelte,
+            Language::Sql,
+            Language::Scss,
         ] {
             assert!(l.highlight_config().is_some(), "{l:?}");
         }
