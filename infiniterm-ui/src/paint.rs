@@ -623,6 +623,14 @@ impl AppView {
             Some(bg) => (bg, chrome.card_bg),
             None => (label_bg, label_fg),
         };
+        // A protected card's chip is the warning colour: the one colour in
+        // the chrome that says "not like the others", beside the lock in
+        // the text.
+        let (label_bg, label_fg) = if card.protected {
+            (chrome.warn, chrome.card_bg)
+        } else {
+            (label_bg, label_fg)
+        };
         let h = label_px * LABEL_BADGE_HEIGHT_RATIO;
         let mut right = b.origin.x + b.size.width - border;
         if !label.is_empty() {

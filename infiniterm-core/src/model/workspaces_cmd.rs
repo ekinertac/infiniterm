@@ -12,6 +12,16 @@ impl Model {
     /// The confirmed half of `workspace.close`: cards go with it, shells and
     /// all, since a card on no workspace is invisible and still running.
     pub fn close_workspace_confirmed(&mut self, id: &str) {
+        // A locked card holds its workspace too: removing the workspace
+        // and refusing the card would leave the card on no canvas.
+        if self
+            .cards
+            .iter()
+            .any(|c| c.workspace_id == id && c.protected)
+        {
+            self.notify("a locked card is in this workspace: Cmd+Shift+L on it first");
+            return;
+        }
         let ids = self.workspace_ids();
         let next = after_closing(&ids, id).map(String::from);
         for card in self.remove_workspace(id) {

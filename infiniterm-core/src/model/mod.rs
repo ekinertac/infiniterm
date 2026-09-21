@@ -104,6 +104,11 @@ pub struct Card {
     /// `claude --resume <id>` ready to paste. Never cleared by the app;
     /// the next hook event overwrites it.
     pub agent_session: Option<String>,
+    /// `card.protect` (Cmd+Shift+L): the card cannot be closed, by Cmd+W,
+    /// by its workspace closing, or by its shell exiting (a fresh shell
+    /// takes the pane instead). SAVED (`protected`); the label wears a lock
+    /// and a different ground. Not `locked`, which is the keyboard's.
+    pub protected: bool,
     /// A short handle for talking about the card ("close #7"), shown ahead
     /// of the label. Given once, at creation, from a counter that only
     /// grows within a session, so two cards never share one while you look
@@ -696,6 +701,7 @@ impl Model {
             read_only: false,
             masked: false,
             displaced: false,
+            protected: false,
             rect,
             z: self.cards.len() as f64,
             title: String::new(),

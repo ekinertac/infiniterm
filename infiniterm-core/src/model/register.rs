@@ -664,6 +664,46 @@ mod tests {
         );
     }
 
+    // A locked card is not closed by Cmd+W, by its shell exiting, or by
+    // its workspace closing; the label says so; it survives the save file.
+    #[test]
+    fn a_protected_card_survives_every_close() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.run("card.protect");
+        assert!(h.m.card(&id).unwrap().protected);
+        assert!(h
+            .m
+            .numbered_label(h.m.card(&id).unwrap())
+            .starts_with('\u{1f512}'));
+        h.run("card.close");
+        assert!(h.m.card(&id).is_some(), "refused");
+        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("locked")));
+        h.m.card_mut(&id).unwrap().pane_id = Some(9);
+        h.m.apply_pane_event(9, &PaneEvent::Exited { code: 0 });
+        assert!(h.m.card(&id).is_some(), "the shell exited, the card stays");
+        assert_eq!(
+            h.m.card(&id).unwrap().pane_id,
+            None,
+            "and gets a fresh shell"
+        );
+        let ws = h.m.active_workspace.clone().unwrap();
+        h.m.close_workspace_confirmed(&ws);
+        assert!(h.m.card(&id).is_some());
+        assert!(
+            h.m.workspaces.iter().any(|w| w.id == ws),
+            "the workspace stays too"
+        );
+        let text = h.m.save_text().unwrap();
+        assert!(text.contains("\"protected\": true"));
+        h.run("card.protect");
+        assert!(!h.m.card(&id).unwrap().protected);
+        assert!(
+            !h.m.save_text().unwrap().contains("protected"),
+            "written only when on"
+        );
+    }
+
     // Closing an editor card of several tabs asks first, locked or not,
     // unsaved or not: closing one tab was meant.
     #[test]

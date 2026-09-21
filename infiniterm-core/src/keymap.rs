@@ -201,9 +201,14 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
     (
         "cmd+z",
         "layout.undo",
-        "moves, swaps, drops, resizes; not closes",
+        "moves, swaps, drops, resizes, closes, new cards",
     ),
     ("cmd+shift+z", "layout.redo", ""),
+    (
+        "cmd+shift+l",
+        "card.protect",
+        "the card cannot be closed until unlocked; the label wears a lock",
+    ),
     (
         "cmd+alt+s",
         "card.size",

@@ -49,6 +49,19 @@ impl Model {
         let Some(card) = self.card(id).cloned() else {
             return;
         };
+        // A protected card is not closed by anything: a shell that exited
+        // is replaced (the pane goes, `terminals.rs` spawns a fresh one),
+        // a close is refused with the way out named.
+        if card.protected {
+            if already_exited {
+                if let Some(c) = self.card_mut(id) {
+                    c.pane_id = None;
+                }
+            } else {
+                self.notify("card is locked: Cmd+Shift+L to unlock it");
+            }
+            return;
+        }
 
         // Remembered before anything is torn down, so Cmd+Ctrl+T can put it
         // back. Runtime facts are stripped for the same reason the save file

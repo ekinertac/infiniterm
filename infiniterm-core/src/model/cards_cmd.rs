@@ -71,10 +71,11 @@ impl Model {
     /// card to somebody else. `label_of` is the bare one, for a name that
     /// becomes something else (a group's name, a rename prompt's default).
     pub fn numbered_label(&self, card: &Card) -> String {
+        let lock = if card.protected { "\u{1f512} " } else { "" };
         if card.number == 0 {
-            return self.label_of(card);
+            return format!("{lock}{}", self.label_of(card));
         }
-        format!("#{} {}", card.number, self.label_of(card))
+        format!("{lock}#{} {}", card.number, self.label_of(card))
     }
 
     pub fn label_of(&self, card: &Card) -> String {
@@ -1299,6 +1300,17 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // that looks like work; Enter or Escape (input.rs) or the chord again
     // takes it away. Every selected card, so a split masks as one.
     // A maximised card is the one most worth masking, so not `for_selected`.
+    // The card that must not go: a long job, a session you keep coming
+    // back to. Every selected card, so a split pair locks as one.
+    r.register("card.protect", "Card: lock against closing / unlock", |m| {
+        for id in m.selected_ids() {
+            let on = !m.card(&id).is_some_and(|c| c.protected);
+            if let Some(c) = m.card_mut(&id) {
+                c.protected = on;
+            }
+            m.dirty_layout = true;
+        }
+    });
     r.register("card.mask", "Card: mask with a decoy / unmask", |m| {
         for id in m.selected_ids() {
             let on = !m.card(&id).is_some_and(|c| c.masked);

@@ -117,6 +117,8 @@ pub struct SavedCard {
     pub agent_session: Option<String>,
     /// The card's `#7`. Zero when the file predates it; written when set.
     pub number: u32,
+    /// `card.protect`: cannot be closed. Written only when true.
+    pub protected: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -221,6 +223,11 @@ fn card_value(c: &SavedCard) -> Value {
             map.insert("number".into(), Value::from(c.number));
         }
     }
+    if c.protected {
+        if let Some(map) = card.as_object_mut() {
+            map.insert("protected".into(), Value::Bool(true));
+        }
+    }
     // Same rule as `session`/`kittyKeys`/`agentSession`: written only when
     // there is more than one tab, so a card that never opened a second one
     // round-trips byte for byte.
@@ -320,6 +327,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
     let kitty_keys = c.get("kittyKeys").and_then(Value::as_bool).unwrap_or(false);
     let agent_session = non_empty(c.get("agentSession"));
     let number = c.get("number").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let protected = c.get("protected").and_then(Value::as_bool).unwrap_or(false);
     let tabs: Vec<String> = c
         .get("tabs")
         .and_then(Value::as_array)
@@ -397,6 +405,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         kitty_keys,
         agent_session,
         number,
+        protected,
     })
 }
 
@@ -581,6 +590,7 @@ mod tests {
             kitty_keys: false,
             agent_session: None,
             number: 0,
+            protected: false,
             title: "api".into(),
             cwd: "/Users/ekinertac/Code/api".into(),
             group_id: None,

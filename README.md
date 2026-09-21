@@ -74,6 +74,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | drag a card | the card stays; an outline snaps to the slots the cards around it offer, blue where it fits, orange where it doesn't; drop on free space to move, on a card to swap, Esc to cancel |
 | `Cmd + Alt + Arrows` in an editor | between the text and the tree first (the tree lies left or above); at the card's edge, on to the next card as everywhere else. `Cmd + K` shows and hides the tree |
 | palette: "App: show pressed shortcuts" | every chord you press appears bottom right with the command it ran, stacked, fading; for screencasts and for showing somebody |
+| `Cmd + Shift + L` | lock the card against closing: Cmd+W, its workspace closing and its shell exiting all leave it (a fresh shell takes over); the label wears a lock on the warning colour |
 | `Cmd + Alt + S` | resize to a fraction of the default: full, half wide, half tall, quarter, double wide, double tall; shrinking leaves the space free, growing needs it |
 | double-click | on a card's frame or label fits it (`Cmd + 1`); on empty canvas fits everything (`Cmd + 2`) |
 | | every card wears a number (`#7`) ahead of its label, for naming it to somebody: given once, kept across restarts, in `ift ls` and `ift sessions` as trailing columns; `ift attach 7` reaches that card's shell from any terminal, app running or not |

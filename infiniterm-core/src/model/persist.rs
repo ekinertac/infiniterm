@@ -70,6 +70,7 @@ impl Model {
                         // Zero from a file before numbers; given below,
                         // above every number the file does have.
                         card.number = c.number;
+                        card.protected = c.protected;
                         // The session this card's shell was in. The ui checks
                         // whether the backend still has it: if so the card is
                         // adopted, and if not it spawns as any card does.
@@ -139,6 +140,7 @@ impl Model {
                 kitty_keys: c.kitty_keys,
                 agent_session: c.agent_session.clone(),
                 number: c.number,
+                protected: c.protected,
             })
             .collect();
         let groups: Vec<SavedGroup> = self
