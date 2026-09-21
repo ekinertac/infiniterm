@@ -42,6 +42,13 @@ impl AppView {
     }
 
     pub fn hit(&self, screen: Point) -> Hit {
+        // A maximised card is painted over the whole content area at scale
+        // 1 (paint.rs), so every point is its body in screen coordinates.
+        // Without this a click "missed every card", cleared the focus and
+        // took the maximise with it.
+        if let Some(id) = self.maximized_id() {
+            return Hit::CardBody { id, local: screen };
+        }
         // The label chip first, as the frame it is: painted over the body,
         // last painted wins.
         if let Some((id, _)) = self.label_hits.iter().rev().find(|(_, r)| {
@@ -370,7 +377,19 @@ impl AppView {
     }
 
     /// `screen` as card pixels of `id`, wherever the pointer is.
+    /// The focused card while `card.maximize.toggle` is on.
+    fn maximized_id(&self) -> Option<String> {
+        self.model
+            .selection
+            .maximized
+            .then(|| self.model.selection.focused_id.clone())
+            .flatten()
+    }
+
     fn local_in(&self, id: &str, screen: Point) -> Option<Point> {
+        if self.maximized_id().as_deref() == Some(id) {
+            return Some(screen);
+        }
         let r = self.model.card(id)?.rect;
         let world = world_pos_of(screen, self.model.viewport);
         Some(Point {
@@ -666,10 +685,15 @@ impl AppView {
                 return true;
             }
         }
-        // Cmd+Alt+Arrow on an editor card first tries to move between the
-        // text and the tree; only at the card's edge does it go on to the
-        // next card, like every other Cmd+Alt+Arrow.
-        if m.platform && m.alt && !m.control && !m.shift {
+        // Cmd+Alt+Arrow on a LOCKED editor card first tries to move between
+        // the text and the tree; only at the card's edge does it go on to
+        // the next card. Unlocked, the card is a card like any other and
+        // the arrows walk the canvas.
+        let locked_editor = self
+            .model
+            .focused()
+            .is_some_and(|c| c.locked && c.kind == infiniterm_core::saved_layout::CardKind::Editor);
+        if locked_editor && m.platform && m.alt && !m.control && !m.shift {
             let dir = match k.key.as_str() {
                 "left" => Some(infiniterm_core::navigate::Direction::Left),
                 "right" => Some(infiniterm_core::navigate::Direction::Right),
