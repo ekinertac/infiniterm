@@ -127,6 +127,11 @@ pub struct Frame {
     pub selected: bool,
 }
 
+/// How many cells short of the width a row may end and still count as
+/// wrapped by the program (`selection_text`): a word-wrap leaves at most
+/// the word that did not fit, and twelve covers most English words.
+const SOFT_WRAP_SLACK: usize = 12;
+
 pub struct Grid {
     term: Term<Listener>,
     processor: Processor,
@@ -250,8 +255,57 @@ impl Grid {
 
     /// The selection as text, `None` when nothing is selected. Trailing
     /// spaces of each line are dropped, as alacritty and xterm do.
+    ///
+    /// A row break that a TUI made is joined: Claude Code (Ink) wraps its
+    /// own paragraphs and writes every screen row with a hard newline, so
+    /// the grid holds no soft-wrap flag and a copy across the wrap came out
+    /// broken mid-sentence. Where the row before the break is filled to
+    /// within `SOFT_WRAP_SLACK` cells of the width (a word-wrap leaves at
+    /// most a word) and the row after continues at the same indent, the
+    /// two are one line and the break becomes a space. A short row keeps
+    /// its newline, so code and lists keep their lines.
     pub fn selection_text(&self) -> Option<String> {
-        self.term.selection_to_string().filter(|s| !s.is_empty())
+        let raw = self.term.selection_to_string().filter(|s| !s.is_empty())?;
+        let range = self.term.selection.as_ref()?.to_range(&self.term)?;
+        if range.is_block || range.start.line == range.end.line {
+            return Some(raw);
+        }
+        let pieces: Vec<&str> = raw.split('\n').collect();
+        let lines: Vec<Line> = (range.start.line.0..=range.end.line.0).map(Line).collect();
+        if pieces.len() != lines.len() {
+            return Some(raw);
+        }
+        let cols = self.size.cols;
+        let extent = |line: Line| -> Option<(usize, usize)> {
+            let row = &self.term.grid()[line];
+            let first = (0..cols).find(|&c| row[Column(c)].c != ' ')?;
+            let last = (0..cols).rev().find(|&c| row[Column(c)].c != ' ')?;
+            Some((first, last))
+        };
+        let mut out = String::with_capacity(raw.len());
+        let mut joined_into = false;
+        for (i, piece) in pieces.iter().enumerate() {
+            // A row joined onto the one before drops its wrap indent.
+            out.push_str(if joined_into {
+                piece.trim_start()
+            } else {
+                piece
+            });
+            if i + 1 == pieces.len() {
+                break;
+            }
+            joined_into = match (extent(lines[i]), extent(lines[i + 1])) {
+                (Some((a_first, a_last)), Some((b_first, _))) => {
+                    // A narrow grid gets a narrower slack, or a 20-column
+                    // test grid joins everything.
+                    let slack = SOFT_WRAP_SLACK.min(cols / 4);
+                    a_last + 1 >= cols.saturating_sub(slack) && b_first == a_first
+                }
+                _ => false,
+            };
+            out.push(if joined_into { ' ' } else { '\n' });
+        }
+        Some(out)
     }
 
     pub fn has_selection(&self) -> bool {

@@ -1512,6 +1512,80 @@ mod tests {
         b.mouse_up(at(3., 1.), gpui::MouseButton::Left, &plain);
     }
 
+    // Claude Code writes a paragraph as full rows with hard newlines; a
+    // copy across the wrap joins them with a space, while a short row (a
+    // code line, a list item) keeps its newline, and a different indent
+    // is a different block.
+    #[test]
+    fn a_tui_wrapped_paragraph_copies_as_one_line() {
+        let mut b = body();
+        let cols = b.cols() as usize;
+        // Row 0 filled to within a word of the width, row 1 continuing at
+        // the same indent, row 2 short, row 3 continuing after a short row.
+        let filler = "x".repeat(cols - 8);
+        let text = format!("  {filler} words\r\n  continue here\r\n  short\r\n  after\r\n");
+        b.feed(text.as_bytes());
+        let at = |col: f64, row: f64| Point {
+            x: PAD + col * 8.4 + 1.,
+            y: PAD + row * 14. * 1.2 + 1.,
+        };
+        let onto = |col: f64, row: f64| Point {
+            x: PAD + col * 8.4 + 7.,
+            y: PAD + row * 14. * 1.2 + 1.,
+        };
+        let plain = gpui::Modifiers::default();
+        b.mouse_down(at(2., 0.), gpui::MouseButton::Left, &plain, 1);
+        b.mouse_move(onto(6., 3.), &plain);
+        b.mouse_up(onto(6., 3.), gpui::MouseButton::Left, &plain);
+        let copied = b.grid.selection_text().unwrap();
+        assert!(
+            copied.starts_with(&format!("{filler} words continue here\n  short\n  after")),
+            "{copied:?}"
+        );
+    }
+
+    #[test]
+    fn a_copy_keeps_real_line_breaks_and_drops_blank_tails() {
+        let mut b = body();
+        b.feed(b"one two three four\r\nfive six seven\r\n");
+        let at = |col: f64, row: f64| Point {
+            x: PAD + col * 8.4 + 1.,
+            y: PAD + row * 14. * 1.2 + 1.,
+        };
+        let onto = |col: f64, row: f64| Point {
+            x: PAD + col * 8.4 + 7.,
+            y: PAD + row * 14. * 1.2 + 1.,
+        };
+        let plain = gpui::Modifiers::default();
+        b.mouse_down(at(4., 0.), gpui::MouseButton::Left, &plain, 1);
+        b.mouse_move(onto(12., 0.), &plain);
+        b.mouse_up(onto(12., 0.), gpui::MouseButton::Left, &plain);
+        assert_eq!(b.grid.selection_text().as_deref(), Some("two three"));
+        // Across two rows from the middle.
+        b.mouse_down(at(4., 0.), gpui::MouseButton::Left, &plain, 1);
+        b.mouse_move(onto(3., 1.), &plain);
+        b.mouse_up(onto(3., 1.), gpui::MouseButton::Left, &plain);
+        assert_eq!(
+            b.grid.selection_text().as_deref(),
+            Some("two three four\nfive")
+        );
+        // Ending past the row's last character, in the blank tail: no
+        // trailing newline, no trailing spaces.
+        b.mouse_down(at(4., 0.), gpui::MouseButton::Left, &plain, 1);
+        b.mouse_move(onto(40., 0.), &plain);
+        b.mouse_up(onto(40., 0.), gpui::MouseButton::Left, &plain);
+        assert_eq!(b.grid.selection_text().as_deref(), Some("two three four"));
+        // Starting in the blank tail of a row and ending mid next row.
+        b.mouse_down(at(30., 0.), gpui::MouseButton::Left, &plain, 1);
+        b.mouse_move(onto(3., 1.), &plain);
+        b.mouse_up(onto(3., 1.), gpui::MouseButton::Left, &plain);
+        assert_eq!(b.grid.selection_text().as_deref(), Some("\nfive"));
+        // A double-click word.
+        b.mouse_down(at(5., 1.), gpui::MouseButton::Left, &plain, 2);
+        b.mouse_up(at(5., 1.), gpui::MouseButton::Left, &plain);
+        assert_eq!(b.grid.selection_text().as_deref(), Some("six"));
+    }
+
     #[test]
     fn weights_are_spelled_as_css_spells_them() {
         assert_eq!(weight_of("normal"), FontWeight::NORMAL);
