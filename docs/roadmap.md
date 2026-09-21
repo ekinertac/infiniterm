@@ -34,6 +34,11 @@ The daemon keeps a shell alive across the app quitting. Nothing keeps a process 
 - What N daemons cost in practice. 13 were alive at once on the real canvas; the spec guessed ~2 MB each plus the ring. Never measured.
 - Colour reporting under tmux, Nerd Font glyph widths, a very long scrollback on adopt: the tmux handover's open items 2, 3 and 6, still true of tmux, mostly moot under the daemon.
 
+## For the browser session (ift-browser), noted while it was not running
+
+- Omnibox inline completion, 2026-09-21: typing `3` showed a long history url as the completion with the typed `3` cut off its front and the rest in orange, overflowing the field. Screenshot in the infiniterm-rust-port session's transcript.
+- The tab strip should show the card lock (`Card.protected`, U+1F512) beside the `#N`; `tab_strip::paint_strip` needs a `locked` flag and editors.rs/browsers.rs pass `card.protected`.
+
 ## Dropped
 
 - Inline images in a terminal card (imgcat, kitty graphics, sixel). Dropped 2026-09-18: Cmd+click on an image path opens it in an editor card, and the tree walks a folder of screenshots with the arrows, which is what the images were wanted for. Rendering inside the grid would have been two days per protocol for the same picture in a smaller box.
