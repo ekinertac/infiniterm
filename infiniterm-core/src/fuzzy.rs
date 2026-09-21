@@ -7,9 +7,11 @@ pub struct Match {
     pub matches: Vec<usize>,
 }
 pub fn fuzzy_match(query: &str, text: &str) -> Option<Match> {
-    let q = query
+    let q: Vec<char> = query
         .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
-        .to_lowercase();
+        .to_lowercase()
+        .chars()
+        .collect();
     if q.is_empty() {
         return Some(Match {
             score: 0.,
@@ -17,17 +19,63 @@ pub fn fuzzy_match(query: &str, text: &str) -> Option<Match> {
         });
     }
     let lower: Vec<u16> = text.to_lowercase().encode_utf16().collect();
-    let mut matches = vec![];
+    let needles: Vec<Vec<u16>> = q
+        .iter()
+        .map(|c| {
+            let mut units = [0; 2];
+            c.encode_utf16(&mut units).to_vec()
+        })
+        .collect();
+    // Taking the FIRST occurrence of each character was greedy in the
+    // wrong way: "rgs" against "Card: #13 CG-RGS" took the r of "Card"
+    // and then hunted forward, and the contiguous RGS lost to scattered
+    // letters in "Group: go to the previous". Every occurrence of the
+    // first character is tried as a start; from each, a character that
+    // continues the run is preferred to one further on; the best wins.
+    let starts: Vec<usize> = lower
+        .windows(needles[0].len())
+        .enumerate()
+        .filter(|(_, w)| *w == needles[0].as_slice())
+        .map(|(i, _)| i)
+        .collect();
+    let mut best: Option<Match> = None;
+    for start in starts {
+        let Some(m) = align_from(&lower, &needles, start) else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|b| m.score > b.score) {
+            best = Some(m);
+        }
+    }
+    best.map(|mut m| {
+        m.score -= text.encode_utf16().count().min(60) as f64 / 10.;
+        m
+    })
+}
+
+/// One alignment: the first character at `start`, each next one at the
+/// position right after the last when it is there, else the first
+/// occurrence further on. Scored as the greedy walk always was.
+fn align_from(lower: &[u16], needles: &[Vec<u16>], start: usize) -> Option<Match> {
+    let mut matches = Vec::with_capacity(needles.len());
     let mut score = 0.;
-    let mut at = 0;
-    for c in q.chars() {
-        let mut units = [0; 2];
-        let needle = c.encode_utf16(&mut units);
-        let found = at
-            + lower
-                .get(at..)?
-                .windows(needle.len())
-                .position(|w| w == needle)?;
+    let mut at = start;
+    for (i, needle) in needles.iter().enumerate() {
+        let found = if i == 0 {
+            start
+        } else {
+            let continues = lower
+                .get(at..at + needle.len())
+                .is_some_and(|w| w == needle.as_slice());
+            if continues {
+                at
+            } else {
+                at + lower
+                    .get(at..)?
+                    .windows(needle.len())
+                    .position(|w| w == needle.as_slice())?
+            }
+        };
         let gap = found - at;
         if gap > 0 {
             score -= gap.min(12) as f64;
@@ -44,7 +92,6 @@ pub fn fuzzy_match(query: &str, text: &str) -> Option<Match> {
         matches.push(found);
         at = found + 1;
     }
-    score -= text.encode_utf16().count().min(60) as f64 / 10.;
     Some(Match { score, matches })
 }
 
@@ -54,6 +101,16 @@ mod tests {
     fn score(q: &str, t: &str) -> f64 {
         fuzzy_match(q, t).map_or(f64::NEG_INFINITY, |m| m.score)
     }
+    // The contiguous run wins over scattered letters, wherever it sits.
+    #[test]
+    fn a_contiguous_run_outranks_scattered_letters() {
+        let run = score("rgs", "Card: #13 CG-RGS · CuriousOS");
+        let scattered = score("rgs", "Group: go to the previous");
+        assert!(run > scattered, "{run} vs {scattered}");
+        let m = fuzzy_match("rgs", "Card: #13 CG-RGS · CuriousOS").unwrap();
+        assert_eq!(m.matches, vec![13, 14, 15]);
+    }
+
     #[test]
     fn subsequence_in_order() {
         assert!(fuzzy_match("nwc", "New terminal card").is_some());
