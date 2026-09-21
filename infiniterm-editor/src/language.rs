@@ -167,6 +167,14 @@ impl Language {
     /// language by the caller and kept: a configuration is a compiled
     /// query and costs a few ms.
     pub fn highlight_config(self) -> Option<HighlightConfiguration> {
+        // JavaScript's highlight query followed by TypeScript's: the
+        // inheritance the TypeScript query was written to rely on, joined
+        // at runtime because the two are the crates' own constants.
+        let typescript_highlights = format!(
+            "{}\n{}",
+            tree_sitter_javascript::HIGHLIGHT_QUERY,
+            tree_sitter_typescript::HIGHLIGHTS_QUERY
+        );
         let (lang, highlights, injections, locals): (tree_sitter::Language, &str, &str, &str) =
             match self {
                 Language::Rust => (
@@ -181,16 +189,23 @@ impl Language {
                     tree_sitter_javascript::INJECTIONS_QUERY,
                     tree_sitter_javascript::LOCALS_QUERY,
                 ),
+                // The TypeScript crate's query holds only what TypeScript
+                // ADDS (types, `interface`, `readonly`) and expects the
+                // JavaScript query to be inherited, which nvim does and a
+                // bare `HighlightConfiguration` does not: a .ts file was a
+                // few coloured type names in a wall of plain text. The TS
+                // grammar is a superset of JS's node types, so the two
+                // queries compile as one against it.
                 Language::TypeScript => (
                     tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-                    tree_sitter_typescript::HIGHLIGHTS_QUERY,
-                    "",
+                    typescript_highlights.as_str(),
+                    tree_sitter_javascript::INJECTIONS_QUERY,
                     tree_sitter_typescript::LOCALS_QUERY,
                 ),
                 Language::Tsx => (
                     tree_sitter_typescript::LANGUAGE_TSX.into(),
-                    tree_sitter_typescript::HIGHLIGHTS_QUERY,
-                    "",
+                    typescript_highlights.as_str(),
+                    tree_sitter_javascript::INJECTIONS_QUERY,
                     tree_sitter_typescript::LOCALS_QUERY,
                 ),
                 Language::Python => (

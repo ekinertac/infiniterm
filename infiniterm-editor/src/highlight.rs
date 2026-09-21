@@ -98,3 +98,38 @@ mod tests {
         assert!(c.iter().any(|(k, _)| *k == "comment"));
     }
 }
+#[cfg(test)]
+mod every_grammar {
+    use super::*;
+    // Each grammar against a sample of what it is for, in one sequence
+    // through one `Highlighting`: TypeScript once came back empty, because
+    // its query only adds to JavaScript's and nothing had joined the two.
+    #[test]
+    fn every_grammar_yields_spans_on_a_sample() {
+        let samples = [
+            (Language::Rust, "fn main() { let s = \"x\"; } // c"),
+            (Language::JavaScript, "function f() { return 'x'; } // c"),
+            (Language::TypeScript, "function f(): string { return 'x'; } // c"),
+            (Language::Tsx, "const a = <div>{'x'}</div>; // c"),
+            (Language::Python, "def f():\n    return 'x'  # c"),
+            (Language::Json, "{\n  \"a\": 1\n}"),
+            (Language::Toml, "[a]\nb = \"x\" # c"),
+            (Language::Yaml, "a: 1 # c\nb: \"x\""),
+            (Language::Bash, "echo \"x\" # c\nif true; then :; fi"),
+            (Language::Css, "a { color: red; } /* c */"),
+            (Language::Html, "<div class=\"a\">x</div><!-- c -->"),
+            (Language::Go, "package main\nfunc main() { s := \"x\" } // c"),
+            (Language::C, "int main() { return 1; } // c"),
+            (Language::Markdown, "# Title\n\nsome *text* and `code`\n"),
+            (Language::Svelte, "<script>let a = 1;</script>\n<div>{a}</div>"),
+        ];
+        let mut h = Highlighting::default();
+        let mut empty = vec![];
+        for (l, text) in samples {
+            if h.spans(l, text).is_empty() {
+                empty.push(l);
+            }
+        }
+        assert!(empty.is_empty(), "no spans for {empty:?}");
+    }
+}
