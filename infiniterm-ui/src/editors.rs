@@ -440,8 +440,10 @@ impl AppView {
     /// Between frames: drafts and the disk poll of every editor and diff.
     pub fn idle_editors(&mut self, now: f64) {
         for body in self.bodies.values_mut() {
-            if let Some(e) = body.as_any_mut().downcast_mut::<EditorBody>() {
-                e.idle(now);
+            // Every tab, not only the active one: a file changing on disk
+            // under a background tab is picked up before it is looked at.
+            if let Some(t) = body.as_any_mut().downcast_mut::<EditorTabs>() {
+                t.idle(now);
             } else if let Some(d) = body.as_any_mut().downcast_mut::<DiffBody>() {
                 d.idle(now);
             } else if let Some(t) = body.as_any_mut().downcast_mut::<TranscriptBody>() {

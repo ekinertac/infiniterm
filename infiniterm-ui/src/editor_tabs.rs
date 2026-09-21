@@ -193,6 +193,18 @@ impl EditorTabs {
         self.dirty = true;
     }
 
+    /// Every tab's housekeeping (drafts, the disk poll): the wrapper is
+    /// what the idle loop finds, so a downcast to `EditorBody` there found
+    /// nothing and no tab polled its file for a day.
+    pub fn idle(&mut self, now: f64) {
+        for (_, b) in &mut self.tabs {
+            b.idle(now);
+        }
+        if self.tabs.iter().any(|(_, b)| b.wants_frame(now)) {
+            self.dirty = true;
+        }
+    }
+
     /// Every tab's events, the active one's first: a `Notice` from a
     /// background tab (its disk poll does not run, but a save might) is
     /// still worth a line.
@@ -446,6 +458,29 @@ mod tests {
         );
         assert_eq!(t.active_body().unwrap().buffer.text(), "");
         assert_eq!(t.labels(), vec!["b.txt •", "untitled", "untitled •"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A file changing on disk reaches a clean buffer through the idle
+    // loop, active tab or not; this is the path a downcast to the wrong
+    // type silently skipped.
+    #[test]
+    fn idle_polls_every_tabs_file() {
+        let dir = std::env::temp_dir().join(format!("ift-tabidle-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.txt").to_string_lossy().to_string();
+        let b = dir.join("b.txt").to_string_lossy().to_string();
+        std::fs::write(&a, "a1").unwrap();
+        std::fs::write(&b, "b1").unwrap();
+        let mut t = tabs();
+        t.rebuild_tabs(&[a.clone(), b.clone()], 0, "/tmp", 0., false);
+        // A second on, both files change; the poll runs every two seconds.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        std::fs::write(&a, "a2").unwrap();
+        std::fs::write(&b, "b2").unwrap();
+        t.idle(5000.);
+        assert_eq!(t.tabs[0].1.buffer.text(), "a2", "the active tab");
+        assert_eq!(t.tabs[1].1.buffer.text(), "b2", "the background tab too");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
