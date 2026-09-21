@@ -17,6 +17,10 @@
 //! here so the model stays a plain struct.
 use gpui::Keystroke;
 
+/// The inline caret's width. Thin like a text field's, wider than a
+/// hairline so it survives a zoomed-out interface scale.
+const CARET_W_PX: f32 = 1.5;
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Field {
     pub text: String,
@@ -67,7 +71,9 @@ impl Field {
         use gpui::{div, ParentElement, Styled};
         let (before, selected, after) = self.parts();
         let caret = selected.is_empty();
-        let mut d = div().flex().flex_row().items_center();
+        // Flex's default cross-axis is stretch, which is what gives the
+        // caret bar the row's full height without knowing the font size.
+        let mut d = div().flex().flex_row();
         if !before.is_empty() {
             d = d.child(before);
         }
@@ -75,7 +81,11 @@ impl Field {
             d = d.child(div().bg(sel_bg).text_color(sel_fg).child(selected));
         }
         if caret {
-            d = d.child("▏");
+            // A bar, not a glyph: `▏` is a whole monospace cell with the
+            // bar at its left edge, and the rest of the cell read as a
+            // space after the caret in every field. `CARET_W_PX` wide,
+            // the row's height, white on every theme's dark field.
+            d = d.child(div().w(gpui::px(CARET_W_PX)).bg(gpui::white()));
         }
         if !after.is_empty() {
             d = d.child(after);
