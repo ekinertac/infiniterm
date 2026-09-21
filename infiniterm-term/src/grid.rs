@@ -131,6 +131,11 @@ pub struct Frame {
 /// wrapped by the program (`selection_text`): a word-wrap leaves at most
 /// the word that did not fit, and twelve covers most English words.
 const SOFT_WRAP_SLACK: usize = 12;
+/// How many rows above and below a selection are looked at to find the
+/// width the program wrapped at: a paragraph's worth.
+const WRAP_NEIGHBOURHOOD: i32 = 20;
+/// Below this width nothing is taken for a wrapped paragraph.
+const WRAP_MIN_WIDTH: usize = 40;
 
 pub struct Grid {
     term: Term<Listener>,
@@ -282,6 +287,40 @@ impl Grid {
             let last = (0..cols).rev().find(|&c| row[Column(c)].c != ' ')?;
             Some((first, last))
         };
+        // The width the program wrapped at is not the grid's: Claude Code
+        // wraps at the width it had when it drew, which on a widened or
+        // maximised card is far short of the grid (measured: 73-character
+        // rows on a 150-column card). The yardstick is the widest row in
+        // the selection's neighbourhood, which is that wrap width.
+        let grid = self.term.grid();
+        let top = grid
+            .topmost_line()
+            .0
+            .max(range.start.line.0 - WRAP_NEIGHBOURHOOD);
+        let bottom = grid
+            .bottommost_line()
+            .0
+            .min(range.end.line.0 + WRAP_NEIGHBOURHOOD);
+        let widths: Vec<usize> = (top..=bottom)
+            .filter_map(|l| extent(Line(l)).map(|(_, last)| last + 1))
+            .collect();
+        let wrap_width = widths.iter().copied().max().unwrap_or(cols);
+        // Nothing wraps prose at less than forty columns; rows that short
+        // are a listing, a shell's output, and their breaks are real.
+        if wrap_width < WRAP_MIN_WIDTH {
+            return Some(raw);
+        }
+        let slack = SOFT_WRAP_SLACK.min(wrap_width / 4);
+        // Wrapping leaves several rows at the width; one long row among
+        // short ones ("hello world" over "second") is just the longest
+        // line, and its break is real.
+        let full_rows = widths
+            .iter()
+            .filter(|w| **w >= wrap_width.saturating_sub(slack))
+            .count();
+        if full_rows < 2 {
+            return Some(raw);
+        }
         let mut out = String::with_capacity(raw.len());
         let mut joined_into = false;
         for (i, piece) in pieces.iter().enumerate() {
@@ -296,10 +335,7 @@ impl Grid {
             }
             joined_into = match (extent(lines[i]), extent(lines[i + 1])) {
                 (Some((a_first, a_last)), Some((b_first, _))) => {
-                    // A narrow grid gets a narrower slack, or a 20-column
-                    // test grid joins everything.
-                    let slack = SOFT_WRAP_SLACK.min(cols / 4);
-                    a_last + 1 >= cols.saturating_sub(slack) && b_first == a_first
+                    a_last + 1 >= wrap_width.saturating_sub(slack) && b_first == a_first
                 }
                 _ => false,
             };

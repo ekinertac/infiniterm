@@ -1520,10 +1520,14 @@ mod tests {
     fn a_tui_wrapped_paragraph_copies_as_one_line() {
         let mut b = body();
         let cols = b.cols() as usize;
-        // Row 0 filled to within a word of the width, row 1 continuing at
-        // the same indent, row 2 short, row 3 continuing after a short row.
-        let filler = "x".repeat(cols - 8);
-        let text = format!("  {filler} words\r\n  continue here\r\n  short\r\n  after\r\n");
+        // Rows 0 and 1 filled to within a word of the wrap width (two of
+        // them: one long row among short ones is not a wrap), row 2 the
+        // paragraph's tail, row 3 short, row 4 continuing after a short
+        // row. The wrap width is the text's own, well short of the grid.
+        let filler = "x".repeat(cols / 2);
+        let text = format!(
+            "  {filler} words\r\n  {filler} more\r\n  continue here\r\n  short\r\n  after\r\n"
+        );
         b.feed(text.as_bytes());
         let at = |col: f64, row: f64| Point {
             x: PAD + col * 8.4 + 1.,
@@ -1535,12 +1539,12 @@ mod tests {
         };
         let plain = gpui::Modifiers::default();
         b.mouse_down(at(2., 0.), gpui::MouseButton::Left, &plain, 1);
-        b.mouse_move(onto(6., 3.), &plain);
-        b.mouse_up(onto(6., 3.), gpui::MouseButton::Left, &plain);
+        b.mouse_move(onto(6., 4.), &plain);
+        b.mouse_up(onto(6., 4.), gpui::MouseButton::Left, &plain);
         let copied = b.grid.selection_text().unwrap();
-        assert!(
-            copied.starts_with(&format!("{filler} words continue here\n  short\n  after")),
-            "{copied:?}"
+        assert_eq!(
+            copied,
+            format!("{filler} words {filler} more continue here\n  short\n  after")
         );
     }
 
