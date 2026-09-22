@@ -292,11 +292,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "app.shortcuts",
         "Cmd+? is the Help menu's search field",
     ),
-    // Four modifiers, on purpose. Quitting and reopening ends every process
+    // Three modifiers, on purpose. Quitting and reopening ends every process
     // in every card, and the daemon backend only makes that survivable, not
     // free. Nothing else in this table is this hard to press by accident.
+    // Was Cmd+Ctrl+Alt+R; Ctrl and Alt together are a stretch on Ekin's
+    // hand, Ctrl and Shift are not.
     (
-        "cmd+ctrl+alt+r",
+        "cmd+ctrl+shift+r",
         "app.restart",
         "a restart nobody asked for is expensive",
     ),
