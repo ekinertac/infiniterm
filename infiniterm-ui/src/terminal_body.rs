@@ -128,6 +128,9 @@ pub struct TerminalBody {
     /// text is drawn as bars for the duration so the motion stays smooth,
     /// and the glyphs come back the frame it stops. Set by `terminals.rs`.
     pub in_motion: bool,
+    /// Too many cells on screen for glyphs to be affordable this frame;
+    /// set by `paint_world` from the frame's budget, read like `in_motion`.
+    crowded: bool,
     /// A selection drag has left the card by the top (negative) or bottom
     /// (positive) edge: the grid scrolls this many lines a frame, growing
     /// with the distance, and the selection follows to the edge row. Set
@@ -255,6 +258,7 @@ impl TerminalBody {
             cwd,
             error: None,
             in_motion: false,
+            crowded: false,
             autoscroll: 0.,
             drag_local: Point { x: 0., y: 0. },
             displaced: false,
@@ -685,7 +689,8 @@ impl CardBody for TerminalBody {
         // label names the card instead. Small-and-moving counts as too
         // small: see `in_motion`.
         let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32)
-            && !(self.in_motion && font_size < px(crate::chrome::FAR_FONT_PX as f32));
+            && !((self.in_motion || self.crowded)
+                && font_size < px(crate::chrome::FAR_FONT_PX as f32));
         // The cursor under the text: solid when focused and on, hollow when
         // the card is not focused, nothing while scrolled into history.
         if frame.cursor_kind != CursorKind::Hidden
@@ -916,6 +921,17 @@ impl CardBody for TerminalBody {
 
     /// The cursor cell on screen, from the last paint, so the input
     /// method's candidate window sits under what is being typed.
+    fn text_cells(&self) -> usize {
+        self.cols() as usize * self.rows() as usize
+    }
+
+    fn set_crowded(&mut self, crowded: bool) {
+        if self.crowded != crowded {
+            self.crowded = crowded;
+            self.mark_dirty();
+        }
+    }
+
     fn caret_bounds(&self) -> Option<Bounds<Pixels>> {
         let painted = self.painted_bounds?;
         let scale = self.scale;

@@ -425,6 +425,27 @@ impl AppView {
             .collect();
         cards.sort_by_key(|c| moving.contains(&c.id));
         let visible = Bounds::new(origin, bounds.size);
+        // The frame's glyph budget: what every visible card together would
+        // cost in glyphs. Over it, nothing under `FAR_FONT_PX` paints any
+        // (`chrome::GLYPH_BUDGET_CELLS`), because the cost is the total,
+        // not any one card's size. Decided before a body paints, so every
+        // card this frame agrees.
+        let on_screen: Vec<String> = cards
+            .iter()
+            .filter(|c| visible.intersects(&at(self.drawn_rect(&c.id, c.rect, now))))
+            .map(|c| c.id.clone())
+            .collect();
+        let cells: usize = on_screen
+            .iter()
+            .filter_map(|id| self.bodies.get(id))
+            .map(|b| b.text_cells())
+            .sum();
+        let crowded = crate::chrome::over_glyph_budget(cells);
+        for id in &on_screen {
+            if let Some(b) = self.bodies.get_mut(id) {
+                b.set_crowded(crowded);
+            }
+        }
         for card in &cards {
             let rect = self.drawn_rect(&card.id, card.rect, now);
             let b = at(rect);

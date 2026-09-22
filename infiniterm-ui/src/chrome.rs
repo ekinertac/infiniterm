@@ -34,6 +34,26 @@ pub const LEGIBLE_FONT_PX: f64 = 7.;
 /// painted at most every `FAR_REFRESH_MS`. Zoomed in, nothing changes.
 pub const FAR_FONT_PX: f64 = 12.;
 pub const FAR_REFRESH_MS: f64 = 250.;
+/// How many terminal cells may be on screen, across every visible card,
+/// before a frame stops painting glyphs at all and every card under
+/// `FAR_FONT_PX` draws bars (`AppView::crowded`).
+///
+/// The per-card size threshold above cannot say this: the cost is the
+/// TOTAL number of glyphs, and a glyph is 1.7 microseconds whatever the
+/// zoom, because a card's grid does not shrink when the canvas does. On
+/// Ekin's 4K canvas one full card is about 13,000 cells and fit-all with
+/// twelve of them is 157,000, which measured 85 to 100 ms a frame at a
+/// font size (9.6 px) the old 7 px threshold called legible. This is about
+/// two full cards: a pair side by side still reads, a wall of them does
+/// not and now costs nothing. Counted from the grids, not from what is in
+/// them, so the flag does not flip as output scrolls.
+pub const GLYPH_BUDGET_CELLS: usize = 30_000;
+
+/// Whether a frame showing `cells` of text across its visible cards must
+/// drop to bars. The rule, so it can be argued with in one place.
+pub fn over_glyph_budget(cells: usize) -> bool {
+    cells > GLYPH_BUDGET_CELLS
+}
 /// Lines scrolled per wheel tick, shared by every card body with a text
 /// buffer, so the terminal, editor, diff and transcript all feel the same
 /// under the mouse wheel.
@@ -277,5 +297,24 @@ impl Chrome {
 
     pub fn rgba(c: Hsla) -> Rgba {
         c.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One full card on Ekin's canvas is about 151 by 87 cells. A pair
+    /// still reads; a wall of eight cost 85 to 100 ms a frame in glyphs.
+    #[test]
+    fn the_glyph_budget_is_about_two_full_cards() {
+        let card = 151 * 87;
+        assert!(!over_glyph_budget(card), "one card paints glyphs");
+        assert!(
+            !over_glyph_budget(card * 2),
+            "a pair side by side still does"
+        );
+        assert!(over_glyph_budget(card * 3), "three is past it");
+        assert!(over_glyph_budget(card * 8), "a 4x2 fit-all is bars");
     }
 }

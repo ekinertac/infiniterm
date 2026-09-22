@@ -73,6 +73,18 @@ pub trait CardBody {
         None
     }
 
+    /// Cells of text this body would paint glyphs for, for the frame's
+    /// glyph budget (`chrome::GLYPH_BUDGET_CELLS`). The grid's size, not
+    /// what is in it, so the budget does not flip as output scrolls.
+    fn text_cells(&self) -> usize {
+        0
+    }
+
+    /// The frame is over its glyph budget: paint bars rather than glyphs
+    /// while this body is smaller than `chrome::FAR_FONT_PX`. Zoomed in,
+    /// bodies ignore it.
+    fn set_crowded(&mut self, _crowded: bool) {}
+
     fn key(&mut self, _keystroke: &Keystroke, _now: f64, _cx: &mut App) -> BodyAction {
         BodyAction::None
     }
