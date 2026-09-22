@@ -213,6 +213,25 @@ pub struct Selection {
     pub hints: HashMap<String, char>,
 }
 
+/// A focus, from the moment it landed until it leaves or earns its place.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FocusVisit {
+    pub id: String,
+    pub since: f64,
+    pub earned: bool,
+    /// Something was typed into this card while it held the focus.
+    pub typed: bool,
+}
+
+/// The card switcher's state while it is up: the rows it offered when it
+/// opened (frozen, so stepping cannot shuffle under the hand) and where
+/// the selection is.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Switcher {
+    pub list: Vec<String>,
+    pub index: usize,
+}
+
 /// One-shot work for the ui crate, pushed by commands and drained after each.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Effect {
@@ -403,6 +422,14 @@ pub struct Model {
     /// the focused card goes back along it; not saved, a restart has no
     /// "before".
     pub focus_trail: Vec<String>,
+    /// The focus as it stands: which card, when it took the focus, and
+    /// whether that visit has earned a place in the trail yet
+    /// (`switcher::earns_trail`). A card crossed with Cmd+Alt+Arrow on the
+    /// way to another never earns one, which is what makes the switcher's
+    /// first row the card you actually work in.
+    pub focus_visit: Option<FocusVisit>,
+    /// The card switcher (Ctrl+Tab), while it is up.
+    pub switcher: Option<Switcher>,
     /// The next card's `number`; set past the highest loaded one.
     pub next_number: u32,
     /// Layout undo (Cmd+Z / Cmd+Shift+Z): every card's rect on the active
@@ -498,6 +525,8 @@ impl Model {
             last_focused: HashMap::new(),
             left_at: HashMap::new(),
             focus_trail: Vec::new(),
+            focus_visit: None,
+            switcher: None,
             next_number: 1,
             layout_undo: Vec::new(),
             layout_redo: Vec::new(),
@@ -542,6 +571,9 @@ impl Model {
     /// Notices expire here; the staleness sweep is `sweep_stale`.
     pub fn tick(&mut self, now_ms: f64) {
         self.now_ms = now_ms;
+        // A card sat in earns its place without waiting for the focus to
+        // leave it: the trail is read by the switcher and by a close.
+        self.promote_focus();
         if self.notice.is_some() && now_ms >= self.notice_until {
             self.notice = None;
         }
@@ -767,6 +799,13 @@ impl Model {
     pub fn remove_card(&mut self, id: &str) {
         self.cards.retain(|c| c.id != id);
         self.focus_trail.retain(|t| t != id);
+        if self.focus_visit.as_ref().is_some_and(|v| v.id == id) {
+            self.focus_visit = None;
+        }
+        if let Some(s) = &mut self.switcher {
+            s.list.retain(|t| t != id);
+            s.index = s.index.min(s.list.len().saturating_sub(1));
+        }
         self.dirty_layout = true;
     }
 
@@ -782,16 +821,83 @@ impl Model {
     /// slot picking; the card is remembered as its group's last focus.
     pub fn set_focus(&mut self, id: Option<&str>) {
         self.selection.extra.clear();
-        self.land_focus(id);
+        self.land_focus(id, true);
+    }
+
+    /// Focus moved by WALKING the canvas (Cmd+Alt+Arrow): the card is
+    /// focused like any other, but the visit only reaches the switcher's
+    /// list if it is stayed in (`switcher::earns_trail`). Ekin crosses
+    /// three cards on the way to a fourth; a plain most-recent list filled
+    /// with those and the one press that should return him to the card he
+    /// was working in landed on a card he passed.
+    pub fn focus_traversing(&mut self, id: Option<&str>) {
+        self.selection.extra.clear();
+        self.land_focus(id, false);
     }
 
     /// Focus moved by EXTENDING: the extras are kept as the caller set them.
     pub fn focus_extended(&mut self, id: &str, extra: Vec<String>) {
         self.selection.extra = extra;
-        self.land_focus(Some(id));
+        self.land_focus(Some(id), true);
     }
 
-    fn land_focus(&mut self, id: Option<&str>) {
+    /// A key reached the focused card's body: the visit is earned, whatever
+    /// brought the focus there. The ui calls this from `key_down`.
+    pub fn note_input(&mut self) {
+        if let Some(v) = &mut self.focus_visit {
+            v.typed = true;
+        }
+        self.promote_focus();
+    }
+
+    /// Put the current visit in the trail if it has earned its place. Run
+    /// when the focus leaves, when a key arrives, and on every tick, so a
+    /// card sat in is in the trail before you leave it: closing a card
+    /// walks the same trail.
+    fn promote_focus(&mut self) {
+        let now = self.now_ms;
+        let Some(v) = &self.focus_visit else { return };
+        if v.earned {
+            return;
+        }
+        if !crate::switcher::earns_trail(false, v.typed, now - v.since) {
+            return;
+        }
+        let id = v.id.clone();
+        self.remember_focus(&id);
+        if let Some(v) = &mut self.focus_visit {
+            v.earned = true;
+        }
+    }
+
+    /// The trail, most recent last, each card once.
+    fn remember_focus(&mut self, id: &str) {
+        self.focus_trail.retain(|t| t != id);
+        self.focus_trail.push(id.to_string());
+        if self.focus_trail.len() > Self::FOCUS_TRAIL {
+            self.focus_trail.remove(0);
+        }
+    }
+
+    fn land_focus(&mut self, id: Option<&str>, deliberate: bool) {
+        // The visit that is ending: it keeps its place only if it earned
+        // one. Then the new visit starts, earned at once when it was
+        // chosen rather than walked into.
+        self.promote_focus();
+        self.focus_visit = id.map(|id| FocusVisit {
+            id: id.to_string(),
+            since: self.now_ms,
+            earned: false,
+            typed: false,
+        });
+        if deliberate {
+            if let Some(id) = id {
+                self.remember_focus(id);
+            }
+            if let Some(v) = &mut self.focus_visit {
+                v.earned = true;
+            }
+        }
         // A find bar belongs to the card it was opened on, the way a
         // browser's belongs to its tab: looking at something else closes it
         // and clears the highlights behind it.
@@ -809,11 +915,6 @@ impl Model {
                     .clone()
                     .unwrap_or_else(|| UNGROUPED.to_string());
                 self.last_focused.insert(key, id.to_string());
-                self.focus_trail.retain(|t| t != id);
-                self.focus_trail.push(id.to_string());
-                if self.focus_trail.len() > Self::FOCUS_TRAIL {
-                    self.focus_trail.remove(0);
-                }
             }
         }
         self.dirty_layout = true;

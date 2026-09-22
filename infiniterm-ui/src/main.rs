@@ -31,6 +31,7 @@ mod omnibox;
 mod overlays;
 mod paint;
 mod runtime;
+mod switcher_view;
 mod tab_strip;
 mod terminal_body;
 mod terminals;

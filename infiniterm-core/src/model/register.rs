@@ -115,7 +115,12 @@ fn is_workspace_switch(chord: &str) -> bool {
 /// keymap lookup, the same way `is_workspace_switch` is: this is about
 /// what these two chords MEAN to the app, not about tracking a rebind.
 fn is_locked_carveout(chord: &str) -> bool {
-    matches!(chord, "cmd+l" | "cmd+escape")
+    // Ctrl+Tab is the card switcher, a way OUT of a locked card like
+    // Cmd+Escape; Chrome's own next-tab is Cmd+Shift+] here.
+    matches!(
+        chord,
+        "cmd+l" | "cmd+escape" | "ctrl+tab" | "ctrl+shift+tab"
+    )
 }
 
 /// Runs a command and then any `RunCommand` effects it queued, so a palette
@@ -178,6 +183,96 @@ mod tests {
         fn focused(&self) -> &Card {
             self.m.focused().expect("a focused card")
         }
+    }
+
+    /// Four cards, the first focused on purpose; returns their ids.
+    fn four_cards(h: &mut Harness) -> Vec<String> {
+        for _ in 0..3 {
+            h.run("card.new.terminal");
+        }
+        let ids: Vec<String> = h.m.cards.iter().map(|c| c.id.clone()).collect();
+        assert_eq!(ids.len(), 4);
+        // Making a card focuses it on purpose, which earns it a place;
+        // start the story from a trail of one.
+        h.m.focus_trail.clear();
+        h.m.set_focus(Some(&ids[0]));
+        ids
+    }
+
+    // Cmd+Alt+Arrow across two cards on the way to a third leaves no trace:
+    // the switcher's second row is the card you worked in, not one you
+    // crossed.
+    #[test]
+    fn walking_through_cards_does_not_put_them_in_the_switcher() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        let t = h.m.now_ms;
+        h.m.now_ms = t + 100.;
+        h.m.focus_traversing(Some(&ids[1]));
+        h.m.now_ms = t + 200.;
+        h.m.focus_traversing(Some(&ids[2]));
+        h.m.now_ms = t + 300.;
+        h.m.focus_traversing(Some(&ids[3]));
+        assert!(!h.m.focus_trail.contains(&ids[1]));
+        assert!(!h.m.focus_trail.contains(&ids[2]));
+        h.run("card.switcher.next");
+        let s = h.m.switcher.clone().expect("the switcher is up");
+        assert_eq!(s.list[0], ids[3], "the card you are in first");
+        assert_eq!(
+            s.list[1], ids[0],
+            "then the one you chose, not the ones crossed"
+        );
+        assert_eq!(s.index, 1, "one press lands on it");
+    }
+
+    // Staying earns a walked-into card its place; so does typing into it.
+    #[test]
+    fn a_walked_into_card_earns_its_place_by_staying_or_typing() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        let t = h.m.now_ms;
+        h.m.focus_traversing(Some(&ids[1]));
+        h.m.tick(t + crate::switcher::TRAIL_DWELL_MS + 1.);
+        assert_eq!(h.m.focus_trail.last(), Some(&ids[1]), "stayed in: earned");
+        h.m.focus_traversing(Some(&ids[2]));
+        h.m.note_input();
+        assert_eq!(h.m.focus_trail.last(), Some(&ids[2]), "typed in: earned");
+    }
+
+    // Release commits: the selected card is focused; Escape leaves things
+    // where they were. A card in another workspace brings its workspace.
+    #[test]
+    fn the_switcher_commits_to_the_selection_and_cancel_changes_nothing() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        h.m.set_focus(Some(&ids[1]));
+        h.m.set_focus(Some(&ids[2]));
+        h.run("card.switcher.next");
+        h.run("card.switcher.next");
+        h.m.switcher_cancel();
+        assert!(h.m.switcher.is_none());
+        assert_eq!(h.focused().id, ids[2], "cancel moved nothing");
+        h.run("card.switcher.next");
+        h.m.switcher_commit();
+        assert!(h.m.switcher.is_none());
+        assert_eq!(h.focused().id, ids[1], "back to the previous card");
+        // Backwards from the top wraps to the oldest.
+        h.run("card.switcher.prev");
+        assert_eq!(h.m.switcher.as_ref().unwrap().index, 3);
+    }
+
+    // Ctrl+Tab is a way out of a locked browser card, like Cmd+Escape.
+    #[test]
+    fn ctrl_tab_reaches_the_switcher_from_a_locked_card() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        h.m.set_focus(Some(&ids[1]));
+        h.m.cards[1].kind = CardKind::Browser;
+        h.m.cards[1].locked = true;
+        assert_eq!(
+            resolve_chord(&h.m, "ctrl+tab").as_deref(),
+            Some("card.switcher.next")
+        );
     }
 
     // Every default binding names a command that exists: a binding pointing

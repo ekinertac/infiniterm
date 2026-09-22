@@ -312,6 +312,19 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "snippet.paste",
         "predefined text into the card",
     ),
+    // Cmd+Tab for cards, on Ctrl because Cmd+Tab is the system's: hold
+    // Ctrl, Tab steps through the cards you worked in, release goes there.
+    // Takes Ctrl+Tab from a focused terminal; nothing Ekin runs uses it.
+    (
+        "ctrl+tab",
+        "card.switcher.next",
+        "Cmd+Tab is the system's; this is the same hand on Ctrl",
+    ),
+    (
+        "ctrl+shift+tab",
+        "card.switcher.prev",
+        "the switcher, backwards",
+    ),
     // A letter on every card, one keystroke to any of them. "Find", loosely.
     // Cmd+H was the first choice and is Hide on macOS.
     (
@@ -490,12 +503,19 @@ pub fn chord_for(e: &KeyPress) -> String {
     parts.join("+")
 }
 
-/// Whether a chord may be bound at all: Cmd anything, or Ctrl plus a single
-/// digit. The one place that decides.
+/// Whether a chord may be bound at all: Cmd anything, Ctrl plus a single
+/// digit, or the switcher's Ctrl+Tab. The one place that decides.
 pub fn is_allowed_chord(chord: &str) -> bool {
     let lower = chord.to_lowercase();
     let parts: Vec<&str> = lower.split('+').collect();
     if parts.contains(&"cmd") {
+        return true;
+    }
+    // The card switcher, Cmd+Tab's hand on Ctrl because Cmd+Tab is the
+    // system's. Taken from terminals knowingly (2026-09-22): nothing Ekin
+    // runs in a card reads Ctrl+Tab, and a switcher needs a held modifier
+    // whose release commits, which only Ctrl leaves free.
+    if matches!(lower.as_str(), "ctrl+tab" | "ctrl+shift+tab") {
         return true;
     }
     parts.len() == 2

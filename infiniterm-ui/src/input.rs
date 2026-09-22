@@ -582,6 +582,21 @@ impl AppView {
         if crate::keycode::last_dead() && !m.platform && !m.control {
             return false;
         }
+        // The card switcher is up (Ctrl held): Tab steps through the chord
+        // path below, Enter goes now, Escape puts it back, and nothing
+        // else reaches a card while it is open.
+        if self.model.switcher.is_some() && !(m.control && k.key == "tab") {
+            match k.key.as_str() {
+                "escape" => self.model.switcher_cancel(),
+                "enter" => {
+                    self.model.switcher_commit();
+                    self.perform_effects();
+                }
+                _ => {}
+            }
+            self.redraw = true;
+            return true;
+        }
         // Cmd+F is in `browser_override`'s always-on list, so it opens the
         // app's find bar over a LOCKED browser card too (lock only gates
         // the tab-strip chords, `browser_keys::lock_override`'s list).
@@ -780,6 +795,11 @@ impl AppView {
             // handler. A key the body ignored (a dead key on its own) is
             // not, so the input context gets it and a composition begins.
             let taken = !matches!(action, crate::body::BodyAction::Ignored);
+            // A key into a card is what makes a walked-into visit count
+            // for the switcher (`switcher::earns_trail`).
+            if taken {
+                self.model.note_input();
+            }
             self.body_action(&id, action);
             self.flush_writes();
             self.perform_effects();

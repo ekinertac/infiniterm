@@ -6,7 +6,7 @@
 //! helpers live here. `handle_bare_key` is the one place a key WITHOUT Cmd
 //! reaches the app, and only while one of these modes is up.
 use super::palette_state::Source;
-use super::{Effect, Model, NewCard, Phantom};
+use super::{Effect, Model, NewCard, Phantom, Switcher};
 use crate::cards::{CardRect, PlacedCard, GUTTER};
 use crate::grid::{Point, Rect, Size, HALF_CELL};
 use crate::groups::{canvas_units, step_ring, CanvasUnit, UnitKind, UNGROUPED};
@@ -357,7 +357,9 @@ impl Model {
         let Some(next) = nearest_in_direction(&placed, &focused, dir).map(|n| n.id.clone()) else {
             return;
         };
-        self.set_focus(Some(&next));
+        // Walked into, not chosen: the visit reaches the switcher's list
+        // only if it is stayed in (`Model::focus_traversing`).
+        self.focus_traversing(Some(&next));
         self.reveal_focused();
     }
 
@@ -509,8 +511,60 @@ impl Model {
     }
 }
 
+impl Model {
+    /// Ctrl+Tab, and every press after it while Ctrl is still down: the
+    /// first press freezes the rows so stepping cannot shuffle under the
+    /// hand, the rest only move the selection. The ui commits when Ctrl
+    /// comes up (`switcher_commit`), or Escape puts it back.
+    pub fn switcher_step(&mut self, delta: isize) {
+        if self.switcher.is_none() {
+            let all: Vec<String> = self.cards.iter().map(|c| c.id.clone()).collect();
+            let list = crate::switcher::order(
+                self.selection.focused_id.as_deref(),
+                &self.focus_trail,
+                &all,
+            );
+            if list.len() < 2 {
+                return;
+            }
+            self.switcher = Some(Switcher { list, index: 0 });
+        }
+        let Some(s) = &mut self.switcher else { return };
+        s.index = crate::switcher::step(s.list.len(), s.index, delta);
+    }
+
+    /// Ctrl came up: go to the row under the selection. A card in another
+    /// workspace takes its workspace with it, the way the palette's card
+    /// rows do.
+    pub fn switcher_commit(&mut self) {
+        let Some(s) = self.switcher.take() else {
+            return;
+        };
+        let Some(id) = s.list.get(s.index).cloned() else {
+            return;
+        };
+        self.go_to_card(&id);
+    }
+
+    pub fn switcher_cancel(&mut self) {
+        self.switcher = None;
+    }
+}
+
 pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     use super::cards_cmd::dir_name;
+    // Ctrl+Tab: the cards you have actually worked in, most recent first,
+    // committed when Ctrl comes up (the ui watches the modifier, keycode.rs).
+    for (id, label, delta) in [
+        (
+            "card.switcher.next",
+            "Card: switch, most recent first",
+            1isize,
+        ),
+        ("card.switcher.prev", "Card: switch, backwards", -1),
+    ] {
+        r.register(id, label, move |m| m.switcher_step(delta));
+    }
     use super::context::{step_id, where_, which};
     let dirs = [
         Direction::Left,

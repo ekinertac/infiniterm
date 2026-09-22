@@ -76,6 +76,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | palette: "App: show pressed shortcuts" | every chord you press appears bottom right with the command it ran, stacked, fading; for screencasts and for showing somebody |
 | `Cmd + Shift + L` | lock the card against closing: Cmd+W, its workspace closing and its shell exiting all leave it (a fresh shell takes over); the label wears a lock on the warning colour |
 | `Cmd + Alt + S` | resize to a fraction of the default: full, half wide, half tall, quarter, double wide, double tall; shrinking leaves the space free, growing needs it |
+| `Ctrl + Tab` | switch cards, Cmd+Tab style: hold Ctrl, Tab steps through the cards you worked in (most recent first; cards you only crossed with the arrows are left out), release goes there, Escape cancels; `Ctrl + Shift + Tab` steps back |
 | `Cmd + Ctrl + S` | paste a snippet: predefined text from `~/.config/infiniterm/snippets.json` (a name to a string, or to an array of lines) into the focused card as Cmd+V would, so Claude gets a multi-line prompt as one block; the last row opens the file, and an edit is live on the next open |
 | double-click | on a card's frame or label fits it (`Cmd + 1`); on empty canvas fits everything (`Cmd + 2`) |
 | | every card wears a number (`#7`) ahead of its label, for naming it to somebody: given once, kept across restarts, in `ift ls` and `ift sessions` as trailing columns; `ift attach 7` reaches that card's shell from any terminal, app running or not |

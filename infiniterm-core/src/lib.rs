@@ -77,6 +77,7 @@ pub mod shell_history;
 pub mod shortcuts;
 pub mod slot_snap;
 pub mod snippets;
+pub mod switcher;
 pub mod themes_files;
 pub mod transcript;
 

@@ -298,6 +298,11 @@ impl Render for AppView {
         let keycast = self
             .keycasts_alive(crate::now_ms())
             .then(|| self.render_keycast());
+        let switcher = self
+            .model
+            .switcher
+            .is_some()
+            .then(|| self.render_switcher());
 
         div()
             .size_full()
@@ -312,6 +317,17 @@ impl Render for AppView {
                     cx.stop_propagation();
                 }
                 cx.notify();
+            }))
+            // Ctrl coming up commits the card switcher, the way letting go
+            // of Cmd commits Cmd+Tab. gpui reports modifier changes to the
+            // focused element like keys, so no NSEvent monitor is needed.
+            .on_modifiers_changed(cx.listener(|this, e: &gpui::ModifiersChangedEvent, _, cx| {
+                if this.model.switcher.is_some() && !e.modifiers.control {
+                    this.model.switcher_commit();
+                    this.perform_effects();
+                    this.redraw = true;
+                    cx.notify();
+                }
             }))
             .child(title_bar)
             .child(
@@ -398,7 +414,8 @@ impl Render for AppView {
                     .children(omnibox)
                     .children(find_bar)
                     .children(context_menu)
-                    .children(keycast),
+                    .children(keycast)
+                    .children(switcher),
             )
             .child(status_bar)
     }
