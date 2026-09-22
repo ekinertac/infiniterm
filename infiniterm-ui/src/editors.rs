@@ -103,6 +103,10 @@ impl AppView {
                 tabs.card_number = card.number;
                 tabs.mark_dirty();
             }
+            if tabs.protected != card.protected {
+                tabs.protected = card.protected;
+                tabs.mark_dirty();
+            }
             if tabs.style != style {
                 tabs.style = style.clone();
                 tabs.mark_dirty();

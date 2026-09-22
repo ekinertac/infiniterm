@@ -139,6 +139,11 @@ impl AppView {
                 .flex()
                 .items_center()
                 .gap_0()
+                // The row is exactly the dialog's width; without this a long
+                // completion (a history url has no length limit) painted
+                // past its own bounds and over the border, since gpui does
+                // not clip by default.
+                .overflow_hidden()
                 .text_color(if query.is_empty() {
                     chrome.text_faint
                 } else {
@@ -150,11 +155,26 @@ impl AppView {
                     d.child("search or enter address".to_string())
                 })
                 .when(!placeholder, |d| {
-                    d.child(self.omni_field.inline(chrome.sel_bg, chrome.sel_fg))
+                    d.child(
+                        // What was typed keeps its own width; the
+                        // completion takes what is left and elides rather
+                        // than squeezing the typed text or pushing the
+                        // dialog's edge (the subtitle row's own rule,
+                        // above).
+                        self.omni_field
+                            .inline_composing(
+                                chrome.sel_bg,
+                                chrome.sel_fg,
+                                self.composing.as_deref(),
+                            )
+                            .flex_shrink_0(),
+                    )
                 })
                 .when(!tail.is_empty(), |d| {
                     d.child(
                         div()
+                            .flex_1()
+                            .truncate()
                             .bg(chrome.sel_bg)
                             .text_color(chrome.sel_fg)
                             .child(tail.clone()),
@@ -410,7 +430,11 @@ impl AppView {
                     })
                     .when(query.is_empty(), |d| d.child("find in page".to_string()))
                     .when(!query.is_empty(), |d| {
-                        d.child(self.find_field.inline(chrome.sel_bg, chrome.sel_fg))
+                        d.child(self.find_field.inline_composing(
+                            chrome.sel_bg,
+                            chrome.sel_fg,
+                            self.composing.as_deref(),
+                        ))
                     }),
             )
             .child(

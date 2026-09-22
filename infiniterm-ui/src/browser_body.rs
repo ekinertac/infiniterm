@@ -144,6 +144,9 @@ pub struct BrowserBody {
     /// so the strip can paint it: the corner label used to carry this, and
     /// was removed when the strip took over the job.
     pub card_number: u32,
+    /// Mirrors `card.protected`: `card.protect`'s own lock, a different
+    /// one from `locked` above (the keyboard's), shown beside `#N`.
+    pub protected: bool,
     /// Mirrors `Model::ui_scale`, the same way `card_bg`/`text` do, so the
     /// strip's screen-pixel sizes scale with the interface multiplier like
     /// every other piece of chrome.
@@ -204,6 +207,7 @@ impl BrowserBody {
             left_down: false,
             inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             card_number: 0,
+            protected: false,
             ui_scale: 1.,
             card_bg: gpui::rgb(0x0e101a).into(),
             text: gpui::rgb(0xb9c4d2).into(),
@@ -592,6 +596,7 @@ impl CardBody for BrowserBody {
             &labels,
             self.active,
             self.card_number,
+            self.protected,
             &self.style,
             window,
             cx,

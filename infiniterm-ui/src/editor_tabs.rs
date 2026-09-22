@@ -38,6 +38,9 @@ pub struct EditorTabs {
     pub last_escape_ms: Option<f64>,
     pub ui_scale: f32,
     pub card_number: u32,
+    /// Mirrors `card.protected`: `card.protect`'s own lock, a different
+    /// one from `locked` above (the keyboard's), shown beside `#N`.
+    pub protected: bool,
     pub style: StripStyle,
     /// Bounds of the last paint, for the strip's hit test.
     world: Size,
@@ -56,6 +59,7 @@ impl EditorTabs {
             last_escape_ms: None,
             ui_scale: 1.,
             card_number: 0,
+            protected: false,
             style,
             world,
             dirty: true,
@@ -272,6 +276,7 @@ impl CardBody for EditorTabs {
             &labels,
             self.active,
             self.card_number,
+            self.protected,
             &self.style,
             window,
             cx,

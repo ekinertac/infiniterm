@@ -52,6 +52,18 @@ fn close_band_left_ratio() -> f64 {
     TAB_STRIP_TAB_WIDTH_RATIO - TAB_STRIP_CLOSE_WIDTH_RATIO
 }
 
+/// The strip's own "#N" badge, with `card.protect`'s own lock ahead of it
+/// when set — the same glyph and wording as the corner label's
+/// (`Model::numbered_label`). A different lock from this strip's `locked`
+/// (the keyboard's), so it is spelled out rather than reusing that word.
+fn number_label(card_number: u32, protected: bool) -> String {
+    if protected {
+        format!("\u{1f512} #{card_number}")
+    } else {
+        format!("#{card_number}")
+    }
+}
+
 /// Which of the strip's affordances a click at `local` (world units) lands
 /// on, or `None` below the strip.
 pub fn strip_hit(local: Point, font_px: f64, ui_scale: f32, tab_count: usize) -> Option<TabClick> {
@@ -86,6 +98,7 @@ pub fn paint_strip(
     labels: &[String],
     active: usize,
     card_number: u32,
+    protected: bool,
     style: &StripStyle,
     window: &mut Window,
     cx: &mut App,
@@ -145,13 +158,8 @@ pub fn paint_strip(
         );
         crate::text::paint_in(window, cx, &plus, plus_bounds, px(0.));
         if card_number > 0 {
-            let line = crate::text::shape(
-                window,
-                &format!("#{card_number}"),
-                strip_font,
-                &f,
-                style.text_muted,
-            );
+            let number = number_label(card_number, protected);
+            let line = crate::text::shape(window, &number, strip_font, &f, style.text_muted);
             let number_bounds = Bounds::new(
                 point(
                     strip.origin.x + strip.size.width - line.width - pad,
@@ -203,5 +211,13 @@ mod tests {
             strip_hit(at(100., 25.), 10., 2., 2),
             Some(TabClick::Switch(0))
         );
+    }
+
+    // The lock is `card.protect`'s, not this strip's own `locked`: it
+    // shows or not by the card's saved flag alone.
+    #[test]
+    fn a_protected_card_wears_the_lock_glyph_beside_its_number() {
+        assert_eq!(number_label(7, false), "#7");
+        assert_eq!(number_label(7, true), "\u{1f512} #7");
     }
 }

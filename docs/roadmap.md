@@ -19,7 +19,9 @@ The list Ekin asks about. Dates are when something landed. The rule for this fil
 - Workspace tabs show finished turns, 2026-09-21: a green dot for a Claude that reached Stop after you left that workspace, gone once you have been back. Waiting and working dots as before; the active tab shows none, the cards are right there.
 - Snippets, 2026-09-22: Cmd+Ctrl+S lists `snippets.json`'s names and pastes one into the focused card; the last row opens the file.
 - Workspace tabs wear one dot per card, 2026-09-22, grey until its agent has a state, in the cards' reading order on the canvas so the row of dots is the row of cards; before, one dot per state kind, so three Claudes read as one.
-- Composing text drawn, 2026-09-22: the marked text of a dead key or an input method shows at the caret, underlined, in terminals and editors (composing.rs) and inline in the palette, prompt and shortcuts fields; the editor now reports its caret cell so the candidate window sits there too. The omnibox fields are the browser session's (one call each to `inline_composing`).
+- Composing text drawn, 2026-09-22: the marked text of a dead key or an input method shows at the caret, underlined, in terminals and editors (composing.rs) and inline in the palette, prompt and shortcuts fields; the editor now reports its caret cell so the candidate window sits there too. The omnibox and find fields picked up the same `inline_composing` call the same day.
+- A browser card no longer grows gpui's sprite atlas without bound, 2026-09-22: `RenderImage::new` mints a fresh id every CEF frame and gpui has no atlas LRU, so nothing but `Window::drop_image` on that exact `Arc` ever freed the tile. `BrowserBody` now tracks the texture it last painted and evicts it the moment a different one replaces it (never the one it just painted, which the same frame's scene still points at), and a closed card's last tile is evicted too, from `reconcile_bodies`. Found by @infiniterm-rust-port spiking a texture path for terminal cards.
+- The omnibox's completion tail no longer overflows the dialog on a long history url, and the tab strip shows `card.protect`'s lock (🔒) beside `#N`, 2026-09-22.
 
 ## v1.5: the other agents
 
@@ -37,12 +39,6 @@ The daemon keeps a shell alive across the app quitting. Nothing keeps a process 
 - `tools/drive/daemon.sh` ran once and passed; its screenshots 01 to 04 did not write (`winid --pid` found nothing for those instances) and only 05 did. Not chased.
 - What N daemons cost in practice, measured 2026-09-22 on the real canvas: 17 alive, 120 MB RSS total, 13 idle ones at 0.4 to 1.2 MB each, the busy ones 3, 8, 15, 23 and 65 MB. Idle is cheaper than the spec's ~2 MB guess; the 65 MB one is not explained by a 4 MiB ring and is worth a look if it grows (the ring's `Vec` growth, or the snapshot copy every 2 s, are the suspects).
 - Colour reporting under tmux, Nerd Font glyph widths, a very long scrollback on adopt: the tmux handover's open items 2, 3 and 6, still true of tmux, mostly moot under the daemon.
-
-## For the browser session (ift-browser), noted while it was not running
-
-- The omnibox and find fields do not show marked text yet: `omnibox.rs:153` and `:413` call `Field::inline`; `inline_composing(sel_bg, sel_fg, self.composing.as_deref())` is the whole change.
-- Omnibox inline completion, 2026-09-21: typing `3` showed a long history url as the completion with the typed `3` cut off its front and the rest in orange, overflowing the field. Screenshot in the infiniterm-rust-port session's transcript.
-- The tab strip should show the card lock (`Card.protected`, U+1F512) beside the `#N`; `tab_strip::paint_strip` needs a `locked` flag and editors.rs/browsers.rs pass `card.protected`.
 
 ## Dropped
 

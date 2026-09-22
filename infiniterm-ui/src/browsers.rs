@@ -177,6 +177,7 @@ impl AppView {
             body.font_family = family.clone();
             body.inactive_dim = inactive_dim;
             body.card_number = card.number;
+            body.protected = card.protected;
             body.ui_scale = ui_scale;
             body.zoom = card.zoom;
 
