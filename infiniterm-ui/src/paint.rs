@@ -177,6 +177,9 @@ impl AppView {
         self.feed_terminals(now, cx);
         let t1 = std::time::Instant::now();
         self.paint_world(bounds, now, window, cx);
+        // Marked text over the focused card's caret, while an input method
+        // composes; the fields draw theirs inline.
+        self.paint_composing(window, cx);
         self.apply_hover_cursor(window);
         // Over a frame band the cursor says what a press would do: arrows
         // on an edge or corner, a hand on the band that moves the card.

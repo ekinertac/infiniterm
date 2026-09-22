@@ -68,6 +68,20 @@ impl Field {
     /// placeholder itself when the text is empty, because a caret against
     /// placeholder words suggests they were typed.
     pub fn inline(&self, sel_bg: gpui::Hsla, sel_fg: gpui::Hsla) -> gpui::Div {
+        self.inline_composing(sel_bg, sel_fg, None)
+    }
+
+    /// `inline` with the text an input method is still composing (the
+    /// `\u{b4}` before the `e`, a Pinyin syllable) shown at the caret,
+    /// underlined the way every Mac field shows marked text. The caller
+    /// passes `AppView::composing` when this field is the open one; the
+    /// text is macOS's, not the field's, and is never in `self.text`.
+    pub fn inline_composing(
+        &self,
+        sel_bg: gpui::Hsla,
+        sel_fg: gpui::Hsla,
+        composing: Option<&str>,
+    ) -> gpui::Div {
         use gpui::{div, ParentElement, Styled};
         let (before, selected, after) = self.parts();
         let caret = selected.is_empty();
@@ -79,6 +93,14 @@ impl Field {
         }
         if !selected.is_empty() {
             d = d.child(div().bg(sel_bg).text_color(sel_fg).child(selected));
+        }
+        if let Some(marked) = composing.filter(|m| !m.is_empty()) {
+            d = d.child(
+                div()
+                    .text_decoration_1()
+                    .text_decoration_solid()
+                    .child(marked.to_string()),
+            );
         }
         if caret {
             // A bar, not a glyph: `▏` is a whole monospace cell with the

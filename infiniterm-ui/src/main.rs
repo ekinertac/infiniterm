@@ -16,6 +16,7 @@ mod body;
 mod browser_body;
 mod browsers;
 mod chrome;
+mod composing;
 mod decoys;
 mod diff_body;
 mod editor_body;

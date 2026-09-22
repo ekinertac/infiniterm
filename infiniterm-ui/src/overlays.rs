@@ -711,9 +711,11 @@ impl AppView {
                                         d.child(source.placeholder().to_string())
                                     })
                                     .when(!query.is_empty(), |d| {
-                                        d.child(
-                                            self.query_field.inline(chrome.sel_bg, chrome.sel_fg),
-                                        )
+                                        d.child(self.query_field.inline_composing(
+                                            chrome.sel_bg,
+                                            chrome.sel_fg,
+                                            self.composing.as_deref(),
+                                        ))
                                     }),
                             )
                             .child(list),
@@ -744,7 +746,11 @@ impl AppView {
         let p = &self.model.prompt;
         let is_confirm = p.confirm && !p.alert;
         let is_alert = p.alert;
-        let field = self.prompt_field.inline(chrome.sel_bg, chrome.sel_fg);
+        let field = self.prompt_field.inline_composing(
+            chrome.sel_bg,
+            chrome.sel_fg,
+            self.composing.as_deref(),
+        );
         // The key sits in a translucent cap so it reads on either button:
         // white ink on the dark Cancel, the same on the orange action.
         let key_cap = |label: &str, chrome: &crate::chrome::Chrome| {
@@ -1011,9 +1017,11 @@ impl AppView {
                                     d.child("Filter shortcuts".to_string())
                                 })
                                 .when(!query.is_empty(), |d| {
-                                    d.child(
-                                        self.shortcuts_field.inline(chrome.sel_bg, chrome.sel_fg),
-                                    )
+                                    d.child(self.shortcuts_field.inline_composing(
+                                        chrome.sel_bg,
+                                        chrome.sel_fg,
+                                        self.composing.as_deref(),
+                                    ))
                                 }),
                         )
                         .child(list),

@@ -9,10 +9,11 @@
 //! and typed text can never arrive twice: once through `key_down` and once
 //! through `replace_text_in_range`.
 //!
-//! Marked text (the `\u{b4}` before the `e`) is held and not drawn. Holding
-//! it is what matters: while `marked_text_range` is `Some`, macOS routes
-//! the next key to the input context before us, which is how the `e`
-//! becomes `é` instead of a plain `e`. Drawing it is a later nicety.
+//! Marked text (the `\u{b4}` before the `e`) is held here and drawn by
+//! composing.rs at the focused body's caret, or inline by the open field.
+//! Holding it is what matters: while `marked_text_range` is `Some`, macOS
+//! routes the next key to the input context before us, which is how the
+//! `e` becomes `é` instead of a plain `e`.
 //!
 //! Registered from the canvas paint in overlays.rs, on the app's one focus
 //! handle. Related: body.rs (`insert_text`, `caret_bounds`), field.rs
@@ -121,7 +122,7 @@ impl EntityInputHandler for AppView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Composition in progress. Held, not drawn; see the header.
+        // Composition in progress; composing.rs and the fields draw it.
         self.composing = if new_text.is_empty() {
             None
         } else {

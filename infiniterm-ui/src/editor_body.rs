@@ -185,6 +185,9 @@ pub struct EditorBody {
     pub blink: bool,
     blink_epoch: f64,
     painted_phase: bool,
+    /// The caret's cell at the last paint, in window pixels; `None` while
+    /// the tree has the focus. What `caret_bounds` answers with.
+    painted_caret: Option<Bounds<Pixels>>,
     painted_focused: bool,
     dirty: bool,
     /// The wheel's fraction of a line, carried between events.
@@ -261,6 +264,7 @@ impl EditorBody {
             blink: true,
             blink_epoch: 0.,
             painted_phase: true,
+            painted_caret: None,
             painted_focused: false,
             dirty: true,
             wheel_carry: crate::chrome::WheelCarry::default(),
@@ -1858,9 +1862,16 @@ impl CardBody for EditorBody {
                 && (cursor_col < r.b
                     || (cursor_col == r.b && r.b == self.buffer.line(r.line).chars().count()))
         });
+        self.painted_caret = None;
         if let (true, Some(row_i)) = (self.focus != Focus::Tree, cursor_row) {
             let col = cursor_col - vrows[row_i].a;
             let y = origin.y + line_h * row_i as f32;
+            // The cell the caret is in, for the input method's candidate
+            // window and the marked text drawn over it (`caret_bounds`).
+            self.painted_caret = Some(Bounds::new(
+                point(text_x + cell_w * col as f32, y),
+                size(cell_w, line_h),
+            ));
             let rect = Bounds::new(
                 point(text_x + cell_w * col as f32, y),
                 size(
@@ -1889,6 +1900,10 @@ impl CardBody for EditorBody {
         }
         // Keep the shaping cache to the visible lines.
         self.shaped.retain(|(l, _), _| *l >= first && *l < last);
+    }
+
+    fn caret_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.painted_caret
     }
 
     fn key(&mut self, k: &Keystroke, now: f64, cx: &mut App) -> BodyAction {
