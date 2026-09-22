@@ -16,3 +16,4 @@ tools/winid
 run.log
 spikes/cef-extension/*.log
 tools/locked
+spikes/card-texture/target/

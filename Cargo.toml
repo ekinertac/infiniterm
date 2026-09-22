@@ -14,6 +14,8 @@ members = [
     "infiniterm-session",
 ]
 resolver = "2"
+# The spikes carry their own lockfiles; nothing in the app builds them.
+exclude = ["spikes/card-texture"]
 
 [workspace.package]
 version = "0.1.0"

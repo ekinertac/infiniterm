@@ -1,0 +1,20 @@
+# Spike: can a terminal card be rendered to a texture and painted like the
+# browser card is, instead of painting every glyph every frame? Excluded
+# from the workspace so `make check` never builds it; its code goes when
+# the question is answered (spikes/*/NOTES.md keeps the numbers).
+[package]
+name = "card-texture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# All four are already in the app's Cargo.lock as gpui's own dependencies:
+# rasterising costs no new crate in the tree.
+core-text = "21"
+core-graphics = "0.24"
+core-foundation = "0.10"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[profile.release]
+opt-level = 3
