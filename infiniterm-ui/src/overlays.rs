@@ -26,6 +26,9 @@ use infiniterm_core::workspaces::{reading_order, tab_dots};
 /// Rows the palette shows at once; the selection is kept inside the window.
 const PALETTE_ROWS: usize = 14;
 
+/// How much of a palette row a snippet's first line may take before the
+/// ellipsis; the name is the thing to read, the line is a reminder.
+const SNIPPET_HINT_MAX_W_PX: f32 = 360.;
 /// The workspace tabs' label size, shared by the "+" new-tab control.
 const TAB_LABEL_FONT_PX: f32 = 12.;
 /// A workspace tab's agent dots, one per agent card: a hint, not a badge.
@@ -641,11 +644,24 @@ impl AppView {
                 )
                 .child(label);
             if let Some(hint) = &item.item.hint {
-                let mut keys = div().flex().gap_1();
-                for key in hint.split(' ') {
-                    keys = keys.child(key_cap_box(key, chrome, ui));
+                // A hint is a chord, one cap per key, for every source but
+                // the snippets, whose hint is the text's first line and
+                // reads as prose: faint, one line, cut with an ellipsis.
+                if source == infiniterm_core::model::palette_state::Source::Snippets {
+                    row = row.child(
+                        div()
+                            .max_w(px(SNIPPET_HINT_MAX_W_PX * ui))
+                            .truncate()
+                            .text_color(chrome.text_faint)
+                            .child(hint.clone()),
+                    );
+                } else {
+                    let mut keys = div().flex().gap_1();
+                    for key in hint.split(' ') {
+                        keys = keys.child(key_cap_box(key, chrome, ui));
+                    }
+                    row = row.child(keys);
                 }
-                row = row.child(keys);
             }
             list = list.child(row);
         }
