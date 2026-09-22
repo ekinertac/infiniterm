@@ -1,7 +1,7 @@
 //! Workspace naming, navigation, and the agent dots a workspace tab wears.
 //! Port of workspaces.ts and its tests; callers supply ids and states explicitly.
 //! Switching workspaces never removes cards or their PTYs and never follows activity.
-use crate::{agent_state::AgentState, viewport::Viewport};
+use crate::{agent_state::AgentState, grid::Rect, viewport::Viewport};
 #[derive(Clone, Debug, PartialEq)]
 pub struct Workspace {
     pub id: String,
@@ -38,6 +38,30 @@ pub fn tab_dots(cards: &[(AgentState, f64)], left_at: f64, active: bool) -> Vec<
         })
         .collect()
 }
+/// The order the tab's dots follow: the cards as they lie on the canvas,
+/// read like a page, top row first and left to right within it. Two cards
+/// are on one row when their tops are within `ROW_SLACK` of each other,
+/// which absorbs the odd pixel a drag left behind; slots keep tops aligned
+/// otherwise. Returns indexes into `rects`. Number order was tried first
+/// and a dot said nothing about WHERE its card was.
+pub fn reading_order(rects: &[Rect]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..rects.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (ra, rb) = (&rects[a], &rects[b]);
+        let same_row = (ra.y - rb.y).abs() <= ROW_SLACK;
+        if same_row {
+            ra.x.total_cmp(&rb.x)
+        } else {
+            ra.y.total_cmp(&rb.y)
+        }
+    });
+    order
+}
+/// World units within which two cards' tops count as one row.
+/// shortcut: the comparison is not transitive across a chain of tops each
+/// within the slack of the next; slots snap tops to the same values, so no
+/// such chain exists on a real canvas.
+const ROW_SLACK: f64 = 24.;
 pub fn next_name(existing: &[String], stem: &str) -> String {
     for i in 1..=existing.len() + 1 {
         let name = format!("{stem} {i}");
@@ -98,6 +122,26 @@ mod tests {
         assert_eq!(tab_dots(&cards, 30., false), vec![None, None, Working]);
         // The active workspace shows the cards themselves.
         assert_eq!(tab_dots(&cards, 0., true), vec![None, None, Working]);
+    }
+    #[test]
+    fn dots_read_the_canvas_like_a_page() {
+        let r = |x, y| Rect {
+            x,
+            y,
+            w: 100.,
+            h: 100.,
+        };
+        // A row of two, a quarter tucked under the first, one far right on
+        // the top row, then a second row.
+        let rects = [
+            r(200., 0.),
+            r(0., 0.),
+            r(0., 400.),
+            r(1000., 3.),
+            r(600., 400.),
+        ];
+        assert_eq!(reading_order(&rects), vec![1, 0, 3, 2, 4]);
+        assert_eq!(reading_order(&[]), Vec::<usize>::new());
     }
     #[test]
     fn names_number_from_one_skip_taken() {
