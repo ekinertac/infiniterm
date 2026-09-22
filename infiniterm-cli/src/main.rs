@@ -170,21 +170,24 @@ fn install_self() -> ExitCode {
         return ExitCode::from(2);
     }
     let link = bin.join("ift");
-    if let Ok(target) = std::fs::read_link(&link) {
-        if target == exe {
-            println!("ift: already installed at {}", link.display());
-            return ExitCode::SUCCESS;
+    // The symlink, then the completion, every time: a second `ift install`
+    // after an update is how the completion gets its new subcommands, so
+    // "already installed" must not stop short of it.
+    let linked = matches!(std::fs::read_link(&link), Ok(target) if target == exe);
+    if linked {
+        println!("ift: already installed at {}", link.display());
+    } else {
+        if link.exists() && std::fs::read_link(&link).is_err() {
+            eprintln!("ift: {} exists and is not a symlink; move it first", link.display());
+            return ExitCode::from(2);
         }
         let _ = std::fs::remove_file(&link);
-    } else if link.exists() {
-        eprintln!("ift: {} exists and is not a symlink; move it first", link.display());
-        return ExitCode::from(2);
+        if let Err(e) = std::os::unix::fs::symlink(&exe, &link) {
+            eprintln!("ift: cannot link {}: {e}", link.display());
+            return ExitCode::from(2);
+        }
+        println!("ift: {} -> {}", link.display(), exe.display());
     }
-    if let Err(e) = std::os::unix::fs::symlink(&exe, &link) {
-        eprintln!("ift: cannot link {}: {e}", link.display());
-        return ExitCode::from(2);
-    }
-    println!("ift: {} -> {}", link.display(), exe.display());
     match completion::install(&home(), std::env::var("FPATH").ok().as_deref()) {
         Ok(lines) => lines.iter().for_each(|l| println!("{l}")),
         Err(e) => eprintln!("ift: {e}"),
