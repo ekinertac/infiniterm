@@ -17,7 +17,7 @@ use gpui::{
 use infiniterm_core::grid::{snap, Point, Rect};
 use infiniterm_core::keymap::{chord_for, KeyPress};
 use infiniterm_core::model::focus_cmd::BareKey;
-use infiniterm_core::model::register::handle_chord;
+use infiniterm_core::model::register::{handle_chord, resolve_chord};
 use infiniterm_core::momentum::{velocity_from, Sample, VELOCITY_SAMPLE_MS};
 use infiniterm_core::pan_mode::starts_pan;
 use infiniterm_core::resize::{apply_resize, Edge};
@@ -721,13 +721,16 @@ impl AppView {
                 }
             }
         }
+        // The label is resolved BEFORE the chord runs: a command that
+        // unlocks or refocuses would change what the chord resolves to.
+        let cast = (self.keycast_on && (m.platform || m.control))
+            .then(|| resolve_chord(&self.model, &chord))
+            .flatten()
+            .and_then(|id| self.registry.get(&id))
+            .map(|c| c.label.clone());
         if (m.platform || m.control) && handle_chord(&mut self.model, &self.registry, &chord) {
             if self.keycast_on {
-                let label = infiniterm_core::keymap::lookup(&self.model.keymap, &chord)
-                    .and_then(|id| self.registry.get(id))
-                    .map(|c| c.label.clone())
-                    .unwrap_or_default();
-                self.note_chord(&chord, &label, now_ms());
+                self.note_chord(&chord, &cast.unwrap_or_default(), now_ms());
             }
             self.perform_effects();
             return true;

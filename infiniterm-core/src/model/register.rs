@@ -40,12 +40,24 @@ pub fn describe_context(m: &Model) -> String {
 /// chords are the page's; a LOCKED browser card widens that to real
 /// Chrome tab shortcuts; then the keymap. True when a command ran.
 pub fn handle_chord(m: &mut Model, r: &CommandRegistry<Model>, chord: &str) -> bool {
+    let Some(id) = resolve_chord(m, chord) else {
+        return false;
+    };
+    run_with_effects(m, r, &id);
+    true
+}
+
+/// The command a chord runs on the focused card right now, or `None` when
+/// the chord is the body's. Separate from `handle_chord` so the keycast can
+/// label a chord with the command it ACTUALLY ran: on a locked card the
+/// keymap says "Card: new terminal" for Cmd+T while this says the tab.
+pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
     let card = m.focused();
     let kind = card.map(|c| c.kind);
     if kind == Some(crate::saved_layout::CardKind::Editor)
         && crate::editor_keys::editor_keeps(chord)
     {
-        return false;
+        return None;
     }
     let locked = card.is_some_and(|c| c.locked)
         && matches!(
@@ -66,31 +78,20 @@ pub fn handle_chord(m: &mut Model, r: &CommandRegistry<Model>, chord: &str) -> b
             crate::browser_keys::lock_override(chord)
                 .or_else(|| crate::browser_keys::browser_override(chord))
         };
-        return match id {
-            Some(id) => {
-                run_with_effects(m, r, id);
-                true
-            }
-            // Neither table knows it: not consumed, so `key_down` carries
-            // on to `body.key()`, which forwards a Cmd chord to
-            // `Surface::edit_chord` (copy, paste, cut, select-all, undo,
-            // redo) exactly as an unlocked browser card already does. A
-            // Chrome window has no app keymap behind it to fall back to;
-            // this one does, and swallowing here used to hide it.
-            None => false,
-        };
+        // Neither table knows it: not consumed, so `key_down` carries on
+        // to `body.key()`, which forwards a Cmd chord to
+        // `Surface::edit_chord` (copy, paste, cut, select-all, undo, redo)
+        // exactly as an unlocked browser card already does. A Chrome window
+        // has no app keymap behind it to fall back to; this one does, and
+        // swallowing here used to hide it.
+        return id.map(String::from);
     }
     let override_ = (kind == Some(crate::saved_layout::CardKind::Browser))
         .then(|| crate::browser_keys::browser_override(chord))
         .flatten();
-    let Some(id) = override_
+    override_
         .map(String::from)
         .or_else(|| crate::keymap::lookup(&m.keymap, chord).map(String::from))
-    else {
-        return false;
-    };
-    run_with_effects(m, r, &id);
-    true
 }
 
 /// `Ctrl` plus a single digit, the one Ctrl range a locked browser card
@@ -1500,6 +1501,32 @@ mod tests {
         assert!(handle_chord(&mut h.m, &h.r, "cmd+t"));
         assert_eq!(h.m.cards.len(), before, "no new card");
         assert_eq!(h.m.card(&id).unwrap().tabs.len(), 2, "a tab instead");
+    }
+
+    // The keycast labels a chord with what `resolve_chord` says, so on a
+    // locked card it must name the tab command, not the keymap's card one.
+    #[test]
+    fn resolve_chord_names_the_command_a_locked_card_runs() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+t").as_deref(),
+            Some("card.new.terminal")
+        );
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].locked = true;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+t").as_deref(),
+            Some("browser.tab.new")
+        );
+        h.m.cards[0].kind = CardKind::Editor;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+t").as_deref(),
+            Some("editor.tab.new")
+        );
+        // Unknown to every table: the body's.
+        assert_eq!(resolve_chord(&h.m, "cmd+shift+alt+ctrl+9"), None);
     }
 
     // Ctrl+digit is workspace switching, never a Chrome shortcut, so lock
