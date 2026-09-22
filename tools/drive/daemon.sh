@@ -31,6 +31,15 @@ SESSIONS="$DATA/s"
 
 FRESH=1
 drive_start
+# A fresh canvas seeds its card and spawns the shell AFTER the window is up,
+# and keys typed before the shell exists go nowhere: on 2026-09-23 the
+# redraw command below was lost that way while the later echo arrived.
+# Wait for the card's session socket, then a beat for zsh's own startup.
+for _ in $(seq 1 30); do
+    ls "$SESSIONS"/*.sock >/dev/null 2>&1 && break
+    sleep 0.5
+done
+wait_s 2
 
 echo "--- part 1: a synthetic inline redraw, no Claude needed ---"
 # Mimics Ink's own update style (and Claude Code's): print two lines, then
@@ -61,7 +70,9 @@ quit
 wait_s 1
 echo "--- after Cmd+Q: the daemon and its child must still be running ---"
 ls -la "$SESSIONS" 2>&1 || echo "   sessions dir is gone"
-pgrep -fl "iftd --socket" | head -4 || echo "   iftd is GONE"
+# Scoped to this run's data dir: a bare "iftd --socket" also lists every
+# daemon of the real canvas, which proves nothing about this one.
+pgrep -fl "iftd --socket $SESSIONS/" || echo "   iftd is GONE"
 "$IFT" sessions 2>&1 || echo "   ift sessions failed with the app dead: that is the bug, it must not need the app"
 
 echo "--- relaunching: the card should adopt that session, redraw and all ---"
