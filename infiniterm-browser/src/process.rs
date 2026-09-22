@@ -9,11 +9,15 @@
 //! run on `INFINITERM_DATA_DIR` gets its own; the two Anthropic native
 //! messaging manifests are copied from Chrome's directory into it at every
 //! start, so a Claude Code update is picked up on the next launch. The
-//! extension is loaded unpacked from `<data>/browser/extension`, seeded
-//! from Chrome's copy when absent. A missing extension is a browser
-//! without Claude, not a failure; a missing framework (the bare binary,
-//! outside a bundle) is an app without browser cards.
+//! Claude extension is loaded unpacked from `<data>/browser/extension`,
+//! seeded from Chrome's copy when absent; every extra extension
+//! `ift install-extension` has put under `<data>/browser/extensions/*`
+//! (`infiniterm_core::extensions`) loads alongside it. A missing Claude
+//! extension is a browser without Claude, not a failure; a missing
+//! framework (the bare binary, outside a bundle) is an app without browser
+//! cards.
 use cef::{args::Args, *};
+use infiniterm_core::extensions::{chrome_extension_dir, copy_dir, installed_extensions};
 use std::path::{Path, PathBuf};
 
 /// The Claude in Chrome extension's store id, which the unpacked copy keeps
@@ -21,55 +25,17 @@ use std::path::{Path, PathBuf};
 const EXTENSION_ID: &str = "fcoeoabgfenejglbffodgkkbkcdhcgfn";
 
 pub fn browser_dir() -> PathBuf {
-    infiniterm_core::paths::app_support_dir().join("browser")
+    infiniterm_core::paths::browser_dir()
 }
 
-fn chrome_support() -> PathBuf {
-    infiniterm_core::paths::home_dir().join("Library/Application Support/Google/Chrome")
-}
-
-/// Chrome's newest installed copy of the extension, if any.
-fn chrome_extension() -> Option<PathBuf> {
-    let dir = chrome_support()
-        .join("Default/Extensions")
-        .join(EXTENSION_ID);
-    let mut versions: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.join("manifest.json").is_file())
-        .collect();
-    versions.sort();
-    versions.pop()
-}
-
-/// Regular files and directories only: a profile holds sockets and locks
-/// (`Singleton*`) that must not travel, and a copy that stops at one of
-/// them would leave half a profile.
-fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)?.flatten() {
-        let name = entry.file_name();
-        if name.to_string_lossy().starts_with("Singleton") {
-            continue;
-        }
-        let target = to.join(&name);
-        let kind = entry.file_type()?;
-        if kind.is_dir() {
-            copy_dir(&entry.path(), &target)?;
-        } else if kind.is_file() {
-            std::fs::copy(entry.path(), target)?;
-        }
-    }
-    Ok(())
-}
-
-/// The extension and the native messaging manifests in place under
-/// `data`. Returns the extension directory when there is one to load.
-pub fn seed(data: &Path) -> Option<PathBuf> {
+/// The Claude extension and every extra one in place under `data`, and the
+/// native messaging manifests. Returns every extension directory to load,
+/// Claude's first when it has one, sorted after that (`installed_extensions`'s
+/// own order) so `--load-extension`'s list is the same on every launch.
+pub fn seed(data: &Path) -> Vec<PathBuf> {
     let ext = data.join("extension");
     if !ext.join("manifest.json").is_file() {
-        match chrome_extension() {
+        match chrome_extension_dir(EXTENSION_ID) {
             Some(src) => {
                 if let Err(e) = copy_dir(&src, &ext) {
                     eprintln!("[infiniterm/warn] could not copy the extension: {e}");
@@ -99,7 +65,7 @@ pub fn seed(data: &Path) -> Option<PathBuf> {
     }
     let hosts = profile.join("NativeMessagingHosts");
     let _ = std::fs::create_dir_all(&hosts);
-    let src = chrome_support().join("NativeMessagingHosts");
+    let src = infiniterm_core::paths::chrome_support_dir().join("NativeMessagingHosts");
     if let Ok(entries) = std::fs::read_dir(&src) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
@@ -108,12 +74,14 @@ pub fn seed(data: &Path) -> Option<PathBuf> {
             }
         }
     }
-    ext.join("manifest.json").is_file().then_some(ext)
+    let mut dirs: Vec<PathBuf> = ext.join("manifest.json").is_file().then_some(ext).into_iter().collect();
+    dirs.extend(installed_extensions(data));
+    dirs
 }
 
 wrap_app! {
     pub struct AppBuilder {
-        extension: Option<String>,
+        extensions: Vec<String>,
     }
 
     impl App {
@@ -122,8 +90,11 @@ wrap_app! {
             cmd.append_switch(Some(&"no-startup-window".into()));
             cmd.append_switch(Some(&"noerrdialogs".into()));
             cmd.append_switch(Some(&"use-mock-keychain".into()));
-            if let Some(ext) = &self.extension {
-                cmd.append_switch_with_value(Some(&"load-extension".into()), Some(&CefString::from(ext.as_str())));
+            if !self.extensions.is_empty() {
+                // Chromium's own format for more than one: the switch takes
+                // a comma-separated list of paths, not repeated switches.
+                let joined = self.extensions.join(",");
+                cmd.append_switch_with_value(Some(&"load-extension".into()), Some(&CefString::from(joined.as_str())));
             }
         }
     }
@@ -156,8 +127,11 @@ pub fn early() -> Result<Process, Unavailable> {
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
     let args = Args::new();
     let data = browser_dir();
-    let extension = seed(&data).map(|p| p.to_string_lossy().into_owned());
-    let mut app = AppBuilder::new(extension);
+    let extensions: Vec<String> = seed(&data)
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    let mut app = AppBuilder::new(extensions);
     let ret = execute_process(
         Some(args.as_main_args()),
         Some(&mut app),

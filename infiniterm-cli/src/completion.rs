@@ -8,7 +8,8 @@
 //! path (the bare `ift <path>` form); for `attach`, the live sessions and
 //! the card numbers from `ift sessions`, which prints tab-separated rows
 //! into a pipe for exactly this; for `group`, the groups `ift ls` shows;
-//! directories for `diff` and `install-pi-hooks`. Related: main.rs (USAGE,
+//! directories for `diff`, `install-pi-hooks` and `install-extension`.
+//! Related: main.rs (USAGE,
 //! the dispatch), attach.rs (the columns the pipe form prints).
 
 /// The `_ift` function. `#compdef` first, so it works from an fpath dir.
@@ -55,6 +56,7 @@ _ift() {
     'install:put ift on $PATH and this completion on fpath'
     'install-claude-hooks:wire infiniterm into ~/.claude/settings.json'
     'install-pi-hooks:install the Pi extension'
+    'install-extension:add an extension the browser cards load'
     'completion:print the zsh completion'
   )
   if (( CURRENT == 2 )); then
@@ -68,6 +70,7 @@ _ift() {
     group) _ift_groups ;;
     install-pi-hooks) _arguments '--dry-run[show the edit, write nothing]' '1:agent dir:_files -/' ;;
     install-claude-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
+    install-extension) _files -/ ;;
     sessions) _arguments '--full[every column: id, pid, cwd, command, started]' ;;
     completion) _values 'shell' zsh ;;
     omni) _message 'a term for the omnibox' ;;

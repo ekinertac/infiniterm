@@ -62,13 +62,20 @@ ift — drive infiniterm from a shell
   ift install-pi-hooks [DIR] install the Pi extension into ~/.pi/agent (or
                              $PI_CODING_AGENT_DIR, or DIR: a wrapper that
                              runs Pi against its own agent dir needs its own)
+  ift install-extension <path|id|store-url>
+                             add an extension the browser cards load: an
+                             unpacked directory, or an id / Chrome Web
+                             Store url looked up in Chrome's own profile
+                             (CEF cannot pull a .crx from the store
+                             directly, so it must be installed there
+                             first); takes effect on the app's next launch
 
 Exit codes: 0 ok, 1 infiniterm not running, 2 bad usage.
 ";
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 12] = [
+pub const SUBCOMMANDS: [&str; 13] = [
     "diff",
     "ls",
     "sessions",
@@ -80,6 +87,7 @@ pub const SUBCOMMANDS: [&str; 12] = [
     "install",
     "install-claude-hooks",
     "install-pi-hooks",
+    "install-extension",
     "completion",
 ];
 
@@ -97,6 +105,7 @@ fn main() -> ExitCode {
             args.iter().skip(1).find(|a| !a.starts_with("--")).map(String::as_str),
             args.contains(&"--dry-run".to_string()),
         ),
+        Some("install-extension") => install_extension(args.get(1).map(String::as_str)),
         Some("install") => install_self(),
         Some("completion") => match args.get(1).map(String::as_str) {
             Some("zsh") => {
@@ -477,6 +486,28 @@ fn install_pi(dir: Option<&str>, dry_run: bool) -> ExitCode {
     println!("  hook: {binary}");
     println!("  takes effect in the next pi session");
     ExitCode::SUCCESS
+}
+
+/// `ift install-extension <path|id|store-url>`: filesystem only, no socket,
+/// the same shape as `install-pi-hooks` — the browser picks a new one up
+/// on its own next launch, not this app's, so there is nothing to tell the
+/// running app about.
+fn install_extension(source: Option<&str>) -> ExitCode {
+    let Some(source) = source else {
+        eprintln!("ift: install-extension needs a path, an id, or a Chrome Web Store url");
+        return ExitCode::from(2);
+    };
+    match infiniterm_core::extensions::install(&infiniterm_core::paths::browser_dir(), source) {
+        Ok(dest) => {
+            println!("installed {}", dest.display());
+            println!("  takes effect on infiniterm's next launch");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("ift: {e}");
+            ExitCode::from(2)
+        }
+    }
 }
 
 #[cfg(test)]

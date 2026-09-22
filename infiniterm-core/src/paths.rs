@@ -81,6 +81,21 @@ pub fn themes_dir() -> PathBuf {
     app_support_dir().join("themes")
 }
 
+/// CEF's profile, the Claude extension's own seeded copy, and every other
+/// extension `ift install-extension` has put in (`extensions::extensions_dir`).
+pub fn browser_dir() -> PathBuf {
+    app_support_dir().join("browser")
+}
+
+/// Chrome's own profile directory: where an extension `ift install-
+/// extension` looks up is unpacked once Chrome has installed it
+/// (`extensions::chrome_extension_dir`), and where the two Anthropic
+/// native messaging manifests are copied from
+/// (`infiniterm-browser::process::seed`).
+pub fn chrome_support_dir() -> PathBuf {
+    home_dir().join("Library/Application Support/Google/Chrome")
+}
+
 /// Where each card's `iftd` socket and `.meta` file live: `<data>/s/<id>.sock`.
 ///
 /// Under the data dir on purpose, not a sibling of it: `INFINITERM_DATA_DIR`
