@@ -31,6 +31,9 @@ SESSIONS="$DATA/s"
 
 FRESH=1
 drive_start
+# Every later drive_start (the relaunches) would otherwise clear $SHOTS,
+# which is why only 05 ever survived and 01 to 04 looked unwritten.
+export KEEP_SHOTS=1
 # A fresh canvas seeds its card and spawns the shell AFTER the window is up,
 # and keys typed before the shell exists go nowhere: on 2026-09-23 the
 # redraw command below was lost that way while the later echo arrived.
