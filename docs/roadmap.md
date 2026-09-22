@@ -46,6 +46,8 @@ The daemon keeps a shell alive across the app quitting. Nothing keeps a process 
 
 ## Dropped
 
+- A card's text as a TEXTURE at far zoom, measured and dropped 2026-09-22 (spikes/card-texture/NOTES.md): it works and it reads in colour at 9.6 px, but it is 4 ms a card against a bar's 0.5, plus a cache, an invalidation rule and a gpui atlas tile. Bars won. The spike's code and numbers stay for the day reading a card at fit-all matters.
+
 - Inline images in a terminal card (imgcat, kitty graphics, sixel). Dropped 2026-09-18: Cmd+click on an image path opens it in an editor card, and the tree walks a folder of screenshots with the arrows, which is what the images were wanted for. Rendering inside the grid would have been two days per protocol for the same picture in a smaller box.
 
 ## Parked

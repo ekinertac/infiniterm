@@ -39,9 +39,11 @@ Zooming is where it really pays: a pinch re-renders nothing, it scales the textu
 - Colour fidelity against our own palette (the spike used five hand-picked colours), wide characters and emoji, and the cursor and selection overlays, which stay as quads over the texture because they change without output.
 - Whether the editor, diff and transcript bodies want the same treatment. They report no cells to the glyph budget yet either.
 
-## Recommendation
+## Decision: not built (2026-09-22)
 
-Build it, as the far mode: below `FAR_FONT_PX` a terminal paints its texture, with bars as the fallback for the frame before the first texture exists. Two to three days. The glyph budget stays as the thing that decides when far starts.
+Ekin read the numbers and kept bars: "bars: 0.5 ms/card beats all of them". A texture is 8x a bar to produce and carries a cache, an invalidation rule, an atlas tile and a second text path; bars are one rect per word and never go stale. Far zoom is for finding a card, not for reading it.
+
+What would reopen this: wanting to READ a card at fit-all. Then the recommendation was: below `FAR_FONT_PX` a terminal paints its texture, bars as the fallback for the frame before the first one exists, the glyph budget still deciding when far starts. Two to three days.
 
 ## How to run
 
