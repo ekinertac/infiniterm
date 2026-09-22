@@ -15,19 +15,20 @@ use gpui::{
     canvas, div, prelude::*, px, Context, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Render, ScrollWheelEvent, Window,
 };
+use infiniterm_core::agent_state::AgentState;
 use infiniterm_core::format_zoom::format_zoom;
 use infiniterm_core::palette::{highlight, rank, sectionise, step_index, RankedItem, MAX_RESULTS};
 use infiniterm_core::palette_usage::{recent_keys, usage_bonus, use_key, RECENT_LIMIT};
 use infiniterm_core::saved_layout::CardKind;
 use infiniterm_core::shortcuts::{filter_shortcuts, shortcut_sections, GESTURES};
-use infiniterm_core::workspaces::{fresh_done_count, waiting_count, working_count};
+use infiniterm_core::workspaces::tab_dots;
 
 /// Rows the palette shows at once; the selection is kept inside the window.
 const PALETTE_ROWS: usize = 14;
 
 /// The workspace tabs' label size, shared by the "+" new-tab control.
 const TAB_LABEL_FONT_PX: f32 = 12.;
-/// A workspace's waiting/working dot: a hint, not a badge.
+/// A workspace tab's agent dots, one per agent card: a hint, not a badge.
 const TAB_DOT_PX: f32 = 6.;
 /// The working dot is dimmer than the waiting one, so a card still running
 /// doesn't visually shout as loud as one already asking for you.
@@ -407,21 +408,13 @@ impl AppView {
         let mut tabs = div().flex().items_center().gap_1();
         for ws in &self.model.workspaces {
             let cards = self.model.cards_on(Some(&ws.id));
-            let states: Vec<_> = cards.iter().map(|c| c.agent).collect();
-            let waiting = waiting_count(&states);
-            let working = working_count(&states);
             let is_active = active.as_deref() == Some(&ws.id);
-            // Finished since you left; the active workspace shows the
-            // cards themselves, so its tab does not repeat them.
-            let done = if is_active {
-                0
-            } else {
-                let timed: Vec<_> = cards.iter().map(|c| (c.agent, c.last_event_at)).collect();
-                fresh_done_count(
-                    &timed,
-                    self.model.left_at.get(&ws.id).copied().unwrap_or(0.),
-                )
-            };
+            let timed: Vec<_> = cards.iter().map(|c| (c.agent, c.last_event_at)).collect();
+            let dots = tab_dots(
+                &timed,
+                self.model.left_at.get(&ws.id).copied().unwrap_or(0.),
+                is_active,
+            );
             let id = ws.id.clone();
             let mut tab = div()
                 .id(gpui::SharedString::from(format!("tab-{}", ws.id)))
@@ -447,36 +440,22 @@ impl AppView {
                     }),
                 )
                 .child(ws.name.clone());
-            if waiting > 0 {
+            // One dot per agent card, in the colour its border wears, so
+            // the dots and the cards they send you to agree.
+            for state in dots {
+                let color = match state {
+                    AgentState::Waiting => chrome.agent_waiting,
+                    AgentState::Working => {
+                        crate::chrome::with_alpha(chrome.agent_working, TAB_WORKING_DOT_ALPHA)
+                    }
+                    _ => chrome.agent_done,
+                };
                 tab = tab.child(
                     div()
                         .w(px(TAB_DOT_PX * ui))
                         .h(px(TAB_DOT_PX * ui))
                         .rounded_full()
-                        // The same colour the card's own border takes, so
-                        // the dot and the card it sends you to agree.
-                        .bg(chrome.agent_waiting),
-                );
-            }
-            if working > 0 {
-                tab = tab.child(
-                    div()
-                        .w(px(TAB_DOT_PX * ui))
-                        .h(px(TAB_DOT_PX * ui))
-                        .rounded_full()
-                        .bg(crate::chrome::with_alpha(
-                            chrome.agent_working,
-                            TAB_WORKING_DOT_ALPHA,
-                        )),
-                );
-            }
-            if done > 0 {
-                tab = tab.child(
-                    div()
-                        .w(px(TAB_DOT_PX * ui))
-                        .h(px(TAB_DOT_PX * ui))
-                        .rounded_full()
-                        .bg(chrome.agent_done),
+                        .bg(color),
                 );
             }
             tabs = tabs.child(tab);

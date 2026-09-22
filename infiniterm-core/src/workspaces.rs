@@ -1,4 +1,4 @@
-//! Workspace naming, navigation, and independent waiting/working counts.
+//! Workspace naming, navigation, and the agent dots a workspace tab wears.
 //! Port of workspaces.ts and its tests; callers supply ids and states explicitly.
 //! Switching workspaces never removes cards or their PTYs and never follows activity.
 use crate::{agent_state::AgentState, viewport::Viewport};
@@ -18,26 +18,30 @@ pub const INITIAL_VIEWPORT: Viewport = Viewport {
     y: 0.,
     scale: 1.,
 };
-/// Cards blocked on you. NOT cards that finished: counting those lit the
-/// dot after every turn, and a dot that is always on says nothing; the
-/// ones that finished while you were away are `fresh_done_count`.
-pub fn waiting_count(states: &[AgentState]) -> usize {
-    states.iter().filter(|&&s| s == AgentState::Waiting).count()
-}
-pub fn working_count(states: &[AgentState]) -> usize {
-    states.iter().filter(|&&s| s == AgentState::Working).count()
-}
-/// Cards that FINISHED after you left the workspace: `(state, when its
-/// last hook event arrived)` against the moment the workspace was last
-/// shown. A Done card stays Done until its next turn, so counting every
-/// one lit the tab for good; counting the ones you have not been back to
-/// see says "something finished while you were away" and clears itself on
-/// the visit.
-pub fn fresh_done_count(states: &[(AgentState, f64)], left_at: f64) -> usize {
-    states
+/// The dots a workspace's tab wears: ONE PER AGENT CARD in that card's own
+/// hue, so a tab with three Claudes shows three dots and you can see how
+/// many are asking. `cards` is `(state, when its last hook event arrived)`;
+/// the order is waiting, working, done, so what needs you is nearest the
+/// name. A Done card counts only when its Stop arrived after you LEFT the
+/// workspace (`left_at`) and never on the active tab (`active`), because
+/// a Done card stays Done until its next turn and counting every one lit
+/// the tab for good, which is the same as having no dot. A plain shell
+/// (`None`) is no dot.
+pub fn tab_dots(cards: &[(AgentState, f64)], left_at: f64, active: bool) -> Vec<AgentState> {
+    let mut dots: Vec<AgentState> = cards
         .iter()
-        .filter(|(s, at)| *s == AgentState::Done && *at > left_at)
-        .count()
+        .filter_map(|&(s, at)| match s {
+            AgentState::Waiting | AgentState::Working => Some(s),
+            AgentState::Done if !active && at > left_at => Some(s),
+            _ => None,
+        })
+        .collect();
+    dots.sort_by_key(|s| match s {
+        AgentState::Waiting => 0,
+        AgentState::Working => 1,
+        _ => 2,
+    });
+    dots
 }
 pub fn next_name(existing: &[String], stem: &str) -> String {
     for i in 1..=existing.len() + 1 {
@@ -80,23 +84,32 @@ mod tests {
         s.iter().map(|s| s.to_string()).collect()
     }
     #[test]
-    fn waiting_counts_only_what_is_asking_for_you() {
+    fn one_dot_per_agent_card_waiting_first() {
         use AgentState::*;
-        assert_eq!(waiting_count(&[Waiting, Working, None, Waiting]), 2);
-        assert_eq!(waiting_count(&[Working, None]), 0);
-        // A finished turn is not a request.
-        assert_eq!(waiting_count(&[Done, Done]), 0);
-        assert_eq!(waiting_count(&[]), 0);
+        let cards = [
+            (Working, 1.),
+            (None, 2.),
+            (Waiting, 3.),
+            (Working, 4.),
+            (Waiting, 5.),
+        ];
+        assert_eq!(
+            tab_dots(&cards, 0., false),
+            vec![Waiting, Waiting, Working, Working]
+        );
+        assert_eq!(tab_dots(&[(None, 1.)], 0., false), vec![]);
+        assert_eq!(tab_dots(&[], 0., false), vec![]);
     }
     #[test]
-    fn fresh_done_counts_turns_finished_since_the_workspace_was_left() {
+    fn done_counts_only_turns_finished_since_the_workspace_was_left() {
         use AgentState::*;
-        let cards = [(Done, 10.), (Done, 30.), (Working, 40.), (Waiting, 50.)];
-        assert_eq!(fresh_done_count(&cards, 20.), 1);
-        assert_eq!(fresh_done_count(&cards, 0.), 2);
+        let cards = [(Done, 10.), (Done, 30.), (Working, 40.)];
+        assert_eq!(tab_dots(&cards, 20., false), vec![Working, Done]);
+        assert_eq!(tab_dots(&cards, 0., false), vec![Working, Done, Done]);
         // Seen already: nothing new to report.
-        assert_eq!(fresh_done_count(&cards, 30.), 0);
-        assert_eq!(fresh_done_count(&[], 0.), 0);
+        assert_eq!(tab_dots(&cards, 30., false), vec![Working]);
+        // The active workspace shows the cards themselves.
+        assert_eq!(tab_dots(&cards, 0., true), vec![Working]);
     }
     #[test]
     fn names_number_from_one_skip_taken() {
@@ -153,10 +166,5 @@ mod tests {
     fn closing_last_or_unknown_has_no_target() {
         assert_eq!(after_closing(&ids(&["only"]), "only"), None);
         assert_eq!(after_closing(&ids(&["a", "b", "c"]), "gone"), None);
-    }
-    #[test]
-    fn working_counts_only_working() {
-        use AgentState::*;
-        assert_eq!(working_count(&[Working, Done, None, Working]), 2);
     }
 }

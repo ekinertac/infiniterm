@@ -14,7 +14,7 @@ Native macOS app in Rust: gpui draws the canvas, `alacritty_terminal` parses the
 - Card borders, and only card borders, driven by Claude Code and Pi hooks, in three colours because there are three questions: the agent is working, the agent is blocked on you (it wants permission, or it asked something), or its turn finished. A plain shell has no colour
 - Keyboard-first. Every action is a command; `Cmd` is the app's modifier, and everything else goes to the terminal untouched
 - Card labels and group names take a colour of their own from the terminal theme's palette, derived from the card's id so it never changes
-- Several workspaces, each a canvas of its own, with dots on the tab for a card blocked waiting on you, one still working, and a turn that finished after you left (once you have been back, that one is gone)
+- Several workspaces, each a canvas of its own, with a dot on the tab per agent card in its colour: blocked waiting on you, still working, or finished after you left (once you have been back, that one is gone)
 - Groups: a named frame around a set of cards, placed clear of the loose ones. The frame carries no agent colour of its own: it holds several sessions, and one colour could not say which of them wants you
 - Card labels that track what the card is doing: the running process while one runs, the current directory otherwise; editors carry badges for language, read-only and unsaved. Zoomed out, the name is drawn large across the card and the text becomes texture, so a full card reads as full at 10%
 - Splits, iTerm2's keys: a card gives up half of itself to a new one, and the halves remember each other, so closing one hands its space back
