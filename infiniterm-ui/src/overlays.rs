@@ -30,6 +30,8 @@ const PALETTE_ROWS: usize = 14;
 const TAB_LABEL_FONT_PX: f32 = 12.;
 /// A workspace tab's agent dots, one per agent card: a hint, not a badge.
 const TAB_DOT_PX: f32 = 6.;
+/// An idle card's dot is a lamp that is off: there, and no louder.
+const TAB_IDLE_DOT_ALPHA: f32 = 0.45;
 /// The working dot is dimmer than the waiting one, so a card still running
 /// doesn't visually shout as loud as one already asking for you.
 const TAB_WORKING_DOT_ALPHA: f32 = 0.6;
@@ -409,7 +411,10 @@ impl AppView {
         for ws in &self.model.workspaces {
             let cards = self.model.cards_on(Some(&ws.id));
             let is_active = active.as_deref() == Some(&ws.id);
-            let timed: Vec<_> = cards.iter().map(|c| (c.agent, c.last_event_at)).collect();
+            // In number order, so a card's dot keeps its place on the tab.
+            let mut ordered: Vec<_> = cards.iter().collect();
+            ordered.sort_by_key(|c| c.number);
+            let timed: Vec<_> = ordered.iter().map(|c| (c.agent, c.last_event_at)).collect();
             let dots = tab_dots(
                 &timed,
                 self.model.left_at.get(&ws.id).copied().unwrap_or(0.),
@@ -440,15 +445,19 @@ impl AppView {
                     }),
                 )
                 .child(ws.name.clone());
-            // One dot per agent card, in the colour its border wears, so
-            // the dots and the cards they send you to agree.
+            // One dot per card, in the colour its border wears, so the
+            // dots and the cards they send you to agree; grey for a card
+            // with nothing to say, so the row reads as lamps.
             for state in dots {
                 let color = match state {
                     AgentState::Waiting => chrome.agent_waiting,
                     AgentState::Working => {
                         crate::chrome::with_alpha(chrome.agent_working, TAB_WORKING_DOT_ALPHA)
                     }
-                    _ => chrome.agent_done,
+                    AgentState::Done => chrome.agent_done,
+                    AgentState::None => {
+                        crate::chrome::with_alpha(chrome.text_faint, TAB_IDLE_DOT_ALPHA)
+                    }
                 };
                 tab = tab.child(
                     div()

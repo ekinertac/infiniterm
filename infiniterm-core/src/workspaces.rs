@@ -18,30 +18,25 @@ pub const INITIAL_VIEWPORT: Viewport = Viewport {
     y: 0.,
     scale: 1.,
 };
-/// The dots a workspace's tab wears: ONE PER AGENT CARD in that card's own
-/// hue, so a tab with three Claudes shows three dots and you can see how
-/// many are asking. `cards` is `(state, when its last hook event arrived)`;
-/// the order is waiting, working, done, so what needs you is nearest the
-/// name. A Done card counts only when its Stop arrived after you LEFT the
-/// workspace (`left_at`) and never on the active tab (`active`), because
-/// a Done card stays Done until its next turn and counting every one lit
-/// the tab for good, which is the same as having no dot. A plain shell
-/// (`None`) is no dot.
+/// The dots a workspace's tab wears: ONE PER CARD, in the card's order, a
+/// grey one for a card with nothing to say and the card's own hue when an
+/// agent in it is working, waiting or freshly done, so the tab is a row of
+/// lamps and you watch them light one at a time. `cards` is `(state, when
+/// its last hook event arrived)`; a card's dot keeps its place whatever it
+/// does, which is what makes the row readable. A Done card lights only
+/// when its Stop arrived after you LEFT the workspace (`left_at`) and never
+/// on the active tab (`active`), because a Done card stays Done until its
+/// next turn and lighting every one lit the tab for good, which is the
+/// same as having no dot; otherwise it is grey like a shell.
 pub fn tab_dots(cards: &[(AgentState, f64)], left_at: f64, active: bool) -> Vec<AgentState> {
-    let mut dots: Vec<AgentState> = cards
+    cards
         .iter()
-        .filter_map(|&(s, at)| match s {
-            AgentState::Waiting | AgentState::Working => Some(s),
-            AgentState::Done if !active && at > left_at => Some(s),
-            _ => None,
+        .map(|&(s, at)| match s {
+            AgentState::Waiting | AgentState::Working => s,
+            AgentState::Done if !active && at > left_at => s,
+            _ => AgentState::None,
         })
-        .collect();
-    dots.sort_by_key(|s| match s {
-        AgentState::Waiting => 0,
-        AgentState::Working => 1,
-        _ => 2,
-    });
-    dots
+        .collect()
 }
 pub fn next_name(existing: &[String], stem: &str) -> String {
     for i in 1..=existing.len() + 1 {
@@ -84,32 +79,25 @@ mod tests {
         s.iter().map(|s| s.to_string()).collect()
     }
     #[test]
-    fn one_dot_per_agent_card_waiting_first() {
+    fn one_dot_per_card_in_place_grey_when_nothing_to_say() {
         use AgentState::*;
-        let cards = [
-            (Working, 1.),
-            (None, 2.),
-            (Waiting, 3.),
-            (Working, 4.),
-            (Waiting, 5.),
-        ];
+        let cards = [(Working, 1.), (None, 2.), (Waiting, 3.), (None, 4.)];
         assert_eq!(
             tab_dots(&cards, 0., false),
-            vec![Waiting, Waiting, Working, Working]
+            vec![Working, None, Waiting, None]
         );
-        assert_eq!(tab_dots(&[(None, 1.)], 0., false), vec![]);
         assert_eq!(tab_dots(&[], 0., false), vec![]);
     }
     #[test]
-    fn done_counts_only_turns_finished_since_the_workspace_was_left() {
+    fn done_lights_only_turns_finished_since_the_workspace_was_left() {
         use AgentState::*;
         let cards = [(Done, 10.), (Done, 30.), (Working, 40.)];
-        assert_eq!(tab_dots(&cards, 20., false), vec![Working, Done]);
-        assert_eq!(tab_dots(&cards, 0., false), vec![Working, Done, Done]);
-        // Seen already: nothing new to report.
-        assert_eq!(tab_dots(&cards, 30., false), vec![Working]);
+        assert_eq!(tab_dots(&cards, 20., false), vec![None, Done, Working]);
+        assert_eq!(tab_dots(&cards, 0., false), vec![Done, Done, Working]);
+        // Seen already: grey like a shell.
+        assert_eq!(tab_dots(&cards, 30., false), vec![None, None, Working]);
         // The active workspace shows the cards themselves.
-        assert_eq!(tab_dots(&cards, 0., true), vec![Working]);
+        assert_eq!(tab_dots(&cards, 0., true), vec![None, None, Working]);
     }
     #[test]
     fn names_number_from_one_skip_taken() {
