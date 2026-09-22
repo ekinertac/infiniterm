@@ -49,6 +49,7 @@ _ift() {
     'sessions:session daemons still running, app or no app'
     'attach:connect a session'\''s shell to this terminal'
     'omni:what the omnibox would show for a term'
+    'commands:every command the app registers, with its key'
     'name:name the card this is run from'
     'group:put this card in a group'
     'install:put ift on $PATH and this completion on fpath'

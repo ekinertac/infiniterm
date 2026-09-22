@@ -48,6 +48,9 @@ ift — drive infiniterm from a shell
                              its id or by the card's number (#7 on its
                              label, the same after a reboot; the id is not);
                              Ctrl-\\ (0x1c) detaches, leaving it running
+  ift commands               every command the app registers: id, label,
+                             key; the palette's list as text (the default
+                             keybindings file has only the bound ones)
   ift omni <term>            what the omnibox (Cmd+L) would show for a term,
                              ranked against the real history and open cards
   ift name <text>            name the card this is run from
@@ -65,12 +68,13 @@ Exit codes: 0 ok, 1 infiniterm not running, 2 bad usage.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 11] = [
+pub const SUBCOMMANDS: [&str; 12] = [
     "diff",
     "ls",
     "sessions",
     "attach",
     "omni",
+    "commands",
     "name",
     "group",
     "install",
@@ -105,6 +109,7 @@ fn main() -> ExitCode {
             }
         },
         Some("ls") => send_table("ls", &LS_HEADER),
+        Some("commands") => send_table("commands", &["id", "label", "key"]),
         Some("sessions") => attach::sessions_cmd(args.contains(&"--full".to_string())),
         Some("attach") => match args.get(1) {
             Some(id) => attach::attach(id),

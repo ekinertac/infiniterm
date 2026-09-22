@@ -16,7 +16,9 @@ fn kind_of(s: &str) -> PathKind {
 }
 
 impl Model {
-    pub fn run_ift(&mut self, req: &CliRequest, command_ids: &[&str]) -> CliReply {
+    /// `commands` is the registry as `(id, label)`, since the model does
+    /// not hold the registry: `ift commands` lists it and `dev-run` checks it.
+    pub fn run_ift(&mut self, req: &CliRequest, commands: &[(&str, &str)]) -> CliReply {
         let ok = |text: String| CliReply { ok: true, text };
         let err = |text: &str| CliReply {
             ok: false,
@@ -48,6 +50,29 @@ impl Model {
                     |id| self.group(id).map(|g| g.name.clone()),
                     &self.home,
                 ))
+            }
+            // `ift commands`: every registered command with its chord, the
+            // list keybindings.default.json only shows the bound part of.
+            // From the running app, so it cannot drift from the palette.
+            "commands" => {
+                let mut rows: Vec<(String, String, String)> = commands
+                    .iter()
+                    .map(|(id, label)| {
+                        let chord = self
+                            .keymap
+                            .iter()
+                            .find(|(_, cid)| cid == id)
+                            .map(|(chord, _)| crate::shortcuts::format_chord(chord))
+                            .unwrap_or_default();
+                        (id.to_string(), label.to_string(), chord)
+                    })
+                    .collect();
+                rows.sort();
+                ok(rows
+                    .iter()
+                    .map(|(id, label, chord)| format!("{id}\t{label}\t{chord}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"))
             }
             // `ift omni <term>`: what Cmd+L would show, ranked against the
             // live history and the cards actually open, so a result nobody
@@ -123,7 +148,7 @@ impl Model {
                     return err("not a development build");
                 }
                 let id = req.args.first().map(String::as_str).unwrap_or("");
-                if !command_ids.contains(&id) {
+                if !commands.iter().any(|(i, _)| *i == id) {
                     return err(&format!("no command {id}"));
                 }
                 self.effects.push(Effect::RunCommand(id.to_string()));
@@ -188,6 +213,32 @@ mod tests {
         assert!(reply.text.contains("Hacker News"), "{}", reply.text);
         assert!(reply.text.contains("open https://news.ycombinator.com"));
         assert_eq!(m.omni.query, "left alone");
+    }
+
+    #[test]
+    fn commands_lists_every_registered_command_with_its_chord() {
+        let mut m = Model::new();
+        m.keymap = vec![("cmd+t".into(), "card.new.terminal".into())];
+        let reply = m.run_ift(
+            &CliRequest {
+                id: 1,
+                cmd: "commands".into(),
+                args: vec![],
+                card_id: None,
+            },
+            &[
+                ("card.new.terminal", "Card: new terminal"),
+                ("app.keycast", "App: keycast"),
+            ],
+        );
+        assert!(reply.ok);
+        let lines: Vec<&str> = reply.text.lines().collect();
+        assert_eq!(
+            lines[0], "app.keycast\tApp: keycast\t",
+            "sorted, unbound is blank"
+        );
+        assert!(lines[1].starts_with("card.new.terminal\tCard: new terminal\t"));
+        assert!(lines[1].contains('T'), "{}", lines[1]);
     }
 
     #[test]

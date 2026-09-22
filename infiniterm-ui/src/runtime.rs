@@ -481,9 +481,13 @@ impl AppView {
             }
         }
         while let Ok(req) = self.backend.cli_requests.try_recv() {
-            let ids: Vec<String> = self.registry.all().iter().map(|c| c.id.clone()).collect();
-            let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-            let reply = self.model.run_ift(&req, &ids);
+            let commands: Vec<(&str, &str)> = self
+                .registry
+                .all()
+                .iter()
+                .map(|c| (c.id.as_str(), c.label.as_str()))
+                .collect();
+            let reply = self.model.run_ift(&req, &commands);
             self.backend.cli.reply(req.id, reply.ok, reply.text);
             // An ift verb arrives from the socket, after the element tree
             // for this frame was built, and several of them change chrome
