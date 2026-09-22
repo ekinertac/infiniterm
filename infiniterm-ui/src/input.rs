@@ -592,6 +592,9 @@ impl AppView {
                     self.model.switcher_commit();
                     self.perform_effects();
                 }
+                // Cmd+Tab's arrows, down the list the panel draws.
+                "down" => self.model.switcher_step(1),
+                "up" => self.model.switcher_step(-1),
                 _ => {}
             }
             self.redraw = true;
