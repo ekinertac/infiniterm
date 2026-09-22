@@ -161,6 +161,13 @@ pub struct BrowserBody {
     /// the app-level menu overlay. Aggregated across tabs rather than kept
     /// per tab: a menu only ever opens from a click on the visible page.
     pub context_menu: Option<infiniterm_browser::ContextMenuRequest>,
+    /// The texture last painted into gpui's sprite atlas, so `paint` can
+    /// evict it the moment a new one takes its place. gpui has no atlas
+    /// LRU: every `RenderImage::new` mints a fresh id, and nothing but
+    /// `Window::drop_image` ever frees the tile it was painted into, so
+    /// without this an open browser card grows the atlas by one tile per
+    /// CEF frame for as long as it runs.
+    painted_texture: Option<Arc<RenderImage>>,
     /// Remembered so a tab opened later is built the same way the first
     /// one was.
     cef_running: bool,
@@ -205,6 +212,7 @@ impl BrowserBody {
             dirty: true,
             popups: vec![],
             context_menu: None,
+            painted_texture: None,
             cef_running,
         }
     }
@@ -418,6 +426,16 @@ impl BrowserBody {
         cursor_style_for(self.active_surface().map_or("default", |s| s.cursor()))
     }
 
+    /// Releases the last texture painted, if any, from gpui's sprite atlas.
+    /// Called from `paint.rs::reconcile_bodies` right before this card's
+    /// body is dropped: a closed card's last frame is not otherwise freed
+    /// (see `painted_texture`'s own doc).
+    pub fn drop_texture(&mut self, window: &mut Window) {
+        if let Some(img) = self.painted_texture.take() {
+            let _ = window.drop_image(img);
+        }
+    }
+
     fn mods(m: &gpui::Modifiers) -> Mods {
         Mods {
             shift: m.shift,
@@ -448,6 +466,14 @@ fn page_world_size(world: Size, font_px: f64, ui_scale: f32) -> Size {
         w: world.w,
         h: (world.h - strip_world_h(font_px, ui_scale)).max(1.),
     }
+}
+
+/// Whether the tile last painted (`last`), if any, should be evicted now
+/// that `new` was just painted into gpui's sprite atlas: never when the
+/// two are the SAME image, which is every frame nothing new has arrived
+/// from CEF and the unchanged texture is simply repainted again.
+fn texture_changed(last: Option<gpui::ImageId>, new: gpui::ImageId) -> bool {
+    last.is_some_and(|id| id != new)
 }
 
 impl CardBody for BrowserBody {
@@ -508,7 +534,19 @@ impl CardBody for BrowserBody {
         window.paint_quad(fill(bounds, self.card_bg));
         match self.active_tab().and_then(|t| t.texture.clone()) {
             Some(img) => {
-                let _ = window.paint_image(page_bounds, Default::default(), img, 0, false);
+                let _ = window.paint_image(page_bounds, Default::default(), img.clone(), 0, false);
+                // Only a DIFFERENT image is ever evicted: the same texture
+                // is repainted, unchanged, every frame nothing new has
+                // arrived, and dropping what this very call just referenced
+                // would be a bug, not a fix.
+                let last_id = self.painted_texture.as_ref().map(|p| p.id);
+                if texture_changed(last_id, img.id) {
+                    if let Some(old) = self.painted_texture.replace(img) {
+                        let _ = window.drop_image(old);
+                    }
+                } else if self.painted_texture.is_none() {
+                    self.painted_texture = Some(img);
+                }
             }
             None => {
                 let font_size = px((STATUS_FONT_PX * scale) as f32);
@@ -898,6 +936,34 @@ mod page_world_size_tests {
     fn a_card_shorter_than_the_strip_still_gets_a_positive_page_height() {
         let tiny = Size { w: 100., h: 10. };
         assert!(page_world_size(tiny, 14., 1.).h > 0.);
+    }
+}
+
+#[cfg(test)]
+mod texture_changed_tests {
+    use super::*;
+    use gpui::ImageId;
+
+    // The first frame ever painted has nothing to evict: `None` means
+    // nothing was tracked yet, not "the atlas is somehow already stale".
+    #[test]
+    fn nothing_painted_yet_is_never_a_change() {
+        assert!(!texture_changed(None, ImageId(1)));
+    }
+
+    // The same id painted again is every frame CEF has not produced a new
+    // one: evicting it would drop the exact tile this frame's own scene
+    // still points at.
+    #[test]
+    fn the_same_id_again_is_not_a_change() {
+        assert!(!texture_changed(Some(ImageId(7)), ImageId(7)));
+    }
+
+    // A different id is a real new CEF frame: the old tile is no longer
+    // referenced by anything painted and is safe to evict.
+    #[test]
+    fn a_different_id_is_a_change() {
+        assert!(texture_changed(Some(ImageId(7)), ImageId(8)));
     }
 }
 

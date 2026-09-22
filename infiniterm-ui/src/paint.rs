@@ -168,7 +168,7 @@ impl AppView {
             window.show_character_palette();
         }
         self.start_glides(now);
-        self.reconcile_bodies();
+        self.reconcile_bodies(window);
         self.reconcile_terminals(window);
         self.reconcile_decoys(window);
         self.reconcile_editors(window);
@@ -236,10 +236,25 @@ impl AppView {
         }
     }
 
-    /// Every card gets a body once; a closed card's body goes with it.
-    fn reconcile_bodies(&mut self) {
+    /// Every card gets a body once; a closed card's body goes with it. A
+    /// browser body's last painted frame gets a chance to leave gpui's
+    /// sprite atlas here too: nothing else evicts a dead frame's tile
+    /// (gpui has no atlas LRU), so a closed card would otherwise leave it
+    /// allocated forever (`browser_body::BrowserBody::drop_texture`).
+    fn reconcile_bodies(&mut self, window: &mut Window) {
         let ids: Vec<String> = self.model.cards.iter().map(|c| c.id.clone()).collect();
-        self.bodies.retain(|id, _| ids.contains(id));
+        self.bodies.retain(|id, body| {
+            if ids.contains(id) {
+                return true;
+            }
+            if let Some(browser) = body
+                .as_any_mut()
+                .downcast_mut::<crate::browser_body::BrowserBody>()
+            {
+                browser.drop_texture(window);
+            }
+            false
+        });
         self.body_sizes.retain(|id, _| ids.contains(id));
         for c in &self.model.cards {
             self.bodies.entry(c.id.clone()).or_insert_with(|| {
