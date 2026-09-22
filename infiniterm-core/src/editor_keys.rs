@@ -51,6 +51,11 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
         "cmd+7" => "editor.tab.jump.7",
         "cmd+8" => "editor.tab.jump.8",
         "cmd+9" => "editor.tab.jump.last",
+        // Not a tab command, but the one app chord a locked editor cannot
+        // do without: an unmatched chord falls through to the body, which
+        // has no save of its own, so Cmd+S saved nothing until the lock
+        // was dropped. Zed and VS Code save from inside the text; so here.
+        "cmd+s" => "card.save",
         _ => return None,
     })
 }
@@ -69,6 +74,7 @@ mod tests {
         assert_eq!(lock_override("cmd+t"), Some("editor.tab.new"));
         assert_eq!(lock_override("cmd+9"), Some("editor.tab.jump.last"));
         assert_eq!(lock_override("cmd+shift+]"), Some("editor.tab.next"));
+        assert_eq!(lock_override("cmd+s"), Some("card.save")); // saves while locked
         assert_eq!(lock_override("cmd+k"), None);
     }
 
