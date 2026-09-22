@@ -26,6 +26,7 @@ Hook adapters so a card running something other than Claude Code gets the same c
 
 The daemon keeps a shell alive across the app quitting. Nothing keeps a process alive across a reboot, and Ekin does not want that; he wanted the scrollback, and since 2026-09-18 he has it (see Done).
 
+- **Remote canvas** (`ift connect mini`): a viewer window on the Air showing the mini's live canvas, keys running on the mini, the way `wezterm connect` served 15 days of vacation work. Spec written and agreed 2026-09-22, docs/superpowers/specs/2026-09-22-remote-canvas-design.md: the host's app is the only authority, the viewer is a replica of the save file over the app socket, bytes come from each card's iftd as a droppable viewer client, transport is ssh with `ift proxy`. Terminals only in the first slice. About 3 to 4 days; start with `ift proxy` and the iftd viewer class, both testable headless.
 - **Composing text is not drawn.** Dead keys and input methods work (ime.rs), but the `\u{b4}` before the `e` is held and not shown, and an input method's candidate window sits at the caret only for terminals. Drawing the marked text at the caret, and caret bounds for the fields, is the rest of it.
 - **Ring compaction**, only if 4 MiB proves shallow for a Claude card. Ink repaints are large and repetitive. The upgrade is to parse what is about to fall out of the ring into a headless grid with our own parser and serialise it back as the new front. Named in the daemon spec, deliberately not built.
 
