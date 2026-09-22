@@ -20,6 +20,7 @@
 
 mod attach;
 mod claude_hooks;
+mod completion;
 mod socket;
 
 use std::path::{Path, PathBuf};
@@ -37,10 +38,12 @@ ift — drive infiniterm from a shell
   ift ls                     cards: id, group, directory, state, remote, number
                              (the #7 on the card's label); a table on a
                              terminal, tab separated without a header into a pipe
-  ift sessions               session daemons still running, app or no app:
-                             id, pid, cwd, command, started, card number,
-                             card label; a table on a terminal, tab
-                             separated without a header into a pipe
+  ift sessions [--full]      session daemons still running, app or no app:
+                             card number and label (or directory) on a
+                             terminal, every column with --full (id, pid,
+                             cwd, command, started, card, label); into a
+                             pipe always every column, tab separated, no
+                             header
   ift attach <id|#N>         connect a session's shell to this terminal, by
                              its id or by the card's number (#7 on its
                              label, the same after a reboot; the id is not);
@@ -49,7 +52,9 @@ ift — drive infiniterm from a shell
                              ranked against the real history and open cards
   ift name <text>            name the card this is run from
   ift group <name>           put this card in a group, creating it if needed
-  ift install                put ift on $PATH (a symlink in ~/.local/bin)
+  ift install                put ift on $PATH (a symlink in ~/.local/bin) and
+                             its zsh completion on fpath
+  ift completion zsh         print the zsh completion function
   ift install-claude-hooks   wire infiniterm into ~/.claude/settings.json
   ift install-pi-hooks [DIR] install the Pi extension into ~/.pi/agent (or
                              $PI_CODING_AGENT_DIR, or DIR: a wrapper that
@@ -57,6 +62,22 @@ ift — drive infiniterm from a shell
 
 Exit codes: 0 ok, 1 infiniterm not running, 2 bad usage.
 ";
+
+/// Every subcommand `main` dispatches, for the completion's test: the two
+/// lists must agree, and this one is the source.
+pub const SUBCOMMANDS: [&str; 11] = [
+    "diff",
+    "ls",
+    "sessions",
+    "attach",
+    "omni",
+    "name",
+    "group",
+    "install",
+    "install-claude-hooks",
+    "install-pi-hooks",
+    "completion",
+];
 
 /// The bundle id, which is how LaunchServices finds the app wherever it was
 /// put — no path to guess, and a moved .app still launches.
@@ -73,8 +94,18 @@ fn main() -> ExitCode {
             args.contains(&"--dry-run".to_string()),
         ),
         Some("install") => install_self(),
+        Some("completion") => match args.get(1).map(String::as_str) {
+            Some("zsh") => {
+                print!("{}", completion::ZSH);
+                ExitCode::SUCCESS
+            }
+            _ => {
+                eprintln!("ift: completion takes one shell: zsh");
+                ExitCode::from(2)
+            }
+        },
         Some("ls") => send_table("ls", &LS_HEADER),
-        Some("sessions") => attach::sessions_cmd(),
+        Some("sessions") => attach::sessions_cmd(args.contains(&"--full".to_string())),
         Some("attach") => match args.get(1) {
             Some(id) => attach::attach(id),
             None => attach::no_id(),
@@ -154,6 +185,10 @@ fn install_self() -> ExitCode {
         return ExitCode::from(2);
     }
     println!("ift: {} -> {}", link.display(), exe.display());
+    match completion::install(&home(), std::env::var("FPATH").ok().as_deref()) {
+        Ok(lines) => lines.iter().for_each(|l| println!("{l}")),
+        Err(e) => eprintln!("ift: {e}"),
+    }
     let on_path = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).any(|d| d == bin))
         .unwrap_or(false);

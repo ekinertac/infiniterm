@@ -192,9 +192,14 @@ fn home() -> String {
 /// prints (`ift ls`) and it pipes into `cut`/`awk` without a flag to ask for.
 /// The card's number and label come last, as trailing columns, so the five
 /// before them are what scripts already cut.
-pub fn sessions_cmd() -> ExitCode {
+pub fn sessions_cmd(full: bool) -> ExitCode {
     let cards = cards_by_session(layout_text().as_deref(), &home());
-    print_sessions(&list_sessions(&infiniterm_core::paths::sessions_dir()), &cards);
+    let rows = list_sessions(&infiniterm_core::paths::sessions_dir());
+    if full {
+        print_sessions(&rows, &cards);
+    } else {
+        print_sessions_short(&rows, &cards);
+    }
     ExitCode::SUCCESS
 }
 
@@ -222,6 +227,25 @@ fn session_cells(rows: &[SessionRow], cards: &HashMap<String, (u32, String)>) ->
 }
 
 const SESSION_HEADER: [&str; 7] = ["id", "pid", "cwd", "cmd", "started", "card", "label"];
+
+/// The short listing's cells: the card number and the label, else the cwd.
+/// What `ift attach` takes and what tells the rows apart, and nothing
+/// wider: the full table did not fit a phone over ssh, which is where the
+/// list gets read when the app is not in front of you.
+fn session_cells_short(
+    rows: &[SessionRow],
+    cards: &HashMap<String, (u32, String)>,
+) -> Vec<Vec<String>> {
+    session_cells(rows, cards)
+        .into_iter()
+        .map(|r| {
+            let what = if r[6] == "-" { r[2].clone() } else { r[6].clone() };
+            vec![r[5].clone(), what]
+        })
+        .collect()
+}
+
+const SESSION_HEADER_SHORT: [&str; 2] = ["card", "label"];
 
 /// Cells as a table: a header, columns padded to their widest cell, two
 /// spaces between. For eyes; the tab-separated form is for pipes.
@@ -266,6 +290,21 @@ fn print_sessions(rows: &[SessionRow], cards: &HashMap<String, (u32, String)>) {
         for row in cells {
             println!("{}", row.join("\t"));
         }
+    }
+}
+
+/// The two-column form on a terminal. Into a pipe the FULL rows go, as
+/// always: a script reading `cut -f1` for the id must not lose it to a
+/// flag it did not pass.
+fn print_sessions_short(rows: &[SessionRow], cards: &HashMap<String, (u32, String)>) {
+    use std::io::IsTerminal;
+    if std::io::stdout().is_terminal() {
+        print!(
+            "{}",
+            table(&SESSION_HEADER_SHORT, &session_cells_short(rows, cards))
+        );
+    } else {
+        print_sessions(rows, cards);
     }
 }
 
@@ -670,6 +709,35 @@ mod tests {
         }
         let ids: Vec<_> = list_sessions(&dir).into_iter().map(|r| r.id).collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
+    }
+
+    // The phone-width form: the card number, then the label, or the cwd
+    // when the card has no label; the id stays in the full form.
+    #[test]
+    fn the_short_listing_is_card_and_label_or_cwd() {
+        let rows = vec![
+            SessionRow {
+                id: "a".into(),
+                pid: 1,
+                cwd: "~/Code/x".into(),
+                cmd: "zsh".into(),
+                started: "t".into(),
+            },
+            SessionRow {
+                id: "b".into(),
+                pid: 2,
+                cwd: "~/Code/y".into(),
+                cmd: "zsh".into(),
+                started: "t".into(),
+            },
+        ];
+        let mut cards = HashMap::new();
+        cards.insert("a".to_string(), (7, "Zap".to_string()));
+        cards.insert("b".to_string(), (8, "-".to_string()));
+        let cells = session_cells_short(&rows, &cards);
+        assert_eq!(cells[0], vec!["#7", "Zap"]);
+        assert_eq!(cells[1], vec!["#8", "~/Code/y"]);
+        assert_eq!(session_cells(&rows, &cards)[0][0], "a", "the full form keeps the id");
     }
 
     // `ift attach <id-nobody-has>`: a usage error, not "nothing is running" —

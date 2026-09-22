@@ -56,7 +56,7 @@ To install it:
 ```sh
 make release
 ditto target/bundle/infiniterm.app /Applications/infiniterm.app
-/Applications/infiniterm.app/Contents/MacOS/ift install      # ift on your PATH
+/Applications/infiniterm.app/Contents/MacOS/ift install      # ift on your PATH, zsh completion on fpath (it says what to add)
 ift install-claude-hooks                                     # agent state from Claude Code
 ift install-pi-hooks [DIR]                                   # same for Pi; DIR for a wrapper with its own agent dir
 ```
