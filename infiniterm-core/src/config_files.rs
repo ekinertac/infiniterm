@@ -25,6 +25,9 @@ pub enum ConfigFile {
     SettingsDefault,
     Keybindings,
     KeybindingsDefault,
+    /// `snippets.json`: the snippet picker's rows (snippets.rs). Yours
+    /// alone; the app writes it once, as an example, when it is missing.
+    Snippets,
 }
 
 impl ConfigFile {
@@ -34,6 +37,7 @@ impl ConfigFile {
             Self::SettingsDefault => "settings.default.json",
             Self::Keybindings => "keybindings.json",
             Self::KeybindingsDefault => "keybindings.default.json",
+            Self::Snippets => "snippets.json",
         }
     }
 

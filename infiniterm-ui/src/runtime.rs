@@ -169,6 +169,51 @@ impl AppView {
         self.model.theme_names = list_themes(&self.themes_dir);
     }
 
+    /// `snippets.json` into the model, as the picker opens. A missing file
+    /// is written with the example first, so "Edit snippets…" opens a file
+    /// that shows the two shapes a value takes; a file that will not parse
+    /// leaves the picker with its edit row only and says why in the log.
+    fn refresh_snippets(&mut self) {
+        use infiniterm_core::config_files::{config_read, config_write, ConfigFile};
+        let text = match config_read(ConfigFile::Snippets) {
+            Some(t) => t,
+            None => {
+                if let Err(e) =
+                    config_write(ConfigFile::Snippets, infiniterm_core::snippets::EXAMPLE)
+                {
+                    self.model
+                        .log(format!("[snippets] could not write the example: {e}"));
+                }
+                infiniterm_core::snippets::EXAMPLE.to_string()
+            }
+        };
+        self.model.snippets = match infiniterm_core::snippets::parse(&text) {
+            Ok(list) => list,
+            Err(e) => {
+                self.model.log(format!("[snippets] {e}"));
+                vec![]
+            }
+        };
+    }
+
+    /// A snippet into a card the way Cmd+V goes: the terminal's paste path
+    /// (bracketed when the program asked), any other body's `insert_text`.
+    /// A masked or displaced card has no live body and gets nothing.
+    fn paste_text(&mut self, card_id: &str, text: &str) {
+        let Some(body) = self.live_body(card_id) else {
+            return;
+        };
+        match body
+            .as_any_mut()
+            .downcast_mut::<crate::terminal_body::TerminalBody>()
+        {
+            Some(t) => t.paste_text(text),
+            None => body.insert_text(text),
+        }
+        self.flush_writes();
+        self.redraw = true;
+    }
+
     /// The one-shot work the model queued. `RunCommand` never reaches here:
     /// `run_with_effects` consumes it.
     pub fn perform_effects(&mut self) {
@@ -238,6 +283,8 @@ impl AppView {
                 }
                 Effect::LoadTheme(name) => self.load_theme(&name),
                 Effect::RefreshThemes => self.refresh_themes(),
+                Effect::RefreshSnippets => self.refresh_snippets(),
+                Effect::PasteText { card_id, text } => self.paste_text(&card_id, &text),
                 Effect::Editor { card_id, action } => self.editor_effect(&card_id, action),
                 Effect::Browser { card_id, action } => self.browser_effect(&card_id, action),
                 Effect::Find { card_id, request } => self.find_effect(&card_id, request),

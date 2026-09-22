@@ -305,6 +305,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
     // Cmd+T with Shift: a new terminal, but WHERE is the question. A short
     // menu whose first entry letters every empty slot around the cards.
     ("cmd+shift+t", "card.place", "a new terminal, but WHERE"),
+    // Snippets: Cmd+Ctrl+S, chosen by Ekin over Cmd+Shift+V; Ctrl with
+    // Shift or Cmd is comfortable where Ctrl with Alt is not.
+    (
+        "cmd+ctrl+s",
+        "snippet.paste",
+        "predefined text into the card",
+    ),
     // A letter on every card, one keystroke to any of them. "Find", loosely.
     // Cmd+H was the first choice and is Hide on macOS.
     (

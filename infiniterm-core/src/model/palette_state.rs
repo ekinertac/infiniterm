@@ -21,6 +21,9 @@ pub enum Source {
     SlotKind,
     /// `card.size` (Cmd+Alt+S): the card's size as fractions of the default.
     Sizes,
+    /// `snippet.paste` (Cmd+Ctrl+S): the snippets file's names, then a row
+    /// that opens the file.
+    Snippets,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
@@ -36,6 +39,7 @@ impl Source {
             Source::Placement => "placement",
             Source::SlotKind => "slotKind",
             Source::Sizes => "sizes",
+            Source::Snippets => "snippets",
         }
     }
 
@@ -60,6 +64,7 @@ impl Source {
             Source::Placement => "New terminal…",
             Source::SlotKind => "New card in this slot…",
             Source::Sizes => "Resize the card to…",
+            Source::Snippets => "Paste a snippet…",
         }
     }
 }
@@ -280,6 +285,23 @@ impl Model {
                     label: (*label).into(),
                     hint: None,
                 })
+                .collect(),
+            // The file's names, the first line as the hint, and the way to
+            // the file last. Recency applies: the snippet you paste daily
+            // rises.
+            Source::Snippets => self
+                .snippets
+                .iter()
+                .map(|s| PaletteItem {
+                    id: s.name.clone(),
+                    label: s.name.clone(),
+                    hint: Some(crate::snippets::first_line(&s.text).to_string()),
+                })
+                .chain(std::iter::once(PaletteItem {
+                    id: crate::snippets::EDIT_ROW.into(),
+                    label: "Edit snippets…".into(),
+                    hint: Some("snippets.json".into()),
+                }))
                 .collect(),
         }
     }

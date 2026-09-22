@@ -894,6 +894,42 @@ impl Model {
             .push(Effect::RunCommand("canvas.zoom.fitCard".into()));
     }
 
+    /// A snippet row chosen: the text goes to the focused card as a paste;
+    /// the edit row opens `snippets.json` in an editor card beside it, or
+    /// focuses the card already showing it.
+    fn paste_snippet(&mut self, id: &str) {
+        if id == crate::snippets::EDIT_ROW {
+            let path = crate::config_files::config_path(crate::config_files::ConfigFile::Snippets)
+                .to_string_lossy()
+                .into_owned();
+            let existing = self
+                .here()
+                .into_iter()
+                .find(|c| c.kind == CardKind::Editor && c.path.as_deref() == Some(path.as_str()))
+                .map(|c| c.id.clone());
+            match existing {
+                Some(id) => self.set_focus(Some(&id)),
+                None => {
+                    let after = self.focused().map(|c| c.id.clone());
+                    self.open_in_card(open_plan(&path, PathKind::File, None), after.as_deref());
+                }
+            }
+            return;
+        }
+        let Some(text) = self
+            .snippets
+            .iter()
+            .find(|s| s.name == id)
+            .map(|s| s.text.clone())
+        else {
+            return;
+        };
+        let Some(card_id) = self.selection.focused_id.clone() else {
+            return;
+        };
+        self.effects.push(Effect::PasteText { card_id, text });
+    }
+
     pub fn palette_run(&mut self, source: Source, id: &str) {
         match source {
             Source::Commands => {
@@ -941,6 +977,7 @@ impl Model {
                     self.resize_active(*w, *h);
                 }
             }
+            Source::Snippets => self.paste_snippet(id),
             Source::SlotKind => match id {
                 "terminal" => {
                     self.fill_phantom(CardKind::Terminal, None);
@@ -1233,6 +1270,16 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.undo_layout(false)
     });
     r.register("layout.redo", "Layout: redo", |m| m.undo_layout(true));
+    // The snippet picker. The file is re-read on every open so an edit in
+    // the editor card the last row opens is live on the next Cmd+Ctrl+S.
+    r.register("snippet.paste", "Snippet: paste…", |m| {
+        if m.palette.source == Some(Source::Snippets) {
+            m.close_palette(false);
+        } else {
+            m.effects.push(Effect::RefreshSnippets);
+            m.open_palette(Source::Snippets);
+        }
+    });
     r.register("card.size", "Card: resize to…", |m| {
         if m.palette.source == Some(Source::Sizes) {
             m.close_palette(false);

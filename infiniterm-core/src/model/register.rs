@@ -485,6 +485,68 @@ mod tests {
         );
     }
 
+    // Cmd+Ctrl+S: the file's names, a paste into the focused card, and the
+    // last row opens the file itself.
+    #[test]
+    fn the_snippet_picker_pastes_into_the_focused_card_and_opens_its_file() {
+        use crate::snippets::{Snippet, EDIT_ROW};
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        let effects = h.run("snippet.paste");
+        assert!(effects.iter().any(|e| matches!(e, Effect::RefreshSnippets)));
+        assert_eq!(h.m.palette.source, Some(Source::Snippets));
+        assert!(!Source::Snippets.keeps_its_order(), "the daily one rises");
+        // The ui would have read the file; stand in for it.
+        h.m.snippets = vec![Snippet {
+            name: "review".into(),
+            text: "line one\nline two".into(),
+        }];
+        let items = h.m.palette_items(Source::Snippets, &[]);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "review");
+        assert_eq!(items[0].hint.as_deref(), Some("line one"));
+        assert_eq!(items[1].id, EDIT_ROW);
+        h.m.palette_run(Source::Snippets, "review");
+        let pasted = h.m.effects.iter().find_map(|e| match e {
+            Effect::PasteText { card_id, text } => Some((card_id.clone(), text.clone())),
+            _ => None,
+        });
+        assert_eq!(pasted, Some((id.clone(), "line one\nline two".into())));
+        // An unknown name pastes nothing.
+        h.m.effects.clear();
+        h.m.palette_run(Source::Snippets, "nope");
+        assert!(!h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::PasteText { .. })));
+        // The edit row opens snippets.json in an editor card, once.
+        h.m.palette_run(Source::Snippets, EDIT_ROW);
+        let editors: Vec<_> =
+            h.m.cards
+                .iter()
+                .filter(|c| c.kind == CardKind::Editor)
+                .collect();
+        assert_eq!(editors.len(), 1);
+        assert!(editors[0]
+            .path
+            .as_deref()
+            .unwrap()
+            .ends_with("snippets.json"));
+        let editor = editors[0].id.clone();
+        h.m.set_focus(Some(&id));
+        h.m.palette_run(Source::Snippets, EDIT_ROW);
+        assert_eq!(
+            h.m.cards
+                .iter()
+                .filter(|c| c.kind == CardKind::Editor)
+                .count(),
+            1,
+            "the card already showing it is focused instead"
+        );
+        assert_eq!(h.focused().id, editor);
+    }
+
     // Cmd+Alt+R: one Enter to a quarter, and the rows stay in their order.
     // Growing needs the room; shrinking always fits.
     #[test]

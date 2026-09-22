@@ -76,6 +76,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | palette: "App: show pressed shortcuts" | every chord you press appears bottom right with the command it ran, stacked, fading; for screencasts and for showing somebody |
 | `Cmd + Shift + L` | lock the card against closing: Cmd+W, its workspace closing and its shell exiting all leave it (a fresh shell takes over); the label wears a lock on the warning colour |
 | `Cmd + Alt + S` | resize to a fraction of the default: full, half wide, half tall, quarter, double wide, double tall; shrinking leaves the space free, growing needs it |
+| `Cmd + Ctrl + S` | paste a snippet: predefined text from `~/.config/infiniterm/snippets.json` (a name to a string, or to an array of lines) into the focused card as Cmd+V would, so Claude gets a multi-line prompt as one block; the last row opens the file, and an edit is live on the next open |
 | double-click | on a card's frame or label fits it (`Cmd + 1`); on empty canvas fits everything (`Cmd + 2`) |
 | | every card wears a number (`#7`) ahead of its label, for naming it to somebody: given once, kept across restarts, in `ift ls` and `ift sessions` as trailing columns; `ift attach 7` reaches that card's shell from any terminal, app running or not |
 | `Cmd + S` / `Cmd + N` | save the editor card's file / new empty editor |
@@ -160,7 +161,7 @@ HISTFILE="${INFINITERM_HISTFILE:-$HOME/.zsh_history}"
 
 The `terminal.` keys cover the shell, cursor, font and the decoy; `cards.` how big a new card is and whether it inherits the active card's directory; `canvas.` zoom sensitivity and pan momentum; `editor.` the selection colours, line wash and wrapping; `browser.` the page zoom and search; `ui.` chrome sizes, dimming, animation and the frame counter. A file in the older nested shape (`"terminal": { "fontSize": 16 }`) still reads. `settings.default.json` is the documentation.
 
-Comments and trailing commas work in both. `Cmd + ,` opens settings and `Cmd + Shift + ,` keybindings, each as a pair of editor cards on the canvas. Both apply on save without a restart.
+Comments and trailing commas work in both. `Cmd + ,` opens settings and `Cmd + Shift + ,` keybindings, each as a pair of editor cards on the canvas. Both apply on save without a restart. `snippets.json` beside them holds the snippet picker's rows and is read as the picker opens.
 
 A binding set to `null` is removed, which is how you give a key back to the terminal:
 
