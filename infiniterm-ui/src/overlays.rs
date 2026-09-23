@@ -285,7 +285,7 @@ impl Render for AppView {
         let entity = cx.entity();
         let focus = self.focus.clone();
         let title_bar = self.render_title_bar(cx);
-        let status_bar = self.render_status_bar();
+        let status_bar = self.render_status_bar(cx);
         let palette = self.model.palette_open().then(|| self.render_palette(cx));
         let prompt = self.model.prompt.is_open().then(|| self.render_prompt(cx));
         let shortcuts = self.model.shortcuts_open.then(|| self.render_shortcuts());
@@ -541,7 +541,7 @@ impl AppView {
             })
     }
 
-    fn render_status_bar(&self) -> impl IntoElement {
+    fn render_status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let chrome = &self.chrome;
         let m = &self.model;
         let size = px((m.config.ui.status_bar_size * m.ui_scale) as f32);
@@ -592,16 +592,31 @@ impl AppView {
                         self.browser_lock_indicator()
                             .map(|label| div().text_color(chrome.warn).child(label)),
                     )
-                    // A downloaded update stays said after its notice has
-                    // faded, until the restart installs it.
+                    // A downloaded update stays said, in the colour that
+                    // asks for attention, until the restart installs it;
+                    // the notice alone faded before Ekin could read it.
+                    // A click is the restart (`app.update.install`).
                     .children(
                         self.updater
                             .as_ref()
                             .and_then(|u| u.staged.as_ref())
                             .map(|s| {
                                 div()
-                                    .text_color(chrome.text)
-                                    .child(format!("update {} ready", s.build))
+                                    .id("update-ready")
+                                    .cursor_pointer()
+                                    .px_1()
+                                    .rounded_sm()
+                                    .bg(chrome.warn)
+                                    .text_color(chrome.bar_bg)
+                                    .child(format!("Restart to update to {}", s.build))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                            this.run_command("app.update.install");
+                                            this.perform_effects();
+                                            cx.notify();
+                                        }),
+                                    )
                             }),
                     )
                     .child(div().text_color(fps_color).child(right))
