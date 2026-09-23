@@ -604,7 +604,13 @@ impl AppView {
                                     .child(format!("update {} ready", s.build))
                             }),
                     )
-                    .child(div().text_color(fps_color).child(right)),
+                    .child(div().text_color(fps_color).child(right))
+                    // Which build this is, for a bug report from a friend.
+                    .children(self.build.map(|b| {
+                        div()
+                            .text_color(chrome.text_faint)
+                            .child(format!("build {b}"))
+                    })),
             )
     }
 

@@ -43,6 +43,7 @@ impl AppView {
             focus,
             composing: None,
             updater: None,
+            build: None,
             reveal_on_release: None,
             label_hits: Vec::new(),
             show_character_palette: false,
@@ -836,6 +837,9 @@ fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
 /// The staging dir from the last run is emptied first: it holds the bundle
 /// the last update moved aside, or a download nobody installed.
 fn start_updater(app: &mut AppView) {
+    app.build = std::env::current_exe()
+        .ok()
+        .and_then(|exe| bundle_of(&exe).and_then(crate::updater::build_of));
     if std::env::var_os("INFINITERM_DATA_DIR").is_some() {
         return;
     }

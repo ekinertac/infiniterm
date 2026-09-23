@@ -133,6 +133,10 @@ pub struct AppView {
     /// is in progress; see `ime.rs`.
     /// The updater, for an installed app only (`runtime::startup`).
     pub updater: Option<crate::updater::Updater>,
+    /// This bundle's build number (`CFBundleVersion`, the commit count),
+    /// shown in the status bar so a friend can say which build they run;
+    /// `None` outside a bundle.
+    pub build: Option<u64>,
     pub composing: Option<String>,
     /// `app.emoji` asked; the next frame, which has the window, opens it.
     pub show_character_palette: bool,
