@@ -40,6 +40,14 @@ for kv in "CFBundleIconFile AppIcon" "CFBundleIconName AppIcon" "CFBundleName in
     /usr/libexec/PlistBuddy -c "Set :$1 $2" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :$1 string $2" "$plist"
 done
 /usr/libexec/PlistBuddy -c "Set :NSHighResolutionCapable true" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :NSHighResolutionCapable bool true" "$plist"
+# A real version on every bundle, not the bundler's 1.0.0: the updater
+# (updater.rs) compares the running build with latest.json's, so the build
+# number has to grow with every commit. The version is the workspace's;
+# the build is the commit count, monotonic on master.
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+build=$(git rev-list --count HEAD)
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build" "$plist"
 # cef-rs's bundler sets LSFileQuarantineEnabled because it is modelled on
 # the CEF browser sample, and a browser SHOULD quarantine what it downloads.
 # Here it means every file every shell in every card writes is stamped

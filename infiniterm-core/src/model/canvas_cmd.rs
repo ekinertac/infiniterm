@@ -210,6 +210,17 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     });
     r.register("theme.next", "Theme: next", |m| m.cycle_theme(1));
     r.register("theme.prev", "Theme: previous", |m| m.cycle_theme(-1));
+    // Updates (update.rs, updater.rs): a check now, reported either way,
+    // and the install, which is a restart through the swap. A restart
+    // installs a staged update too; this is the name to find it by.
+    r.register("app.update.check", "App: check for updates", |m| {
+        m.effects.push(Effect::CheckForUpdate)
+    });
+    r.register(
+        "app.update.install",
+        "App: install the downloaded update and restart",
+        |m| m.effects.push(Effect::InstallUpdate),
+    );
     // The label says "keycast" because that is the word typed into the
     // palette to find it; "show pressed shortcuts" alone matched nothing
     // Ekin tried.

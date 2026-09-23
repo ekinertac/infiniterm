@@ -251,6 +251,10 @@ pub enum Effect {
     KillAllPanes,
     /// `app.keycast`: the ui owns the overlay and its clock.
     ToggleKeycast,
+    /// `app.update.check`: ask the updater thread for a check now.
+    CheckForUpdate,
+    /// `app.update.install`: swap in the staged update and restart.
+    InstallUpdate,
     /// Re-read the snippets folder into `Model::snippets`, seeding it when
     /// missing; before the snippet picker opens.
     RefreshSnippets,

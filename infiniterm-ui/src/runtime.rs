@@ -42,6 +42,7 @@ impl AppView {
             decoys: Default::default(),
             focus,
             composing: None,
+            updater: None,
             reveal_on_release: None,
             label_hits: Vec::new(),
             show_character_palette: false,
@@ -333,6 +334,29 @@ impl AppView {
                     });
                     self.redraw = true;
                 }
+                Effect::CheckForUpdate => match &self.updater {
+                    Some(u) => {
+                        u.check_now();
+                        self.model.notify("checking for updates…");
+                    }
+                    None => self
+                        .model
+                        .notify("updates are for the app installed in Applications"),
+                },
+                Effect::InstallUpdate => {
+                    if self.updater.as_ref().is_some_and(|u| u.staged.is_some()) {
+                        self.install_update_and_restart();
+                    } else {
+                        self.model.notify(
+                            "no update is downloaded yet; App: check for updates looks now",
+                        );
+                    }
+                }
+                // A restart with an update waiting installs it: the notice
+                // says "restart to install", and this is that restart.
+                Effect::Restart if self.updater.as_ref().is_some_and(|u| u.staged.is_some()) => {
+                    self.install_update_and_restart();
+                }
                 Effect::Restart => {
                     self.flush_save();
                     match relaunch_after_exit() {
@@ -500,6 +524,7 @@ impl AppView {
                 _ => self.model.apply_keymap_text(&change.contents),
             }
         }
+        self.drain_updates();
         while let Ok(req) = self.backend.cli_requests.try_recv() {
             let commands: Vec<(&str, &str)> = self
                 .registry
@@ -694,6 +719,7 @@ pub fn startup(app: &mut AppView) {
         let keep: Vec<String> = app.model.cards.iter().map(|c| c.id.clone()).collect();
         infiniterm_core::files::draft_prune(&keep);
     }
+    start_updater(app);
     app.perform_effects();
     if !app.backend.socket_ok {
         app.model
@@ -805,6 +831,99 @@ fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
 /// The wait is a poll rather than a signal because the child cannot wait on
 /// a process that is not its own. 100 ms is below noticing and costs a few
 /// wakeups at most: a quit takes well under a second.
+/// The updater, for the app installed in an Applications folder and never
+/// for a scratch instance or a development bundle (`update::applies_to`).
+/// The staging dir from the last run is emptied first: it holds the bundle
+/// the last update moved aside, or a download nobody installed.
+fn start_updater(app: &mut AppView) {
+    if std::env::var_os("INFINITERM_DATA_DIR").is_some() {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(bundle) = bundle_of(&exe) else {
+        return;
+    };
+    if !infiniterm_core::update::applies_to(bundle, &home_dir()) {
+        return;
+    }
+    let dir = infiniterm_core::paths::app_support_dir().join("update");
+    crate::updater::clean(&dir);
+    let Some(running) = crate::updater::build_of(bundle) else {
+        eprintln!("[infiniterm] no build number in the bundle; updates are off");
+        return;
+    };
+    app.updater = Some(crate::updater::start(bundle.to_path_buf(), running, dir));
+}
+
+impl AppView {
+    /// What the updater thread found, into the chrome: a staged update
+    /// gets a notice and the status bar's hint; a check somebody asked for
+    /// says how it went.
+    fn drain_updates(&mut self) {
+        let Some(u) = &mut self.updater else { return };
+        let mut said: Option<String> = None;
+        while let Ok(e) = u.events.try_recv() {
+            said = Some(match e {
+                crate::updater::UpdateEvent::Ready(s) => {
+                    let text = format!(
+                        "infiniterm {} ({}) is ready: restart to install (Cmd+Ctrl+Shift+R)",
+                        s.version, s.build
+                    );
+                    u.staged = Some(s);
+                    text
+                }
+                crate::updater::UpdateEvent::UpToDate => "infiniterm is up to date".into(),
+                crate::updater::UpdateEvent::Failed(e) => format!("update check failed: {e}"),
+            });
+        }
+        if let Some(text) = said {
+            self.model.notify(text);
+            self.redraw = true;
+        }
+    }
+
+    /// Hands the swap to a waiter that runs once this process is gone
+    /// (`update::swap_script`), then quits. The Applications folder must be
+    /// writable by this user, or the move would fail after we had already
+    /// gone; checked first, and said.
+    fn install_update_and_restart(&mut self) {
+        let Some(u) = &self.updater else { return };
+        let Some(staged) = u.staged.clone() else {
+            return;
+        };
+        let parent = u.bundle.parent().unwrap_or(std::path::Path::new("/"));
+        let probe = parent.join(".infiniterm-update-probe");
+        if std::fs::write(&probe, b"").is_err() {
+            self.model.notify(format!(
+                "cannot replace the app: {} is not writable; install the DMG from the releases page",
+                parent.display()
+            ));
+            return;
+        }
+        let _ = std::fs::remove_file(&probe);
+        let aside = u.dir.join(format!("old-{}.app", std::process::id()));
+        let script = infiniterm_core::update::swap_script(
+            std::process::id(),
+            &u.bundle.to_string_lossy(),
+            &staged.app.to_string_lossy(),
+            &aside.to_string_lossy(),
+        );
+        self.flush_save();
+        match std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .spawn()
+        {
+            Ok(_) => std::process::exit(0),
+            Err(e) => self
+                .model
+                .notify(format!("could not start the update: {e}")),
+        }
+    }
+}
+
 fn relaunch_after_exit() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let bundle = bundle_of(&exe).ok_or("not running from an .app bundle")?;

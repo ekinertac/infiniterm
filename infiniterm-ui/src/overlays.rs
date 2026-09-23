@@ -318,6 +318,11 @@ impl Render for AppView {
                 }
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &crate::CheckForUpdates, _, cx| {
+                this.run_command("app.update.check");
+                this.perform_effects();
+                cx.notify();
+            }))
             // Ctrl coming up commits the card switcher, the way letting go
             // of Cmd commits Cmd+Tab. gpui reports modifier changes to the
             // focused element like keys, so no NSEvent monitor is needed.
@@ -586,6 +591,18 @@ impl AppView {
                     .children(
                         self.browser_lock_indicator()
                             .map(|label| div().text_color(chrome.warn).child(label)),
+                    )
+                    // A downloaded update stays said after its notice has
+                    // faded, until the restart installs it.
+                    .children(
+                        self.updater
+                            .as_ref()
+                            .and_then(|u| u.staged.as_ref())
+                            .map(|s| {
+                                div()
+                                    .text_color(chrome.text)
+                                    .child(format!("update {} ready", s.build))
+                            }),
                     )
                     .child(div().text_color(fps_color).child(right)),
             )

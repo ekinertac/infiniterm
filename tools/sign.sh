@@ -1,6 +1,6 @@
 #!/bin/sh
-# Signs target/bundle/infiniterm.app with Ekin's Developer ID, and with
-# `notarize` sends it to Apple and staples the ticket.
+# Signs target/bundle/infiniterm.app with Ekin's Developer ID. Notarizing
+# is tools/dist.sh's, for the build that leaves this Mac.
 #
 # Why sign at all for an app that is only ever installed by hand: macOS
 # keys a privacy grant (Screen Recording, Accessibility) to the app's code
@@ -11,9 +11,6 @@
 # the helpers, then the app,
 # with the same entitlements everywhere because the renderer helper JITs
 # and the rest load the framework unsigned by Apple.
-#   tools/sign.sh [notarize]
-# The notary credentials are the AC_PASSWORD keychain profile
-# (`xcrun notarytool store-credentials`), the one ScreenCop uses.
 set -e
 cd "$(dirname "$0")/.."
 app=target/bundle/infiniterm.app
@@ -29,11 +26,3 @@ sign "$fw"
 for h in "$app"/Contents/Frameworks/*.app; do sign "$h"; done
 sign "$app"
 codesign --verify --deep --strict "$app"
-if [ "$1" = notarize ]; then
-    zip=target/bundle/infiniterm.zip
-    rm -f "$zip"
-    ditto -c -k --keepParent "$app" "$zip"
-    xcrun notarytool submit "$zip" --keychain-profile AC_PASSWORD --wait
-    xcrun stapler staple "$app"
-    spctl -a -vv -t install "$app"
-fi

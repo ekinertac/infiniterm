@@ -37,6 +37,7 @@ mod terminal_body;
 mod terminals;
 mod text;
 mod transcript_body;
+mod updater;
 mod window_state;
 
 use animator::Animator;
@@ -130,6 +131,8 @@ pub struct AppView {
     /// Text an input method is composing and has not committed: the `\u{b4}`
     /// after Option+E, a Pinyin candidate. Held so macOS knows a composition
     /// is in progress; see `ime.rs`.
+    /// The updater, for an installed app only (`runtime::startup`).
+    pub updater: Option<crate::updater::Updater>,
     pub composing: Option<String>,
     /// `app.emoji` asked; the next frame, which has the window, opens it.
     pub show_character_palette: bool,
@@ -241,7 +244,8 @@ actions!(
         ShowAll,
         Minimize,
         Zoom,
-        ShowCharacterPalette
+        ShowCharacterPalette,
+        CheckForUpdates
     ]
 );
 
@@ -338,6 +342,10 @@ fn main() {
             Menu {
                 name: "infiniterm".into(),
                 items: vec![
+                    // Where a Mac user looks for it; handled on the view
+                    // (overlays.rs), which runs `app.update.check`.
+                    MenuItem::action("Check for Updates…", CheckForUpdates),
+                    MenuItem::separator(),
                     MenuItem::action("Hide infiniterm", Hide),
                     MenuItem::action("Hide Others", HideOthers),
                     MenuItem::action("Show All", ShowAll),
