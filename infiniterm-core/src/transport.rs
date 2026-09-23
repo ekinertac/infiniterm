@@ -111,7 +111,9 @@ mod inner {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use std::path::Path;
     use std::time::Duration;
-    use windows_sys::Win32::Foundation::{ERROR_NO_DATA, ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{
+        ERROR_NO_DATA, ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE,
+    };
     use windows_sys::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
     use windows_sys::Win32::System::Pipes::{
         ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
@@ -246,7 +248,11 @@ mod inner {
     pub fn connect(path: &Path) -> io::Result<Stream> {
         let mut last = None;
         for attempt in 0..CONNECT_TRIES {
-            match std::fs::OpenOptions::new().read(true).write(true).open(path) {
+            match std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+            {
                 Ok(f) => return Ok(Stream(f)),
                 Err(e) => last = Some(e),
             }
@@ -263,7 +269,6 @@ mod tests {
     use super::*;
     use crate::test_support::endpoint;
     use std::io::{BufRead, BufReader};
-
 
     // The round trip both callers need: a client writes a line, the server
     // answers one.

@@ -281,12 +281,17 @@ impl Language {
                     "",
                     "",
                 ),
+                #[cfg(not(windows))]
                 Language::Scss => (
                     tree_sitter_scss::language(),
                     tree_sitter_scss::HIGHLIGHTS_QUERY,
                     "",
                     "",
                 ),
+                // No grammar in this build: see Cargo.toml. The file opens
+                // as plain text rather than not at all.
+                #[cfg(windows)]
+                Language::Scss => return None,
             };
         let mut config =
             HighlightConfiguration::new(lang, self.badge(), highlights, injections, locals).ok()?;
@@ -350,6 +355,7 @@ mod tests {
             Language::Markdown,
             Language::Svelte,
             Language::Sql,
+            #[cfg(not(windows))]
             Language::Scss,
         ] {
             assert!(l.highlight_config().is_some(), "{l:?}");

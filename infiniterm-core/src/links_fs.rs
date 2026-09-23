@@ -97,8 +97,8 @@ mod tests {
 
     impl Tree {
         fn new(tag: &str) -> Tree {
-            let root = std::env::temp_dir()
-                .join(format!("infiniterm-links-{tag}-{}", std::process::id()));
+            let root =
+                std::env::temp_dir().join(format!("infiniterm-links-{tag}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(root.join("sub")).unwrap();
             std::fs::write(root.join("sub").join("file.txt"), "x").unwrap();

@@ -105,7 +105,10 @@ mod tests {
     fn a_full_path_and_an_exe_suffix_reach_the_same_answer() {
         assert_eq!(kind_of("/bin/zsh"), ShellKind::Posix);
         assert_eq!(kind_of("zsh"), ShellKind::Posix);
-        assert_eq!(kind_of(r"C:\Program Files\PowerShell\7\pwsh.exe"), ShellKind::PowerShell);
+        assert_eq!(
+            kind_of(r"C:\Program Files\PowerShell\7\pwsh.exe"),
+            ShellKind::PowerShell
+        );
         assert_eq!(kind_of("pwsh"), ShellKind::PowerShell);
         assert_eq!(kind_of("PowerShell.EXE"), ShellKind::PowerShell);
         assert_eq!(kind_of(r"C:\Windows\System32\cmd.exe"), ShellKind::Cmd);
@@ -115,7 +118,10 @@ mod tests {
     // what decides.
     #[test]
     fn a_posix_shell_at_a_windows_path_is_still_posix() {
-        assert_eq!(kind_of(r"C:\Program Files\Git\bin\bash.exe"), ShellKind::Posix);
+        assert_eq!(
+            kind_of(r"C:\Program Files\Git\bin\bash.exe"),
+            ShellKind::Posix
+        );
         assert_eq!(
             shell_args(r"C:\Program Files\Git\bin\bash.exe", Some("echo hi")),
             vec!["-lc", "echo hi"]

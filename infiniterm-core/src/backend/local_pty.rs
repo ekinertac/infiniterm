@@ -378,8 +378,6 @@ pub fn terminal_identity() -> Vec<(String, String)> {
     ]
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,8 +401,7 @@ mod tests {
         pub const EXIT_3: &str = "exit 3";
         pub const SLEEP: &str = "Start-Sleep 30";
         /// One shot, not typed at a prompt: see the resize test for why.
-        pub const REPORT_COLS: &str =
-            "Start-Sleep 3; \"COLS=$($Host.UI.RawUI.WindowSize.Width)\"";
+        pub const REPORT_COLS: &str = "Start-Sleep 3; \"COLS=$($Host.UI.RawUI.WindowSize.Width)\"";
     }
     #[cfg(unix)]
     mod sh {
@@ -464,11 +461,7 @@ mod tests {
     async fn spawns_a_command_and_streams_its_output() {
         let (backend, rx) = LocalPtyBackend::new();
         let pane = backend
-            .spawn(
-                &tmp(),
-                Some(sh::ECHO_A),
-                vec![],
-            )
+            .spawn(&tmp(), Some(sh::ECHO_A), vec![])
             .await
             .unwrap();
         assert!(wait_for_output(&backend, &rx, pane, "hello-infiniterm"));
@@ -477,10 +470,7 @@ mod tests {
     #[tokio::test]
     async fn write_reaches_the_shell() {
         let (backend, rx) = LocalPtyBackend::new();
-        let pane = backend
-            .spawn(&tmp(), None, vec![])
-            .await
-            .unwrap();
+        let pane = backend.spawn(&tmp(), None, vec![]).await.unwrap();
         backend.write(pane, b"echo written-ok\n");
         assert!(wait_for_output(&backend, &rx, pane, "written-ok"));
     }
@@ -507,14 +497,15 @@ mod tests {
         std::env::set_var("TERM_PROGRAM", "WezTerm");
         let (backend, rx) = LocalPtyBackend::new();
         let pane = backend
-            .spawn(
-                &tmp(),
-                Some(sh::IDENTITY),
-                vec![],
-            )
+            .spawn(&tmp(), Some(sh::IDENTITY), vec![])
             .await
             .unwrap();
-        assert!(wait_for_output(&backend, &rx, pane, "prog=infiniterm pane=none"));
+        assert!(wait_for_output(
+            &backend,
+            &rx,
+            pane,
+            "prog=infiniterm pane=none"
+        ));
     }
 
     #[tokio::test]

@@ -27,4 +27,11 @@ tree-sitter-c = "0.24"
 tree-sitter-md = "0.5"
 tree-sitter-svelte-ng = "1.0"
 tree-sitter-sequel = "0.3"
+
+# tree-sitter-scss 1.0.0, the only release, hands cc an unconditional
+# `-Wno-unused-parameter`, which MSVC rejects outright (D8021), so the
+# crate cannot build on Windows at all. An .scss file still opens there,
+# without highlighting (`Language::highlight_config`). Move this back up
+# when upstream releases a build script that asks the compiler first.
+[target.'cfg(not(windows))'.dependencies]
 tree-sitter-scss = "1.0"

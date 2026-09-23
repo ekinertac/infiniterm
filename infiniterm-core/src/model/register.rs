@@ -642,8 +642,7 @@ mod tests {
                 .collect();
         assert_eq!(editors.len(), 1);
         // As a path: the separator is not the same on every platform.
-        assert!(std::path::Path::new(editors[0].root.as_deref().unwrap())
-            .ends_with("snippets"));
+        assert!(std::path::Path::new(editors[0].root.as_deref().unwrap()).ends_with("snippets"));
         let editor = editors[0].id.clone();
         h.m.set_focus(Some(&id));
         h.m.palette_run(Source::Snippets, EDIT_ROW);
