@@ -169,31 +169,51 @@ impl AppView {
         self.model.theme_names = list_themes(&self.themes_dir);
     }
 
-    /// `snippets.json` into the model, as the picker opens. A missing file
-    /// is written with the example first, so "Edit snippets…" opens a file
-    /// that shows the two shapes a value takes; a file that will not parse
-    /// leaves the picker with its edit row only and says why in the log.
+    /// The snippets folder into the model, as the picker opens. A missing
+    /// folder is made and seeded: with the entries of the day-old
+    /// `snippets.json` when there is one (left in place, never rewritten),
+    /// else with the examples, so "Edit snippets…" opens files that show
+    /// the shape. A file that cannot be read as text is skipped and logged.
     fn refresh_snippets(&mut self) {
-        use infiniterm_core::config_files::{config_read, config_write, ConfigFile};
-        let text = match config_read(ConfigFile::Snippets) {
-            Some(t) => t,
-            None => {
-                if let Err(e) =
-                    config_write(ConfigFile::Snippets, infiniterm_core::snippets::EXAMPLE)
-                {
-                    self.model
-                        .log(format!("[snippets] could not write the example: {e}"));
-                }
-                infiniterm_core::snippets::EXAMPLE.to_string()
+        use infiniterm_core::config_files::{config_read, snippets_dir, ConfigFile};
+        use infiniterm_core::snippets;
+        let dir = snippets_dir();
+        if !dir.is_dir() {
+            let seed: Vec<(String, String)> =
+                match config_read(ConfigFile::Snippets).map(|json| snippets::from_json(&json)) {
+                    Some(Ok(files)) => files,
+                    Some(Err(e)) => {
+                        self.model
+                            .log(format!("[snippets] snippets.json not moved: {e}"));
+                        vec![]
+                    }
+                    None => snippets::EXAMPLES
+                        .iter()
+                        .map(|(n, t)| (n.to_string(), t.to_string()))
+                        .collect(),
+                };
+            let written = std::fs::create_dir_all(&dir).and_then(|()| {
+                seed.iter()
+                    .try_for_each(|(name, text)| std::fs::write(dir.join(name), text))
+            });
+            if let Err(e) = written {
+                self.model
+                    .log(format!("[snippets] could not seed {}: {e}", dir.display()));
             }
-        };
-        self.model.snippets = match infiniterm_core::snippets::parse(&text) {
-            Ok(list) => list,
-            Err(e) => {
-                self.model.log(format!("[snippets] {e}"));
-                vec![]
+        }
+        let mut files = vec![];
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
             }
-        };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            match std::fs::read_to_string(&path) {
+                Ok(text) => files.push((name, text)),
+                Err(e) => self.model.log(format!("[snippets] {name} skipped: {e}")),
+            }
+        }
+        self.model.snippets = snippets::collect(files);
     }
 
     /// A snippet into a card the way Cmd+V goes: the terminal's paste path

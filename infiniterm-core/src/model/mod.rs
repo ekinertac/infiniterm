@@ -251,8 +251,8 @@ pub enum Effect {
     KillAllPanes,
     /// `app.keycast`: the ui owns the overlay and its clock.
     ToggleKeycast,
-    /// Re-read `snippets.json` into `Model::snippets`, creating it with the
-    /// example when missing; before the snippet picker opens.
+    /// Re-read the snippets folder into `Model::snippets`, seeding it when
+    /// missing; before the snippet picker opens.
     RefreshSnippets,
     /// Paste `text` into the card's body as Cmd+V would: bracketed when the
     /// program asked for it, inserted at the caret in an editor.
@@ -472,7 +472,7 @@ pub struct Model {
     pub keymap: Keymap,
     pub settings_error: Option<String>,
     pub theme_names: Vec<String>,
-    /// `snippets.json`, read by the ui when the picker opens
+    /// the snippets folder's files, read by the ui when the picker opens
     /// (`Effect::RefreshSnippets`), the way `theme_names` is.
     pub snippets: Vec<crate::snippets::Snippet>,
     pub theme_current: Option<String>,

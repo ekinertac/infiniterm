@@ -304,7 +304,7 @@ impl Model {
                 .chain(std::iter::once(PaletteItem {
                     id: crate::snippets::EDIT_ROW.into(),
                     label: "Edit snippets…".into(),
-                    hint: Some("snippets.json".into()),
+                    hint: Some("a folder, one file each".into()),
                 }))
                 .collect(),
         }

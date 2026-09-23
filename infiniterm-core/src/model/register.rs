@@ -615,7 +615,8 @@ mod tests {
             .effects
             .iter()
             .any(|e| matches!(e, Effect::PasteText { .. })));
-        // The edit row opens snippets.json in an editor card, once.
+        // The edit row opens the snippets FOLDER in an editor card (its
+        // tree lists the files), once.
         h.m.palette_run(Source::Snippets, EDIT_ROW);
         let editors: Vec<_> =
             h.m.cards
@@ -623,11 +624,7 @@ mod tests {
                 .filter(|c| c.kind == CardKind::Editor)
                 .collect();
         assert_eq!(editors.len(), 1);
-        assert!(editors[0]
-            .path
-            .as_deref()
-            .unwrap()
-            .ends_with("snippets.json"));
+        assert!(editors[0].root.as_deref().unwrap().ends_with("/snippets"));
         let editor = editors[0].id.clone();
         h.m.set_focus(Some(&id));
         h.m.palette_run(Source::Snippets, EDIT_ROW);

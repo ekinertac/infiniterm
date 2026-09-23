@@ -895,23 +895,23 @@ impl Model {
     }
 
     /// A snippet row chosen: the text goes to the focused card as a paste;
-    /// the edit row opens `snippets.json` in an editor card beside it, or
-    /// focuses the card already showing it.
+    /// the edit row opens the snippets folder in an editor card beside it,
+    /// its tree listing the files, or focuses the card already showing it.
     fn paste_snippet(&mut self, id: &str) {
         if id == crate::snippets::EDIT_ROW {
-            let path = crate::config_files::config_path(crate::config_files::ConfigFile::Snippets)
+            let dir = crate::config_files::snippets_dir()
                 .to_string_lossy()
                 .into_owned();
             let existing = self
                 .here()
                 .into_iter()
-                .find(|c| c.kind == CardKind::Editor && c.path.as_deref() == Some(path.as_str()))
+                .find(|c| c.kind == CardKind::Editor && c.root.as_deref() == Some(dir.as_str()))
                 .map(|c| c.id.clone());
             match existing {
                 Some(id) => self.set_focus(Some(&id)),
                 None => {
                     let after = self.focused().map(|c| c.id.clone());
-                    self.open_in_card(open_plan(&path, PathKind::File, None), after.as_deref());
+                    self.open_in_card(open_plan(&dir, PathKind::Directory, None), after.as_deref());
                 }
             }
             return;

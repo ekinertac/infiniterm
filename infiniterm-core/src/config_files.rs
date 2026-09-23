@@ -25,8 +25,8 @@ pub enum ConfigFile {
     SettingsDefault,
     Keybindings,
     KeybindingsDefault,
-    /// `snippets.json`: the snippet picker's rows (snippets.rs). Yours
-    /// alone; the app writes it once, as an example, when it is missing.
+    /// `snippets.json`: the snippet picker's rows for one day, 2026-09-22.
+    /// Read once to move its entries into `snippets_dir()`, then left alone.
     Snippets,
 }
 
@@ -50,6 +50,12 @@ impl ConfigFile {
 
 pub fn config_path(file: ConfigFile) -> PathBuf {
     config_dir().join(file.file_name())
+}
+
+/// The snippet picker's folder: one plain file per snippet (snippets.rs).
+/// A folder rather than a `ConfigFile` because its unit is many files.
+pub fn snippets_dir() -> PathBuf {
+    config_dir().join("snippets")
 }
 
 /// The single file this app used before the directory existed.
