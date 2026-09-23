@@ -31,3 +31,12 @@ uuid = { version = "1", features = ["v4"] }
 # The PTY tests are async because SessionBackend::spawn is (tmux assigns ids
 # asynchronously, v2); the app itself runs them on gpui's executor.
 tokio = { version = "1", features = ["rt", "macros"] }
+
+# The local IPC channel is a unix socket on unix and a named pipe on
+# Windows (`transport.rs`); the server half of a named pipe is not in std.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+] }

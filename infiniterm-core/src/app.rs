@@ -81,24 +81,21 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::endpoint;
+    use crate::transport;
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixStream;
     use std::time::Duration;
-
-    fn temp_socket(tag: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("infiniterm-test-{tag}-{}.sock", std::process::id()))
-    }
 
     // Phase 2's done-check: the socket answers ift and a hook report with
     // no window open. The "UI" is a thread draining the request channel.
     #[test]
     fn the_socket_answers_ift_and_forwards_hook_reports_with_no_window() {
-        let path = temp_socket("app");
+        let path = endpoint("app");
         let backend = Backend::start(&path, TerminalBackend::Pty, 4);
         assert!(backend.socket_ok);
 
         // A hook report, as infiniterm-hook writes it.
-        let mut hook = UnixStream::connect(&path).unwrap();
+        let mut hook = transport::connect(&path).unwrap();
         writeln!(
             hook,
             r#"{{"card_id":"c1","event":"Stop","payload":{{"transcript_path":"/s/x.jsonl"}}}}"#
@@ -121,7 +118,7 @@ mod tests {
             assert_eq!(req.card_id.as_deref(), Some("c1"));
             cli.reply(req.id, true, "c1\t-\t~/Code\tnone\t-".into());
         });
-        let mut ift = UnixStream::connect(&path).unwrap();
+        let mut ift = transport::connect(&path).unwrap();
         writeln!(ift, r#"{{"cmd":"ls","card_id":"c1"}}"#).unwrap();
         let mut line = String::new();
         BufReader::new(ift.try_clone().unwrap())
@@ -136,11 +133,13 @@ mod tests {
 
     #[test]
     fn a_socket_that_cannot_bind_disables_hooks_but_the_backend_still_starts() {
-        let backend = Backend::start(
-            Path::new("/nonexistent-dir/infiniterm.sock"),
-            TerminalBackend::Pty,
-            4,
-        );
+        // A path this platform's transport cannot serve: a directory that
+        // is not there on unix, a path that is not a pipe name on Windows.
+        #[cfg(windows)]
+        let bad = Path::new(r"C:\nonexistent-dir\infiniterm.sock");
+        #[cfg(unix)]
+        let bad = Path::new("/nonexistent-dir/infiniterm.sock");
+        let backend = Backend::start(bad, TerminalBackend::Pty, 4);
         assert!(!backend.socket_ok);
         // The PTY side is untouched by that.
         assert!(backend.pane_events.try_recv().is_err());

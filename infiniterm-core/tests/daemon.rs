@@ -13,6 +13,10 @@
 //! frame at a time instead of through this client), the design spec's
 //! "Testing" section for why this one exists at all.
 
+//! Unix only: `iftd` is fork/setsid over a unix socket and is not built
+//! on Windows (see docs/windows-handoff.md, "No daemon").
+#![cfg(unix)]
+
 use infiniterm_core::backend::daemon::DaemonBackend;
 use infiniterm_core::backend::PaneEvent;
 use std::path::{Path, PathBuf};

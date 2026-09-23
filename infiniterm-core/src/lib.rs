@@ -80,6 +80,7 @@ pub mod snippets;
 pub mod switcher;
 pub mod themes_files;
 pub mod transcript;
+pub mod transport;
 pub mod update;
 
 pub mod sidebar;
