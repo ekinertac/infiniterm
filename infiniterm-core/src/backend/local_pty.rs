@@ -400,8 +400,13 @@ mod tests {
             "echo \"prog=$env:TERM_PROGRAM pane=$(if ($env:WEZTERM_PANE) { $env:WEZTERM_PANE } else { 'none' })\"";
         pub const EXIT_3: &str = "exit 3";
         pub const SLEEP: &str = "Start-Sleep 30";
-        /// One shot, not typed at a prompt: see the resize test for why.
-        pub const REPORT_COLS: &str = "Start-Sleep 3; \"COLS=$($Host.UI.RawUI.WindowSize.Width)\"";
+        /// CR, the byte a real terminal sends for Enter and what the
+        /// key encoder sends: PSReadLine acts on that one, not on LF.
+        pub const TYPE_ECHO: &[u8] = b"echo written-ok\r";
+        /// Reports the width over and over until the pane is killed, and
+        /// not typed at a prompt: see the resize test for both halves of why.
+        pub const REPORT_COLS: &str =
+            "while ($true) { \"COLS=$($Host.UI.RawUI.WindowSize.Width)\"; Start-Sleep -Milliseconds 200 }";
     }
     #[cfg(unix)]
     mod sh {
@@ -410,6 +415,7 @@ mod tests {
         pub const IDENTITY: &str = "echo prog=$TERM_PROGRAM pane=${WEZTERM_PANE:-none}";
         pub const EXIT_3: &str = "exit 3";
         pub const SLEEP: &str = "sleep 30";
+        pub const TYPE_ECHO: &[u8] = b"echo written-ok\n";
         pub const FLOOD: &str = "yes";
         pub const TYPE_COLS: &[u8] = b"echo COLS=$(tput cols)\n";
     }
@@ -417,10 +423,12 @@ mod tests {
     /// Generous on purpose, and used by every loop here. These spawn the
     /// REAL login shell, so the user's own profile runs first, and this
     /// suite spawns shells in several crates at once: five seconds was
-    /// enough alone and intermittently was not under a full `cargo test`,
-    /// and PowerShell's own startup takes a second or two on top. The
-    /// deadline only costs this long when a test is failing anyway.
-    const SPAWN_DEADLINE: Duration = Duration::from_secs(20);
+    /// enough alone and intermittently was not under a full `cargo test`.
+    /// PowerShell is slower again: a card's interactive shell took the best
+    /// part of twenty seconds to start answering under a loaded suite here,
+    /// which is why this is not twenty. The deadline only costs this long
+    /// when a test is failing anyway.
+    const SPAWN_DEADLINE: Duration = Duration::from_secs(45);
 
     /// ConPTY opens by asking the terminal where the cursor is (ESC [ 6 n)
     /// and writes NOTHING until it is answered, so a test that only reads
@@ -432,6 +440,41 @@ mod tests {
         if bytes.windows(4).any(|w| w == b"\x1b[6n") {
             backend.write_now(pane, b"\x1b[1;1R");
         }
+    }
+
+    /// Types `input` until `needle` comes back, retyping once a second.
+    /// A shell is not listening the moment its pty exists: it runs the
+    /// user's profile first, and under a full `cargo test` with shells
+    /// spawning in several crates at once that takes seconds. A line typed
+    /// before then is simply gone. Every command typed here is idempotent,
+    /// so retyping costs nothing but a repeated line of output.
+    fn type_until(
+        backend: &LocalPtyBackend,
+        rx: &std::sync::mpsc::Receiver<(PaneId, PaneEvent)>,
+        pane: PaneId,
+        input: &[u8],
+        needle: &str,
+    ) -> bool {
+        let deadline = std::time::Instant::now() + SPAWN_DEADLINE;
+        let mut acc = Vec::new();
+        let mut typed = std::time::Instant::now();
+        backend.write_now(pane, input);
+        while std::time::Instant::now() < deadline {
+            if let Ok((p, PaneEvent::Output(bytes))) = rx.recv_timeout(Duration::from_millis(200)) {
+                if p == pane {
+                    answer_conpty_probe(backend, pane, &bytes);
+                    acc.extend_from_slice(&bytes);
+                    if String::from_utf8_lossy(&acc).contains(needle) {
+                        return true;
+                    }
+                }
+            }
+            if typed.elapsed() > Duration::from_secs(1) {
+                backend.write_now(pane, input);
+                typed = std::time::Instant::now();
+            }
+        }
+        false
     }
 
     /// Drains events for `pane` until `needle` is seen or the deadline passes.
@@ -471,8 +514,7 @@ mod tests {
     async fn write_reaches_the_shell() {
         let (backend, rx) = LocalPtyBackend::new();
         let pane = backend.spawn(&tmp(), None, vec![]).await.unwrap();
-        backend.write(pane, b"echo written-ok\n");
-        assert!(wait_for_output(&backend, &rx, pane, "written-ok"));
+        assert!(type_until(&backend, &rx, pane, sh::TYPE_ECHO, "written-ok"));
     }
 
     #[tokio::test]
@@ -532,11 +574,13 @@ mod tests {
     #[tokio::test]
     async fn resize_is_visible_to_the_child() {
         let (backend, rx) = LocalPtyBackend::new();
-        // Windows asks a ONE-SHOT command instead of typing at a prompt:
-        // ConPTY and PSReadLine redraw the typed line a character at a time
-        // with cursor moves between them, so "COLS=120" never appears as one
-        // run of bytes in an interactive session however long you wait. The
-        // command sleeps first so the resize lands before it reads the size.
+        // Windows runs a COMMAND that reports the width in a loop instead
+        // of typing at a prompt. Two reasons, both ConPTY's: with PSReadLine
+        // it redraws a typed line a character at a time with cursor moves
+        // between them, so "COLS=120" never comes back as one run of bytes
+        // from an interactive session; and a loop needs no guess about when
+        // PowerShell has finished starting, which under a full `cargo test`
+        // is not a safe guess to make.
         #[cfg(windows)]
         let pane = backend
             .spawn(&tmp(), Some(sh::REPORT_COLS), vec![])
@@ -555,8 +599,12 @@ mod tests {
         // of numbers and a loose match could pass without the resize ever
         // having been seen.
         #[cfg(unix)]
-        backend.write(pane, sh::TYPE_COLS);
-        assert!(wait_for_output(&backend, &rx, pane, "COLS=120"));
+        let saw = type_until(&backend, &rx, pane, sh::TYPE_COLS, "COLS=120");
+        #[cfg(windows)]
+        let saw = wait_for_output(&backend, &rx, pane, "COLS=120");
+        // The Windows command loops forever; nothing else ends it.
+        backend.kill(pane);
+        assert!(saw);
     }
 
     #[tokio::test]
