@@ -210,15 +210,18 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     });
     r.register("theme.next", "Theme: next", |m| m.cycle_theme(1));
     r.register("theme.prev", "Theme: previous", |m| m.cycle_theme(-1));
+    // The label says "keycast" because that is the word typed into the
+    // palette to find it; "show pressed shortcuts" alone matched nothing
+    // Ekin tried.
+    r.register(
+        "app.keycast",
+        "App: keycast, show pressed shortcuts on screen",
+        |m| m.effects.push(Effect::ToggleKeycast),
+    );
     // A reload kills every shell and its chord is a reflex from browsers; it
     // Deliberately a four-key chord. It ends every process in every card,
     // and a restart you did not mean to ask for is expensive in a way that
     // no other binding here is.
-    r.register(
-        "app.keycast",
-        "App: show pressed shortcuts on screen",
-        |m| m.effects.push(Effect::ToggleKeycast),
-    );
     r.register("app.restart", "App: restart", |m| {
         // Under the daemon backend quitting DETACHES, so the shells and
         // anything running in them are still there afterwards and the cards

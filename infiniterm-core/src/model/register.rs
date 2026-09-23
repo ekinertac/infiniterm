@@ -275,6 +275,23 @@ mod tests {
         );
     }
 
+    // The palette finds the keycast by the word people call it.
+    #[test]
+    fn the_palette_finds_the_keycast_by_its_name() {
+        let h = Harness::new();
+        let labels: Vec<(&str, &str)> =
+            h.r.all()
+                .iter()
+                .map(|c| (c.id.as_str(), c.label.as_str()))
+                .collect();
+        let items = h.m.palette_items(Source::Commands, &labels);
+        let ranked = crate::palette::rank(&items, "keycast", 10, |_| 0.);
+        assert_eq!(
+            ranked.items.first().map(|r| r.item.id.as_str()),
+            Some("app.keycast")
+        );
+    }
+
     // Every default binding names a command that exists: a binding pointing
     // at nothing reads as a broken shortcut.
     #[test]
