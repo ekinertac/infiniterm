@@ -93,6 +93,8 @@ pub const SUBCOMMANDS: [&str; 13] = [
 
 /// The bundle id, which is how LaunchServices finds the app wherever it was
 /// put — no path to guess, and a moved .app still launches.
+// Only `launch` on macOS asks `open` for it.
+#[cfg(unix)]
 const BUNDLE_ID: &str = "dev.ekinertac.infiniterm";
 
 fn main() -> ExitCode {
@@ -150,10 +152,36 @@ fn main() -> ExitCode {
 
 /// Bare `ift`: the app, the way typing `code` opens the editor.
 ///
+/// Windows has no bundle to register and no `open -b`, so this runs the
+/// `infiniterm.exe` sitting beside this binary, which is how the app is laid
+/// out when a release zip is unpacked. A running instance still ends up
+/// focused rather than duplicated: the second copy sees the endpoint is held
+/// and exits (`hooks::listen`).
+#[cfg(windows)]
+fn launch() -> ExitCode {
+    let app = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("infiniterm.exe")))
+        .filter(|app| app.is_file());
+    let Some(app) = app else {
+        eprintln!("ift: no infiniterm.exe beside this binary");
+        eprintln!("ift: run ift from the folder the release zip unpacked into");
+        return ExitCode::from(1);
+    };
+    match std::process::Command::new(&app).spawn() {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("ift: cannot start {}: {e}", app.display());
+            ExitCode::from(1)
+        }
+    }
+}
+
 /// Through `open -b`, so it works from anywhere the bundle has been registered
 /// (dropped into /Applications, or simply launched once). A running instance
 /// is focused rather than duplicated: the app is single-instance, and `open`
 /// on a running bundle activates it.
+#[cfg(unix)]
 fn launch() -> ExitCode {
     let status = std::process::Command::new("open")
         .args(["-b", BUNDLE_ID])
@@ -168,11 +196,43 @@ fn launch() -> ExitCode {
     }
 }
 
+/// `ift install` on Windows: nothing to install, just where to point PATH.
+///
+/// No symlink. A symlink on Windows needs Developer Mode or an elevated
+/// shell, and the reason the Mac makes one (the command keeps pointing at the
+/// bundle's own copy, so an update updates the command) has no equivalent
+/// while the app ships as a folder you unpack yourself. Copying instead would
+/// leave a stale `ift` behind after the next update, which is worse than
+/// asking for one line in a profile. The zsh completion is skipped for the
+/// obvious reason.
+#[cfg(windows)]
+fn install_self() -> ExitCode {
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("ift: cannot find my own path");
+        return ExitCode::from(2);
+    };
+    let Some(dir) = exe.parent() else {
+        eprintln!("ift: {} has no parent folder", exe.display());
+        return ExitCode::from(2);
+    };
+    println!("ift: this binary is {}", exe.display());
+    let on_path = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d == dir))
+        .unwrap_or(false);
+    if on_path {
+        println!("ift: {} is already on your PATH", dir.display());
+    } else {
+        println!("ift: add {} to your PATH to run ift from anywhere", dir.display());
+    }
+    ExitCode::SUCCESS
+}
+
 /// `ift install`: a symlink to this very binary in ~/.local/bin.
 ///
 /// A symlink, not a copy, so the bundle's copy stays the one that runs and an
 /// updated app updates the command. ~/.local/bin because it needs no sudo and
 /// is on most people's PATH already; it says so when it is not.
+#[cfg(unix)]
 fn install_self() -> ExitCode {
     let Ok(exe) = std::env::current_exe().and_then(std::fs::canonicalize) else {
         eprintln!("ift: cannot find my own path");

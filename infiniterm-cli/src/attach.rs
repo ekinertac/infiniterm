@@ -39,30 +39,50 @@
 //!   SIGQUIT on its own, which frees it up as a chord of ours.
 //! - Raw mode and the signal handlers need a real tty and cannot be exercised
 //!   by a unit test; `list_sessions` and the id-lookup logic can, and are.
+//! - There is no daemon on Windows at all (docs/windows-handoff.md), so
+//!   `sessions` and `attach` say so there and everything from the socket
+//!   down is cfg(unix). The listing and the table stay portable: they are
+//!   pure, they are tested, and the save file they read is the same file.
 
+// On Windows nothing calls the session listing: `sessions_cmd`, `attach`
+// and `no_id` refuse before they would reach it. It stays compiled and
+// tested there all the same, because it is pure logic over a save file
+// both platforms write, and rot in it would otherwise only show on a Mac.
+#![cfg_attr(windows, allow(dead_code))]
+
+#[cfg(unix)]
 use infiniterm_core::backend::session_protocol::{Frame, FrameReader};
 use infiniterm_core::card_label::{card_label, Labelled};
 use infiniterm_core::saved_layout::{parse_layout, SavedCard};
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::io::RawFd;
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::ExitCode;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+#[cfg(unix)]
 use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(unix)]
 use std::thread;
+#[cfg(unix)]
 use std::time::Duration;
 
 /// Ctrl-\, ASCII FS (file separator). Chosen because it is the byte a normal
 /// terminal already wires to SIGQUIT and raw mode disarms that wiring (ISIG
 /// is cleared by `cfmakeraw`), so the byte would otherwise do nothing at all
 /// rather than colliding with something a shell or an editor wants.
+#[cfg(unix)]
 const DETACH_KEY: u8 = 0x1c;
 
 /// How often the resize-poller thread checks whether a SIGWINCH landed.
 /// Short enough that a resized terminal window feels immediate, long enough
 /// that an idle attach costs nothing measurable.
+#[cfg(unix)]
 const RESIZE_POLL: Duration = Duration::from_millis(150);
 
 /// One row of `ift sessions`: a session as `iftd`'s own `.meta` file
@@ -192,6 +212,13 @@ fn home() -> String {
 /// prints (`ift ls`) and it pipes into `cut`/`awk` without a flag to ask for.
 /// The card's number and label come last, as trailing columns, so the five
 /// before them are what scripts already cut.
+#[cfg(windows)]
+pub fn sessions_cmd(_full: bool) -> ExitCode {
+    println!("ift: session daemons are macOS only; on Windows a card owns its shell directly");
+    ExitCode::SUCCESS
+}
+
+#[cfg(unix)]
 pub fn sessions_cmd(full: bool) -> ExitCode {
     let cards = cards_by_session(layout_text().as_deref(), &home());
     let rows = list_sessions(&infiniterm_core::paths::sessions_dir());
@@ -310,6 +337,13 @@ fn print_sessions_short(rows: &[SessionRow], cards: &HashMap<String, (u32, Strin
 
 /// `ift attach` with no id at all: the id was the whole point, so this is a
 /// usage error, not "nothing is running".
+#[cfg(windows)]
+pub fn no_id() -> ExitCode {
+    eprintln!("ift: session daemons are macOS only; on Windows a card owns its shell directly");
+    ExitCode::from(2)
+}
+
+#[cfg(unix)]
 pub fn no_id() -> ExitCode {
     eprintln!("ift: attach needs a session id or a card number (#7)\n");
     let cards = cards_by_session(layout_text().as_deref(), &home());
@@ -325,6 +359,13 @@ pub fn no_id() -> ExitCode {
 /// is a daemon that died without cleaning up (a crash, `kill -9`) — that is
 /// not "which one did you mean", it is "this one is gone", so it gets a
 /// plain statement and a pointer rather than the whole table.
+#[cfg(windows)]
+pub fn attach(_target: &str) -> ExitCode {
+    eprintln!("ift: session daemons are macOS only; on Windows a card owns its shell directly");
+    ExitCode::from(2)
+}
+
+#[cfg(unix)]
 pub fn attach(target: &str) -> ExitCode {
     let dir = infiniterm_core::paths::sessions_dir();
     let rows = list_sessions(&dir);
@@ -357,23 +398,28 @@ pub fn attach(target: &str) -> ExitCode {
 
 // --- termios plumbing ------------------------------------------------------
 
+#[cfg(unix)]
 /// Published once raw mode is entered, so the signal handlers below have
 /// something to restore. `OnceLock`/`AtomicI32` rather than a `Mutex`: a
 /// signal handler must not take a lock that the interrupted code might
 /// already be holding, so both of these are read with plain atomic loads.
 static ORIGINAL_TERMIOS: OnceLock<libc::termios> = OnceLock::new();
+#[cfg(unix)]
 static TTY_FD: AtomicI32 = AtomicI32::new(-1);
 
 /// Set by the SIGWINCH handler, cleared by the poller that acts on it. A
 /// signal handler may not safely call `TIOCGWINSZ` itself (ioctl is not on
 /// the async-signal-safe list), so it only flags that a resize happened and
 /// a normal thread does the actual work on the next poll.
+#[cfg(unix)]
 static WINCH: AtomicBool = AtomicBool::new(false);
 
+#[cfg(unix)]
 extern "C" fn on_winch(_sig: libc::c_int) {
     WINCH.store(true, Ordering::SeqCst);
 }
 
+#[cfg(unix)]
 /// Restores the terminal and ends the process. A `Drop` never runs when a
 /// signal ends it instead — SIGINT/SIGTERM/SIGHUP each name a case where
 /// that happens (`kill`, a closing window, the shell exiting under us) — so
@@ -395,12 +441,14 @@ extern "C" fn restore_and_exit(sig: libc::c_int) {
     }
 }
 
+#[cfg(unix)]
 fn install_restore_signal(sig: libc::c_int) {
     unsafe {
         libc::signal(sig, restore_and_exit as *const () as libc::sighandler_t);
     }
 }
 
+#[cfg(unix)]
 /// Restores the tty's termios when it drops, covering every NORMAL exit path
 /// out of `run_attached` (return, `?`, an early `return ExitCode`). The
 /// signal path is `restore_and_exit` above, not this: this type's `drop`
@@ -410,6 +458,7 @@ struct TermiosGuard {
     original: libc::termios,
 }
 
+#[cfg(unix)]
 impl Drop for TermiosGuard {
     fn drop(&mut self) {
         unsafe {
@@ -418,6 +467,7 @@ impl Drop for TermiosGuard {
     }
 }
 
+#[cfg(unix)]
 fn terminal_size(fd: RawFd) -> Option<(u16, u16)> {
     let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
     if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } != 0 {
@@ -426,6 +476,7 @@ fn terminal_size(fd: RawFd) -> Option<(u16, u16)> {
     Some((ws.ws_col, ws.ws_row))
 }
 
+#[cfg(unix)]
 fn send_resize(write_handle: &Arc<Mutex<UnixStream>>, tty_fd: RawFd) {
     if let Some((cols, rows)) = terminal_size(tty_fd) {
         let _ = write_handle
@@ -435,6 +486,7 @@ fn send_resize(write_handle: &Arc<Mutex<UnixStream>>, tty_fd: RawFd) {
     }
 }
 
+#[cfg(unix)]
 /// Forwards stdin bytes as `Frame::Data`, watching for the detach key.
 /// Not joined: it ends on its own (stdin EOF, a write failure, or detaching)
 /// and the process exits without waiting for background threads either way.
@@ -475,6 +527,7 @@ fn forward_stdin(write_handle: Arc<Mutex<UnixStream>>, detached: Arc<AtomicBool>
     }
 }
 
+#[cfg(unix)]
 fn resize_poller(write_handle: Arc<Mutex<UnixStream>>, tty_fd: RawFd) {
     loop {
         thread::sleep(RESIZE_POLL);
@@ -484,6 +537,7 @@ fn resize_poller(write_handle: Arc<Mutex<UnixStream>>, tty_fd: RawFd) {
     }
 }
 
+#[cfg(unix)]
 /// The low byte of a child's exit code, the same convention a shell's `$?`
 /// uses for a signal-killed child: `ExitCode` only carries a `u8`, and a
 /// `Frame::Exited` payload is the daemon's `portable_pty` exit code as-is.
@@ -491,6 +545,7 @@ fn exit_code_byte(code: i32) -> u8 {
     (code & 0xff) as u8
 }
 
+#[cfg(unix)]
 /// Everything after a successful connect: enter raw mode, wire up the three
 /// directions of traffic (stdin in, frames out, `SIGWINCH` out), and run
 /// until detach, `Exited`, or the connection dropping out from under us.

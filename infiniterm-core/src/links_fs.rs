@@ -8,8 +8,9 @@
 //! process table) and `~` against the home directory, the two ways a shell
 //! writes a path that is not absolute.
 //!
-//! Opening goes through the system's `open` (macOS); the per-OS seam is
-//! `open_with_system`, the one function Linux and Windows replace.
+//! Opening goes through whatever the system uses to open a file by its
+//! type: `open` on macOS, `explorer.exe` on Windows. `open_with_system` is
+//! the one function that knows which, and the one Linux replaces.
 use crate::paths::home_dir;
 use std::path::{Path, PathBuf};
 
@@ -54,8 +55,17 @@ pub fn path_kinds(cwd: &str, paths: &[&str]) -> Vec<Option<PathKind>> {
 }
 
 /// Hands a path or URL to the system's default handler.
+///
+/// `explorer.exe` on Windows rather than `cmd /C start`: start is a cmd
+/// BUILTIN, so it needs a shell, and its first quoted argument is taken as a
+/// window title, which is the trap a path with spaces in it walks straight
+/// into. explorer takes the target and nothing else.
 pub fn open_with_system(target: &Path) -> Result<(), String> {
-    std::process::Command::new("open")
+    #[cfg(windows)]
+    let opener = "explorer.exe";
+    #[cfg(unix)]
+    let opener = "open";
+    std::process::Command::new(opener)
         .arg(target)
         .spawn()
         .map(|_| ())

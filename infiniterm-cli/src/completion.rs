@@ -12,6 +12,11 @@
 //! Related: main.rs (USAGE,
 //! the dispatch), attach.rs (the columns the pipe form prints).
 
+// `ift completion zsh` still PRINTS on Windows (the text is the same, and
+// a Windows box can be feeding a zsh on another machine), but nothing
+// there installs it: `ift install` has no fpath to write into.
+#![cfg_attr(windows, allow(dead_code))]
+
 /// The `_ift` function. `#compdef` first, so it works from an fpath dir.
 pub const ZSH: &str = r#"#compdef ift
 # zsh completion for ift, from `ift completion zsh`. Do not edit: the next
@@ -129,6 +134,10 @@ mod tests {
         assert_eq!(got, expected);
     }
 
+    // unix only: `$FPATH` is a colon-separated zsh variable, and a Windows
+    // path has a colon two characters in. The feature is zsh's anyway;
+    // `ift install` on Windows writes no completion at all.
+    #[cfg(unix)]
     #[test]
     fn install_writes_the_function_and_names_the_fpath_line_only_when_needed() {
         let tmp = std::env::temp_dir().join(format!("ift-completion-{}", std::process::id()));

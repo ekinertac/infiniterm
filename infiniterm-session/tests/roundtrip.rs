@@ -11,6 +11,9 @@
 //! `src/main.rs` (what is under test),
 //! docs/superpowers/specs/2026-09-17-session-daemon-design.md ("Testing").
 
+// unix only: there is no `iftd` on Windows to round-trip against.
+#![cfg(unix)]
+
 use infiniterm_core::backend::session_protocol::{Frame, FrameReader};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -339,15 +342,20 @@ fn the_ring_is_written_to_disk_and_removed_on_exit() {
     c.send(&Frame::Data(b"echo marker-77\n".to_vec()));
     c.collect_output("marker-77");
     assert!(
-        wait_until(|| std::fs::read(&ring).is_ok_and(|b| {
-            String::from_utf8_lossy(&b).contains("marker-77")
-        })),
+        wait_until(|| std::fs::read(&ring)
+            .is_ok_and(|b| { String::from_utf8_lossy(&b).contains("marker-77") })),
         "the ring landed on disk with the output in it"
     );
-    assert!(!dir.path().join("r.ring.tmp").exists(), "renamed, not left half-written");
+    assert!(
+        !dir.path().join("r.ring.tmp").exists(),
+        "renamed, not left half-written"
+    );
 
     c.send(&Frame::Data(b"exit\n".to_vec()));
-    assert!(wait_until(|| !ring.exists()), "a finished shell leaves no ring");
+    assert!(
+        wait_until(|| !ring.exists()),
+        "a finished shell leaves no ring"
+    );
     assert!(wait_until(|| !dir.path().join("r.sock").exists()));
 }
 
@@ -365,15 +373,25 @@ fn the_meta_says_whether_a_client_is_attached() {
     };
     let mut c = Conn::new(start(dir.path(), "m"));
     c.recv_matching(|f| matches!(f, Frame::Hello { .. }));
-    assert!(wait_until(|| attached() == Some(true)), "attached once a client is on");
+    assert!(
+        wait_until(|| attached() == Some(true)),
+        "attached once a client is on"
+    );
     // A second client evicts the first: still attached, by the newcomer.
     let mut again = Conn::new(UnixStream::connect(dir.path().join("m.sock")).unwrap());
     again.recv_matching(|f| matches!(f, Frame::Hello { .. }));
     drop(c);
     std::thread::sleep(POLL);
-    assert_eq!(attached(), Some(true), "the eviction of the first must not clear the second");
+    assert_eq!(
+        attached(),
+        Some(true),
+        "the eviction of the first must not clear the second"
+    );
     drop(again);
-    assert!(wait_until(|| attached() == Some(false)), "free once the last client detaches");
+    assert!(
+        wait_until(|| attached() == Some(false)),
+        "free once the last client detaches"
+    );
     let mut back = Conn::new(UnixStream::connect(dir.path().join("m.sock")).unwrap());
     back.recv_matching(|f| matches!(f, Frame::Hello { .. }));
     stop(dir.path(), "m", &mut back);
