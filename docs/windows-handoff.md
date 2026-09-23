@@ -2,6 +2,51 @@
 
 For a Claude session on Ekin's Windows desktop (the "gpu box", RTX 4070 Ti), starting from nothing but this repo. Written 2026-09-23 on the Mac by the session that built most of the tree. Read `CLAUDE.md` first: it holds the rules and the traps, and most of them still apply. This file is only what is different about Windows.
 
+## Where this stands
+
+Phase 1 is done, on the `windows` branch, 2026-09-23. Every crate but
+`infiniterm-ui` builds and passes its tests on Windows, and `infiniterm-ui`
+builds and passes its tests too with `--no-default-features`. Nothing has
+been run on screen yet: that is phase 2, and it needs Ekin at the desktop.
+
+What phase 1 actually changed, beyond the plan below:
+
+- `infiniterm-core/src/transport.rs` is the one IPC channel, a unix socket on
+  unix and a named pipe on Windows. `paths::socket_path` answers a pipe name
+  there, with the data dir hashed into it so `INFINITERM_DATA_DIR` still
+  isolates a scratch instance. `ift` dropped its own copy of both; the hook
+  binary keeps one, and keeps its zero dependencies (the CLIENT half of a
+  named pipe is std).
+- `infiniterm-core/src/shell_cmd.rs` holds which shell a card gets and how to
+  hand it one command, decided from the shell's file NAME, not the OS. Git
+  Bash on Windows is still POSIX and takes `-lc`.
+- `infiniterm-ui` grew a `browser` feature, on by default. Off, it compiles
+  CEF out and `browser_stub.rs` IS the browsers module (`#[path]`), so every
+  call site stays as it is. This is also the Lite/Pro split's shape
+  (ekinertac/notes#50); the `ift-browser` session has not been told yet.
+- `infiniterm-session` builds on Windows to a binary that refuses, because a
+  workspace member cannot be cfg'd out and the root's `cargo test` builds
+  every one. Its body moved to `daemon.rs`.
+- Two real bugs, not Windows-only in principle: fifteen places took a file's
+  name by splitting on `/` alone, and three derived a parent directory the
+  same way (`C:\a` gave `C:`, which names a drive's cursor rather than its
+  root). Both are `paths::base_name` and `paths::parent_dir` now.
+- `tree-sitter-scss` cannot build on MSVC at all (see the traps below), so
+  `.scss` opens without highlighting on Windows.
+
+What is still open, in the order it will be hit:
+
+- `inspect.rs` still shells out to `ps` and `lsof`, so on Windows a card has
+  no process label and no cwd tracking. It compiles and answers nothing.
+  Toolhelp32 is the replacement, and the cwd is not readable from outside a
+  process on Windows at all.
+- The modifier question under "Keys" below is untouched and is phase 3's
+  first decision. `keycode.rs` answers `None` on Windows, so `keymap.rs`
+  falls back to gpui's keystroke; whether that survives a Turkish Q keyboard
+  there has not been tested.
+- End-to-end backpressure (`HIGH_WATER`) has no Windows test, for the ConPTY
+  reason below. The credit machinery itself is tested directly.
+
 ## The goal, and what it is not
 
 Claude Code running in terminal cards on the infinite canvas, on Windows, with the editor, diff and transcript cards, the palette, workspaces, groups and agent colours from hooks. A lesser app than the Mac one, on purpose:
@@ -74,6 +119,28 @@ Recommended: a small transport module in core with one API (listen, connect, the
 ## Things that will bite
 
 - ConPTY rewrites what the program writes, redraws on resize, and older builds of it swallow escape sequences newer programs rely on. When something renders wrong, check whether Windows Terminal shows the same program correctly before blaming our parser.
+- **ConPTY writes NOTHING until the terminal answers its cursor probe.** It
+  opens with `ESC [ ? 9001 h`, `ESC [ ? 1004 h` and then `ESC [ 6 n`, and
+  blocks there. The app is fine (alacritty answers, and
+  `Panes::we_are_the_terminal` is true for this backend), but any test that
+  only reads sees the probe and then silence forever. `local_pty.rs`'s
+  `answer_conpty_probe` is what that cost.
+- **ConPTY caps a pane's output rate at roughly its own render rate.**
+  Measured 2026-09-23: about 9 KiB a second for a program writing flat out,
+  against a pty that does megabytes. It renders the pane and emits what
+  changed, so a `yes`-shaped flood mostly never reaches us. Nothing is wrong
+  when a flood looks slow; the 256 KiB backpressure mark is half a minute
+  away at that rate, which is why the flood test stayed unix.
+- **PSReadLine redraws a typed line a character at a time**, with cursor
+  moves between, so a string typed at an interactive prompt never comes back
+  as one run of bytes. A test that matches output from an interactive shell
+  has to ask a one-shot command instead.
+- **A shell is not listening the moment its pty exists.** PowerShell runs the
+  profile first, which took the best part of twenty seconds under a loaded
+  test suite here. A line typed before then is gone, not queued.
+- **tree-sitter-scss 1.0.0 cannot build on MSVC**: its build script hands cc
+  an unconditional `-Wno-unused-parameter` and cl refuses it (D8021). It is
+  the crate's only release. It is `cfg(not(windows))` now.
 - Line endings: set `core.autocrlf false` on the clone, or `.gitattributes` fights begin; the Mac side commits LF.
 - A path in a card label, a drop, or `ift <path>` has backslashes and a drive letter; `shell_quote` (`drop.rs`) is POSIX quoting and must get a PowerShell twin before a dropped file reaches a pwsh prompt, because that function is the whole security story for a file named `; rm -rf ~`.
 - The single-instance lock is the socket today; on Windows it is the named pipe, and a crashed instance leaves no stale file to clean (unlike the Unix socket), which is simpler.
