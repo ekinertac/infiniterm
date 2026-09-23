@@ -241,12 +241,17 @@ impl AppView {
     /// sprite atlas here too: nothing else evicts a dead frame's tile
     /// (gpui has no atlas LRU), so a closed card would otherwise leave it
     /// allocated forever (`browser_body::BrowserBody::drop_texture`).
+    // Without the browser feature nothing in here touches the window or the
+    // body being dropped: there is no atlas tile to evict.
+    #[cfg_attr(not(feature = "browser"), allow(unused_variables))]
     fn reconcile_bodies(&mut self, window: &mut Window) {
         let ids: Vec<String> = self.model.cards.iter().map(|c| c.id.clone()).collect();
         self.bodies.retain(|id, body| {
             if ids.contains(id) {
                 return true;
             }
+            // Only a real CEF body ever put a frame in the atlas.
+            #[cfg(feature = "browser")]
             if let Some(browser) = body
                 .as_any_mut()
                 .downcast_mut::<crate::browser_body::BrowserBody>()

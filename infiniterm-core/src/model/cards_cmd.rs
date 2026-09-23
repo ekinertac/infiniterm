@@ -405,11 +405,7 @@ impl Model {
                 let from = self.card(&id).cloned();
                 let full = self.resolve_typed_path(raw.trim(), from.as_ref());
                 if let Some(card) = self.card_mut(&id) {
-                    card.cwd = full
-                        .rsplit_once('/')
-                        .map(|(dir, _)| if dir.is_empty() { "/" } else { dir })
-                        .unwrap_or("/")
-                        .to_string();
+                    card.cwd = crate::paths::parent_dir(&full);
                     card.path = Some(full);
                     self.dirty_layout = true;
                 }

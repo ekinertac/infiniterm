@@ -234,7 +234,7 @@ impl EditorTabs {
                 let name = if h.is_empty() {
                     "untitled".to_string()
                 } else {
-                    h.rsplit('/').next().unwrap_or(h).to_string()
+                    infiniterm_core::paths::base_name(h).to_string()
                 };
                 if b.is_dirty() {
                     format!("{name} •")

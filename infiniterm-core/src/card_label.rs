@@ -71,7 +71,7 @@ fn host_of(url: &str) -> &str {
 }
 
 fn last_segment(path: &str) -> &str {
-    let name = path.rsplit('/').next().unwrap_or("");
+    let name = crate::paths::base_name(path);
     if name.is_empty() {
         path
     } else {
@@ -95,7 +95,7 @@ pub fn card_label(card: &Labelled, home: &str) -> String {
         let Some(path) = card.path else {
             return "transcript".to_string();
         };
-        let name = path.rsplit('/').next().unwrap_or("");
+        let name = crate::paths::base_name(path);
         let start = name.rfind('_').map_or(0, |i| i + 1);
         return name[start..].chars().take(8).collect();
     }

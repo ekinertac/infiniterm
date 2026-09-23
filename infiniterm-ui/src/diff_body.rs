@@ -175,7 +175,7 @@ impl DiffBody {
                 eprintln!("[infiniterm/warn] git: {e}");
                 self.events.push(EditorEvent::Notice(format!(
                     "not a git repository: {}",
-                    self.root.rsplit('/').next().unwrap_or(&self.root)
+                    infiniterm_core::paths::base_name(&self.root)
                 )));
                 self.files.clear();
             }
@@ -221,10 +221,7 @@ impl DiffBody {
         }
         self.events.push(EditorEvent::PathChanged {
             path: full.clone(),
-            cwd: full
-                .rsplit_once('/')
-                .map(|(d, _)| d.to_string())
-                .unwrap_or_else(|| "/".into()),
+            cwd: infiniterm_core::paths::parent_dir(&full),
         });
         self.dirty = true;
     }

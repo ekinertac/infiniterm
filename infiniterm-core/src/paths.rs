@@ -217,6 +217,43 @@ pub fn path_hash(text: &str) -> u64 {
     h
 }
 
+/// The last segment of a path written as TEXT, with either separator.
+///
+/// Not `Path::file_name`: these strings arrive from a save file, a process
+/// table or a line of terminal output, and a Windows path can reach a Mac
+/// (a canvas copied across, an ssh session, a log) or the other way. `Path`
+/// on unix does not treat a backslash as a separator at all, so a card
+/// showing a Windows path would wear the whole thing as its name.
+///
+/// Returns the input itself when there is no separator in it.
+pub fn base_name(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+/// The same split, keeping both halves: `("a/b", "c")` for `a/b/c`. `None`
+/// when there is no separator.
+pub fn split_parent(path: &str) -> Option<(&str, &str)> {
+    path.rsplit_once(['/', '\\'])
+}
+
+/// The directory a path sits in, as text, for a card's cwd.
+///
+/// Three callers reached this three slightly different ways before it
+/// existed, all of them splitting on `/` alone. `"/"` for a path with no
+/// parent is kept as it was: a shell on either platform understands it,
+/// and every caller here is handed an absolute path anyway.
+pub fn parent_dir(path: &str) -> String {
+    match split_parent(path) {
+        // `C:\a` splits to ("C:", "a"), and a bare `C:` does not name the
+        // drive's root: it means "wherever that drive's cursor is", which
+        // is a different directory from one shell to the next.
+        Some((dir, _)) if dir.ends_with(':') => format!("{dir}\\"),
+        Some((dir, _)) if !dir.is_empty() => dir.to_string(),
+        // `/a`: the parent is the root itself.
+        _ => "/".to_string(),
+    }
+}
+
 /// `INFINITERM_DATA_DIR` is set: this instance is a side-by-side one.
 pub fn data_dir_overridden() -> bool {
     std::env::var_os("INFINITERM_DATA_DIR").is_some()
@@ -298,6 +335,35 @@ mod tests {
     #[test]
     fn layout_path_is_not_the_config_path() {
         assert_ne!(layout_path().parent(), Some(config_dir().as_path()));
+    }
+
+    #[test]
+    fn a_base_name_is_the_last_segment_under_either_separator() {
+        assert_eq!(base_name("/Users/ekin/Code/a.rs"), "a.rs");
+        assert_eq!(base_name(r"C:\Users\PC\Code\a.rs"), "a.rs");
+        // Mixed, which is what a Windows shell hands back half the time.
+        assert_eq!(base_name(r"C:/Users/PC\Code/a.rs"), "a.rs");
+        assert_eq!(base_name("a.rs"), "a.rs");
+        assert_eq!(base_name(""), "");
+        // A trailing separator names nothing, and saying so beats guessing.
+        assert_eq!(base_name("/Users/ekin/"), "");
+    }
+
+    #[test]
+    fn split_parent_keeps_both_halves_or_neither() {
+        assert_eq!(split_parent("/a/b/c"), Some(("/a/b", "c")));
+        assert_eq!(split_parent(r"C:\a\b"), Some((r"C:\a", "b")));
+        assert_eq!(split_parent("c"), None);
+    }
+
+    #[test]
+    fn a_parent_dir_survives_a_drive_letter_and_a_root() {
+        assert_eq!(parent_dir("/Users/ekin/a.rs"), "/Users/ekin");
+        assert_eq!(parent_dir(r"C:\Users\PC\a.rs"), r"C:\Users\PC");
+        // A drive with nothing between it and the file: the root, not `C:`.
+        assert_eq!(parent_dir(r"C:\a.rs"), r"C:\");
+        assert_eq!(parent_dir("/a.rs"), "/");
+        assert_eq!(parent_dir("a.rs"), "/");
     }
 
     // Short on purpose: see this fn's own doc comment for the socket path

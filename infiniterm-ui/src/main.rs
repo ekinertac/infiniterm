@@ -13,7 +13,15 @@
 //! the person did.
 mod animator;
 mod body;
+#[cfg(feature = "browser")]
 mod browser_body;
+// Without the feature, `browser_stub.rs` IS the browsers module: same names,
+// no CEF. Every call site stays as it is, and the difference between the two
+// builds lives in that one file. See its header.
+#[cfg(feature = "browser")]
+mod browsers;
+#[cfg(not(feature = "browser"))]
+#[path = "browser_stub.rs"]
 mod browsers;
 mod chrome;
 mod composing;
@@ -253,8 +261,16 @@ actions!(
     ]
 );
 
+/// Windows has its own reduced-motion setting; reading it is phase 3's
+/// business, and until then `ui.animations` is the only answer.
+#[cfg(not(target_os = "macos"))]
+fn system_reduces_motion() -> bool {
+    false
+}
+
 /// `NSWorkspace.accessibilityDisplayShouldReduceMotion`: the system's
 /// reduced-motion switch, which outranks `ui.animations` in the reference.
+#[cfg(target_os = "macos")]
 fn system_reduces_motion() -> bool {
     use objc::{class, msg_send, sel, sel_impl};
     unsafe {
@@ -268,6 +284,7 @@ fn main() {
     // CEF first: a helper invocation runs and exits here; the browser
     // process loads the framework from the bundle and goes on. Outside a
     // bundle there is no framework and the app runs without browser cards.
+    #[cfg(feature = "browser")]
     let mut cef = match infiniterm_browser::process::early() {
         Ok(p) => Some(p),
         Err(infiniterm_browser::process::Unavailable::Helper(code)) => std::process::exit(code),
@@ -277,7 +294,12 @@ fn main() {
         }
     };
     if runtime::another_instance_holds_the_socket() {
-        eprintln!("[infiniterm] another infiniterm holds the socket; activating it");
+        eprintln!("[infiniterm] another infiniterm holds the endpoint; activating it");
+        // Bringing the first copy forward is macOS's `open -b`. Windows has
+        // no equivalent that does not mean finding its window by hand, so
+        // this one just exits: the lock is what mattered, and the first copy
+        // is already on screen somewhere.
+        #[cfg(target_os = "macos")]
         let _ = std::process::Command::new("open")
             .args(["-b", "dev.ekinertac.infiniterm"])
             .status();
@@ -285,6 +307,11 @@ fn main() {
     }
     Application::new().run(move |cx: &mut App| {
         keycode::install();
+        // Without the feature there is no CEF to start and no pump to run:
+        // `browser_stub.rs` draws those cards instead.
+        #[cfg(not(feature = "browser"))]
+        let cef_running = false;
+        #[cfg(feature = "browser")]
         let cef_running = match cef.as_mut() {
             Some(p) => {
                 infiniterm_browser::app_protocol::install();
@@ -296,6 +323,7 @@ fn main() {
             }
             None => false,
         };
+        #[cfg(feature = "browser")]
         if cef_running {
             // CEF's message pump, as the spikes ran it: one turn every 4 ms.
             cx.spawn(async move |cx: &mut gpui::AsyncApp| loop {
@@ -437,6 +465,7 @@ fn main() {
                         // The surfaces close before CEF shuts down.
                         this.bodies.clear();
                     });
+                    #[cfg(feature = "browser")]
                     if cef_running {
                         infiniterm_browser::process::stop();
                     }

@@ -196,7 +196,12 @@ fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
     }
 }
 
-#[cfg(test)]
+// macOS only: every one of these runs a macOS tool (PlistBuddy for the
+// build number, codesign for the requirement) against a macOS bundle. The
+// updater itself does not run on Windows either (`update::applies_to` wants
+// an Applications folder); shipping there is phase 6 of the Windows handoff
+// and brings WinVerifyTrust with it.
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 

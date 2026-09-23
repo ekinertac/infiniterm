@@ -343,7 +343,7 @@ impl EditorBody {
                 eprintln!("[infiniterm/warn] could not read {path}: {e}");
                 self.events.push(EditorEvent::Notice(format!(
                     "could not open {}",
-                    path.rsplit('/').next().unwrap_or(path)
+                    infiniterm_core::paths::base_name(path)
                 )));
             }
         }
@@ -385,7 +385,7 @@ impl EditorBody {
                 let _ = draft_delete(&self.card_id);
                 self.events.push(EditorEvent::Notice(format!(
                     "saved {}",
-                    path.rsplit('/').next().unwrap_or(path)
+                    infiniterm_core::paths::base_name(path)
                 )));
             }
             Err(e) => {
@@ -448,7 +448,7 @@ impl EditorBody {
             if !self.warned_stale {
                 self.events.push(EditorEvent::Notice(format!(
                     "{} changed on disk; your unsaved changes are kept",
-                    path.rsplit('/').next().unwrap_or(&path)
+                    infiniterm_core::paths::base_name(&path)
                 )));
             }
             self.warned_stale = true;
@@ -1506,11 +1506,7 @@ impl EditorBody {
 }
 
 fn parent_of(path: &str) -> String {
-    match path.rsplit_once('/') {
-        Some(("", _)) => "/".into(),
-        Some((dir, _)) => dir.into(),
-        None => "/".into(),
-    }
+    infiniterm_core::paths::parent_dir(path)
 }
 
 fn list_dir(dir: &str) -> Vec<Entry> {

@@ -731,12 +731,11 @@ pub fn startup(app: &mut AppView) {
 }
 
 /// One instance, as the reference's single-instance plugin enforced it:
-/// the socket path is the lock. A second launch on the same data dir
-/// activates the first through its bundle id and exits before it could
-/// race the first for the save file.
+/// the endpoint is the lock (`infiniterm-core`'s `transport`, a unix socket
+/// or a named pipe). A second launch on the same data dir activates the
+/// first and exits before it could race it for the save file.
 pub fn another_instance_holds_the_socket() -> bool {
-    let path = infiniterm_core::paths::socket_path();
-    std::os::unix::net::UnixStream::connect(&path).is_ok()
+    infiniterm_core::transport::is_live(&infiniterm_core::paths::socket_path())
 }
 
 /// curl, not an HTTP crate: one endpoint, off by default, and this app

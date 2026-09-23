@@ -9,8 +9,16 @@
 //!
 //! Only letters, digits and the US punctuation row are named; every other
 //! key keeps gpui's name, which is already stable across layouts.
+//!
+//! On Windows there is no monitor and `last_code` answers `None`, so
+//! `keymap.rs` falls back to gpui's keystroke. Whether that is enough on a
+//! Turkish Q keyboard THERE is an open question and phase 3's first one
+//! (docs/windows-handoff.md, "Keys"); the equivalent when it is not is the
+//! virtual key and scan code off the window message.
 #![allow(unexpected_cfgs, clippy::missing_transmute_annotations)]
+#[cfg(target_os = "macos")]
 use objc::runtime::Object;
+#[cfg(target_os = "macos")]
 use objc::{class, msg_send, sel, sel_impl};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
@@ -29,11 +37,19 @@ static LAST_SHIFT: AtomicBool = AtomicBool::new(false);
 static LAST_DEAD: AtomicBool = AtomicBool::new(false);
 
 /// NSEventMaskKeyDown.
+#[cfg(target_os = "macos")]
 const KEY_DOWN_MASK: u64 = 1 << 10;
 /// NSEventModifierFlagShift.
+#[cfg(target_os = "macos")]
 const SHIFT_FLAG: u64 = 1 << 17;
 
+/// Nothing to watch: `LAST` stays -1 and `last_code` answers `None`, which
+/// is the "use gpui's keystroke" path `keymap.rs` already has.
+#[cfg(not(target_os = "macos"))]
+pub fn install() {}
+
 /// Starts watching key-downs. Once per process, before the window opens.
+#[cfg(target_os = "macos")]
 pub fn install() {
     let block = block::ConcreteBlock::new(|event: *mut Object| -> *mut Object {
         let code: u16 = unsafe { msg_send![event, keyCode] };

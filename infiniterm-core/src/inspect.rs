@@ -107,7 +107,7 @@ fn is_ssh(args: &str) -> bool {
     // ~/.ssh/config` — is not an ssh session, and matching anywhere in the line
     // would paint those red.
     let argv0 = args.split_whitespace().next().unwrap_or("");
-    let name = argv0.rsplit('/').next().unwrap_or(argv0);
+    let name = crate::paths::base_name(argv0);
     name == "ssh"
 }
 
@@ -142,7 +142,7 @@ pub fn ssh_destination(args: &str) -> Option<String> {
 /// removed (`-zsh` is how a login shell names itself, not a flag).
 pub fn proc_name(args: &str) -> String {
     let argv0 = args.split_whitespace().next().unwrap_or("");
-    let base = argv0.rsplit('/').next().unwrap_or(argv0);
+    let base = crate::paths::base_name(argv0);
     base.trim_start_matches('-').to_string()
 }
 
