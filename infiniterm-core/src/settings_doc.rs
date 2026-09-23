@@ -125,7 +125,8 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "\"ping 8.8.8.8\" and \"top\" are the other classics. It runs through a",
             "login shell, not an interactive one, so a PATH set in .zshrc is not",
             "there: give a Homebrew program its full path, cron's rule",
-            "(\"/opt/homebrew/bin/htop\").",
+            "(\"/opt/homebrew/bin/htop\"). On Windows it runs through PowerShell",
+            "instead, so write it as PowerShell.",
         ],
     ),
     (

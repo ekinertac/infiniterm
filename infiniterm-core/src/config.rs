@@ -205,12 +205,24 @@ pub fn default_config() -> Config {
         starting_dir: String::new(),
         terminal: Terminal {
             shell: String::new(),
+            // There is no iftd on Windows and no tmux to talk to, and
+            // `Panes::start` refuses both there (backend/mod.rs). Defaulting
+            // to the backend that exists keeps a fresh install from opening
+            // on a notice explaining why its setting was ignored.
+            #[cfg(windows)]
+            backend: TerminalBackend::Pty,
+            #[cfg(unix)]
             backend: TerminalBackend::Daemon,
             cursor_style: CursorStyle::Block,
             cursor_blink: true,
-            // What every Mac has. A Nerd Font is one you install, and a
-            // default that renders tofu on a fresh machine is worse than one
-            // that renders plain ASCII.
+            // What every machine of that kind already has. A Nerd Font is
+            // one you install, and a default that renders tofu on a fresh
+            // machine is worse than one that renders plain ASCII. Cascadia
+            // Mono ships with Windows Terminal and recent Windows; Consolas
+            // has been there since Vista.
+            #[cfg(windows)]
+            font_family: "Cascadia Mono, Consolas, monospace".into(),
+            #[cfg(unix)]
             font_family: "ui-monospace, Menlo, monospace".into(),
             font_size: 14.,
             font_weight: "normal".into(),
@@ -225,7 +237,17 @@ pub fn default_config() -> Config {
             // always checks builtins before PATH), which otherwise takes
             // the args meant for /usr/bin/log and answers "too many
             // arguments": the decoy showed an error instead of the log.
+            #[cfg(unix)]
             decoy_command: "command log stream --style compact".into(),
+            // The same idea with what Windows has: a process list that moves
+            // on its own and says nothing. `Get-Process` is a PowerShell
+            // cmdlet, so this only makes sense while the card's shell is a
+            // PowerShell, which on Windows it is unless `terminal.shell`
+            // says otherwise (`shell_cmd::default_shell`).
+            #[cfg(windows)]
+            decoy_command: "while ($true) { Get-Process | Sort CPU -Desc | Select -First 30 | \
+                 Format-Table -AutoSize; Start-Sleep 2 }"
+                .into(),
         },
         cards: Cards {
             width: 69.,
