@@ -1,6 +1,6 @@
 //! The pressed-shortcut overlay (`app.keycast`, for screencasts and for
 //! showing somebody what you just did): every chord the app handles is
-//! shown as its keycaps and the command's name, bottom right, newest at
+//! shown as its keycaps and the command's name, bottom left, newest at
 //! the bottom with the earlier ones stacked above it, each fading out on
 //! its own clock. Off by default; a runtime toggle, not a setting, since
 //! it is turned on for a recording and off after.
@@ -19,9 +19,11 @@ pub const KEYCAST_MS: f64 = 2200.;
 pub const KEYCAST_FADE_MS: f64 = 600.;
 /// How many stay stacked: more than a hand can press in the time.
 pub const KEYCAST_MAX: usize = 6;
-const KEYCAST_FONT_PX: f32 = 14.;
-const KEYCAST_INSET_PX: f32 = 16.;
-const KEYCAST_GAP_PX: f32 = 6.;
+/// Big enough to read in a screen recording played back small; was 14,
+/// which Ekin asked to be bigger.
+const KEYCAST_FONT_PX: f32 = 22.;
+const KEYCAST_INSET_PX: f32 = 24.;
+const KEYCAST_GAP_PX: f32 = 8.;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Keycast {
@@ -75,10 +77,10 @@ impl AppView {
         let mut column = div()
             .absolute()
             .bottom(px(KEYCAST_INSET_PX * ui))
-            .right(px(KEYCAST_INSET_PX * ui))
+            .left(px(KEYCAST_INSET_PX * ui))
             .flex()
             .flex_col()
-            .items_end()
+            .items_start()
             .gap(px(KEYCAST_GAP_PX * ui));
         for k in &self.keycasts {
             let alpha = keycast_alpha(k.at, now);
@@ -87,16 +89,16 @@ impl AppView {
                     .flex()
                     .items_center()
                     .gap(px(KEYCAST_GAP_PX * ui))
-                    .px(px(10. * ui))
-                    .py(px(6. * ui))
+                    .px(px(14. * ui))
+                    .py(px(9. * ui))
                     .rounded_md()
                     .bg(crate::chrome::with_alpha(chrome.bar_bg, 0.92 * alpha))
                     .text_size(px(KEYCAST_FONT_PX * ui))
                     .text_color(crate::chrome::with_alpha(chrome.text_muted, alpha))
                     .child(
                         div()
-                            .px(px(8. * ui))
-                            .py(px(3. * ui))
+                            .px(px(11. * ui))
+                            .py(px(4. * ui))
                             .rounded_sm()
                             .bg(crate::chrome::with_alpha(chrome.text_bright, alpha))
                             .text_color(crate::chrome::with_alpha(chrome.bar_bg, alpha))
