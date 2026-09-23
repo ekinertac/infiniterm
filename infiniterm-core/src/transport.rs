@@ -295,7 +295,7 @@ mod tests {
     // The single-instance lock: nothing bound means nothing running.
     #[test]
     fn is_live_is_false_until_something_binds() {
-        let path = endpoint("live");
+        let path = endpoint("islive");
         assert!(!is_live(&path));
         let listener = bind(&path).unwrap();
         // Accepting must happen off this thread: on Windows a connect only

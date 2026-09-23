@@ -16,13 +16,15 @@
 //! per-frame parse budget in `infiniterm-term::scheduler` bounds time, and
 //! both are needed (the term-zoom spike measured 1 fps without the budget).
 //!
-//! `INHERITED_TERMINAL_VARS`, `terminal_identity` and `default_shell` are
-//! `pub`: `infiniterm-session`'s `iftd` spawns a card's shell now instead of
-//! this process, so the env scrubbing has to live here and be used from
-//! there too, or a daemon-backed card claims to be whatever terminal
-//! launched the app.
+//! `INHERITED_TERMINAL_VARS` and `terminal_identity` are `pub`:
+//! `infiniterm-session`'s `iftd` spawns a card's shell now instead of this
+//! process, so the env scrubbing has to live here and be used from there
+//! too, or a daemon-backed card claims to be whatever terminal launched the
+//! app. Which shell that is, and how to hand it one command, is
+//! `shell_cmd.rs` for the same reason.
 
 use super::{PaneEvent, PaneId, SessionBackend};
+use crate::shell_cmd::{default_shell, shell_args};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -198,15 +200,9 @@ impl LocalPtyBackend {
             pixel_height: 0,
         })?;
 
-        let mut builder = match cmd {
-            // -lc so the user's profile is loaded, matching what a terminal app does.
-            Some(c) => {
-                let mut b = CommandBuilder::new(default_shell());
-                b.args(["-lc", c]);
-                b
-            }
-            None => CommandBuilder::new(default_shell()),
-        };
+        let shell = default_shell();
+        let mut builder = CommandBuilder::new(&shell);
+        builder.args(shell_args(&shell, cmd));
         builder.cwd(cwd);
         // The shell must know it is in infiniterm, not in whatever launched
         // the app. Launched from a terminal (`open`, `ift`), the app inherits
@@ -382,33 +378,78 @@ pub fn terminal_identity() -> Vec<(String, String)> {
     ]
 }
 
-/// `pub`: `iftd` builds the same command line this backend does, and must
-/// fall back to the same shell when `$SHELL` is unset.
-pub fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
-}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
 
+    /// A directory every platform has. `/tmp` was written in when the port
+    /// was macOS only; a card's cwd has to exist or the spawn fails.
+    fn tmp() -> std::path::PathBuf {
+        std::env::temp_dir()
+    }
+
+    /// The test commands, written for whichever shell a card actually gets
+    /// here (`shell_cmd::default_shell`). Same question each time, different
+    /// spelling: PowerShell has no `$VAR`, no `tput` and no `yes`.
+    #[cfg(windows)]
+    mod sh {
+        pub const ECHO_A: &str = "echo hello-infiniterm";
+        pub const CARD_ENV: &str = "echo card=$env:INFINITERM_CARD_ID";
+        pub const IDENTITY: &str =
+            "echo \"prog=$env:TERM_PROGRAM pane=$(if ($env:WEZTERM_PANE) { $env:WEZTERM_PANE } else { 'none' })\"";
+        pub const EXIT_3: &str = "exit 3";
+        pub const SLEEP: &str = "Start-Sleep 30";
+        /// One shot, not typed at a prompt: see the resize test for why.
+        pub const REPORT_COLS: &str =
+            "Start-Sleep 3; \"COLS=$($Host.UI.RawUI.WindowSize.Width)\"";
+    }
+    #[cfg(unix)]
+    mod sh {
+        pub const ECHO_A: &str = "echo hello-infiniterm";
+        pub const CARD_ENV: &str = "echo card=$INFINITERM_CARD_ID";
+        pub const IDENTITY: &str = "echo prog=$TERM_PROGRAM pane=${WEZTERM_PANE:-none}";
+        pub const EXIT_3: &str = "exit 3";
+        pub const SLEEP: &str = "sleep 30";
+        pub const FLOOD: &str = "yes";
+        pub const TYPE_COLS: &[u8] = b"echo COLS=$(tput cols)\n";
+    }
+
+    /// Generous on purpose, and used by every loop here. These spawn the
+    /// REAL login shell, so the user's own profile runs first, and this
+    /// suite spawns shells in several crates at once: five seconds was
+    /// enough alone and intermittently was not under a full `cargo test`,
+    /// and PowerShell's own startup takes a second or two on top. The
+    /// deadline only costs this long when a test is failing anyway.
+    const SPAWN_DEADLINE: Duration = Duration::from_secs(20);
+
+    /// ConPTY opens by asking the terminal where the cursor is (ESC [ 6 n)
+    /// and writes NOTHING until it is answered, so a test that only reads
+    /// sees the probe and then silence forever. In the app the emulator
+    /// answers (`TerminalBody::replies`, and `Panes::we_are_the_terminal`
+    /// is true for this backend); with no emulator here the test has to.
+    /// A no-op on unix, where a pty asks nothing.
+    fn answer_conpty_probe(backend: &LocalPtyBackend, pane: PaneId, bytes: &[u8]) {
+        if bytes.windows(4).any(|w| w == b"\x1b[6n") {
+            backend.write_now(pane, b"\x1b[1;1R");
+        }
+    }
+
     /// Drains events for `pane` until `needle` is seen or the deadline passes.
     fn wait_for_output(
+        backend: &LocalPtyBackend,
         rx: &std::sync::mpsc::Receiver<(PaneId, PaneEvent)>,
         pane: PaneId,
         needle: &str,
     ) -> bool {
-        // Generous on purpose. These spawn the REAL login shell, so the
-        // user's own profile runs first, and this suite now spawns shells
-        // in several crates at once: five seconds was enough alone and
-        // intermittently was not under a full `cargo test`. The deadline
-        // only costs this long when a test is failing anyway.
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let deadline = std::time::Instant::now() + SPAWN_DEADLINE;
         let mut acc = Vec::new();
         while std::time::Instant::now() < deadline {
             if let Ok((p, PaneEvent::Output(bytes))) = rx.recv_timeout(Duration::from_millis(200)) {
                 if p == pane {
+                    answer_conpty_probe(backend, pane, &bytes);
                     acc.extend_from_slice(&bytes);
                     if String::from_utf8_lossy(&acc).contains(needle) {
                         return true;
@@ -424,24 +465,24 @@ mod tests {
         let (backend, rx) = LocalPtyBackend::new();
         let pane = backend
             .spawn(
-                std::path::Path::new("/tmp"),
-                Some("echo hello-infiniterm"),
+                &tmp(),
+                Some(sh::ECHO_A),
                 vec![],
             )
             .await
             .unwrap();
-        assert!(wait_for_output(&rx, pane, "hello-infiniterm"));
+        assert!(wait_for_output(&backend, &rx, pane, "hello-infiniterm"));
     }
 
     #[tokio::test]
     async fn write_reaches_the_shell() {
         let (backend, rx) = LocalPtyBackend::new();
         let pane = backend
-            .spawn(std::path::Path::new("/tmp"), None, vec![])
+            .spawn(&tmp(), None, vec![])
             .await
             .unwrap();
         backend.write(pane, b"echo written-ok\n");
-        assert!(wait_for_output(&rx, pane, "written-ok"));
+        assert!(wait_for_output(&backend, &rx, pane, "written-ok"));
     }
 
     #[tokio::test]
@@ -449,13 +490,13 @@ mod tests {
         let (backend, rx) = LocalPtyBackend::new();
         let pane = backend
             .spawn(
-                std::path::Path::new("/tmp"),
-                Some("echo card=$INFINITERM_CARD_ID"),
+                &tmp(),
+                Some(sh::CARD_ENV),
                 vec![("INFINITERM_CARD_ID".into(), "card-42".into())],
             )
             .await
             .unwrap();
-        assert!(wait_for_output(&rx, pane, "card=card-42"));
+        assert!(wait_for_output(&backend, &rx, pane, "card=card-42"));
     }
 
     // The app launched from a WezTerm shell must not hand WezTerm's identity
@@ -467,30 +508,31 @@ mod tests {
         let (backend, rx) = LocalPtyBackend::new();
         let pane = backend
             .spawn(
-                std::path::Path::new("/tmp"),
-                Some("echo prog=$TERM_PROGRAM pane=${WEZTERM_PANE:-none}"),
+                &tmp(),
+                Some(sh::IDENTITY),
                 vec![],
             )
             .await
             .unwrap();
-        assert!(wait_for_output(&rx, pane, "prog=infiniterm pane=none"));
+        assert!(wait_for_output(&backend, &rx, pane, "prog=infiniterm pane=none"));
     }
 
     #[tokio::test]
     async fn reports_exit() {
         let (backend, rx) = LocalPtyBackend::new();
         let pane = backend
-            .spawn(std::path::Path::new("/tmp"), Some("exit 3"), vec![])
+            .spawn(&tmp(), Some(sh::EXIT_3), vec![])
             .await
             .unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + SPAWN_DEADLINE;
         let mut saw = None;
         while std::time::Instant::now() < deadline && saw.is_none() {
-            if let Ok((p, PaneEvent::Exited { code })) = rx.recv_timeout(Duration::from_millis(200))
-            {
-                if p == pane {
-                    saw = Some(code);
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok((p, PaneEvent::Output(bytes))) if p == pane => {
+                    answer_conpty_probe(&backend, pane, &bytes)
                 }
+                Ok((p, PaneEvent::Exited { code })) if p == pane => saw = Some(code),
+                _ => {}
             }
         }
         assert_eq!(saw, Some(3));
@@ -499,41 +541,51 @@ mod tests {
     #[tokio::test]
     async fn resize_is_visible_to_the_child() {
         let (backend, rx) = LocalPtyBackend::new();
+        // Windows asks a ONE-SHOT command instead of typing at a prompt:
+        // ConPTY and PSReadLine redraw the typed line a character at a time
+        // with cursor moves between them, so "COLS=120" never appears as one
+        // run of bytes in an interactive session however long you wait. The
+        // command sleeps first so the resize lands before it reads the size.
+        #[cfg(windows)]
+        let pane = backend
+            .spawn(&tmp(), Some(sh::REPORT_COLS), vec![])
+            .await
+            .unwrap();
         // TERM is passed explicitly so `tput` has a valid terminfo entry
         // regardless of the ambient environment the test runs in — an unset
         // or unusual TERM would otherwise burn the deadline and fail flakily.
+        #[cfg(unix)]
         let pane = backend
-            .spawn(
-                std::path::Path::new("/tmp"),
-                None,
-                vec![("TERM".into(), "xterm-256color".into())],
-            )
+            .spawn(&tmp(), None, vec![("TERM".into(), "xterm-256color".into())])
             .await
             .unwrap();
         backend.resize(pane, 120, 40);
         // Marked, not a bare "120": the shell's own startup prints plenty
         // of numbers and a loose match could pass without the resize ever
         // having been seen.
-        backend.write(pane, b"echo COLS=$(tput cols)\n");
-        assert!(wait_for_output(&rx, pane, "COLS=120"));
+        #[cfg(unix)]
+        backend.write(pane, sh::TYPE_COLS);
+        assert!(wait_for_output(&backend, &rx, pane, "COLS=120"));
     }
 
     #[tokio::test]
     async fn kill_terminates_the_child() {
         let (backend, rx) = LocalPtyBackend::new();
         let pane = backend
-            .spawn(std::path::Path::new("/tmp"), Some("sleep 30"), vec![])
+            .spawn(&tmp(), Some(sh::SLEEP), vec![])
             .await
             .unwrap();
         backend.kill(pane);
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + SPAWN_DEADLINE;
         let mut exited = false;
         while std::time::Instant::now() < deadline && !exited {
-            if let Ok((p, PaneEvent::Exited { .. })) = rx.recv_timeout(Duration::from_millis(200)) {
-                if p == pane {
-                    exited = true;
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok((p, PaneEvent::Output(bytes))) if p == pane => {
+                    answer_conpty_probe(&backend, pane, &bytes)
                 }
+                Ok((p, PaneEvent::Exited { .. })) if p == pane => exited = true,
+                _ => {}
             }
         }
         assert!(
@@ -542,13 +594,47 @@ mod tests {
         );
     }
 
-    /// The backpressure contract: a flooding pane stops being read once
-    /// HIGH_WATER bytes are unacknowledged, and resumes on ack.
+    /// The backpressure contract at the mechanism rather than through a
+    /// pty: over the mark a reader parks, an ack releases it, and a close
+    /// releases it too (that last one is how a kill reaches a reader that is
+    /// waiting here rather than in `read`). Runs everywhere, unlike the
+    /// flood test below.
+    #[test]
+    fn credit_parks_a_reader_over_the_mark_and_an_ack_releases_it() {
+        let credit = Arc::new(Credit::default());
+        assert!(credit.wait_for_room(), "an empty pane must not wait");
+        credit.sent(HIGH_WATER + 1);
+
+        let parked = credit.clone();
+        let waiter = std::thread::spawn(move || parked.wait_for_room());
+        // Nothing to synchronise on but time: the point is that it does NOT
+        // return, and the only way to observe that is to look and see.
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!waiter.is_finished(), "a pane over the mark kept reading");
+        credit.ack(HIGH_WATER + 1);
+        assert!(waiter.join().unwrap(), "an ack did not release the reader");
+
+        credit.sent(HIGH_WATER + 1);
+        let parked = credit.clone();
+        let waiter = std::thread::spawn(move || parked.wait_for_room());
+        credit.close();
+        assert!(!waiter.join().unwrap(), "a close must stop the reader");
+    }
+
+    /// The same contract through a real pty, which is the only place the
+    /// reader thread and the credit actually meet.
+    ///
+    /// unix only. ConPTY is an emulator in its own right: it renders the
+    /// pane at its own refresh rate and emits what changed, which measured
+    /// about 9 KiB a second here for a program writing as fast as it could.
+    /// Reaching a 256 KiB mark would take half a minute, so on Windows the
+    /// mechanism is covered by the test above instead.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_flooding_pane_waits_for_acks() {
         let (backend, rx) = LocalPtyBackend::new();
         let pane = backend
-            .spawn(std::path::Path::new("/tmp"), Some("yes"), vec![])
+            .spawn(&tmp(), Some(sh::FLOOD), vec![])
             .await
             .unwrap();
 
@@ -559,6 +645,7 @@ mod tests {
         while idle < 5 {
             match rx.recv_timeout(Duration::from_millis(200)) {
                 Ok((p, PaneEvent::Output(b))) if p == pane => {
+                    answer_conpty_probe(&backend, pane, &b);
                     got += b.len();
                     idle = 0;
                 }
@@ -598,19 +685,20 @@ mod tests {
     async fn tags_events_by_pane() {
         let (backend, rx) = LocalPtyBackend::new();
         let a = backend
-            .spawn(std::path::Path::new("/tmp"), Some("echo from-a"), vec![])
+            .spawn(&tmp(), Some("echo from-a"), vec![])
             .await
             .unwrap();
         let b = backend
-            .spawn(std::path::Path::new("/tmp"), Some("echo from-b"), vec![])
+            .spawn(&tmp(), Some("echo from-b"), vec![])
             .await
             .unwrap();
         assert_ne!(a, b);
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + SPAWN_DEADLINE;
         let mut acc: HashMap<PaneId, String> = HashMap::new();
         while std::time::Instant::now() < deadline {
             if let Ok((p, PaneEvent::Output(bytes))) = rx.recv_timeout(Duration::from_millis(200)) {
+                answer_conpty_probe(&backend, p, &bytes);
                 acc.entry(p)
                     .or_default()
                     .push_str(&String::from_utf8_lossy(&bytes));

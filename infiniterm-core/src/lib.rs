@@ -73,6 +73,7 @@ pub mod paths;
 pub mod prompt;
 pub mod saved_layout;
 pub mod settings_doc;
+pub mod shell_cmd;
 pub mod shell_history;
 pub mod shortcuts;
 pub mod slot_snap;

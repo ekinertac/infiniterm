@@ -90,25 +90,53 @@ mod tests {
         assert_eq!(resolve("/tmp", "~"), home);
     }
 
+    /// A directory holding `sub/` and `sub/file.txt`, removed on the way
+    /// out. Built rather than borrowed from the OS: `/etc/hosts` answered
+    /// this on macOS and has no Windows equivalent worth guessing at.
+    struct Tree(PathBuf);
+
+    impl Tree {
+        fn new(tag: &str) -> Tree {
+            let root = std::env::temp_dir()
+                .join(format!("infiniterm-links-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("sub")).unwrap();
+            std::fs::write(root.join("sub").join("file.txt"), "x").unwrap();
+            Tree(root)
+        }
+        fn cwd(&self) -> String {
+            self.0.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn existence_is_answered_per_path() {
+        let t = Tree::new("exists");
         assert_eq!(
-            paths_exist("/", &["etc", "no-such-thing-xyz"]),
+            paths_exist(&t.cwd(), &["sub", "no-such-thing-xyz"]),
             [true, false]
         );
     }
 
     #[test]
     fn kinds_tell_a_directory_from_a_file() {
+        let t = Tree::new("kinds");
         assert_eq!(
-            path_kinds("/", &["etc", "etc/hosts", "nope-xyz"]),
+            path_kinds(&t.cwd(), &["sub", "sub/file.txt", "nope-xyz"]),
             [Some(PathKind::Dir), Some(PathKind::File), None]
         );
     }
 
     #[test]
     fn refuses_to_open_what_is_not_there() {
-        assert!(open_path("/", "no-such-thing-xyz").is_err());
+        let t = Tree::new("open");
+        assert!(open_path(&t.cwd(), "no-such-thing-xyz").is_err());
         assert!(open_url("ftp://x").is_err());
     }
 }

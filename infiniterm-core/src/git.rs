@@ -186,7 +186,10 @@ mod tests {
         assert!(std::path::Path::new(&changes.repo)
             .join("Cargo.toml")
             .is_file());
-        assert!(here.starts_with(&changes.repo));
+        // As paths, not as strings: on Windows git answers with forward
+        // slashes and CARGO_MANIFEST_DIR has backslashes, and the question
+        // being asked is about directories, not spelling.
+        assert!(std::path::Path::new(here).starts_with(&changes.repo));
         // HEAD has a Cargo.toml; a file that never existed does not.
         assert!(git_show_head(&changes.repo, "infiniterm-core/Cargo.toml")
             .unwrap()

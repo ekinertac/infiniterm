@@ -27,9 +27,10 @@
 //!   write blocking IS the backpressure. See session_protocol.rs's header.
 
 use infiniterm_core::backend::local_pty::{
-    default_shell, terminal_identity, INHERITED_TERMINAL_VARS,
+    terminal_identity, INHERITED_TERMINAL_VARS,
 };
 use infiniterm_core::backend::session_protocol::{Frame, FrameReader, Ring, MAX_PAYLOAD};
+use infiniterm_core::shell_cmd::{default_shell, shell_args};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::net::Shutdown;
@@ -273,17 +274,13 @@ fn run(listener: UnixListener, opts: Options) -> ! {
         Err(e) => fail_startup(&meta_path, &opts.socket, format!("openpty: {e}")),
     };
 
-    // Same construction as local_pty::spawn_now: -lc for a one-shot command
-    // so the user's profile loads, the parent terminal's identity scrubbed
-    // before this card's own is applied, then the daemon's own --env pairs.
-    let mut builder = match &opts.cmd {
-        Some(c) => {
-            let mut b = CommandBuilder::new(default_shell());
-            b.args(["-lc", c]);
-            b
-        }
-        None => CommandBuilder::new(default_shell()),
-    };
+    // Same construction as local_pty::spawn_now, through the same function:
+    // the shell's own run flags for a one-shot command so the user's profile
+    // loads, the parent terminal's identity scrubbed before this card's own
+    // is applied, then the daemon's own --env pairs.
+    let shell = default_shell();
+    let mut builder = CommandBuilder::new(&shell);
+    builder.args(shell_args(&shell, opts.cmd.as_deref()));
     builder.cwd(&opts.cwd);
     for k in INHERITED_TERMINAL_VARS {
         builder.env_remove(k);
