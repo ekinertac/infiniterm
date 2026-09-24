@@ -211,10 +211,27 @@ pub struct Metrics {
 impl Metrics {
     /// The font at the configured weight.
     pub fn font(&self) -> gpui::Font {
-        let mut f = font(self.family.clone());
+        let mut f = term_font(&self.family);
         f.weight = self.weight;
         f
     }
+}
+
+/// The family the app bundles for Nerd Font icons (`assets/fonts/`,
+/// registered in `main.rs`): the prompt's powerline arrows, git and folder
+/// glyphs live in Unicode's private use area, which only a Nerd Font has,
+/// and CoreText does not borrow an installed font for that range on its own.
+/// So a card in Menlo drew empty boxes where every other terminal drew
+/// icons, even on a Mac full of Nerd Fonts (the MacBook Air, 2026-09-24).
+/// WezTerm ships the same font as its fallback for the same reason.
+pub const ICON_FONT: &str = "Symbols Nerd Font Mono";
+
+/// The terminal's font with the icon font behind it, so a glyph the
+/// configured family lacks is looked for there before anywhere else.
+pub fn term_font(family: &str) -> gpui::Font {
+    let mut f = font(family.to_string());
+    f.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![ICON_FONT.to_string()]));
+    f
 }
 
 /// `"normal"`, `"bold"`, or a number 100 to 900, as CSS spells weights.
@@ -558,7 +575,7 @@ impl TerminalBody {
         }
         let pad = px((ERROR_PAD_PX * scale) as f32);
         let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
-        let f = font(self.font_family.clone());
+        let f = term_font(&self.font_family);
         let mut y = bounds.origin.y + pad;
         let lines = [
             (format!("could not start a shell in {}", self.cwd), 0xfca5a5),
@@ -604,7 +621,7 @@ impl TerminalBody {
             Bounds::new(bounds.origin, size(bounds.size.width, line_h + pad * 2.)),
             gpui::rgb(0x1a0f0f),
         ));
-        let f = font(self.font_family.clone());
+        let f = term_font(&self.font_family);
         let line = crate::text::shape(
             window,
             "attached from outside (ift attach); the card takes the shell back when that terminal detaches",
@@ -677,7 +694,7 @@ impl CardBody for TerminalBody {
         let cell_w = px((self.cell_w * scale) as f32);
         let pad = px((PAD * scale) as f32);
         let origin = point(bounds.origin.x + pad, bounds.origin.y + pad);
-        let mut base = font(self.font_family.clone());
+        let mut base = term_font(&self.font_family);
         base.weight = self.weight;
         let bold_weight = self.bold_weight;
         // Too small to read, or too many cells on screen this frame
@@ -1354,6 +1371,18 @@ pub fn lost_session_tail(when: &str, resume: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every terminal font carries the bundled icon font behind it, whatever
+    /// family the settings name, or a Mac without a Nerd Font draws boxes.
+    #[test]
+    fn every_terminal_font_falls_back_to_the_icon_font() {
+        for family in ["Menlo", "IosevkaTerm Nerd Font Mono"] {
+            let f = term_font(family);
+            assert_eq!(f.family.as_ref(), family);
+            let fallbacks = f.fallbacks.expect("a fallback list");
+            assert_eq!(fallbacks.fallback_list(), [ICON_FONT.to_string()]);
+        }
+    }
 
     /// A card half out of the window paints only the rows the window shows:
     /// its off-screen rows were clipped anyway but still cost their glyphs.

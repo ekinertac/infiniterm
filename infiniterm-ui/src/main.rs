@@ -378,6 +378,13 @@ fn main() {
         ]);
         // Where it was last time, else centred: the reference's window-state
         // plugin, owned here.
+        // The icon font every card falls back to (`terminal_body::ICON_FONT`),
+        // bundled so a Mac without a Nerd Font still draws the prompt's icons.
+        if let Err(e) = cx.text_system().add_fonts(vec![std::borrow::Cow::Borrowed(
+            include_bytes!("../../assets/fonts/SymbolsNerdFontMono-Regular.ttf").as_slice(),
+        )]) {
+            eprintln!("[infiniterm/warn] the bundled icon font did not load: {e}");
+        }
         let window_bounds = window_state::WindowState::load()
             .map(|s| s.bounds())
             .unwrap_or_else(|| {
