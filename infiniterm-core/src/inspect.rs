@@ -30,9 +30,25 @@
 //! backgrounded tunnel (`ssh -fN`) from painting a card red for hours.
 //!
 //! From the Tauri app's inspect.rs unchanged but for the glue: the poller
-//! takes the backend's pid source and an mpsc sender. macOS only (`ps` and
-//! `lsof`); Linux reads `/proc` and Windows the ConPTY API behind the same
-//! `PaneStatus` when they come. `card_label.rs` turns a status into a name.
+//! takes the backend's pid source and an mpsc sender. `ps` and `lsof` on
+//! unix, Toolhelp32 on Windows, both behind the same `PaneStatus`; Linux
+//! reads `/proc` when it comes. `card_label.rs` turns a status into a name.
+//!
+//! What Windows cannot answer, and why the shape survives it anyway:
+//!
+//! - There is no foreground PROCESS GROUP. `snapshot` there marks every
+//!   process as its own group leader and as foreground, which turns the walk
+//!   below into "the shallowest child of the card's shell". That is the same
+//!   answer the group rule gives for the case it was written for: `claude`'s
+//!   MCP servers are children of `claude`, not of the shell, so the shell's
+//!   own child is `claude`.
+//! - A process's working directory is not readable from outside it without
+//!   debug privileges, so `cwds` answers nothing and a card keeps the
+//!   directory it was opened in. `PaneEvent::CwdChanged` is the seam that
+//!   would fix it for both platforms (a shell's OSC 7, which oh-my-posh
+//!   already writes); nothing emits or consumes it yet.
+//! - Toolhelp gives the exe's FILE NAME, not the command line, so a card
+//!   says `ssh` but never which host.
 
 use crate::backend::PaneId;
 use std::collections::HashMap;
@@ -139,11 +155,25 @@ pub fn ssh_destination(args: &str) -> Option<String> {
 }
 
 /// The basename of a command line's argv[0], with a login shell's leading dash
-/// removed (`-zsh` is how a login shell names itself, not a flag).
+/// removed (`-zsh` is how a login shell names itself, not a flag) and a
+/// Windows executable suffix dropped.
+///
+/// The suffix goes because a card labelled `PING.EXE` says the same thing as
+/// one labelled `PING` with four characters of noise, and because the Mac
+/// shows `ping` for the same program. The CASE stays: Windows keeps a file's
+/// name as it was written, so `PING.EXE` really is how that one is spelled,
+/// while others are `pwsh.exe` and `Code.exe`, and folding them would be
+/// inventing a name rather than reading one.
 pub fn proc_name(args: &str) -> String {
     let argv0 = args.split_whitespace().next().unwrap_or("");
     let base = crate::paths::base_name(argv0);
-    base.trim_start_matches('-').to_string()
+    let base = base.trim_start_matches('-');
+    match base.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && ext.eq_ignore_ascii_case("exe") => {
+            stem.to_string()
+        }
+        _ => base.to_string(),
+    }
 }
 
 /// What each pane is doing, given its shell pid and the process table.
@@ -249,6 +279,14 @@ pub fn parse_lsof(output: &str) -> HashMap<u32, String> {
     out
 }
 
+/// Nothing: see this file's header. Left taking the same argument as the
+/// unix one so the poller below has no cfg in it.
+#[cfg(windows)]
+fn cwds(_pids: &[u32]) -> HashMap<u32, String> {
+    HashMap::new()
+}
+
+#[cfg(unix)]
 fn cwds(pids: &[u32]) -> HashMap<u32, String> {
     if pids.is_empty() {
         return HashMap::new();
@@ -266,6 +304,54 @@ fn cwds(pids: &[u32]) -> HashMap<u32, String> {
         .unwrap_or_default()
 }
 
+/// The process table from Toolhelp32: pid, parent pid, and the exe's file
+/// name, which is every part of `ps` this file reads.
+///
+/// `pgid` is the pid and `foreground` is true for all of them, because
+/// Windows has neither idea. That is not a lie papered over a gap: it makes
+/// `pane_statuses`'s "shallowest foreground process that leads its group"
+/// mean "the shallowest child of the shell", which is the Windows answer to
+/// the same question. See the header.
+#[cfg(windows)]
+fn snapshot() -> Vec<Proc> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snap == INVALID_HANDLE_VALUE {
+        return Vec::new();
+    }
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+    let mut out = Vec::new();
+    // The first call fills `entry`; every later one steps. A false return is
+    // the end of the list, not a failure.
+    let mut more = unsafe { Process32FirstW(snap, &mut entry) } != 0;
+    while more {
+        let end = entry
+            .szExeFile
+            .iter()
+            .position(|c| *c == 0)
+            .unwrap_or(entry.szExeFile.len());
+        out.push(Proc {
+            pid: entry.th32ProcessID,
+            ppid: entry.th32ParentProcessID,
+            pgid: entry.th32ProcessID,
+            foreground: true,
+            args: String::from_utf16_lossy(&entry.szExeFile[..end]),
+        });
+        more = unsafe { Process32NextW(snap, &mut entry) } != 0;
+    }
+    unsafe { CloseHandle(snap) };
+    out
+}
+
+#[cfg(unix)]
 fn snapshot() -> Vec<Proc> {
     std::process::Command::new("ps")
         .args(["-axo", "pid=,ppid=,pgid=,stat=,args="])
@@ -313,6 +399,76 @@ pub fn pane_status_poll(
 
 #[cfg(test)]
 mod tests {
+
+    // The one thing a table walk cannot be unit tested against: a real
+    // process table. Asserts the shape every rule above depends on rather
+    // than any particular process being there.
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_snapshot_finds_this_process_and_its_parent() {
+        let procs = super::snapshot();
+        assert!(
+            procs.len() > 5,
+            "a process table has more than {} in it",
+            procs.len()
+        );
+        let me = std::process::id();
+        let mine = procs
+            .iter()
+            .find(|p| p.pid == me)
+            .expect("this process is in the table");
+        // The exe's file name, not a path and not a command line.
+        assert!(mine.args.ends_with(".exe"), "{:?}", mine.args);
+        assert!(
+            !mine.args.contains('\\'),
+            "a name, not a path: {:?}",
+            mine.args
+        );
+        // What makes `pane_statuses` read as "the shallowest child of the
+        // shell" on Windows; see this file's header.
+        assert_eq!(mine.pgid, mine.pid);
+        assert!(mine.foreground);
+        // The parent is in the table too, which is what the walk needs.
+        assert!(
+            procs.iter().any(|p| p.pid == mine.ppid),
+            "parent {} of {me} is missing",
+            mine.ppid
+        );
+    }
+
+    // A card's shell with one child reports that child, whatever the
+    // platform's idea of a process group is.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_shell_reports_the_command_it_started() {
+        let procs = vec![
+            super::Proc {
+                pid: 100,
+                ppid: 1,
+                pgid: 100,
+                foreground: true,
+                args: "pwsh.exe".into(),
+            },
+            super::Proc {
+                pid: 200,
+                ppid: 100,
+                pgid: 200,
+                foreground: true,
+                args: "claude.exe".into(),
+            },
+            // An MCP server claude spawned: deeper, and not the answer.
+            super::Proc {
+                pid: 300,
+                ppid: 200,
+                pgid: 300,
+                foreground: true,
+                args: "python.exe".into(),
+            },
+        ];
+        let got = super::pane_statuses(&[(7, 100)], &procs);
+        // The suffix is dropped by `proc_name`; the case is not.
+        assert_eq!(got[0].0.proc.as_deref(), Some("claude"));
+    }
     use super::*;
 
     /// A group leader by default, which is what a shell's foreground job is.
@@ -486,6 +642,14 @@ mod tests {
         assert_eq!(proc_name("/usr/bin/vim a.rs"), "vim");
         assert_eq!(proc_name("-zsh"), "zsh");
         assert_eq!(proc_name(""), "");
+        // Windows: the table gives a file name, and the suffix is noise.
+        // The case is the file's own and is left alone.
+        assert_eq!(proc_name("PING.EXE"), "PING");
+        assert_eq!(proc_name("pwsh.exe"), "pwsh");
+        assert_eq!(proc_name(r"C:\Windows\System32\cmd.exe"), "cmd");
+        // Only an exe suffix. A dot in the name itself stays.
+        assert_eq!(proc_name("python3.11"), "python3.11");
+        assert_eq!(proc_name(".exe"), ".exe");
     }
 
     /// A malformed table with a pid cycle must not spin forever.
