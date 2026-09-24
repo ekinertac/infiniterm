@@ -70,10 +70,20 @@ pub const FAR_REFRESH_MS: f64 = 250.;
 /// them, so the flag does not flip as output scrolls.
 pub const GLYPH_BUDGET_CELLS: usize = 30_000;
 
+/// The budget also grows with the WINDOW: it is at least this many
+/// windowfuls of text at 100%. A fixed 30,000 was less than one windowful
+/// on the 4K (three large cards covering the screen at 98% drew bars,
+/// 2026-09-24), and no terminal draws bars at its own font size. 1.5 means
+/// a window covered edge to edge in cards reads down to about 82% zoom
+/// (the square root of 1/1.5), and a half-covered one to about 58%.
+pub const GLYPH_BUDGET_WINDOWS: f32 = 1.5;
+
 /// Whether a frame showing `cells` of text across its visible cards must
-/// drop to bars. The rule, so it can be argued with in one place.
-pub fn over_glyph_budget(cells: usize) -> bool {
-    cells > GLYPH_BUDGET_CELLS
+/// drop to bars, when the window would hold `window_cells` at 100%. The
+/// rule, so it can be argued with in one place.
+pub fn over_glyph_budget(cells: usize, window_cells: usize) -> bool {
+    let relative = (window_cells as f32 * GLYPH_BUDGET_WINDOWS) as usize;
+    cells > GLYPH_BUDGET_CELLS.max(relative)
 }
 /// Lines scrolled per wheel tick, shared by every card body with a text
 /// buffer, so the terminal, editor, diff and transcript all feel the same
@@ -339,12 +349,24 @@ mod tests {
     #[test]
     fn the_glyph_budget_is_about_two_full_cards() {
         let card = 151 * 87;
-        assert!(!over_glyph_budget(card), "one card paints glyphs");
+        assert!(!over_glyph_budget(card, 0), "one card paints glyphs");
         assert!(
-            !over_glyph_budget(card * 2),
+            !over_glyph_budget(card * 2, 0),
             "a pair side by side still does"
         );
-        assert!(over_glyph_budget(card * 3), "three is past it");
-        assert!(over_glyph_budget(card * 8), "a 4x2 fit-all is bars");
+        assert!(over_glyph_budget(card * 3, 0), "three is past it");
+        assert!(over_glyph_budget(card * 8, 0), "a 4x2 fit-all is bars");
+    }
+
+    /// A window that holds 60,000 cells at 100% (the 4K) and is covered
+    /// edge to edge in cards shows 60,000 / zoom^2 of them. At 98% that is
+    /// text; at 70% it is bars.
+    #[test]
+    fn a_window_full_of_cards_is_text_near_100_percent() {
+        let window = 60_000;
+        let shown = |zoom: f32| (window as f32 / (zoom * zoom)) as usize;
+        assert!(!over_glyph_budget(shown(0.98), window), "98% reads");
+        assert!(!over_glyph_budget(shown(0.85), window), "85% reads");
+        assert!(over_glyph_budget(shown(0.70), window), "70% is bars");
     }
 }

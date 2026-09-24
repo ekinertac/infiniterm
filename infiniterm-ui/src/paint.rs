@@ -471,7 +471,24 @@ impl AppView {
                     .map(|b| (b.text_cells() as f32 * part) as usize)
             })
             .sum();
-        let crowded = crate::chrome::over_glyph_budget(cells);
+        // What the window would hold at 100%, from the densest visible
+        // card: its cells per screen pixel now, times the window's area,
+        // times the zoom squared (a card's grid does not change with zoom,
+        // its pixels do).
+        let density = on_screen
+            .iter()
+            .filter_map(|(id, _)| {
+                let card = cards.iter().find(|c| &c.id == id)?;
+                let b = at(self.drawn_rect(id, card.rect, now));
+                let area = f32::from(b.size.width) * f32::from(b.size.height);
+                let cells = self.bodies.get(id)?.text_cells() as f32;
+                (area > 0.).then_some(cells / area)
+            })
+            .fold(0., f32::max);
+        let window_area = f32::from(visible.size.width) * f32::from(visible.size.height);
+        let scale = vp.scale as f32;
+        let window_cells = (density * window_area * scale * scale) as usize;
+        let crowded = crate::chrome::over_glyph_budget(cells, window_cells);
         self.crowded = crowded;
         for (id, _) in &on_screen {
             if let Some(b) = self.bodies.get_mut(id) {
