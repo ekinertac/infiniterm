@@ -197,18 +197,6 @@ impl AppView {
         if self.gesture.is_some() {
             window.set_window_cursor_style(gpui::CursorStyle::ClosedHand);
         }
-        // Another app is in front: a wash over everything, so a glance says
-        // keys are going elsewhere. Over the cards and their labels, under
-        // the overlays gpui draws after this canvas, which are not open
-        // when the window is not active anyway. gpui refreshes the window
-        // on every activation change, so this needs no observer of its own.
-        let dim = self.model.config.ui.unfocused_dim;
-        if dim > 0. && !window.is_window_active() {
-            window.paint_quad(fill(
-                bounds,
-                crate::chrome::with_alpha(self.chrome.canvas_bg, dim as f32),
-            ));
-        }
         let t2 = std::time::Instant::now();
         self.schedule_save(now);
         self.schedule_history(now);
@@ -283,6 +271,16 @@ impl AppView {
         let view = self.model.view_size;
         let chrome = self.chrome.clone();
         window.paint_quad(fill(bounds, chrome.canvas_bg));
+        // Another app is in front: a glance must say keys are going
+        // elsewhere. Every card ends up washed ONCE: the canvas here, under
+        // the cards; the focused card over its body, below; an unfocused
+        // card already wears its own `ui.inactiveDim` scrim, and a wash over
+        // the whole window on top of that dimmed those cards twice (Ekin,
+        // 2026-09-24). gpui refreshes on every activation change, so this
+        // needs no observer of its own.
+        let away_dim = self.model.config.ui.unfocused_dim;
+        let away = (away_dim > 0. && !window.is_window_active())
+            .then(|| crate::chrome::with_alpha(chrome.canvas_bg, away_dim as f32));
 
         let maximized = self.model.selection.maximized && self.model.selection.focused_id.is_some();
         if maximized {
@@ -301,6 +299,9 @@ impl AppView {
                 window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
                     body.paint(bounds, 1., focused, now, window, cx)
                 });
+            }
+            if let Some(wash) = away {
+                window.paint_quad(fill(bounds, wash));
             }
             self.paint_labels(&card, bounds, 1., window, cx);
             return;
@@ -324,6 +325,10 @@ impl AppView {
                     chrome.grid_line,
                 ));
             }
+        }
+
+        if let Some(wash) = away {
+            window.paint_quad(fill(bounds, wash));
         }
 
         let ws = self.model.active_workspace.clone().unwrap_or_default();
@@ -483,6 +488,11 @@ impl AppView {
                 window.with_content_mask(Some(gpui::ContentMask { bounds: b }), |window| {
                     body.paint(b, vp.scale, focused, now, window, cx)
                 });
+            }
+            // The focused card has no scrim of its own, so the away wash is
+            // laid on it here; the rest are already dimmed once.
+            if let (Some(wash), true) = (away, focused) {
+                window.paint_quad(fill(b, wash));
             }
             // The state border: agent state, else the card's resting colour.
             let state_color = match card.agent {
