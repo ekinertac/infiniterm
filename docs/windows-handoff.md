@@ -4,10 +4,13 @@ For a Claude session on Ekin's Windows desktop (the "gpu box", RTX 4070 Ti), sta
 
 ## Where this stands
 
-Phases 1 to 4 are done on the `windows` branch, 2026-09-23 and -24. Claude
-Code runs in a card with its hooks reaching the app, the themes are in, the
-keymap needs no Windows edition, and a card names itself from the process
-table. Phase 5 (browser cards) and phase 6 (shipping) are what is left. Every crate builds and passes its
+Phases 1 to 4 are done on the `windows` branch, 2026-09-23 to -25, and
+phase 6 builds: `tools/dist.ps1` makes an unpacked release folder, a zip and
+a manifest, and that folder runs standalone with its themes beside it and
+its build number in the status bar. Claude Code runs in a card with its
+hooks reaching the app, the keymap needs no Windows edition, and a card
+names itself from the process table. What is left is browser cards and the
+question of whether the app updates itself here at all. Every crate builds and passes its
 tests on Windows (`infiniterm-ui` with `--no-default-features`), the window
 opens, a card runs PowerShell, and the app chords work: cards, workspaces,
 the omnibox, focus, fit-all.
@@ -68,11 +71,17 @@ What is still open, in the order it will be hit:
 
 - Phase 5, browser cards: CEF for Windows, with the `ift-browser` session.
   The feature seam is already there (`--no-default-features` draws the stub).
-- Phase 6, shipping. Two things this port found that packaging must carry:
-  the 520 themes go BESIDE THE EXE (`bundled_themes` looks there first on
-  Windows), with their LICENSE.txt, and `ift install-claude-hooks` should be
-  re-run after an install so the hook path points at the shipped binary
-  rather than a checkout.
+  Parked until everything else is done, on Ekin's call.
+- Phase 6's remaining half: whether the app should UPDATE ITSELF on
+  Windows. `tools/dist.ps1` already produces the folder, the zip and the
+  manifest, and the app reports its build. What is not built is the
+  download-and-swap, and that is a decision rather than a task: the Mac
+  updater verifies a download with `codesign` against the team requirement
+  and `spctl`, and with no Authenticode certificate the Windows equivalent
+  could only check the SHA-256 the manifest names. That reduces the trust to
+  "whoever can write the releases repo can run code on your machine", where
+  the Mac keeps a second factor. Shipping the zip and letting a person
+  unpack it is the honest floor until there is a certificate.
 
 - `inspect.rs` still shells out to `ps` and `lsof`, so on Windows a card has
   no process label and no cwd tracking. It compiles and answers nothing.
@@ -181,6 +190,17 @@ Recommended: a small transport module in core with one API (listen, connect, the
 - **A shell is not listening the moment its pty exists.** PowerShell runs the
   profile first, which took the best part of twenty seconds under a loaded
   test suite here. A line typed before then is gone, not queued.
+- **`ChildKiller::kill` does not kill a ConPTY tree.** It ends the process
+  portable-pty spawned and nothing else: the shell sits beside an
+  OpenConsole of its own and its own children are untouched. Lifting a
+  card's mask left the decoy running after the app had quit, and a
+  force-killed app left pwsh and OpenConsole behind. Each pane holds a job
+  object with KILL_ON_JOB_CLOSE now, which covers the kill and the crash.
+- **A card's command runs with the user's PROFILE loaded**, deliberately,
+  and a profile may redefine anything. `Sort` on this box is a function that
+  runs Git's sort.exe, so the decoy default showed "Input file specified two
+  times" instead of a process list. Anything the app puts in a card's
+  command line wants full cmdlet names, never aliases.
 - **Claude Code runs a hook through `/usr/bin/bash` on Windows**, where a
   backslash is an escape character, so an absolute path written into
   settings.json arrives as `C:UsersPCCode...` and the hook is never found.
