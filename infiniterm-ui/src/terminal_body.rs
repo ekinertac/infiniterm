@@ -819,6 +819,9 @@ impl CardBody for TerminalBody {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             use std::hash::{Hash, Hasher};
             row.text.hash(&mut hasher);
+            // A U+FE0F arriving on a cell whose character did not change
+            // must still reshape the row.
+            row.zerowidth.hash(&mut hasher);
             f32::from(font_size).to_bits().hash(&mut hasher);
             for run in &row.runs {
                 (
@@ -1163,6 +1166,9 @@ fn shape_row(
     let mut slots: Vec<CharSlot> = Vec::with_capacity(row.text.len());
     let mut decorations: Vec<(usize, usize, Hsla, Decoration)> = vec![];
     let mut col = 0usize;
+    // The row's zero-width characters, in column order, taken as the
+    // columns are walked.
+    let mut zerowidth = row.zerowidth.iter().peekable();
     for run in &row.runs {
         let color = if run.dim {
             crate::chrome::with_alpha(rgb(run.fg), TERM_DIM_ALPHA)
@@ -1184,8 +1190,17 @@ fn shape_row(
                 col += 1;
                 continue;
             }
-            let len = ch.len_utf8();
+            let mut len = ch.len_utf8();
             text.push(ch);
+            // The cell's zero-width characters join its character in the
+            // shaped text and belong to its slot: with U+FE0F the shaper
+            // picks the colour emoji, and a joiner fuses this character
+            // with the next one it meets. The wide cell's spacer never
+            // enters the shaped text, so 🏃 + joiner + ♀ arrive together.
+            while let Some((_, zw)) = zerowidth.next_if(|(c, _)| *c == col) {
+                text.push_str(zw);
+                len += zw.len();
+            }
             slot_of_byte.extend(std::iter::repeat_n(slots.len() as u32, len));
             slots.push(CharSlot {
                 col,
@@ -1371,6 +1386,7 @@ mod tests {
         let cursor = Row {
             runs: vec![run(Some([200, 200, 200]))],
             text: " ".into(),
+            zerowidth: vec![],
         };
         assert!(
             !row_paints_nothing(&cursor),
@@ -1379,6 +1395,7 @@ mod tests {
         let empty = Row {
             runs: vec![run(None)],
             text: "      ".into(),
+            zerowidth: vec![],
         };
         assert!(
             row_paints_nothing(&empty),
@@ -1387,6 +1404,7 @@ mod tests {
         let text = Row {
             runs: vec![run(None)],
             text: " x ".into(),
+            zerowidth: vec![],
         };
         assert!(!row_paints_nothing(&text));
     }

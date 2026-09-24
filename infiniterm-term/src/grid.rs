@@ -101,8 +101,17 @@ pub struct Run {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Row {
     pub runs: Vec<Run>,
-    /// The row as text, for links and selection.
+    /// The row as text, for links and selection: exactly one character per
+    /// cell, which the bar painter, the backgrounds and the link underlines
+    /// all count as columns.
     pub text: String,
+    /// The zero-width characters alacritty keeps ON a cell (`Cell::
+    /// zerowidth`), by column, sparse: U+FE0F asking for the colour emoji
+    /// (⚠️ drew as a flat text ⚠ without it), the joiner in a ZWJ emoji
+    /// (🏃‍♀️ drew as a runner and a text ♀), combining accents. Beside the
+    /// text rather than in it, so a column is still a character everywhere
+    /// else; only the shaper reads these (`terminal_body::shape_row`).
+    pub zerowidth: Vec<(usize, String)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -497,6 +506,7 @@ impl Grid {
                 .map(|_| Row {
                     runs: Vec::new(),
                     text: String::with_capacity(cols),
+                    zerowidth: Vec::new(),
                 })
                 .collect();
         }
@@ -534,6 +544,7 @@ impl Grid {
     ) {
         out.runs.clear();
         out.text.clear();
+        out.zerowidth.clear();
         let grid_line = Line(line as i32 - offset as i32);
         let row = &self.term.grid()[grid_line];
         for col in 0..self.size.cols {
@@ -606,6 +617,11 @@ impl Grid {
             } else {
                 cell.c
             };
+            if ch == cell.c {
+                if let Some(zw) = cell.zerowidth().filter(|zw| !zw.is_empty()) {
+                    out.zerowidth.push((col, zw.iter().collect()));
+                }
+            }
             out.text.push(ch);
             match out.runs.last_mut() {
                 Some(last)
@@ -639,6 +655,41 @@ mod tests {
             .iter()
             .map(|r| r.text.trim_end().to_string())
             .collect()
+    }
+
+    // ⚠️ is a text symbol plus U+FE0F, 🏃‍♀️ a runner, a joiner, ♀ and
+    // U+FE0F. alacritty keeps the zero-width ones ON a cell; they must
+    // reach the row beside its text, on the right columns, or the painter
+    // draws a flat ⚠ and a runner next to a text ♀.
+    #[test]
+    fn zero_width_characters_ride_beside_the_text_on_their_cells() {
+        let mut g = Grid::new(20, 2, 100);
+        g.advance("\u{26a0}\u{fe0f} x\r\n\u{1f3c3}\u{200d}\u{2640}\u{fe0f}!".as_bytes());
+        let f = g.frame(&Palette::default_palette());
+        // The text is still one character per cell.
+        assert!(
+            f.rows[0].text.starts_with("\u{26a0} x"),
+            "{:?}",
+            f.rows[0].text
+        );
+        assert_eq!(f.rows[0].zerowidth, vec![(0, "\u{fe0f}".to_string())]);
+        let runner = &f.rows[1];
+        assert!(
+            runner
+                .text
+                .starts_with(&format!("\u{1f3c3}{SPACER}\u{2640}!")),
+            "{:?}",
+            runner.text
+        );
+        assert_eq!(
+            runner.zerowidth,
+            vec![(0, "\u{200d}".to_string()), (2, "\u{fe0f}".to_string())]
+        );
+        // A plain row carries none.
+        g.advance(b"\x1b[2J\x1b[Hplain");
+        assert!(g.frame(&Palette::default_palette()).rows[0]
+            .zerowidth
+            .is_empty());
     }
 
     #[test]
