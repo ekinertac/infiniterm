@@ -383,7 +383,10 @@ fn send(cmd: &str, args: Vec<String>) -> ExitCode {
 }
 
 fn home() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
+    // core's answer, which knows about %USERPROFILE%; `ift` had its own copy
+    // that only read $HOME and so put ~/.claude at the filesystem root on
+    // Windows.
+    infiniterm_core::paths::home_dir()
 }
 
 /// Where `infiniterm-hook` is, given where `ift` is.
@@ -400,17 +403,29 @@ fn hook_binary() -> Option<String> {
     // binary in the bundle, not beside the link in ~/.local/bin.
     let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok()?;
     let dir = exe.parent()?;
+    let name = claude_hooks::HOOK_BINARY;
     let candidates = [
-        dir.join("infiniterm-hook"),
+        dir.join(name),
         // crates/infiniterm-cli/target/release/ift -> crates/infiniterm-hook/...
-        dir.join("../../../infiniterm-hook/target/release/infiniterm-hook"),
+        dir.join("../../../infiniterm-hook/target/release").join(name),
     ];
     candidates
         .iter()
         .find(|p| p.exists())
         .and_then(|p| std::fs::canonicalize(p).ok())
-        .map(|p| p.to_string_lossy().into_owned())
-        .or_else(|| which_on_path("infiniterm-hook"))
+        // Canonicalising a Windows path gives the \\?\ verbatim form, which
+        // a shell will not run. The hook command is handed to a shell.
+        .map(|p| strip_verbatim(&p.to_string_lossy()))
+        .or_else(|| which_on_path(name))
+}
+
+/// Windows canonicalisation returns `\\?\C:\...`, the form that turns off
+/// path parsing. It is right for an API call and wrong in a command line.
+fn strip_verbatim(path: &str) -> String {
+    path.strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .or_else(|| path.strip_prefix(r"\\?\").map(str::to_string))
+        .unwrap_or_else(|| path.to_string())
 }
 
 /// The first `infiniterm-hook` on `$PATH`, if there is one.

@@ -37,6 +37,37 @@ pub const EVENTS: [&str; 8] = [
     "SessionEnd",
 ];
 
+/// The name the hook binary is built under, which Windows spells with an
+/// extension. `ift` looks for this beside itself and on PATH.
+pub const HOOK_BINARY: &str = if cfg!(windows) {
+    "infiniterm-hook.exe"
+} else {
+    "infiniterm-hook"
+};
+
+/// The command Claude Code runs for one event.
+///
+/// Quoted when the path has a space in it. The command is handed to a shell,
+/// so `C:\Program Files\infiniterm\infiniterm-hook.exe Stop` would try to
+/// run `C:\Program`; a Mac path for this is under /Applications or a
+/// checkout and rarely has one, and Windows puts things in Program Files.
+pub fn hook_command(hook_binary: &str, event: &str) -> String {
+    if hook_binary.contains(' ') {
+        format!("\"{hook_binary}\" {event}")
+    } else {
+        format!("{hook_binary} {event}")
+    }
+}
+
+/// The program a hook command runs, with its quotes taken off.
+fn program_of(command: &str) -> &str {
+    let text = command.trim_start();
+    match text.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(""),
+        None => text.split_whitespace().next().unwrap_or(""),
+    }
+}
+
 /// True when a hook entry runs our binary, whatever path it was installed at.
 ///
 /// Two ways to be ours, and both are needed:
@@ -51,12 +82,13 @@ pub const EVENTS: [&str; 8] = [
 /// somebody else's hook that merely mentions the word — a wrapper script that
 /// logs what it is about to run, say.
 fn is_ours(command: &str, hook_binary: &str) -> bool {
-    let program = command.split_whitespace().next().unwrap_or("");
+    let program = program_of(command);
     if program == hook_binary {
         return true;
     }
-    let name = program.rsplit('/').next().unwrap_or(program);
-    name.contains("infiniterm-hook")
+    // Either separator: an entry written on one platform can be read on the
+    // other, and a settings.json travels between machines.
+    infiniterm_core::paths::base_name(program).contains("infiniterm-hook")
 }
 
 /// Adds or repairs infiniterm's hooks, returning the events that changed.
@@ -80,7 +112,7 @@ pub fn install(settings: &mut Value, hook_binary: &str) -> Vec<String> {
     let hooks = hooks.as_object_mut().expect("just made it an object");
 
     for event in EVENTS {
-        let want = format!("{hook_binary} {event}");
+        let want = hook_command(hook_binary, event);
         let list = hooks
             .entry(event.to_string())
             .or_insert_with(|| Value::Array(Vec::new()));
@@ -125,6 +157,38 @@ pub fn install(settings: &mut Value, hook_binary: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+
+    // A hook command is handed to a shell, so a path with a space in it has
+    // to arrive quoted or the shell runs only the first word. Windows puts
+    // programs in Program Files; this never came up on a Mac.
+    #[test]
+    fn a_path_with_a_space_is_quoted_and_still_recognised_as_ours() {
+        let win = r"C:\Program Files\infiniterm\infiniterm-hook.exe";
+        let cmd = hook_command(win, "Stop");
+        assert_eq!(cmd, format!("\"{win}\" Stop"));
+        assert_eq!(program_of(&cmd), win);
+        assert!(is_ours(&cmd, win), "its own entry must be idempotent");
+        // And an entry an older install wrote at another path.
+        assert!(is_ours(&cmd, "/somewhere/else/infiniterm-hook"));
+    }
+
+    #[test]
+    fn a_path_without_a_space_is_left_bare() {
+        let unix = "/Applications/infiniterm.app/Contents/MacOS/infiniterm-hook";
+        assert_eq!(hook_command(unix, "Stop"), format!("{unix} Stop"));
+        assert_eq!(program_of("/a/b Stop"), "/a/b");
+    }
+
+    // The base name is taken with either separator, because a settings.json
+    // travels between machines and an entry written on one is read on the
+    // other.
+    #[test]
+    fn an_entry_is_recognised_whichever_platform_wrote_it() {
+        assert!(is_ours(r"C:\tools\infiniterm-hook.exe Stop", "/usr/bin/other"));
+        assert!(is_ours("/usr/local/bin/infiniterm-hook Stop", r"C:\x\other.exe"));
+        // Somebody else's hook that merely mentions the word is not ours.
+        assert!(!is_ours("/usr/bin/logger ran infiniterm-hook", "/x/infiniterm-hook"));
+    }
     use super::*;
 
     fn commands(settings: &Value, event: &str) -> Vec<String> {
