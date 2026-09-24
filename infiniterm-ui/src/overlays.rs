@@ -331,8 +331,13 @@ impl Render for AppView {
             // Ctrl coming up commits the card switcher, the way letting go
             // of Cmd commits Cmd+Tab. gpui reports modifier changes to the
             // focused element like keys, so no NSEvent monitor is needed.
+            // Through `roles` like every other modifier read: on Windows the
+            // switcher is held with the Ctrl the terminal owns (Caps Lock on
+            // a Mac-order keyboard), and letting go of the OTHER one must
+            // not commit it.
             .on_modifiers_changed(cx.listener(|this, e: &gpui::ModifiersChangedEvent, _, cx| {
-                if this.model.switcher.is_some() && !e.modifiers.control {
+                let modifiers = crate::keycode::roles(e.modifiers);
+                if this.model.switcher.is_some() && !modifiers.control {
                     this.model.switcher_commit();
                     this.perform_effects();
                     this.redraw = true;

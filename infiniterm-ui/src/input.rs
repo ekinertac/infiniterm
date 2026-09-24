@@ -129,6 +129,13 @@ impl AppView {
     }
 
     pub fn mouse_down(&mut self, e: &MouseDownEvent) {
+        // The roles, not the raw keys: see `keycode::roles`. Done at each
+        // of this file's five entry points, which is every way a modifier
+        // reaches the app, so nothing downstream needs to know.
+        let e = &MouseDownEvent {
+            modifiers: crate::keycode::roles(e.modifiers),
+            ..e.clone()
+        };
         let p = self.to_content(e.position);
         self.mouse = p;
         let button = match e.button {
@@ -271,6 +278,10 @@ impl AppView {
     }
 
     pub fn mouse_move(&mut self, e: &MouseMoveEvent) {
+        let e = &MouseMoveEvent {
+            modifiers: crate::keycode::roles(e.modifiers),
+            ..e.clone()
+        };
         let p = self.to_content(e.position);
         self.mouse = p;
         match self.pan {
@@ -430,6 +441,10 @@ impl AppView {
     }
 
     pub fn mouse_up(&mut self, e: &MouseUpEvent) {
+        let e = &MouseUpEvent {
+            modifiers: crate::keycode::roles(e.modifiers),
+            ..e.clone()
+        };
         let p = self.to_content(e.position);
         // A press that focused a card and did not travel was a click on
         // it: bring the whole card into view, as a keyboard focus move
@@ -508,6 +523,10 @@ impl AppView {
     /// Cmd+scroll (and a trackpad pinch, which arrives as ctrl) zooms about
     /// the cursor: the world point under the pointer must not move.
     pub fn wheel(&mut self, e: &ScrollWheelEvent) {
+        let e = &ScrollWheelEvent {
+            modifiers: crate::keycode::roles(e.modifiers),
+            ..e.clone()
+        };
         let keylog = std::env::var_os("INFINITERM_KEYLOG").is_some();
         // An overlay's list scrolls itself, but the event still arrives at the
         // canvas under it: a scroll in the shortcuts panel also scrolled the
@@ -568,6 +587,9 @@ impl AppView {
     /// two parse identically, which Cmd+= on a non-US layout does not, so
     /// the caller must stop propagation on a handled chord.
     pub fn key_down(&mut self, e: &KeyDownEvent, cx: &mut gpui::App) -> bool {
+        let mut owned = e.clone();
+        owned.keystroke.modifiers = crate::keycode::roles(owned.keystroke.modifiers);
+        let e = &owned;
         let k: &Keystroke = &e.keystroke;
         let m = &k.modifiers;
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
@@ -676,8 +698,9 @@ impl AppView {
                 return false;
             }
         }
-        // The physical key and the real Shift state from the NSEvent, so
-        // the keymap is layout-proof; gpui's keystroke has neither.
+        // The physical key and the real Shift state from the NSEvent (or the
+        // Windows keyboard hook), so the keymap is layout-proof; gpui's
+        // keystroke has neither.
         let code = crate::keycode::last_code();
         let press = KeyPress {
             key: &k.key,

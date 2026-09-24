@@ -9,6 +9,14 @@
 //! Ctrl+DIGIT mostly does not, which is the whole width of the exception
 //! (Ctrl+3 sends ESC on an xterm; rebind it if you live in vim).
 //!
+//! Windows has no Cmd key, and this file needs no Windows edition anyway.
+//! What "cmd" NAMES there is the LEFT Ctrl and what "ctrl" names is the
+//! RIGHT one, decided in `infiniterm-ui`'s `keycode::roles` before a chord
+//! is ever built. On a keyboard remapped into Mac order (Ekin's is: the key
+//! where Cmd sits emits left Ctrl, Caps Lock emits right Ctrl) every
+//! binding below then lands under the finger that already reaches for it,
+//! and Caps Lock plus C is still a real `^C`.
+//!
 //! Chords are built from the PHYSICAL key, not the character the layout
 //! produced: Option+J reports `∆` and Shift+= reports `+`, and a binding
 //! written `cmd+shift+=` never matched an event whose key was `+` (it sat
