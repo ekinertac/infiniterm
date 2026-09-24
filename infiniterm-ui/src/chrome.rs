@@ -26,17 +26,21 @@ pub const HAIRLINE_ALPHA: f32 = 0.4;
 /// paid for, and Ekin's fit-all is 6.6 px, where a frame still cost 100
 /// ms and the text still did not read.
 pub const LEGIBLE_FONT_PX: f64 = 7.;
-/// Below this, text is "far": while the viewport MOVES the terminal draws
-/// bars so the animation stays smooth (a zoom from fit-all passes through
-/// this band with every card still on screen), and at rest, in the band
-/// between `LEGIBLE_FONT_PX` and this where a frame is expensive but the
-/// text just reads, a frame asked for by output or the cursor blink is
-/// painted at most every `FAR_REFRESH_MS`. Zoomed in, nothing changes.
-pub const FAR_FONT_PX: f64 = 12.;
+/// While the frame is over its glyph budget (`AppView::crowded`), a frame
+/// asked for by output or the cursor blink is painted at most this often:
+/// the cards are bars then, and nobody reads a wall of bars frame by frame.
+///
+/// There used to be a `FAR_FONT_PX` (12 px) under which text drew bars
+/// while the viewport moved, counted toward the budget, and repainted at
+/// four frames a second, by font size alone. It stood in for the budget
+/// before the budget existed, and on 2026-09-24 it turned a single card at
+/// 57% (10.8 px, perfectly readable, in a smaller window on Ekin's 4K)
+/// into bars at 4 fps. The budget decides now, counting what is on screen.
 pub const FAR_REFRESH_MS: f64 = 250.;
 /// How many terminal cells may be on screen, across every visible card,
-/// before a frame stops painting glyphs at all and every card under
-/// `FAR_FONT_PX` draws bars (`AppView::crowded`).
+/// before a frame stops painting glyphs at all and every card draws bars
+/// (`AppView::crowded`). ON SCREEN: a card half out of the window counts
+/// half its cells, because the painter skips the rows outside it.
 ///
 /// The per-card size threshold above cannot say this: the cost is the
 /// TOTAL number of glyphs, and a glyph is 1.7 microseconds whatever the

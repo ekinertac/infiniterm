@@ -445,23 +445,35 @@ impl AppView {
             .collect();
         cards.sort_by_key(|c| moving.contains(&c.id));
         let visible = Bounds::new(origin, bounds.size);
-        // The frame's glyph budget: what every visible card together would
-        // cost in glyphs. Over it, nothing under `FAR_FONT_PX` paints any
-        // (`chrome::GLYPH_BUDGET_CELLS`), because the cost is the total,
-        // not any one card's size. Decided before a body paints, so every
-        // card this frame agrees.
-        let on_screen: Vec<String> = cards
+        // The frame's glyph budget: what every visible card together costs
+        // in glyphs, counting only the part of each card the window shows
+        // (the painter skips the rows outside it). Over it, every card
+        // draws bars (`chrome::GLYPH_BUDGET_CELLS`), because the cost is
+        // the total, not any one card's size. Decided before a body paints,
+        // so every card this frame agrees.
+        let on_screen: Vec<(String, f32)> = cards
             .iter()
-            .filter(|c| visible.intersects(&at(self.drawn_rect(&c.id, c.rect, now))))
-            .map(|c| c.id.clone())
+            .filter_map(|c| {
+                let b = at(self.drawn_rect(&c.id, c.rect, now));
+                let shown = b.intersect(&visible);
+                let area = f32::from(b.size.width) * f32::from(b.size.height);
+                (visible.intersects(&b) && area > 0.).then(|| {
+                    let part = f32::from(shown.size.width) * f32::from(shown.size.height);
+                    (c.id.clone(), part / area)
+                })
+            })
             .collect();
         let cells: usize = on_screen
             .iter()
-            .filter_map(|id| self.bodies.get(id))
-            .map(|b| b.text_cells())
+            .filter_map(|(id, part)| {
+                self.bodies
+                    .get(id)
+                    .map(|b| (b.text_cells() as f32 * part) as usize)
+            })
             .sum();
         let crowded = crate::chrome::over_glyph_budget(cells);
-        for id in &on_screen {
+        self.crowded = crowded;
+        for (id, _) in &on_screen {
             if let Some(b) = self.bodies.get_mut(id) {
                 b.set_crowded(crowded);
             }

@@ -145,6 +145,9 @@ pub struct AppView {
     /// The left button went down on empty canvas and has not come up: a
     /// right click now fits everything (`pan_mode::chord_fits_all`).
     pub left_on_canvas: bool,
+    /// The last frame was over its glyph budget (`paint_world`): cards drew
+    /// bars, and content frames are rationed (`AppView::far`).
+    pub crowded: bool,
     pub gesture: Option<Gesture>,
     /// The card whose body is following a drag (a text selection).
     pub body_drag: Option<String>,

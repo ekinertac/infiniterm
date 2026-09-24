@@ -124,12 +124,8 @@ pub struct TerminalBody {
     /// `terminal.cursorBlink`, `ui.inactiveDim`; the ui keeps them current.
     pub blink: bool,
     pub inactive_dim: f64,
-    /// The viewport is moving (zoom, pan, a drag): under `FAR_FONT_PX` the
-    /// text is drawn as bars for the duration so the motion stays smooth,
-    /// and the glyphs come back the frame it stops. Set by `terminals.rs`.
-    pub in_motion: bool,
     /// Too many cells on screen for glyphs to be affordable this frame;
-    /// set by `paint_world` from the frame's budget, read like `in_motion`.
+    /// set by `paint_world` from the frame's budget.
     crowded: bool,
     /// A selection drag has left the card by the top (negative) or bottom
     /// (positive) edge: the grid scrolls this many lines a frame, growing
@@ -257,7 +253,6 @@ impl TerminalBody {
             cell_w: metrics.cell_w,
             cwd,
             error: None,
-            in_motion: false,
             crowded: false,
             autoscroll: 0.,
             drag_local: Point { x: 0., y: 0. },
@@ -685,12 +680,10 @@ impl CardBody for TerminalBody {
         let mut base = font(self.font_family.clone());
         base.weight = self.weight;
         let bold_weight = self.bold_weight;
-        // Too small to read: skip the glyphs, keep the ground. The corner
-        // label names the card instead. Small-and-moving counts as too
-        // small: see `in_motion`.
-        let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32)
-            && !((self.in_motion || self.crowded)
-                && font_size < px(crate::chrome::FAR_FONT_PX as f32));
+        // Too small to read, or too many cells on screen this frame
+        // (`crowded`, the glyph budget): skip the glyphs, keep the ground.
+        // The corner label names the card instead.
+        let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32) && !self.crowded;
         // The cursor under the text: solid when focused and on, hollow when
         // the card is not focused, nothing while scrolled into history.
         if frame.cursor_kind != CursorKind::Hidden
@@ -735,8 +728,9 @@ impl CardBody for TerminalBody {
             );
             let bar_h = (line_h * crate::chrome::TEXTURE_BAR_HEIGHT_RATIO)
                 .max(px(crate::chrome::HAIRLINE_PX as f32));
+            let shown = window.content_mask().bounds;
             for (r, row) in frame.rows.iter().enumerate() {
-                if row_paints_nothing(row) {
+                if row_paints_nothing(row) || !row_on_screen(origin.y, line_h, r, shown) {
                     continue;
                 }
                 let y = origin.y + line_h * r as f32 + (line_h - bar_h) / 2.;
@@ -778,8 +772,9 @@ impl CardBody for TerminalBody {
             return;
         }
         let hover = self.hover;
+        let shown = window.content_mask().bounds;
         for (r, row) in frame.rows.iter().enumerate() {
-            if row_paints_nothing(row) {
+            if row_paints_nothing(row) || !row_on_screen(origin.y, line_h, r, shown) {
                 continue;
             }
             let y = origin.y + line_h * r as f32;
@@ -1153,6 +1148,15 @@ impl CardBody for TerminalBody {
 
 /// The row as one shaped line, with the cell of every character. See
 /// `ShapedRow` for why the shaper's positions are not the ones painted.
+/// Whether row `r` of a grid drawn from `top` falls inside `shown` (the
+/// part of the card the window shows, its content mask). Rows outside are
+/// skipped: the mask clipped them anyway, but their glyphs were still paid
+/// for, so a card mostly out of the window cost as much as one in it.
+fn row_on_screen(top: Pixels, line_h: Pixels, r: usize, shown: Bounds<Pixels>) -> bool {
+    let y = top + line_h * r as f32;
+    y + line_h > shown.top() && y < shown.bottom()
+}
+
 fn shape_row(
     row: &infiniterm_term::grid::Row,
     base: &gpui::Font,
@@ -1349,6 +1353,30 @@ pub fn lost_session_tail(when: &str, resume: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A card half out of the window paints only the rows the window shows:
+    /// its off-screen rows were clipped anyway but still cost their glyphs.
+    #[test]
+    fn only_rows_the_window_shows_are_painted() {
+        let shown = Bounds::new(point(px(0.), px(100.)), size(px(500.), px(50.)));
+        let h = px(20.);
+        // Rows from y = 0: 0..20, 20..40 ... row 4 is 80..100, row 5 100..120.
+        assert!(
+            !row_on_screen(px(0.), h, 4, shown),
+            "ends where the view starts"
+        );
+        assert!(row_on_screen(px(0.), h, 5, shown));
+        assert!(
+            row_on_screen(px(0.), h, 7, shown),
+            "140..160 overlaps the 150 edge"
+        );
+        assert!(
+            !row_on_screen(px(0.), h, 8, shown),
+            "starts where the view ends"
+        );
+        // A row cut by the edge still paints.
+        assert!(row_on_screen(px(-10.), h, 5, shown));
+    }
 
     fn body() -> TerminalBody {
         let metrics = Metrics {

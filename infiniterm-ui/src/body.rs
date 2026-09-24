@@ -80,9 +80,7 @@ pub trait CardBody {
         0
     }
 
-    /// The frame is over its glyph budget: paint bars rather than glyphs
-    /// while this body is smaller than `chrome::FAR_FONT_PX`. Zoomed in,
-    /// bodies ignore it.
+    /// The frame is over its glyph budget: paint bars rather than glyphs.
     fn set_crowded(&mut self, _crowded: bool) {}
 
     fn key(&mut self, _keystroke: &Keystroke, _now: f64, _cx: &mut App) -> BodyAction {

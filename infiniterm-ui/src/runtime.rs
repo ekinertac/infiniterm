@@ -49,6 +49,7 @@ impl AppView {
             show_character_palette: false,
             pan: None,
             left_on_canvas: false,
+            crowded: false,
             gesture: None,
             body_drag: None,
             hover_body: None,
@@ -428,12 +429,10 @@ impl AppView {
         }
     }
 
-    /// Whether the text is in the band where a frame is expensive (glyphs,
-    /// not bars) and too small to be worth one per change: see
-    /// `chrome::FAR_FONT_PX`.
+    /// Whether content frames are rationed (`chrome::FAR_REFRESH_MS`): only
+    /// while the last frame was over its glyph budget and drew bars.
     pub fn far(&self) -> bool {
-        let font = self.model.config.terminal.font_size * self.model.viewport.scale;
-        (crate::chrome::LEGIBLE_FONT_PX..crate::chrome::FAR_FONT_PX).contains(&font)
+        self.crowded
     }
 
     pub fn needs_frame(&self) -> bool {
