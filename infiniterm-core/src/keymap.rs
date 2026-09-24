@@ -35,6 +35,32 @@
 //! for the panel; the ui crate dispatches with `chord_for`.
 use serde_json::Value;
 
+/// Which of the keys actually down play Cmd's part and Ctrl's, when the
+/// keyboard has no Cmd key: `(cmd, ctrl)`.
+///
+/// Windows only; macOS has a real Cmd and never calls this. The whole
+/// Windows keyboard answer is here rather than in the ui crate so it can be
+/// read and tested without a window, and so the reasoning sits beside the
+/// keymap it governs.
+///
+/// Both Ctrls at once reads as the app's, the way any ambiguous two-modifier
+/// press resolves toward the more specific thing; it is not a chord anyone
+/// types on purpose.
+pub fn modifier_roles(
+    choice: crate::config::CommandModifier,
+    left_ctrl: bool,
+    right_ctrl: bool,
+    win: bool,
+) -> (bool, bool) {
+    use crate::config::CommandModifier;
+    match choice {
+        CommandModifier::LeftControl => (left_ctrl, right_ctrl && !left_ctrl),
+        // Ctrl is left whole for the shell, which is the point of choosing
+        // this one.
+        CommandModifier::Win => (win, left_ctrl || right_ctrl),
+    }
+}
+
 /// A chord and the command it runs, in the order the generated file lists them.
 pub type Keymap = Vec<(String, String)>;
 
@@ -651,6 +677,55 @@ pub fn unregistered_bindings(bindings: &Keymap, registered_ids: &[&str]) -> Vec<
 
 #[cfg(test)]
 mod tests {
+
+    // Windows has no Cmd key, so one of these two arrangements has to stand
+    // in for it. See `config::CommandModifier` for why the list is short.
+    mod modifier_roles_tests {
+        use crate::config::CommandModifier::{LeftControl, Win};
+        use crate::keymap::modifier_roles;
+
+        #[test]
+        fn left_control_splits_the_two_ctrls_between_app_and_terminal() {
+            // The key where Cmd sits on a Mac-order keyboard.
+            assert_eq!(
+                modifier_roles(LeftControl, true, false, false),
+                (true, false)
+            );
+            // Caps Lock, which must still send a real ^C.
+            assert_eq!(
+                modifier_roles(LeftControl, false, true, false),
+                (false, true)
+            );
+            assert_eq!(
+                modifier_roles(LeftControl, false, false, false),
+                (false, false)
+            );
+            // The Windows key is nobody's under this arrangement.
+            assert_eq!(
+                modifier_roles(LeftControl, false, false, true),
+                (false, false)
+            );
+        }
+
+        // Holding both is not a chord anyone types; the app wins rather than
+        // the press meaning two things at once.
+        #[test]
+        fn both_ctrls_at_once_read_as_the_apps() {
+            assert_eq!(
+                modifier_roles(LeftControl, true, true, false),
+                (true, false)
+            );
+        }
+
+        #[test]
+        fn win_leaves_ctrl_whole_for_the_shell() {
+            assert_eq!(modifier_roles(Win, false, false, true), (true, false));
+            // Either Ctrl is the terminal's now, which is the trade.
+            assert_eq!(modifier_roles(Win, true, false, false), (false, true));
+            assert_eq!(modifier_roles(Win, false, true, false), (false, true));
+            assert_eq!(modifier_roles(Win, true, false, true), (true, true));
+        }
+    }
     use super::*;
     use crate::jsonc::parse_jsonc;
     use serde_json::json;

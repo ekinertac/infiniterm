@@ -42,6 +42,40 @@ pub struct Config {
     pub editor: Editor,
     pub browser: Browser,
     pub ui: Ui,
+    pub keyboard: Keyboard,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Keyboard {
+    /// Which key plays Cmd's part. Read on Windows only; macOS has a Cmd
+    /// key and reads this nowhere.
+    pub command_modifier: CommandModifier,
+}
+
+/// Where the app's modifier lives when the keyboard has no Cmd key.
+///
+/// The Mac's whole keyboard story rests on Cmd being a modifier terminals
+/// ignore, so the app can claim all of it with no prefix key and no modal
+/// state. Windows has no such modifier: Ctrl is the shell's, Alt is Meta,
+/// and Win is the OS's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CommandModifier {
+    /// The two SIDES of Ctrl carry the two roles: left is the app's, right
+    /// is the terminal's. The default, because a keyboard remapped into Mac
+    /// order already puts left Ctrl where Cmd sits and right Ctrl on Caps
+    /// Lock, so every binding lands under the finger that reaches for it
+    /// and Caps Lock plus C is still a real `^C`. Without such a remap it
+    /// still works, it just is not muscle memory: app chords on the left
+    /// Ctrl, the shell's Ctrl on the right.
+    LeftControl,
+    /// The Windows key, and Ctrl stays entirely the terminal's. Honest, and
+    /// the closest thing to Cmd in position, but Windows takes Win+L (which
+    /// LOCKS THE MACHINE), Win+D, Win+E, Win+R, Win+S, Win+T, Win+digit,
+    /// Win+arrows and Win+= before any application sees them, so the
+    /// bindings on those keys simply will not arrive.
+    Win,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -279,6 +313,10 @@ pub fn default_config() -> Config {
             animations: true,
             show_fps: true,
         },
+        keyboard: Keyboard {
+            // See `CommandModifier`. Ignored on macOS.
+            command_modifier: CommandModifier::LeftControl,
+        },
     }
 }
 
@@ -372,6 +410,7 @@ pub fn merge_config(raw: &Value) -> Config {
     let v = group(r, "canvas");
     let e = group(r, "editor");
     let b = group(r, "browser");
+    let k = group(r, "keyboard");
 
     Config {
         theme: match r.get("theme").and_then(Value::as_str) {
@@ -481,6 +520,16 @@ pub fn merge_config(raw: &Value) -> Config {
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),
             animations: bool_(u.get("animations"), d.ui.animations),
             show_fps: bool_(u.get("showFps"), d.ui.show_fps),
+        },
+        keyboard: Keyboard {
+            command_modifier: one(
+                k.get("commandModifier"),
+                d.keyboard.command_modifier,
+                &[
+                    ("leftControl", CommandModifier::LeftControl),
+                    ("win", CommandModifier::Win),
+                ],
+            ),
         },
     }
 }

@@ -336,7 +336,7 @@ impl Render for AppView {
             // a Mac-order keyboard), and letting go of the OTHER one must
             // not commit it.
             .on_modifiers_changed(cx.listener(|this, e: &gpui::ModifiersChangedEvent, _, cx| {
-                let modifiers = crate::keycode::roles(e.modifiers);
+                let modifiers = this.modifier_roles(e.modifiers);
                 if this.model.switcher.is_some() && !modifiers.control {
                     this.model.switcher_commit();
                     this.perform_effects();

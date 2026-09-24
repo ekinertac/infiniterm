@@ -71,6 +71,17 @@ pub fn connect(path: &Path) -> io::Result<Stream> {
 }
 
 /// Something is listening: another instance is running.
+///
+/// A connect, and deliberately nothing cleverer. On Windows a force-killed
+/// process's pipe goes on answering for a few seconds while the kernel tears
+/// its handles down, so a relaunch inside that window is told the endpoint is
+/// held and exits. That was measured and then made WORSE by trying to fix it:
+/// asking the pipe which process serves it (`GetNamedPipeServerProcessId`)
+/// and whether that process is alive looks exact, but while a dying
+/// instance's handle lingers beside a live one's, a client can land on
+/// either, and landing on the dead one let a SECOND instance start on the
+/// same save file. Refusing to launch for three seconds after a crash is the
+/// cheaper failure.
 pub fn is_live(path: &Path) -> bool {
     connect(path).is_ok()
 }

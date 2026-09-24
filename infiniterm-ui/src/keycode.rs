@@ -15,6 +15,7 @@
 //! `ctrl_sides` for why the side is the whole answer to "Windows has no
 //! Cmd key".
 #![allow(unexpected_cfgs, clippy::missing_transmute_annotations)]
+use infiniterm_core::config::CommandModifier;
 #[cfg(target_os = "macos")]
 use objc::runtime::Object;
 #[cfg(target_os = "macos")]
@@ -303,59 +304,46 @@ pub fn install() {
 /// gpui's modifiers with the ROLES on them rather than the raw keys.
 ///
 /// The app is written against the Mac's split: `platform` is the app's
-/// modifier, `control` is the terminal's. On Windows those two roles live on
-/// the two SIDES of Ctrl (see `ctrl_sides`), and gpui reports one `control`
-/// flag for both. Rewriting them once, where an event enters (`input.rs`),
-/// is what keeps the other thirty-odd reads of `.platform` across this crate
-/// correct without a cfg at each of them, and keeps the next one correct too.
+/// modifier, `control` is the terminal's. Windows has no Cmd key, so WHICH
+/// keys carry those two roles is a setting, `keyboard.commandModifier`, and
+/// `keymap::modifier_roles` is the rule it selects. The default splits the
+/// two SIDES of Ctrl, left for the app and right for the terminal, because a
+/// keyboard remapped into Mac order already puts left Ctrl where Cmd sits
+/// and right Ctrl on Caps Lock.
 ///
-/// A no-op everywhere else, so the Mac path is the code it always was.
+/// Rewriting the modifiers once, where an event enters (`input.rs`), is what
+/// keeps the other thirty-odd reads of `.platform` across this crate correct
+/// without a cfg at each of them, and keeps the next one correct too.
+///
+/// gpui cannot answer this on its own: `current_modifiers` sets one
+/// `control` flag from `VK_CONTROL`, which is either side, and the sides are
+/// the whole point. They are read live rather than recorded by the keyboard
+/// hook, because a modifier is a STATE while the hook records the last key
+/// pressed, and a chord asks about both at the same moment.
+///
+/// A no-op everywhere else, so the Mac path is the code it always was and
+/// the setting is read nowhere.
 #[cfg(windows)]
-pub fn roles(m: gpui::Modifiers) -> gpui::Modifiers {
-    let (left, right) = ctrl_sides();
+pub fn roles(m: gpui::Modifiers, choice: CommandModifier) -> gpui::Modifiers {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_LCONTROL, VK_RCONTROL};
+    // The high bit of GetKeyState is "down right now".
+    let down = |vk: u16| unsafe { GetKeyState(vk as i32) } < 0;
+    let (platform, control) = infiniterm_core::keymap::modifier_roles(
+        choice,
+        down(VK_LCONTROL),
+        down(VK_RCONTROL),
+        m.platform,
+    );
     gpui::Modifiers {
-        platform: left,
-        control: right,
+        platform,
+        control,
         ..m
     }
 }
 
 #[cfg(not(windows))]
-pub fn roles(m: gpui::Modifiers) -> gpui::Modifiers {
+pub fn roles(m: gpui::Modifiers, _choice: CommandModifier) -> gpui::Modifiers {
     m
-}
-
-/// Which Ctrl is down: `(left, right)`.
-///
-/// This is how Windows gets a Cmd key. Ekin's box carries a registry
-/// scancode map that swaps the modifier row into Mac order, and the part
-/// that matters here is that the key sitting WHERE CMD SITS emits LEFT
-/// Ctrl, while Caps Lock emits RIGHT Ctrl
-/// (ekinertac.com/blog/teaching-windows-to-speak-mac). So the two roles the
-/// Mac splits between Cmd and Ctrl already exist in the hardware, on two
-/// different keys, and all this has to do is tell them apart:
-///
-/// - LEFT Ctrl is the app's, where the Mac reads Cmd. Every one of the 79
-///   default bindings then lands on the key the same finger already reaches
-///   for, and the keymap needs no Windows edition at all.
-/// - RIGHT Ctrl is the terminal's, where the Mac reads Ctrl. Caps Lock plus
-///   C is a real `^C` and always was.
-///
-/// gpui cannot answer this: `current_modifiers` sets one `control` flag
-/// from `VK_CONTROL`, which is either side. Read live rather than recorded
-/// by the hook, because a modifier is a STATE while the hook records the
-/// last key pressed, and a chord asks about both at the same moment.
-///
-/// On a machine with no such remap, left Ctrl is simply Ctrl and the app
-/// takes it while right Ctrl goes to the shell. That is a coherent default
-/// and a documented one, not an accident, but it is not the arrangement
-/// this was designed around.
-#[cfg(windows)]
-pub fn ctrl_sides() -> (bool, bool) {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_LCONTROL, VK_RCONTROL};
-    // The high bit of GetKeyState is "down right now".
-    let down = |vk: u16| unsafe { GetKeyState(vk as i32) } < 0;
-    (down(VK_LCONTROL), down(VK_RCONTROL))
 }
 
 /// No dead keys are recorded on Windows yet. Turkish Q, the layout this was

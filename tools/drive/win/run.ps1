@@ -31,8 +31,23 @@ if (-not (Test-Path $Exe)) {
     throw "no $Exe; cargo build -p infiniterm-ui --no-default-features"
 }
 
-$p = Start-Process -FilePath $Exe -PassThru `
-    -RedirectStandardError "$Data\err.log" -RedirectStandardOutput "$Data\out.log"
+# A force-killed instance's endpoint goes on answering for a second or two
+# while Windows tears its handles down, and the app refuses to start while it
+# does (see `transport::is_live` for why that is the safe way round). The
+# driver kills instances constantly, so it waits that out rather than making
+# every caller sleep.
+$p = $null
+for ($try = 1; $try -le 6; $try++) {
+    $p = Start-Process -FilePath $Exe -PassThru `
+        -RedirectStandardError "$Data\err.log" -RedirectStandardOutput "$Data\out.log"
+    Start-Sleep -Milliseconds 700
+    $p.Refresh()
+    if (-not $p.HasExited) { break }
+    $held = Select-String -Path "$Data\err.log" -Pattern 'holds the endpoint' -Quiet
+    if (-not $held) { throw "infiniterm exited $($p.ExitCode); see $Data\err.log" }
+    Start-Sleep -Seconds 1
+}
+if ($p.HasExited) { throw "the endpoint stayed held; another infiniterm is running" }
 
 # PowerShell with a real profile takes seconds to draw its first prompt, and
 # the window is up well before that; wait for the window, not the prompt.

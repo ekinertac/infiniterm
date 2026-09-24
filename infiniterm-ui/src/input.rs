@@ -128,12 +128,18 @@ impl AppView {
         Hit::Nothing
     }
 
+    /// `keycode::roles` with this instance's setting, so the five entry
+    /// points below do not each have to reach for the config.
+    pub fn modifier_roles(&self, m: gpui::Modifiers) -> gpui::Modifiers {
+        crate::keycode::roles(m, self.model.config.keyboard.command_modifier)
+    }
+
     pub fn mouse_down(&mut self, e: &MouseDownEvent) {
         // The roles, not the raw keys: see `keycode::roles`. Done at each
         // of this file's five entry points, which is every way a modifier
         // reaches the app, so nothing downstream needs to know.
         let e = &MouseDownEvent {
-            modifiers: crate::keycode::roles(e.modifiers),
+            modifiers: self.modifier_roles(e.modifiers),
             ..e.clone()
         };
         let p = self.to_content(e.position);
@@ -279,7 +285,7 @@ impl AppView {
 
     pub fn mouse_move(&mut self, e: &MouseMoveEvent) {
         let e = &MouseMoveEvent {
-            modifiers: crate::keycode::roles(e.modifiers),
+            modifiers: self.modifier_roles(e.modifiers),
             ..e.clone()
         };
         let p = self.to_content(e.position);
@@ -442,7 +448,7 @@ impl AppView {
 
     pub fn mouse_up(&mut self, e: &MouseUpEvent) {
         let e = &MouseUpEvent {
-            modifiers: crate::keycode::roles(e.modifiers),
+            modifiers: self.modifier_roles(e.modifiers),
             ..e.clone()
         };
         let p = self.to_content(e.position);
@@ -524,7 +530,7 @@ impl AppView {
     /// the cursor: the world point under the pointer must not move.
     pub fn wheel(&mut self, e: &ScrollWheelEvent) {
         let e = &ScrollWheelEvent {
-            modifiers: crate::keycode::roles(e.modifiers),
+            modifiers: self.modifier_roles(e.modifiers),
             ..e.clone()
         };
         let keylog = std::env::var_os("INFINITERM_KEYLOG").is_some();
@@ -588,7 +594,7 @@ impl AppView {
     /// the caller must stop propagation on a handled chord.
     pub fn key_down(&mut self, e: &KeyDownEvent, cx: &mut gpui::App) -> bool {
         let mut owned = e.clone();
-        owned.keystroke.modifiers = crate::keycode::roles(owned.keystroke.modifiers);
+        owned.keystroke.modifiers = self.modifier_roles(owned.keystroke.modifiers);
         let e = &owned;
         let k: &Keystroke = &e.keystroke;
         let m = &k.modifiers;

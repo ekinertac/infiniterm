@@ -117,6 +117,19 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "keyboard.commandModifier",
+        &[
+            "Windows only: which key plays Cmd's part, since Windows has none.",
+            "\"leftControl\" splits the two sides of Ctrl, left for the app and",
+            "right for the terminal, so a keyboard remapped into Mac order puts",
+            "every binding under the finger that already reaches for it and Caps",
+            "Lock plus C is still a real ^C. \"win\" puts them on the Windows key",
+            "and leaves Ctrl whole for the shell, at the cost of every binding",
+            "Windows takes first: Win+L locks the machine, and Win+D, E, R, S, T,",
+            "the digits, the arrows and = never arrive.",
+        ],
+    ),
+    (
         "terminal.decoyCommand",
         &[
             "What Cmd+Shift+H runs over the focused card when somebody is reading",
