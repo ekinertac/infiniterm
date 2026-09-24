@@ -254,6 +254,19 @@ pub fn parent_dir(path: &str) -> String {
     }
 }
 
+/// Whether a path names a place on its own, rather than one relative to
+/// some directory.
+///
+/// Not `Path::is_absolute`, which answers for THIS platform only: on
+/// Windows it calls `/Users/ekin` relative, and a canvas saved on a Mac is
+/// opened here with every path spelled that way. Both roots count on both
+/// platforms, because a path that arrives is a path somebody already
+/// resolved and its spelling says where it came from, not where it is being
+/// read.
+pub fn is_rooted(path: &str) -> bool {
+    path.starts_with('/') || path.starts_with('\\') || std::path::Path::new(path).is_absolute()
+}
+
 /// `std::fs::canonicalize`, with the answer in a form a shell, a card label
 /// and a person can all read.
 ///
@@ -414,6 +427,22 @@ mod tests {
         let text = got.to_string_lossy();
         assert!(!text.starts_with(r"\\?\"), "{text}");
         assert!(canonical(dir.join("no-such-thing-xyz")).is_err());
+    }
+
+    #[test]
+    fn a_rooted_path_is_one_that_names_its_own_place() {
+        assert!(is_rooted("/Users/ekin/a.rs"));
+        assert!(is_rooted(r"C:\Users\PC\a.rs"));
+        assert!(is_rooted("C:/Users/PC/a.rs"));
+        // A UNC share, and a Windows path rooted on the current drive.
+        assert!(is_rooted(r"\\server\share"));
+        assert!(is_rooted(r"\Users\PC"));
+        // Relative, on either platform.
+        assert!(!is_rooted("a.rs"));
+        assert!(!is_rooted("src/a.rs"));
+        assert!(!is_rooted(r"src"));
+        assert!(!is_rooted("~/a.rs"), "a tilde is the caller's to expand");
+        assert!(!is_rooted(""));
     }
 
     // Short on purpose: see this fn's own doc comment for the socket path

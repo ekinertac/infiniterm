@@ -48,8 +48,13 @@ pub fn tilde_path(path: &str, home: &str) -> String {
     if path == h {
         return "~".to_string();
     }
+    // Either separator: home is `C:\Users\PC` on Windows, and the test is
+    // that what follows is a SEPARATOR rather than more name, so
+    // `/Users/ekin2` is not shortened against `/Users/ekin`.
     match path.strip_prefix(h) {
-        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+        Some(rest) if rest.starts_with('/') || rest.starts_with('\\') => {
+            format!("~{rest}")
+        }
         _ => path.to_string(),
     }
 }

@@ -120,15 +120,16 @@ pub fn transcript_plan(path: &str, cwd: &str) -> OpenPlan {
     }
 }
 
-/// The directory of an absolute path, `/` for a top-level file; `None` for
-/// a relative one.
+/// The directory of an absolute path, its root for a top-level file;
+/// `None` for a relative one, which is what every caller turns into a
+/// refusal. `ift` resolves a path before sending it, so a relative one
+/// arriving means the caller did not.
+///
+/// `paths::is_rooted` rather than a leading `/`, because `C:\Users\PC` is
+/// rooted and has no leading slash: `ift <a windows path>` was refused as
+/// relative until this asked the right question.
 fn parent(path: &str) -> Option<String> {
-    let cut = path.rfind('/')?;
-    Some(if cut == 0 {
-        "/".to_string()
-    } else {
-        path[..cut].to_string()
-    })
+    crate::paths::is_rooted(path).then(|| crate::paths::parent_dir(path))
 }
 
 /// `ift diff <path>`: a directory shows every change beneath it, a file
