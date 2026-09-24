@@ -113,6 +113,12 @@ pub fn sessions_dir() -> PathBuf {
     app_support_dir().join("s")
 }
 
+/// The zsh integration a card's shell loads through ZDOTDIR
+/// (`shell_integration`), rewritten at every launch.
+pub fn shell_integration_dir() -> PathBuf {
+    app_support_dir().join("shell").join("zsh")
+}
+
 /// The unix socket `ift` and the hook binary connect to. Its existence is
 /// the answer to "is infiniterm running", which is what `ift` asks first.
 pub fn socket_path() -> PathBuf {

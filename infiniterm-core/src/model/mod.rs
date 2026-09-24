@@ -338,6 +338,28 @@ pub enum EditorAction {
     GoToLine,
     ToggleBlame,
     ToggleExplorer,
+    /// A palette-only text transform (Batch 1, 2026-09-24): no chord of its
+    /// own, reachable only through the command palette, `cards_cmd.rs`'s
+    /// `editor.transform.*` entries.
+    Transform(TextTransform),
+}
+
+/// A pure function in `infiniterm_editor::transforms`, picked by name here
+/// since the model crate cannot depend on the ui crate that runs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextTransform {
+    Upper,
+    Lower,
+    Title,
+    Snake,
+    Kebab,
+    Camel,
+    SortLines,
+    UniqueLines,
+    ReverseLines,
+    TrimTrailingWhitespace,
+    IndentTabsToSpaces,
+    IndentSpacesToTabs,
 }
 
 /// What a browser card's page is asked to do. History is the page's own,
@@ -429,6 +451,13 @@ pub struct Model {
     /// the focused card goes back along it; not saved, a restart has no
     /// "before".
     pub focus_trail: Vec<String>,
+    /// Each terminal card's escape-sequence scanner and the command in
+    /// flight (`program_state`), by card id. Session-only: a command
+    /// running across a restart is simply not known about.
+    pub programs: std::collections::HashMap<
+        String,
+        (crate::program_state::Scanner, crate::program_state::Track),
+    >,
     /// The focus as it stands: which card, when it took the focus, and
     /// whether that visit has earned a place in the trail yet
     /// (`switcher::earns_trail`). A card crossed with Cmd+Alt+Arrow on the
@@ -536,6 +565,7 @@ impl Model {
             last_focused: HashMap::new(),
             left_at: HashMap::new(),
             focus_trail: Vec::new(),
+            programs: std::collections::HashMap::new(),
             focus_visit: None,
             switcher: None,
             layout_undo: Vec::new(),
@@ -584,6 +614,7 @@ impl Model {
         // A card sat in earns its place without waiting for the focus to
         // leave it: the trail is read by the switcher and by a close.
         self.promote_focus();
+        self.promote_programs();
         if self.notice.is_some() && now_ms >= self.notice_until {
             self.notice = None;
         }

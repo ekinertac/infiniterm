@@ -29,6 +29,12 @@ impl Model {
         }
         let before = card.agent;
         card.agent = apply_hook_event(card.agent, &report.event);
+        if let Some((_, track)) = self.programs.get_mut(&report.card_id) {
+            track.hook();
+        }
+        let Some(card) = self.card_mut(&report.card_id) else {
+            return;
+        };
         card.last_event_at = now;
         // Notification means Claude has been waiting on input for a minute:
         // worth a nudge, unlike every other state change here.
@@ -83,12 +89,23 @@ impl Model {
             .map(|c| c.id.clone());
         let Some(id) = card_id else { return };
         match event {
-            PaneEvent::Output(_) | PaneEvent::Replay(_) => {
+            PaneEvent::Output(bytes) => {
+                if let Some(c) = self.card_mut(&id) {
+                    c.last_output_at = now;
+                }
+                self.scan_program(&id, bytes);
+            }
+            // Never scanned: a replay is old output, and its marks would
+            // relight cards with commands that finished long ago.
+            PaneEvent::Replay(_) => {
                 if let Some(c) = self.card_mut(&id) {
                     c.last_output_at = now;
                 }
             }
-            PaneEvent::Exited { .. } => self.close_card(&id, true),
+            PaneEvent::Exited { .. } => {
+                self.programs.remove(&id);
+                self.close_card(&id, true)
+            }
             // Not an exit: the pane id stays, so nothing spawns a second
             // shell under the one that is still running.
             PaneEvent::Detached => {
@@ -104,12 +121,73 @@ impl Model {
         }
     }
 
+    /// Reads a card's live output for command marks, progress and
+    /// notifications (`program_state`) and applies what it finds.
+    fn scan_program(&mut self, id: &str, bytes: &[u8]) {
+        let now = self.now_ms;
+        let entry = self.programs.entry(id.to_string()).or_default();
+        let signals = entry.0.feed(bytes);
+        if signals.is_empty() {
+            return;
+        }
+        let Some(card) = self.cards.iter_mut().find(|c| c.id == id) else {
+            return;
+        };
+        let track = &mut entry.1;
+        let agent_card = card.agent_session.is_some();
+        let mut lines = vec![];
+        for sig in &signals {
+            let before = card.agent;
+            card.agent = track.apply(card.agent, agent_card, sig, now);
+            if before != card.agent {
+                lines.push(format!(
+                    "[shell] {sig:?} {before:?}->{:?} {}",
+                    card.agent,
+                    short(card)
+                ));
+            }
+        }
+        for line in lines {
+            self.log(line);
+        }
+    }
+
+    /// A command that has run long enough turns its card working.
+    pub(super) fn promote_programs(&mut self) {
+        let now = self.now_ms;
+        let mut lines = vec![];
+        for card in &mut self.cards {
+            if let Some((_, track)) = self.programs.get(&card.id) {
+                let before = card.agent;
+                card.agent = track.tick(card.agent, now);
+                if before != card.agent {
+                    lines.push(format!(
+                        "[shell] running {before:?}->{:?} {}",
+                        card.agent,
+                        short(card)
+                    ));
+                }
+            }
+        }
+        for line in lines {
+            self.log(line);
+        }
+    }
+
     /// Catches a crashed agent or a missed Stop hook, which would otherwise
     /// leave a card claiming to work forever. Run every 5 s by the ui.
     pub fn sweep_stale(&mut self) {
         let now = self.now_ms;
         let mut lines = vec![];
         for c in &mut self.cards {
+            // A quiet build is still running; the sweep is for agents.
+            if self
+                .programs
+                .get(&c.id)
+                .is_some_and(|(_, t)| t.owns_working())
+            {
+                continue;
+            }
             let before = c.agent;
             c.agent = staleness(c.agent, c.last_event_at, c.last_output_at, now);
             if before != c.agent {
@@ -127,5 +205,14 @@ impl Model {
         for line in lines {
             self.effects.push(super::Effect::AgentLog(line));
         }
+    }
+}
+
+/// The card's name for the log, as the hook lines have it.
+fn short(card: &super::Card) -> &str {
+    if card.title.is_empty() {
+        &card.id[..8.min(card.id.len())]
+    } else {
+        &card.title
     }
 }

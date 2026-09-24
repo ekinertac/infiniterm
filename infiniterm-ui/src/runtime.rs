@@ -684,6 +684,13 @@ pub fn startup(app: &mut AppView) {
             moved.display()
         );
     }
+    // The zsh integration every new card's shell loads (command marks for
+    // program_state.rs), rewritten so an update's version wins.
+    if let Err(e) = infiniterm_core::shell_integration::install(
+        &infiniterm_core::paths::shell_integration_dir(),
+    ) {
+        eprintln!("[infiniterm/warn] could not write the zsh integration: {e}");
+    }
     // Always rewritten, which is what makes them read-only in practice; also
     // how a new setting reaches an existing install.
     let labels: Vec<(String, String)> = app

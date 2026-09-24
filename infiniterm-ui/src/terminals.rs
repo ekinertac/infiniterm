@@ -235,13 +235,27 @@ impl AppView {
                 // `terminal.shell` when set, else the backend's $SHELL; a card
                 // made to run one program runs that instead.
                 let command = card.command.clone().or_else(|| shell.clone());
-                let env = vec![
+                let mut env = vec![
                     ("INFINITERM_CARD_ID".to_string(), card.id.clone()),
                     (
                         "INFINITERM_HISTFILE".to_string(),
                         history.to_string_lossy().to_string(),
                     ),
                 ];
+                // A shell card's zsh loads our command marks, so a long
+                // command colours its card (program_state.rs). Not a card
+                // made to run one program: it has no prompt to mark.
+                let integration = infiniterm_core::paths::shell_integration_dir();
+                if card.command.is_none() && integration.join(".zshenv").exists() {
+                    let sh = shell
+                        .clone()
+                        .unwrap_or_else(infiniterm_core::backend::local_pty::default_shell);
+                    env.extend(infiniterm_core::shell_integration::zsh_env(
+                        &sh,
+                        &integration,
+                        std::env::var("ZDOTDIR").ok(),
+                    ));
+                }
                 match self.backend.pty.spawn_now(
                     std::path::Path::new(&card.cwd),
                     command.as_deref(),

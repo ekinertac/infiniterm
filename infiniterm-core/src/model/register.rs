@@ -77,7 +77,7 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
     // editor card locks the same way with its own tab commands behind the
     // same chords (`editor_keys::lock_override`); what neither table
     // knows falls through to the body, where the editor's own keys live.
-    if locked && !is_workspace_switch(chord) && !is_locked_carveout(chord) {
+    if locked && !is_workspace_switch(chord) && !is_locked_carveout(chord, kind) {
         let id = if kind == Some(crate::saved_layout::CardKind::Editor) {
             crate::editor_keys::lock_override(chord)
         } else {
@@ -110,23 +110,24 @@ fn is_workspace_switch(chord: &str) -> bool {
         && parts[1].chars().all(|c| c.is_ascii_digit())
 }
 
-/// The other carve-out a locked browser card does not claim: the omnibox
-/// (`cmd+l`, an app overlay, not the page — the design doc: "the omnibox
-/// already does this") and the way out of a locked page (`browser.leave`,
-/// bound to `cmd+escape` in the default keymap). Both are app-level, not
-/// Chrome shortcuts a real browser window would bind, and `browser.leave`
-/// in particular has to stay reachable or a locked card's own way out
-/// becomes unreachable now that plain Escape's separate meaning
-/// (double-Escape to unlock) sits on the same key. Hardcoded rather than a
-/// keymap lookup, the same way `is_workspace_switch` is: this is about
-/// what these two chords MEAN to the app, not about tracking a rebind.
-fn is_locked_carveout(chord: &str) -> bool {
+/// The other carve-outs a locked card does not claim: the way out of a
+/// locked page (`browser.leave`, bound to `cmd+escape` in the default
+/// keymap; a no-op on an editor, which unlocks by double-Escape only) and,
+/// for a BROWSER only, the omnibox (`cmd+l`, an app overlay, not the page
+/// — the design doc: "the omnibox already does this"). A locked editor
+/// does not carve `cmd+l` out: 2026-09-24, Ekin wants an editor's own
+/// shortcuts (`editor_keys::editor_keeps`) to shadow the app's while
+/// locked the same way Chrome's do for a browser, and Cmd+L there is
+/// "select the line", not the address bar. Hardcoded rather than a keymap
+/// lookup, the same way `is_workspace_switch` is: this is about what these
+/// chords MEAN to the app, not about tracking a rebind.
+fn is_locked_carveout(chord: &str, kind: Option<crate::saved_layout::CardKind>) -> bool {
     // Ctrl+Tab is the card switcher, a way OUT of a locked card like
     // Cmd+Escape; Chrome's own next-tab is Cmd+Shift+] here.
-    matches!(
-        chord,
-        "cmd+l" | "cmd+escape" | "ctrl+tab" | "ctrl+shift+tab"
-    )
+    if matches!(chord, "cmd+escape" | "ctrl+tab" | "ctrl+shift+tab") {
+        return true;
+    }
+    chord == "cmd+l" && kind != Some(crate::saved_layout::CardKind::Editor)
 }
 
 /// Runs a command and then any `RunCommand` effects it queued, so a palette
@@ -1382,6 +1383,39 @@ mod tests {
         assert_eq!(h.focused().agent, crate::agent_state::AgentState::None);
     }
 
+    // A shell command that runs long colours its card from the marks in
+    // its output: working after five seconds, done when it ends well, and
+    // a quiet build is not taken for a crashed agent by the sweep. A
+    // replay of the same bytes changes nothing.
+    #[test]
+    fn a_long_shell_command_colours_its_card() {
+        use crate::agent_state::AgentState::*;
+        use crate::backend::{PaneEvent, PaneId};
+        let mut h = Harness::new();
+        let pane: PaneId = 7;
+        h.m.cards[0].pane_id = Some(pane);
+        let out = |b: &[u8]| PaneEvent::Output(b.to_vec());
+        let t0 = h.m.now_ms;
+        h.m.apply_pane_event(pane, &out(b"cargo build\r\n\x1b]133;C\x07"));
+        h.m.tick(t0 + 1_000.);
+        assert_eq!(h.focused().agent, None);
+        h.m.tick(t0 + crate::program_state::LONG_MS);
+        assert_eq!(h.focused().agent, Working);
+        h.m.tick(t0 + crate::agent_state::STALE_MS * 2.);
+        h.m.sweep_stale();
+        assert_eq!(
+            h.focused().agent,
+            Working,
+            "ten silent minutes is still a build"
+        );
+        h.m.apply_pane_event(pane, &out(b"\x1b]133;D;0\x07"));
+        assert_eq!(h.focused().agent, Done);
+        h.m.apply_pane_event(pane, &PaneEvent::Replay(b"\x1b]133;C\x07".to_vec()));
+        assert_eq!(h.focused().agent, Done, "a replay is old news");
+        h.m.apply_pane_event(pane, &out(b"\x1b]133;C\x07"));
+        assert_eq!(h.focused().agent, None, "the next command clears it");
+    }
+
     // The keymap dispatches through the editor and browser exceptions.
     #[test]
     fn chords_dispatch_through_the_keymap_with_the_editor_and_browser_exceptions() {
@@ -1447,6 +1481,28 @@ mod tests {
             handle_chord(&mut h.m, &h.r, "ctrl+1"),
             "workspaces switch through a lock"
         );
+    }
+
+    // Cmd+L is the omnibox on a locked BROWSER card but not on a locked
+    // EDITOR one: there it is the editor's "select the line" (Batch 1,
+    // 2026-09-24), so it must fall through to the body rather than open
+    // the address bar. Ctrl+G is `editor.goToLine`, a command (it opens
+    // the model's prompt), unlike the line, bracket and selection chords,
+    // which are pure body key handling and need no entry here at all.
+    #[test]
+    fn a_locked_editor_does_not_carve_out_cmd_l_but_does_bind_ctrl_g() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        h.m.card_mut(&id).unwrap().path = Some("/h/a.rs".into());
+        h.m.card_mut(&id).unwrap().locked = true;
+        assert!(
+            !handle_chord(&mut h.m, &h.r, "cmd+l"),
+            "falls to the body instead of opening the omnibox"
+        );
+        assert!(!h.m.omni.open);
+        assert!(handle_chord(&mut h.m, &h.r, "ctrl+g"));
+        assert!(h.m.prompt.is_open());
     }
 
     // A card dropped over another goes back where it was: nothing may end

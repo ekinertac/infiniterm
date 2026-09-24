@@ -27,6 +27,8 @@ pub mod swap;
 pub mod multi_select;
 
 pub mod agent_state;
+pub mod program_state;
+pub mod shell_integration;
 
 pub mod groups;
 
