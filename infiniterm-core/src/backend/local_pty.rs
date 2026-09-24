@@ -28,6 +28,8 @@ use crate::shell_cmd::{default_shell, shell_args};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -84,6 +86,77 @@ impl Credit {
     }
 }
 
+/// A Windows job object holding one pane's whole process tree.
+///
+/// `ChildKiller::kill` ends the process portable-pty spawned and NOTHING
+/// else, and under ConPTY that is not the tree: the shell ends up beside an
+/// OpenConsole of its own, and the shell's own children are not touched
+/// either. Measured 2026-09-24 — lifting a card's mask killed the pane and
+/// left its decoy, a `while ($true)` loop, running after the app had quit.
+/// The same gap is why a force-killed app left pwsh and OpenConsole behind.
+///
+/// A job with KILL_ON_JOB_CLOSE closes both cases at once: `kill` terminates
+/// the job, and if the app dies without killing anything the kernel closes
+/// the handle on the way out and the tree goes with it.
+#[cfg(windows)]
+struct Job(std::os::windows::io::OwnedHandle);
+
+#[cfg(windows)]
+impl Job {
+    /// `None` when any step fails: a pane with no job still runs, it just
+    /// leaks its tree the way every pane did before this existed. Not worth
+    /// refusing to open a card over.
+    fn holding(pid: u32) -> Option<Job> {
+        use std::os::windows::io::{FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+        };
+
+        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if job.is_null() {
+            return None;
+        }
+        let job = unsafe { OwnedHandle::from_raw_handle(job as _) };
+
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let set = unsafe {
+            SetInformationJobObject(
+                job.as_raw_handle() as _,
+                JobObjectExtendedLimitInformation,
+                std::ptr::addr_of!(limits).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if set == 0 {
+            return None;
+        }
+
+        // A handle on the child, which portable-pty does not hand out; it
+        // gives a pid, and the job wants the process.
+        let child = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
+        if child.is_null() {
+            return None;
+        }
+        let assigned = unsafe { AssignProcessToJobObject(job.as_raw_handle() as _, child) };
+        unsafe { CloseHandle(child) };
+        (assigned != 0).then_some(Job(job))
+    }
+
+    /// Ends every process in the job, which is the shell and everything it
+    /// started.
+    fn terminate(&self) {
+        use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+        unsafe { TerminateJobObject(self.0.as_raw_handle() as _, 1) };
+    }
+}
+
 struct Pane {
     master: Box<dyn MasterPty + Send>,
     // Wrapped separately from `panes` so a write that blocks (child not
@@ -100,6 +173,10 @@ struct Pane {
     // Optional because portable_pty does not promise one on every platform.
     pid: Option<u32>,
     credit: Arc<Credit>,
+    /// Holds this pane's whole process tree; see `Job`. Dropping the pane
+    /// kills the tree even if nothing asked, which is what a crash needs.
+    #[cfg(windows)]
+    job: Option<Job>,
 }
 
 pub struct LocalPtyBackend {
@@ -237,6 +314,8 @@ impl LocalPtyBackend {
                 killer,
                 pid,
                 credit: credit.clone(),
+                #[cfg(windows)]
+                job: pid.and_then(Job::holding),
             },
         );
 
@@ -322,6 +401,13 @@ impl LocalPtyBackend {
         // the map by the exit watcher once `child.wait()` actually returns,
         // not here, so `Exited` is still emitted exactly once.
         if let Some(p) = self.panes.lock().unwrap().get_mut(&pane) {
+            // The job first: it is the only thing that reaches what the
+            // shell started. The killer still runs, because a pane whose
+            // job could not be made has nothing else.
+            #[cfg(windows)]
+            if let Some(job) = &p.job {
+                job.terminate();
+            }
             let _ = p.killer.kill();
             // The reader may be parked on credit rather than in read(), where
             // the kill would have reached it; wake it so the thread can end.

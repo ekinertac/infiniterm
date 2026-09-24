@@ -41,4 +41,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Pipes",
     # `inspect.rs`: the process table, for a card's label.
     "Win32_System_Diagnostics_ToolHelp",
+    # `local_pty.rs`: a job object per pane, so killing a card's shell
+    # reaches what that shell started.
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
 ] }

@@ -278,9 +278,17 @@ pub fn default_config() -> Config {
             // cmdlet, so this only makes sense while the card's shell is a
             // PowerShell, which on Windows it is unless `terminal.shell`
             // says otherwise (`shell_cmd::default_shell`).
+            //
+            // Written in FULL cmdlet names, no aliases. A card's command runs
+            // with the user's profile loaded, deliberately, and a profile may
+            // define anything: `Sort` here was a function of Ekin's that ran
+            // Git's sort.exe, so the decoy showed "Input file specified two
+            // times" instead of a process list. The same trap the macOS
+            // default dodges with `command log`, zsh having a builtin `log`.
             #[cfg(windows)]
-            decoy_command: "while ($true) { Get-Process | Sort CPU -Desc | Select -First 30 | \
-                 Format-Table -AutoSize; Start-Sleep 2 }"
+            decoy_command: "while ($true) { Get-Process | Sort-Object -Property CPU \
+                 -Descending | Select-Object -First 30 | Format-Table -AutoSize; \
+                 Start-Sleep 2 }"
                 .into(),
         },
         cards: Cards {
