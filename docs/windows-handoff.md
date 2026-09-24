@@ -4,10 +4,17 @@ For a Claude session on Ekin's Windows desktop (the "gpu box", RTX 4070 Ti), sta
 
 ## Where this stands
 
-Phase 1 is done, on the `windows` branch, 2026-09-23. Every crate but
-`infiniterm-ui` builds and passes its tests on Windows, and `infiniterm-ui`
-builds and passes its tests too with `--no-default-features`. Nothing has
-been run on screen yet: that is phase 2, and it needs Ekin at the desktop.
+Phases 1 and 2 are done, on the `windows` branch, 2026-09-23 and -24. Every
+crate builds and passes its tests on Windows (`infiniterm-ui` with
+`--no-default-features`), the window opens, and a card runs PowerShell:
+`dir` typed into it draws its listing, and a window resize reflows the grid.
+Phase 3 is next, and its first item is the modifier decision under "Keys"
+below, which is Ekin's.
+
+There IS a small GUI driver now, `tools/drive/win/`: `run.ps1` launches on a
+scratch data dir, `type.ps1` types into the window (refusing unless
+infiniterm is the one in front), `shot.ps1` screenshots it. Enough that a
+session on the box can check its own work without asking Ekin to look.
 
 What phase 1 actually changed, beyond the plan below:
 
@@ -34,7 +41,22 @@ What phase 1 actually changed, beyond the plan below:
 - `tree-sitter-scss` cannot build on MSVC at all (see the traps below), so
   `.scss` opens without highlighting on Windows.
 
+What phase 2 changed:
+
+- Windows gets a real caption bar. `appears_transparent` means "we draw the
+  whole title bar" and gpui on Windows takes it literally, which left the
+  window with no close, minimise or maximise button: the traffic lights we
+  leave room for are macOS's and we never drew any others.
+- The 84-pixel inset that keeps the workspace tabs clear of those traffic
+  lights is 8 on Windows, where it was that much empty space.
+
 What is still open, in the order it will be hit:
+
+- **The 521 themes are not on Windows at all.** They live in the archived
+  Tauri repo and `tools/bundle.sh` copies them into the Mac bundle from
+  there; nothing does that here, so the app runs on its fallback palette and
+  prints "could not load theme" twice at startup. Readable, and wrong.
+  Packaging is phase 6 and this goes with it.
 
 - `inspect.rs` still shells out to `ps` and `lsof`, so on Windows a card has
   no process label and no cwd tracking. It compiles and answers nothing.
