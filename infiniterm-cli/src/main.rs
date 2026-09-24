@@ -281,7 +281,7 @@ fn install_self() -> ExitCode {
 /// in the directory the path is relative to, and the app is not.
 fn open_path(arg: &str) -> ExitCode {
     let (path, line) = split_line(arg);
-    let Ok(full) = std::fs::canonicalize(path) else {
+    let Ok(full) = infiniterm_core::paths::canonical(path) else {
         eprintln!("ift: cannot resolve {path}");
         return ExitCode::from(2);
     };
@@ -295,7 +295,7 @@ fn open_path(arg: &str) -> ExitCode {
 
 /// `ift diff [path]`: the changes under a directory, or of one file.
 fn diff_path(arg: &str) -> ExitCode {
-    let Ok(full) = std::fs::canonicalize(arg) else {
+    let Ok(full) = infiniterm_core::paths::canonical(arg) else {
         eprintln!("ift: cannot resolve {arg}");
         return ExitCode::from(2);
     };
@@ -401,7 +401,9 @@ fn home() -> PathBuf {
 fn hook_binary() -> Option<String> {
     // Canonical, so a symlinked ift (`ift install`) looks beside the real
     // binary in the bundle, not beside the link in ~/.local/bin.
-    let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok()?;
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|e| infiniterm_core::paths::canonical(e).ok())?;
     let dir = exe.parent()?;
     let name = claude_hooks::HOOK_BINARY;
     let candidates = [
@@ -412,20 +414,9 @@ fn hook_binary() -> Option<String> {
     candidates
         .iter()
         .find(|p| p.exists())
-        .and_then(|p| std::fs::canonicalize(p).ok())
-        // Canonicalising a Windows path gives the \\?\ verbatim form, which
-        // a shell will not run. The hook command is handed to a shell.
-        .map(|p| strip_verbatim(&p.to_string_lossy()))
+        .and_then(|p| infiniterm_core::paths::canonical(p).ok())
+        .map(|p| p.to_string_lossy().into_owned())
         .or_else(|| which_on_path(name))
-}
-
-/// Windows canonicalisation returns `\\?\C:\...`, the form that turns off
-/// path parsing. It is right for an API call and wrong in a command line.
-fn strip_verbatim(path: &str) -> String {
-    path.strip_prefix(r"\\?\UNC\")
-        .map(|rest| format!(r"\\{rest}"))
-        .or_else(|| path.strip_prefix(r"\\?\").map(str::to_string))
-        .unwrap_or_else(|| path.to_string())
 }
 
 /// The first `infiniterm-hook` on `$PATH`, if there is one.

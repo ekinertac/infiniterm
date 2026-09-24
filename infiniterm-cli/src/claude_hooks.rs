@@ -45,17 +45,40 @@ pub const HOOK_BINARY: &str = if cfg!(windows) {
     "infiniterm-hook"
 };
 
+/// The path as the shell Claude Code runs hooks with will read it.
+///
+/// Forward slashes on Windows. Claude Code runs a hook through BASH there
+/// (`/usr/bin/bash`, Git Bash's), where a backslash is an escape character,
+/// so `C:\Users\PC\...` arrives as `C:UsersPC...` and the hook is never
+/// found. Measured 2026-09-24 against a real session, and the only sign of
+/// it was a non-blocking notice inside Claude's own startup output:
+///
+///     SessionStart:startup hook error
+///     /usr/bin/bash: line 1: C:UsersPCCodeinfinitermtargetdebuginfiniterm-hook.exe: command not found
+///
+/// Quoting would also work, since bash leaves a backslash alone inside
+/// double quotes, but only until a path has a `$` or a backtick in it.
+/// Windows takes forward slashes in every API, so there is nothing to trade.
+pub fn shell_path(path: &str) -> String {
+    if cfg!(windows) {
+        path.replace('\\', "/")
+    } else {
+        path.to_string()
+    }
+}
+
 /// The command Claude Code runs for one event.
 ///
-/// Quoted when the path has a space in it. The command is handed to a shell,
-/// so `C:\Program Files\infiniterm\infiniterm-hook.exe Stop` would try to
-/// run `C:\Program`; a Mac path for this is under /Applications or a
-/// checkout and rarely has one, and Windows puts things in Program Files.
+/// Quoted when the path has a space in it. The command is handed to a
+/// shell, so `C:/Program Files/infiniterm/infiniterm-hook.exe Stop` would
+/// run only `C:/Program`; a Mac path for this is under /Applications or a
+/// checkout and rarely has a space, which is why it never came up there.
 pub fn hook_command(hook_binary: &str, event: &str) -> String {
-    if hook_binary.contains(' ') {
-        format!("\"{hook_binary}\" {event}")
+    let path = shell_path(hook_binary);
+    if path.contains(' ') {
+        format!("\"{path}\" {event}")
     } else {
-        format!("{hook_binary} {event}")
+        format!("{path} {event}")
     }
 }
 
@@ -83,7 +106,9 @@ fn program_of(command: &str) -> &str {
 /// logs what it is about to run, say.
 fn is_ours(command: &str, hook_binary: &str) -> bool {
     let program = program_of(command);
-    if program == hook_binary {
+    // Against the spelling that would be WRITTEN, so a second run recognises
+    // its own entry rather than adding a slashed one beside a backslashed one.
+    if program == shell_path(hook_binary) {
         return true;
     }
     // Either separator: an entry written on one platform can be read on the
@@ -158,6 +183,32 @@ pub fn install(settings: &mut Value, hook_binary: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
 
+    // Claude Code runs a hook through bash on Windows, where a backslash is
+    // an escape: the path arrived as C:UsersPC... and the hook was never
+    // found. The only sign was a non-blocking notice in Claude's own output.
+    #[test]
+    fn a_windows_path_is_written_with_forward_slashes() {
+        let win = r"C:\Users\PC\Code\infiniterm\target\debug\infiniterm-hook.exe";
+        let cmd = hook_command(win, "Stop");
+        if cfg!(windows) {
+            assert_eq!(
+                cmd,
+                "C:/Users/PC/Code/infiniterm/target/debug/infiniterm-hook.exe Stop"
+            );
+            assert!(!cmd.contains('\\'), "no backslash may survive: {cmd}");
+        }
+        // Idempotent: its own entry is recognised from the raw path it was
+        // installed with, whichever way that was spelled.
+        assert!(is_ours(&cmd, win));
+    }
+
+    #[test]
+    fn a_unix_path_is_left_exactly_as_it_is() {
+        let unix = "/Applications/infiniterm.app/Contents/MacOS/infiniterm-hook";
+        assert_eq!(shell_path(unix), unix);
+        assert_eq!(hook_command(unix, "Stop"), format!("{unix} Stop"));
+    }
+
     // A hook command is handed to a shell, so a path with a space in it has
     // to arrive quoted or the shell runs only the first word. Windows puts
     // programs in Program Files; this never came up on a Mac.
@@ -165,8 +216,9 @@ mod tests {
     fn a_path_with_a_space_is_quoted_and_still_recognised_as_ours() {
         let win = r"C:\Program Files\infiniterm\infiniterm-hook.exe";
         let cmd = hook_command(win, "Stop");
-        assert_eq!(cmd, format!("\"{win}\" Stop"));
-        assert_eq!(program_of(&cmd), win);
+        let written = shell_path(win);
+        assert_eq!(cmd, format!("\"{written}\" Stop"));
+        assert_eq!(program_of(&cmd), written);
         assert!(is_ours(&cmd, win), "its own entry must be idempotent");
         // And an entry an older install wrote at another path.
         assert!(is_ours(&cmd, "/somewhere/else/infiniterm-hook"));

@@ -254,6 +254,34 @@ pub fn parent_dir(path: &str) -> String {
     }
 }
 
+/// `std::fs::canonicalize`, with the answer in a form a shell, a card label
+/// and a person can all read.
+///
+/// On Windows canonicalize returns the VERBATIM form, `\\?\C:\...`, which
+/// tells the OS to skip path parsing entirely. That is right for an API call
+/// and wrong for every use this app has: a card's cwd, a command line handed
+/// to a shell, a label somebody reads. `ift <dir>` opened a card whose
+/// directory read `\\?\C:\Users\PC\Code\infiniterm` until this existed,
+/// and the hook command written into settings.json had the same problem.
+///
+/// One function rather than a rule to remember at each call site, because
+/// the rule was forgotten twice on the first day.
+pub fn canonical(path: impl AsRef<std::path::Path>) -> std::io::Result<PathBuf> {
+    let full = std::fs::canonicalize(path)?;
+    Ok(PathBuf::from(strip_verbatim(&full.to_string_lossy())))
+}
+
+/// The plain form of a Windows verbatim path, and anything else unchanged.
+/// A network share is spelled `\\?\UNC\server\share` in that form and
+/// `\\server\share` in this one, which is why the answer is owned: the
+/// two leading separators are not there to borrow.
+pub fn strip_verbatim(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
+}
+
 /// `INFINITERM_DATA_DIR` is set: this instance is a side-by-side one.
 pub fn data_dir_overridden() -> bool {
     std::env::var_os("INFINITERM_DATA_DIR").is_some()
@@ -364,6 +392,28 @@ mod tests {
         assert_eq!(parent_dir(r"C:\a.rs"), r"C:\");
         assert_eq!(parent_dir("/a.rs"), "/");
         assert_eq!(parent_dir("a.rs"), "/");
+    }
+
+    #[test]
+    fn a_verbatim_path_comes_back_plain() {
+        assert_eq!(strip_verbatim(r"\\?\C:\Users\PC"), r"C:\Users\PC");
+        // A UNC share keeps its two leading separators.
+        assert_eq!(strip_verbatim(r"\\?\UNC\server\share"), r"\\server\share");
+        // Anything that is not verbatim is its own answer, unix paths included.
+        assert_eq!(strip_verbatim(r"C:\Users\PC"), r"C:\Users\PC");
+        assert_eq!(strip_verbatim("/Users/ekin"), "/Users/ekin");
+        assert_eq!(strip_verbatim(""), "");
+    }
+
+    // The seam itself: whatever the OS hands back, nothing downstream sees a
+    // prefix it cannot use.
+    #[test]
+    fn canonical_never_returns_a_verbatim_path() {
+        let dir = std::env::temp_dir();
+        let got = canonical(&dir).unwrap();
+        let text = got.to_string_lossy();
+        assert!(!text.starts_with(r"\\?\"), "{text}");
+        assert!(canonical(dir.join("no-such-thing-xyz")).is_err());
     }
 
     // Short on purpose: see this fn's own doc comment for the socket path
