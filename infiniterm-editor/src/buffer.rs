@@ -435,7 +435,10 @@ impl Buffer {
     }
 
     /// Return: a newline plus the current line's indentation, the part of
-    /// `indentOnInput` a plain editor needs.
+    /// `indentOnInput` a plain editor needs. Between an auto-closed pair
+    /// (the cursor right after `{` and right before its `}`) it opens the
+    /// pair out onto three lines instead, caret indented on the middle one,
+    /// CodeMirror's `closeBrackets` handler for Return.
     pub fn newline(&mut self, now: f64) {
         let line = self.line(self.line_of(self.cursor));
         let indent: String = line
@@ -446,7 +449,277 @@ impl Buffer {
             .chars()
             .take(self.col_of(self.cursor).min(indent.chars().count()))
             .collect();
+        if self.selection().is_none() && self.cursor > 0 && self.cursor < self.len_chars() {
+            let before = self.text.char(self.cursor - 1);
+            let after = self.text.char(self.cursor);
+            let pair = matches!((before, after), ('(', ')') | ('[', ']') | ('{', '}'));
+            if pair {
+                let inner = format!("{indent}{INDENT}");
+                let inner_len = inner.chars().count();
+                let new = format!("\n{inner}\n{indent}");
+                let cursor_after = self.cursor + 1 + inner_len;
+                self.apply(self.cursor, String::new(), new, cursor_after, false, now);
+                return;
+            }
+        }
         self.insert(&format!("\n{indent}"), now);
+    }
+
+    /// Cmd+Shift+D: a copy of the current line inserted right below it,
+    /// caret on the copy at the same column.
+    pub fn duplicate_line(&mut self, now: f64) {
+        let line = self.line_of(self.cursor);
+        let col = self.col_of(self.cursor);
+        let text = self.line(line);
+        let last = line + 1 >= self.line_count();
+        let at = if last { self.len_chars() } else { self.line_start(line + 1) };
+        let new = if last {
+            format!("\n{text}")
+        } else {
+            format!("{text}\n")
+        };
+        let cursor_after = at + usize::from(last) + col.min(text.chars().count());
+        self.apply(at, String::new(), new, cursor_after, false, now);
+    }
+
+    /// Ctrl+Cmd+Up: the current line trades places with the one above it.
+    pub fn swap_line_up(&mut self, now: f64) {
+        let line = self.line_of(self.cursor);
+        if line == 0 {
+            return;
+        }
+        let col = self.col_of(self.cursor);
+        let start = self.line_start(line - 1);
+        let last = line + 1 >= self.line_count();
+        let end = if last {
+            self.len_chars()
+        } else {
+            self.line_start(line + 1)
+        };
+        let old = self.slice(start..end);
+        let cur = self.line(line);
+        let prev = self.line(line - 1);
+        let new = if last {
+            format!("{cur}\n{prev}")
+        } else {
+            format!("{cur}\n{prev}\n")
+        };
+        let cursor_after = start + col.min(cur.chars().count());
+        self.apply(start, old, new, cursor_after, false, now);
+    }
+
+    /// Ctrl+Cmd+Down: the current line trades places with the one below it.
+    pub fn swap_line_down(&mut self, now: f64) {
+        let line = self.line_of(self.cursor);
+        if line + 1 >= self.line_count() {
+            return;
+        }
+        let col = self.col_of(self.cursor);
+        let start = self.line_start(line);
+        let last = line + 2 >= self.line_count();
+        let end = if last {
+            self.len_chars()
+        } else {
+            self.line_start(line + 2)
+        };
+        let old = self.slice(start..end);
+        let cur = self.line(line);
+        let next = self.line(line + 1);
+        let new = if last {
+            format!("{next}\n{cur}")
+        } else {
+            format!("{next}\n{cur}\n")
+        };
+        let cur_start_after = start + next.chars().count() + 1;
+        let cursor_after = cur_start_after + col.min(cur.chars().count());
+        self.apply(start, old, new, cursor_after, false, now);
+    }
+
+    /// The char just past line `line`'s own text: where the next line's
+    /// text starts, or the end of the document on the last line.
+    fn line_span_end(&self, line: usize) -> usize {
+        if line + 1 < self.line_count() {
+            self.line_start(line + 1)
+        } else {
+            self.len_chars()
+        }
+    }
+
+    /// Ctrl+Shift+K: the whole current line, newline included, so the
+    /// lines below step up. On the last line the newline ABOVE it goes
+    /// instead, since there is none below.
+    pub fn delete_line(&mut self, now: f64) {
+        let line = self.line_of(self.cursor);
+        let col = self.col_of(self.cursor);
+        let count = self.line_count();
+        let (start, end) = if line + 1 < count {
+            (self.line_start(line), self.line_start(line + 1))
+        } else if line > 0 {
+            (self.line_start(line) - 1, self.len_chars())
+        } else {
+            (0, self.len_chars())
+        };
+        let old = self.slice(start..end);
+        self.apply(start, old, String::new(), start, false, now);
+        let target = line.min(self.line_count().saturating_sub(1));
+        let len = self.line(target).chars().count();
+        self.set_cursor(self.line_start(target) + col.min(len));
+    }
+
+    /// Cmd+Enter: a new line below the current one, indented the way
+    /// Enter at the line's end would.
+    pub fn add_line_below(&mut self, now: f64) {
+        self.move_line_end(false);
+        self.newline(now);
+    }
+
+    /// Cmd+Shift+Enter: a new blank line above the current one, matching
+    /// its indent, caret at the end of it.
+    pub fn add_line_above(&mut self, now: f64) {
+        let line = self.line_of(self.cursor);
+        let start = self.line_start(line);
+        let indent: String = self
+            .line(line)
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let indent_len = indent.chars().count();
+        let new = format!("{indent}\n");
+        self.apply(start, String::new(), new, start + indent_len, false, now);
+    }
+
+    /// Cmd+Shift+J: the next line joins this one, its leading whitespace
+    /// collapsed to a single space, caret at the join.
+    pub fn join_lines(&mut self, now: f64) {
+        let line = self.line_of(self.cursor);
+        if line + 1 >= self.line_count() {
+            return;
+        }
+        let end_of_line = self.line_end(line);
+        let next_start = self.line_start(line + 1);
+        let next = self.line(line + 1);
+        let ws = next.chars().take_while(|c| c.is_whitespace()).count();
+        let remove_end = next_start + ws;
+        let old = self.slice(end_of_line..remove_end);
+        self.apply(end_of_line, old, " ".to_string(), end_of_line + 1, false, now);
+    }
+
+    /// Cmd+]: indent the current line (or every selected line), unlike Tab
+    /// which inserts the unit at the cursor when nothing is selected.
+    pub fn indent_line(&mut self, now: f64) {
+        let r = self.selection().unwrap_or(self.cursor..self.cursor);
+        self.indent_lines(r, true, now);
+    }
+
+    /// Cmd+L, called again on an already-whole-line selection: grows it by
+    /// one more line. A fresh call selects the cursor's own line.
+    pub fn expand_line_selection(&mut self) {
+        let (first, last) = match self.selection() {
+            Some(r) => (
+                self.line_of(r.start),
+                self.line_of(r.end.saturating_sub(1).max(r.start)),
+            ),
+            None => (self.line_of(self.cursor), self.line_of(self.cursor)),
+        };
+        let exact = self.selection().is_some_and(|r| {
+            r.start == self.line_start(first) && r.end == self.line_span_end(last)
+        });
+        let last = if exact {
+            (last + 1).min(self.line_count().saturating_sub(1))
+        } else {
+            last
+        };
+        let start = self.line_start(first);
+        let end = self.line_span_end(last);
+        self.select_range(start..end);
+    }
+
+    /// Cmd+D: the word under the cursor, or, called again on a selection
+    /// that already is one word, the next occurrence of it (wrapping).
+    /// One selection moves rather than a second cursor: this buffer keeps
+    /// only one.
+    pub fn select_word_or_next(&mut self) {
+        match self.selection() {
+            None => {
+                let r = self.word_at(self.cursor);
+                if !r.is_empty() {
+                    self.select_range(r);
+                }
+            }
+            Some(r) => {
+                let text = self.slice(r.clone());
+                if text.is_empty() {
+                    return;
+                }
+                let matches = crate::search::find_all(&self.text(), &text);
+                if matches.is_empty() {
+                    return;
+                }
+                let next = matches
+                    .iter()
+                    .find(|(s, _)| *s >= r.end)
+                    .or_else(|| matches.first())
+                    .copied();
+                if let Some((a, b)) = next {
+                    self.select_range(a..b);
+                }
+            }
+        }
+    }
+
+    /// Ctrl+Shift+M: the contents of the nearest enclosing bracket pair.
+    /// Called again on a selection that already sits just inside one pair,
+    /// it walks out to the pair around that one.
+    pub fn expand_to_brackets(&mut self) {
+        let scan_from = match self.selection() {
+            Some(r) if r.start > 0 && matches!(self.text.char(r.start - 1), '(' | '[' | '{') => {
+                r.start - 1
+            }
+            Some(r) => r.start,
+            None => self.cursor,
+        };
+        if let Some((open, close)) = self.enclosing_brackets(scan_from) {
+            self.select_range(open + 1..close);
+        }
+    }
+
+    /// Scans outward from `from`: the nearest unmatched opener before it,
+    /// then that opener's own match, the pair `expand_to_brackets` selects
+    /// inside of.
+    fn enclosing_brackets(&self, from: usize) -> Option<(usize, usize)> {
+        let mut depth = 0i32;
+        let mut i = from;
+        let open = loop {
+            if i == 0 {
+                return None;
+            }
+            i -= 1;
+            match self.text.char(i) {
+                ')' | ']' | '}' => depth += 1,
+                '(' | '[' | '{' if depth == 0 => break i,
+                '(' | '[' | '{' => depth -= 1,
+                _ => {}
+            }
+        };
+        let open_char = self.text.char(open);
+        let close_char = match open_char {
+            '(' => ')',
+            '[' => ']',
+            _ => '}',
+        };
+        let mut depth = 0i32;
+        for j in open + 1..self.len_chars() {
+            let c = self.text.char(j);
+            if c == open_char {
+                depth += 1;
+            } else if c == close_char {
+                if depth == 0 {
+                    return Some((open, j));
+                }
+                depth -= 1;
+            }
+        }
+        None
     }
 
     /// Tab: indent every selected line, or insert the unit at the cursor.
@@ -898,6 +1171,143 @@ mod tests {
         assert_eq!(b.matching_bracket(), Some((1, 8)));
         b.set_cursor(6);
         assert_eq!(b.matching_bracket(), Some((5, 7)));
+    }
+
+    #[test]
+    fn duplicate_line_copies_below_and_keeps_the_column() {
+        let mut b = Buffer::new("abc\ndef");
+        b.set_cursor(1);
+        b.duplicate_line(0.);
+        assert_eq!(b.text(), "abc\nabc\ndef");
+        assert_eq!(b.cursor(), 5); // col 1 of the new middle line
+        let mut b = Buffer::new("abc");
+        b.set_cursor(2);
+        b.duplicate_line(0.);
+        assert_eq!(b.text(), "abc\nabc");
+        assert_eq!(b.cursor(), 6);
+    }
+
+    #[test]
+    fn swap_line_trades_places_and_the_caret_follows() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.set_cursor(2); // on "b"
+        b.swap_line_up(0.);
+        assert_eq!(b.text(), "b\na\nc");
+        assert_eq!(b.line_of(b.cursor()), 0);
+        b.swap_line_down(1.);
+        assert_eq!(b.text(), "a\nb\nc");
+        assert_eq!(b.line_of(b.cursor()), 1);
+        // The doc's edges refuse rather than losing a line.
+        b.set_cursor(0);
+        b.swap_line_up(2.);
+        assert_eq!(b.text(), "a\nb\nc");
+        b.set_cursor(4); // on "c", the last line
+        b.swap_line_down(3.);
+        assert_eq!(b.text(), "a\nb\nc");
+    }
+
+    #[test]
+    fn delete_line_takes_the_newline_that_keeps_the_rest_together() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.set_cursor(2); // "b"
+        b.delete_line(0.);
+        assert_eq!(b.text(), "a\nc");
+        assert_eq!(b.cursor(), 2); // "c" took its place
+        // The last line has no newline of its own; the one before it goes.
+        let mut b = Buffer::new("a\nb");
+        b.set_cursor(2);
+        b.delete_line(0.);
+        assert_eq!(b.text(), "a");
+        // The only line: everything goes.
+        let mut b = Buffer::new("solo");
+        b.delete_line(0.);
+        assert_eq!(b.text(), "");
+    }
+
+    #[test]
+    fn add_line_below_and_above_keep_the_indent() {
+        let mut b = Buffer::new("  foo");
+        b.set_cursor(3);
+        b.add_line_below(0.);
+        assert_eq!(b.text(), "  foo\n  ");
+        let mut b = Buffer::new("  foo");
+        b.set_cursor(3);
+        b.add_line_above(0.);
+        assert_eq!(b.text(), "  \n  foo");
+        assert_eq!(b.cursor(), 2);
+    }
+
+    #[test]
+    fn join_lines_collapses_the_next_lines_indent_to_one_space() {
+        let mut b = Buffer::new("foo\n  bar");
+        b.set_cursor(0);
+        b.join_lines(0.);
+        assert_eq!(b.text(), "foo bar");
+        assert_eq!(b.cursor(), 4);
+        // The last line has nothing to join.
+        b.set_cursor(b.len_chars());
+        b.join_lines(1.);
+        assert_eq!(b.text(), "foo bar");
+    }
+
+    #[test]
+    fn indent_line_indents_the_whole_line_regardless_of_the_caret() {
+        let mut b = Buffer::new("x");
+        b.set_cursor(1);
+        b.indent_line(0.);
+        assert_eq!(b.text(), "  x");
+    }
+
+    #[test]
+    fn newline_between_a_closed_pair_opens_it_onto_three_lines() {
+        let mut b = Buffer::new("fn a() {}");
+        b.set_cursor(8); // between { and }
+        b.newline(0.);
+        assert_eq!(b.text(), "fn a() {\n  \n}");
+        assert_eq!(b.cursor(), 11);
+        // A quote pair does not get this treatment.
+        let mut b = Buffer::new("\"\"");
+        b.set_cursor(1);
+        b.newline(0.);
+        assert_eq!(b.text(), "\"\n\"");
+    }
+
+    #[test]
+    fn expand_line_selection_grows_by_one_line_each_call() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.set_cursor(0);
+        b.expand_line_selection();
+        assert_eq!(b.selected_text().as_deref(), Some("a\n"));
+        b.expand_line_selection();
+        assert_eq!(b.selected_text().as_deref(), Some("a\nb\n"));
+        b.expand_line_selection();
+        assert_eq!(b.selected_text().as_deref(), Some("a\nb\nc"));
+        b.expand_line_selection();
+        assert_eq!(b.selected_text().as_deref(), Some("a\nb\nc"));
+    }
+
+    #[test]
+    fn select_word_or_next_walks_occurrences_and_wraps() {
+        let mut b = Buffer::new("foo bar foo baz foo");
+        b.set_cursor(1);
+        b.select_word_or_next();
+        assert_eq!(b.selected_text().as_deref(), Some("foo"));
+        b.select_word_or_next();
+        assert_eq!(b.selection(), Some(8..11));
+        b.select_word_or_next();
+        assert_eq!(b.selection(), Some(16..19));
+        b.select_word_or_next(); // wraps back to the first
+        assert_eq!(b.selection(), Some(0..3));
+    }
+
+    #[test]
+    fn expand_to_brackets_selects_the_nearest_pair_then_the_next_one_out() {
+        let mut b = Buffer::new("f(a, (b))");
+        b.set_cursor(7); // on "b"
+        b.expand_to_brackets();
+        assert_eq!(b.selected_text().as_deref(), Some("b"));
+        b.expand_to_brackets();
+        assert_eq!(b.selected_text().as_deref(), Some("a, (b)"));
     }
 
     #[test]

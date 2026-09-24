@@ -5,8 +5,8 @@
 use super::palette_state::Source;
 use super::palette_state::{CARD_ROW, SIZES, WORKSPACE_ROW};
 use super::{
-    BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending, UndoStep,
-    LAYOUT_UNDO_DEPTH,
+    BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
+    TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
 };
 use crate::card_label::{card_label, Labelled};
 use crate::cards::GUTTER;
@@ -1217,6 +1217,75 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             }
         })
     });
+    // Palette-only: no chord of its own (Batch 1, 2026-09-24). Each runs
+    // over the selection, or the whole document when there is none
+    // (`EditorBody::apply_transform`).
+    for (id, label, t) in [
+        (
+            "editor.transform.upper",
+            "Editor: UPPERCASE",
+            TextTransform::Upper,
+        ),
+        (
+            "editor.transform.lower",
+            "Editor: lowercase",
+            TextTransform::Lower,
+        ),
+        (
+            "editor.transform.title",
+            "Editor: Title Case",
+            TextTransform::Title,
+        ),
+        (
+            "editor.transform.snake",
+            "Editor: snake_case",
+            TextTransform::Snake,
+        ),
+        (
+            "editor.transform.kebab",
+            "Editor: kebab-case",
+            TextTransform::Kebab,
+        ),
+        (
+            "editor.transform.camel",
+            "Editor: camelCase",
+            TextTransform::Camel,
+        ),
+        (
+            "editor.transform.sortLines",
+            "Editor: Sort Lines",
+            TextTransform::SortLines,
+        ),
+        (
+            "editor.transform.uniqueLines",
+            "Editor: Unique Lines",
+            TextTransform::UniqueLines,
+        ),
+        (
+            "editor.transform.reverseLines",
+            "Editor: Reverse Lines",
+            TextTransform::ReverseLines,
+        ),
+        (
+            "editor.transform.trimTrailingWhitespace",
+            "Editor: Trim Trailing Whitespace",
+            TextTransform::TrimTrailingWhitespace,
+        ),
+        (
+            "editor.transform.indentTabsToSpaces",
+            "Editor: Indentation to Spaces",
+            TextTransform::IndentTabsToSpaces,
+        ),
+        (
+            "editor.transform.indentSpacesToTabs",
+            "Editor: Indentation to Tabs",
+            TextTransform::IndentSpacesToTabs,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.editor_action(EditorAction::Transform(t))
+        });
+    }
     for (dir, dx, dy) in [
         (Direction::Left, -MOVE_STEP, 0.),
         (Direction::Right, MOVE_STEP, 0.),

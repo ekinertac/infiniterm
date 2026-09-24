@@ -468,6 +468,54 @@ impl EditorBody {
         self.dirty = true;
     }
 
+    /// A palette-only transform (Batch 1, 2026-09-24): runs the pure
+    /// function on the selection, or the whole document when there is
+    /// none, and puts the result back with the same range selected so the
+    /// next transform can chain onto it. A no-op change (already sorted,
+    /// already upper case) still records an undo step the way replacing a
+    /// selection with itself would; harmless, and simpler than detecting it.
+    pub fn apply_transform(&mut self, t: infiniterm_core::model::TextTransform, now: f64) {
+        if self.read_only {
+            return;
+        }
+        use infiniterm_core::model::TextTransform;
+        use infiniterm_editor::buffer::INDENT;
+        use infiniterm_editor::transforms as tf;
+        let width = INDENT.chars().count();
+        let f: fn(&str) -> String = match t {
+            TextTransform::Upper => tf::to_upper,
+            TextTransform::Lower => tf::to_lower,
+            TextTransform::Title => tf::to_title_case,
+            TextTransform::Snake => tf::to_snake_case,
+            TextTransform::Kebab => tf::to_kebab_case,
+            TextTransform::Camel => tf::to_camel_case,
+            TextTransform::SortLines => tf::sort_lines,
+            TextTransform::UniqueLines => tf::unique_lines,
+            TextTransform::ReverseLines => tf::reverse_lines,
+            TextTransform::TrimTrailingWhitespace => tf::trim_trailing_whitespace,
+            TextTransform::IndentTabsToSpaces => {
+                return self.replace_transform_range(|s| tf::indent_tabs_to_spaces(s, width), now)
+            }
+            TextTransform::IndentSpacesToTabs => {
+                return self.replace_transform_range(|s| tf::indent_spaces_to_tabs(s, width), now)
+            }
+        };
+        self.replace_transform_range(f, now);
+    }
+
+    fn replace_transform_range(&mut self, f: impl FnOnce(&str) -> String, now: f64) {
+        let r = self
+            .buffer
+            .selection()
+            .unwrap_or(0..self.buffer.len_chars());
+        let text = self.buffer.slice(r.clone());
+        let new = f(&text);
+        self.buffer.replace_range(r.clone(), &new, now);
+        self.buffer
+            .select_range(r.start..r.start + new.chars().count());
+        self.now_dirty(now);
+    }
+
     pub fn open_search(&mut self, replacing: bool) {
         let mut s = self.search.take().unwrap_or_default();
         // The selection seeds the query, as every editor's find does.
@@ -925,16 +973,29 @@ impl EditorBody {
                 "z" if shift => self.buffer.redo(),
                 "z" => self.buffer.undo(),
                 "a" => self.buffer.select_all(),
+                // A whole line, unselected, is what Sublime's
+                // `copy_with_empty_selection` copies and cuts.
                 "c" => {
-                    if let Some(t) = self.buffer.selected_text() {
+                    let t = self.buffer.selected_text().or_else(|| {
+                        Some(self.buffer.line(self.buffer.line_of(self.buffer.cursor())))
+                    });
+                    if let Some(t) = t {
                         cx.write_to_clipboard(ClipboardItem::new_string(t));
                     }
                 }
                 "x" => {
-                    if let Some(t) = self.buffer.selected_text() {
+                    if self.buffer.selection().is_some() {
+                        if let Some(t) = self.buffer.selected_text() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(t));
+                            if !ro {
+                                self.buffer.backspace(now);
+                            }
+                        }
+                    } else {
+                        let t = self.buffer.line(self.buffer.line_of(self.buffer.cursor()));
                         cx.write_to_clipboard(ClipboardItem::new_string(t));
                         if !ro {
-                            self.buffer.backspace(now);
+                            self.buffer.delete_line(now);
                         }
                     }
                 }
@@ -965,11 +1026,53 @@ impl EditorBody {
                 }
                 "left" => self.buffer.move_line_start(shift),
                 "right" => self.buffer.move_line_end(shift),
+                "up" if m.control => {
+                    if !ro {
+                        self.buffer.swap_line_up(now)
+                    }
+                }
+                "down" if m.control => {
+                    if !ro {
+                        self.buffer.swap_line_down(now)
+                    }
+                }
                 "up" => self.buffer.move_doc_start(shift),
                 "down" => self.buffer.move_doc_end(shift),
                 "backspace" => {
                     if !ro {
                         self.buffer.delete_to_line_start(now)
+                    }
+                }
+                "d" if shift => {
+                    if !ro {
+                        self.buffer.duplicate_line(now)
+                    }
+                }
+                "d" => self.buffer.select_word_or_next(),
+                "l" => self.buffer.expand_line_selection(),
+                "j" if shift => {
+                    if !ro {
+                        self.buffer.join_lines(now)
+                    }
+                }
+                "]" => {
+                    if !ro {
+                        self.buffer.indent_line(now)
+                    }
+                }
+                "[" => {
+                    if !ro {
+                        self.buffer.outdent(now)
+                    }
+                }
+                "enter" if shift => {
+                    if !ro {
+                        self.buffer.add_line_above(now)
+                    }
+                }
+                "enter" => {
+                    if !ro {
+                        self.buffer.add_line_below(now)
                     }
                 }
                 _ => return,
@@ -1000,6 +1103,19 @@ impl EditorBody {
             match key {
                 "a" => self.buffer.move_line_start(shift),
                 "e" => self.buffer.move_line_end(shift),
+                "k" if shift => {
+                    if !ro {
+                        self.buffer.delete_line(now)
+                    }
+                }
+                "m" if shift => self.buffer.expand_to_brackets(),
+                "m" => {
+                    if let Some((a, b)) = self.buffer.matching_bracket() {
+                        let c = self.buffer.cursor();
+                        let at_open = c == a || c == a + 1;
+                        self.buffer.set_cursor(if at_open { b + 1 } else { a + 1 });
+                    }
+                }
                 _ => return,
             }
         } else {

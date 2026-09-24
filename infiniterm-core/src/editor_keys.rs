@@ -51,6 +51,11 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
         "cmd+7" => "editor.tab.jump.7",
         "cmd+8" => "editor.tab.jump.8",
         "cmd+9" => "editor.tab.jump.last",
+        // Not a tab command either: `editor.goToLine` opens the model's
+        // prompt (Batch 1, 2026-09-24), so it must be resolved here like
+        // Cmd+S rather than left to fall through to the body, which has no
+        // prompt of its own to open.
+        "ctrl+g" => "editor.goToLine",
         // Not a tab command, but the one app chord a locked editor cannot
         // do without: an unmatched chord falls through to the body, which
         // has no save of its own, so Cmd+S saved nothing until the lock
@@ -75,6 +80,7 @@ mod tests {
         assert_eq!(lock_override("cmd+9"), Some("editor.tab.jump.last"));
         assert_eq!(lock_override("cmd+shift+]"), Some("editor.tab.next"));
         assert_eq!(lock_override("cmd+s"), Some("card.save")); // saves while locked
+        assert_eq!(lock_override("ctrl+g"), Some("editor.goToLine"));
         assert_eq!(lock_override("cmd+k"), None);
     }
 

@@ -8,4 +8,5 @@ pub mod explorer;
 pub mod highlight;
 pub mod language;
 pub mod search;
+pub mod transforms;
 pub mod wrap;
