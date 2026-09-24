@@ -27,6 +27,7 @@ mod ime;
 mod input;
 mod keycast;
 mod keycode;
+mod middle_drag;
 mod omnibox;
 mod overlays;
 mod paint;
@@ -395,6 +396,9 @@ fn main() {
                     app
                 });
                 window.focus(&view.read(cx).focus.clone());
+                // gpui's view never answers middle-button drags; now that the
+                // window (and so its view class) exists, teach it to.
+                middle_drag::install();
                 // The idle wake-up: every 16 ms, drain what the backend's
                 // threads sent and draw a frame if anything needs one. A
                 // receiver cannot be awaited on gpui's executor, so a short
