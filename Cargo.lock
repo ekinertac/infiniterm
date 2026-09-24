@@ -3175,6 +3175,9 @@ version = "0.1.0"
 dependencies = [
  "block",
  "cef",
+ "core-graphics 0.24.0",
+ "core-text",
+ "foreign-types",
  "gpui",
  "image",
  "infiniterm-browser",

@@ -31,6 +31,11 @@ image = "0.25"
 smallvec = "1"
 objc = "0.2"
 block = "0.1"
+# Registering the bundled icon font with CoreText (icon_font.rs); both are
+# already in the tree as gpui's own dependencies.
+core-graphics = "0.24"
+core-text = "21"
+foreign-types = "0.5"
 gpui = "0.2.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -224,7 +224,7 @@ impl Metrics {
 /// So a card in Menlo drew empty boxes where every other terminal drew
 /// icons, even on a Mac full of Nerd Fonts (the MacBook Air, 2026-09-24).
 /// WezTerm ships the same font as its fallback for the same reason.
-pub const ICON_FONT: &str = "Symbols Nerd Font Mono";
+pub const ICON_FONT: &str = crate::icon_font::ICON_FONT_POSTSCRIPT;
 
 /// The terminal's font with the icon font behind it, so a glyph the
 /// configured family lacks is looked for there before anywhere else.
