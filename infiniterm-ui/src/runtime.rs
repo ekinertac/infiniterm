@@ -96,14 +96,29 @@ impl AppView {
         self.perform_effects();
     }
 
-    /// Something to draw a theme's colours from. The app bundle's resources
-    /// when running from one; the reference checkout beside this repo while
-    /// developing.
+    /// Something to draw a theme's colours from, in the order a build is
+    /// most likely to have one: where this build ships them, then the
+    /// reference checkout somebody developing has beside this repo.
+    ///
+    /// The 521 schemes live in the archived Tauri app
+    /// (`ekinertac/infiniterm-tauri`), not in this repo, which is why the
+    /// second rung is a path into a sibling checkout rather than an asset
+    /// directory. `tools/bundle.sh` copies them into the Mac bundle from
+    /// there; a Windows release will put them beside the exe, which is the
+    /// first rung's Windows half and is also why a debug build on Windows
+    /// finds nothing until that checkout exists.
     fn bundled_themes() -> Option<PathBuf> {
         let exe = std::env::current_exe().ok()?;
-        let in_bundle = exe.parent()?.parent()?.join("Resources").join("themes");
-        if in_bundle.is_dir() {
-            return Some(in_bundle);
+        let dir = exe.parent()?;
+        let shipped = if cfg!(target_os = "macos") {
+            // infiniterm.app/Contents/MacOS/infiniterm -> Contents/Resources
+            dir.parent()?.join("Resources").join("themes")
+        } else {
+            // An unpacked release folder: the exe with its resources beside it.
+            dir.join("themes")
+        };
+        if shipped.is_dir() {
+            return Some(shipped);
         }
         let dev = home_dir().join("Code/infiniterm-tauri/src-tauri/resources/themes");
         dev.is_dir().then_some(dev)
