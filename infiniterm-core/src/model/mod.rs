@@ -43,7 +43,7 @@ use crate::config::{default_config, Config};
 use crate::grid::{Point, Rect, Size, HALF_CELL};
 use crate::groups::{group_bounds, GROUP_PAD, UNGROUPED};
 use crate::keymap::{default_keymap, Keymap};
-use crate::layout::nearest_free_slot;
+use crate::layout::block_slot;
 use crate::palette_usage::Usage;
 use crate::saved_layout::CardKind;
 use crate::slots::Slot;
@@ -682,21 +682,16 @@ impl Model {
                 h: self.config.cards.height,
             },
             self.view_size,
+            crate::cards::parse_shape(&self.config.cards.shape).unwrap_or(Some(16. / 9.)),
         )
     }
 
-    /// The free slot nearest the active card (`after`), so a new card opens
-    /// beside the one it came from wherever that is; the window's shape
-    /// decides when a row ends (`layout::nearest_free_slot`). `origin`
-    /// moves the grid's anchor (a card joining a group starts from its
-    /// siblings). Only cards on the SAME canvas are in the way.
-    fn next_slot(
-        &self,
-        origin: Option<Point>,
-        avoid: &[Rect],
-        workspace_id: &str,
-        after: Option<Rect>,
-    ) -> Rect {
+    /// The first free slot in block order (`layout::block_slot`): a square
+    /// block grown from the top-left, the same place whatever card is
+    /// focused, holes first. `origin` moves the grid's anchor (a card
+    /// joining a group starts from its siblings). Only cards on the SAME
+    /// canvas are in the way.
+    fn next_slot(&self, origin: Option<Point>, avoid: &[Rect], workspace_id: &str) -> Rect {
         let size = self.default_size();
         let origin = origin.unwrap_or(Point {
             x: HALF_CELL,
@@ -709,12 +704,7 @@ impl Model {
             .map(|c| c.rect)
             .collect();
         taken.extend_from_slice(avoid);
-        let aspect = if self.view_size.h > 0. {
-            self.view_size.w / self.view_size.h
-        } else {
-            1.8
-        };
-        nearest_free_slot(&taken, size, origin, GUTTER, after, aspect)
+        block_slot(&taken, size, origin, GUTTER)
     }
 
     pub fn add_card(&mut self, cwd: &str, opts: NewCard) -> String {
@@ -733,7 +723,7 @@ impl Model {
         let origin = bounding_rect(&siblings).map(|b| Point { x: b.x, y: b.y });
         let rect = opts
             .rect
-            .unwrap_or_else(|| self.next_slot(origin, &opts.avoid, &workspace_id, opts.after));
+            .unwrap_or_else(|| self.next_slot(origin, &opts.avoid, &workspace_id));
         let card = Card {
             id: opts.id.unwrap_or_else(new_id),
             kind: opts.kind,
@@ -1164,8 +1154,6 @@ pub struct NewCard {
     pub zoom: Option<f64>,
     pub command: Option<String>,
     pub line: Option<u64>,
-    /// The card this one is opened from: placement starts just past it.
-    pub after: Option<Rect>,
 }
 
 #[cfg(test)]

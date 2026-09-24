@@ -10,7 +10,7 @@ Native macOS app in Rust: gpui draws the canvas, `alacritty_terminal` parses the
 
 ## What it does
 
-- Real shells in cards on a pan-and-zoom canvas, snapped to a 25 px grid. A new card is 69 x 80 cells, portrait, the same on every display. A new card opens in the free slot nearest the one you were in; rows form from the window's shape, so the canvas stays screen-shaped at any count
+- Real shells in cards on a pan-and-zoom canvas, snapped to a 25 px grid. A new card is 16:9 and sized to fill the window at 100% (`cards.shape`, `cards.width`, `cards.height` change that). New cards fill a square block from the top-left corner, the same place whichever card you were on, so four cards are a 2x2 and the canvas stays screen-shaped at any count
 - Card borders, and only card borders, driven by Claude Code and Pi hooks, in three colours because there are three questions: the agent is working, the agent is blocked on you (it wants permission, or it asked something), or its turn finished. A plain shell has no colour
 - Keyboard-first. Every action is a command; `Cmd` is the app's modifier, and everything else goes to the terminal untouched
 - Card labels and group names take a colour of their own from the terminal theme's palette, derived from the card's id so it never changes

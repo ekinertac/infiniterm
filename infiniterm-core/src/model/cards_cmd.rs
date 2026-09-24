@@ -131,7 +131,6 @@ impl Model {
                     avoid: self.other_frames(group_id.as_deref(), &ws),
                     group_id,
                     workspace_id: Some(ws),
-                    after: from.as_ref().map(|c| c.rect),
                     ..Default::default()
                 },
             );
@@ -161,7 +160,6 @@ impl Model {
                 avoid: self.other_frames(group_id.as_deref(), &ws),
                 group_id,
                 workspace_id: Some(ws),
-                after: from.as_ref().map(|c| c.rect),
                 ..Default::default()
             },
         );
@@ -638,7 +636,7 @@ impl Model {
             .map(|c| c.rect)
             .collect();
         if taken.iter().any(|r| rects_overlap(*r, card.rect)) {
-            card.rect = self.next_slot(None, &[], &ws, Some(card.rect));
+            card.rect = self.next_slot(None, &[], &ws);
         }
         let id = card.id.clone();
         // A group that was dissolved while the card was away is not a group.

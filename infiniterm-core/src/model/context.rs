@@ -232,7 +232,6 @@ impl Model {
             avoid: self.other_frames(group_id.as_deref(), &workspace_id),
             group_id,
             workspace_id: Some(workspace_id),
-            after: from.as_ref().map(|c| c.rect),
             ..Default::default()
         };
         let id = self.add_card(&cwd, opts);

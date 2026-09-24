@@ -110,6 +110,10 @@ pub struct Cards {
     /// from the window (`cards::auto_size`).
     pub width: f64,
     pub height: f64,
+    /// The shape of a card sized from the window: a ratio like "16:9"
+    /// (the default) or "window" for the window's own shape
+    /// (`cards::parse_shape`).
+    pub shape: String,
     /// Whether a card carved out of another (a split) keeps its
     /// directory. A plain new card always starts at `starting_dir`.
     pub inherit_directory: bool,
@@ -247,6 +251,7 @@ pub fn default_config() -> Config {
             // laptop it is a tall sliver. 0 means "size it from the window".
             width: 0.,
             height: 0.,
+            shape: "16:9".into(),
             inherit_directory: true,
         },
         canvas: Canvas {
@@ -427,6 +432,11 @@ pub fn merge_config(raw: &Value) -> Config {
             // 0 stays 0: "from the window", not a card 12 cells wide.
             width: cells(c.get("width"), d.cards.width, 12.),
             height: cells(c.get("height"), d.cards.height, 8.),
+            // A value that is neither "window" nor a ratio keeps the default.
+            shape: match trimmed(c.get("shape"), &d.cards.shape) {
+                s if crate::cards::shape_is_valid(&s) => s,
+                _ => d.cards.shape.clone(),
+            },
             inherit_directory: bool_(c.get("inheritDirectory"), d.cards.inherit_directory),
         },
         canvas: Canvas {

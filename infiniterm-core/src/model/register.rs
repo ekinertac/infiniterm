@@ -210,6 +210,35 @@ mod tests {
         ids
     }
 
+    // Cmd+T lands in block order whatever is focused: focus the first
+    // card, and the fifth still starts column three, the sixth goes under
+    // it; close card 2 and the next Cmd+T fills its hole.
+    #[test]
+    fn new_cards_fill_the_block_whatever_is_focused() {
+        let mut h = Harness::new();
+        for _ in 0..3 {
+            h.run("card.new.terminal");
+        }
+        let first = h.m.cards[0].clone();
+        let (w, hgt) = (first.rect.w, first.rect.h);
+        h.m.set_focus(Some(&first.id));
+        h.run("card.new.terminal");
+        h.run("card.new.terminal");
+        let at = |c: &Card| {
+            (
+                ((c.rect.x - first.rect.x) / w).round() as i64,
+                ((c.rect.y - first.rect.y) / hgt).round() as i64,
+            )
+        };
+        let spots: Vec<(i64, i64)> = h.m.cards.iter().map(at).collect();
+        assert_eq!(spots, [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (2, 1)]);
+        let second = h.m.cards[1].id.clone();
+        h.m.set_focus(Some(&second));
+        h.run("card.close");
+        h.run("card.new.terminal");
+        assert_eq!(at(h.m.cards.last().unwrap()), (1, 0), "the hole first");
+    }
+
     // Cmd+Alt+Arrow across two cards on the way to a third leaves no trace:
     // the switcher's second row is the card you worked in, not one you
     // crossed.

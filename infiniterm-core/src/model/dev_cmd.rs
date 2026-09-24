@@ -41,13 +41,11 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             let ws = m.add_workspace(Some("stress"));
             m.show_workspace(&ws);
             for _ in 0..25 {
-                let after = m.focused().map(|c| c.rect);
                 let start = m.start_dir.clone();
                 let id = m.add_card(
                     &start,
                     NewCard {
                         workspace_id: Some(ws.clone()),
-                        after,
                         ..Default::default()
                     },
                 );
