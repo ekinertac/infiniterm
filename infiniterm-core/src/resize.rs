@@ -52,18 +52,51 @@ pub fn sized(
     }
 }
 
-/// The card grown from its top-left corner into the free space beside
-/// and below it, up to the default size (`card.size.reset`, Cmd+Ctrl+
-/// Enter): a quarter next to a half becomes the other half, not a full
-/// card refused for lack of room. Two ways to grow, width first then
-/// height or the reverse, and the larger area wins; each axis stops a
-/// gutter short of the nearest card in its way, on the grid.
+/// The card grown into the free space around it, up to the default size
+/// (`card.size.reset`, Cmd+Ctrl+Enter): a quarter next to a half becomes
+/// the other half, not a full card refused for lack of room.
+///
+/// From the top-left corner first, so the card stays where it is when it
+/// can. Only when that gains nothing are the other three corners tried,
+/// the largest winning: card #96 on Ekin's canvas was already full height
+/// with a card one gutter to its right, so "right and down" had no room
+/// while everything to its left was empty, and it said so.
 pub fn fill_from_corner(
     rect: Rect,
     default: crate::grid::Size,
     taken: &[Rect],
     gutter: f64,
 ) -> Rect {
+    let top_left = grow_from_top_left(rect, default, taken, gutter);
+    if top_left != rect {
+        return top_left;
+    }
+    // The same rule in a mirrored layout is growth from another corner.
+    let mirror = |r: Rect, fx: bool, fy: bool| Rect {
+        x: if fx { -(r.x + r.w) } else { r.x },
+        y: if fy { -(r.y + r.h) } else { r.y },
+        ..r
+    };
+    [(true, false), (false, true), (true, true)]
+        .into_iter()
+        .map(|(fx, fy)| {
+            let flipped: Vec<Rect> = taken.iter().map(|&t| mirror(t, fx, fy)).collect();
+            mirror(
+                grow_from_top_left(mirror(rect, fx, fy), default, &flipped, gutter),
+                fx,
+                fy,
+            )
+        })
+        .fold(
+            rect,
+            |best, r| if r.w * r.h > best.w * best.h { r } else { best },
+        )
+}
+
+/// Growth from the top-left corner: two ways, width first then height or
+/// the reverse, and the larger area wins; each axis stops a gutter short
+/// of the nearest card in its way, on the grid.
+fn grow_from_top_left(rect: Rect, default: crate::grid::Size, taken: &[Rect], gutter: f64) -> Rect {
     let snap_down = |v: f64| (v / GRID_SIZE).floor() * GRID_SIZE;
     // How wide the card can be at height `h`: to the nearest card that
     // starts right of its left edge and overlaps its rows.
@@ -334,7 +367,20 @@ mod tests {
             w: 850.,
             h: 975.,
         };
-        let boxed = fill_from_corner(quarter, d, &[right_half, below], g);
+        // Boxed on every side: nothing to grow into from any corner.
+        let left = Rect {
+            x: -862.5,
+            y: -2000.,
+            w: 850.,
+            h: 5000.,
+        };
+        let above = Rect {
+            x: -3000.,
+            y: -1012.5,
+            w: 6000.,
+            h: 1000.,
+        };
+        let boxed = fill_from_corner(quarter, d, &[right_half, below, left, above], g);
         assert_eq!(boxed, quarter);
         // Room to the right only, wider than tall: width wins.
         let far_below = Rect {
@@ -345,6 +391,37 @@ mod tests {
         };
         let r = fill_from_corner(quarter, d, &[far_below], g);
         assert_eq!((r.w, r.h), (1725., 2000.));
+    }
+
+    // Card #96 on Ekin's canvas: already full height, a card one gutter to
+    // its right, empty space to its left. Right-and-down has no room, so it
+    // grows left, its top-right corner staying where it was.
+    #[test]
+    fn a_card_with_no_room_right_or_down_grows_the_other_way() {
+        let d = crate::grid::Size { w: 1725., h: 2000. };
+        let g = 25.;
+        let card = Rect {
+            x: -6112.5,
+            y: 2037.5,
+            w: 850.,
+            h: 2000.,
+        };
+        let right = Rect {
+            x: -5237.5,
+            y: 2037.5,
+            w: 850.,
+            h: 1000.,
+        };
+        let right_below = Rect {
+            x: -5237.5,
+            y: 3062.5,
+            w: 850.,
+            h: 975.,
+        };
+        let r = fill_from_corner(card, d, &[right, right_below], g);
+        assert_eq!((r.w, r.h), (1725., 2000.), "{r:?}");
+        assert_eq!(r.x + r.w, card.x + card.w, "the right edge stays put");
+        assert_eq!(r.y, card.y);
     }
 
     // A half from the picker is a half from a split: two of them plus the

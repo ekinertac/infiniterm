@@ -582,25 +582,34 @@ mod tests {
         let half = h.m.card(&kept).unwrap().rect;
         assert!(half.w < original.w);
         h.m.set_focus(Some(&kept));
-        h.run("card.size.reset");
-        assert_eq!(
-            h.m.card(&kept).unwrap().rect,
-            half,
-            "the split partner is in the way"
-        );
-        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("no room")));
-        // Close the partner leaving the space, then it fits.
-        let partner = h.m.cards.iter().find(|c| c.id != kept).unwrap().id.clone();
-        h.m.set_focus(Some(&partner));
-        h.run("card.close.leave");
-        h.m.set_focus(Some(&kept));
+        // The split partner blocks the right, so it grows LEFT into the
+        // free canvas, its right edge where it was (card #96's case).
         let effects = h.run("card.size.reset");
-        assert_eq!(h.m.card(&kept).unwrap().rect, original);
-        assert_eq!(h.m.card(&kept).unwrap().soft_group_id, None);
+        let grown = h.m.card(&kept).unwrap().rect;
+        assert_eq!(grown.w, original.w, "{grown:?}");
+        assert_eq!(grown.x + grown.w, half.x + half.w, "the right edge stays");
         assert!(
             effects.iter().any(|e| matches!(e, Effect::MarkSwap(_))),
             "animated"
         );
+        // Already the default size: nothing to grow into, and it says so.
+        h.run("card.size.reset");
+        assert_eq!(h.m.card(&kept).unwrap().rect, grown);
+        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("no room")));
+
+        // Close the partner leaving its space: the top-left corner grows
+        // back into it, and the card is where it started.
+        let mut h = Harness::new();
+        let kept = h.focused().id.clone();
+        let original = h.focused().rect;
+        h.run("card.split.right");
+        let partner = h.m.cards.iter().find(|c| c.id != kept).unwrap().id.clone();
+        h.m.set_focus(Some(&partner));
+        h.run("card.close.leave");
+        h.m.set_focus(Some(&kept));
+        h.run("card.size.reset");
+        assert_eq!(h.m.card(&kept).unwrap().rect, original);
+        assert_eq!(h.m.card(&kept).unwrap().soft_group_id, None);
     }
 
     // Cmd+Ctrl+S: the file's names, a paste into the focused card, and the
