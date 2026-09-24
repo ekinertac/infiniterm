@@ -52,7 +52,7 @@ use animator::Animator;
 use body::CardBody;
 use chrome::Chrome;
 use gpui::{
-    actions, point, prelude::*, px, size, App, Application, Bounds, FocusHandle, KeyBinding, Menu,
+    actions, prelude::*, px, size, App, Application, Bounds, FocusHandle, KeyBinding, Menu,
     MenuItem, TitlebarOptions, WindowBounds, WindowOptions,
 };
 use infiniterm_core::app::Backend;
@@ -404,14 +404,27 @@ fn main() {
             .unwrap_or_else(|| {
                 WindowBounds::Windowed(Bounds::centered(None, size(px(1600.), px(1000.)), cx))
             });
+        // `appears_transparent` means "we draw the whole title bar" and on
+        // Windows gpui takes it literally: no caption, and therefore no
+        // close, minimise or maximise button, because the traffic lights we
+        // leave room for are macOS's. Windows gets its own caption bar and
+        // our title row sits under it.
+        #[cfg(target_os = "macos")]
+        let titlebar = TitlebarOptions {
+            title: Some("infiniterm".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(gpui::point(px(12.), px(14.))),
+        };
+        #[cfg(not(target_os = "macos"))]
+        let titlebar = TitlebarOptions {
+            title: Some("infiniterm".into()),
+            appears_transparent: false,
+            traffic_light_position: None,
+        };
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(window_bounds),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("infiniterm".into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(12.), px(14.))),
-                }),
+                titlebar: Some(titlebar),
                 ..Default::default()
             },
             |window, cx| {

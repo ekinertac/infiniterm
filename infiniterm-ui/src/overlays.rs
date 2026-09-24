@@ -38,8 +38,13 @@ const TAB_IDLE_DOT_ALPHA: f32 = 0.45;
 /// The working dot is dimmer than the waiting one, so a card still running
 /// doesn't visually shout as loud as one already asking for you.
 const TAB_WORKING_DOT_ALPHA: f32 = 0.6;
-/// The title bar's tabs start clear of the traffic lights.
+/// The title bar's tabs start clear of the traffic lights. Zero where
+/// there are none: on Windows the system draws its own caption above this
+/// row, so the inset would be 84 pixels of nothing at the left of the tabs.
+#[cfg(target_os = "macos")]
 const TITLE_BAR_TRAFFIC_LIGHT_INSET_PX: f32 = 84.;
+#[cfg(not(target_os = "macos"))]
+const TITLE_BAR_TRAFFIC_LIGHT_INSET_PX: f32 = 8.;
 /// Below this the status bar's fps reads as a stall, not a frame rate.
 const LOW_FPS_THRESHOLD: f32 = 50.;
 /// A key cap: the panel's own ground for ink on a near-white cap, which
