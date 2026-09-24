@@ -26,6 +26,23 @@ pub const HAIRLINE_ALPHA: f32 = 0.4;
 /// paid for, and Ekin's fit-all is 6.6 px, where a frame still cost 100
 /// ms and the text still did not read.
 pub const LEGIBLE_FONT_PX: f64 = 7.;
+/// The physical floor under `LEGIBLE_FONT_PX`, in logical pixels. That
+/// constant counts DEVICE pixels, measured on Ekin's 1x 4K: a glyph needs
+/// about seven to be drawn at all. On a 2x Retina screen seven device
+/// pixels are 3.5 logical ones, sharp but physically too small to read, so
+/// there the limit is size, not pixels. First measured by eye on the
+/// 15-inch MacBook Air, 2026-09-24, where the fixed 7 px line turned a
+/// single card to bars at 48% although its 6.7 px text was 13 device
+/// pixels and read fine.
+pub const LEGIBLE_FLOOR_PX: f32 = 4.5;
+
+/// The font size, in the logical pixels gpui paints in, below which text
+/// is drawn as bars: enough device pixels to draw a glyph, and big enough
+/// to read. 7 on a 1x screen, as it always was; 4.5 on Retina.
+pub fn legible_font_px(scale_factor: f32) -> gpui::Pixels {
+    let pixels = LEGIBLE_FONT_PX as f32 / scale_factor.max(1.);
+    gpui::px(pixels.max(LEGIBLE_FLOOR_PX))
+}
 /// While the frame is over its glyph budget (`AppView::crowded`), a frame
 /// asked for by output or the cursor blink is painted at most this often:
 /// the cards are bars then, and nobody reads a wall of bars frame by frame.
@@ -307,6 +324,15 @@ impl Chrome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_legible_line_is_pixels_on_1x_and_size_on_retina() {
+        assert_eq!(legible_font_px(1.), gpui::px(7.), "the 4K is unchanged");
+        assert_eq!(legible_font_px(2.), gpui::px(LEGIBLE_FLOOR_PX));
+        // 6.7 px on the Air (48% of a 14 px font) is text there, bars on 1x.
+        assert!(gpui::px(6.7) >= legible_font_px(2.));
+        assert!(gpui::px(6.7) < legible_font_px(1.));
+    }
 
     /// One full card on Ekin's canvas is about 151 by 87 cells. A pair
     /// still reads; a wall of eight cost 85 to 100 ms a frame in glyphs.

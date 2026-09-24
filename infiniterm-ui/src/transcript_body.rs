@@ -274,7 +274,7 @@ impl CardBody for TranscriptBody {
         let s = |v: f64| px((v * scale) as f32);
         window.paint_quad(fill(bounds, self.colors.background));
         let font_size = px((self.metrics.font_px * scale) as f32);
-        if font_size < px(crate::chrome::LEGIBLE_FONT_PX as f32) {
+        if font_size < crate::chrome::legible_font_px(window.scale_factor()) {
             return;
         }
         let line_h = s(self.line_h());

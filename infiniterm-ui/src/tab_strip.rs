@@ -114,7 +114,7 @@ pub fn paint_strip(
     let close_w = px((TAB_STRIP_CLOSE_WIDTH_RATIO * unit) as f32);
     let close_left = px((close_band_left_ratio() * unit) as f32);
     let f = font(style.font_family.clone());
-    if strip_font >= px(crate::chrome::LEGIBLE_FONT_PX as f32) {
+    if strip_font >= crate::chrome::legible_font_px(window.scale_factor()) {
         let pad = px((TAB_STRIP_LABEL_PAD_RATIO * unit) as f32);
         for (i, label) in labels.iter().enumerate() {
             let tab_bounds = Bounds::new(

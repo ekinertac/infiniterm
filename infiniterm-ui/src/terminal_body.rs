@@ -553,7 +553,7 @@ impl TerminalBody {
     ) {
         window.paint_quad(fill(bounds, gpui::rgb(0x1a0f0f)));
         let size_px = px((ERROR_FONT_PX * scale) as f32);
-        if size_px < px(crate::chrome::LEGIBLE_FONT_PX as f32) {
+        if size_px < crate::chrome::legible_font_px(window.scale_factor()) {
             return;
         }
         let pad = px((ERROR_PAD_PX * scale) as f32);
@@ -595,7 +595,7 @@ impl TerminalBody {
         cx: &mut App,
     ) {
         let size_px = px((ERROR_FONT_PX * scale) as f32);
-        if size_px < px(crate::chrome::LEGIBLE_FONT_PX as f32) {
+        if size_px < crate::chrome::legible_font_px(window.scale_factor()) {
             return;
         }
         let pad = px((ERROR_PAD_PX * scale) as f32);
@@ -683,7 +683,8 @@ impl CardBody for TerminalBody {
         // Too small to read, or too many cells on screen this frame
         // (`crowded`, the glyph budget): skip the glyphs, keep the ground.
         // The corner label names the card instead.
-        let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32) && !self.crowded;
+        let legible =
+            font_size >= crate::chrome::legible_font_px(window.scale_factor()) && !self.crowded;
         // The cursor under the text: solid when focused and on, hollow when
         // the card is not focused, nothing while scrolled into history.
         if frame.cursor_kind != CursorKind::Hidden

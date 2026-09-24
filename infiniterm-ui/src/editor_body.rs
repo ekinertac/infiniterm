@@ -1552,7 +1552,7 @@ impl CardBody for EditorBody {
         let font_size = px((self.metrics.font_px * scale) as f32);
         let line_h = px((self.line_h() * scale) as f32);
         let cell_w = px((self.metrics.cell_w * scale) as f32);
-        let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32);
+        let legible = font_size >= crate::chrome::legible_font_px(window.scale_factor());
         let s = |v: f64| px((v * scale) as f32);
 
         // The tree, beside or above.

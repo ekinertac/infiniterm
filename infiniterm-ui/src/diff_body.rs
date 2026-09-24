@@ -501,7 +501,7 @@ impl CardBody for DiffBody {
         let font_size = px((self.metrics.font_px * scale) as f32);
         let line_h = px((self.line_h() * scale) as f32);
         let cell_w = px((self.metrics.cell_w * scale) as f32);
-        let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32);
+        let legible = font_size >= crate::chrome::legible_font_px(window.scale_factor());
         if self.tree_shown {
             let area = if self.sidebar_top {
                 Bounds::new(bounds.origin, size(bounds.size.width, s(self.sidebar_w)))
