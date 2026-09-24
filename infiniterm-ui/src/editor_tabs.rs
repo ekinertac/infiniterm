@@ -305,11 +305,10 @@ impl CardBody for EditorTabs {
     }
 
     fn insert_text(&mut self, text: &str) {
-        // The emoji panel or an input method's commit is deliberate text:
-        // it locks the card the way the first key does, and goes in.
+        // Text from the emoji panel or an input method reaches only an
+        // editor you are in, like every key.
         if !self.locked {
-            self.locked = true;
-            self.dirty = true;
+            return;
         }
         if let Some(b) = self.active_body() {
             b.insert_text(text);
@@ -321,17 +320,19 @@ impl CardBody for EditorTabs {
     }
 
     fn key(&mut self, k: &Keystroke, now: f64, cx: &mut App) -> BodyAction {
-        // The keyboard's way in: a key without Cmd or Ctrl on a
-        // focused-but-unlocked card locks it and is swallowed. The
-        // browser's rule was a bare Enter; here it is every plain key,
-        // because a letter typed at an unlocked editor went into the file
-        // while the ring said the keyboard was the canvas's, and Ekin found
-        // edits he had not meant to make. Escape stays out of it (nothing
-        // to lock for), and a chord is the app's or the lock table's.
-        let m = &k.modifiers;
-        if !self.locked && !m.platform && !m.control && k.key != "escape" {
-            self.locked = true;
-            self.dirty = true;
+        // An editor you are not IN takes no keys at all. Bare Enter is the
+        // one way in from the keyboard (a click in the text is the mouse's),
+        // the browser card's rule. It used to be every plain key, which
+        // locked and swallowed whatever you pressed; Ekin found that too
+        // loose: an arrowed-to editor is a card on the canvas, drawn dimmed,
+        // and nothing typed at the canvas may end up in a file.
+        // Swallowed rather than ignored, so macOS neither repeats a Cmd key
+        // nor hands a letter to the input context behind our back.
+        if !self.locked {
+            if enters(k) {
+                self.locked = true;
+                self.dirty = true;
+            }
             return BodyAction::None;
         }
         if k.key != "escape" {
@@ -409,8 +410,32 @@ impl CardBody for EditorTabs {
     }
 }
 
+/// Whether a key pressed at an editor you are not in puts you in it: a bare
+/// Enter, and nothing else (`EditorTabs::key`).
+fn enters(k: &Keystroke) -> bool {
+    let m = &k.modifiers;
+    k.key == "enter" && !m.platform && !m.control && !m.alt && !m.shift
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_bare_enter_gets_you_into_an_editor() {
+        let k = |s: &str| gpui::Keystroke::parse(s).unwrap();
+        assert!(enters(&k("enter")));
+        for other in [
+            "a",
+            "cmd-/",
+            "cmd-z",
+            "shift-enter",
+            "cmd-enter",
+            "escape",
+            "space",
+        ] {
+            assert!(!enters(&k(other)), "{other} must not enter the editor");
+        }
+    }
+
     use super::*;
     use gpui::FontWeight;
 

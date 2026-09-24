@@ -54,7 +54,13 @@ pub fn handle_chord(m: &mut Model, r: &CommandRegistry<Model>, chord: &str) -> b
 pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
     let card = m.focused();
     let kind = card.map(|c| c.kind);
+    // An editor keeps its find, comment, undo and select-to-boundary
+    // chords only once you are IN it (locked). Merely focused, with
+    // Cmd+Alt+Arrow, it is a card like any other and the canvas has its
+    // keys: Cmd+/ on an arrowed-to editor commented the highlighted line
+    // instead of opening the shortcuts panel.
     if kind == Some(crate::saved_layout::CardKind::Editor)
+        && card.is_some_and(|c| c.locked)
         && crate::editor_keys::editor_keeps(chord)
     {
         return None;
@@ -1315,11 +1321,17 @@ mod tests {
         assert!(handle_chord(&mut h.m, &h.r, "cmd+t"));
         assert_eq!(h.m.cards.len(), 2);
         assert!(!handle_chord(&mut h.m, &h.r, "cmd+alt+shift+z"), "unbound");
-        // An editor keeps Cmd+F; a terminal gives it to hints.
+        // An editor you are IN keeps Cmd+F; one you only arrowed to is a
+        // card, and Cmd+F letters the cards, as on a terminal.
         h.m.take_effects();
         let id = h.focused().id.clone();
         h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        h.m.card_mut(&id).unwrap().locked = true;
         assert!(!handle_chord(&mut h.m, &h.r, "cmd+f"));
+        h.m.card_mut(&id).unwrap().locked = false;
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+f"));
+        assert!(!h.m.selection.hints.is_empty());
+        h.m.selection.hints.clear();
         h.m.card_mut(&id).unwrap().kind = CardKind::Terminal;
         assert!(handle_chord(&mut h.m, &h.r, "cmd+f"));
         assert!(!h.m.selection.hints.is_empty());
@@ -1337,7 +1349,7 @@ mod tests {
     }
 
     // A locked editor card's Cmd+T is a tab, its Cmd+W the tab; unlocked,
-    // both are the app's. Cmd+F stays the editor's either way, and Ctrl+1
+    // both are the app's. Cmd+F is the editor's while locked, and Ctrl+1
     // the workspace's.
     #[test]
     fn a_locked_editor_card_gets_tab_chords_an_unlocked_one_does_not() {
@@ -1698,6 +1710,26 @@ mod tests {
         );
         // Unknown to every table: the body's.
         assert_eq!(resolve_chord(&h.m, "cmd+shift+alt+ctrl+9"), None);
+    }
+
+    // An arrowed-to editor is a card: the canvas's chords are the canvas's
+    // until you are in it. Locked, the same chords are the editor's.
+    #[test]
+    fn an_editor_keeps_its_chords_only_once_you_are_in_it() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.cards[0].locked = false;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+/").as_deref(),
+            Some("app.shortcuts")
+        );
+        assert_eq!(resolve_chord(&h.m, "cmd+z").as_deref(), Some("layout.undo"));
+        h.m.cards[0].locked = true;
+        assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the comment toggle");
+        assert_eq!(resolve_chord(&h.m, "cmd+z"), None, "the buffer's undo");
+        assert_eq!(resolve_chord(&h.m, "cmd+s").as_deref(), Some("card.save"));
     }
 
     // Ctrl+digit is workspace switching, never a Chrome shortcut, so lock
