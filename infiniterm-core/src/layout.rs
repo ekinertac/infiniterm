@@ -99,7 +99,8 @@ fn aspect_error(b: Rect, aspect: f64) -> f64 {
 
 /// The free slot nearest to `from` (a card's rect; the origin slot when
 /// none), on the grid of default-sized slots anchored at `origin`. Slots
-/// are searched ring by ring; within a ring the closest centre wins, then
+/// are searched ring by ring; within a ring the closest centre wins
+/// (counted in slot steps, so beside and below are equally near), then
 /// the one that keeps the bounding box of `taken` closest to `aspect`
 /// (the window's width over height), then right, below, left, above.
 /// `taken` holds every rect that is in the way, group frames included.
@@ -155,9 +156,14 @@ pub fn nearest_free_slot(
                 if !free(cand) {
                     continue;
                 }
-                let cx = cand.x + cand.w / 2. - centre.x;
-                let cy = cand.y + cand.h / 2. - centre.y;
-                let dist = (cx * cx + cy * cy).sqrt();
+                // In SLOT steps, not pixels: one slot right and one slot
+                // down are both 1.0, so the window's shape decides between
+                // them. In pixels a wide card's slot below was always
+                // nearer than the slot beside it, and Cmd+T on the MacBook
+                // Air stacked every new card in one column (2026-09-24).
+                let ux = (cand.x + cand.w / 2. - centre.x) / step_x;
+                let uy = (cand.y + cand.h / 2. - centre.y) / step_y;
+                let dist = (ux * ux + uy * uy).sqrt();
                 let mut all: Vec<Rect> = taken.to_vec();
                 all.push(cand);
                 let shape = bounding(&all).map_or(0., |b| aspect_error(b, aspect));
@@ -169,7 +175,7 @@ pub fn nearest_free_slot(
                     (0, -1) => 3,
                     _ => 4,
                 };
-                let key = (round(dist), round(shape * 1000.), side);
+                let key = (round(dist * 1000.), round(shape * 1000.), side);
                 if best.as_ref().is_none_or(|(_, k)| key < *k) {
                     best = Some((cand, key));
                 }
@@ -348,6 +354,36 @@ mod tests {
 
     // A card at the end of a row opens the next one below or beside it,
     // never at the start of the next row.
+    // The MacBook Air: wide cards (2500 by 1500) in a wide window. In
+    // pixels the slot below a wide card is always nearer than the one
+    // beside it, so four Cmd+T made one column. Counted in slots, beside
+    // and below are equally near and the window's shape decides: the four
+    // cards make a two by two block, each new one opening from the last.
+    #[test]
+    fn wide_cards_in_a_wide_window_do_not_stack_in_one_column() {
+        let size = Size { w: 2500., h: 1500. };
+        let origin = Point { x: 0., y: 0. };
+        let aspect = 2048. / 1326.;
+        let mut cards = vec![Rect {
+            x: 0.,
+            y: 0.,
+            w: 2500.,
+            h: 1500.,
+        }];
+        for _ in 0..3 {
+            let from = *cards.last().unwrap();
+            let next = nearest_free_slot(&cards, size, origin, 25., Some(from), aspect);
+            cards.push(next);
+        }
+        let mut xs: Vec<i64> = cards.iter().map(|c| c.x as i64).collect();
+        let mut ys: Vec<i64> = cards.iter().map(|c| c.y as i64).collect();
+        xs.sort();
+        xs.dedup();
+        ys.sort();
+        ys.dedup();
+        assert_eq!((xs.len(), ys.len()), (2, 2), "{cards:?}");
+    }
+
     #[test]
     fn nearest_slot_stays_beside_the_source_at_a_row_end() {
         let row: Vec<Rect> = (0..5).map(|i| slot_rect(i, SIZE, ORIGIN, 10., 5)).collect();
