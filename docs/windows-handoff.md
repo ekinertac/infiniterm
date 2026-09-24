@@ -4,8 +4,9 @@ For a Claude session on Ekin's Windows desktop (the "gpu box", RTX 4070 Ti), sta
 
 ## Where this stands
 
-Phases 1 and 2 are done and phase 3's keyboard half with them, on the
-`windows` branch, 2026-09-23 and -24. Every crate builds and passes its
+Phases 1, 2 and 4 are done, and phase 3's keyboard half with them, on the
+`windows` branch, 2026-09-23 and -24. Claude Code runs in a card with its
+hooks reaching the app, and the card names itself. Every crate builds and passes its
 tests on Windows (`infiniterm-ui` with `--no-default-features`), the window
 opens, a card runs PowerShell, and the app chords work: cards, workspaces,
 the omnibox, focus, fit-all.
@@ -74,8 +75,17 @@ What is still open, in the order it will be hit:
   no process label and no cwd tracking. It compiles and answers nothing.
   Toolhelp32 is the replacement, and the cwd is not readable from outside a
   process on Windows at all.
-- Phase 3's remaining half: the canvas and the palette under real use, and
-  whether anything else assumes a Mac. The keyboard is done.
+- Card labels. `inspect.rs` still shells out to `ps` and `lsof`, so a card
+  has no process name and no cwd tracking; every one reads `~` until
+  something renames it. Toolhelp32 replaces `ps`, and the selection rule
+  that matches the Mac's "leader of the foreground process group" is "the
+  direct CHILD of the card's shell" — `claude`'s MCP servers are its own
+  children, not the shell's, so that gives `claude` the way the Mac rule
+  does. A process's cwd is not readable from outside on Windows at all.
+  Worth knowing: `PaneEvent::CwdChanged` exists and NOTHING emits or
+  consumes it on either platform, while oh-my-posh already writes OSC 7, so
+  wiring that would answer the directory on both. That is a change to the
+  Mac too, so it is the Mac session's to make.
 - End-to-end backpressure (`HIGH_WATER`) has no Windows test, for the ConPTY
   reason below. The credit machinery itself is tested directly.
 
@@ -170,6 +180,16 @@ Recommended: a small transport module in core with one API (listen, connect, the
 - **A shell is not listening the moment its pty exists.** PowerShell runs the
   profile first, which took the best part of twenty seconds under a loaded
   test suite here. A line typed before then is gone, not queued.
+- **Claude Code runs a hook through `/usr/bin/bash` on Windows**, where a
+  backslash is an escape character, so an absolute path written into
+  settings.json arrives as `C:UsersPCCode...` and the hook is never found.
+  `ift install-claude-hooks` writes forward slashes there. The only sign is
+  a non-blocking notice inside Claude's own startup output, so it is easy to
+  install a setup that looks fine and never lights a border.
+- **`std::fs::canonicalize` returns the VERBATIM form**, `\?\C:\...`, which
+  turns off path parsing: right for an API call, wrong for a card's cwd, a
+  shell command line and anything a person reads. `paths::canonical` is the
+  one that strips it; three call sites had leaked it before that existed.
 - **A force-killed instance's endpoint answers for a couple of seconds**
   while Windows tears its handles down, so a relaunch inside that window is
   told another infiniterm holds it and exits. Asking the pipe which process
