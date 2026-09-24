@@ -54,6 +54,7 @@ pub mod editor_keys;
 pub mod editor_theme;
 pub mod extensions;
 pub mod files;
+pub mod fullscreen;
 pub mod fuzzy;
 pub mod git;
 pub mod hooks;

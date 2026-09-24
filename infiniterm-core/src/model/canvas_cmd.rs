@@ -224,6 +224,9 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // The label says "keycast" because that is the word typed into the
     // palette to find it; "show pressed shortcuts" alone matched nothing
     // Ekin tried.
+    r.register("app.fullscreen", "App: toggle full screen", |m| {
+        m.effects.push(Effect::ToggleFullScreen)
+    });
     r.register(
         "app.keycast",
         "App: keycast, show pressed shortcuts on screen",

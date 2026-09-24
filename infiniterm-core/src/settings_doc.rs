@@ -275,6 +275,15 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "animation frame loop, so the app never fully idles while it is on.",
         ],
     ),
+    (
+        "ui.fullscreen",
+        &[
+            "What the green button and Cmd+Ctrl+F do. \"cover\" makes the window cover the",
+            "whole screen, the strip beside a MacBook's notch included, with the menu bar",
+            "and Dock hidden until the pointer reaches them. \"native\" is macOS's own",
+            "full screen: a Space of its own, content starting below the notch.",
+        ],
+    ),
 ];
 
 fn doc(key: &str) -> &'static [&'static str] {

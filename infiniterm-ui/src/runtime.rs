@@ -327,6 +327,7 @@ impl AppView {
                 // Needs the Window, which effects do not have; the frame
                 // makes the call. Same shape as the owed-frame flag.
                 Effect::ShowCharacterPalette => self.show_character_palette = true,
+                Effect::ToggleFullScreen => crate::fullscreen::toggle(),
                 Effect::ToggleKeycast => {
                     self.keycast_on = !self.keycast_on;
                     self.keycasts.clear();
@@ -594,7 +595,21 @@ impl AppView {
 
     /// The frame changed: write it half a second after it stops changing.
     pub fn note_window(&mut self, bounds: gpui::WindowBounds, now: f64) {
-        let state = crate::window_state::WindowState::of(bounds);
+        let mut state = crate::window_state::WindowState::of(bounds);
+        // Covering, gpui sees a window the size of the screen. What is kept
+        // is the frame from before, marked full screen, so a quit reopens
+        // covered at launch and un-covering has somewhere to return.
+        if crate::fullscreen::covering() {
+            match &self.window_seen {
+                Some(before) => {
+                    state = crate::window_state::WindowState {
+                        mode: "fullscreen".into(),
+                        ..before.clone()
+                    }
+                }
+                None => return,
+            }
+        }
         if self.window_seen.as_ref() != Some(&state) {
             let first = self.window_seen.is_none();
             self.window_seen = Some(state);

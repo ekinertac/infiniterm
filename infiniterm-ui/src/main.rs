@@ -23,6 +23,7 @@ mod editor_body;
 mod editor_tabs;
 mod editors;
 mod field;
+mod fullscreen;
 mod icon_font;
 mod ime;
 mod input;
@@ -256,6 +257,7 @@ actions!(
         ShowAll,
         Minimize,
         Zoom,
+        ToggleFullScreen,
         ShowCharacterPalette,
         CheckForUpdates
     ]
@@ -334,6 +336,9 @@ fn main() {
                 let _ = cx.update_window(w, |_, window, _| window.zoom_window());
             }
         });
+        // The same message the green button sends, so `ui.fullscreen`
+        // decides for both (fullscreen.rs).
+        cx.on_action(|_: &ToggleFullScreen, _| fullscreen::toggle());
         // The emoji panel, from the menu. The chord is `app.emoji` in the
         // keymap, not a gpui binding here: macOS also handles
         // Cmd+Ctrl+Space system-wide, and with a gpui action bound to it
@@ -374,6 +379,7 @@ fn main() {
                 items: vec![
                     MenuItem::action("Minimize", Minimize),
                     MenuItem::action("Zoom", Zoom),
+                    MenuItem::action("Toggle Full Screen", ToggleFullScreen),
                 ],
             },
         ]);
@@ -386,8 +392,19 @@ fn main() {
         if !icon_font::register() {
             eprintln!("[infiniterm/warn] the bundled icon font is not resolvable; prompt icons may draw as boxes");
         }
+        // A window that quit full screen opens at its old frame and goes
+        // full screen once it exists, through the same toggle as the green
+        // button, so `ui.fullscreen` picks the kind; left to gpui it would
+        // always be a native Space.
+        let mut reopen_full = false;
         let window_bounds = window_state::WindowState::load()
-            .map(|s| s.bounds())
+            .map(|s| match s.bounds() {
+                WindowBounds::Fullscreen(b) => {
+                    reopen_full = true;
+                    WindowBounds::Windowed(b)
+                }
+                b => b,
+            })
             .unwrap_or_else(|| {
                 WindowBounds::Windowed(Bounds::centered(None, size(px(1600.), px(1000.)), cx))
             });
@@ -407,12 +424,14 @@ fn main() {
                     app.cef_running = cef_running;
                     app.reduce_motion = system_reduces_motion();
                     runtime::startup(&mut app);
+                    fullscreen::set_mode(app.model.config.ui.fullscreen);
                     app
                 });
                 window.focus(&view.read(cx).focus.clone());
                 // gpui's view never answers middle-button drags; now that the
                 // window (and so its view class) exists, teach it to.
                 middle_drag::install();
+                fullscreen::install();
                 // The idle wake-up: every 16 ms, drain what the backend's
                 // threads sent and draw a frame if anything needs one. A
                 // receiver cannot be awaited on gpui's executor, so a short
@@ -431,6 +450,9 @@ fn main() {
                         this.schedule_save(now_ms());
                         this.schedule_window_save(now_ms());
                         this.idle_editors(now_ms());
+                        // The green button has no model to ask; an atomic
+                        // store is cheaper than noticing a settings change.
+                        fullscreen::set_mode(this.model.config.ui.fullscreen);
                         if this.needs_frame() {
                             cx.notify();
                         }
@@ -466,5 +488,8 @@ fn main() {
         )
         .expect("a window");
         cx.activate(true);
+        if reopen_full {
+            fullscreen::toggle();
+        }
     });
 }

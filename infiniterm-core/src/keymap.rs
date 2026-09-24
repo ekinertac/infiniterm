@@ -287,6 +287,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "app.emoji",
         "the system's chord, owned by us",
     ),
+    // macOS's own full screen chord, so it reaches `ui.fullscreen` rather
+    // than always meaning the native Space.
+    (
+        "cmd+ctrl+f",
+        "app.fullscreen",
+        "the system's chord; ui.fullscreen says which kind",
+    ),
     (
         "cmd+/",
         "app.shortcuts",

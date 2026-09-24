@@ -251,6 +251,9 @@ pub enum Effect {
     KillAllPanes,
     /// `app.keycast`: the ui owns the overlay and its clock.
     ToggleKeycast,
+    /// `app.fullscreen`: the ui sends `toggleFullScreen:` to the window,
+    /// the message the green button sends, so both take one path.
+    ToggleFullScreen,
     /// `app.update.check`: ask the updater thread for a check now.
     CheckForUpdate,
     /// `app.update.install`: swap in the staged update and restart.

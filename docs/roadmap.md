@@ -25,6 +25,7 @@ The list Ekin asks about. Dates are when something landed. The rule for this fil
 - A browser card no longer grows gpui's sprite atlas without bound, 2026-09-22: `RenderImage::new` mints a fresh id every CEF frame and gpui has no atlas LRU, so nothing but `Window::drop_image` on that exact `Arc` ever freed the tile. `BrowserBody` now tracks the texture it last painted and evicts it the moment a different one replaces it (never the one it just painted, which the same frame's scene still points at), and a closed card's last tile is evicted too, from `reconcile_bodies`. Found by @infiniterm-rust-port spiking a texture path for terminal cards.
 - The omnibox's completion tail no longer overflows the dialog on a long history url, and the tab strip shows `card.protect`'s lock (🔒) beside `#N`, 2026-09-22.
 - A browser card can load more than one extension, 2026-09-22: `--load-extension` takes a comma-separated list, so `process::seed` returns every extension directory (the Claude one, unchanged, plus everything under `browser/extensions/*`). `ift install-extension <path|id|store-url>` puts one there, from a local unpacked directory or a Chrome Web Store id/url looked up in the user's own Chrome profile. Wanted for Dark Reader.
+- Full screen that covers the notch, 2026-09-24: `ui.fullscreen` is `cover` by default, so the green button and Cmd+Ctrl+F fill the whole screen with the title bar beside the notch instead of a black strip; `native` keeps macOS's own. Checked on the Air.
 
 ## v1.5: the other agents
 

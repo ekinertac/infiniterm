@@ -2127,6 +2127,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn full_screen_is_a_command_on_the_systems_chord() {
+        let mut h = Harness::new();
+        let effects = h.run("app.fullscreen");
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::ToggleFullScreen)));
+        assert_eq!(
+            crate::keymap::default_keymap()
+                .iter()
+                .find(|(_, id)| id == "app.fullscreen")
+                .map(|(c, _)| c.as_str()),
+            Some("cmd+ctrl+f")
+        );
+    }
+
     // Switching back to a workspace lands on the card you were working
     // in there, not on whichever card was made first.
     #[test]

@@ -192,6 +192,19 @@ pub struct Ui {
     /// of it is to be there when something stutters; it holds a permanent
     /// frame loop while on.
     pub show_fps: bool,
+    /// What the green button and `app.fullscreen` do: macOS's own full
+    /// screen, or the window over the whole screen, notch strip
+    /// included (`fullscreen.rs`).
+    pub fullscreen: FullscreenMode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FullscreenMode {
+    /// macOS's full screen: its own Space, content below the notch.
+    Native,
+    /// The window covers the whole screen, beside the notch too.
+    Cover,
 }
 
 /// Page zoom limits for browser cards, the range Safari allows.
@@ -260,6 +273,9 @@ pub fn default_config() -> Config {
             status_bar_size: 11.,
             animations: true,
             show_fps: true,
+            // Native full screen on a notched MacBook leaves the strip
+            // beside the camera black; cover puts the title bar there.
+            fullscreen: FullscreenMode::Cover,
         },
     }
 }
@@ -473,6 +489,14 @@ pub fn merge_config(raw: &Value) -> Config {
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),
             animations: bool_(u.get("animations"), d.ui.animations),
             show_fps: bool_(u.get("showFps"), d.ui.show_fps),
+            fullscreen: one(
+                u.get("fullscreen"),
+                d.ui.fullscreen,
+                &[
+                    ("native", FullscreenMode::Native),
+                    ("cover", FullscreenMode::Cover),
+                ],
+            ),
         },
     }
 }
@@ -550,6 +574,19 @@ mod tests {
                 .terminal
                 .backend,
             default_config().terminal.backend
+        );
+    }
+
+    #[test]
+    fn full_screen_is_native_or_cover_and_cover_by_default() {
+        assert_eq!(default_config().ui.fullscreen, FullscreenMode::Cover);
+        assert_eq!(
+            m(json!({"ui.fullscreen": "native"})).ui.fullscreen,
+            FullscreenMode::Native
+        );
+        assert_eq!(
+            m(json!({"ui": {"fullscreen": "sideways"}})).ui.fullscreen,
+            FullscreenMode::Cover
         );
     }
 
