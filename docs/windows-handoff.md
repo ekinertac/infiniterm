@@ -4,12 +4,24 @@ For a Claude session on Ekin's Windows desktop (the "gpu box", RTX 4070 Ti), sta
 
 ## Where this stands
 
-Phases 1 and 2 are done, on the `windows` branch, 2026-09-23 and -24. Every
-crate builds and passes its tests on Windows (`infiniterm-ui` with
-`--no-default-features`), the window opens, and a card runs PowerShell:
-`dir` typed into it draws its listing, and a window resize reflows the grid.
-Phase 3 is next, and its first item is the modifier decision under "Keys"
-below, which is Ekin's.
+Phases 1 and 2 are done and phase 3's keyboard half with them, on the
+`windows` branch, 2026-09-23 and -24. Every crate builds and passes its
+tests on Windows (`infiniterm-ui` with `--no-default-features`), the window
+opens, a card runs PowerShell, and the app chords work: cards, workspaces,
+the omnibox, focus, fit-all.
+
+**The modifier question under "Keys" below is answered.** Windows gets its
+Cmd from the SIDE of Ctrl: left is the app's, right is the terminal's, so a
+keyboard remapped into Mac order (Ekin's is; the key where Cmd sits emits
+left Ctrl and Caps Lock emits right Ctrl) puts all 79 bindings under the
+finger that already reaches for them, and Caps Lock plus C is still a real
+`^C`. The keymap needs no Windows edition at all. It is a setting,
+`keyboard.commandModifier`, with `win` as the alternative for an un-remapped
+machine. Rejected: the Win key alone (the OS takes Win+L, D, E, R, S, T, the
+digits, the arrows and =, and Win+L locks the box), Ctrl+Alt (that is AltGr,
+which is how Turkish Q types `{ [ ] } \ @`), bare Ctrl (the carve-out list
+differs per program in a card), and Ctrl+Shift (collides with itself on the
+eighteen bindings that already carry Shift).
 
 There IS a small GUI driver now, `tools/drive/win/`: `run.ps1` launches on a
 scratch data dir, `type.ps1` types into the window (refusing unless
@@ -62,10 +74,8 @@ What is still open, in the order it will be hit:
   no process label and no cwd tracking. It compiles and answers nothing.
   Toolhelp32 is the replacement, and the cwd is not readable from outside a
   process on Windows at all.
-- The modifier question under "Keys" below is untouched and is phase 3's
-  first decision. `keycode.rs` answers `None` on Windows, so `keymap.rs`
-  falls back to gpui's keystroke; whether that survives a Turkish Q keyboard
-  there has not been tested.
+- Phase 3's remaining half: the canvas and the palette under real use, and
+  whether anything else assumes a Mac. The keyboard is done.
 - End-to-end backpressure (`HIGH_WATER`) has no Windows test, for the ConPTY
   reason below. The credit machinery itself is tested directly.
 
@@ -160,6 +170,21 @@ Recommended: a small transport module in core with one API (listen, connect, the
 - **A shell is not listening the moment its pty exists.** PowerShell runs the
   profile first, which took the best part of twenty seconds under a loaded
   test suite here. A line typed before then is gone, not queued.
+- **A force-killed instance's endpoint answers for a couple of seconds**
+  while Windows tears its handles down, so a relaunch inside that window is
+  told another infiniterm holds it and exits. Asking the pipe which process
+  serves it (`GetNamedPipeServerProcessId`) and whether that process lives
+  looks like the fix and is not: while a dying instance's handle lingers
+  beside a live one's, a client lands on either, and landing on the dead one
+  lets a SECOND instance start on the same save file. It was tried, it did
+  exactly that, and it was withdrawn. `tools/drive/win/run.ps1` waits the
+  window out instead.
+- **gpui names a Windows key through the current layout** and hands back the
+  SHIFTED character with shift cleared for punctuation and digits, which is
+  the macOS trap word for word. `keycode.rs`'s Windows half takes the SCAN
+  CODE from a thread-local `WH_KEYBOARD` hook instead. Thread-local and not
+  `WH_KEYBOARD_LL` on purpose: the low-level hook is global and would have
+  this process watching every key typed in every other application.
 - **tree-sitter-scss 1.0.0 cannot build on MSVC**: its build script hands cc
   an unconditional `-Wno-unused-parameter` and cl refuses it (D8021). It is
   the crate's only release. It is `cfg(not(windows))` now.
