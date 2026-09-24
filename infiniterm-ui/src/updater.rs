@@ -64,7 +64,20 @@ pub fn clean(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The build number this binary was made at.
+///
+/// Windows has no bundle to read it back out of, so `tools/dist.ps1` stamps
+/// it at COMPILE time and a dev build simply has none. The status bar
+/// already draws nothing when there is none; that line exists so a friend's
+/// bug report says which build they are on, and a dev build is not one
+/// anybody reports.
+#[cfg(windows)]
+pub fn build_of(_bundle: &Path) -> Option<u64> {
+    option_env!("INFINITERM_BUILD").and_then(|b| b.trim().parse().ok())
+}
+
 /// The build number of a bundle, from its Info.plist.
+#[cfg(not(windows))]
 pub fn build_of(bundle: &Path) -> Option<u64> {
     let out = Command::new("/usr/libexec/PlistBuddy")
         .arg("-c")
