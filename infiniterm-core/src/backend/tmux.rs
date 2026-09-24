@@ -516,16 +516,16 @@ impl TmuxBackend {
                 "set-environment -t {} {} {}",
                 session_name(),
                 key,
-                crate::drop::shell_quote(&value)
+                crate::drop::posix_quote(&value)
             ));
         }
         let start = cmd
-            .map(|c| format!(" {}", crate::drop::shell_quote(c)))
+            .map(|c| format!(" {}", crate::drop::posix_quote(c)))
             .unwrap_or_default();
         self.command_expecting(
             &format!(
                 "new-window -d -P -F '#{{window_id}} #{{pane_id}}' -c {}{}",
-                crate::drop::shell_quote(&cwd.to_string_lossy()),
+                crate::drop::posix_quote(&cwd.to_string_lossy()),
                 start
             ),
             Expect::Ids(id),

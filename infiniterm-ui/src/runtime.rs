@@ -948,7 +948,7 @@ fn relaunch_after_exit() -> Result<(), String> {
     let script = format!(
         "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; exec open {bundle}",
         pid = std::process::id(),
-        bundle = infiniterm_core::drop::shell_quote(&bundle.to_string_lossy()),
+        bundle = infiniterm_core::drop::posix_quote(&bundle.to_string_lossy()),
     );
     std::process::Command::new("/bin/sh")
         .arg("-c")

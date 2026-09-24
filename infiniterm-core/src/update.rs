@@ -104,7 +104,7 @@ pub fn applies_to(bundle: &Path, home: &Path) -> bool {
 /// the second move fails the old one goes back, so a failed update is a
 /// plain restart rather than no app at all.
 pub fn swap_script(pid: u32, bundle: &str, staged: &str, aside: &str) -> String {
-    let q = crate::drop::shell_quote;
+    let q = crate::drop::posix_quote;
     let (b, s, a) = (q(bundle), q(staged), q(aside));
     format!(
         "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; \

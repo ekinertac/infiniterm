@@ -932,7 +932,18 @@ impl AppView {
             Hit::CardBody { id, .. } | Hit::CardEdge { id, .. } => self.model.card(id).cloned(),
             _ => None,
         };
-        match drop_plan(&items, card.as_ref().map(|c| c.kind)) {
+        // The card's own shell, not this platform's idea of one: quoting a
+        // dropped path is the whole security story of the drop, and POSIX
+        // quoting does not survive PowerShell. `terminal.shell` when it is
+        // set, else whatever a new card would start.
+        let shell = infiniterm_core::shell_cmd::kind_of(
+            Some(self.model.config.terminal.shell.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(infiniterm_core::shell_cmd::default_shell)
+                .as_str(),
+        );
+        match drop_plan(&items, card.as_ref().map(|c| c.kind), shell) {
             DropAction::Type(text) => {
                 let Some(card) = card else { return };
                 // The drop focuses the card it landed on: the text has gone
