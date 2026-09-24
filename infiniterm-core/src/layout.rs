@@ -118,9 +118,75 @@ pub fn block_slot(taken: &[Rect], size: Size, origin: Point, gutter: f64) -> Rec
         .unwrap_or_else(|| slot(block_order(0)))
 }
 
+/// Where `canvas.tidy` puts cards of these sizes, in this order: the
+/// same square block new cards fill (`block_order`), starting at
+/// `origin`, each card keeping its size. A column is as wide as its
+/// widest card and a row as tall as its tallest, so mixed sizes never
+/// overlap; a card smaller than its cell sits in the cell's top-left.
+pub fn tidy(sizes: &[Size], origin: Point, gutter: f64) -> Vec<Rect> {
+    let cells: Vec<(usize, usize)> = (0..sizes.len())
+        .map(|i| {
+            let (c, r) = block_order(i);
+            (c as usize, r as usize)
+        })
+        .collect();
+    let cols = cells.iter().map(|&(c, _)| c + 1).max().unwrap_or(0);
+    let rows = cells.iter().map(|&(_, r)| r + 1).max().unwrap_or(0);
+    let mut widths = vec![0f64; cols];
+    let mut heights = vec![0f64; rows];
+    for (s, &(c, r)) in sizes.iter().zip(&cells) {
+        widths[c] = widths[c].max(s.w);
+        heights[r] = heights[r].max(s.h);
+    }
+    let start =
+        |lengths: &[f64], i: usize| -> f64 { lengths[..i].iter().map(|l| l + gutter).sum() };
+    sizes
+        .iter()
+        .zip(&cells)
+        .map(|(s, &(c, r))| Rect {
+            x: origin.x + start(&widths, c),
+            y: origin.y + start(&heights, r),
+            w: s.w,
+            h: s.h,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tidy_packs_mixed_sizes_into_the_block_without_overlap() {
+        let s = |w, h| Size { w, h };
+        let sizes = [
+            s(200., 100.),
+            s(100., 100.),
+            s(100., 300.),
+            s(50., 50.),
+            s(80., 80.),
+        ];
+        let got = tidy(&sizes, Point { x: 25., y: 25. }, 10.);
+        // Column 0 is 200 wide (card 1), row 1 is 300 tall (card 3).
+        let at: Vec<(f64, f64)> = got.iter().map(|r| (r.x, r.y)).collect();
+        assert_eq!(
+            at,
+            [
+                (25., 25.),
+                (235., 25.),
+                (25., 135.),
+                (235., 135.),
+                (345., 25.)
+            ]
+        );
+        for (i, a) in got.iter().enumerate() {
+            assert_eq!((a.w, a.h), (sizes[i].w, sizes[i].h), "sizes kept");
+            for b in &got[i + 1..] {
+                assert!(!rects_overlap(*a, *b), "{a:?} {b:?}");
+            }
+        }
+        assert!(tidy(&[], Point { x: 0., y: 0. }, 10.).is_empty());
+    }
 
     #[test]
     fn block_order_grows_a_square_from_the_top_left() {

@@ -161,6 +161,45 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.apply_viewport(next);
         }
     });
+    // Cards dragged about by hand, back into the block new cards fill, in
+    // the order you read them now, each keeping its size; then fit all so
+    // you see the result. Cmd+Z puts them back.
+    r.register("canvas.tidy", "Canvas: tidy the cards into a block", |m| {
+        let here: Vec<(String, crate::grid::Rect)> =
+            m.here().iter().map(|c| (c.id.clone(), c.rect)).collect();
+        if here.len() < 2 {
+            return;
+        }
+        let rects: Vec<_> = here.iter().map(|(_, r)| *r).collect();
+        let order = crate::workspaces::reading_order(&rects);
+        let origin = Point {
+            x: rects.iter().map(|r| r.x).fold(f64::INFINITY, f64::min),
+            y: rects.iter().map(|r| r.y).fold(f64::INFINITY, f64::min),
+        };
+        let sizes: Vec<_> = order
+            .iter()
+            .map(|&i| crate::grid::Size {
+                w: rects[i].w,
+                h: rects[i].h,
+            })
+            .collect();
+        let placed = crate::layout::tidy(&sizes, origin, crate::cards::GUTTER);
+        m.remember_layout();
+        let ids: Vec<String> = here.iter().map(|(id, _)| id.clone()).collect();
+        m.mark_swap(&ids);
+        for (&i, rect) in order.iter().zip(placed) {
+            if let Some(c) = m.card_mut(&here[i].0) {
+                c.rect = rect;
+                c.soft_group_id = None;
+            }
+        }
+        m.dirty_layout = true;
+        let all: Vec<_> = m.here().iter().map(|c| c.rect).collect();
+        if let Some(bounds) = bounding_rect(&all) {
+            let next = fit_rect(bounds, m.view_size);
+            m.apply_viewport(next);
+        }
+    });
     // Toggle: the key that opened it is the obvious one to press to dismiss it.
     r.register("app.palette", "Run a command", |m| {
         if m.palette_open() {

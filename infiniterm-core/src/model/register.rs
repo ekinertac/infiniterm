@@ -1383,6 +1383,38 @@ mod tests {
         assert_eq!(h.focused().agent, crate::agent_state::AgentState::None);
     }
 
+    // Four cards dragged all over the canvas come back as a 2x2 in the
+    // order you read them, sizes kept, and Cmd+Z scatters them again.
+    #[test]
+    fn tidy_puts_scattered_cards_back_into_the_block() {
+        let mut h = Harness::new();
+        for _ in 0..3 {
+            h.run("card.new.terminal");
+        }
+        let scattered = [(9000., 40.), (25., 5000.), (4000., 4000.), (25., 25.)];
+        for (c, (x, y)) in h.m.cards.iter_mut().zip(scattered) {
+            c.rect.x = x;
+            c.rect.y = y;
+        }
+        let before: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+        let effects = h.run("canvas.tidy");
+        assert!(
+            effects.iter().any(|e| matches!(e, Effect::MarkSwap(_))),
+            "glides"
+        );
+        let r: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+        let (w, g) = (r[0].w, crate::cards::GUTTER);
+        // Reading order was card 3 (top-left), 0, 2, 1.
+        assert_eq!((r[3].x, r[3].y), (25., 25.));
+        assert_eq!((r[0].x, r[0].y), (25. + w + g, 25.));
+        assert_eq!((r[2].x, r[2].y), (25., 25. + r[0].h + g));
+        assert_eq!((r[1].x, r[1].y), (25. + w + g, 25. + r[0].h + g));
+        assert!(r.iter().zip(&before).all(|(a, b)| (a.w, a.h) == (b.w, b.h)));
+        h.run("layout.undo");
+        let back: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+        assert_eq!(back, before);
+    }
+
     // A shell command that runs long colours its card from the marks in
     // its output: working after five seconds, done when it ends well, and
     // a quiet build is not taken for a crashed agent by the sweep. A
