@@ -164,7 +164,7 @@ impl Model {
                 let mut chords: Vec<(&str, String)> = vec![];
                 for (chord, id) in &self.keymap {
                     if !chords.iter().any(|(i, _)| i == id) {
-                        chords.push((id, format_chord(chord)));
+                        chords.push((id, format_chord(chord, self.modifier_labels())));
                     }
                 }
                 let mut items: Vec<PaletteItem> = command_labels
@@ -233,7 +233,7 @@ impl Model {
                     self.keymap
                         .iter()
                         .find(|(_, i)| i == id)
-                        .map(|(c, _)| format_chord(c))
+                        .map(|(c, _)| format_chord(c, self.modifier_labels()))
                 };
                 vec![
                     (

@@ -980,8 +980,14 @@ impl AppView {
             .map(|(i, l)| (i.as_str(), l.as_str()))
             .collect();
         let query = self.shortcuts_field.text.clone();
-        let sections =
-            filter_shortcuts(&shortcut_sections(&self.model.keymap, &labels_ref), &query);
+        let sections = filter_shortcuts(
+            &shortcut_sections(
+                &self.model.keymap,
+                &labels_ref,
+                self.model.modifier_labels(),
+            ),
+            &query,
+        );
         let key_box = |key: &str| key_cap_box(key, chrome, ui);
         let mut list = div()
             .id("shortcuts-list")

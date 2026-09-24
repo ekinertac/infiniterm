@@ -62,7 +62,9 @@ impl Model {
                             .keymap
                             .iter()
                             .find(|(_, cid)| cid == id)
-                            .map(|(chord, _)| crate::shortcuts::format_chord(chord))
+                            .map(|(chord, _)| {
+                                crate::shortcuts::format_chord(chord, self.modifier_labels())
+                            })
                             .unwrap_or_default();
                         (id.to_string(), label.to_string(), chord)
                     })

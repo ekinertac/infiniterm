@@ -2035,7 +2035,12 @@ mod tests {
         let items = h.m.palette_items(Source::Commands, &labels);
         assert!(items.iter().all(|i| i.id != "app.palette"));
         let close = items.iter().find(|i| i.id == "card.close").unwrap();
-        assert_eq!(close.hint.as_deref(), Some("Cmd W"));
+        // Spelled through the same labels the app would use, because what
+        // the app's modifier is CALLED is per platform and per setting
+        // (`shortcuts::ModifierLabels`); the question here is that the hint
+        // is the chord for this command, not what that key is named.
+        let expected = crate::shortcuts::format_chord("cmd+w", h.m.modifier_labels());
+        assert_eq!(close.hint.as_deref(), Some(expected.as_str()));
     }
 
     // The emoji panel has one owner: our chord, our command, one effect

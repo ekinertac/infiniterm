@@ -11,6 +11,11 @@
 //! matching the order a chord is written in, so the panel and the keymap
 //! read the same way. One box per key and no `+` between them; prose keeps
 //! the `+`. The shortcut panel element renders the sections.
+//!
+//! What the two held keys are CALLED is `ModifierLabels`, because a panel
+//! that says Cmd on a keyboard with no Cmd key is telling you to press
+//! something that is not there.
+use crate::config::CommandModifier;
 use crate::fuzzy::fuzzy_match;
 use crate::keymap::Keymap;
 
@@ -28,12 +33,56 @@ const SECTIONS: [(&str, &str); 7] = [
 
 const OTHER: &str = "other";
 
-const MODIFIERS: [(&str, &str); 4] = [
-    ("cmd", "Cmd"),
-    ("ctrl", "Ctrl"),
-    ("alt", "Alt"),
-    ("shift", "Shift"),
-];
+/// What to call the two modifiers whose keys differ per platform.
+///
+/// `cmd` and `ctrl` are ROLES, not keys (see `keymap::modifier_roles`): the
+/// app's modifier and the terminal's. On macOS they are the keys of those
+/// names. On Windows they are whichever keys `keyboard.commandModifier`
+/// put them on, and naming them "Cmd" there would point at a key the
+/// keyboard does not have.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModifierLabels {
+    pub cmd: &'static str,
+    pub ctrl: &'static str,
+}
+
+impl ModifierLabels {
+    /// What every chord in this file's tests is written against, so they
+    /// read the same on either platform.
+    pub const MAC: ModifierLabels = ModifierLabels {
+        cmd: "Cmd",
+        ctrl: "Ctrl",
+    };
+
+    /// The labels this build and this setting actually mean. `choice` is
+    /// read on Windows only; macOS has both keys and ignores it.
+    pub fn new(choice: CommandModifier) -> ModifierLabels {
+        #[cfg(not(windows))]
+        {
+            let _ = choice;
+            ModifierLabels::MAC
+        }
+        #[cfg(windows)]
+        match choice {
+            // Both roles live on Ctrl, so the SIDE is the whole label. Said
+            // as the key is, not as the role: someone reading the panel is
+            // looking for a key to press.
+            // No space in either: the separator between key boxes IS a
+            // space, so "L Ctrl" would draw as two caps, L and Ctrl. The
+            // test below holds that.
+            CommandModifier::LeftControl => ModifierLabels {
+                cmd: "LCtrl",
+                ctrl: "RCtrl",
+            },
+            CommandModifier::Win => ModifierLabels {
+                cmd: "Win",
+                ctrl: "Ctrl",
+            },
+        }
+    }
+}
+
+const ALWAYS: [(&str, &str); 2] = [("alt", "Alt"), ("shift", "Shift")];
 
 const KEYS: [(&str, &str); 9] = [
     ("arrowleft", "Left"),
@@ -50,11 +99,20 @@ const KEYS: [(&str, &str); 9] = [
 /// A chord as separate keys: `cmd+shift+]` gives `["Cmd", "Shift", "]"]`,
 /// one per drawn box. The key is the LAST part, so a chord ending in `+`
 /// (the literal plus key) still finds it.
-pub fn chord_keys(chord: &str) -> Vec<String> {
+pub fn chord_keys(chord: &str, labels: ModifierLabels) -> Vec<String> {
     let parts: Vec<&str> = chord.split('+').collect();
     let (held, key) = parts.split_at(parts.len() - 1);
     let key = key[0];
-    let mut out: Vec<String> = MODIFIERS
+    // The order a chord is written in, which is also the order the panel
+    // reads: the app's modifier first, then the terminal's, then the two
+    // that are the same key everywhere.
+    let modifiers = [
+        ("cmd", labels.cmd),
+        ("ctrl", labels.ctrl),
+        ALWAYS[0],
+        ALWAYS[1],
+    ];
+    let mut out: Vec<String> = modifiers
         .iter()
         .filter(|(name, _)| held.contains(name))
         .map(|(_, label)| label.to_string())
@@ -72,8 +130,8 @@ pub fn chord_keys(chord: &str) -> Vec<String> {
 pub const CHORD_SEPARATOR: &str = " ";
 
 /// The same chord as one string, for the palette's hint field.
-pub fn format_chord(chord: &str) -> String {
-    chord_keys(chord).join(CHORD_SEPARATOR)
+pub fn format_chord(chord: &str, labels: ModifierLabels) -> String {
+    chord_keys(chord, labels).join(CHORD_SEPARATOR)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,7 +153,11 @@ pub struct ShortcutSection {
 /// Commands keep REGISTRATION order within a section (roughly how the
 /// feature reads: new, close, move); alphabetical would interleave them.
 /// Empty sections are dropped. `commands` are (id, label) pairs.
-pub fn shortcut_sections(bindings: &Keymap, commands: &[(&str, &str)]) -> Vec<ShortcutSection> {
+pub fn shortcut_sections(
+    bindings: &Keymap,
+    commands: &[(&str, &str)],
+    labels: ModifierLabels,
+) -> Vec<ShortcutSection> {
     let mut sections: Vec<ShortcutSection> = SECTIONS
         .iter()
         .map(|(_, title)| title)
@@ -113,7 +175,7 @@ pub fn shortcut_sections(bindings: &Keymap, commands: &[(&str, &str)]) -> Vec<Sh
         let chords = bindings
             .iter()
             .filter(|(_, bound)| bound == id)
-            .map(|(chord, _)| format_chord(chord))
+            .map(|(chord, _)| format_chord(chord, labels))
             .collect();
         let section = sections
             .iter_mut()
@@ -170,6 +232,26 @@ pub fn filter_shortcuts(sections: &[ShortcutSection], query: &str) -> Vec<Shortc
 
 #[cfg(test)]
 mod tests {
+    use super::ModifierLabels as ML;
+    /// Every expectation here is written in the Mac spelling, so the tests
+    /// read the same on a platform whose keys are called something else.
+    const M: ML = ML::MAC;
+
+    // `CHORD_SEPARATOR` is a space and the ui splits key boxes on it, so a
+    // label with a space in it silently becomes two keys. "L Ctrl" did
+    // exactly that, and the panel told you to press four keys to close a
+    // card.
+    #[test]
+    fn no_modifier_label_contains_the_separator() {
+        use crate::config::CommandModifier;
+        for choice in [CommandModifier::LeftControl, CommandModifier::Win] {
+            let l = ModifierLabels::new(choice);
+            for label in [l.cmd, l.ctrl, super::ALWAYS[0].1, super::ALWAYS[1].1] {
+                assert!(!label.contains(CHORD_SEPARATOR), "{label:?} has a space");
+                assert!(!label.is_empty());
+            }
+        }
+    }
     use super::*;
     use crate::keymap::DEFAULT_KEYMAP;
 
@@ -184,22 +266,22 @@ mod tests {
     // would make the panel hard to compare against the keymap being edited.
     #[test]
     fn format_chord_puts_cmd_first_matching_how_a_chord_is_written() {
-        assert_eq!(format_chord("cmd+shift+g"), "Cmd Shift G");
-        assert_eq!(format_chord("cmd+alt+t"), "Cmd Alt T");
-        assert_eq!(format_chord("cmd+alt+arrowleft"), "Cmd Alt Left");
+        assert_eq!(format_chord("cmd+shift+g", M), "Cmd Shift G");
+        assert_eq!(format_chord("cmd+alt+t", M), "Cmd Alt T");
+        assert_eq!(format_chord("cmd+alt+arrowleft", M), "Cmd Alt Left");
     }
 
     #[test]
     fn format_chord_names_the_keys_that_have_no_printable_character() {
-        assert_eq!(format_chord("cmd+shift+enter"), "Cmd Shift Enter");
-        assert_eq!(format_chord("cmd+arrowdown"), "Cmd Down");
+        assert_eq!(format_chord("cmd+shift+enter", M), "Cmd Shift Enter");
+        assert_eq!(format_chord("cmd+arrowdown", M), "Cmd Down");
     }
 
     #[test]
     fn format_chord_keeps_punctuation_and_digits_as_they_are_labelled() {
-        assert_eq!(format_chord("cmd+shift+]"), "Cmd Shift ]");
-        assert_eq!(format_chord("cmd+,"), "Cmd ,");
-        assert_eq!(format_chord("cmd+3"), "Cmd 3");
+        assert_eq!(format_chord("cmd+shift+]", M), "Cmd Shift ]");
+        assert_eq!(format_chord("cmd+,", M), "Cmd ,");
+        assert_eq!(format_chord("cmd+3", M), "Cmd 3");
     }
 
     #[test]
@@ -210,6 +292,7 @@ mod tests {
                 ("card.new.terminal", "card.new.terminal"),
                 ("group.new", "group.new"),
             ],
+            M,
         );
         assert_eq!(
             sections
@@ -222,7 +305,7 @@ mod tests {
 
     #[test]
     fn a_command_matching_no_prefix_still_appears() {
-        let sections = shortcut_sections(&km(&[]), &[("weird.thing", "weird.thing")]);
+        let sections = shortcut_sections(&km(&[]), &[("weird.thing", "weird.thing")], M);
         assert_eq!(
             sections,
             [ShortcutSection {
@@ -245,6 +328,7 @@ mod tests {
                 ("cmd+alt+j", "focus.move.left"),
             ]),
             &[("focus.move.left", "focus.move.left")],
+            M,
         );
         assert_eq!(
             sections[0].shortcuts[0].chords,
@@ -255,7 +339,7 @@ mod tests {
     // The mirror of unregistered_bindings: this catches a command with no chord.
     #[test]
     fn an_unbound_command_is_listed_with_no_chords() {
-        let sections = shortcut_sections(&km(&[]), &[("card.close", "Close active card")]);
+        let sections = shortcut_sections(&km(&[]), &[("card.close", "Close active card")], M);
         assert_eq!(
             sections[0].shortcuts[0],
             Shortcut {
@@ -269,7 +353,7 @@ mod tests {
     #[test]
     fn a_section_with_no_commands_is_dropped() {
         assert_eq!(
-            shortcut_sections(&km(&[]), &[("card.close", "card.close")]).len(),
+            shortcut_sections(&km(&[]), &[("card.close", "card.close")], M).len(),
             1
         );
     }
@@ -278,24 +362,24 @@ mod tests {
     #[test]
     fn every_default_binding_formats_to_something() {
         for (chord, _, _) in DEFAULT_KEYMAP {
-            assert!(!format_chord(chord).is_empty(), "{chord}");
+            assert!(!format_chord(chord, M).is_empty(), "{chord}");
         }
     }
 
     #[test]
     fn chord_keys_gives_each_key_separately_in_macos_order() {
-        assert_eq!(chord_keys("cmd+shift+g"), ["Cmd", "Shift", "G"]);
-        assert_eq!(chord_keys("cmd+arrowleft"), ["Cmd", "Left"]);
+        assert_eq!(chord_keys("cmd+shift+g", M), ["Cmd", "Shift", "G"]);
+        assert_eq!(chord_keys("cmd+arrowleft", M), ["Cmd", "Left"]);
     }
 
     // The palette's hint is a plain string and splits back apart on the separator.
     #[test]
     fn format_chord_round_trips_through_a_split() {
-        let split: Vec<String> = format_chord("cmd+alt+arrowleft")
+        let split: Vec<String> = format_chord("cmd+alt+arrowleft", M)
             .split(' ')
             .map(String::from)
             .collect();
-        assert_eq!(split, chord_keys("cmd+alt+arrowleft"));
+        assert_eq!(split, chord_keys("cmd+alt+arrowleft", M));
     }
 
     fn sections() -> Vec<ShortcutSection> {

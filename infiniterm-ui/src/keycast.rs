@@ -54,7 +54,7 @@ impl AppView {
             return;
         }
         self.keycasts.push(Keycast {
-            chord: chord_keys(chord).join(CHORD_SEPARATOR),
+            chord: chord_keys(chord, self.model.modifier_labels()).join(CHORD_SEPARATOR),
             label: label.to_string(),
             at: now,
         });
