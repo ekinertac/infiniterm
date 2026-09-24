@@ -140,6 +140,11 @@ impl AppView {
             MouseButton::Right => 2,
             _ => return,
         };
+        if infiniterm_core::pan_mode::chord_fits_all(button, self.left_on_canvas) {
+            self.run_command("canvas.zoom.fitAll");
+            self.perform_effects();
+            return;
+        }
         if starts_pan(button, e.modifiers.platform) {
             // Grabbing the canvas mid-glide must stop it dead.
             self.animator.cancel();
@@ -164,6 +169,9 @@ impl AppView {
                 }
                 // A left press that missed every card deselects. It does not
                 // pan: a plain drag means text selection on a card.
+                if button == 0 {
+                    self.left_on_canvas = true;
+                }
                 self.model.set_focus(None);
                 self.model.selection.phantom = None;
                 self.animator.cancel();
@@ -430,6 +438,9 @@ impl AppView {
     }
 
     pub fn mouse_up(&mut self, e: &MouseUpEvent) {
+        if e.button == MouseButton::Left {
+            self.left_on_canvas = false;
+        }
         let p = self.to_content(e.position);
         // A press that focused a card and did not travel was a click on
         // it: bring the whole card into view, as a keyboard focus move

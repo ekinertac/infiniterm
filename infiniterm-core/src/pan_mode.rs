@@ -6,6 +6,17 @@ pub fn starts_pan(button: u8, cmd_held: bool) -> bool {
     button == MIDDLE_BUTTON || (button == 0 && cmd_held)
 }
 
+/// The right button while the left is held on empty canvas fits everything
+/// (Cmd+2 for the mouse, a pinch-out in two fingers). Ekin found it by
+/// accident: a left click then a right click on bare canvas counted as a
+/// double-click, which fits all, but only when the two were nearly
+/// simultaneous. Holding left is the deliberate form. Only a press that
+/// began on empty canvas counts: a left press on a card is a selection or a
+/// drag, and a right click must not cut into it.
+pub fn chord_fits_all(button: u8, left_held_on_canvas: bool) -> bool {
+    button == 2 && left_held_on_canvas
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -22,6 +33,19 @@ mod tests {
     #[test]
     fn plain_left_never_pans() {
         assert!(!starts_pan(0, false));
+    }
+    #[test]
+    fn right_while_left_holds_the_canvas_fits_all() {
+        assert!(chord_fits_all(2, true));
+        assert!(
+            !chord_fits_all(2, false),
+            "a plain right click is a right click"
+        );
+        assert!(
+            !chord_fits_all(0, true),
+            "the left press itself does nothing"
+        );
+        assert!(!chord_fits_all(MIDDLE_BUTTON, true));
     }
     #[test]
     fn right_never_pans() {

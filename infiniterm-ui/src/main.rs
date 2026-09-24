@@ -142,6 +142,9 @@ pub struct AppView {
     /// `app.emoji` asked; the next frame, which has the window, opens it.
     pub show_character_palette: bool,
     pub pan: Option<Pan>,
+    /// The left button went down on empty canvas and has not come up: a
+    /// right click now fits everything (`pan_mode::chord_fits_all`).
+    pub left_on_canvas: bool,
     pub gesture: Option<Gesture>,
     /// The card whose body is following a drag (a text selection).
     pub body_drag: Option<String>,
