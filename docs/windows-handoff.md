@@ -4,9 +4,10 @@ For a Claude session on Ekin's Windows desktop (the "gpu box", RTX 4070 Ti), sta
 
 ## Where this stands
 
-Phases 1, 2 and 4 are done, and phase 3's keyboard half with them, on the
-`windows` branch, 2026-09-23 and -24. Claude Code runs in a card with its
-hooks reaching the app, and the card names itself. Every crate builds and passes its
+Phases 1 to 4 are done on the `windows` branch, 2026-09-23 and -24. Claude
+Code runs in a card with its hooks reaching the app, the themes are in, the
+keymap needs no Windows edition, and a card names itself from the process
+table. Phase 5 (browser cards) and phase 6 (shipping) are what is left. Every crate builds and passes its
 tests on Windows (`infiniterm-ui` with `--no-default-features`), the window
 opens, a card runs PowerShell, and the app chords work: cards, workspaces,
 the omnibox, focus, fit-all.
@@ -65,27 +66,27 @@ What phase 2 changed:
 
 What is still open, in the order it will be hit:
 
-- **The 521 themes are not on Windows at all.** They live in the archived
-  Tauri repo and `tools/bundle.sh` copies them into the Mac bundle from
-  there; nothing does that here, so the app runs on its fallback palette and
-  prints "could not load theme" twice at startup. Readable, and wrong.
-  Packaging is phase 6 and this goes with it.
+- Phase 5, browser cards: CEF for Windows, with the `ift-browser` session.
+  The feature seam is already there (`--no-default-features` draws the stub).
+- Phase 6, shipping. Two things this port found that packaging must carry:
+  the 520 themes go BESIDE THE EXE (`bundled_themes` looks there first on
+  Windows), with their LICENSE.txt, and `ift install-claude-hooks` should be
+  re-run after an install so the hook path points at the shipped binary
+  rather than a checkout.
 
 - `inspect.rs` still shells out to `ps` and `lsof`, so on Windows a card has
   no process label and no cwd tracking. It compiles and answers nothing.
   Toolhelp32 is the replacement, and the cwd is not readable from outside a
   process on Windows at all.
-- Card labels. `inspect.rs` still shells out to `ps` and `lsof`, so a card
-  has no process name and no cwd tracking; every one reads `~` until
-  something renames it. Toolhelp32 replaces `ps`, and the selection rule
-  that matches the Mac's "leader of the foreground process group" is "the
-  direct CHILD of the card's shell" — `claude`'s MCP servers are its own
-  children, not the shell's, so that gives `claude` the way the Mac rule
-  does. A process's cwd is not readable from outside on Windows at all.
-  Worth knowing: `PaneEvent::CwdChanged` exists and NOTHING emits or
-  consumes it on either platform, while oh-my-posh already writes OSC 7, so
-  wiring that would answer the directory on both. That is a change to the
-  Mac too, so it is the Mac session's to make.
+- A card's DIRECTORY never changes on Windows. A process's cwd cannot be
+  read from outside it without debug privileges, so `inspect::cwds` answers
+  nothing there and a card keeps the directory it opened in. The fix is not
+  a Windows one: `PaneEvent::CwdChanged` exists and NOTHING emits or
+  consumes it on either platform, while oh-my-posh already writes OSC 7. A
+  Mac change, so the Mac session's to make, and it would answer the
+  directory on both at once.
+- A card can say `ssh` but never which host: Toolhelp gives an exe's file
+  name, not a command line. `ssh_destination` is unreachable on Windows.
 - End-to-end backpressure (`HIGH_WATER`) has no Windows test, for the ConPTY
   reason below. The credit machinery itself is tested directly.
 
