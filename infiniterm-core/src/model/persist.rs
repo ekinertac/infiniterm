@@ -85,15 +85,13 @@ impl Model {
                         card.active_tab = c.active_tab;
                     }
                 }
-                // Numbers the file did not have go above every one it did,
-                // in file order, and the counter continues past them all,
-                // so a new card never repeats a loaded one.
-                let mut next = self.cards.iter().map(|c| c.number).max().unwrap_or(0) + 1;
-                for card in self.cards.iter_mut().filter(|c| c.number == 0) {
-                    card.number = next;
-                    next += 1;
+                // Cards the file gave no number (before the field existed)
+                // get the lowest free ones, in file order.
+                for i in 0..self.cards.len() {
+                    if self.cards[i].number == 0 {
+                        self.cards[i].number = self.take_number();
+                    }
                 }
-                self.next_number = next;
                 self.viewport = saved.viewport;
                 self.ui_scale = saved.ui_scale;
                 self.selection.focused_id = saved.focused_id;

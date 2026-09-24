@@ -434,8 +434,6 @@ pub struct Model {
     pub focus_visit: Option<FocusVisit>,
     /// The card switcher (Ctrl+Tab), while it is up.
     pub switcher: Option<Switcher>,
-    /// The next card's `number`; set past the highest loaded one.
-    pub next_number: u32,
     /// Layout undo (Cmd+Z / Cmd+Shift+Z): every card's rect on the active
     /// canvas as it was before each move, swap, drop, split or resize.
     /// Session-only. A snapshot is taken by `remember_layout` at the top
@@ -518,6 +516,12 @@ impl Default for Model {
     }
 }
 
+/// The lowest card number from 1 up that `used` does not hold. Pure, for
+/// `Model::take_number`, the load and a reopened card.
+pub fn lowest_free_number(used: &[u32]) -> u32 {
+    (1..).find(|n| !used.contains(n)).unwrap_or(1)
+}
+
 impl Model {
     pub fn new() -> Model {
         Model {
@@ -531,7 +535,6 @@ impl Model {
             focus_trail: Vec::new(),
             focus_visit: None,
             switcher: None,
-            next_number: 1,
             layout_undo: Vec::new(),
             layout_redo: Vec::new(),
             undoing: false,
@@ -784,11 +787,14 @@ impl Model {
         id
     }
 
-    /// The next card number, never handed out twice in a session.
-    pub fn take_number(&mut self) -> u32 {
-        let n = self.next_number;
-        self.next_number += 1;
-        n
+    /// The number a new card gets: the lowest one no card has. It counted
+    /// up forever until 2026-09-24, so a week of cards on Ekin's canvas
+    /// would have read #2332; a closed card's number goes back into use.
+    /// The price, taken knowingly: `#7` from last week may be another card
+    /// now.
+    pub fn take_number(&self) -> u32 {
+        let used: Vec<u32> = self.cards.iter().map(|c| c.number).collect();
+        lowest_free_number(&used)
     }
 
     /// The one door for a mask. The ui reconciles its decoy panes from

@@ -135,13 +135,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "cards.width",
         &[
-            "Width in 25px grid cells. 69 is 1725px, about 192 columns at the default font",
-            "\u{2014} the size of a full iTerm2 window. Existing cards keep the size they have.",
+            "Width in 25px grid cells, or 0 to size new cards from the window: the canvas at",
+            "100% minus a margin, at most 80 cells wide. 69 is 1725px, a full iTerm2 window.",
+            "Existing cards keep the size they have.",
         ],
     ),
     (
         "cards.height",
-        &["Height in 25px grid cells. 80 is 2000px, about 83 rows."],
+        &["Height in 25px grid cells, or 0 to size from the window. 80 is 2000px."],
     ),
     (
         "cards.inheritDirectory",

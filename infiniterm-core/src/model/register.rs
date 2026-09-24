@@ -171,6 +171,11 @@ mod tests {
             r.set_context(describe_context);
             let mut m = Model::new();
             m.view_size = Size { w: 1600., h: 1000. };
+            // The placement, focus and swap tests below were written against
+            // the fixed 69 by 80 card, the default until 2026-09-24; they are
+            // about geometry, not about the default size, so they keep it.
+            m.config.cards.width = 69.;
+            m.config.cards.height = 80.;
             m.home = "/Users/me".into();
             m.start_dir = "/Users/me".into();
             m.now_ms = 1_000_000.;
@@ -296,6 +301,34 @@ mod tests {
             ranked.items.first().map(|r| r.item.id.as_str()),
             Some("app.keycast")
         );
+    }
+
+    // A closed card's number goes back into use, and a card reopened after
+    // its number was taken gets a free one rather than a twin.
+    #[test]
+    fn numbers_are_the_lowest_free_and_never_doubled() {
+        assert_eq!(lowest_free_number(&[]), 1);
+        assert_eq!(lowest_free_number(&[1, 2, 4]), 3);
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        h.run("card.new.terminal");
+        let numbers = |h: &Harness| {
+            let mut n: Vec<u32> = h.m.cards.iter().map(|c| c.number).collect();
+            n.sort();
+            n
+        };
+        assert_eq!(numbers(&h), [1, 2, 3]);
+        // Close #2, and the next card is #2 again, not #4.
+        let two = h.m.cards.iter().find(|c| c.number == 2).unwrap().clone();
+        h.m.set_focus(Some(&two.id));
+        h.run("card.close");
+        h.run("card.new.terminal");
+        assert_eq!(numbers(&h), [1, 2, 3]);
+        // The old #2 comes back (Cmd+Z, `card.reopen`): not a second #2.
+        h.m.reopen_card(two);
+        let n = numbers(&h);
+        assert_eq!(n.len(), 4);
+        n.windows(2).for_each(|w| assert_ne!(w[0], w[1], "{n:?}"));
     }
 
     // Every default binding names a command that exists: a binding pointing
@@ -516,10 +549,11 @@ mod tests {
         assert_eq!(h.m.card(&kept_id).unwrap().soft_group_id, None);
     }
 
-    // "#7" is how a card is named to somebody else: given once, shown ahead
-    // of the label, never repeated within a session even after a close.
+    // "#7" is how a card is named to somebody else, shown ahead of the
+    // label. Since 2026-09-24 a closed card's number goes back into use, so
+    // numbers stay small (Ekin: a week of cards would have read #2332).
     #[test]
-    fn cards_are_numbered_once_and_the_number_leads_the_label() {
+    fn cards_are_numbered_and_the_number_leads_the_label() {
         let mut h = Harness::new();
         let first = h.focused().clone();
         assert_eq!(first.number, 1);
@@ -528,11 +562,7 @@ mod tests {
         assert_eq!(h.focused().number, 2);
         h.run("card.close");
         h.run("card.new.terminal");
-        assert_eq!(
-            h.focused().number,
-            3,
-            "a closed card's number is not reused"
-        );
+        assert_eq!(h.focused().number, 2, "a closed card's number is reused");
         // The bare label is for names that become something else.
         assert!(!h.m.label_of(h.focused()).starts_with('#'));
     }
@@ -1226,14 +1256,14 @@ mod tests {
         assert_eq!(again.selection.focused_id, h.m.selection.focused_id);
         assert!(again.loaded && !again.read_only);
         assert_eq!(again.save_text().unwrap(), text);
-        // Numbers come back as they were and the counter continues past
-        // them; a file with none (before the field) gets them in file
-        // order, above whichever it does have.
+        // Numbers come back as they were, and the next card takes the
+        // lowest free one; a file with none (before the field) gets the
+        // lowest free ones in file order.
         assert_eq!(
             again.cards.iter().map(|c| c.number).collect::<Vec<_>>(),
             [1, 2]
         );
-        assert_eq!(again.next_number, 3);
+        assert_eq!(again.take_number(), 3);
         let mixed = text.replacen("\"number\": 1", "\"number\": 9", 1).replacen(
             "\"number\": 2",
             "\"nope\": 2",
@@ -1244,9 +1274,9 @@ mod tests {
         old.load_layout(Some(&mixed));
         assert_eq!(
             old.cards.iter().map(|c| c.number).collect::<Vec<_>>(),
-            [9, 10]
+            [9, 1]
         );
-        assert_eq!(old.next_number, 11);
+        assert_eq!(old.take_number(), 2);
     }
 
     #[test]

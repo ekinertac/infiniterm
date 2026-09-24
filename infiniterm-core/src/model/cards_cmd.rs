@@ -649,6 +649,12 @@ impl Model {
         {
             card.group_id = None;
         }
+        // Its number may have gone to a newer card while it was away
+        // (numbers are reused, `take_number`); two #7s would make the
+        // number useless, so it takes a free one.
+        if card.number == 0 || self.cards.iter().any(|c| c.number == card.number) {
+            card.number = self.take_number();
+        }
         self.cards.push(card);
         self.set_focus(Some(&id));
         self.reveal_focused();

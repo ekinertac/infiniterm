@@ -79,7 +79,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | `Ctrl + Tab` | switch cards, Cmd+Tab style: hold Ctrl, Tab steps through the cards you worked in (most recent first; cards you only crossed with the arrows are left out), release goes there, Escape cancels; `Ctrl + Shift + Tab` or the arrows step through it too |
 | `Cmd + Ctrl + S` | paste a snippet into the focused card as Cmd+V would, so Claude gets a multi-line prompt as one block. Snippets are plain files in `~/.config/infiniterm/snippets/`, one per snippet, named for what the picker shows; the last row opens the folder, and a saved edit is live on the next open |
 | double-click | on a card's frame or label fits it (`Cmd + 1`); on empty canvas fits everything (`Cmd + 2`) |
-| | every card wears a number (`#7`) ahead of its label, for naming it to somebody: given once, kept across restarts, in `ift ls` and `ift sessions` as trailing columns; `ift attach 7` reaches that card's shell from any terminal, app running or not |
+| | every card wears a number (`#7`) ahead of its label, for naming it to somebody: the lowest free one, kept across restarts (a closed card's number is reused), in `ift ls` and `ift sessions` as trailing columns; `ift attach 7` reaches that card's shell from any terminal, app running or not |
 | `Cmd + S` / `Cmd + N` | save the editor card's file / new empty editor |
 | `Cmd + F`, `Cmd + G`, `Cmd + Alt + F`, `Cmd + /` | in an editor: find, next, replace, comment (elsewhere these are hints, group, and the shortcut list) |
 | `Cmd + B` | in a diff: git blame in the gutter |
@@ -209,6 +209,10 @@ A terminal can reach everything on the machine, so here is everything this one d
 - Where browser cards have been, in `history.json` beside the save file, so the address bar can rank what you visit often above what you saw once. Nothing reads it but the address bar, and deleting the file clears it.
 
 The source is public so all of that can be checked, and a release is a tagged commit built with the CEF version named in `Cargo.lock`, signed and notarized.
+
+## Bundled font
+
+`assets/fonts/SymbolsNerdFontMono-Regular.ttf` is the icons-only font from [Nerd Fonts](https://github.com/ryanoasis/nerd-fonts) (MIT, licence beside it). Every terminal card falls back to it, so a prompt's icons draw even when the card's font is not a Nerd Font.
 
 ## The icon
 

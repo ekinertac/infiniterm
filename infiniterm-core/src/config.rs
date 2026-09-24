@@ -106,7 +106,8 @@ pub enum TerminalBackend {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Cards {
-    /// Size of a new card, in 25px grid cells.
+    /// Size of a new card, in 25px grid cells; 0 (the default) sizes it
+    /// from the window (`cards::auto_size`).
     pub width: f64,
     pub height: f64,
     /// Whether a card carved out of another (a split) keeps its
@@ -228,8 +229,11 @@ pub fn default_config() -> Config {
             decoy_command: "command log stream --style compact".into(),
         },
         cards: Cards {
-            width: 69.,
-            height: 80.,
+            // From the window: 69 by 80 cells, portrait, was the default
+            // until 2026-09-24 and suited one 32-inch 4K screen; on a
+            // laptop it is a tall sliver. 0 means "size it from the window".
+            width: 0.,
+            height: 0.,
             inherit_directory: true,
         },
         canvas: Canvas {
@@ -257,6 +261,15 @@ pub fn default_config() -> Config {
             animations: true,
             show_fps: true,
         },
+    }
+}
+
+/// A card size in cells: 0 is "from the window" and kept; anything else is
+/// whole cells between `min` and 400.
+fn cells(value: Option<&Value>, fallback: f64, min: f64) -> f64 {
+    match value.and_then(Value::as_f64) {
+        Some(0.) => 0.,
+        _ => num(value, fallback, min, 400.).round(),
     }
 }
 
@@ -395,8 +408,9 @@ pub fn merge_config(raw: &Value) -> Config {
             // Floors that keep a card usable: below about 40 columns a
             // terminal stops being one; the ceiling is what placement can
             // still fit.
-            width: num(c.get("width"), d.cards.width, 12., 400.).round(),
-            height: num(c.get("height"), d.cards.height, 8., 400.).round(),
+            // 0 stays 0: "from the window", not a card 12 cells wide.
+            width: cells(c.get("width"), d.cards.width, 12.),
+            height: cells(c.get("height"), d.cards.height, 8.),
             inherit_directory: bool_(c.get("inheritDirectory"), d.cards.inherit_directory),
         },
         canvas: Canvas {
@@ -721,7 +735,18 @@ mod tests {
     #[test]
     fn card_size_is_whole_cells_and_clamped_to_something_usable() {
         let c = m(json!({})).cards;
-        assert_eq!((c.width, c.height, c.inherit_directory), (69., 80., true));
+        assert_eq!(
+            (c.width, c.height, c.inherit_directory),
+            (0., 0., true),
+            "from the window"
+        );
+        assert_eq!(m(json!({"cards": {"width": 0}})).cards.width, 0.);
+        assert_eq!(
+            m(json!({"cards": {"width": 69, "height": 80}}))
+                .cards
+                .height,
+            80.
+        );
         assert_eq!(m(json!({"cards": {"width": 40.7}})).cards.width, 41.);
         assert_eq!(m(json!({"cards": {"width": 1}})).cards.width, 12.);
         assert_eq!(m(json!({"cards": {"height": 9999}})).cards.height, 400.);
