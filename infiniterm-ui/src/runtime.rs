@@ -851,9 +851,20 @@ fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
 /// The staging dir from the last run is emptied first: it holds the bundle
 /// the last update moved aside, or a download nobody installed.
 fn start_updater(app: &mut AppView) {
-    app.build = std::env::current_exe()
-        .ok()
-        .and_then(|exe| bundle_of(&exe).and_then(crate::updater::build_of));
+    // The status bar's build number, which is the whole of the updater that
+    // Windows has so far. It is stamped into the binary there rather than
+    // read back out of a bundle, so there is nothing to find first; see
+    // `updater::build_of`.
+    #[cfg(windows)]
+    {
+        app.build = crate::updater::build_of(std::path::Path::new(""));
+    }
+    #[cfg(not(windows))]
+    {
+        app.build = std::env::current_exe()
+            .ok()
+            .and_then(|exe| bundle_of(&exe).and_then(crate::updater::build_of));
+    }
     if std::env::var_os("INFINITERM_DATA_DIR").is_some() {
         return;
     }
