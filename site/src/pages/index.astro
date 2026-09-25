@@ -19,6 +19,18 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 // PRICE means "not on sale yet" and the page says so instead of inventing one.
 const BUY_URL = '';
 const PRICE = '';
+// Friends' test-drive builds (free DMGs and zips, with latest.json) sit in
+// the public ekinertac/infiniterm-releases until Pro goes on sale, Ekin's
+// call on 2026-09-26. Setting BUY_URL is that moment, so the build refuses
+// to ship a buy button while the free builds may still be up: take them
+// down (and move the updater's feed), then flip this to true.
+const FREE_BUILDS_TAKEN_DOWN = false;
+if (BUY_URL && !FREE_BUILDS_TAKEN_DOWN) {
+  throw new Error(
+    'Pro is going on sale but the free builds in ekinertac/infiniterm-releases were never taken down. ' +
+      'Remove them (and point the updater at the paid feed), then set FREE_BUILDS_TAKEN_DOWN = true in src/pages/index.astro.',
+  );
+}
 const SOURCE_URL = 'https://github.com/ekinertac/infiniterm';
 
 // The hero canvas, in reading order. `state` is what the card settles on;
