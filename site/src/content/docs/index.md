@@ -1,9 +1,23 @@
 ---
 title: infiniterm
 description: Terminal cards on an infinite canvas, with the state of every coding agent visible at a glance.
+template: splash
+hero:
+  tagline: Terminal cards on an infinite canvas, with the state of every coding agent visible at a glance.
+  actions:
+    - text: Install
+      link: guide/install/
+      icon: right-arrow
+    - text: Read the guide
+      link: guide/canvas/
+      variant: minimal
 ---
 
-Terminal cards on an infinite canvas, with the state of every coding agent visible at a glance.
+<iframe src="film.html?play" title="infiniterm in 48 seconds" loading="lazy" style="display:block;width:100%;aspect-ratio:16/9;border:0;border-radius:8px;background:#0e0f13"></iframe>
+
+```sh
+curl -fsSL https://ekinertac.github.io/infiniterm-releases/install.sh | sh
+```
 
 It started as a way out of iTerm2: ten to fifteen tabs, two or three splits in each, and finding one session among twenty to fifty meant opening them one by one. Here every session is a card on one canvas and keeps its place. Running coding agents made the old way worse, because you cannot tell which are working, which are waiting on you and which have finished without cycling through them. So each card's border says it.
 
