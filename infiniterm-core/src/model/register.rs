@@ -1442,6 +1442,21 @@ mod tests {
         );
         h.m.apply_pane_event(pane, &out(b"\x1b]133;D;0\x07"));
         assert_eq!(h.focused().agent, Done);
+        // Every mark reaches agent.log, the end with how long it ran.
+        let logged: Vec<String> =
+            h.m.take_effects()
+                .into_iter()
+                .filter_map(|e| match e {
+                    Effect::AgentLog(l) => Some(l),
+                    _ => Option::None,
+                })
+                .collect();
+        assert!(
+            logged
+                .iter()
+                .any(|l| l.contains("[shell] CommandEnd(Some(0)) after 600.0s working -> done")),
+            "{logged:?}"
+        );
         h.m.apply_pane_event(pane, &PaneEvent::Replay(b"\x1b]133;C\x07".to_vec()));
         assert_eq!(h.focused().agent, Done, "a replay is old news");
         h.m.apply_pane_event(pane, &out(b"\x1b]133;C\x07"));

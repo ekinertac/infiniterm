@@ -138,17 +138,24 @@ impl Model {
         let mut lines = vec![];
         for sig in &signals {
             let before = card.agent;
+            let ran = track.since.map(|t| (now - t) / 1000.);
             card.agent = track.apply(card.agent, agent_card, sig, now);
-            if before != card.agent {
-                lines.push(format!(
-                    "[shell] {sig:?} {before:?}->{:?} {}",
-                    card.agent,
-                    short(card)
-                ));
-            }
+            // Every mark, not only the ones that change the colour, with how
+            // long the command ran: "my failed command showed nothing" is
+            // answered here (under `LONG_MS` it is not meant to).
+            let took = match (sig, ran) {
+                (crate::program_state::Signal::CommandEnd(_), Some(s)) => format!(" after {s:.1}s"),
+                _ => String::new(),
+            };
+            lines.push(format!(
+                "{}  [shell] {sig:?}{took} {} -> {}",
+                &card.id[..8.min(card.id.len())],
+                before.name(),
+                card.agent.name()
+            ));
         }
         for line in lines {
-            self.log(line);
+            self.effects.push(super::Effect::AgentLog(line));
         }
     }
 
@@ -162,15 +169,16 @@ impl Model {
                 card.agent = track.tick(card.agent, now);
                 if before != card.agent {
                     lines.push(format!(
-                        "[shell] running {before:?}->{:?} {}",
-                        card.agent,
-                        short(card)
+                        "{}  [shell] running {} -> {}",
+                        &card.id[..8.min(card.id.len())],
+                        before.name(),
+                        card.agent.name()
                     ));
                 }
             }
         }
         for line in lines {
-            self.log(line);
+            self.effects.push(super::Effect::AgentLog(line));
         }
     }
 
@@ -205,14 +213,5 @@ impl Model {
         for line in lines {
             self.effects.push(super::Effect::AgentLog(line));
         }
-    }
-}
-
-/// The card's name for the log, as the hook lines have it.
-fn short(card: &super::Card) -> &str {
-    if card.title.is_empty() {
-        &card.id[..8.min(card.id.len())]
-    } else {
-        &card.title
     }
 }
