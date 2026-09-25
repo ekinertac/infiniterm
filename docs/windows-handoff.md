@@ -4,17 +4,20 @@ For a Claude session on Ekin's Windows desktop (the "gpu box", RTX 4070 Ti), sta
 
 ## Where this stands
 
-Phases 1 to 4 are done on the `windows` branch, 2026-09-23 to -25, and
-phase 6 is done: `tools/dist.ps1` makes an unpacked release folder, a zip
-and a manifest, that folder runs standalone with its themes beside it and
-its build number in the status bar, and the app updates itself with the
-manifest's hash as the only check. Claude Code runs in a card with its
-hooks reaching the app, the keymap needs no Windows edition, and a card
-names itself from the process table. What is left is browser cards and the
-question of whether the app updates itself here at all. Every crate builds and passes its
-tests on Windows (`infiniterm-ui` with `--no-default-features`), the window
-opens, a card runs PowerShell, and the app chords work: cards, workspaces,
-the omnibox, focus, fit-all.
+**Every phase is done, 2026-09-23 to -25.** Every crate builds and passes
+its tests on Windows with the browser feature ON (787 core, 72 ui, 44 term,
+34 editor, 28 cli, 8 browser; clippy clean), the window opens, a card runs
+PowerShell, Claude Code runs in a card with its hooks reaching the app, the
+app chords work (cards, workspaces, the omnibox, focus, fit-all), a card
+names itself from the process table, and `tools/dist.ps1` makes an unpacked
+release folder, a zip and a manifest that the app updates itself from.
+
+Phase 5, browser cards, landed on 2026-09-25 and was checked on screen
+rather than only compiled: a CEF card renders a real page with its images
+and mixed scripts, the omnibox navigates it, a click lands where the
+screenshot says and focuses the field under it, typing and the named keys
+reach the page, the wheel scrolls it, and the right-click menu opens. What
+that cost is under "What phase 5 changed" below.
 
 **The modifier question under "Keys" below is answered.** Windows gets its
 Cmd from the SIDE of Ctrl: left is the app's, right is the terminal's, so a
@@ -29,10 +32,29 @@ which is how Turkish Q types `{ [ ] } \ @`), bare Ctrl (the carve-out list
 differs per program in a card), and Ctrl+Shift (collides with itself on the
 eighteen bindings that already carry Shift).
 
-There IS a small GUI driver now, `tools/drive/win/`: `run.ps1` launches on a
-scratch data dir, `type.ps1` types into the window (refusing unless
-infiniterm is the one in front), `shot.ps1` screenshots it. Enough that a
-session on the box can check its own work without asking Ekin to look.
+There IS a small GUI driver now, `tools/drive/win/`, and it is how every
+claim above was checked. `run.ps1` launches on a scratch data dir,
+`shot.ps1` screenshots the window, `post.ps1` types into it and `click.ps1`
+clicks or scrolls in it without taking the foreground, `type.ps1` and
+`chord.ps1` send real OS input when the question is about the keyboard
+itself, `kill.ps1` stops it, `awake.ps1` keeps the box from blanking, and
+`window.ps1` is the one handle lookup they share.
+
+Three things about it are worth knowing before trusting a result:
+
+- **`window.ps1` exists because `Get-Process infiniterm` returns seven
+  processes** once a browser card is open. Windows re-executes the same exe
+  for every Chromium subprocess, and `.MainWindowHandle` on that array is
+  whichever one PowerShell listed first.
+- **`post.ps1` posts WM_CHAR, and must keep doing so.** Posting key messages
+  looks right and is not: the app's pump calls TranslateMessage, which turns
+  a posted WM_KEYDOWN into a character anyway, and whether it lands twice
+  depends on where the frame loop is. A quarter of the characters doubled,
+  so short strings usually came out right and the driver looked honest while
+  a URL arrived as nonsense. `chord.ps1` is the cross-check: real hardware
+  input, and it typed the same string cleanly.
+- **`click.ps1` takes shot.ps1's coordinates**, not the client area's, so a
+  session can read a pixel off a screenshot and click it.
 
 What phase 1 actually changed, beyond the plan below:
 
@@ -68,20 +90,62 @@ What phase 2 changed:
 - The 84-pixel inset that keeps the workspace tabs clear of those traffic
   lights is 8 on Windows, where it was that much empty space.
 
-What is still open, in the order it will be hit:
+What phase 5 changed:
 
-- Phase 5, browser cards: CEF for Windows. Started 2026-09-25, at Ekin's
-  word, now that everything else is done. The feature seam is already there
-  (`--no-default-features` draws `browser_stub.rs`), so this is additive:
-  make `infiniterm-browser` build against a Windows CEF and turn the feature
-  back on. NOTE the ownership rule in CLAUDE.md — `infiniterm-browser/`,
-  `browser_body.rs`, `browsers.rs` and `omnibox.rs` are the `ift-browser`
-  session's files. That rule is about ONE shared checkout on the Mac; this
-  is a separate clone on the Windows box, so there is no shared index to
-  sweep, but a change here and a change there still have to merge.
-- Nothing, until the browser. Phase 6 is done: `tools/dist.ps1` makes the
-  folder, the zip and `latest-windows.json`, and the app checks, downloads,
-  verifies and swaps itself.
+- **Windows has no helper binary, and needs none.** macOS runs each Chromium
+  subprocess from an `infiniterm Helper.app`; Windows re-executes the main
+  exe, which `process::early` already handles by calling `execute_process`
+  before gpui starts. So `bin/helper.rs`, the framework loader and
+  `app_protocol` (CEF's two methods on gpui's NSApplication) are all gated
+  to macOS. `early` now tells a subprocess apart by Chromium's own `--type=`
+  switch and skips the profile seeding, or half a dozen children would each
+  copy the same directories over each other at launch.
+- `no_sandbox` is set on Windows, because we hand `initialize` a null
+  `sandbox_info`. On macOS the helper bundles carry the sandbox instead.
+- `native_key_code` is now two tables. It is the physical key in the
+  platform's own codeset: Carbon's on macOS, where Cocoa resolves Backspace
+  and the arrows from it, and the SCAN CODE on Windows, where Chromium turns
+  it into the `code` a page's key handler reads. Left at the macOS value, a
+  page heard `code: "Comma"` for every Backspace — the key still worked,
+  which is why it could have sat there for a long time. The arrows and the
+  navigation block carry the E0 prefix that tells them from the keypad keys
+  they share a code with.
+- `objc` moved to a macOS-only dependency of `infiniterm-browser`; as an
+  unconditional one it put `objc.lib` on the Windows link line.
+- CEF is set up with `CEF_PATH` pointing at a Windows distribution (see
+  "Setting up the box"); the `cef` crate downloads it and its build script
+  copies libcef.dll and the rest into `target/debug` beside the exe.
+
+NOTE the ownership rule in CLAUDE.md: `infiniterm-browser/`,
+`browser_body.rs`, `browsers.rs` and `omnibox.rs` are the `ift-browser`
+session's files. That rule is about ONE shared checkout on the Mac and this
+is a separate clone, so there is no shared index to sweep, but these changes
+still have to merge. `surface.rs` and `process.rs` are the two that carry
+real edits.
+
+What is still open:
+
+- **The Mac has not seen any of this.** `make check` on macOS is the gate
+  before a merge, and only the Mac session can run it. Everything here is
+  `cfg`-gated, but a `#[cfg(not(windows))]` arm is only as good as the
+  compiler that saw it.
+- **A killed CEF app locks its own binary.** Force-killing leaves one thread
+  of the main process alive in the kernel: the process stays enumerable with
+  `HasExited` true and goes on holding `infiniterm.exe` and the Chromium
+  dlls, so the next build fails on "Access is denied". It did not clear in a
+  minute of watching. `kill.ps1` asks with WM_CLOSE first for that reason,
+  and `-FreeLocks` moves a stuck exe aside. It deliberately leaves the dlls
+  alone: moving libcef.dll aside does not get a new one, because cargo will
+  not re-run cef-dll-sys's build script when its inputs have not changed,
+  and the app then starts and dies instantly with no Chromium beside it.
+  The way out of that is `cargo clean -p cef-dll-sys` and a minute.
+- **A cold CEF start takes over thirty seconds.** CEF is initialised inside
+  gpui's run closure, before the window opens, so a first launch on a fresh
+  profile directory shows nothing at all for that long. `run.ps1` waits a
+  minute now. It is a second or two on a warm profile.
+- The omnibox's `file:///C:/...` reading. It navigates correctly, but the
+  suggestion row shows the address as the path `/C:/Users/...`. Cosmetic,
+  and the omnibox is the `ift-browser` session's file.
 
   **The hash is the only check on Windows, deliberately.** Ekin decided
   against Authenticode on 2026-09-25 knowing what it costs: the Mac requires
@@ -92,10 +156,6 @@ What is still open, in the order it will be hit:
   TLS, is the floor it rests on. Do not quietly widen this: a manifest field
   that could point the download elsewhere would remove the last of it.
 
-- `inspect.rs` still shells out to `ps` and `lsof`, so on Windows a card has
-  no process label and no cwd tracking. It compiles and answers nothing.
-  Toolhelp32 is the replacement, and the cwd is not readable from outside a
-  process on Windows at all.
 - Transcript cards are the one card kind never opened on Windows. Ekin is
   testing that (2026-09-25). The Claude card this session ran had transcript
   saving off because it inherited `CLAUDE_CODE_CHILD_SESSION` from the
@@ -121,15 +181,15 @@ Claude Code running in terminal cards on the infinite canvas, on Windows, with t
 - **No daemon.** On macOS every card's shell lives in its own `iftd` process so it outlives the app. On Windows the terminal backend is `pty`: the card owns its shell directly through `portable-pty`, which uses ConPTY. Quitting, restarting or updating the app ends every shell; a card comes back as a fresh shell in its saved directory, and Claude sessions come back with `claude --resume`.
 - Why not port `iftd`: ConPTY is itself a terminal emulator that re-renders the program's output before we see it. `iftd` exists so that nothing stands between Claude and our own parser and a reattach can replay the exact bytes; ConPTY is precisely the second emulator that design routes around. It needs a design of its own, later, if ever.
 - No `ift attach`, no `ift sessions`, no scrollback on disk across a power cut.
-- Browser cards come last (CEF on Windows is a phase of its own), and signing, packaging and the updater after that.
+- Browser cards came last (CEF on Windows was a phase of its own), then packaging and the updater. All three are done; Authenticode is the one piece deliberately skipped, see the hash note above.
 
 ## Ground rules for this session
 
 - **macOS must keep building and working.** Every Windows change goes behind `#[cfg(windows)]` / `#[cfg(unix)]` (or `target_os = "macos"` where the thing is Mac-specific rather than Unix-specific). Never delete a Mac path to make Windows compile.
 - **Work on the `windows` branch**, push it, never force-push master, never merge into master yourself. The Mac session merges after `make check` passes on macOS, because only the Mac can check the Mac. Rebase `windows` onto master often; two other sessions (the Mac port session and `ift-browser`) commit to master daily.
 - Commit messages say why, no attribution trailers of any kind, stage files by name. Every new file starts with a header block (responsibility, where it fits, callers, constraints). Tests always: logic is a pure function in its own file with tests, the gpui side is wiring.
-- `infiniterm-browser/`, `browser_body.rs`, `browsers.rs` and `omnibox.rs` belong to the `ift-browser` session. For phases 1 to 4 you compile the browser OUT (see phase 1), so you should not need to touch them; phase 5 is coordinated with that session through Ekin.
-- There is no GUI driver on Windows. Verifying on screen means Ekin at the desktop. Say what to look at, and wait.
+- `infiniterm-browser/`, `browser_body.rs`, `browsers.rs` and `omnibox.rs` belong to the `ift-browser` session. Phase 5 touched `surface.rs` and `process.rs` there, at Ekin's word; anything further is coordinated with that session through him.
+- **Verify on screen with `tools/drive/win/`, not by compiling.** Every bug phase 5 found was invisible to the compiler and the tests: a page hearing the wrong key, the driver itself doubling characters. A screenshot is the evidence.
 
 ## Setting up the box
 
@@ -137,7 +197,7 @@ The remote shell over `ssh win-gpu-box` is PowerShell 7; use pwsh syntax and quo
 
 1. Rust via rustup with the MSVC toolchain, and the Visual Studio Build Tools "Desktop development with C++" workload (gpui and tree-sitter compile C and C++).
 2. `gh auth login`, then `gh repo clone ekinertac/infiniterm` (the repo is private).
-3. `.cargo/config.toml` sets `CEF_PATH` to a macOS path with `force = false`, so an environment variable wins. You need CEF only from phase 5; until then the browser is compiled out.
+3. `.cargo/config.toml` sets `CEF_PATH` to a macOS path with `force = false`, so an environment variable wins. On the box set `$env:CEF_PATH = "$env:LOCALAPPDATA\cef"` and build once: the `cef` crate downloads the Windows distribution under it and its build script copies libcef.dll, the paks and the rest into `target/debug`. Without that variable the build picks up the macOS path and fails; with `--no-default-features` no CEF is needed at all.
 4. The Makefile is macOS-only (`make bundle`, signing, notarization, the driver). On Windows use cargo directly: `cargo test -p infiniterm-core -p infiniterm-term -p infiniterm-editor`, `cargo build -p infiniterm-ui`, `cargo clippy -- -D warnings` on what you touch. Never `cargo fmt --all` (it rewrites the cli and hook crates; see CLAUDE.md's traps); format only the crates you change.
 
 ## What is Mac or Unix specific, file by file
@@ -176,12 +236,17 @@ Recommended: a small transport module in core with one API (listen, connect, the
 
 ## Phases, each with its done line
 
+**All six are done as of 2026-09-25.** This is the plan as it was written on
+the Mac, kept because the "Done:" lines say what each phase was actually
+being judged on. What happened instead of the plan is under "Where this
+stands" above; where the two disagree, that section is the record.
+
 1. **The core crates build and pass their tests on Windows.** `infiniterm-core`, `infiniterm-term`, `infiniterm-editor`: the daemon and tmux backends gated unix, the socket behind the transport module, `/tmp` in tests replaced. A `browser` cargo feature on `infiniterm-ui` (default on, so macOS is unchanged) that compiles `infiniterm-browser` and CEF out and draws a stub card ("browser cards are not in this build") in their place; this is also the build-time Lite/Pro split planned in ekinertac/notes#50, so build it the way that plan says (the stub card, no runtime key) and tell Ekin, because the `ift-browser` session owns that crate. Done: `cargo test` green for the three crates on Windows, and `make check` still green on the Mac (the Mac session runs it when merging).
 2. **A window opens and a terminal card runs pwsh.** `cargo build -p infiniterm-ui --no-default-features` (browser off), then run it. Keys typed reach the shell, Enter runs a command, output draws, a resize reflows. Done: Ekin types `dir` in a card and sees the listing.
 3. **The canvas and the app keys.** The modifier decision from "Keys" above, then pan, zoom, new card, focus movement, the palette, workspaces. Done: Ekin can do a morning's work on the canvas without reaching for a Mac-only chord.
 4. **Claude in a card with hooks.** The named-pipe transport, the hook binary on Windows, `ift install-claude-hooks` writing the Windows path of `infiniterm-hook.exe` into `%USERPROFILE%\.claude\settings.json`. Check that Claude Code's Shift+Enter still makes a line break through ConPTY (the kitty keyboard protocol; recent ConPTY passes it through, older ones swallow it). Done: a Claude card turns working, waiting and done colours as it runs.
 5. **Browser cards.** CEF for Windows through cef-rs (its README has the PowerShell steps), with the `ift-browser` session. Done: a browser card loads a page.
-6. **Shipping.** A zip or MSI, Authenticode signing (a paid certificate; SmartScreen warns until it has reputation), and the updater's Windows half (the manifest and "newer is a higher build" logic in `update.rs` carry over; the signature check becomes WinVerifyTrust, and the swap has to wait for the exe to unlock). Ekin decides when; not before phases 1 to 4 are real.
+6. **Shipping.** A zip or MSI, Authenticode signing (a paid certificate; SmartScreen warns until it has reputation), and the updater's Windows half (the manifest and "newer is a higher build" logic in `update.rs` carry over; the signature check becomes WinVerifyTrust, and the swap has to wait for the exe to unlock). Ekin decides when; not before phases 1 to 4 are real. **Shipped as a zip, and Authenticode is out**: Ekin decided on 2026-09-25 that the SHA-256 in the manifest is the only check, so there is no WinVerifyTrust. See the hash note above for what that trades away.
 
 ## Things that will bite
 
