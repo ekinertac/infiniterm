@@ -736,10 +736,60 @@ pub fn virtual_key(name: &str) -> i32 {
     }
 }
 
-/// macOS virtual key codes (Carbon `kVK_*`) for the same named keys, the
-/// codeset Cocoa's `interpretKeyEvents:` resolves editing commands from.
+/// The PHYSICAL key, in whatever codeset this platform's CEF reads it in.
+///
+/// Two different jobs behind one name, which is why there are two tables.
+/// On macOS it is the Carbon `kVK_*` code and Cocoa resolves the editing
+/// commands from it, so Backspace and the arrows do nothing in a text field
+/// without it. On Windows it is the scan code, and Chromium turns it into
+/// the `code` a page's key handler reads: left at the macOS value, a
+/// Backspace arrived at the page as `code: "Comma"`, because 0x33 is the
+/// comma key in scan code set 1 (measured in a card, 2026-09-25). The value
+/// is wrong in a quiet way on both platforms — the key still works, a page
+/// that reads `event.code` just hears a different key — so it is worth a
+/// test each rather than trusting the tables to look right.
+///
 /// Only meaningful alongside `virtual_key`, which is why an unnamed key (0)
 /// never reaches here: `key()` skips this table for the CHAR-only path.
+#[cfg(windows)]
+fn native_key_code(name: &str) -> i32 {
+    match name {
+        "enter" => 0x1C,
+        "backspace" => 0x0E,
+        "tab" => 0x0F,
+        "escape" => 0x01,
+        "space" => 0x39,
+        // The grey navigation block and the arrows are the extended keys:
+        // the same scan codes as the numeric keypad, told apart by the E0
+        // prefix. Chromium wants that prefix as bit 8 of the scan code
+        // (`0xE0xx` in its own tables), not as the lParam's extended bit,
+        // which a synthetic event has no room for.
+        "pageup" => 0xE049,
+        "pagedown" => 0xE051,
+        "end" => 0xE04F,
+        "home" => 0xE047,
+        "left" => 0xE04B,
+        "up" => 0xE048,
+        "right" => 0xE04D,
+        "down" => 0xE050,
+        "delete" => 0xE053,
+        "f1" => 0x3B,
+        "f2" => 0x3C,
+        "f3" => 0x3D,
+        "f4" => 0x3E,
+        "f5" => 0x3F,
+        "f6" => 0x40,
+        "f7" => 0x41,
+        "f8" => 0x42,
+        "f9" => 0x43,
+        "f10" => 0x44,
+        "f11" => 0x57,
+        "f12" => 0x58,
+        _ => 0,
+    }
+}
+
+#[cfg(not(windows))]
 fn native_key_code(name: &str) -> i32 {
     match name {
         "enter" => 0x24,
@@ -783,6 +833,7 @@ mod tests {
         assert_eq!(virtual_key("a"), 0);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn backspace_carries_the_real_macos_keycode_not_the_a_key() {
         // Cocoa resolves deleteBackward: from the native code; left at the
@@ -791,6 +842,32 @@ mod tests {
         assert_eq!(native_key_code("left"), 0x7B);
         assert_eq!(native_key_code("home"), 0x73);
         assert_eq!(native_key_code("a"), 0);
+    }
+
+    // The Windows table is scan codes, and the macOS one read as scan codes
+    // is what sent `code: "Comma"` to a page for Backspace. The three that
+    // would collide if the wrong table were compiled in are the check.
+    #[cfg(windows)]
+    #[test]
+    fn backspace_carries_the_scan_code_a_page_reads_as_backspace() {
+        assert_eq!(native_key_code("backspace"), 0x0E);
+        assert_eq!(native_key_code("escape"), 0x01);
+        assert_eq!(native_key_code("a"), 0);
+    }
+
+    // An arrow shares its scan code with the keypad key printed beside it;
+    // without the E0 prefix a page hears Numpad4 for Left.
+    #[cfg(windows)]
+    #[test]
+    fn the_navigation_keys_carry_their_extended_prefix() {
+        for name in ["left", "up", "right", "down", "home", "end", "pageup", "pagedown", "delete"] {
+            let code = native_key_code(name);
+            assert_eq!(code & 0xFF00, 0xE000, "{name} is missing its E0 prefix");
+        }
+        // And the ones that are not extended do not carry it.
+        for name in ["enter", "backspace", "tab", "escape", "space", "f1", "f12"] {
+            assert_eq!(native_key_code(name) & 0xFF00, 0, "{name} must not be extended");
+        }
     }
 
     #[test]
