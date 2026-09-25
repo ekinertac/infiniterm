@@ -8,11 +8,21 @@
 # message queue, which is what to use when the question is about the app
 # rather than about the keyboard.
 #
-# WM_KEYDOWN and WM_KEYUP only, no WM_CHAR: gpui turns each of those into a
-# keystroke of its own, and posting both made every character arrive twice
-# (`dir` came out `ddiirr`, 2026-09-24). Which also means this cannot type
-# anything the key alone does not produce, an accented letter included; for
-# those, and for anything the layout composes, use type.ps1.
+# WM_CHAR for text, WM_KEYDOWN/WM_KEYUP for Enter. Posting both was wrong
+# (`dir` came out `ddiirr`, 2026-09-24) and so was the fix that followed it,
+# key messages alone: the app's own pump calls TranslateMessage, which turns
+# a posted WM_KEYDOWN into a WM_CHAR anyway, and whether that char lands on
+# top of the keystroke depends on where the frame loop is. A quarter of the
+# characters doubled, which is worse than all of them, because a short
+# string usually came out right and the driver looked trustworthy
+# (`abcdefghijklmnop` -> `abcdefghijjkllmnopp`, 2026-09-25). Only WM_CHAR,
+# and the duplicate has nothing to duplicate from. Checked against
+# chord.ps1, which sends real hardware input and types the same string
+# cleanly.
+#
+# A character rather than a key also means the shifted ones work: a `:` used
+# to arrive as `;`, because this took VkKeyScanW's virtual key and threw its
+# shift bit away.
 #
 # Related: run.ps1, shot.ps1, type.ps1, awake.ps1.
 param(
@@ -38,6 +48,16 @@ $h = Get-IftWindow $ProcName
 
 $WM_KEYDOWN = 0x0100
 $WM_KEYUP = 0x0101
+$WM_CHAR = 0x0102
+
+# A shell reads faster than the app draws, and it paints on demand; without
+# this pause between messages a whole line arrives inside one frame.
+$GAP = 40
+
+function Send-Char([char]$c) {
+    [void][Post]::PostMessage($h, $WM_CHAR, [IntPtr][int]$c, [IntPtr]1)
+    Start-Sleep -Milliseconds $GAP
+}
 
 function Send-Key([int]$vk) {
     # lParam: repeat count 1, the scan code in bits 16-23, and for the key-up
@@ -47,13 +67,10 @@ function Send-Key([int]$vk) {
     $up = [IntPtr](1 -bor ($scan -shl 16) -bor 0xC0000000)
     [void][Post]::PostMessage($h, $WM_KEYDOWN, [IntPtr]$vk, $down)
     [void][Post]::PostMessage($h, $WM_KEYUP, [IntPtr]$vk, $up)
-    # A shell reads faster than it draws; this is for the app's frame loop,
-    # which paints on demand and would otherwise coalesce the whole line.
-    Start-Sleep -Milliseconds 40
+    Start-Sleep -Milliseconds $GAP
 }
 
-foreach ($c in $Text.ToCharArray()) {
-    Send-Key ([Post]::VkKeyScanW($c) -band 0xFF)
-}
+foreach ($c in $Text.ToCharArray()) { Send-Char $c }
+# Enter is a key, not a character: a field acts on the keystroke.
 if ($Enter) { Send-Key 0x0D }
 "posted"
