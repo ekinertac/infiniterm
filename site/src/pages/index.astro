@@ -1,0 +1,570 @@
+---
+// The landing page at the site root. Not a Starlight page: the docs live
+// under guide/ and reference/ with Starlight's chrome, and this page has its
+// own. Its one idea is that the page IS a piece of the canvas: a light dot
+// grid with dark terminal cards on it, and the four state colours are the
+// app's own (infiniterm-ui/src/chrome.rs: agent_working, _waiting, _failed,
+// _done). Far cards draw their text as bars, the way the app does below the
+// legible size. The film is typereel's HTML (public/film.html, ?play mode).
+// Fonts are self-hosted through fontsource so the page asks nothing of
+// Google, which a "no telemetry" product page should not.
+import '@fontsource-variable/schibsted-grotesk';
+import '@fontsource-variable/jetbrains-mono';
+
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+const install = 'curl -fsSL https://ekinertac.github.io/infiniterm-releases/install.sh | sh';
+
+// The hero canvas, in reading order. `state` is what the card settles on;
+// `lines` are bar widths in characters, since these cards are "far away".
+type State = 'working' | 'waiting' | 'failed' | 'done' | 'none';
+const heroCards: { name: string; state: State; lines: number[]; near?: string[] }[] = [
+  { name: 'api', state: 'working', lines: [14, 22, 9, 30, 18, 26, 12] },
+  {
+    name: 'claude',
+    state: 'waiting',
+    lines: [],
+    near: ['⏺ Update(src/router.rs)', '', 'Do you want to make this edit', 'to router.rs?', '', '❯ 1. Yes', '  2. Yes, and don’t ask again', '  3. No'],
+  },
+  { name: 'claude', state: 'done', lines: [24, 11, 31, 16, 8, 27] },
+  { name: 'web', state: 'none', lines: [9, 18, 13, 22] },
+  { name: 'pi', state: 'working', lines: [28, 15, 21, 10, 33, 19, 7] },
+  { name: 'tests', state: 'failed', lines: [17, 29, 12, 25, 9, 20] },
+  { name: 'logs', state: 'none', lines: [31, 30, 32, 29, 31, 30, 28] },
+  { name: 'claude', state: 'working', lines: [12, 26, 19, 8, 23, 15] },
+  { name: 'db', state: 'none', lines: [10, 16, 7] },
+  { name: 'infra', state: 'done', lines: [20, 13, 27, 18, 11] },
+  { name: 'docs', state: 'none', lines: [25, 14, 22] },
+  { name: 'claude', state: 'working', lines: [16, 30, 11, 24, 20, 9, 13] },
+  { name: 'ssh', state: 'none', lines: [19, 8, 26] },
+  { name: 'pi', state: 'done', lines: [22, 14, 30, 10] },
+  { name: 'build', state: 'working', lines: [30, 28, 31, 29, 30] },
+];
+
+const states = [
+  {
+    key: 'working',
+    name: 'Working',
+    says: 'An agent is mid-turn, or a command has been running for 5 seconds.',
+    screen: ['~/Code/api ❯ cargo build --release', '   Compiling tokio v1.47.1', '   Compiling api v0.3.0', '   Building [=====>   ] 212/297'],
+  },
+  {
+    key: 'waiting',
+    name: 'Waiting on you',
+    says: 'It asked for permission, or asked you a question.',
+    screen: ['Bash(rm -rf target/)', '', 'Do you want to proceed?', '❯ 1. Yes', '  2. No, and tell Claude what to do'],
+  },
+  {
+    key: 'failed',
+    name: 'Failed',
+    says: 'A command exited non-zero, or the turn ended in an error.',
+    screen: ['~/Code/web ❯ npm test', '', ' FAIL  src/cart.test.ts', '  ✕ applies the discount', '', 'Tests: 1 failed, 41 passed'],
+  },
+  {
+    key: 'done',
+    name: 'Done',
+    says: 'The turn finished. It stays green until the next one starts.',
+    screen: ['⏺ The migration is in place and the', '  three failing tests pass now.', '', '> _'],
+  },
+];
+
+// The title bar's workspace tabs: one dot per card in reading order, grey
+// until the card has something to say. The active tab shows none lit,
+// as in the app (the cards are right there).
+const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
+  { name: 'api', active: true, dots: ['none', 'none', 'none', 'none'] },
+  { name: 'web', dots: ['working', 'none', 'waiting', 'none', 'none'] },
+  { name: 'infra', dots: ['done', 'none', 'failed'] },
+  { name: 'notes', dots: ['none', 'none'] },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>infiniterm</title>
+    <meta name="description" content="Terminal cards on an infinite canvas for macOS. Each card's border shows whether the agent in it is working, waiting on you, failed or done." />
+    <link rel="icon" href={`${base}favicon.png`} />
+  </head>
+  <body>
+    <header class="top">
+      <a class="mark" href={base}><img src={`${base}favicon.png`} alt="" width="28" height="28" />infiniterm</a>
+      <nav>
+        <a href={`${base}guide/install/`}>Docs</a>
+        <a href="https://github.com/ekinertac/infiniterm-releases/releases/latest">Releases</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <h1>See which agent needs you without opening a single tab.</h1>
+          <p class="lede">
+            infiniterm puts every terminal on one zoomable canvas. Each card keeps its place, and its border says what the
+            agent inside is doing: working, waiting on you, failed, or done.
+          </p>
+          <div class="install">
+            <code id="install-line">{install}</code>
+            <button type="button" id="copy" aria-label="Copy the install command">Copy</button>
+          </div>
+          <p class="fine">
+            macOS 13 or later on Apple Silicon. Or <a href="https://github.com/ekinertac/infiniterm-releases/releases/latest">download the DMG</a>.
+          </p>
+        </div>
+
+        <div class="hero-canvas" aria-hidden="true">
+          {
+            heroCards.map((c, i) => (
+              <div class={`card s-${c.state}${c.near ? ' near' : ''}`} style={`--i:${i}`}>
+                <span class="label">#{i + 1} {c.name}</span>
+                {c.near ? (
+                  <pre>{c.near.join('\n')}</pre>
+                ) : (
+                  <div class="bars">
+                    {c.lines.map((w) => (
+                      <i style={`width:${w * 3}%`} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))
+          }
+        </div>
+      </section>
+
+      <section class="film">
+        <iframe data-src={`${base}film.html?play`} title="infiniterm in 48 seconds"></iframe>
+      </section>
+
+      <section class="states">
+        <h2>Four colours, because there are four questions.</h2>
+        <p class="section-lede">
+          Claude Code and Pi report through hooks. Any other command reports through zsh, so a long build goes violet and
+          then green, and a failing one goes red. A shell doing nothing has no colour at all.
+        </p>
+        <div class="state-row">
+          {
+            states.map((s) => (
+              <figure class={`state s-${s.key}`}>
+                <div class="card">
+                  <pre>{s.screen.join('\n')}</pre>
+                </div>
+                <figcaption>
+                  <strong>{s.name}</strong>
+                  <span>{s.says}</span>
+                </figcaption>
+              </figure>
+            ))
+          }
+        </div>
+      </section>
+
+      <section class="calm split">
+        <div>
+          <h2>Nothing flashes. Nothing steals focus.</h2>
+          <p>
+            There are no notifications and no bouncing icons. You look when you are ready, see which cards changed colour,
+            and go there. Other workspaces tell you from their tab: one dot per card, in the order the cards sit, lit in
+            that card's colour.
+          </p>
+        </div>
+        <div class="tabs" aria-hidden="true">
+          {
+            workspaces.map((w) => (
+              <div class={`tab${w.active ? ' active' : ''}`}>
+                <span>{w.name}</span>
+                <span class="dots">
+                  {w.dots.map((d) => (
+                    <i class={`d-${d}`} />
+                  ))}
+                </span>
+              </div>
+            ))
+          }
+        </div>
+      </section>
+
+      <section class="kinds">
+        <h2>The rest of the work sits on the same canvas.</h2>
+        <dl>
+          <div><dt>Editor cards</dt><dd>Syntax highlighting for 17 languages, a file tree, find and replace. No LSP, on purpose.</dd></div>
+          <div><dt>Diff cards</dt><dd><code>ift diff</code> shows your changes against HEAD, with a blame gutter on <kbd>Cmd</kbd> <kbd>B</kbd>.</dd></div>
+          <div><dt>Transcript cards</dt><dd>A Claude Code or Pi session as turns, tool calls folded, following along while it runs.</dd></div>
+          <div><dt>Browser cards</dt><dd>Chromium with the Claude in Chrome extension, so an agent can drive a browser that lives next to it.</dd></div>
+          <div><dt>Shells that outlive the window</dt><dd>Each card's shell runs under its own small daemon. Quit the app and they keep running; reopen it and they are back.</dd></div>
+        </dl>
+      </section>
+
+      <section class="keys split">
+        <div>
+          <h2>Cmd is the app's. Everything else is your shell's.</h2>
+          <p>Ctrl, Alt and bare keys go to the terminal untouched, so vim, tmux and your readline habits keep working. Every action is a command, so nothing needs the mouse.</p>
+          <p><a href={`${base}reference/keys/`}>All keys</a></p>
+        </div>
+        <ul>
+          <li><span><kbd>Cmd</kbd> <kbd>T</kbd></span> new card, placed where you can predict</li>
+          <li><span><kbd>Cmd</kbd> <kbd>Alt</kbd> <kbd>←</kbd></span> the card to the left</li>
+          <li><span><kbd>Ctrl</kbd> <kbd>Tab</kbd></span> the cards you worked in, most recent first</li>
+          <li><span><kbd>Cmd</kbd> <kbd>2</kbd></span> fit every card in the window</li>
+          <li><span><kbd>Cmd</kbd> <kbd>Shift</kbd> <kbd>P</kbd></span> every command, by name</li>
+        </ul>
+      </section>
+
+      <section class="nots">
+        <h2>What it does not have.</h2>
+        <p class="big">No Electron. No account. No telemetry.</p>
+        <p>
+          A native app in Rust. The only request it makes on its own is the update check, a plain GET with nothing about
+          you in it. <a href={`${base}guide/configuration/#what-the-app-touches`}>Everything it touches</a> is written down.
+        </p>
+      </section>
+
+      <section class="end">
+        <h2>Install it in one line.</h2>
+        <div class="install">
+          <code>{install}</code>
+          <button type="button" class="copy-again" aria-label="Copy the install command">Copy</button>
+        </div>
+        <p class="fine">
+          Early, and in active development. Source-available: free for personal use, a paid licence for work.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <a href={`${base}guide/install/`}>Docs</a>
+      <a href={`${base}reference/keys/`}>Keys</a>
+      <a href="https://github.com/ekinertac/infiniterm-releases/releases">Releases</a>
+    </footer>
+
+    <script>
+      // The film plays once and holds its end card, so it starts only when
+      // half of it is on screen; loaded with the page it would be half over
+      // before anyone scrolled to it.
+      const film = document.querySelector<HTMLIFrameElement>('.film iframe');
+      if (film) {
+        const start = () => (film.src = film.dataset.src ?? '');
+        if ('IntersectionObserver' in window) {
+          const io = new IntersectionObserver(
+            (entries) => {
+              if (entries.some((e) => e.isIntersecting)) {
+                start();
+                io.disconnect();
+              }
+            },
+            { threshold: 0.5 },
+          );
+          io.observe(film);
+        } else start();
+      }
+
+      // Both copy buttons put the install line on the clipboard and say so in
+      // their own label for a moment; that label change is the confirmation.
+      const line = document.getElementById('install-line')?.textContent ?? '';
+      for (const b of document.querySelectorAll<HTMLButtonElement>('#copy, .copy-again')) {
+        b.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(line);
+            b.textContent = 'Copied';
+          } catch {
+            b.textContent = 'Select it';
+          }
+          setTimeout(() => (b.textContent = 'Copy'), 1600);
+        });
+      }
+    </script>
+  </body>
+</html>
+
+<style is:global>
+  :root {
+    /* The canvas: a cool pale grey with a dot grid, the app's canvas lit up. */
+    --canvas: #e7e6ee;
+    --dot: #c9c7d6;
+    --ink: #17161f;
+    --ink-soft: #4a4858;
+    /* A terminal card, Catppuccin Mocha, the app's default theme. */
+    --card: #1e1e2e;
+    --card-edge: #3a3a50;
+    --card-text: #cdd6f4;
+    --card-dim: #6c7086;
+    /* The four states, the app's own values (chrome.rs). */
+    --working: #9d7cd8;
+    --waiting: #ffc400;
+    --failed: #e5484d;
+    --done: #4fb477;
+
+    --sans: 'Schibsted Grotesk Variable', system-ui, sans-serif;
+    --mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+      --canvas: #121119;
+      --dot: #2a2837;
+      --ink: #ecebf5;
+      --ink-soft: #a6a4b8;
+      --card: #1e1e2e;
+      --card-edge: #34344a;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme='dark'] {
+    --canvas: #121119;
+    --dot: #2a2837;
+    --ink: #ecebf5;
+    --ink-soft: #a6a4b8;
+    --card-edge: #34344a;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background-color: var(--canvas);
+    background-image: radial-gradient(var(--dot) 1.2px, transparent 1.4px);
+    background-size: 24px 24px;
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 1.125rem;
+    line-height: 1.55;
+    overflow-x: clip;
+  }
+  html { overflow-x: clip; }
+  a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  a:hover { text-decoration-thickness: 2px; }
+  :focus-visible { outline: 3px solid var(--working); outline-offset: 3px; border-radius: 4px; }
+  kbd {
+    font: 600 0.8em var(--mono);
+    padding: 0.1em 0.45em;
+    border: 1px solid var(--ink-soft);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+
+  .top, main > section, footer {
+    width: min(1180px, 100% - 32px);
+    margin-inline: auto;
+  }
+  .top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-block: 20px;
+  }
+  .mark { display: flex; gap: 10px; align-items: center; font-weight: 700; font-size: 1.15rem; text-decoration: none; }
+  .mark img { border-radius: 6px; }
+  .top nav { display: flex; gap: 24px; font-weight: 500; }
+  .top nav a { text-decoration: none; }
+  .top nav a:hover { text-decoration: underline; }
+
+  h1, h2 { font-weight: 800; letter-spacing: -0.03em; line-height: 1.02; margin: 0; }
+  h1 { font-size: clamp(2.6rem, 5.6vw, 4.8rem); max-width: 14ch; }
+  h2 { font-size: clamp(1.9rem, 3.8vw, 3rem); max-width: 20ch; }
+  p { max-width: 62ch; }
+
+  /* Hero: copy on the left, a stretch of canvas running off the right edge. */
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    gap: 40px;
+    align-items: center;
+    padding-block: 40px 96px;
+  }
+  .lede { font-size: 1.25rem; color: var(--ink-soft); margin: 28px 0 32px; }
+  .install {
+    display: flex;
+    align-items: stretch;
+    max-width: 640px;
+    background: var(--card);
+    color: var(--card-text);
+    border-radius: 10px;
+    border: 1px solid var(--card-edge);
+    overflow: hidden;
+  }
+  .install code {
+    flex: 1;
+    min-width: 0;
+    font: 0.86rem/1.4 var(--mono);
+    padding: 15px 16px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .install code::before { content: '$ '; color: var(--card-dim); }
+  .install button {
+    font: 600 0.9rem var(--sans);
+    background: var(--working);
+    color: #17161f;
+    border: 0;
+    padding: 0 20px;
+    cursor: pointer;
+    min-width: 92px;
+  }
+  .install button:hover { background: #b39ae3; }
+  .fine { font-size: 0.95rem; color: var(--ink-soft); margin-top: 14px; }
+
+  /* Wider than its column on purpose: it runs off the window's right edge,
+     because the canvas does not end. The near card is the one you zoomed to:
+     twice the size and readable, where the far ones are bars. */
+  .hero-canvas {
+    display: grid;
+    grid-template-columns: repeat(6, 168px);
+    grid-auto-rows: 104px;
+    grid-auto-flow: dense;
+    gap: 14px;
+    width: max-content;
+  }
+  .hero-canvas .near { grid-column: span 2; grid-row: span 2; padding: 30px 18px 16px; }
+  .hero-canvas .near pre { font-size: 14px; line-height: 1.55; }
+  .hero-canvas .near .label { font-size: 12px; top: 9px; left: 14px; }
+  .card {
+    background: var(--card);
+    color: var(--card-text);
+    border-radius: 7px;
+    border: 1px solid var(--card-edge);
+    position: relative;
+    overflow: hidden;
+  }
+  .hero-canvas .card { padding: 22px 12px 10px; }
+  .card .label {
+    position: absolute;
+    top: 6px;
+    left: 10px;
+    font: 500 10px var(--mono);
+    color: var(--card-dim);
+  }
+  .bars { display: grid; gap: 6px; }
+  .bars i { display: block; height: 4px; max-width: 100%; border-radius: 2px; background: #45475a; }
+  .card pre {
+    margin: 0;
+    font: 11px/1.45 var(--mono);
+    white-space: pre;
+    overflow: hidden;
+  }
+
+  /* A card's state is its border, as in the app: 3px in the state's hue. */
+  .s-working.card, .s-working .card { box-shadow: 0 0 0 3px var(--working); }
+  .s-waiting.card, .s-waiting .card { box-shadow: 0 0 0 3px var(--waiting); }
+  .s-failed.card, .s-failed .card { box-shadow: 0 0 0 3px var(--failed); }
+  .s-done.card, .s-done .card { box-shadow: 0 0 0 3px var(--done); }
+  .hero-canvas .near { box-shadow: 0 0 0 3px var(--waiting), 0 0 0 7px rgba(255, 196, 0, 0.18); }
+
+  /* The page's one moment: the hero's cards light up in reading order, the
+     way a workspace tab's dots do. Skipped under reduced motion. */
+  @media (prefers-reduced-motion: no-preference) {
+    .hero-canvas .card:not(.s-none) {
+      animation: light 500ms ease-out both;
+      animation-delay: calc(400ms + var(--i) * 140ms);
+    }
+    @keyframes light {
+      from { box-shadow: 0 0 0 0 transparent; }
+    }
+  }
+
+  .film { padding-bottom: 120px; }
+  .film iframe {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border: 0;
+    border-radius: 12px;
+    background: #0e0f13;
+    box-shadow: 0 0 0 1px var(--card-edge);
+  }
+
+  main > section:not(.hero):not(.film) { padding-block: 72px; }
+  .section-lede { color: var(--ink-soft); margin: 20px 0 40px; }
+
+  .state-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 28px;
+  }
+  .state { margin: 0; }
+  .state .card { padding: 16px 14px; height: 150px; }
+  .state figcaption { margin-top: 18px; display: grid; gap: 4px; font-size: 1rem; }
+  .state figcaption span { color: var(--ink-soft); }
+  .state figcaption strong { font-size: 1.15rem; }
+
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 64px;
+    align-items: center;
+  }
+  .split p { color: var(--ink-soft); margin-top: 20px; }
+
+  /* The title bar's workspace tabs, drawn big. */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    padding: 8px;
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .tab {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    gap: 10px;
+    justify-items: start;
+    padding: 18px 18px 20px;
+    border-radius: 6px;
+    color: var(--card-dim);
+    font: 500 1.05rem var(--mono);
+  }
+  .tab.active { background: #313244; color: var(--card-text); }
+  .dots { display: flex; gap: 7px; flex-wrap: wrap; }
+  .dots i { width: 12px; height: 12px; border-radius: 50%; background: #585b70; }
+  .dots .d-working { background: var(--working); }
+  .dots .d-waiting { background: var(--waiting); }
+  .dots .d-failed { background: var(--failed); }
+  .dots .d-done { background: var(--done); }
+
+  .kinds dl { margin: 40px 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px 56px; }
+  .kinds dt { font-weight: 700; font-size: 1.2rem; }
+  .kinds dd { margin: 6px 0 0; color: var(--ink-soft); }
+  .kinds code { font: 0.9em var(--mono); }
+
+  .keys ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 18px; font-size: 1.05rem; }
+  .keys li { display: grid; grid-template-columns: 190px 1fr; gap: 16px; align-items: baseline; }
+  .keys kbd { font-size: 0.95rem; }
+
+  .nots .big { font-size: clamp(1.4rem, 2.6vw, 2rem); font-weight: 700; letter-spacing: -0.02em; margin: 24px 0 12px; }
+  .nots p:last-child { color: var(--ink-soft); }
+
+  .end { border-top: 1px solid var(--dot); }
+  .end .install { margin-top: 28px; }
+
+  footer {
+    display: flex;
+    gap: 24px;
+    padding-block: 32px 48px;
+    font-size: 0.95rem;
+    color: var(--ink-soft);
+  }
+
+  @media (max-width: 900px) {
+    .hero { grid-template-columns: minmax(0, 1fr); padding-bottom: 64px; }
+    .hero-canvas { grid-template-columns: repeat(6, 150px); grid-auto-rows: 92px; }
+    .state-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kinds dl { grid-template-columns: 1fr; }
+    .split { grid-template-columns: 1fr; gap: 36px; }
+  }
+  @media (max-width: 560px) {
+    body { font-size: 1.05rem; }
+    .hero-canvas { grid-template-columns: repeat(6, 118px); grid-auto-rows: 76px; gap: 10px; }
+    .hero-canvas .near { padding: 26px 12px 10px; }
+    .hero-canvas .near pre { font-size: 11px; }
+    .hero-canvas .card { padding: 18px 8px 8px; }
+    .card pre { font-size: 9px; }
+    .state-row { grid-template-columns: 1fr; }
+    .keys li { grid-template-columns: 1fr; gap: 4px; }
+    .install code { font-size: 0.75rem; }
+  }
+</style>
