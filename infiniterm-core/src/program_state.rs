@@ -14,8 +14,13 @@
 //!
 //! The rules, and why:
 //! - A command must run `LONG_MS` before it shows as working, and only a
-//!   command that ran that long turns the card done (status 0) or waiting
-//!   (anything else) when it ends, so every `ls` does not flash the card.
+//!   command that ran that long turns the card done when it ends well, so
+//!   every `ls` does not leave the card green: green would then be the
+//!   colour of every shell card and say nothing.
+//! - A FAILURE turns the card waiting however quick it was (Ekin,
+//!   2026-09-25: a failing command that showed nothing looked broken). It
+//!   costs little: you are usually in that card and the next command
+//!   clears it. Ctrl+C (status 130) is not a failure, you stopped it.
 //!   A new command clears the last one's done or waiting.
 //! - A full-screen program (vim, htop, less: the alternate screen) is
 //!   something you are using, not something running for you, so it never
@@ -34,6 +39,10 @@ use crate::agent_state::AgentState;
 /// glance (`ls`, `git status`) and a flash of colour would be noise, the
 /// tab dots' rule: a lamp always lit says nothing.
 pub const LONG_MS: f64 = 5_000.;
+
+/// The status a shell reports for a command stopped with Ctrl+C (128 +
+/// SIGINT): you stopped it, so it is not a failure to show you.
+const INTERRUPTED: i32 = 130;
 
 /// An OSC longer than this is not one of ours (a clipboard write, an image)
 /// and is not buffered.
@@ -218,20 +227,25 @@ impl Track {
                     return agent;
                 };
                 let long = now - since >= LONG_MS;
-                let decided = !self.hooked && !self.interactive && long;
                 let was = std::mem::take(self);
-                if !decided {
-                    // A short command leaves the card as it was, except a
-                    // working this module set itself.
-                    return if agent == Working && !was.hooked {
-                        None
-                    } else {
-                        agent
-                    };
+                if was.hooked || was.interactive {
+                    // The hooks, or you in a full-screen program, decided.
+                    return agent;
                 }
                 match status {
-                    Some(0) | Option::None => Done,
-                    Some(_) => Waiting,
+                    Some(INTERRUPTED) => {
+                        if agent == Working {
+                            None
+                        } else {
+                            agent
+                        }
+                    }
+                    Some(s) if *s != 0 => Waiting,
+                    _ if long => Done,
+                    // A quick success leaves the card as it was, except a
+                    // working this module set itself.
+                    _ if agent == Working => None,
+                    _ => agent,
                 }
             }
             Signal::AltScreen(on) => {
@@ -319,14 +333,20 @@ mod tests {
     }
 
     #[test]
-    fn a_short_command_changes_nothing() {
+    fn a_quick_success_changes_nothing_but_a_quick_failure_shows() {
         let mut t = Track::default();
         assert_eq!(run(&mut t, 0., 800., 0), None);
         assert_eq!(
             run(&mut t, 0., 800., 1),
-            None,
-            "a quick typo is not a failure worth a lamp"
+            Waiting,
+            "a failure is news however quick"
         );
+        assert_eq!(
+            run(&mut t, 0., 800., 130),
+            None,
+            "Ctrl+C is you, not a failure"
+        );
+        assert_eq!(run(&mut t, 0., 60_000., 130), None, "even after a long run");
     }
 
     #[test]
