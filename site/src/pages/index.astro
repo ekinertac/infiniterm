@@ -12,7 +12,14 @@ import '@fontsource-variable/schibsted-grotesk';
 import '@fontsource-variable/jetbrains-mono';
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
-const install = 'curl -fsSL https://ekinertac.github.io/infiniterm-releases/install.sh | sh';
+// Lite and Pro, as decided in ekinertac/notes#50: the public source builds
+// Lite for free (personal use, no browser cards); the signed, notarized,
+// auto-updating DMG with browser cards and the work licence is Pro, sold on
+// Lemon Squeezy. No free binary is linked from here, ever. Empty BUY_URL or
+// PRICE means "not on sale yet" and the page says so instead of inventing one.
+const BUY_URL = '';
+const PRICE = '';
+const SOURCE_URL = 'https://github.com/ekinertac/infiniterm';
 
 // The hero canvas, in reading order. `state` is what the card settles on;
 // `lines` are bar widths in characters, since these cards are "far away".
@@ -92,7 +99,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
       <a class="mark" href={base}><img src={`${base}favicon.png`} alt="" width="28" height="28" />infiniterm</a>
       <nav>
         <a href={`${base}guide/install/`}>Docs</a>
-        <a href="https://github.com/ekinertac/infiniterm-releases/releases/latest">Releases</a>
+        <a href="#pricing">Pricing</a>
       </nav>
     </header>
 
@@ -104,13 +111,11 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
             infiniterm puts every terminal on one zoomable canvas. Each card keeps its place, and its border says what the
             agent inside is doing: working, waiting on you, failed, or done.
           </p>
-          <div class="install">
-            <code id="install-line">{install}</code>
-            <button type="button" id="copy" aria-label="Copy the install command">Copy</button>
+          <div class="ctas">
+            <a class="btn primary" href="#pricing">Get infiniterm Pro</a>
+            <a class="btn" href="#pricing">Build Lite from source</a>
           </div>
-          <p class="fine">
-            macOS 13 or later on Apple Silicon. Or <a href="https://github.com/ekinertac/infiniterm-releases/releases/latest">download the DMG</a>.
-          </p>
+          <p class="fine">For macOS 13 or later on Apple Silicon.</p>
         </div>
 
         <div class="hero-canvas" aria-hidden="true">
@@ -191,7 +196,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
           <div><dt>Editor cards</dt><dd>Syntax highlighting for 17 languages, a file tree, find and replace. No LSP, on purpose.</dd></div>
           <div><dt>Diff cards</dt><dd><code>ift diff</code> shows your changes against HEAD, with a blame gutter on <kbd>Cmd</kbd> <kbd>B</kbd>.</dd></div>
           <div><dt>Transcript cards</dt><dd>A Claude Code or Pi session as turns, tool calls folded, following along while it runs.</dd></div>
-          <div><dt>Browser cards</dt><dd>Chromium with the Claude in Chrome extension, so an agent can drive a browser that lives next to it.</dd></div>
+          <div><dt>Browser cards <span class="pro">Pro</span></dt><dd>Chromium with the Claude in Chrome extension, so an agent can drive a browser that lives next to it.</dd></div>
           <div><dt>Shells that outlive the window</dt><dd>Each card's shell runs under its own small daemon. Quit the app and they keep running; reopen it and they are back.</dd></div>
         </dl>
       </section>
@@ -220,14 +225,37 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
         </p>
       </section>
 
-      <section class="end">
-        <h2>Install it in one line.</h2>
-        <div class="install">
-          <code>{install}</code>
-          <button type="button" class="copy-again" aria-label="Copy the install command">Copy</button>
+      <section class="end" id="pricing">
+        <h2>Build it yourself, or buy the build.</h2>
+        <div class="plans">
+          <div class="plan">
+            <h3>Lite</h3>
+            <p class="price">Free to build</p>
+            <ul>
+              <li>Everything on this page except browser cards</li>
+              <li>Built from the public source with Rust</li>
+              <li>For personal use</li>
+            </ul>
+            <a class="btn" href={SOURCE_URL}>Get the source</a>
+          </div>
+          <div class="plan pro-plan">
+            <h3>Pro</h3>
+            <p class="price">{PRICE ? `${PRICE}, one time` : 'One-time purchase'}</p>
+            <ul>
+              <li>A signed, notarized app that updates itself</li>
+              <li>Browser cards, with the Claude in Chrome extension</li>
+              <li>A licence for work, one per person</li>
+            </ul>
+            {BUY_URL ? (
+              <a class="btn primary" href={BUY_URL}>Buy Pro</a>
+            ) : (
+              <span class="btn primary disabled" aria-disabled="true">Not on sale yet</span>
+            )}
+          </div>
         </div>
         <p class="fine">
-          Early, and in active development. Source-available: free for personal use, a paid licence for work.
+          Source-available, not open source: you can read, build and change it for personal use, and not hand builds to
+          anyone else. Using it for paid work, freelance included, needs Pro. Early, and in active development.
         </p>
       </section>
     </main>
@@ -235,7 +263,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     <footer>
       <a href={`${base}guide/install/`}>Docs</a>
       <a href={`${base}reference/keys/`}>Keys</a>
-      <a href="https://github.com/ekinertac/infiniterm-releases/releases">Releases</a>
+      <a href={SOURCE_URL}>Source</a>
     </footer>
 
     <script>
@@ -259,20 +287,6 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
         } else start();
       }
 
-      // Both copy buttons put the install line on the clipboard and say so in
-      // their own label for a moment; that label change is the confirmation.
-      const line = document.getElementById('install-line')?.textContent ?? '';
-      for (const b of document.querySelectorAll<HTMLButtonElement>('#copy, .copy-again')) {
-        b.addEventListener('click', async () => {
-          try {
-            await navigator.clipboard.writeText(line);
-            b.textContent = 'Copied';
-          } catch {
-            b.textContent = 'Select it';
-          }
-          setTimeout(() => (b.textContent = 'Copy'), 1600);
-        });
-      }
     </script>
   </body>
 </html>
@@ -375,35 +389,21 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     padding-block: 40px 96px;
   }
   .lede { font-size: 1.25rem; color: var(--ink-soft); margin: 28px 0 32px; }
-  .install {
-    display: flex;
-    align-items: stretch;
-    max-width: 640px;
-    background: var(--card);
-    color: var(--card-text);
-    border-radius: 10px;
-    border: 1px solid var(--card-edge);
-    overflow: hidden;
+  .ctas { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn {
+    display: inline-block;
+    font: 600 1rem var(--sans);
+    text-decoration: none;
+    padding: 14px 22px;
+    border-radius: 9px;
+    border: 1.5px solid var(--ink);
+    color: var(--ink);
   }
-  .install code {
-    flex: 1;
-    min-width: 0;
-    font: 0.86rem/1.4 var(--mono);
-    padding: 15px 16px;
-    overflow-x: auto;
-    white-space: nowrap;
-  }
-  .install code::before { content: '$ '; color: var(--card-dim); }
-  .install button {
-    font: 600 0.9rem var(--sans);
-    background: var(--working);
-    color: #17161f;
-    border: 0;
-    padding: 0 20px;
-    cursor: pointer;
-    min-width: 92px;
-  }
-  .install button:hover { background: #b39ae3; }
+  .btn:hover { text-decoration: none; background: color-mix(in srgb, var(--ink) 8%, transparent); }
+  .btn.primary { background: var(--working); border-color: var(--working); color: #17161f; }
+  .btn.primary:hover { background: #b39ae3; }
+  .btn.disabled { opacity: 0.55; cursor: default; }
+  .btn.disabled:hover { background: var(--working); }
   .fine { font-size: 0.95rem; color: var(--ink-soft); margin-top: 14px; }
 
   /* Wider than its column on purpose: it runs off the window's right edge,
@@ -539,7 +539,38 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
   .nots p:last-child { color: var(--ink-soft); }
 
   .end { border-top: 1px solid var(--dot); }
-  .end .install { margin-top: 28px; }
+  .plans {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 28px;
+    margin: 40px 0 28px;
+    max-width: 900px;
+  }
+  .plan {
+    background: var(--card);
+    color: var(--card-text);
+    border: 1px solid var(--card-edge);
+    border-radius: 10px;
+    padding: 28px;
+    display: grid;
+    align-content: start;
+    gap: 14px;
+  }
+  .plan.pro-plan { box-shadow: 0 0 0 3px var(--working); }
+  .plan h3 { margin: 0; font-size: 1.6rem; letter-spacing: -0.02em; }
+  .plan .price { margin: 0; color: var(--card-dim); }
+  .plan ul { margin: 0 0 8px; padding-left: 1.1em; display: grid; gap: 8px; }
+  .plan .btn { justify-self: start; border-color: var(--card-text); color: var(--card-text); }
+  .plan .btn.primary { color: #17161f; border-color: var(--working); }
+  .pro {
+    font: 600 0.72rem var(--mono);
+    vertical-align: 0.2em;
+    margin-left: 6px;
+    padding: 2px 7px;
+    border-radius: 5px;
+    background: var(--working);
+    color: #17161f;
+  }
 
   footer {
     display: flex;
@@ -565,6 +596,6 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     .card pre { font-size: 9px; }
     .state-row { grid-template-columns: 1fr; }
     .keys li { grid-template-columns: 1fr; gap: 4px; }
-    .install code { font-size: 0.75rem; }
+    .plans { grid-template-columns: 1fr; }
   }
 </style>
