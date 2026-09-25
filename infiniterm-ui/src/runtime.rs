@@ -749,8 +749,29 @@ pub fn startup(app: &mut AppView) {
 /// the endpoint is the lock (`infiniterm-core`'s `transport`, a unix socket
 /// or a named pipe). A second launch on the same data dir activates the
 /// first and exits before it could race it for the save file.
+#[cfg(not(windows))]
 pub fn another_instance_holds_the_socket() -> bool {
     infiniterm_core::transport::is_live(&infiniterm_core::paths::socket_path())
+}
+
+/// Two questions on Windows, not one: something is listening AND the process
+/// that claimed the endpoint still exists.
+///
+/// A terminated process is not reaped while a thread of it is stuck in the
+/// kernel, and CEF leaves one that is, so the pipe goes on accepting
+/// connections for about forty seconds after the app has gone. A relaunch
+/// inside that window was told the endpoint was held and exited, which reads
+/// as "infiniterm will not start" (measured 2026-09-25). See
+/// `infiniterm_core::instance` for why this cannot let two instances onto
+/// one save file, which an earlier attempt at the same problem did.
+#[cfg(windows)]
+pub fn another_instance_holds_the_socket() -> bool {
+    let data = infiniterm_core::paths::app_support_dir();
+    infiniterm_core::instance::holds_the_endpoint(
+        infiniterm_core::transport::is_live(&infiniterm_core::paths::socket_path()),
+        infiniterm_core::instance::owner(&data),
+        infiniterm_core::instance::process_alive,
+    )
 }
 
 /// curl, not an HTTP crate: one endpoint, off by default, and this app

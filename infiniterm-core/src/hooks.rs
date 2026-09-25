@@ -73,6 +73,12 @@ pub fn listen(path: &Path, reports: Sender<HookReport>, cli: Arc<CliState>) -> R
     }
     let listener =
         transport::bind(path).map_err(|e| format!("could not bind {}: {e}", path.display()))?;
+    // Ours now, and on record. Windows only: there a lingering endpoint is
+    // told from a running instance by this file rather than by the pipe,
+    // which goes on answering for half a minute after its owner has gone.
+    // See `instance`.
+    #[cfg(windows)]
+    crate::instance::claim(&crate::paths::app_support_dir());
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let reports = reports.clone();

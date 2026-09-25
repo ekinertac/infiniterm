@@ -59,6 +59,8 @@ pub mod git;
 pub mod hooks;
 pub mod ift;
 pub mod inspect;
+// Who owns the single-instance endpoint; the other half of `transport`.
+pub mod instance;
 pub mod itermcolors;
 // Windows job objects, used by the pane backend and by main to make a
 // process tree die with its owner. The file is `#![cfg(windows)]`.
