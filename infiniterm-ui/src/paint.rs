@@ -528,6 +528,7 @@ impl AppView {
                 _ if overlapping && moving.contains(&card.id) => chrome.remote_bg,
                 AgentState::Working => chrome.agent_working,
                 AgentState::Waiting => chrome.agent_waiting,
+                AgentState::Failed => chrome.agent_failed,
                 AgentState::Done => chrome.agent_done,
                 AgentState::None => chrome.card_border,
             };
@@ -763,6 +764,7 @@ impl AppView {
         let state_chip = match card.agent {
             AgentState::Working => Some(chrome.agent_working),
             AgentState::Waiting => Some(chrome.agent_waiting),
+            AgentState::Failed => Some(chrome.agent_failed),
             AgentState::Done => Some(chrome.agent_done),
             AgentState::None => None,
         };

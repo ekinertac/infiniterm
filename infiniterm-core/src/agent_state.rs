@@ -16,9 +16,14 @@ pub enum AgentState {
     None,
     /// Mid-turn. Nothing is needed from you.
     Working,
-    /// Blocked on you: a permission prompt, a question, or a turn that
-    /// ended badly. The only state worth interrupting yourself for.
+    /// Blocked on you: a permission prompt, a question. The only state
+    /// worth interrupting yourself for.
     Waiting,
+    /// Something failed: a command that exited non-zero, a turn that ended
+    /// in error, a program reporting an error. Its own state and colour
+    /// since 2026-09-25 (Ekin: "asking" and "broke" are different news);
+    /// before, both were Waiting.
+    Failed,
     /// The turn finished. Its result is there when you want it.
     Done,
 }
@@ -39,6 +44,7 @@ impl AgentState {
             AgentState::None => "none",
             AgentState::Working => "working",
             AgentState::Waiting => "waiting",
+            AgentState::Failed => "failed",
             AgentState::Done => "done",
         }
     }
@@ -47,8 +53,8 @@ pub fn apply_hook_event(prev: AgentState, event: &str) -> AgentState {
     match event {
         "UserPromptSubmit" | "PreToolUse" | "PostToolUse" => AgentState::Working,
         // A turn that ended in failure is exactly when you want to look, so
-        // it waits for you rather than reporting itself done.
-        "StopFailure" => AgentState::Waiting,
+        // it says so rather than reporting itself done.
+        "StopFailure" => AgentState::Failed,
         // Claude Code sends Notification for two different things: it wants
         // permission MID-TURN, and it has been waiting on your input for a
         // minute. Only the first is the agent being blocked on you; the
@@ -91,7 +97,7 @@ mod tests {
     fn being_blocked_on_you_is_not_the_same_as_being_finished() {
         assert_eq!(apply_hook_event(Working, "Stop"), Done);
         assert_eq!(apply_hook_event(Working, "Notification"), Waiting);
-        assert_eq!(apply_hook_event(Working, "StopFailure"), Waiting);
+        assert_eq!(apply_hook_event(Working, "StopFailure"), Failed);
     }
 
     // Claude Code nags a minute after every turn ends. That is not the agent

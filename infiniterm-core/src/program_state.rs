@@ -9,15 +9,15 @@
 //! - OSC 133, shell integration: 133;C a command started, 133;D;<status> it
 //!   finished. zsh sends it through our integration (shell_integration.rs).
 //! - OSC 9;4, progress a program reports itself: 1 or 3 running, 2 error,
-//!   4 paused, 0 cleared. And OSC 9 / 777 / 99 notifications, a program
-//!   asking for you.
+//!   4 paused, 0 cleared (2 is failed, 4 waiting). And OSC 9 / 777 / 99
+//!   notifications, a program asking for you (waiting).
 //!
 //! The rules, and why:
 //! - A command must run `LONG_MS` before it shows as working, and only a
 //!   command that ran that long turns the card done when it ends well, so
 //!   every `ls` does not leave the card green: green would then be the
 //!   colour of every shell card and say nothing.
-//! - A FAILURE turns the card waiting however quick it was (Ekin,
+//! - A FAILURE turns the card failed (red) however quick it was (Ekin,
 //!   2026-09-25: a failing command that showed nothing looked broken). It
 //!   costs little: you are usually in that card and the next command
 //!   clears it. Ctrl+C (status 130) is not a failure, you stopped it.
@@ -218,7 +218,7 @@ impl Track {
                 // You are back in this card: the last command's result has
                 // been seen.
                 match agent {
-                    Done | Waiting => None,
+                    Done | Waiting | Failed => None,
                     s => s,
                 }
             }
@@ -240,7 +240,7 @@ impl Track {
                             agent
                         }
                     }
-                    Some(s) if *s != 0 => Waiting,
+                    Some(s) if *s != 0 => Failed,
                     _ if long => Done,
                     // A quick success leaves the card as it was, except a
                     // working this module set itself.
@@ -262,7 +262,8 @@ impl Track {
                     self.progress = true;
                     Working
                 }
-                2 | 4 => Waiting,
+                2 => Failed,
+                4 => Waiting,
                 0 if self.progress && agent == Working => {
                     self.progress = false;
                     Done
@@ -338,7 +339,7 @@ mod tests {
         assert_eq!(run(&mut t, 0., 800., 0), None);
         assert_eq!(
             run(&mut t, 0., 800., 1),
-            Waiting,
+            Failed,
             "a failure is news however quick"
         );
         assert_eq!(
@@ -361,7 +362,7 @@ mod tests {
             t.apply(a, false, &Signal::CommandEnd(Some(0)), 60_000.),
             Done
         );
-        assert_eq!(run(&mut Track::default(), 0., 60_000., 101), Waiting);
+        assert_eq!(run(&mut Track::default(), 0., 60_000., 101), Failed);
     }
 
     #[test]
@@ -369,6 +370,7 @@ mod tests {
         let mut t = Track::default();
         assert_eq!(t.apply(Done, false, &Signal::CommandStart, 0.), None);
         assert_eq!(t.apply(Waiting, false, &Signal::CommandStart, 0.), None);
+        assert_eq!(t.apply(Failed, false, &Signal::CommandStart, 0.), None);
     }
 
     #[test]
@@ -407,7 +409,12 @@ mod tests {
         let mut t = Track::default();
         assert_eq!(t.apply(None, false, &Signal::Progress(1), 0.), Working);
         assert_eq!(t.apply(Working, false, &Signal::Progress(0), 1.), Done);
-        assert_eq!(t.apply(None, false, &Signal::Progress(2), 0.), Waiting);
+        assert_eq!(t.apply(None, false, &Signal::Progress(2), 0.), Failed);
+        assert_eq!(
+            t.apply(None, false, &Signal::Progress(4), 0.),
+            Waiting,
+            "paused"
+        );
         assert_eq!(t.apply(None, false, &Signal::Notify, 0.), Waiting);
         assert_eq!(
             t.apply(Done, true, &Signal::Notify, 0.),

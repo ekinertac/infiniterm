@@ -185,7 +185,10 @@ pub struct Chrome {
     pub card_border: Hsla,
     pub card_fg: Hsla,
     pub card_label_fg: Hsla,
-    /// Mid-turn. The common state, so it stays the quiet branded clay.
+    /// Mid-turn, or a long command running. The common state, so a quiet
+    /// violet. It was Claude's clay (#d97757) until 2026-09-25, when failed
+    /// got red: clay and red are one colour at fit-all zoom, and blue was
+    /// taken by the selection ring.
     pub agent_working: Hsla,
     /// Blocked on you. The loudest thing on the canvas, and the only one
     /// that earns being loud.
@@ -193,6 +196,8 @@ pub struct Chrome {
     /// Finished. Calm, and a different HUE from the other two: at 40% zoom
     /// two oranges differing only in brightness are one colour.
     pub agent_done: Hsla,
+    /// Something failed: a non-zero exit, a turn that ended in error.
+    pub agent_failed: Hsla,
     /// Something the app wants to point out that has nothing to do with an
     /// agent: a frame rate that has fallen over, a search with no hits. Its
     /// own colour, because borrowing the agent's is how a signal colour
@@ -268,9 +273,10 @@ impl Chrome {
             card_border: c(0x2a2f38),
             card_fg: c(0xb9c4d2),
             card_label_fg: c(0x7b8794),
-            agent_working: c(0xd97757),
+            agent_working: c(0x9d7cd8),
             agent_waiting: c(0xffc400),
             agent_done: c(0x4fb477),
+            agent_failed: c(0xe5484d),
             warn: c(0xe3a008),
             remote_bg: c(0xc0392b),
             remote_fg: c(0xfff2ef),

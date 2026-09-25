@@ -479,6 +479,7 @@ impl AppView {
             for state in dots {
                 let color = match state {
                     AgentState::Waiting => chrome.agent_waiting,
+                    AgentState::Failed => chrome.agent_failed,
                     AgentState::Working => {
                         crate::chrome::with_alpha(chrome.agent_working, TAB_WORKING_DOT_ALPHA)
                     }

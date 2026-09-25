@@ -32,7 +32,7 @@ pub fn tab_dots(cards: &[(AgentState, f64)], left_at: f64, active: bool) -> Vec<
     cards
         .iter()
         .map(|&(s, at)| match s {
-            AgentState::Waiting | AgentState::Working => s,
+            AgentState::Waiting | AgentState::Failed | AgentState::Working => s,
             AgentState::Done if !active && at > left_at => s,
             _ => AgentState::None,
         })

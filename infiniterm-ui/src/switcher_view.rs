@@ -51,6 +51,7 @@ impl AppView {
             let dot = match card.agent {
                 AgentState::Working => Some(chrome.agent_working),
                 AgentState::Waiting => Some(chrome.agent_waiting),
+                AgentState::Failed => Some(chrome.agent_failed),
                 AgentState::Done => Some(chrome.agent_done),
                 AgentState::None => None,
             };
