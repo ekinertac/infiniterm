@@ -1,0 +1,15 @@
+{
+  "name": "infiniterm-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "reference": "cargo run --quiet -p infiniterm-core --example site_reference -- src/content/docs/reference",
+    "dev": "npm run reference && astro dev",
+    "build": "npm run reference && astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.42.4",
+    "astro": "^7.3.5"
+  }
+}

@@ -1,0 +1,8 @@
+# Rendered from the app's tables by `npm run reference` on every dev and
+# build run (infiniterm-core/src/site_reference.rs); never edited by hand.
+src/content/docs/reference/keys.md
+src/content/docs/reference/commands.md
+src/content/docs/reference/settings.md
+node_modules/
+dist/
+.astro/
