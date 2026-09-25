@@ -16,7 +16,7 @@ param(
     [string]$Data = "$env:TEMP\ift-win-data",
     [string]$Config = "$env:TEMP\ift-win-config",
     [string]$Exe = "$PSScriptRoot\..\..\..\target\debug\infiniterm.exe",
-    [int]$WaitSeconds = 20
+    [int]$WaitSeconds = 60
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,6 +49,13 @@ if ($p.HasExited) { throw "the endpoint stayed held; another infiniterm is runni
 
 # PowerShell with a real profile takes seconds to draw its first prompt, and
 # the window is up well before that; wait for the window, not the prompt.
+#
+# A minute, because CEF is initialised inside gpui's run closure BEFORE the
+# window opens, so nothing is on screen until Chromium is ready. On a warm
+# profile that is a second or two; on a cold one it was over thirty
+# (2026-09-25, the first launch after the profile directory was deleted),
+# which the old twenty second wait called a failure while the app was
+# starting perfectly well.
 $deadline = (Get-Date).AddSeconds($WaitSeconds)
 while ((Get-Date) -lt $deadline) {
     $p.Refresh()
