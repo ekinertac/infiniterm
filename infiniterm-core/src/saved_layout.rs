@@ -115,6 +115,11 @@ pub struct SavedCard {
     /// The last Claude Code session the card ran, for `claude --resume`
     /// after a reboot. Written only when there is one.
     pub agent_session: Option<String>,
+    /// The name the agent gave its session (its terminal title), for the
+    /// label after a relaunch: the title escape is sent when the name is
+    /// set, and a long session's ring no longer holds it. Written only for
+    /// a card with an agent session.
+    pub agent_title: Option<String>,
     /// The card's `#7`. Zero when the file predates it; written when set.
     pub number: u32,
     /// `card.protect`: cannot be closed. Written only when true.
@@ -216,6 +221,11 @@ fn card_value(c: &SavedCard) -> Value {
     if let Some(agent) = &c.agent_session {
         if let Some(map) = card.as_object_mut() {
             map.insert("agentSession".into(), Value::String(agent.clone()));
+        }
+    }
+    if let Some(t) = c.agent_title.as_ref().filter(|_| c.agent_session.is_some()) {
+        if let Some(map) = card.as_object_mut() {
+            map.insert("agentTitle".into(), Value::String(t.clone()));
         }
     }
     if c.number > 0 {
@@ -326,6 +336,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
     let session = non_empty(c.get("session")).or_else(|| non_empty(c.get("tmuxWindow")));
     let kitty_keys = c.get("kittyKeys").and_then(Value::as_bool).unwrap_or(false);
     let agent_session = non_empty(c.get("agentSession"));
+    let agent_title = non_empty(c.get("agentTitle"));
     let number = c.get("number").and_then(Value::as_u64).unwrap_or(0) as u32;
     let protected = c.get("protected").and_then(Value::as_bool).unwrap_or(false);
     let tabs: Vec<String> = c
@@ -404,6 +415,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         session,
         kitty_keys,
         agent_session,
+        agent_title,
         number,
         protected,
     })
@@ -589,6 +601,7 @@ mod tests {
             z: 0.,
             kitty_keys: false,
             agent_session: None,
+            agent_title: None,
             number: 0,
             protected: false,
             title: "api".into(),
@@ -773,6 +786,34 @@ mod tests {
             .as_object()
             .unwrap()
             .contains_key("agentSession"));
+    }
+
+    // The session's name comes back with it, so the label does not fall
+    // back to the directory after a relaunch; a card with no agent session
+    // never writes one.
+    #[test]
+    fn the_agent_title_round_trips_only_beside_an_agent_session() {
+        let saved = round_trip(
+            &[SavedCard {
+                agent_session: Some("c0ffee".into()),
+                agent_title: Some("fix the tab dots".into()),
+                ..card()
+            }],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            saved.cards[0].agent_title.as_deref(),
+            Some("fix the tab dots")
+        );
+        let shell = SavedCard {
+            agent_title: Some("zsh".into()),
+            ..card()
+        };
+        assert!(!card_value(&shell)
+            .as_object()
+            .unwrap()
+            .contains_key("agentTitle"));
     }
 
     // Same rule as session, kittyKeys and agentSession: a card that never

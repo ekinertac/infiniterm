@@ -109,6 +109,16 @@ impl AppView {
                         card.cwd.clone(),
                     )),
                 );
+                // The agent's session name the save file kept, until the
+                // program sets one again; the mirror below would otherwise
+                // copy the new body's empty title over it.
+                if let Some(b) = self
+                    .bodies
+                    .get_mut(&card.id)
+                    .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
+                {
+                    b.title = card.osc_title.clone();
+                }
             }
             let Some(body) = self
                 .bodies
@@ -311,6 +321,10 @@ impl AppView {
             if card.osc_title != osc {
                 if let Some(c) = self.model.card_mut(&card.id) {
                     c.osc_title = osc;
+                    // An agent's session name is saved (`agentTitle`).
+                    if c.runs_agent() {
+                        self.model.dirty_layout = true;
+                    }
                 }
                 // The label was drawn before this ran.
                 self.redraw = true;

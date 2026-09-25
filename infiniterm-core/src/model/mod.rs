@@ -179,6 +179,16 @@ pub struct Card {
     pub split_from: Option<String>,
 }
 
+impl Card {
+    /// An agent has run here: this session's hooks gave a transcript, or
+    /// the save file kept its session id. The transcript alone is runtime,
+    /// so after a relaunch an idle Claude card lost its name to the
+    /// directory until its next hook (2026-09-25); the saved id holds.
+    pub fn runs_agent(&self) -> bool {
+        self.transcript_path.is_some() || self.agent_session.is_some()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Group {
     pub id: String,

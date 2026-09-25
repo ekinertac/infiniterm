@@ -1269,6 +1269,26 @@ mod tests {
         assert!(h.m.framing);
     }
 
+    // A Claude card keeps its session's name across a relaunch, with no
+    // hook arriving to say an agent is there: the saved session id is the
+    // evidence and the saved title the name. A shell's title never is.
+    #[test]
+    fn a_claude_card_keeps_its_name_across_a_relaunch() {
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        h.m.cards[0].agent_session = Some("c0ffee".into());
+        h.m.cards[0].osc_title = Some("fix the tab dots".into());
+        h.m.cards[1].osc_title = Some("zsh: ~/Code".into());
+        let text = h.m.save_text().expect("saveable");
+        let mut again = Model::new();
+        again.home = "/Users/me".into();
+        again.load_layout(Some(&text));
+        assert!(again
+            .label_of(&again.cards[0].clone())
+            .contains("fix the tab dots"));
+        assert!(!again.label_of(&again.cards[1].clone()).contains("zsh"));
+    }
+
     #[test]
     fn the_layout_round_trips_through_save_and_load() {
         let mut h = Harness::new();

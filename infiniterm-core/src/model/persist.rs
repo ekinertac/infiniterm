@@ -81,6 +81,7 @@ impl Model {
                         // fallen out of the ring we replay.
                         card.kitty_keys = c.kitty_keys;
                         card.agent_session = c.agent_session.clone();
+                        card.osc_title = c.agent_title.clone();
                         card.tabs = c.tabs;
                         card.active_tab = c.active_tab;
                     }
@@ -137,6 +138,7 @@ impl Model {
                 session: c.session.clone(),
                 kitty_keys: c.kitty_keys,
                 agent_session: c.agent_session.clone(),
+                agent_title: c.osc_title.clone().filter(|_| c.runs_agent()),
                 number: c.number,
                 protected: c.protected,
             })

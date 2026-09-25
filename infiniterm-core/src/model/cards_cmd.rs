@@ -83,13 +83,12 @@ impl Model {
             &Labelled {
                 title: &card.title,
                 // Only an agent's title is trusted: a card running Claude
-                // Code or Pi has a transcript, and that title IS the
-                // session's name. A plain shell's title is its own idea of
-                // the directory or the last command, which is what the
-                // label already says better.
+                // Code or Pi has a transcript or a saved session, and that
+                // title IS the session's name. A plain shell's title is its
+                // own idea of the directory or the last command, which is
+                // what the label already says better.
                 session: card
-                    .transcript_path
-                    .is_some()
+                    .runs_agent()
                     .then_some(card.osc_title.as_deref())
                     .flatten(),
                 proc: card.proc.as_deref(),
