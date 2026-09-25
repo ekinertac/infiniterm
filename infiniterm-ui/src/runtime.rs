@@ -829,10 +829,20 @@ const AGENT_LOG_MAX_BYTES: u64 = 512 * 1024;
 /// The `.app` an executable lives in: `.../x.app/Contents/MacOS/x` is three
 /// ancestors up. `None` for a bare binary, which is what `cargo run` and
 /// every test is, and which must not be "restarted" into anything.
+#[cfg(not(windows))]
 fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
     exe.ancestors()
         .nth(3)
         .filter(|p| p.extension().is_some_and(|e| e == "app"))
+}
+
+/// What an update replaces on Windows: the folder the exe sits in, which is
+/// what `tools/dist.ps1` produces and what somebody unpacks. There is no
+/// bundle to walk up to and no install location to insist on; whether that
+/// folder may be updated at all is `update::applies_to`.
+#[cfg(windows)]
+fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
+    exe.parent()
 }
 
 /// Arranges for this app bundle to be reopened once this process is gone.
@@ -880,7 +890,10 @@ fn start_updater(app: &mut AppView) {
     let dir = infiniterm_core::paths::app_support_dir().join("update");
     crate::updater::clean(&dir);
     let Some(running) = crate::updater::build_of(bundle) else {
-        eprintln!("[infiniterm] no build number in the bundle; updates are off");
+        // Windows stamps this at compile time, so a build without one is a
+        // `cargo build` rather than a release; macOS reads it from the
+        // bundle's plist.
+        eprintln!("[infiniterm] no build number in this build; updates are off");
         return;
     };
     app.updater = Some(crate::updater::start(bundle.to_path_buf(), running, dir));
@@ -953,6 +966,7 @@ impl AppView {
     }
 }
 
+#[cfg(not(windows))]
 fn relaunch_after_exit() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let bundle = bundle_of(&exe).ok_or("not running from an .app bundle")?;
@@ -969,12 +983,49 @@ fn relaunch_after_exit() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// The same thing in PowerShell, which is the only shell Windows is sure to
+/// have. `-WindowStyle Hidden` so the waiter does not flash a console over
+/// whatever is on screen while it waits.
+#[cfg(windows)]
+fn relaunch_after_exit() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let script = format!(
+        "Wait-Process -Id {pid} -ErrorAction SilentlyContinue; Start-Process -FilePath {exe}",
+        pid = std::process::id(),
+        exe = infiniterm_core::drop::quote_for(
+            &exe.to_string_lossy(),
+            infiniterm_core::shell_cmd::ShellKind::PowerShell
+        ),
+    );
+    std::process::Command::new(infiniterm_core::shell_cmd::default_shell())
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
+
+    // What an update replaces on Windows: the folder somebody unpacked,
+    // whatever it is called and wherever it is.
+    #[cfg(windows)]
+    #[test]
+    fn the_folder_is_the_one_the_executable_sits_in() {
+        use std::path::Path;
+        assert_eq!(
+            bundle_of(Path::new(r"C:\Program Files\infiniterm\infiniterm.exe")),
+            Some(Path::new(r"C:\Program Files\infiniterm"))
+        );
+        assert_eq!(bundle_of(Path::new("infiniterm.exe")), Some(Path::new("")));
+    }
     use super::*;
 
     // Three up and it must be the bundle, or `open` gets handed a path
-    // that is not an app and the restart quits into nothing.
+    // that is not an app and the restart quits into nothing. macOS only:
+    // Windows has no bundle to walk up to and `bundle_of` is the exe's own
+    // folder there.
+    #[cfg(not(windows))]
     #[test]
     fn the_bundle_is_three_above_the_executable() {
         use std::path::Path;

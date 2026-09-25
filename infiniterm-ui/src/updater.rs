@@ -11,15 +11,24 @@
 //! then `spctl` for the notarization, which is a stronger check than the
 //! minisign signature Tauri's updater carries for platforms without one.
 //!
+//! WINDOWS CHECKS ONLY THE HASH. Authenticode needs a paid certificate and
+//! there is none, so the manifest is the authority there: a download that
+//! matches the SHA-256 it names is installed. That makes whoever can write
+//! the releases repo able to run code on a Windows machine, where the Mac
+//! keeps the signature as a second factor. Ekin decided that trade
+//! knowingly, 2026-09-25. `stage` says it again where it happens.
+//!
 //! Started by `runtime::startup` only for an installed app
 //! (`update::applies_to`) and never for a scratch instance. The ui drains
 //! `events` in `drain_backend`; `app.update.check` wakes the thread for a
 //! check now; a staged update is applied by the restart waiter
 //! (`update::swap_script`), which `app.restart` and `app.update.install`
 //! both reach.
-use infiniterm_core::update::{
-    is_newer, parse_manifest, Manifest, CHECK_EVERY_MS, LATEST_URL, TEAM_REQUIREMENT,
-};
+use infiniterm_core::update::{is_newer, parse_manifest, Manifest, CHECK_EVERY_MS, LATEST_URL};
+// The signature requirement is the macOS half of the check; Windows has
+// only the hash (see this file's header).
+#[cfg(not(windows))]
+use infiniterm_core::update::TEAM_REQUIREMENT;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -136,7 +145,81 @@ fn check(running: u64, dir: &Path, staged: Option<u64>) -> Result<Option<Staged>
     stage(&m, dir).map(Some)
 }
 
+/// Download, check the hash, unpack, check the build. Any failure leaves
+/// nothing staged.
+///
+/// THE HASH IS THE WHOLE CHECK on Windows, which is a real difference from
+/// the Mac and worth saying plainly: there a download must also be signed
+/// by Ekin's team and notarized, so a zip somebody else built is refused
+/// even if the manifest names its hash. Authenticode needs a paid
+/// certificate and there is none, so here the manifest is the authority and
+/// whoever can write the releases repo decides what runs. The manifest
+/// itself comes over TLS from that repo and `parse_manifest` refuses a url
+/// pointing anywhere else, which is the floor this rests on.
+///
+/// `curl.exe` and `tar.exe` ship with Windows 10 1803 and later, and
+/// `certutil` with every Windows, so no crate is added for any of it — the
+/// same reasoning the macOS side uses for curl, ditto and shasum.
+#[cfg(windows)]
+fn stage(m: &Manifest, dir: &Path) -> Result<Staged, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let zip = dir.join(format!("{}.zip", m.tag));
+    let out = dir.join(&m.tag);
+    let _ = std::fs::remove_dir_all(&out);
+    let zip_s = zip.to_string_lossy().into_owned();
+    run(
+        "curl",
+        &["-fsSL", "--max-time", "900", "-o", &zip_s, &m.url],
+    )?;
+
+    if hash_of(&zip_s)? != m.sha256.to_ascii_lowercase() {
+        let _ = std::fs::remove_file(&zip);
+        return Err(format!("{} does not match its checksum", m.tag));
+    }
+
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    run("tar", &["-xf", &zip_s, "-C", &out.to_string_lossy()])?;
+    let _ = std::fs::remove_file(&zip);
+
+    // The zip holds one folder, named for the build; find it rather than
+    // spelling the name twice.
+    let folder = std::fs::read_dir(&out)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.join("infiniterm.exe").is_file())
+        .ok_or_else(|| format!("{} holds no infiniterm.exe", m.tag))?;
+
+    Ok(Staged {
+        version: m.version.clone(),
+        build: m.build,
+        app: folder,
+    })
+}
+
+/// A file's SHA-256, lowercase, from `certutil`.
+///
+/// Its output is a header line, the digest, and a success line; older
+/// Windows put spaces inside the digest, so everything that is not a hex
+/// digit comes out before comparing.
+#[cfg(windows)]
+fn hash_of(path: &str) -> Result<String, String> {
+    let out = run("certutil", &["-hashfile", path, "SHA256"])?;
+    let digest: String = out
+        .lines()
+        .find(|l| {
+            let bare: String = l.chars().filter(|c| !c.is_whitespace()).collect();
+            bare.len() == 64 && bare.chars().all(|c| c.is_ascii_hexdigit())
+        })
+        .ok_or_else(|| format!("certutil gave no digest for {path}"))?
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    Ok(digest.to_ascii_lowercase())
+}
+
 /// Download, check, unpack, check again. Any failure leaves nothing staged.
+#[cfg(not(windows))]
 fn stage(m: &Manifest, dir: &Path) -> Result<Staged, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let zip = dir.join(format!("{}.zip", m.tag));
