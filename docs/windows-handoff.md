@@ -153,6 +153,42 @@ Quitting, which is Windows's own chapter (2026-09-26):
 Measured after all of it: window gone about 30 ms after the close, every
 process terminated within nine seconds, and the app relaunches in five.
 
+- **One child is meant to outlive the app**, and the job nearly killed it:
+  the waiter that reopens infiniterm or swaps an update in once the exe is
+  unlocked (`runtime::spawn_waiter`). The job allows a breakaway
+  (`JOB_OBJECT_LIMIT_BREAKAWAY_OK`) and the waiter asks for one
+  (`CREATE_BREAKAWAY_FROM_JOB`). Not the SILENT variant, which would let
+  Chromium's processes out too and empty the job of its purpose. If a
+  future change adds something else that must survive the app, this is the
+  pattern; anything spawned without the flag dies with us, by design.
+- Every way out of the app goes through `runtime::leave_now`, which gives up
+  the endpoint claim and ends the process without teardown. Four callers:
+  the window closing, Reload, Restart, and installing an update. Adding a
+  fifth exit that calls `std::process::exit` directly will hang.
+
+## The daemon, and what stands in for it
+
+There is NO daemon on Windows and there is not meant to be. `iftd` is unix
+only, `terminal.backend` defaults to `pty` there, and `Panes::start` falls
+back to local shells for both `daemon` and `tmux` with a notice. So a card's
+shell dies with the app, every time, and there is nothing to keep alive and
+no keep-alive test to write — `ift attach`, `ift sessions` and scrollback
+across a restart do not exist on Windows. A Claude session comes back with
+`claude --resume`, which is what the "goal, and what it is not" section
+above promises.
+
+Two consequences worth knowing:
+
+- **`app.restart` refuses on Windows**, and should. A restart is only
+  offered when the shells survive it, and they never do here. The guard asks
+  `backend::detaches_on_quit`, not the setting: it used to compare the
+  configured backend, so a machine with `"terminal.backend": "daemon"` in
+  its settings was offered a restart while its shells were local pty ones,
+  which is the exact thing the guard exists to prevent.
+- **Installing an update is not guarded**, because it is an explicit
+  request and restarting is the whole point of it. It ends every shell. That
+  is the same on macOS under the pty backend, so it is not a Windows rule.
+
 What is still open:
 
 - **The Mac has not seen any of this.** `make check` on macOS is the gate
