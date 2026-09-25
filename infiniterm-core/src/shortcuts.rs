@@ -16,10 +16,13 @@ use crate::keymap::Keymap;
 
 /// Section order, and the id prefix that fills each one. A command matching
 /// no prefix falls into the trailing catch-all rather than disappearing.
-const SECTIONS: [(&str, &str); 7] = [
+const SECTIONS: [(&str, &str); 8] = [
     ("card.", "cards"),
     ("editor.", "editor"),
     ("group.", "groups"),
+    // Seventeen commands, the Ctrl+digit jumps among them; lost in "other"
+    // they read as leftovers rather than a feature of their own.
+    ("workspace.", "workspaces"),
     ("focus.", "moving around"),
     ("canvas.", "zoom"),
     ("theme.", "themes"),
@@ -218,6 +221,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["cards", "groups"]
         );
+    }
+
+    #[test]
+    fn workspace_commands_have_a_section_of_their_own() {
+        let sections = shortcut_sections(
+            &km(&[("ctrl+1", "workspace.show.1")]),
+            &[("workspace.show.1", "Workspace: go to 1")],
+        );
+        assert_eq!(sections[0].title, "workspaces");
     }
 
     #[test]
