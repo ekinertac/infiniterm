@@ -5,9 +5,10 @@ For a Claude session on Ekin's Windows desktop (the "gpu box", RTX 4070 Ti), sta
 ## Where this stands
 
 Phases 1 to 4 are done on the `windows` branch, 2026-09-23 to -25, and
-phase 6 builds: `tools/dist.ps1` makes an unpacked release folder, a zip and
-a manifest, and that folder runs standalone with its themes beside it and
-its build number in the status bar. Claude Code runs in a card with its
+phase 6 is done: `tools/dist.ps1` makes an unpacked release folder, a zip
+and a manifest, that folder runs standalone with its themes beside it and
+its build number in the status bar, and the app updates itself with the
+manifest's hash as the only check. Claude Code runs in a card with its
 hooks reaching the app, the keymap needs no Windows edition, and a card
 names itself from the process table. What is left is browser cards and the
 question of whether the app updates itself here at all. Every crate builds and passes its
@@ -69,24 +70,38 @@ What phase 2 changed:
 
 What is still open, in the order it will be hit:
 
-- Phase 5, browser cards: CEF for Windows, with the `ift-browser` session.
-  The feature seam is already there (`--no-default-features` draws the stub).
-  Parked until everything else is done, on Ekin's call.
-- Phase 6's remaining half: whether the app should UPDATE ITSELF on
-  Windows. `tools/dist.ps1` already produces the folder, the zip and the
-  manifest, and the app reports its build. What is not built is the
-  download-and-swap, and that is a decision rather than a task: the Mac
-  updater verifies a download with `codesign` against the team requirement
-  and `spctl`, and with no Authenticode certificate the Windows equivalent
-  could only check the SHA-256 the manifest names. That reduces the trust to
-  "whoever can write the releases repo can run code on your machine", where
-  the Mac keeps a second factor. Shipping the zip and letting a person
-  unpack it is the honest floor until there is a certificate.
+- Phase 5, browser cards: CEF for Windows. Started 2026-09-25, at Ekin's
+  word, now that everything else is done. The feature seam is already there
+  (`--no-default-features` draws `browser_stub.rs`), so this is additive:
+  make `infiniterm-browser` build against a Windows CEF and turn the feature
+  back on. NOTE the ownership rule in CLAUDE.md — `infiniterm-browser/`,
+  `browser_body.rs`, `browsers.rs` and `omnibox.rs` are the `ift-browser`
+  session's files. That rule is about ONE shared checkout on the Mac; this
+  is a separate clone on the Windows box, so there is no shared index to
+  sweep, but a change here and a change there still have to merge.
+- Nothing, until the browser. Phase 6 is done: `tools/dist.ps1` makes the
+  folder, the zip and `latest-windows.json`, and the app checks, downloads,
+  verifies and swaps itself.
+
+  **The hash is the only check on Windows, deliberately.** Ekin decided
+  against Authenticode on 2026-09-25 knowing what it costs: the Mac requires
+  a download to be signed by his team and notarized, so a zip somebody else
+  built is refused even when the manifest names its hash; here the manifest
+  is the authority, and whoever can write the releases repo can run code on
+  a Windows machine. `parse_manifest` refusing a url outside that repo, over
+  TLS, is the floor it rests on. Do not quietly widen this: a manifest field
+  that could point the download elsewhere would remove the last of it.
 
 - `inspect.rs` still shells out to `ps` and `lsof`, so on Windows a card has
   no process label and no cwd tracking. It compiles and answers nothing.
   Toolhelp32 is the replacement, and the cwd is not readable from outside a
   process on Windows at all.
+- Transcript cards are the one card kind never opened on Windows. Ekin is
+  testing that (2026-09-25). The Claude card this session ran had transcript
+  saving off because it inherited `CLAUDE_CODE_CHILD_SESSION` from the
+  agent that launched the app, which is not a Windows fault: `local_pty`
+  scrubs the parent TERMINAL's identity variables and not an agent's, so
+  launching the app from inside a Claude card does the same on a Mac.
 - A card's DIRECTORY never changes on Windows. A process's cwd cannot be
   read from outside it without debug privileges, so `inspect::cwds` answers
   nothing there and a card keeps the directory it opened in. The fix is not
