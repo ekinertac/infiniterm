@@ -7,29 +7,37 @@ infiniterm runs on Apple Silicon Macs with macOS 13 or later. Builds are signed 
 
 ## Install
 
-1. Download the `.dmg` from the [latest release](https://github.com/ekinertac/infiniterm-releases/releases/latest).
-2. Open it and drag infiniterm into Applications.
-3. Launch it once from Applications.
-4. In any card, put the `ift` command on your PATH:
+```sh
+curl -fsSL https://ekinertac.github.io/infiniterm-releases/install.sh | sh
+```
 
-   ```sh
-   /Applications/infiniterm.app/Contents/MacOS/ift install
-   ```
+It downloads the latest release, checks its checksum, its signature against the developer's team and its notarization, copies it into `/Applications`, and puts `ift` on your PATH (a symlink in `~/.local/bin`, plus zsh completion). If infiniterm is already installed it leaves the app alone, since the app updates itself. [Read the script](/infiniterm-releases/install.sh) first if you like; it is about 120 lines of sh.
 
-   This symlinks `ift` into `~/.local/bin` and writes its zsh completion. If either directory is not on your `PATH` or `fpath`, it prints the line to add.
+### Agent hooks
 
-## Agent state
+Card borders show what an agent in the card is doing. Claude Code and Pi report through hooks, which means editing their config, so the script asks first when it finds them. When nobody is there to answer (an agent running the install, a CI job), it skips the hooks and prints the commands. To decide up front:
 
-Card borders show what an agent in the card is doing. Claude Code and Pi report through hooks, installed once:
+```sh
+curl -fsSL https://ekinertac.github.io/infiniterm-releases/install.sh | sh -s -- --hooks claude,pi
+curl -fsSL https://ekinertac.github.io/infiniterm-releases/install.sh | sh -s -- --no-hooks
+```
+
+Or later, from any shell:
 
 ```sh
 ift install-claude-hooks      # edits ~/.claude/settings.json
 ift install-pi-hooks          # installs the Pi extension into ~/.pi/agent
 ```
 
-`ift install-pi-hooks DIR` takes a different agent directory, for a wrapper that runs Pi against its own. Both accept `--dry-run` to show what they would change.
+`ift install-pi-hooks DIR` takes a different agent directory, for a wrapper that runs Pi against its own. Both accept `--dry-run`.
 
 Other commands need no setup: a zsh started in a card reports each command's start and exit status to the app. See [Card states](../card-states/).
+
+### Without the script
+
+1. Download the `.dmg` from the [latest release](https://github.com/ekinertac/infiniterm-releases/releases/latest).
+2. Drag infiniterm into Applications and launch it once.
+3. In any card: `/Applications/infiniterm.app/Contents/MacOS/ift install`, then the hook commands above.
 
 ## Shell history per card
 
