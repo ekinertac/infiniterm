@@ -123,26 +123,65 @@ is a separate clone, so there is no shared index to sweep, but these changes
 still have to merge. `surface.rs` and `process.rs` are the two that carry
 real edits.
 
+Quitting, which is Windows's own chapter (2026-09-26):
+
+- **`on_app_quit` is never reached** once CEF has started, so the quit lives
+  in `on_window_should_close`, which runs on WM_CLOSE with everything still
+  alive. It writes the canvas and the window frame, releases the shells,
+  gives up the endpoint claim, and ends the process.
+- **CEF's `shutdown()` is skipped on Windows.** It measured nineteen seconds
+  with nothing open and never returned at all with one browser card: with
+  an external message pump, the loop that would finish the work is the one
+  the quit just stopped driving. macOS still calls it.
+- **`std::process::exit` is not enough to leave.** It runs every DLL's
+  detach and libcef's does not come back, which is the same hang by a
+  shorter road. `job::exit_now` uses `TerminateProcess` on ourselves, which
+  runs nothing.
+- **What makes that honest is a job object.** Chromium's subprocesses do not
+  follow their parent out: killing only the main process left all eight
+  running eight seconds later. `job::adopt_this_process` runs before CEF
+  starts, so they are all in it, and the kernel takes them down when it
+  closes the handle at exit. This is also why a force-kill no longer strands
+  eight processes.
+- **The endpoint outlives the process, so it is claimed in a file.**
+  `instance.rs`: the owner writes its pid at bind and removes it at quit, and
+  the launch check asks both whether something is listening and whether the
+  claimant still exists. Read that file's header before touching it — the
+  obvious-looking fix (ask the pipe who serves it) was tried before and let
+  two instances onto one save file.
+
+Measured after all of it: window gone about 30 ms after the close, every
+process terminated within nine seconds, and the app relaunches in five.
+
 What is still open:
 
 - **The Mac has not seen any of this.** `make check` on macOS is the gate
   before a merge, and only the Mac session can run it. Everything here is
   `cfg`-gated, but a `#[cfg(not(windows))]` arm is only as good as the
   compiler that saw it.
-- **A killed CEF app locks its own binary.** Force-killing leaves one thread
-  of the main process alive in the kernel: the process stays enumerable with
-  `HasExited` true and goes on holding `infiniterm.exe` and the Chromium
-  dlls, so the next build fails on "Access is denied". It did not clear in a
-  minute of watching. `kill.ps1` asks with WM_CLOSE first for that reason,
-  and `-FreeLocks` moves a stuck exe aside. It deliberately leaves the dlls
-  alone: moving libcef.dll aside does not get a new one, because cargo will
-  not re-run cef-dll-sys's build script when its inputs have not changed,
-  and the app then starts and dies instantly with no Chromium beside it.
-  The way out of that is `cargo clean -p cef-dll-sys` and a minute.
-- **A cold CEF start takes over thirty seconds.** CEF is initialised inside
-  gpui's run closure, before the window opens, so a first launch on a fresh
-  profile directory shows nothing at all for that long. `run.ps1` waits a
-  minute now. It is a second or two on a warm profile.
+- **A terminated CEF process is not reaped for about forty seconds**, and
+  everything below is a consequence. One thread of it stays alive in the
+  kernel, so the process stays enumerable with `HasExited` true and goes on
+  holding its own exe, the Chromium dlls and its named pipe. The two
+  user-facing consequences are fixed (see "Quitting" below); what is left is
+  a build-time nuisance: a build that re-runs cef-dll-sys's build script
+  inside that window fails on "Access is denied". `kill.ps1 -FreeLocks`
+  moves a stuck exe aside. It deliberately leaves the dlls alone: moving
+  libcef.dll aside does not get a new one, because cargo will not re-run a
+  build script whose inputs have not changed, and the app then starts and
+  dies instantly with no Chromium beside it. The way out of that is
+  `cargo clean -p cef-dll-sys` and a minute.
+- **"A cold CEF start takes over thirty seconds" was wrong**, and is
+  recorded because the wrong diagnosis is instructive. Measured properly,
+  time to window is 1.5 to 2 seconds cold OR warm. Every slow start seen
+  was contention with a PREVIOUS instance that had not been reaped and was
+  still holding the profile directory and the pipe. The startup order is
+  fine; nothing needs moving out of gpui's run closure.
+- The omnibox history is not flushed on quit, so a page visited in the last
+  half second of the save debounce is not recorded. Pre-existing and
+  identical on macOS (`flush_save` writes the canvas and the window frame,
+  not `history.json`), so it is not a Windows item; noted because the
+  Windows quit exits abruptly and someone will suspect it.
 - The omnibox's `file:///C:/...` reading. It navigates correctly, but the
   suggestion row shows the address as the path `/C:/Users/...`. Cosmetic,
   and the omnibox is the `ift-browser` session's file.
