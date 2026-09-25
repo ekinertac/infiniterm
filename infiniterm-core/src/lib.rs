@@ -78,6 +78,7 @@ pub mod saved_layout;
 pub mod settings_doc;
 pub mod shell_history;
 pub mod shortcuts;
+pub mod site_reference;
 pub mod slot_snap;
 pub mod snippets;
 pub mod switcher;
