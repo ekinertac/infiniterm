@@ -68,8 +68,8 @@ function New-Key([int]$vk, [int]$scan, [bool]$extended, [bool]$up) {
 # front; attaching our input queue to the current foreground thread is the
 # way round it. It does not always take on the first try, and a chord sent
 # to the wrong window lands in whatever Ekin has open, so this insists.
-$h = (Get-Process $ProcName).MainWindowHandle
-if ($h -eq 0) { throw "$ProcName has no window" }
+. "$PSScriptRoot\window.ps1"
+$h = Get-IftWindow $ProcName
 for ($try = 1; $try -le 8; $try++) {
     [void][Chord]::ShowWindow($h, 9)
     $me = [Chord]::GetCurrentThreadId()

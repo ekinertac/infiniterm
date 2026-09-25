@@ -30,9 +30,8 @@ public class Shot {
 }
 "@
 
-$p = Get-Process $ProcName
-$h = $p.MainWindowHandle
-if ($h -eq 0) { throw "$ProcName has no window" }
+. "$PSScriptRoot\window.ps1"
+$h = Get-IftWindow $ProcName
 
 # DWMWA_EXTENDED_FRAME_BOUNDS (9): the real visible rect. GetWindowRect
 # includes the invisible resize border and the capture comes out padded.

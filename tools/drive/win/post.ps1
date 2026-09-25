@@ -33,9 +33,8 @@ public class Post {
 }
 "@
 
-$p = Get-Process $ProcName
-$h = $p.MainWindowHandle
-if ($h -eq 0) { throw "$ProcName has no window" }
+. "$PSScriptRoot\window.ps1"
+$h = Get-IftWindow $ProcName
 
 $WM_KEYDOWN = 0x0100
 $WM_KEYUP = 0x0101

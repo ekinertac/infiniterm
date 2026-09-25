@@ -29,8 +29,8 @@ public class Fg {
 }
 "@
 
-$p = Get-Process $ProcName -ErrorAction Stop
-$h = $p.MainWindowHandle
+. "$PSScriptRoot\window.ps1"
+$h = Get-IftWindow $ProcName
 [void][Fg]::ShowWindow($h, 9)
 
 $me = [Fg]::GetCurrentThreadId()

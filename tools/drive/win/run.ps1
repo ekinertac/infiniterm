@@ -15,8 +15,6 @@
 param(
     [string]$Data = "$env:TEMP\ift-win-data",
     [string]$Config = "$env:TEMP\ift-win-config",
-    # The browser feature is off on Windows until CEF is built for it
-    # (phase 5), so this is the binary --no-default-features produces.
     [string]$Exe = "$PSScriptRoot\..\..\..\target\debug\infiniterm.exe",
     [int]$WaitSeconds = 20
 )
@@ -28,7 +26,7 @@ $env:INFINITERM_DATA_DIR = $Data
 $env:INFINITERM_CONFIG_DIR = $Config
 
 if (-not (Test-Path $Exe)) {
-    throw "no $Exe; cargo build -p infiniterm-ui --no-default-features"
+    throw "no $Exe; cargo build -p infiniterm-ui --features browser"
 }
 
 # A force-killed instance's endpoint goes on answering for a second or two
