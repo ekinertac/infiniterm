@@ -39,6 +39,15 @@ struct Edit {
     when: f64,
 }
 
+/// One cursor's own state, standing in for the primary's three fields
+/// (`cursor`, `anchor`, `goal_col`) when there is more than one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CursorState {
+    cursor: usize,
+    anchor: Option<usize>,
+    goal_col: Option<usize>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Buffer {
     text: Rope,
@@ -46,6 +55,12 @@ pub struct Buffer {
     anchor: Option<usize>,
     /// The column an up/down keeps aiming at across short lines.
     goal_col: Option<usize>,
+    /// Cursors beyond the primary (Batch 2, 2026-09-25). Empty in the
+    /// overwhelmingly common single-cursor case, so every method written
+    /// before multi-cursor existed keeps working exactly as it did as
+    /// long as nothing has added one: `for_each_cursor` is the only place
+    /// in this file that knows this field exists.
+    extra: Vec<CursorState>,
     undo: Vec<Edit>,
     redo: Vec<Edit>,
     /// Bumped by every change, so a view can cache against it.
@@ -63,6 +78,7 @@ impl Buffer {
             cursor: 0,
             anchor: None,
             goal_col: None,
+            extra: vec![],
             undo: vec![],
             redo: vec![],
             version: 0,
@@ -87,6 +103,9 @@ impl Buffer {
             now,
         );
         self.anchor = None;
+        // A whole-document replace (a save, a disk reload) invalidates
+        // whatever the extra cursors pointed at.
+        self.extra.clear();
     }
 
     pub fn text(&self) -> String {
@@ -320,6 +339,9 @@ impl Buffer {
     pub fn go_to_line(&mut self, n: usize) {
         let line = n.max(1).min(self.line_count()) - 1;
         self.set_cursor(self.line_start(line));
+        // A jump to an absolute line is a reset, not a multi-cursor
+        // operation, and is never called per cursor from `for_each_cursor`.
+        self.extra.clear();
     }
 
     /// The word around `idx`, for a double click.
@@ -634,37 +656,230 @@ impl Buffer {
         self.select_range(start..end);
     }
 
-    /// Cmd+D: the word under the cursor, or, called again on a selection
-    /// that already is one word, the next occurrence of it (wrapping).
-    /// One selection moves rather than a second cursor: this buffer keeps
-    /// only one.
+    /// Cmd+D: the word under the cursor, or, called again on a selection,
+    /// ANOTHER cursor on the next occurrence of the same text not already
+    /// covered (wrapping) — Sublime's real multi-cursor Cmd+D, not the
+    /// single roaming selection this was before there was a second cursor
+    /// to add (Batch 1, 2026-09-24).
     pub fn select_word_or_next(&mut self) {
-        match self.selection() {
-            None => {
-                let r = self.word_at(self.cursor);
-                if !r.is_empty() {
-                    self.select_range(r);
-                }
+        if self.selection().is_none() && self.extra.is_empty() {
+            let r = self.word_at(self.cursor);
+            if !r.is_empty() {
+                self.select_range(r);
             }
-            Some(r) => {
-                let text = self.slice(r.clone());
-                if text.is_empty() {
-                    return;
-                }
-                let matches = crate::search::find_all(&self.text(), &text);
-                if matches.is_empty() {
-                    return;
-                }
-                let next = matches
-                    .iter()
-                    .find(|(s, _)| *s >= r.end)
-                    .or_else(|| matches.first())
-                    .copied();
-                if let Some((a, b)) = next {
-                    self.select_range(a..b);
-                }
-            }
+            return;
         }
+        let Some(primary) = self.selection() else {
+            return;
+        };
+        let text = self.slice(primary);
+        if text.is_empty() {
+            return;
+        }
+        let matches = crate::search::find_all(&self.text(), &text);
+        if matches.is_empty() {
+            return;
+        }
+        let states = self.all_cursor_states();
+        let covered: std::collections::HashSet<usize> = states
+            .iter()
+            .filter_map(|c| c.anchor.map(|a| a.min(c.cursor)))
+            .collect();
+        let rightmost = states
+            .iter()
+            .map(|c| c.cursor.max(c.anchor.unwrap_or(c.cursor)))
+            .max()
+            .unwrap_or(0);
+        let next = matches
+            .iter()
+            .find(|(s, _)| *s >= rightmost && !covered.contains(s))
+            .or_else(|| matches.iter().find(|(s, _)| !covered.contains(s)))
+            .copied();
+        if let Some((a, b)) = next {
+            self.extra.push(CursorState {
+                cursor: b,
+                anchor: Some(a),
+                goal_col: None,
+            });
+        }
+    }
+
+    // ----- multi-cursor (Batch 2, 2026-09-25) -----
+
+    fn all_cursor_states(&self) -> Vec<CursorState> {
+        let mut v = vec![CursorState {
+            cursor: self.cursor,
+            anchor: self.anchor,
+            goal_col: self.goal_col,
+        }];
+        v.extend(self.extra.iter().copied());
+        v
+    }
+
+    pub fn cursor_count(&self) -> usize {
+        1 + self.extra.len()
+    }
+
+    /// Every cursor's position and selection anchor, sorted by position,
+    /// for the view to paint: a caret and a selection highlight per
+    /// cursor instead of the one `cursor`/`selection` describe.
+    pub fn all_selections(&self) -> Vec<(usize, Option<usize>)> {
+        let mut v: Vec<(usize, Option<usize>)> = self
+            .all_cursor_states()
+            .iter()
+            .map(|c| (c.cursor, c.anchor))
+            .collect();
+        v.sort_by_key(|(c, _)| *c);
+        v
+    }
+
+    /// Cmd+Click: a new cursor at `idx`, or, clicking exactly where one
+    /// already sits (and it is not the last one left), that cursor gone —
+    /// Sublime's toggle.
+    pub fn add_cursor_at(&mut self, idx: usize) {
+        if idx == self.cursor && self.anchor.is_none() && self.extra.is_empty() {
+            return;
+        }
+        if let Some(i) = self
+            .extra
+            .iter()
+            .position(|c| c.cursor == idx && c.anchor.is_none())
+        {
+            self.extra.remove(i);
+            return;
+        }
+        if idx == self.cursor && self.anchor.is_none() {
+            return;
+        }
+        self.extra.push(CursorState {
+            cursor: idx,
+            anchor: None,
+            goal_col: None,
+        });
+    }
+
+    /// Ctrl+Shift+Down / Ctrl+Shift+Up: one more cursor, a line beyond
+    /// whichever existing cursor is furthest in that direction, at its
+    /// column. Building a column of cursors from a single one, called
+    /// repeatedly, is the case this is for; starting from a scattered set
+    /// it grows from the extreme one only, not each in turn, which is
+    /// simpler than Sublime's own `select_lines` and enough for that case.
+    pub fn add_cursor_line(&mut self, forward: bool) {
+        let states = self.all_cursor_states();
+        let edge = if forward {
+            states.iter().max_by_key(|c| c.cursor)
+        } else {
+            states.iter().min_by_key(|c| c.cursor)
+        };
+        let Some(edge) = edge.copied() else {
+            return;
+        };
+        let line = self.line_of(edge.cursor) as i64 + if forward { 1 } else { -1 };
+        if line < 0 || line as usize >= self.line_count() {
+            return;
+        }
+        let line = line as usize;
+        let col = edge.goal_col.unwrap_or_else(|| self.col_of(edge.cursor));
+        let len = self.line(line).chars().count();
+        let idx = self.line_start(line) + col.min(len);
+        if states.iter().any(|c| c.cursor == idx) {
+            return;
+        }
+        self.extra.push(CursorState {
+            cursor: idx,
+            anchor: None,
+            goal_col: Some(col),
+        });
+    }
+
+    /// Ctrl+Cmd+G: every occurrence of the current selection (or the word
+    /// under the cursor) becomes its own cursor, replacing whatever set
+    /// there was before.
+    pub fn select_all_occurrences(&mut self) {
+        let r = self.selection().unwrap_or_else(|| self.word_at(self.cursor));
+        if r.is_empty() {
+            return;
+        }
+        let text = self.slice(r);
+        let matches = crate::search::find_all(&self.text(), &text);
+        let mut matches = matches.into_iter();
+        let Some((a, b)) = matches.next() else {
+            return;
+        };
+        self.anchor = Some(a);
+        self.cursor = b;
+        self.goal_col = None;
+        self.extra = matches
+            .map(|(a, b)| CursorState {
+                cursor: b,
+                anchor: Some(a),
+                goal_col: None,
+            })
+            .collect();
+    }
+
+    /// Escape: back to one cursor, the primary's.
+    pub fn collapse_to_primary(&mut self) {
+        self.extra.clear();
+    }
+
+    /// Runs `f` once per cursor, right to left by position so an edit at
+    /// one cannot shift a still-unprocessed cursor further left; every
+    /// buffer method stays written for exactly one cursor and this is the
+    /// only place that knows there can be more. With a single cursor
+    /// (`extra` empty, overwhelmingly the common case) it is one direct
+    /// call, no allocation.
+    ///
+    /// Known limit (v1, 2026-09-25): each cursor's edit still goes through
+    /// `apply` on its own, so a multi-cursor edit is several undo steps,
+    /// not one; Cmd+Z undoes them one cursor at a time, right to left,
+    /// rather than the whole set at once.
+    pub fn for_each_cursor(&mut self, mut f: impl FnMut(&mut Self)) {
+        if self.extra.is_empty() {
+            f(self);
+            return;
+        }
+        let mut states = self.all_cursor_states();
+        states.sort_by_key(|c| std::cmp::Reverse(c.cursor.max(c.anchor.unwrap_or(c.cursor))));
+        let mut updated: Vec<CursorState> = Vec::with_capacity(states.len());
+        for s in states {
+            // The low end of what this cursor could touch: an edit here
+            // can still shift a cursor already recorded (further right,
+            // processed earlier) whose OWN position sits at or past it.
+            let edit_at = s.cursor.min(s.anchor.unwrap_or(s.cursor));
+            let before = self.len_chars() as i64;
+            self.cursor = s.cursor;
+            self.anchor = s.anchor;
+            self.goal_col = s.goal_col;
+            f(self);
+            let delta = self.len_chars() as i64 - before;
+            if delta != 0 {
+                for u in &mut updated {
+                    if u.cursor >= edit_at {
+                        u.cursor = (u.cursor as i64 + delta).max(0) as usize;
+                    }
+                    if u.anchor.is_some_and(|a| a >= edit_at) {
+                        u.anchor = Some((u.anchor.unwrap() as i64 + delta).max(0) as usize);
+                    }
+                }
+            }
+            updated.push(CursorState {
+                cursor: self.cursor,
+                anchor: self.anchor,
+                goal_col: self.goal_col,
+            });
+        }
+        // Left to right now, so two cursors an edit collapsed onto the
+        // same spot (backspace at the start of a line the previous
+        // cursor sits at the end of) dedupe instead of doubling up.
+        updated.sort_by_key(|c| c.cursor);
+        updated.dedup_by_key(|c| c.cursor);
+        let mut iter = updated.into_iter();
+        let primary = iter.next().expect("at least the primary itself ran");
+        self.cursor = primary.cursor;
+        self.anchor = primary.anchor;
+        self.goal_col = primary.goal_col;
+        self.extra = iter.collect();
     }
 
     /// Ctrl+Shift+M: the contents of the nearest enclosing bracket pair.
@@ -1287,20 +1502,6 @@ mod tests {
     }
 
     #[test]
-    fn select_word_or_next_walks_occurrences_and_wraps() {
-        let mut b = Buffer::new("foo bar foo baz foo");
-        b.set_cursor(1);
-        b.select_word_or_next();
-        assert_eq!(b.selected_text().as_deref(), Some("foo"));
-        b.select_word_or_next();
-        assert_eq!(b.selection(), Some(8..11));
-        b.select_word_or_next();
-        assert_eq!(b.selection(), Some(16..19));
-        b.select_word_or_next(); // wraps back to the first
-        assert_eq!(b.selection(), Some(0..3));
-    }
-
-    #[test]
     fn expand_to_brackets_selects_the_nearest_pair_then_the_next_one_out() {
         let mut b = Buffer::new("f(a, (b))");
         b.set_cursor(7); // on "b"
@@ -1308,6 +1509,115 @@ mod tests {
         assert_eq!(b.selected_text().as_deref(), Some("b"));
         b.expand_to_brackets();
         assert_eq!(b.selected_text().as_deref(), Some("a, (b)"));
+    }
+
+    #[test]
+    fn add_cursor_at_adds_and_toggles_off_on_a_second_click() {
+        let mut b = Buffer::new("abc\ndef\nghi");
+        b.set_cursor(1);
+        b.add_cursor_at(6); // second line
+        assert_eq!(b.cursor_count(), 2);
+        b.add_cursor_at(6); // the same spot again: gone
+        assert_eq!(b.cursor_count(), 1);
+        // Clicking exactly on the sole primary is a no-op, not a second
+        // cursor stacked on top of the first.
+        b.add_cursor_at(1);
+        assert_eq!(b.cursor_count(), 1);
+    }
+
+    #[test]
+    fn add_cursor_line_builds_a_column_from_the_extreme_cursor() {
+        let mut b = Buffer::new("one\ntwo\nthree\nfour");
+        b.set_cursor(1); // "one", col 1
+        b.add_cursor_line(true);
+        assert_eq!(b.cursor_count(), 2);
+        b.add_cursor_line(true);
+        assert_eq!(b.cursor_count(), 3);
+        let mut cols: Vec<usize> = b
+            .all_selections()
+            .iter()
+            .map(|(c, _)| b.col_of(*c))
+            .collect();
+        cols.sort_unstable();
+        assert_eq!(cols, vec![1, 1, 1], "same column on every added line");
+        // The doc's last line refuses rather than dropping off the end.
+        let mut b = Buffer::new("a\nb");
+        b.set_cursor(2);
+        b.add_cursor_line(true);
+        assert_eq!(b.cursor_count(), 1);
+    }
+
+    #[test]
+    fn select_all_occurrences_turns_every_match_into_a_cursor() {
+        let mut b = Buffer::new("foo bar foo baz foo");
+        b.select_range(0..3); // "foo"
+        b.select_all_occurrences();
+        assert_eq!(b.cursor_count(), 3);
+        assert_eq!(b.all_selections(), vec![(3, Some(0)), (11, Some(8)), (19, Some(16))]);
+    }
+
+    #[test]
+    fn select_word_or_next_adds_a_cursor_on_repeat_instead_of_moving() {
+        let mut b = Buffer::new("foo bar foo baz foo");
+        b.set_cursor(1);
+        b.select_word_or_next(); // selects the first "foo", still one cursor
+        assert_eq!(b.cursor_count(), 1);
+        b.select_word_or_next(); // adds the second
+        assert_eq!(b.cursor_count(), 2);
+        b.select_word_or_next(); // adds the third
+        assert_eq!(b.cursor_count(), 3);
+        assert_eq!(b.all_selections(), vec![(3, Some(0)), (11, Some(8)), (19, Some(16))]);
+        // A fourth press wraps rather than adding a duplicate.
+        b.select_word_or_next();
+        assert_eq!(b.cursor_count(), 3);
+    }
+
+    #[test]
+    fn collapse_to_primary_drops_every_extra_cursor() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.set_cursor(0);
+        b.add_cursor_line(true);
+        b.add_cursor_line(true);
+        assert_eq!(b.cursor_count(), 3);
+        b.collapse_to_primary();
+        assert_eq!(b.cursor_count(), 1);
+    }
+
+    #[test]
+    fn for_each_cursor_types_at_every_cursor_without_the_others_shifting() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.set_cursor(0);
+        b.add_cursor_line(true);
+        b.add_cursor_line(true);
+        assert_eq!(b.cursor_count(), 3);
+        b.for_each_cursor(|buf| buf.type_char('x', 0.));
+        assert_eq!(b.text(), "xa\nxb\nxc");
+        // Every cursor landed right after its own inserted "x".
+        let cols: Vec<usize> = b
+            .all_selections()
+            .iter()
+            .map(|(c, _)| b.col_of(*c))
+            .collect();
+        assert_eq!(cols, vec![1, 1, 1]);
+    }
+
+    #[test]
+    fn for_each_cursor_backspaces_at_every_cursor() {
+        let mut b = Buffer::new("xa\nxb\nxc");
+        b.set_cursor(1); // right after the first "x"
+        b.add_cursor_at(4); // right after the second "x"
+        b.add_cursor_at(7); // right after the third "x"
+        b.for_each_cursor(|buf| buf.backspace(0.));
+        assert_eq!(b.text(), "a\nb\nc");
+    }
+
+    #[test]
+    fn for_each_cursor_with_one_cursor_is_a_single_direct_call() {
+        let mut b = Buffer::new("abc");
+        b.set_cursor(1);
+        b.for_each_cursor(|buf| buf.type_char('x', 0.));
+        assert_eq!(b.text(), "axbc");
+        assert_eq!(b.cursor(), 2);
     }
 
     #[test]

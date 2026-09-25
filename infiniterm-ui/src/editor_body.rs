@@ -552,6 +552,8 @@ impl EditorBody {
     /// Puts the caret on the current match and shows it.
     fn show_match(&mut self) {
         if let Some((a, b)) = self.search.as_ref().and_then(|s| s.current_range()) {
+            // Jumping to a match is a reset, the same as `go_to_line`.
+            self.buffer.collapse_to_primary();
             self.buffer.select_range(a..b);
             self.ensure_cursor_visible();
         }
@@ -812,11 +814,17 @@ impl EditorBody {
     /// across lines, and forgotten when anything else moves the caret.
     fn move_visual(&mut self, delta: i64, select: bool) {
         if !self.wrap {
-            if delta < 0 {
-                self.buffer.move_up(select);
-            } else {
-                self.buffer.move_down(select);
-            }
+            // Multi-cursor (Batch 2, 2026-09-25): every cursor moves, not
+            // only the primary. The wrapped path below stays primary-only
+            // for now — `visual_goal` is keyed to one cursor and `wrap` is
+            // off by default, so this covers the common case.
+            self.buffer.for_each_cursor(|b| {
+                if delta < 0 {
+                    b.move_up(select);
+                } else {
+                    b.move_down(select);
+                }
+            });
             return;
         }
         let cols = self.cols_visible(self.world);
@@ -1008,6 +1016,11 @@ impl EditorBody {
                 }
                 "f" if m.alt => self.open_search(true),
                 "f" => self.open_search(false),
+                // Ctrl+Cmd+G: every occurrence of the selection becomes
+                // its own cursor (Batch 2, 2026-09-25); plain Cmd+G stays
+                // find-next, unrelated, and only makes sense with a
+                // search open.
+                "g" if m.control => self.buffer.select_all_occurrences(),
                 "g" => {
                     if let Some(s) = self.search.as_mut() {
                         if shift {
@@ -1024,8 +1037,8 @@ impl EditorBody {
                         self.buffer.toggle_comment(token, now);
                     }
                 }
-                "left" => self.buffer.move_line_start(shift),
-                "right" => self.buffer.move_line_end(shift),
+                "left" => self.buffer.for_each_cursor(|b| b.move_line_start(shift)),
+                "right" => self.buffer.for_each_cursor(|b| b.move_line_end(shift)),
                 "up" if m.control => {
                     if !ro {
                         self.buffer.swap_line_up(now)
@@ -1036,11 +1049,11 @@ impl EditorBody {
                         self.buffer.swap_line_down(now)
                     }
                 }
-                "up" => self.buffer.move_doc_start(shift),
-                "down" => self.buffer.move_doc_end(shift),
+                "up" => self.buffer.for_each_cursor(|b| b.move_doc_start(shift)),
+                "down" => self.buffer.for_each_cursor(|b| b.move_doc_end(shift)),
                 "backspace" => {
                     if !ro {
-                        self.buffer.delete_to_line_start(now)
+                        self.buffer.for_each_cursor(|b| b.delete_to_line_start(now))
                     }
                 }
                 "d" if shift => {
@@ -1079,21 +1092,23 @@ impl EditorBody {
             }
         } else if m.alt {
             match key {
-                "left" => self.buffer.move_word_left(shift),
-                "right" => self.buffer.move_word_right(shift),
+                "left" => self.buffer.for_each_cursor(|b| b.move_word_left(shift)),
+                "right" => self.buffer.for_each_cursor(|b| b.move_word_right(shift)),
                 "backspace" => {
                     if !ro {
-                        self.buffer.delete_word_back(now)
+                        self.buffer.for_each_cursor(|b| b.delete_word_back(now))
                     }
                 }
-                "up" => self.buffer.move_up(shift),
-                "down" => self.buffer.move_down(shift),
+                "up" => self.buffer.for_each_cursor(|b| b.move_up(shift)),
+                "down" => self.buffer.for_each_cursor(|b| b.move_down(shift)),
                 _ => {
                     // Option+letter types the character macOS composed.
                     if let Some(ch) = k.key_char.as_deref().filter(|c| !ro && !c.is_empty()) {
-                        for c in ch.chars() {
-                            self.buffer.type_char(c, now);
-                        }
+                        self.buffer.for_each_cursor(|b| {
+                            for c in ch.chars() {
+                                b.type_char(c, now);
+                            }
+                        });
                     } else {
                         return;
                     }
@@ -1101,8 +1116,8 @@ impl EditorBody {
             }
         } else if m.control {
             match key {
-                "a" => self.buffer.move_line_start(shift),
-                "e" => self.buffer.move_line_end(shift),
+                "a" => self.buffer.for_each_cursor(|b| b.move_line_start(shift)),
+                "e" => self.buffer.for_each_cursor(|b| b.move_line_end(shift)),
                 "k" if shift => {
                     if !ro {
                         self.buffer.delete_line(now)
@@ -1116,46 +1131,62 @@ impl EditorBody {
                         self.buffer.set_cursor(if at_open { b + 1 } else { a + 1 });
                     }
                 }
+                // Multi-cursor (Batch 2, 2026-09-25): a column of cursors,
+                // one more per press.
+                "down" if shift => self.buffer.add_cursor_line(true),
+                "up" if shift => self.buffer.add_cursor_line(false),
                 _ => return,
             }
         } else {
             match key {
-                "left" => self.buffer.move_left(shift),
-                "right" => self.buffer.move_right(shift),
+                "left" => self.buffer.for_each_cursor(|b| b.move_left(shift)),
+                "right" => self.buffer.for_each_cursor(|b| b.move_right(shift)),
                 "up" => self.move_visual(-1, shift),
                 "down" => self.move_visual(1, shift),
-                "home" => self.buffer.move_line_start(shift),
-                "end" => self.buffer.move_line_end(shift),
-                "pageup" => self.buffer.move_page(self.rows_visible, false, shift),
-                "pagedown" => self.buffer.move_page(self.rows_visible, true, shift),
+                "home" => self.buffer.for_each_cursor(|b| b.move_line_start(shift)),
+                "end" => self.buffer.for_each_cursor(|b| b.move_line_end(shift)),
+                "pageup" => {
+                    let rows = self.rows_visible;
+                    self.buffer
+                        .for_each_cursor(|b| b.move_page(rows, false, shift));
+                }
+                "pagedown" => {
+                    let rows = self.rows_visible;
+                    self.buffer
+                        .for_each_cursor(|b| b.move_page(rows, true, shift));
+                }
                 "backspace" => {
                     if !ro {
-                        self.buffer.backspace(now)
+                        self.buffer.for_each_cursor(|b| b.backspace(now))
                     }
                 }
                 "delete" => {
                     if !ro {
-                        self.buffer.delete_forward(now)
+                        self.buffer.for_each_cursor(|b| b.delete_forward(now))
                     }
                 }
                 "enter" => {
                     if !ro {
-                        self.buffer.newline(now)
+                        self.buffer.for_each_cursor(|b| b.newline(now))
                     }
                 }
                 "tab" if shift => {
                     if !ro {
-                        self.buffer.outdent(now)
+                        self.buffer.for_each_cursor(|b| b.outdent(now))
                     }
                 }
                 "tab" => {
                     if !ro {
-                        self.buffer.tab(now)
+                        self.buffer.for_each_cursor(|b| b.tab(now))
                     }
                 }
                 "escape" => {
                     if self.search.is_some() {
                         self.close_search();
+                    } else if self.buffer.cursor_count() > 1 {
+                        // Down to one cursor first, Sublime's rule; a
+                        // second Escape then drops its selection too.
+                        self.buffer.collapse_to_primary();
                     } else {
                         let c = self.buffer.cursor();
                         self.buffer.set_cursor(c);
@@ -1169,9 +1200,11 @@ impl EditorBody {
                             ));
                             return;
                         }
-                        for c in ch.chars() {
-                            self.buffer.type_char(c, now);
-                        }
+                        self.buffer.for_each_cursor(|b| {
+                            for c in ch.chars() {
+                                b.type_char(c, now);
+                            }
+                        });
                     } else {
                         return;
                     }
@@ -1720,8 +1753,16 @@ impl CardBody for EditorBody {
         let last = vrows.last().map(|r| r.line + 1).unwrap_or(first);
         let cursor = self.buffer.cursor();
         let cursor_line = self.buffer.line_of(cursor);
-        let cursor_col = self.buffer.col_of(cursor);
         let selection = self.buffer.selection();
+        // Every cursor's own selection (Batch 2, 2026-09-25), the primary's
+        // included; `selection` above stays the primary's alone for the
+        // active-line wash below, which only makes sense for one caret.
+        let all_ranges: Vec<_> = self
+            .buffer
+            .all_selections()
+            .iter()
+            .filter_map(|(c, a)| a.map(|a| a.min(*c)..a.max(*c)))
+            .collect();
         let bracket = self.buffer.matching_bracket();
         let matches: Vec<(usize, usize)> = self
             .search
@@ -1757,7 +1798,11 @@ impl CardBody for EditorBody {
             let row_end = line_start + vrow.b;
             let row_len = vrow.b - vrow.a;
             // The active line wash, gutter, selection, matches, then the text.
-            if self.highlight_line && line_no == cursor_line && selection.is_none() {
+            if self.highlight_line
+                && line_no == cursor_line
+                && selection.is_none()
+                && self.buffer.cursor_count() == 1
+            {
                 window.paint_quad(fill(
                     Bounds::new(point(origin.x + gutter_w, y), size(area.size.width, line_h)),
                     crate::chrome::with_alpha(gpui::rgb(0x808080).into(), ACTIVE_LINE_ALPHA),
@@ -1801,7 +1846,7 @@ impl CardBody for EditorBody {
                     );
                 }
             }
-            if let Some(sel) = &selection {
+            for sel in &all_ranges {
                 if sel.end > row_start && sel.start <= row_end {
                     range_quad(sel.start, sel.end, sel_bg, window);
                 }
@@ -1971,47 +2016,60 @@ impl CardBody for EditorBody {
             let _ = shaped.paint(point(text_x, y), line_h, window, cx);
         }
         // The cursor: a block 0.6 em wide in the cursor colour, on when
-        // focused and the blink says so; hollow when the card is not focused.
-        let cursor_row = vrows.iter().position(|r| {
-            r.line == cursor_line
-                && cursor_col >= r.a
-                && (cursor_col < r.b
-                    || (cursor_col == r.b && r.b == self.buffer.line(r.line).chars().count()))
-        });
+        // focused and the blink says so; hollow when the card is not
+        // focused. One per cursor (Batch 2, 2026-09-25); `painted_caret`,
+        // the IME candidate window's anchor, stays the PRIMARY's alone —
+        // an input method has one caret to sit beside, not several.
         self.painted_caret = None;
-        if let (true, Some(row_i)) = (self.focus != Focus::Tree, cursor_row) {
-            let col = cursor_col - vrows[row_i].a;
-            let y = origin.y + line_h * row_i as f32;
-            // The cell the caret is in, for the input method's candidate
-            // window and the marked text drawn over it (`caret_bounds`).
-            self.painted_caret = Some(Bounds::new(
-                point(text_x + cell_w * col as f32, y),
-                size(cell_w, line_h),
-            ));
-            let rect = Bounds::new(
-                point(text_x + cell_w * col as f32, y),
-                size(
-                    px((self.metrics.font_px * CURSOR_BLOCK_WIDTH_RATIO * scale) as f32)
-                        .max(px(crate::chrome::HAIRLINE_PX as f32)),
-                    line_h,
-                ),
-            );
-            if focused && self.focus == Focus::Buffer {
-                if self.painted_phase {
-                    window.paint_quad(fill(
-                        rect,
-                        crate::chrome::with_alpha(cursor_color, CURSOR_ALPHA),
+        if self.focus != Focus::Tree {
+            let primary = self.buffer.cursor();
+            for (pos, _) in self.buffer.all_selections() {
+                let line = self.buffer.line_of(pos);
+                let col = self.buffer.col_of(pos);
+                let Some(row_i) = vrows.iter().position(|r| {
+                    r.line == line
+                        && col >= r.a
+                        && (col < r.b
+                            || (col == r.b && r.b == self.buffer.line(r.line).chars().count()))
+                }) else {
+                    continue;
+                };
+                let vcol = col - vrows[row_i].a;
+                let y = origin.y + line_h * row_i as f32;
+                let rect = Bounds::new(
+                    point(text_x + cell_w * vcol as f32, y),
+                    size(
+                        px((self.metrics.font_px * CURSOR_BLOCK_WIDTH_RATIO * scale) as f32)
+                            .max(px(crate::chrome::HAIRLINE_PX as f32)),
+                        line_h,
+                    ),
+                );
+                if pos == primary {
+                    // The cell the caret is in, for the input method's
+                    // candidate window and the marked text drawn over it
+                    // (`caret_bounds`).
+                    self.painted_caret = Some(Bounds::new(
+                        point(text_x + cell_w * vcol as f32, y),
+                        size(cell_w, line_h),
                     ));
                 }
-            } else {
-                window.paint_quad(
-                    outline(
-                        rect,
-                        crate::chrome::with_alpha(cursor_color, CURSOR_ALPHA),
-                        gpui::BorderStyle::Solid,
-                    )
-                    .border_widths(px((scale as f32).max(crate::chrome::HAIRLINE_PX as f32))),
-                );
+                if focused && self.focus == Focus::Buffer {
+                    if self.painted_phase {
+                        window.paint_quad(fill(
+                            rect,
+                            crate::chrome::with_alpha(cursor_color, CURSOR_ALPHA),
+                        ));
+                    }
+                } else {
+                    window.paint_quad(
+                        outline(
+                            rect,
+                            crate::chrome::with_alpha(cursor_color, CURSOR_ALPHA),
+                            gpui::BorderStyle::Solid,
+                        )
+                        .border_widths(px((scale as f32).max(crate::chrome::HAIRLINE_PX as f32))),
+                    );
+                }
             }
         }
         // Keep the shaping cache to the visible lines.
@@ -2078,6 +2136,11 @@ impl CardBody for EditorBody {
         self.focus = Focus::Buffer;
         self.tree_focused = false;
         let idx = self.index_at(local, world);
+        // A plain click is a reset to one cursor; Cmd+Click manages
+        // `extra` itself below and must not be collapsed out from under.
+        if !modifiers.platform {
+            self.buffer.collapse_to_primary();
+        }
         match clicks {
             2 => {
                 let r = self.buffer.word_at(idx);
@@ -2088,12 +2151,19 @@ impl CardBody for EditorBody {
                 self.buffer.select_range(r);
             }
             _ => {
-                if modifiers.shift {
+                if modifiers.platform {
+                    // Cmd+Click: a cursor added (or, on an existing one,
+                    // removed), not a drag, so the primary's selection is
+                    // left alone.
+                    self.buffer.add_cursor_at(idx);
+                    self.selecting = false;
+                } else if modifiers.shift {
                     self.buffer.select_to(idx);
+                    self.selecting = true;
                 } else {
                     self.buffer.set_cursor(idx);
+                    self.selecting = true;
                 }
-                self.selecting = true;
             }
         }
         self.blink_epoch = crate::now_ms();
