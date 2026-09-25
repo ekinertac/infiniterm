@@ -63,6 +63,20 @@ impl Model {
             return;
         }
 
+        // An in-place editor closing is `:wq`, not a card going away: no
+        // reopen ring, no undo step, no partner reclaiming its space (the
+        // terminal under it already has it).
+        let covered = self.covers.get(id).cloned();
+        self.end_cover(id);
+        if let Some(base) = covered {
+            self.effects.push(Effect::DraftDelete(card.id.clone()));
+            self.remove_card(id);
+            // Back to the terminal it covered, as vim hands the screen back.
+            if self.card(&base).is_some() {
+                self.set_focus(Some(&base));
+            }
+            return;
+        }
         // Remembered before anything is torn down, so Cmd+Ctrl+T can put it
         // back. Runtime facts are stripped for the same reason the save file
         // strips them: a restored card is a fresh shell in the same

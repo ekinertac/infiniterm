@@ -693,7 +693,7 @@ impl Model {
         let mut occupied: Vec<Rect> = self
             .cards
             .iter()
-            .filter(|c| c.workspace_id == ws && c.id != id)
+            .filter(|c| c.workspace_id == ws && c.id != id && !self.paired(id, &c.id))
             .map(|c| c.rect)
             .collect();
         occupied.extend(self.other_frames(card.group_id.as_deref(), &ws));
@@ -734,6 +734,7 @@ impl Model {
             .find(|c| {
                 c.workspace_id == card.workspace_id
                     && c.id != id
+                    && !self.paired(id, &c.id)
                     && centre.x >= c.rect.x
                     && centre.x < c.rect.x + c.rect.w
                     && centre.y >= c.rect.y
@@ -767,7 +768,11 @@ impl Model {
         let mut occupied: Vec<Rect> = self
             .cards
             .iter()
-            .filter(|c| c.workspace_id == ws && !ids.contains(&c.id))
+            .filter(|c| {
+                c.workspace_id == ws
+                    && !ids.contains(&c.id)
+                    && !ids.iter().any(|i| self.paired(i, &c.id))
+            })
             .map(|c| c.rect)
             .collect();
         occupied.extend(self.other_frames(group.as_deref(), &ws));

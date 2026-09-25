@@ -21,6 +21,7 @@
 pub mod canvas_cmd;
 pub mod cards_cmd;
 pub mod context;
+pub mod cover;
 pub mod dev_cmd;
 pub mod find_cmd;
 pub mod focus_cmd;
@@ -283,6 +284,12 @@ pub enum Effect {
     /// These cards are about to move: their rects as they are now, so the
     /// ui can glide each from there to wherever the command put it.
     MarkSwap(Vec<(String, Rect)>),
+    /// The late answer to an `ift` request (`edit`, when its cover closes).
+    CliReply {
+        id: u64,
+        ok: bool,
+        text: String,
+    },
     OpenUrl(String),
     /// Written into settings.json through `patch_json_text`.
     SaveSetting {
@@ -461,6 +468,15 @@ pub struct Model {
     /// the focused card goes back along it; not saved, a restart has no
     /// "before".
     pub focus_trail: Vec<String>,
+    /// In-place editors (`cover.rs`): cover card id to the terminal card it
+    /// lies over, where each pair was last synced, and the `ift` request
+    /// each one answers when it closes. Session-only.
+    pub covers: HashMap<String, String>,
+    pub cover_at: HashMap<String, Rect>,
+    pub edit_waiters: HashMap<String, u64>,
+    /// Set by an `ift` verb that answers later (`edit`): the ui must not
+    /// reply to this request now.
+    pub reply_deferred: bool,
     /// Each terminal card's escape-sequence scanner and the command in
     /// flight (`program_state`), by card id. Session-only: a command
     /// running across a restart is simply not known about.
@@ -575,6 +591,10 @@ impl Model {
             last_focused: HashMap::new(),
             left_at: HashMap::new(),
             focus_trail: Vec::new(),
+            covers: HashMap::new(),
+            cover_at: HashMap::new(),
+            edit_waiters: HashMap::new(),
+            reply_deferred: false,
             programs: std::collections::HashMap::new(),
             focus_visit: None,
             switcher: None,
@@ -625,6 +645,7 @@ impl Model {
         // leave it: the trail is read by the switcher and by a close.
         self.promote_focus();
         self.promote_programs();
+        self.sync_covers();
         if self.notice.is_some() && now_ms >= self.notice_until {
             self.notice = None;
         }
@@ -699,8 +720,14 @@ impl Model {
         }
     }
 
+    /// The cards on the active canvas you can see: a terminal under an
+    /// in-place editor (`cover.rs`) is left out, so navigation, tidy and
+    /// fit-all treat the pair as the one card on screen.
     pub fn here(&self) -> Vec<&Card> {
         self.cards_on(self.active_workspace.as_deref())
+            .into_iter()
+            .filter(|c| self.covered_by(&c.id).is_none())
+            .collect()
     }
 
     pub fn placed(&self, cards: &[&Card]) -> Vec<crate::cards::PlacedCard> {

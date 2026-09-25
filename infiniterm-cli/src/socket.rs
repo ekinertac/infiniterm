@@ -37,11 +37,25 @@ fn card_id() -> String {
     std::env::var("INFINITERM_CARD_ID").unwrap_or_default()
 }
 
+/// Run from a shell inside an infiniterm card.
+pub fn in_a_card() -> bool {
+    !card_id().is_empty()
+}
+
 pub fn request(cmd: &str, args: Vec<String>) -> Result<Reply, String> {
+    exchange(cmd, args, Some(READ_TIMEOUT))
+}
+
+/// A request answered when the user is done (`edit`): no timeout.
+pub fn request_waiting(cmd: &str, args: Vec<String>) -> Result<Reply, String> {
+    exchange(cmd, args, None)
+}
+
+fn exchange(cmd: &str, args: Vec<String>, timeout: Option<Duration>) -> Result<Reply, String> {
     let path = socket_path();
     let mut stream =
         UnixStream::connect(&path).map_err(|_| "infiniterm is not running".to_string())?;
-    let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
+    let _ = stream.set_read_timeout(timeout);
 
     let body = serde_json::json!({ "cmd": cmd, "args": args, "card_id": card_id() });
     writeln!(stream, "{body}").map_err(|e| format!("could not send: {e}"))?;

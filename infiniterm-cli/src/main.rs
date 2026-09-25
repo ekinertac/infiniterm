@@ -31,7 +31,11 @@ ift — drive infiniterm from a shell
 
   ift                        launch infiniterm, or focus it if it is running
   ift <path>                 open a directory as a terminal card, a file as an
-                             editor card; file:42 or file:42:7 opens at a line
+                             editor card; file:42 or file:42:7 opens at a line.
+                             Run inside a card, a file opens IN PLACE over it
+                             and ift waits until you close it, like vim, so
+                             EDITOR=ift works for git commit
+  ift -n <path>              a file in a card of its own, returning at once
   ift diff [path]            changes against git HEAD, as a card: a tree of the
                              changed files under path (the current directory
                              without one) and each file's diff
@@ -133,6 +137,13 @@ fn main() -> ExitCode {
         // harness can be driven from a script instead of by typing into the
         // palette, and UI actions are otherwise deliberately NOT ift's.
         Some("dev-run") => send("dev-run", rest()),
+        Some("-n") => match args.get(2) {
+            Some(p) if Path::new(split_line(p).0).exists() => open_path(p, false),
+            _ => {
+                eprintln!("ift: -n takes a path that exists");
+                ExitCode::from(2)
+            }
+        },
         Some("-h") | Some("--help") => {
             print!("{USAGE}");
             ExitCode::SUCCESS
@@ -140,7 +151,7 @@ fn main() -> ExitCode {
         None => launch(),
         // A PATH beats a verb. A directory called `ls` in front of you is what you
         // meant; the verbs are checked first only so the common ones stay short.
-        Some(arg) if Path::new(split_line(arg).0).exists() => open_path(arg),
+        Some(arg) if Path::new(split_line(arg).0).exists() => open_path(arg, true),
         Some(other) => {
             eprintln!("ift: unknown command `{other}`\n\n{USAGE}");
             ExitCode::from(2)
@@ -219,13 +230,21 @@ fn install_self() -> ExitCode {
 ///
 /// The KIND is decided here rather than in the app: `ift` is the process standing
 /// in the directory the path is relative to, and the app is not.
-fn open_path(arg: &str) -> ExitCode {
+fn open_path(arg: &str, in_place: bool) -> ExitCode {
     let (path, line) = split_line(arg);
     let Ok(full) = std::fs::canonicalize(path) else {
         eprintln!("ift: cannot resolve {path}");
         return ExitCode::from(2);
     };
     let kind = if full.is_dir() { "directory" } else { "file" };
+    // A file, from inside a card: in place, waiting (the app's `edit`).
+    if in_place && kind == "file" && socket::in_a_card() {
+        let mut args = vec![full.to_string_lossy().into_owned()];
+        if let Some(line) = line {
+            args.push(line.to_string());
+        }
+        return send_waiting("edit", args);
+    }
     let mut args = vec![full.to_string_lossy().into_owned(), kind.to_string()];
     if let Some(line) = line {
         args.push(line.to_string());
@@ -291,6 +310,23 @@ fn send_table(cmd: &str, header: &[&str]) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        Ok(reply) => {
+            eprintln!("ift: {}", reply.text);
+            ExitCode::from(2)
+        }
+        Err(e) => {
+            eprintln!("ift: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// `send` for a request answered when you finish, not within seconds: no
+/// read timeout, and nothing printed on success, since this runs as
+/// `$EDITOR` under git, where stdout is somebody else's.
+fn send_waiting(cmd: &str, args: Vec<String>) -> ExitCode {
+    match socket::request_waiting(cmd, args) {
+        Ok(reply) if reply.ok => ExitCode::SUCCESS,
         Ok(reply) => {
             eprintln!("ift: {}", reply.text);
             ExitCode::from(2)

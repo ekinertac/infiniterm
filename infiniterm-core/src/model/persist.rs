@@ -115,6 +115,9 @@ impl Model {
         let cards: Vec<SavedCard> = self
             .cards
             .iter()
+            // An in-place editor lives as long as the `ift` waiting on it,
+            // which a relaunch ends (cover.rs).
+            .filter(|c| !self.covers.contains_key(&c.id))
             .map(|c| SavedCard {
                 id: c.id.clone(),
                 workspace_id: c.workspace_id.clone(),
@@ -152,14 +155,27 @@ impl Model {
             })
             .collect();
         let usage: &Usage = &self.usage;
+        // A cover is not saved, so the focus it holds is saved as the
+        // terminal under it.
+        let focused = self
+            .selection
+            .focused_id
+            .as_deref()
+            .map(|f| self.covers.get(f).map(String::as_str).unwrap_or(f));
+        let mut workspaces = self.workspaces.clone();
+        for w in &mut workspaces {
+            if let Some(base) = w.focused.as_ref().and_then(|f| self.covers.get(f)) {
+                w.focused = Some(base.clone());
+            }
+        }
         Some(layout_text(&serialise_layout(
             &cards,
             &groups,
             &self.viewport,
-            self.selection.focused_id.as_deref(),
+            focused,
             self.ui_scale,
             usage,
-            &self.workspaces,
+            &workspaces,
             self.active_workspace.as_deref(),
         )))
     }

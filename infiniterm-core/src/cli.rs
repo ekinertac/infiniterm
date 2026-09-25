@@ -101,6 +101,9 @@ impl CliState {
     /// Sends a request to the UI and waits for its answer. Called from the
     /// socket thread, so blocking here blocks only that connection.
     pub fn dispatch(&self, cmd: String, args: Vec<String>, card_id: Option<String>) -> CliReply {
+        // `edit` is answered when the in-place editor closes, minutes from
+        // now; every other verb within `REPLY_TIMEOUT`.
+        let waits = cmd == "edit";
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = channel();
         self.pending.lock().unwrap().insert(id, tx);
@@ -123,7 +126,12 @@ impl CliState {
             self.pending.lock().unwrap().remove(&id);
             return CliReply::err("infiniterm is running but its window is not ready");
         }
-        match rx.recv_timeout(REPLY_TIMEOUT) {
+        let answer = if waits {
+            rx.recv().map_err(|_| ())
+        } else {
+            rx.recv_timeout(REPLY_TIMEOUT).map_err(|_| ())
+        };
+        match answer {
             Ok(reply) => reply,
             Err(_) => {
                 // Cleared so a late reply cannot sit in the map forever.
@@ -183,6 +191,26 @@ mod tests {
         let reply = state.dispatch("ls".into(), vec![], None);
         assert!(!reply.ok);
         assert!(reply.text.contains("not ready"), "{}", reply.text);
+    }
+
+    // `edit` is answered when the in-place editor closes, which is long
+    // after `REPLY_TIMEOUT`; every other verb still gives up at it.
+    #[test]
+    fn edit_waits_past_the_reply_timeout() {
+        let state = std::sync::Arc::new(CliState::default());
+        let (tx, rx) = channel();
+        state.subscribe(tx);
+        let ui = {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                let req: CliRequest = rx.recv().unwrap();
+                std::thread::sleep(REPLY_TIMEOUT + Duration::from_millis(300));
+                state.reply(req.id, true, String::new());
+            })
+        };
+        let reply = state.dispatch("edit".into(), vec!["/tmp/x".into()], None);
+        ui.join().unwrap();
+        assert!(reply.ok, "{}", reply.text);
     }
 
     // Native check: the round trip through a subscribed UI.

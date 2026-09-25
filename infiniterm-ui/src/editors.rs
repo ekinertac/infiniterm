@@ -92,7 +92,11 @@ impl AppView {
             };
             let fresh = self.editor_tabs_for(&card.id).is_none();
             if fresh {
-                let tabs = EditorTabs::new(&card.id, &metrics, world, style.clone());
+                let mut tabs = EditorTabs::new(&card.id, &metrics, world, style.clone());
+                // A card born locked (an in-place editor, cover.rs) takes
+                // keys at once. The lock is the body's from here on, and the
+                // mirror below copies it back onto the card.
+                tabs.locked = card.locked;
                 self.bodies.insert(card.id.clone(), Box::new(tabs));
             }
             let Some(tabs) = self.editor_tabs_for(&card.id) else {

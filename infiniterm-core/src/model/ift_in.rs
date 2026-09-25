@@ -94,6 +94,34 @@ impl Model {
                     None => err(&self.notice.clone().unwrap_or_default()),
                 }
             }
+            // `ift <file>` from inside a terminal card: the file opens in
+            // place over that card (cover.rs) and this request is answered
+            // when it closes, which is what `ift` is waiting for. From
+            // anywhere else there is no card to cover, so it opens a card.
+            "edit" => {
+                let path = req.args.first().map(String::as_str).unwrap_or("");
+                let line = req.args.get(1).and_then(|l| l.parse().ok());
+                let base = from.as_deref().filter(|id| {
+                    self.card(id)
+                        .is_some_and(|c| c.kind == crate::saved_layout::CardKind::Terminal)
+                });
+                match base.map(String::from) {
+                    Some(base) => match self.open_cover(path, line, &base, req.id) {
+                        Some(_) => {
+                            self.reply_deferred = true;
+                            ok(String::new())
+                        }
+                        None => err("could not open it here"),
+                    },
+                    None => match self.open_in_card(
+                        open_plan(path, PathKind::File, line.map(|l| l as f64)),
+                        from.as_deref(),
+                    ) {
+                        Some(id) => ok(id),
+                        None => err(&self.notice.clone().unwrap_or_default()),
+                    },
+                }
+            }
             "diff" => {
                 let path = req.args.first().map(String::as_str).unwrap_or("");
                 let kind = kind_of(req.args.get(1).map(String::as_str).unwrap_or("directory"));

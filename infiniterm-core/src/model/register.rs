@@ -1269,6 +1269,100 @@ mod tests {
         assert!(h.m.framing);
     }
 
+    fn edit_from(h: &mut Harness, card: Option<&str>, path: &str) -> crate::cli::CliReply {
+        h.m.run_ift(
+            &crate::cli::CliRequest {
+                id: 77,
+                cmd: "edit".into(),
+                args: vec![path.into()],
+                card_id: card.map(String::from),
+            },
+            &[],
+        )
+    }
+
+    // `ift ~/.zshrc` in a terminal: the file opens over that card, same
+    // rect, locked and focused, the request left for later; the terminal
+    // drops out of what you can navigate to; closing answers the waiting
+    // `ift` and hands the focus back, with nothing for Cmd+Z to bring back.
+    #[test]
+    fn edit_opens_in_place_and_closing_answers_the_waiting_ift() {
+        let mut h = Harness::new();
+        let term = h.focused().id.clone();
+        let rect = h.focused().rect;
+        let reply = edit_from(&mut h, Some(&term), "/Users/me/.zshrc");
+        assert!(reply.ok);
+        assert!(h.m.reply_deferred, "answered when it closes, not now");
+        let cover = h.focused().clone();
+        assert_ne!(cover.id, term);
+        assert_eq!(
+            (cover.kind, cover.rect, cover.locked),
+            (CardKind::Editor, rect, true)
+        );
+        assert_eq!(cover.path.as_deref(), Some("/Users/me/.zshrc"));
+        assert!(
+            h.m.here().iter().all(|c| c.id != term),
+            "the terminal is under it"
+        );
+        assert!(!h.m.save_text().unwrap().contains(&cover.id), "not saved");
+        h.m.take_effects();
+        let effects = h.run("card.close");
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::CliReply {
+                id: 77,
+                ok: true,
+                ..
+            }
+        )));
+        assert_eq!(h.focused().id, term, "back to the shell");
+        assert!(h.m.card(&cover.id).is_none());
+        assert!(h.m.covers.is_empty() && h.m.edit_waiters.is_empty());
+        assert!(h.m.here().iter().any(|c| c.id == term));
+        assert!(
+            h.m.closed.iter().all(|c| c.id != cover.id),
+            "no Cmd+Ctrl+T twin"
+        );
+    }
+
+    // The pair is one card on screen: moving the cover takes the terminal
+    // with it, and so does moving the terminal (a swap, an undo).
+    #[test]
+    fn a_cover_and_its_terminal_move_together() {
+        let mut h = Harness::new();
+        let term = h.focused().id.clone();
+        edit_from(&mut h, Some(&term), "/tmp/x.txt");
+        let cover = h.focused().id.clone();
+        let mut to = h.focused().rect;
+        to.x += 5000.;
+        assert!(
+            h.m.drop_card(&cover, to),
+            "its own terminal is not in the way"
+        );
+        h.m.tick(h.m.now_ms + 16.);
+        assert_eq!(
+            h.m.card(&term).unwrap().rect,
+            h.m.card(&cover).unwrap().rect
+        );
+        let mut back = to;
+        back.y += 3000.;
+        h.m.card_mut(&term).unwrap().rect = back;
+        h.m.tick(h.m.now_ms + 16.);
+        assert_eq!(h.m.card(&cover).unwrap().rect, back);
+    }
+
+    // No terminal to cover (run outside a card, or from an editor): an
+    // ordinary card, answered at once.
+    #[test]
+    fn edit_without_a_terminal_opens_a_card_and_answers_now() {
+        let mut h = Harness::new();
+        let reply = edit_from(&mut h, None, "/tmp/x.txt");
+        assert!(reply.ok && !h.m.reply_deferred);
+        assert!(h.m.covers.is_empty());
+        assert_eq!(h.focused().kind, CardKind::Editor);
+        assert_ne!(h.focused().rect, h.m.cards[0].rect);
+    }
+
     // A Claude card keeps its session's name across a relaunch, with no
     // hook arriving to say an agent is there: the saved session id is the
     // evidence and the saved title the name. A shell's title never is.

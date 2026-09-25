@@ -282,6 +282,9 @@ impl AppView {
                 Effect::DraftDelete(id) => {
                     let _ = infiniterm_core::files::draft_delete(&id);
                 }
+                Effect::CliReply { id, ok, text } => {
+                    self.backend.cli.reply(id, ok, text);
+                }
                 Effect::MarkSwap(rects) => {
                     for (id, from) in rects {
                         self.marked.insert(id, from);
@@ -535,7 +538,11 @@ impl AppView {
                 .map(|c| (c.id.as_str(), c.label.as_str()))
                 .collect();
             let reply = self.model.run_ift(&req, &commands);
-            self.backend.cli.reply(req.id, reply.ok, reply.text);
+            // An `edit` is answered when its in-place editor closes
+            // (Effect::CliReply), which is what the `ift` is waiting for.
+            if !std::mem::take(&mut self.model.reply_deferred) {
+                self.backend.cli.reply(req.id, reply.ok, reply.text);
+            }
             // An ift verb arrives from the socket, after the element tree
             // for this frame was built, and several of them change chrome
             // rather than anything that draws itself: `ift name` sets a
