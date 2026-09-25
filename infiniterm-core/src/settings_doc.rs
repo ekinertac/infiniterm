@@ -257,9 +257,9 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "ui.cardLabelSize",
         &[
-            "Screen pixels, before the Cmd+Shift+= multiplier; the label is drawn at 1.2x",
-            "this. Card labels have to survive being zoomed out to 10%, which is why this",
-            "is separate from the others.",
+            "Screen pixels, before the Cmd+Shift+= multiplier, at 60% zoom and closer;",
+            "1.1x below 60% and 1.45x below 25%, so a name still registers zoomed far out.",
+            "Separate from the other sizes for that reason.",
         ],
     ),
     (
