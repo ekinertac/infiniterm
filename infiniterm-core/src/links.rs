@@ -9,6 +9,14 @@
 //! generously here is fine. A `:line:col` suffix is underlined but not
 //! opened; the punctuation a sentence leaves on a path is neither.
 //!
+//! A domain written without a scheme (`github.com/ekinertac`, `example.com`)
+//! is a URL too, opened over https (2026-09-25: before, it was offered as a
+//! path, the filesystem said no, and Cmd+hover underlined nothing). What
+//! makes it a domain rather than a file is its last label being a known
+//! top-level domain (`BARE_TLDS`), a list kept to names that are not also
+//! common file extensions, so `lib.rs`, `README.md` and `install.sh` stay
+//! paths.
+//!
 //! Offsets are BYTE offsets into `line`; the terminal element maps them to
 //! cells (the reference's are UTF-16 units for xterm, the same idea). The
 //! regexes are the reference's with `\w`, `\b` and `\d` pinned to ASCII, as
@@ -41,6 +49,35 @@ struct Patterns {
     path: Regex,
     trailing: Regex,
     line_suffix: Regex,
+}
+
+/// Top-level domains that make `name.tld` a web address without a scheme.
+/// Deliberately short and free of file extensions: `.rs`, `.md`, `.sh`,
+/// `.py`, `.js`, `.ts`, `.go`, `.pl` and friends are real TLDs too, and a
+/// terminal prints far more file names than bare domains.
+const BARE_TLDS: &[&str] = &[
+    "com", "org", "net", "io", "dev", "ai", "app", "co", "me", "gov", "edu", "info", "xyz", "so",
+    "gg", "tv", "us", "uk", "de", "fr", "nl", "eu", "tr", "jp", "ca", "au", "ly", "to", "fm",
+    "page", "site", "blog", "cloud", "tech", "news", "art", "biz", "ee", "it", "es", "se",
+];
+
+/// `github.com/ekinertac`, `www.example.org`, `localhost:3000`-free: a host
+/// of dot-separated labels, the last one in `BARE_TLDS`, then an optional
+/// port and path.
+fn is_bare_domain(text: &str) -> bool {
+    if text.starts_with(['~', '.', '/']) {
+        return false;
+    }
+    let host = text.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.split(':').next().unwrap_or("");
+    let labels: Vec<&str> = host.split('.').collect();
+    labels.len() >= 2
+        && labels
+            .iter()
+            .all(|l| !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        && labels
+            .last()
+            .is_some_and(|tld| BARE_TLDS.contains(&tld.to_ascii_lowercase().as_str()))
 }
 
 fn patterns() -> &'static Patterns {
@@ -83,6 +120,17 @@ pub fn find_links(line: &str) -> Vec<Found> {
             .iter()
             .any(|f| f.kind == LinkKind::Url && start >= f.start && end <= f.end)
         {
+            continue;
+        }
+        if is_bare_domain(&text) {
+            found.push(Found {
+                kind: LinkKind::Url,
+                start,
+                end,
+                target: format!("https://{text}"),
+                text,
+                line: None,
+            });
             continue;
         }
         let line_no = p
@@ -178,6 +226,55 @@ mod tests {
                 .target,
             "src/lib/split.ts"
         );
+    }
+
+    #[test]
+    fn a_domain_without_a_scheme_is_a_url_opened_over_https() {
+        let f = at(
+            "see github.com/ekinertac/infiniterm.",
+            "github.com/ekinertac/infiniterm",
+        )
+        .unwrap();
+        assert_eq!(f.kind, LinkKind::Url);
+        assert_eq!(f.target, "https://github.com/ekinertac/infiniterm");
+        let f = at("go to example.com, then", "example.com").unwrap();
+        assert_eq!(
+            (f.kind, f.target.as_str()),
+            (LinkKind::Url, "https://example.com")
+        );
+        // A port is the host's, not a line number. (A port AND a path is
+        // cut at the port by the path pattern; rare enough to leave.)
+        let f = at("on www.humbl.ai:8443", "www.humbl.ai:8443").unwrap();
+        assert_eq!(
+            (f.target.as_str(), f.line),
+            ("https://www.humbl.ai:8443", None)
+        );
+        assert_eq!(
+            at("site.com.tr", "site.com.tr").unwrap().kind,
+            LinkKind::Url
+        );
+    }
+
+    #[test]
+    fn file_names_stay_paths_even_where_the_extension_is_a_tld() {
+        for name in [
+            "lib.rs",
+            "README.md",
+            "install.sh",
+            "run.py",
+            "index.ts",
+            "main.go",
+            "Cargo.toml",
+            "node.js",
+            "src/app.rs",
+        ] {
+            let f = find_links(name);
+            assert!(f.iter().all(|f| f.kind == LinkKind::Path), "{name}: {f:?}");
+        }
+        assert!(find_links("~/Code/foo.com")
+            .iter()
+            .all(|f| f.kind == LinkKind::Path));
+        assert!(find_links("1.2.3").iter().all(|f| f.kind == LinkKind::Path));
     }
 
     #[test]
