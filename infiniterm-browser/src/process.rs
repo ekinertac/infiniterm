@@ -221,6 +221,12 @@ pub fn pump() {
     do_message_loop_work();
 }
 
+/// CEF down.
+///
+/// macOS only in practice: the Windows quit path exits the process instead,
+/// because this call takes nineteen seconds there with no browser open and
+/// never returns at all with one. See `job.rs` and the quit handler in
+/// `main.rs` for why that is safe.
 pub fn stop() {
     shutdown();
 }

@@ -281,6 +281,14 @@ fn system_reduces_motion() -> bool {
 }
 
 fn main() {
+    // Windows: this process and everything under it in one job, so the tree
+    // dies with us however we end. BEFORE CEF, or the subprocesses it is
+    // about to start would be outside the job and outlive us; measured, a
+    // killed infiniterm left all eight of Chromium's processes running
+    // eight seconds later. This is also what makes the quit below able to
+    // just exit. See `infiniterm_core::job`.
+    #[cfg(windows)]
+    infiniterm_core::job::adopt_this_process();
     // CEF first: a helper invocation runs and exits here; the browser
     // process loads the framework from the bundle and goes on. Outside a
     // bundle there is no framework and the app runs without browser cards.
@@ -439,6 +447,38 @@ fn main() {
                     app
                 });
                 window.focus(&view.read(cx).focus.clone());
+                // WINDOWS QUITS HERE, at the close of the window rather
+                // than in `on_app_quit` below.
+                //
+                // Not a shortcut: on this platform `on_app_quit` is not
+                // reached at all once CEF has started. Closing the window
+                // left a live, windowless process holding the
+                // single-instance pipe, its own exe and libcef.dll, so the
+                // app could not even be started again; without a browser
+                // card it did eventually quit, taking thirty-eight seconds
+                // of which CEF's `shutdown()` was nineteen (measured
+                // 2026-09-25). `on_window_should_close` runs on WM_CLOSE
+                // with everything still alive, which is the last moment we
+                // can act at all.
+                //
+                // Exiting rather than unwinding is what the job object in
+                // `main` pays for: the kernel closes its handle here and
+                // every Chromium subprocess goes with it, which is the work
+                // `shutdown()` was being waited on to do. Everything of
+                // OURS is on disk by the line below — `flush_save` writes
+                // the canvas and the window frame, `leave` releases the
+                // shells the way a tmux detach needs.
+                #[cfg(windows)]
+                {
+                    let closing = view.clone();
+                    window.on_window_should_close(cx, move |_, cx| {
+                        closing.update(cx, |this, _| {
+                            this.flush_save();
+                            this.backend.pty.leave();
+                        });
+                        infiniterm_core::job::exit_now();
+                    });
+                }
                 // The idle wake-up: every 16 ms, drain what the backend's
                 // threads sent and draw a frame if anything needs one. A
                 // receiver cannot be awaited on gpui's executor, so a short
@@ -481,11 +521,32 @@ fn main() {
                         // The surfaces close before CEF shuts down.
                         this.bodies.clear();
                     });
-                    #[cfg(feature = "browser")]
-                    if cef_running {
-                        infiniterm_browser::process::stop();
+                    // WINDOWS ENDS HERE, ON PURPOSE. Everything worth
+                    // keeping is on disk by this line, and what remains is
+                    // CEF's own teardown, which does not work on this
+                    // platform: `shutdown()` measured nineteen seconds with
+                    // no browser card open and never returned at all with
+                    // one, leaving a windowless process holding its own exe
+                    // and libcef.dll until something killed it
+                    // (2026-09-25). The job object this process is in is
+                    // what makes exiting safe rather than rude: the kernel
+                    // closes its handle here and takes every Chromium
+                    // subprocess with it, which is the job `shutdown()` was
+                    // being waited on to do.
+                    #[cfg(windows)]
+                    infiniterm_core::job::exit_now();
+                    #[cfg(not(windows))]
+                    {
+                        #[cfg(feature = "browser")]
+                        if cef_running {
+                            infiniterm_browser::process::stop();
+                        }
                     }
-                    async {}
+                    // `on_app_quit` wants a future. On Windows nothing
+                    // reaches it, which is the point of the line above.
+                    #[allow(unreachable_code)]
+                    let done = async {};
+                    done
                 })
                 .detach();
                 view

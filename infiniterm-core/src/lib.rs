@@ -60,6 +60,9 @@ pub mod hooks;
 pub mod ift;
 pub mod inspect;
 pub mod itermcolors;
+// Windows job objects, used by the pane backend and by main to make a
+// process tree die with its owner. The file is `#![cfg(windows)]`.
+pub mod job;
 pub mod jsonc;
 pub mod keymap;
 pub mod layout_file;
