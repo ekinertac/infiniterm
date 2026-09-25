@@ -95,6 +95,26 @@ pub enum Panes {
 // On Windows only the `Local` arm survives, so the session handles every
 // other arm reads (pane ids, session ids, the orphan list) go unread here.
 #[cfg_attr(windows, allow(unused_variables))]
+/// Whether quitting DETACHES a card's shell instead of ending it.
+///
+/// Not the same question as which variant the setting names, which is why
+/// this exists rather than a comparison at the call site. On Windows
+/// `Panes::start` falls back to local shells for both Daemon and Tmux
+/// (neither exists there), so a canvas whose settings ask for the daemon
+/// still has shells that die with the app.
+///
+/// `app.restart` is the caller. It offers a restart only when the shells
+/// will survive it, and comparing the enum meant a Windows machine with
+/// `"terminal.backend": "daemon"` in its settings was offered a restart
+/// that killed every shell, the exact thing the guard exists to prevent.
+///
+/// Tmux detaches too, and is still excluded: that is the rule `app.restart`
+/// already had, and widening it is a macOS decision rather than a Windows
+/// one.
+pub fn detaches_on_quit(backend: TerminalBackend) -> bool {
+    !cfg!(windows) && matches!(backend, TerminalBackend::Daemon)
+}
+
 impl Panes {
     /// tmux or the daemon when asked for AND there is one to talk to (a
     /// `tmux` binary on PATH, an `iftd` sidecar beside the app or on PATH).
@@ -350,6 +370,19 @@ impl Panes {
 
 #[cfg(test)]
 mod panes_tests {
+
+    #[test]
+    fn only_a_backend_that_really_detaches_allows_a_restart() {
+        // The daemon is the one that detaches, and only where it exists.
+        assert_eq!(
+            detaches_on_quit(TerminalBackend::Daemon),
+            cfg!(not(windows))
+        );
+        // Local shells never survive, anywhere.
+        assert!(!detaches_on_quit(TerminalBackend::Pty));
+        // Tmux detaches but is not what `app.restart` allows; see the doc.
+        assert!(!detaches_on_quit(TerminalBackend::Tmux));
+    }
     use super::*;
 
     // tmux is the ONLY backend that answers terminal queries itself. Getting

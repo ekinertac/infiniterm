@@ -391,11 +391,16 @@ mod tests {
         let effects = h.run("app.restart");
         assert!(!effects.iter().any(|e| matches!(e, Effect::Restart)));
 
+        // The daemon keeps the shells, so it may — WHERE IT EXISTS. On
+        // Windows `Panes::start` falls back to local shells for it, so
+        // asking for the daemon in settings must not unlock a restart that
+        // would kill every one of them (`backend::detaches_on_quit`).
         h.m.config.terminal.backend = TerminalBackend::Daemon;
         let effects = h.run("app.restart");
-        assert!(
+        assert_eq!(
             effects.iter().any(|e| matches!(e, Effect::Restart)),
-            "the daemon keeps the shells, so it may"
+            cfg!(not(windows)),
+            "the daemon restarts where it runs, and nowhere else"
         );
     }
 

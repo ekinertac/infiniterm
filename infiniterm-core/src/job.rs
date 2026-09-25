@@ -16,6 +16,10 @@
 //! job goes with it. That is a stronger guarantee than any shutdown code
 //! could make, because it does not depend on our code running.
 //!
+//! The job permits a child to BREAK AWAY when it asks (see `empty`), which
+//! is how the update waiter survives the app it is waiting for. Nothing
+//! else asks.
+//!
 //! Jobs NEST on Windows 8 and later, which is why the app-wide job and the
 //! per-pane jobs can both exist: a pane's shell is in its own job inside the
 //! app's. On an older Windows the inner assignment fails and a pane simply
@@ -31,7 +35,7 @@ use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
     SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, TerminateProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
@@ -50,7 +54,19 @@ impl Job {
         let job = unsafe { OwnedHandle::from_raw_handle(job as _) };
 
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // KILL_ON_JOB_CLOSE is the point. BREAKAWAY_OK is the exception to
+        // it: one thing infiniterm starts is MEANT to outlive it, the
+        // waiter that restarts the app or swaps an update in once this
+        // process is gone (`runtime::spawn_waiter`). Without this flag that
+        // waiter is in the job and dies at the moment it is supposed to
+        // act, so Restart does nothing and a staged update never installs.
+        //
+        // BREAKAWAY_OK, not SILENT_BREAKAWAY_OK: it permits a child that
+        // ASKS with CREATE_BREAKAWAY_FROM_JOB and changes nothing else.
+        // The silent variant would let every child out, starting with
+        // Chromium's, which is the opposite of what the job is for.
+        limits.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
         let set = unsafe {
             SetInformationJobObject(
                 job.as_raw_handle() as _,

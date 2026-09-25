@@ -335,7 +335,7 @@ impl AppView {
                 Effect::AgentLog(line) => append_agent_log(&line),
                 Effect::Reload => {
                     self.flush_save();
-                    std::process::exit(0);
+                    leave_now();
                 }
                 // Needs the Window, which effects do not have; the frame
                 // makes the call. Same shape as the owed-frame flag.
@@ -380,7 +380,7 @@ impl AppView {
                         // left to do but go, and it opens the bundle once
                         // we are gone. Cards come back to their sessions
                         // and the frame comes back from window.json.
-                        Ok(()) => std::process::exit(0),
+                        Ok(()) => leave_now(),
                         // Still here, so say why rather than quitting into
                         // nothing and looking like a crash.
                         Err(e) => self.model.notify(format!("could not restart: {e}")),
@@ -966,7 +966,14 @@ impl AppView {
             return;
         }
         let _ = std::fs::remove_file(&probe);
-        let aside = u.dir.join(format!("old-{}.app", std::process::id()));
+        // The old app moved out of the way, deleted at the next launch by
+        // `updater::clean`. A bundle on macOS; on Windows the release is a
+        // plain folder, and a `.app` suffix there would only be confusing.
+        let aside = if cfg!(windows) {
+            u.dir.join(format!("old-{}", std::process::id()))
+        } else {
+            u.dir.join(format!("old-{}.app", std::process::id()))
+        };
         let script = infiniterm_core::update::swap_script(
             std::process::id(),
             &u.bundle.to_string_lossy(),
@@ -974,12 +981,14 @@ impl AppView {
             &aside.to_string_lossy(),
         );
         self.flush_save();
-        match std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(script)
-            .spawn()
-        {
-            Ok(_) => std::process::exit(0),
+        // `spawn_waiter`, not a bare `/bin/sh`, which is what this used to
+        // be on both platforms: Windows has no /bin/sh, so every Windows
+        // update got as far as downloading, verifying and staging and then
+        // failed at the last step with "could not start the update". It
+        // also has to break away from the job, or it would be killed by the
+        // exit below before it could do anything.
+        match spawn_waiter(&script) {
+            Ok(()) => leave_now(),
             Err(e) => self
                 .model
                 .notify(format!("could not start the update: {e}")),
@@ -987,15 +996,40 @@ impl AppView {
     }
 }
 
+/// End the app, from anywhere that means to.
+///
+/// Four callers: the window closing, Reload, Restart, and installing an
+/// update. They all have the same two obligations and it is not obvious
+/// that they do, which is why this is one function and not four exits.
+///
+/// Give up the endpoint claim, because the named pipe outlives the process
+/// by about half a minute on Windows and the claim file is what tells the
+/// next launch nobody is behind it (`infiniterm_core::instance`).
+///
+/// Then leave WITHOUT running teardown. `std::process::exit` runs every
+/// DLL's detach and libcef's does not return, which hung a Restart with the
+/// waiter already running and the app still on screen (2026-09-26). The job
+/// object takes the subprocesses; see `infiniterm_core::job::exit_now`.
+///
+/// Callers must have flushed anything they care about first: this does not
+/// come back.
+pub fn leave_now() -> ! {
+    #[cfg(windows)]
+    {
+        infiniterm_core::instance::release(&infiniterm_core::paths::app_support_dir());
+        infiniterm_core::job::exit_now()
+    }
+    #[cfg(not(windows))]
+    std::process::exit(0)
+}
+
+/// Starts a script that must OUTLIVE this process: the waiter that reopens
+/// the app, or the one that swaps an update in once the exe is unlocked.
+///
+/// The one place that knowledge lives, because getting it wrong is silent
+/// on both platforms — the waiter dies and Restart simply does nothing.
 #[cfg(not(windows))]
-fn relaunch_after_exit() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let bundle = bundle_of(&exe).ok_or("not running from an .app bundle")?;
-    let script = format!(
-        "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; exec open {bundle}",
-        pid = std::process::id(),
-        bundle = infiniterm_core::drop::posix_quote(&bundle.to_string_lossy()),
-    );
+fn spawn_waiter(script: &str) -> Result<(), String> {
     std::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(script)
@@ -1004,25 +1038,49 @@ fn relaunch_after_exit() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// The same thing in PowerShell, which is the only shell Windows is sure to
-/// have. `-WindowStyle Hidden` so the waiter does not flash a console over
-/// whatever is on screen while it waits.
+/// PowerShell, the only shell Windows is sure to have.
+///
+/// CREATE_BREAKAWAY_FROM_JOB is what makes this work at all: every process
+/// infiniterm starts is in the job that kills the tree when the app ends
+/// (`infiniterm_core::job`), and a waiter for the app's exit that dies with
+/// the app is a waiter that never runs. The job allows the breakaway; this
+/// asks for it. CREATE_NO_WINDOW keeps the console from flashing over
+/// whatever is on screen, which `-WindowStyle Hidden` alone does not.
+#[cfg(windows)]
+fn spawn_waiter(script: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new(infiniterm_core::shell_cmd::default_shell())
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", script])
+        .creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+fn relaunch_after_exit() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let bundle = bundle_of(&exe).ok_or("not running from an .app bundle")?;
+    spawn_waiter(&format!(
+        "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; exec open {bundle}",
+        pid = std::process::id(),
+        bundle = infiniterm_core::drop::posix_quote(&bundle.to_string_lossy()),
+    ))
+}
+
 #[cfg(windows)]
 fn relaunch_after_exit() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let script = format!(
+    spawn_waiter(&format!(
         "Wait-Process -Id {pid} -ErrorAction SilentlyContinue; Start-Process -FilePath {exe}",
         pid = std::process::id(),
         exe = infiniterm_core::drop::quote_for(
             &exe.to_string_lossy(),
             infiniterm_core::shell_cmd::ShellKind::PowerShell
         ),
-    );
-    std::process::Command::new(infiniterm_core::shell_cmd::default_shell())
-        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script])
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    ))
 }
 
 #[cfg(test)]

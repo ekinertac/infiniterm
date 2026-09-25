@@ -476,14 +476,7 @@ fn main() {
                             this.flush_save();
                             this.backend.pty.leave();
                         });
-                        // The endpoint's claim, before we stop being able
-                        // to give anything up. The pipe itself outlives us
-                        // by half a minute; this file is what tells the
-                        // next launch that nobody is behind it.
-                        infiniterm_core::instance::release(
-                            &infiniterm_core::paths::app_support_dir(),
-                        );
-                        infiniterm_core::job::exit_now();
+                        runtime::leave_now();
                     });
                 }
                 // The idle wake-up: every 16 ms, drain what the backend's

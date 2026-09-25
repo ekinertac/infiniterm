@@ -4,7 +4,6 @@
 use super::palette_state::Source;
 use super::{ConfigPair, Effect, Model};
 use crate::chrome::{clamp_ui_scale, UI_SCALE_STEP};
-use crate::config::TerminalBackend;
 use crate::config_files::{config_path, ConfigFile};
 use crate::grid::Point;
 use crate::ift::{open_plan, PathKind};
@@ -239,7 +238,10 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         // adopt them again. Under a local pty the same keystroke means
         // "kill everything I have open", which is not a thing to do on a
         // chord: say so instead of doing it.
-        if m.config.terminal.backend != TerminalBackend::Daemon {
+        // What the shells ACTUALLY do, not what the setting names: on
+        // Windows the daemon falls back to local shells, so asking for it
+        // there must not unlock a restart. See `backend::detaches_on_quit`.
+        if !crate::backend::detaches_on_quit(m.config.terminal.backend) {
             m.notify("restart needs terminal.backend \"daemon\"; on pty it would kill every shell");
             return;
         }
