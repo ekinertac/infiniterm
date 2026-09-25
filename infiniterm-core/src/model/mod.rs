@@ -412,6 +412,12 @@ pub enum Pending {
         id: String,
         reclaim: bool,
     },
+    /// Closing cards with unsaved changes: the ids and `reclaim` to close
+    /// with once "Discard" is chosen.
+    DiscardClose {
+        ids: Vec<String>,
+        reclaim: bool,
+    },
     OpenFile {
         from: Option<String>,
     },
@@ -549,8 +555,6 @@ pub struct Model {
     /// as every other runtime fact. Cheap closing is what keeps a canvas
     /// from silting up, and it is only cheap if it is undoable.
     pub closed: Vec<Card>,
-    /// Closing a dirty editor takes two presses; the first says why.
-    discard_armed: Option<(String, f64)>,
     /// `dev.stress.zoom` in progress: the step taken so far and when the
     /// next is due. Steps run from `tick`, which is the model's only clock.
     pub stress_zoom: Option<(u32, f64)>,
@@ -630,7 +634,6 @@ impl Model {
             dev_build: cfg!(debug_assertions),
             config_pairs: vec![],
             closed: vec![],
-            discard_armed: None,
             stress_zoom: None,
             now_ms: 0.,
             effects: vec![],
@@ -648,13 +651,6 @@ impl Model {
         self.sync_covers();
         if self.notice.is_some() && now_ms >= self.notice_until {
             self.notice = None;
-        }
-        if self
-            .discard_armed
-            .as_ref()
-            .is_some_and(|(_, until)| now_ms >= *until)
-        {
-            self.discard_armed = None;
         }
         if let Some((n, due)) = self.stress_zoom {
             if now_ms >= due {

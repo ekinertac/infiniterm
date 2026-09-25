@@ -201,6 +201,10 @@ pub struct EditorBody {
     selecting: bool,
     /// The rows visible at the last paint, for scrolling the cursor into view.
     rows_visible: usize,
+    /// A `go_to_line` that ran before the first paint, when `rows_visible`
+    /// was not known yet: the paint that learns it centres the line then.
+    /// Without this `file:20` opened with line 20 at the TOP (2026-09-26).
+    centre_pending: bool,
     /// Shaped rows by (line, first char), keyed by what they were shaped from.
     shaped: HashMap<(usize, usize), (u64, gpui::ShapedLine)>,
     /// Pending events for the frame, drained by `take_event`.
@@ -274,6 +278,7 @@ impl EditorBody {
             sidebar_top: false,
             selecting: false,
             rows_visible: 1,
+            centre_pending: false,
             shaped: HashMap::new(),
             events: vec![],
             pending_line: None,
@@ -463,9 +468,23 @@ impl EditorBody {
     pub fn go_to_line(&mut self, line: usize) {
         self.buffer.go_to_line(line);
         // Centre it: the cursor row halfway down the visible rows.
+        self.centre_cursor();
+        self.centre_pending = true;
+        self.dirty = true;
+    }
+
+    fn centre_cursor(&mut self) {
         let target = self.buffer.line_of(self.buffer.cursor());
         self.scroll_line = target.saturating_sub(self.rows_visible / 2);
-        self.dirty = true;
+    }
+
+    /// The paint's measure of the view; a pending `go_to_line` is centred
+    /// against it once.
+    fn set_rows_visible(&mut self, rows: usize) {
+        self.rows_visible = rows;
+        if std::mem::take(&mut self.centre_pending) {
+            self.centre_cursor();
+        }
     }
 
     /// A palette-only transform (Batch 1, 2026-09-24): runs the pure
@@ -1703,7 +1722,7 @@ impl CardBody for EditorBody {
             self.paint_panel(panel, scale, focused, window, cx);
         }
         let rows_visible = ((t_size.h - PAD_Y * 2.) / self.line_h()).floor().max(1.) as usize;
-        self.rows_visible = rows_visible;
+        self.set_rows_visible(rows_visible);
         self.world = world;
         let gutter_w = s(self.gutter_w());
         let origin = point(area.origin.x + s(PAD_X), area.origin.y + s(PAD_Y));
@@ -2409,6 +2428,22 @@ mod tests {
         b.load(rs.to_str().unwrap(), false, 0.);
         assert!(!b.spans_for().is_empty(), "and back");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // `ift file:20` jumps before the editor has ever been painted, so it
+    // does not know its height yet; the first paint centres the line, with
+    // the lines above it on screen, and later paints leave the scroll alone.
+    #[test]
+    fn a_line_jump_before_the_first_paint_is_centred_by_it() {
+        let mut b = body();
+        let text: String = (0..500).map(|i| format!("line {i}\n")).collect();
+        b.buffer = Buffer::new(&text);
+        b.go_to_line(20);
+        b.set_rows_visible(30);
+        assert_eq!(b.scroll_line, 19 - 15, "line 20 mid-view");
+        b.scroll_line = 100;
+        b.set_rows_visible(30);
+        assert_eq!(b.scroll_line, 100, "only once");
     }
 
     // Cmd+End in a long file: the view lands with the last line at the

@@ -23,9 +23,6 @@ use crate::sidebar::{clamp_sidebar, sidebar_extent, sidebar_width};
 use crate::split::{split_rect, SplitSide};
 use crate::swap::swap_with_neighbour;
 
-/// How long the second close press has to arrive.
-const DISCARD_ARM_MS: f64 = 3000.;
-
 pub const ZOOM_STEP: f64 = 1.1;
 
 impl Model {
@@ -246,10 +243,11 @@ impl Model {
                 }
             }
         }
-        self.close_selected_confirmed(ids, reclaim);
+        self.close_selected_confirmed(ids, reclaim, false);
     }
 
-    fn close_selected_confirmed(&mut self, mut ids: Vec<String>, reclaim: bool) {
+    /// `discard`: the unsaved-changes question was already answered yes.
+    fn close_selected_confirmed(&mut self, mut ids: Vec<String>, reclaim: bool, discard: bool) {
         let pair = if ids.len() == 1 {
             self.config_pairs
                 .iter()
@@ -266,18 +264,23 @@ impl Model {
                 .cloned()
                 .collect();
         }
-        if let Some(dirty) = ids
-            .iter()
-            .find(|id| self.card(id).is_some_and(|c| c.dirty))
-            .cloned()
-        {
-            if self.discard_armed.as_ref().map(|(id, _)| id) != Some(&dirty) {
-                self.discard_armed = Some((dirty, self.now_ms + DISCARD_ARM_MS));
-                self.notify("unsaved changes: save first, or close again to discard");
+        // Unsaved changes are asked about in a dialog, not by a second
+        // Cmd+W: a double press discarded work without the second press
+        // being meant (Ekin, 2026-09-26). A Cmd+W while it is up asks the
+        // same question again; only Enter or the Discard button discards.
+        if !discard {
+            if let Some(dirty) = ids
+                .iter()
+                .find(|id| self.card(id).is_some_and(|c| c.dirty))
+                .and_then(|id| self.card(id))
+                .cloned()
+            {
+                let label = format!("discard unsaved changes to {}?", self.label_of(&dirty));
+                self.prompt
+                    .confirm(&label, "Discard", Pending::DiscardClose { ids, reclaim });
                 return;
             }
         }
-        self.discard_armed = None;
         for id in ids.iter().skip(1).rev() {
             self.close_card_with(id, false, reclaim);
         }
@@ -372,6 +375,11 @@ impl Model {
             Pending::CloseCard { id, reclaim } => {
                 if text.is_some() {
                     self.close_card_with(&id, false, reclaim);
+                }
+            }
+            Pending::DiscardClose { ids, reclaim } => {
+                if text.is_some() {
+                    self.close_selected_confirmed(ids, reclaim, true);
                 }
             }
             Pending::OpenFile { from } => {

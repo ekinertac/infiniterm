@@ -67,7 +67,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 
 | | |
 | --- | --- |
-| `Cmd + T` / `Cmd + W` | new card / close card (a dirty editor asks for a second press; a browser or editor card with several tabs asks once, since closing it takes every tab) |
+| `Cmd + T` / `Cmd + W` | new card / close card (a dirty editor asks in a dialog before discarding; a browser or editor card with several tabs asks once, since closing it takes every tab) |
 | `Cmd + Ctrl + W` | close card and leave its space free: the split partner keeps its size |
 | `Cmd + Ctrl + Enter` | grow into the free space beside and below, up to the default size: a quarter next to a half becomes the other half |
 | `Cmd + Z` / `Cmd + Shift + Z` | undo / redo on the canvas: a move, swap, drop or resize, a closed card (back in its slot, a fresh shell), a new card or split (removed); inside an editor these stay the buffer's |

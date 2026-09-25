@@ -1716,18 +1716,26 @@ mod tests {
         assert!(h.m.notice.is_none());
     }
 
-    // A dirty editor closes on the second press, within the window.
+    // A dirty editor asks in a dialog; a second Cmd+W only asks again, and
+    // nothing is discarded until the answer is yes. A no keeps the card.
     #[test]
-    fn a_dirty_editor_takes_two_presses_to_close() {
+    fn a_dirty_editor_asks_before_it_discards() {
         let mut h = Harness::new();
         let id = h.focused().id.clone();
         let c = h.m.card_mut(&id).unwrap();
         c.kind = CardKind::Editor;
         c.dirty = true;
         h.run("card.close");
-        assert_eq!(h.m.cards.len(), 1);
-        assert!(h.m.notice.as_deref().unwrap().contains("unsaved"));
-        let effects = h.run("card.close");
+        h.run("card.close");
+        assert_eq!(h.m.cards.len(), 1, "a double press is not a yes");
+        assert!(h.m.prompt.open && h.m.prompt.label.contains("unsaved"));
+        let (pending, text) = h.m.prompt.settle(None).unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert_eq!(h.m.cards.len(), 1, "no keeps it");
+        h.run("card.close");
+        let (pending, text) = h.m.prompt.settle(Some("")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        let effects = h.m.take_effects();
         assert!(h.m.cards.is_empty());
         assert!(effects.contains(&Effect::DraftDelete(id)));
     }
