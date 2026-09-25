@@ -314,6 +314,9 @@ fn main() {
         #[cfg(feature = "browser")]
         let cef_running = match cef.as_mut() {
             Some(p) => {
+                // CEF's two methods on gpui's NSApplication; nothing on
+                // Windows owns an NSApplication to patch.
+                #[cfg(target_os = "macos")]
                 infiniterm_browser::app_protocol::install();
                 let ok = p.start();
                 if !ok {

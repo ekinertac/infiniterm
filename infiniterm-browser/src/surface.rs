@@ -8,6 +8,14 @@
 //! save file.
 use crate::moat;
 use cef::*;
+
+/// CEF's native cursor handle, which is `HCURSOR` on Windows and an opaque
+/// pointer elsewhere. Nothing here reads it — the cursor is chosen from
+/// `type_` — but a trait method's signature has to match the platform's.
+#[cfg(windows)]
+type CursorHandle = *mut sys::HICON__;
+#[cfg(not(windows))]
+type CursorHandle = *mut u8;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 /// A scale below this makes CEF's layout math degenerate; a card zoomed
@@ -181,7 +189,7 @@ wrap_display_handler! {
         fn on_cursor_change(
             &self,
             _browser: Option<&mut Browser>,
-            _cursor: *mut u8,
+            _cursor: CursorHandle,
             type_: CursorType,
             _custom_cursor_info: Option<&CursorInfo>,
         ) -> ::std::os::raw::c_int {
@@ -300,7 +308,8 @@ wrap_context_menu_handler! {
         ) -> ::std::os::raw::c_int {
             if let Some(params) = params {
                 let link = CefStringUtf16::from(&params.link_url()).to_string();
-                let flags = params.type_flags().as_ref().0;
+                // i32 on Windows, u32 on macOS; `has_flag` takes one width.
+                let flags = params.type_flags().as_ref().0 as u32;
                 self.handler.shared.borrow_mut().context_menu = Some(ContextMenuRequest {
                     x: params.xcoord(),
                     y: params.ycoord(),
@@ -308,7 +317,7 @@ wrap_context_menu_handler! {
                     editable: params.is_editable() != 0,
                     has_selection: has_flag(
                         flags,
-                        sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0,
+                        sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0 as u32,
                     ),
                 });
             }
@@ -527,13 +536,13 @@ impl Surface {
     fn flags(mods: Mods) -> u32 {
         let mut flags = 0u32;
         if mods.shift {
-            flags |= sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0;
+            flags |= sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0 as u32;
         }
         if mods.control {
-            flags |= sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN.0;
+            flags |= sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN.0 as u32;
         }
         if mods.alt {
-            flags |= sys::cef_event_flags_t::EVENTFLAG_ALT_DOWN.0;
+            flags |= sys::cef_event_flags_t::EVENTFLAG_ALT_DOWN.0 as u32;
         }
         flags
     }
@@ -795,8 +804,8 @@ mod tests {
 
     #[test]
     fn has_flag_reads_one_bit_out_of_a_combined_mask() {
-        let selection = sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0;
-        let link = sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_LINK.0;
+        let selection = sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0 as u32;
+        let link = sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_LINK.0 as u32;
         assert!(has_flag(selection | link, selection));
         assert!(!has_flag(link, selection));
     }

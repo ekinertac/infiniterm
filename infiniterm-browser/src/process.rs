@@ -16,6 +16,22 @@
 //! extension is a browser without Claude, not a failure; a missing
 //! framework (the bare binary, outside a bundle) is an app without browser
 //! cards.
+//!
+//! Loading the framework is macOS ONLY. There CEF ships as a framework
+//! inside the bundle and is loaded at runtime, which is what
+//! `Unavailable::NoFramework` reports; on Windows libcef is linked and
+//! there is nothing to find, so a Windows build can never answer that.
+//!
+//! WINDOWS RUNS EVERY CHROMIUM SUBPROCESS AS THIS SAME EXE. macOS has
+//! `infiniterm Helper.app` and `bin/helper.rs`; Windows has neither, so a
+//! renderer, a GPU process and a utility process all arrive back in
+//! `main`, reach `early`, and are turned around by `execute_process`
+//! before gpui starts. That is why `is_subprocess` exists: without it
+//! every one of them would seed the profile and the extensions on its way
+//! past, half a dozen processes copying the same directories over each
+//! other at launch. A subprocess is told what it is by Chromium's own
+//! `--type=` switch, and it needs none of that work: the switches the
+//! parent chose are already on its command line.
 use cef::{args::Args, *};
 use infiniterm_core::extensions::{chrome_extension_dir, copy_dir, installed_extensions};
 use std::path::{Path, PathBuf};
@@ -49,7 +65,9 @@ pub fn seed(data: &Path) -> Vec<PathBuf> {
     // The first profile on this Mac is the spike's, which carries the
     // claude.ai sign-in the extension connects with; without it the
     // extension has to be signed in again inside a card. One-time, and
-    // only when there is no profile yet.
+    // only when there is no profile yet. Nothing on Windows: the spike
+    // was never built there, so the directory is simply absent and a card
+    // signs in once by hand.
     let profile = data.join("profile");
     if !profile.join("Default").is_dir() {
         let spike = infiniterm_core::paths::home_dir()
@@ -104,6 +122,9 @@ pub struct Process {
     args: Args,
     app: App,
     settings: Settings,
+    /// Held for the life of the process: dropping it unloads the framework
+    /// out from under CEF. macOS only, see the header.
+    #[cfg(target_os = "macos")]
     _loader: library_loader::LibraryLoader,
 }
 
@@ -119,18 +140,36 @@ pub enum Unavailable {
 
 /// Before gpui: load the framework and run as a helper if that is what
 /// this invocation is.
+/// Whether this invocation is a Chromium subprocess rather than the app.
+///
+/// Chromium passes `--type=renderer` (or gpu-process, utility, ...) to
+/// every child it spawns and nothing else uses that switch, so it is the
+/// flag on Windows, where the child is this same executable. Always false
+/// on macOS, where a child is the helper binary and never gets here.
+fn is_subprocess() -> bool {
+    std::env::args().any(|a| a.starts_with("--type="))
+}
+
 pub fn early() -> Result<Process, Unavailable> {
-    let loader = library_loader::LibraryLoader::new(&std::env::current_exe().unwrap(), false);
-    if !loader.load() {
-        return Err(Unavailable::NoFramework);
-    }
+    #[cfg(target_os = "macos")]
+    let loader = {
+        let loader = library_loader::LibraryLoader::new(&std::env::current_exe().unwrap(), false);
+        if !loader.load() {
+            return Err(Unavailable::NoFramework);
+        }
+        loader
+    };
     let _ = api_hash(sys::CEF_API_VERSION_LAST, 0);
     let args = Args::new();
     let data = browser_dir();
-    let extensions: Vec<String> = seed(&data)
-        .into_iter()
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect();
+    let extensions: Vec<String> = if is_subprocess() {
+        Vec::new()
+    } else {
+        seed(&data)
+            .into_iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect()
+    };
     let mut app = AppBuilder::new(extensions);
     let ret = execute_process(
         Some(args.as_main_args()),
@@ -144,6 +183,14 @@ pub fn early() -> Result<Process, Unavailable> {
     let settings = Settings {
         windowless_rendering_enabled: 1,
         external_message_pump: 1,
+        // Windows: the sandbox is a `sandbox_info` pointer the app has to
+        // create and hand to both `execute_process` and `initialize`, and
+        // it only works when the exe links `cef_sandbox.lib` statically
+        // against the same CRT CEF was built with. We pass null for it,
+        // so this must say so or Chromium asserts on the mismatch. macOS
+        // gets its sandbox from the helper bundles instead, which is why
+        // it is not needed there.
+        no_sandbox: cfg!(windows) as i32,
         cache_path: profile.to_string_lossy().as_ref().into(),
         log_file: data.join("cef.log").to_string_lossy().as_ref().into(),
         ..Default::default()
@@ -152,6 +199,7 @@ pub fn early() -> Result<Process, Unavailable> {
         args,
         app,
         settings,
+        #[cfg(target_os = "macos")]
         _loader: loader,
     })
 }
