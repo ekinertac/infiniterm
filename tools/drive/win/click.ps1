@@ -18,12 +18,19 @@
 # WM_MOUSEMOVE first, because a page tracks hover and a click with no move
 # before it arrives somewhere the page was not expecting.
 #
+# `-Wheel` scrolls at the same point instead of clicking, in notches: one
+# notch is WHEEL_DELTA (120), positive away from you. It is here rather than
+# in a script of its own because it is the same job, a mouse message at a
+# point, and differs only in which message. Note WM_MOUSEWHEEL is the one
+# mouse message that takes SCREEN coordinates, not client ones.
+#
 # Related: shot.ps1 (the coordinates), post.ps1 (typing), window.ps1.
 param(
     [Parameter(Mandatory = $true)][int]$X,
     [Parameter(Mandatory = $true)][int]$Y,
     [ValidateSet('left', 'right')][string]$Button = 'left',
     [int]$Count = 1,
+    [int]$Wheel = 0,
     [string]$ProcName = 'infiniterm'
 )
 
@@ -56,6 +63,20 @@ $cy = $Y + $frame.Top - $origin.Y
 $l = [IntPtr](($cy -shl 16) -bor ($cx -band 0xFFFF))
 
 $WM_MOUSEMOVE = 0x0200
+$WM_MOUSEWHEEL = 0x020A
+
+if ($Wheel -ne 0) {
+    # Screen coordinates for this one, and the notches in wParam's high word.
+    $sl = [IntPtr]((($cy + $origin.Y) -shl 16) -bor (($cx + $origin.X) -band 0xFFFF))
+    [void][Click]::PostMessage($h, $WM_MOUSEMOVE, [IntPtr]0, $l)
+    for ($i = 0; $i -lt [Math]::Abs($Wheel); $i++) {
+        $notch = if ($Wheel -gt 0) { 120 } else { -120 }
+        [void][Click]::PostMessage($h, $WM_MOUSEWHEEL, [IntPtr](($notch -shl 16)), $sl)
+        Start-Sleep -Milliseconds 60
+    }
+    return "scrolled $Wheel notches at client $cx,$cy"
+}
+
 $down = if ($Button -eq 'left') { 0x0201 } else { 0x0204 }
 $up = if ($Button -eq 'left') { 0x0202 } else { 0x0205 }
 $held = if ($Button -eq 'left') { 0x0001 } else { 0x0002 }
