@@ -70,7 +70,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | `Cmd + T` / `Cmd + W` | new card / close card (a dirty editor asks Save, Don't Save (Cmd+D) or Cancel, as macOS does; a browser or editor card with several tabs asks once, since closing it takes every tab) |
 | `Cmd + Ctrl + W` | close card and leave its space free: the split partner keeps its size |
 | `Cmd + Ctrl + Enter` | grow into the free space beside and below, up to the default size: a quarter next to a half becomes the other half |
-| `Cmd + Z` / `Cmd + Shift + Z` | undo / redo on the canvas: a move, swap, drop or resize, a closed card (back in its slot, a fresh shell), a new card or split (removed); inside an editor these stay the buffer's |
+| `Cmd + Z` / `Cmd + Shift + Z` | undo / redo on the canvas: a move, swap, drop or resize, a closed card (back in its slot, a fresh shell); undo never closes a card; inside an editor these stay the buffer's |
 | drag a card | the card stays; an outline snaps to the slots the cards around it offer, blue where it fits, orange where it doesn't; drop on free space to move, on a card to swap, Esc to cancel |
 | `Cmd + Alt + Arrows` in an editor | between the text and the tree first (the tree lies left or above); at the card's edge, on to the next card as everywhere else. `Cmd + K` shows and hides the tree |
 | palette: "App: show pressed shortcuts" | every chord you press appears bottom right with the command it ran, stacked, fading; for screencasts and for showing somebody |

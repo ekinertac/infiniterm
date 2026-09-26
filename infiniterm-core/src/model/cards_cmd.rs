@@ -669,28 +669,16 @@ impl Model {
         self.undoing = true;
         let inverse = match step {
             UndoStep::Rects(snap) => self.apply_rects(snap),
+            // Reopened, and nothing to redo: redoing a close would close
+            // a card you may already be working in again.
             UndoStep::Closed(card) => {
                 let card = *card;
                 let id = card.id.clone();
                 // Out of the reopen ring too, or Cmd+Ctrl+T brings a twin.
                 self.closed.retain(|c| c.id != id);
                 self.reopen_card(card);
-                Some(UndoStep::Created(id))
+                None
             }
-            UndoStep::Created(id) => match self.card(&id).cloned() {
-                Some(card) => {
-                    self.close_card(&id, false);
-                    Some(UndoStep::Closed(Box::new(Card {
-                        pane_id: None,
-                        agent: crate::agent_state::AgentState::None,
-                        dirty: false,
-                        command: None,
-                        transcript_path: None,
-                        ..card
-                    })))
-                }
-                None => None,
-            },
         };
         self.undoing = false;
         if let Some(inverse) = inverse {
@@ -1283,14 +1271,12 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.notify("nothing to reopen");
             return;
         };
-        // Reopened by hand: the close leaves the trail (or a later Cmd+Z
-        // would reopen it a second time) and the reopen joins it, so Cmd+Z
-        // right after undoes the reopen.
+        // Reopened by hand: the close leaves the trail, or a later Cmd+Z
+        // would reopen it a second time.
         let id = card.id.clone();
         m.layout_undo
             .retain(|s| !matches!(s, UndoStep::Closed(c) if c.id == id));
         m.reopen_card(card);
-        m.record_undo(UndoStep::Created(id));
     });
     r.register("browser.find", "Browser: find in page", Model::open_find);
     r.register("card.find", "Card: find in this card", Model::find_in_card);

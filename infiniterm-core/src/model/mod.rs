@@ -453,17 +453,21 @@ pub struct LayoutSnapshot {
 }
 
 /// One step of the canvas's undo trail (Cmd+Z / Cmd+Shift+Z): a move or
-/// resize, a close, a card made. Undoing a close reopens the card in its
-/// slot (a fresh shell there, the way `card.reopen` does); undoing a new
-/// card or a split closes it. One trail for all three, in the order they
-/// happened, because a close among moves is the thing worth walking back.
+/// resize, or a close. Undoing a close reopens the card in its slot (a
+/// fresh shell there, the way `card.reopen` does). One trail, in the order
+/// things happened, because a close among moves is the thing worth walking
+/// back.
+///
+/// Undo never CLOSES a card. Making a card was a step from 2026-09-21 to
+/// 09-26, so Cmd+Z on a card you had opened and started working in closed
+/// it, shell and all (Ekin: "pretty dangerous"); an unwanted new card is a
+/// Cmd+W away. For the same reason there is no redo of a close.
 #[derive(Clone, Debug, PartialEq)]
 pub enum UndoStep {
     Rects(LayoutSnapshot),
     /// The card as `close_card` kept it: runtime facts stripped. Boxed
     /// because a Card is ten times a snapshot and the trail is a Vec.
     Closed(Box<Card>),
-    Created(String),
 }
 
 /// How many layout changes Cmd+Z can walk back.
@@ -852,11 +856,6 @@ impl Model {
         };
         let id = card.id.clone();
         self.cards.push(card);
-        // Every card made after the layout loaded is a step on the undo
-        // trail; the ones the load itself makes are not.
-        if self.loaded {
-            self.record_undo(UndoStep::Created(id.clone()));
-        }
         self.dirty_layout = true;
         id
     }

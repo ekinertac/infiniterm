@@ -869,12 +869,12 @@ mod tests {
         );
     }
 
-    // One trail: a move, a new card and a close undo in the order they
-    // happened. Undoing a close brings the card back to its slot; undoing
-    // a new card removes it; redo goes the other way; a card reopened by
-    // hand is not reopened again by Cmd+Z.
+    // One trail: a move and a close undo in the order they happened.
+    // Undoing a close brings the card back to its slot. Undo NEVER closes
+    // a card: not a new one you may be working in, not by redoing a close.
+    // A card reopened by hand is not reopened again by Cmd+Z.
     #[test]
-    fn undo_walks_back_through_closes_and_new_cards_too() {
+    fn undo_walks_back_moves_and_closes_and_never_closes_a_card() {
         let mut h = Harness::new();
         let a = h.focused().id.clone();
         let a_rect = h.focused().rect;
@@ -895,20 +895,20 @@ mod tests {
             "the move undone"
         );
         h.run("layout.undo");
-        assert!(h.m.card(&b).is_none(), "the new card undone");
+        assert!(
+            h.m.card(&b).is_some(),
+            "the new card stays: undo closes nothing"
+        );
         h.run("layout.redo");
-        assert!(h.m.card(&b).is_some(), "and redone");
-        // A close reopened by hand: Cmd+Z undoes the reopen, not the close.
+        h.run("layout.redo");
+        assert!(h.m.card(&a).is_some(), "and redo does not close it again");
+        // A close reopened by hand leaves the trail: Cmd+Z does not bring
+        // a second copy, and does not close the reopened card.
         h.m.set_focus(Some(&b));
         h.run("card.close");
         h.run("card.reopen");
-        assert!(h.m.card(&b).is_some());
         h.run("layout.undo");
-        assert!(h.m.card(&b).is_none(), "the reopen undone");
-        assert!(
-            h.m.closed.iter().any(|c| c.id == b),
-            "and Cmd+Ctrl+T has it again"
-        );
+        assert_eq!(h.m.cards.iter().filter(|c| c.id == b).count(), 1);
     }
 
     // A locked card is not closed by Cmd+W, by its shell exiting, or by
