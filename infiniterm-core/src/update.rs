@@ -98,6 +98,24 @@ pub fn applies_to(bundle: &Path, home: &Path) -> bool {
             .is_some_and(|p| p == Path::new("/Applications") || p == home.join("Applications"))
 }
 
+/// `CFBundleVersion` from an Info.plist in XML (what `tools/bundle.sh`
+/// writes): the build of the app on disk.
+pub fn plist_build(text: &str) -> Option<u64> {
+    let after = text.split("<key>CFBundleVersion</key>").nth(1)?;
+    let value = after.split("<string>").nth(1)?.split("</string>").next()?;
+    value.trim().parse().ok()
+}
+
+/// Whether a staged update should replace the app on disk NOW. An update
+/// staged while an older build ran can be older than what is installed by
+/// the time of the restart (a `make install`, a DMG); swapping it in then
+/// is a downgrade. It happened on 2026-09-26: 0.2.0 (356), staged by 355,
+/// replaced a freshly installed 359 on the next restart, and two fixes
+/// seemed not to work. Unknown on-disk build: the swap goes ahead, as before.
+pub fn staged_is_newer(staged: u64, on_disk: Option<u64>) -> bool {
+    on_disk.is_none_or(|d| staged > d)
+}
+
 /// The waiter that replaces the bundle after this process has exited, and
 /// then opens it: the old bundle is moved aside (deleted at the next
 /// launch, `updater::clean`), the staged one moved into its place, and if
@@ -123,6 +141,21 @@ mod tests {
       "url": "https://github.com/ekinertac/infiniterm-releases/releases/download/v0.1.0-1301/infiniterm-0.1.0-1301-arm64.zip",
       "sha256": "00ff", "dmg": "x"
     }"#;
+
+    // A staged update never downgrades the app on disk.
+    #[test]
+    fn a_staged_update_older_than_the_installed_app_is_not_swapped_in() {
+        let plist = "<?xml version=\"1.0\"?><plist><dict>\n\t<key>CFBundleVersion</key>\n\t<string>359</string>\n</dict></plist>";
+        assert_eq!(plist_build(plist), Some(359));
+        assert!(
+            !staged_is_newer(356, plist_build(plist)),
+            "356 over 359 is a downgrade"
+        );
+        assert!(!staged_is_newer(359, Some(359)));
+        assert!(staged_is_newer(360, Some(359)));
+        assert!(staged_is_newer(360, None), "unknown: as before");
+        assert_eq!(plist_build("<dict></dict>"), None);
+    }
 
     #[test]
     fn the_manifest_parses_and_newer_is_a_higher_build() {

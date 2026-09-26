@@ -950,6 +950,22 @@ impl AppView {
         let Some(staged) = u.staged.clone() else {
             return;
         };
+        // The app on disk may be newer than what was staged (installed
+        // since): then this is a plain restart, and the stale download goes.
+        let on_disk = std::fs::read_to_string(u.bundle.join("Contents/Info.plist"))
+            .ok()
+            .and_then(|t| infiniterm_core::update::plist_build(&t));
+        if !infiniterm_core::update::staged_is_newer(staged.build, on_disk) {
+            let _ = std::fs::remove_dir_all(&staged.app);
+            if let Some(u) = self.updater.as_mut() {
+                u.staged = None;
+            }
+            self.flush_save();
+            if relaunch_after_exit().is_ok() {
+                std::process::exit(0);
+            }
+            return;
+        }
         let parent = u.bundle.parent().unwrap_or(std::path::Path::new("/"));
         let probe = parent.join(".infiniterm-update-probe");
         if std::fs::write(&probe, b"").is_err() {
