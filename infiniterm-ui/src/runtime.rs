@@ -315,7 +315,30 @@ impl AppView {
                 Effect::PasteText { card_id, text } => self.paste_text(&card_id, &text),
                 Effect::Editor { card_id, action } => self.editor_effect(&card_id, action),
                 Effect::Browser { card_id, action } => self.browser_effect(&card_id, action),
-                Effect::Find { card_id, request } => self.find_effect(&card_id, request),
+                // A terminal's scrollback is ours to search; a page is
+                // Chromium's (browsers.rs).
+                Effect::Find { card_id, request } => {
+                    if self.terminal_body(&card_id).is_some() {
+                        self.terminal_find(&card_id, request);
+                    } else {
+                        self.find_effect(&card_id, request);
+                    }
+                }
+                Effect::FindSelection(card_id) => {
+                    // The first line of the selection: a query is one line.
+                    let text = self
+                        .terminal_body(&card_id)
+                        .and_then(|b| b.grid.selection_text())
+                        .and_then(|t| t.lines().next().map(str::to_string))
+                        .filter(|t| !t.trim().is_empty());
+                    match text {
+                        Some(t) => {
+                            self.find_field = crate::field::Field::open(&t, false);
+                            self.model.find_with(&t);
+                        }
+                        None => self.model.notify("select some text first"),
+                    }
+                }
                 // Held rather than written: perform_effects has no App to
                 // write through, and threading one into sixteen call sites
                 // for a clipboard is the wrong trade. The frame flushes it,

@@ -1293,6 +1293,12 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.record_undo(UndoStep::Created(id));
     });
     r.register("browser.find", "Browser: find in page", Model::open_find);
+    r.register("card.find", "Card: find in this card", Model::find_in_card);
+    r.register(
+        "card.findSelection",
+        "Find: use selection for find",
+        Model::find_selection,
+    );
     r.register("browser.reload", "Browser: reload the page", |m| {
         m.browser_history(BrowserAction::Reload)
     });

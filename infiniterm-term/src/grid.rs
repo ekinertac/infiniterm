@@ -13,9 +13,11 @@
 use crate::palette::Palette;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::Direction;
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionRange, SelectionType};
 use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{viewport_to_point, Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 use std::cell::RefCell;
@@ -156,6 +158,35 @@ pub struct Grid {
     full_dirty: bool,
     /// A program asked `CSI ? u` and has not left since. See `kitty_keys`.
     kitty_asked: bool,
+    /// Find in the terminal (`find`): every match in the scrollback and the
+    /// one you are on. `None` when the bar is closed.
+    search: Option<Search>,
+    /// The last frame drew search colours, so the next rebuilds every row
+    /// to clear them.
+    search_painted: bool,
+}
+
+/// What `find` found, in order from the top of the scrollback.
+struct Search {
+    matches: Vec<Match>,
+    current: usize,
+}
+
+/// Matches counted and highlighted at most: past this a query is too
+/// common to be worth stepping through, and collecting them is the cost.
+pub const MAX_FIND_MATCHES: usize = 1000;
+
+/// A query as a literal pattern: find is for text, not regular
+/// expressions, so `a.b` finds `a.b`.
+fn literal(query: &str) -> String {
+    let mut out = String::with_capacity(query.len() * 2);
+    for c in query.chars() {
+        if "\\.+*?()|[]{}^$#&-~".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 impl Grid {
@@ -184,7 +215,72 @@ impl Grid {
             size,
             full_dirty: true,
             kitty_asked: false,
+            search: None,
+            search_painted: false,
         }
+    }
+
+    /// Searches the whole scrollback for `query` (smart case: a lowercase
+    /// query ignores case, alacritty's rule) and lands on the NEWEST match,
+    /// nearest the bottom, since what you look for in a terminal has
+    /// usually just scrolled past. Returns (matches, the current one as
+    /// 1-based); (0, 0) when nothing matches, and an empty query clears.
+    pub fn find(&mut self, query: &str) -> (usize, usize) {
+        self.full_dirty = true;
+        if query.is_empty() {
+            self.search = None;
+            return (0, 0);
+        }
+        let Ok(mut regex) = RegexSearch::new(&literal(query)) else {
+            self.search = None;
+            return (0, 0);
+        };
+        let start = Point::new(self.term.topmost_line(), Column(0));
+        let end = Point::new(self.term.bottommost_line(), self.term.last_column());
+        let matches: Vec<Match> =
+            RegexIter::new(start, end, Direction::Right, &self.term, &mut regex)
+                .take(MAX_FIND_MATCHES)
+                .collect();
+        if matches.is_empty() {
+            self.search = None;
+            return (0, 0);
+        }
+        let current = matches.len() - 1;
+        self.search = Some(Search { matches, current });
+        self.show_current()
+    }
+
+    /// Steps to the next match: `older` goes up the scrollback, wrapping.
+    pub fn find_step(&mut self, older: bool) -> (usize, usize) {
+        let Some(s) = self.search.as_mut() else {
+            return (0, 0);
+        };
+        let n = s.matches.len();
+        s.current = if older {
+            (s.current + n - 1) % n
+        } else {
+            (s.current + 1) % n
+        };
+        self.full_dirty = true;
+        self.show_current()
+    }
+
+    /// The bar closed: the colours go and the view returns to the bottom.
+    pub fn find_clear(&mut self) {
+        if self.search.take().is_some() {
+            self.full_dirty = true;
+            self.term.scroll_display(Scroll::Bottom);
+        }
+    }
+
+    /// Scrolls the current match into view; (count, 1-based current).
+    fn show_current(&mut self) -> (usize, usize) {
+        let Some(s) = self.search.as_ref() else {
+            return (0, 0);
+        };
+        let (n, i, at) = (s.matches.len(), s.current, *s.matches[s.current].start());
+        self.term.scroll_to_point(at);
+        (n, i + 1)
     }
 
     pub fn cols(&self) -> usize {
@@ -205,7 +301,38 @@ impl Grid {
     }
 
     fn advance_bytes(&mut self, bytes: &[u8]) {
+        let history = self.term.history_size();
         self.processor.advance(&mut self.term, bytes);
+        // Output pushes lines into history, which moves every match up by
+        // as many lines; without this the highlights drifted off their
+        // text while a program kept printing. Once the scrollback is full
+        // its size stops changing and this cannot tell; the highlights may
+        // then drift until the next search.
+        if let Some(s) = self.search.as_mut() {
+            let grew = self.term.history_size().saturating_sub(history) as i32;
+            if grew > 0 {
+                let top = self.term.topmost_line();
+                let current = s.matches[s.current].clone();
+                let shift = |m: &Match| {
+                    let (mut a, mut b) = (*m.start(), *m.end());
+                    a.line -= grew;
+                    b.line -= grew;
+                    a..=b
+                };
+                s.matches = s
+                    .matches
+                    .iter()
+                    .map(shift)
+                    .filter(|m| m.start().line >= top)
+                    .collect();
+                let moved = shift(&current);
+                s.current = s.matches.iter().position(|m| *m == moved).unwrap_or(0);
+                if s.matches.is_empty() {
+                    self.search = None;
+                }
+                self.full_dirty = true;
+            }
+        }
     }
 
     pub fn resize(&mut self, cols: usize, rows: usize) -> bool {
@@ -490,8 +617,15 @@ impl Grid {
             )
         };
         let fresh = frame.rows.len() != rows || frame.cols != cols;
-        let full = fresh || self.full_dirty || selection.is_some() || frame.selected;
+        let searching = self.search.is_some();
+        let full = fresh
+            || self.full_dirty
+            || selection.is_some()
+            || frame.selected
+            || searching
+            || self.search_painted;
         self.full_dirty = false;
+        self.search_painted = searching;
         let damaged: Vec<usize> = if full {
             (0..rows).collect()
         } else {
@@ -547,11 +681,28 @@ impl Grid {
         out.zerowidth.clear();
         let grid_line = Line(line as i32 - offset as i32);
         let row = &self.term.grid()[grid_line];
+        // The matches touching this row, found once: checking every cell
+        // against every match was cells times matches a frame.
+        let (row_matches, current_match): (Vec<&Match>, Option<&Match>) = match &self.search {
+            Some(s) => (
+                s.matches
+                    .iter()
+                    .filter(|m| m.start().line <= grid_line && grid_line <= m.end().line)
+                    .collect(),
+                Some(&s.matches[s.current]),
+            ),
+            None => (vec![], None),
+        };
         for col in 0..self.size.cols {
             let cell = &row[Column(col)];
             let flags = cell.flags;
             let point = Point::new(grid_line, Column(col));
             let selected = selection.is_some_and(|s| s.contains(point));
+            // Find: every match, and the current one, which wears the
+            // selection pair like a selection would.
+            let hit = |m: &&Match| m.start() <= &point && &point <= m.end();
+            let current = current_match.as_ref().is_some_and(hit);
+            let found = current || row_matches.iter().any(hit);
             // The common cell is a blank on the default ground: it joins the
             // run before it, or starts one in the default colour, and
             // nothing is resolved. Most of a screen is this, and a flood of
@@ -559,6 +710,7 @@ impl Grid {
             if cell.c == ' '
                 && flags.is_empty()
                 && !selected
+                && !found
                 && matches!(cell.bg, Color::Named(NamedColor::Background))
             {
                 out.text.push(' ');
@@ -593,9 +745,14 @@ impl Grid {
             // the reference pushes the same pair into every xterm, because a
             // theme's own selection colour is chosen against a prompt and
             // vanishes on a page of anything.
-            if selected {
+            if selected || current {
                 fg_rgb = palette.selection_text;
                 bg_rgb = Some(palette.selection);
+            } else if found {
+                // The theme's yellow, as every terminal marks a match, with
+                // the ground as ink so it reads on any theme.
+                fg_rgb = palette.background;
+                bg_rgb = Some(palette.ansi[3]);
             }
             let run = Run {
                 text: String::new(),
@@ -647,6 +804,81 @@ impl Grid {
 
 #[cfg(test)]
 mod tests {
+
+    fn fed(text: &str) -> Grid {
+        let mut g = Grid::new(20, 4, 100);
+        g.advance(text.replace('\n', "\r\n").as_bytes());
+        g
+    }
+
+    // Every match in the scrollback is counted, the newest is current (it
+    // is at the bottom), a lowercase query ignores case, and stepping up
+    // wraps round.
+    #[test]
+    fn find_counts_every_match_and_starts_at_the_newest() {
+        let mut g = fed("error one\nok\nError two\nok\nok\nok\nerror three\nok");
+        assert_eq!(g.find("error"), (3, 3));
+        assert_eq!(g.find_step(true), (3, 2));
+        assert_eq!(g.find_step(true), (3, 1));
+        assert_eq!(g.find_step(true), (3, 3), "wraps");
+        assert_eq!(g.find("Error"), (1, 1), "a capital makes it exact");
+        assert_eq!(g.find("nothing"), (0, 0));
+        assert_eq!(g.find(""), (0, 0));
+    }
+
+    // Output after the search moves the text up; the highlights follow it.
+    #[test]
+    fn matches_follow_their_text_as_output_scrolls() {
+        let palette = crate::palette::Palette::default_palette();
+        let mut g = fed("target\n");
+        assert_eq!(g.find("target"), (1, 1));
+        g.advance(b"a\r\nb\r\nc\r\nd\r\ne\r\n");
+        let mut frame = Frame::default();
+        g.update_frame(&palette, &mut frame);
+        let s = g.search.as_ref().unwrap();
+        let line = s.matches[0].start().line;
+        let text: String = (0..6).map(|c| g.term.grid()[line][Column(c)].c).collect();
+        assert_eq!(text, "target");
+    }
+
+    // Find is for text: punctuation is literal, not a pattern.
+    #[test]
+    fn find_takes_the_query_literally() {
+        let mut g = fed("a.b axb (x) [y] $z ~/c-d #1 &");
+        assert_eq!(g.find("a.b").0, 1);
+        assert_eq!(g.find("(x)").0, 1);
+        assert_eq!(g.find("[y]").0, 1);
+        assert_eq!(g.find("$z").0, 1);
+        assert_eq!(g.find("~/c-d").0, 1);
+        assert_eq!(g.find("#1").0, 1);
+        assert_eq!(g.find("&").0, 1);
+    }
+
+    // The current match wears the selection pair and the others the theme's
+    // yellow; closing the bar clears them.
+    #[test]
+    fn matches_are_coloured_and_the_colours_go_with_the_bar() {
+        let palette = crate::palette::Palette::default_palette();
+        let mut g = fed("find me\nand me");
+        let mut frame = Frame::default();
+        g.find("me");
+        g.update_frame(&palette, &mut frame);
+        let bgs = |frame: &Frame, row: usize| -> Vec<Option<[u8; 3]>> {
+            frame.rows[row].runs.iter().map(|r| r.bg).collect()
+        };
+        assert!(
+            bgs(&frame, 1).contains(&Some(palette.selection)),
+            "the newest is current"
+        );
+        assert!(
+            bgs(&frame, 0).contains(&Some(palette.ansi[3])),
+            "the other is yellow"
+        );
+        g.find_clear();
+        g.update_frame(&palette, &mut frame);
+        assert!(!bgs(&frame, 0).contains(&Some(palette.ansi[3])));
+    }
+
     use super::*;
 
     fn text(frame: &Frame) -> Vec<String> {

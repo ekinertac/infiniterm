@@ -332,6 +332,37 @@ impl AppView {
         }
     }
 
+    /// The terminal body of card `id`, if it is one.
+    pub fn terminal_body(&mut self, id: &str) -> Option<&mut TerminalBody> {
+        self.bodies
+            .get_mut(id)
+            .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
+    }
+
+    /// Find in a terminal (`Grid::find`): a new query searches, a step
+    /// moves (Enter goes UP to older output, since the search starts at the
+    /// newest), `None` closes. The count goes back to the bar.
+    pub fn terminal_find(
+        &mut self,
+        id: &str,
+        request: Option<infiniterm_core::model::FindRequest>,
+    ) {
+        let Some(body) = self.terminal_body(id) else {
+            return;
+        };
+        let (count, current) = match request {
+            Some(r) if r.next => body.grid.find_step(r.forward),
+            Some(r) => body.grid.find(&r.text),
+            None => {
+                body.grid.find_clear();
+                (0, 0)
+            }
+        };
+        body.mark_dirty();
+        self.model.find_result(id, count as i32, current as i32);
+        self.redraw = true;
+    }
+
     /// One budget of output across the panes, then the acks and the replies.
     pub fn feed_terminals(&mut self, now: f64, cx: &mut gpui::App) {
         let pieces = self.scheduler.take(now);

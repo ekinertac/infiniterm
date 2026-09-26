@@ -332,13 +332,20 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "card.switcher.prev",
         "the switcher, backwards",
     ),
-    // A letter on every card, one keystroke to any of them. "Find", loosely.
-    // Cmd+H was the first choice and is Hide on macOS.
+    // Find in the card you are on: a terminal's scrollback, a page, a
+    // file. Cmd+F letters the cards until 2026-09-26, "find, loosely", which
+    // left a terminal with no search at all; the hints moved to Cmd+J.
+    ("cmd+f", "card.find", "find, as everywhere on a Mac"),
+    // Cmd+E puts the selection in the find field, macOS's "use selection
+    // for find".
     (
-        "cmd+f",
-        "focus.hint",
-        "\"find\", loosely: how you find a card. Cmd+H is Hide",
+        "cmd+e",
+        "card.findSelection",
+        "use selection for find, macOS's",
     ),
+    // A letter on every card, one keystroke to any of them: jump. Cmd+F
+    // until 2026-09-26; Cmd+H was the first choice and is Hide on macOS.
+    ("cmd+j", "focus.hint", "jump to a card by its letter"),
     // Groups. Cmd+G and Cmd+Shift+G are group / ungroup nearly everywhere
     // that has the concept.
     (

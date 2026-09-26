@@ -20,7 +20,7 @@ Native macOS app in Rust: gpui draws the canvas, `alacritty_terminal` parses the
 - Splits, iTerm2's keys: a card gives up half of itself to a new one, and the halves remember each other, so closing one hands its space back
 - Free drag and resize from the card's edges, with alignment guides against the other cards, and a card dropped on another goes back where it started
 - Multi-select with `Cmd + Shift + Arrow` or Shift + click, and every command that can sensibly mean several cards acts on all of them. The active card keeps its white ring so you know where you are; the rest wear blue
-- No mouse needed to reach anything: arrow into an empty slot to get a hollow card you can fill, `Cmd + Shift + T` letters every empty slot, `Cmd + F` letters every card
+- No mouse needed to reach anything: arrow into an empty slot to get a hollow card you can fill, `Cmd + Shift + T` letters every empty slot, `Cmd + J` letters every card
 - Drag a file in from the Finder: onto a terminal it arrives as the shell-escaped path, the way it does in iTerm2, so it works mid-command; onto a browser card the page goes to the file; anywhere else it opens as a card, the same as `ift <path>`
 - Terminals select with the mouse (two clicks a word, three a line), `Cmd + C` copies, links and paths that exist underline when you hold `Cmd` over them and `Cmd + click` opens them beside the card. `htop`, `vim` and friends get the mouse
 - Editor cards: a file opens in an editor that is a card like any other, coloured by the terminal theme. Syntax highlighting for fifteen languages through tree-sitter, find and replace, go to line, comment toggle, undo, save; long lines wrap in prose files. No LSP, no completion, on purpose. From `ift <file>` (`file:42` opens at a line; run inside a terminal card it opens IN PLACE over that card and `ift` waits until you close it, like `vim`, so `EDITOR=ift` works for `git commit`; `ift -n <file>` gives it a card of its own; a file that does not exist yet opens empty and the first save creates it), `Cmd + N` for an empty one, the palette, the new-card menu, or `Cmd + click` on a path. A file tree beside the buffer, from `ift <dir>` or `Cmd + K`, keyboard-driven. Unsaved changes survive a quit, the way Sublime keeps them; closing the card discards them. A file changed on disk under a clean buffer is reloaded
@@ -81,14 +81,15 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | double-click | on a card's frame or label fits it (`Cmd + 1`); on empty canvas fits everything (`Cmd + 2`) |
 | | every card wears a number (`#7`) ahead of its label, for naming it to somebody: the lowest free one, kept across restarts (a closed card's number is reused), in `ift ls` and `ift sessions` as trailing columns; `ift attach 7` reaches that card's shell from any terminal, app running or not |
 | `Cmd + S` / `Cmd + N` | save the editor card's file / new empty editor |
-| `Cmd + F`, `Cmd + G`, `Cmd + Alt + F`, `Cmd + /` | in an editor: find, next, replace, comment (elsewhere these are hints, group, and the shortcut list) |
+| `Cmd + F`, `Cmd + G`, `Cmd + Alt + F`, `Cmd + /` | in an editor: find, next, replace, comment (elsewhere `Cmd + G` is group and `Cmd + /` the shortcut list) |
 | `Cmd + B` | in a diff: git blame in the gutter |
 | `Cmd + K` | clear the terminal; in an editor or diff, show or hide the file list |
 | `Cmd + I` | the agent's transcript, as a card beside this one |
 | `Cmd + L` | the address bar: type an address or a search, or pick a page you have been to or a card already open. On a browser card it opens holding that card's address; `Tab` scopes the search to a site (GitHub, MDN, crates.io and six more) |
 | `Cmd + [` / `Cmd + ]` | in a browser card: back and forward (elsewhere: previous / next group) |
 | `Cmd + R` | in a browser card: reload the page |
-| `Cmd + F` | in a browser card: find in page, with a match count; `Enter` and `Shift + Enter` step |
+| `Cmd + F` | find in the card: a terminal's whole scrollback or a page, every match highlighted, a count; `Enter` / `Cmd + G` steps (up the scrollback in a terminal, from the newest), `Shift + Enter` / `Cmd + Shift + G` back, `Esc` closes. A lowercase query ignores case |
+| `Cmd + E` | find the selected text (macOS's "use selection for find") |
 | `Cmd + Ctrl + T` | reopen the last card you closed, where it was |
 | `Cmd + Esc` | leave a browser card's page |
 | double-`Escape` | on a focused browser card's page, unlocks its keyboard (see below) |
@@ -101,7 +102,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | `Cmd + Shift + T` | new card, but where: every empty slot around the cards gets a letter, press one |
 | `Cmd + D` / `Cmd + Shift + D` | split the card: new card to the right / below |
 | `Cmd + Alt + Arrow` or `Cmd + Alt + JKL` | switch cards; into an empty slot shows a hollow card, `Enter` asks what goes in it |
-| `Cmd + F` | outside an editor: a letter on every card; press one to go there |
+| `Cmd + J` | a letter on every card; press one to jump there |
 | `Cmd + Shift + Arrow` or `Shift + click` | extend the selection, like Shift + Arrow in a text field; close, split, new card, clear, fit and group then act on all of it |
 | `Cmd + Alt + Shift + Arrow` | swap the active card with its neighbour |
 | `Cmd + Shift + [` / `Cmd + Shift + ]` | previous / next workspace |

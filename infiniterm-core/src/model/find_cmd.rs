@@ -29,8 +29,13 @@ pub struct FindState {
 impl Model {
     pub fn open_find(&mut self) {
         self.with_active_card(|m, id| {
-            if m.card(&id).map(|c| c.kind) != Some(CardKind::Browser) {
-                m.notify("not a browser card");
+            // A page is searched by Chromium, a terminal's scrollback by
+            // alacritty (`Grid::find`); the bar is the same.
+            if !matches!(
+                m.card(&id).map(|c| c.kind),
+                Some(CardKind::Browser | CardKind::Terminal)
+            ) {
+                m.notify("nothing to find in here");
                 return;
             }
             // Reopening on the same card keeps the query, so Cmd+F twice is
@@ -99,6 +104,44 @@ impl Model {
         }
         self.find.matches = matches;
         self.find.active = active;
+    }
+
+    /// Cmd+F on whatever card you are on: its own search.
+    pub fn find_in_card(&mut self) {
+        let Some(kind) = self.focused().map(|c| c.kind) else {
+            return;
+        };
+        match kind {
+            // The editor's search is its own bar, in the body; opening it
+            // also locks the editor so the query can be typed.
+            CardKind::Editor => self.with_active_card(|m, id| {
+                m.effects.push(Effect::Editor {
+                    card_id: id,
+                    action: super::EditorAction::Find,
+                })
+            }),
+            _ => self.open_find(),
+        }
+    }
+
+    /// Cmd+E: the selection becomes the query. Only the body knows its
+    /// selection, so the ui answers (`Effect::FindSelection`).
+    pub fn find_selection(&mut self) {
+        self.with_active_card(|m, id| {
+            if m.card(&id).map(|c| c.kind) == Some(CardKind::Terminal) {
+                m.effects.push(Effect::FindSelection(id));
+            } else {
+                m.notify("use selection for find works in terminals");
+            }
+        });
+    }
+
+    /// The ui's answer to `FindSelection`: open the bar holding `text`.
+    pub fn find_with(&mut self, text: &str) {
+        self.open_find();
+        if self.find.open {
+            self.find_type(text);
+        }
     }
 
     pub fn close_find(&mut self) {

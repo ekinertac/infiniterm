@@ -1584,8 +1584,9 @@ mod tests {
         assert!(handle_chord(&mut h.m, &h.r, "cmd+t"));
         assert_eq!(h.m.cards.len(), 2);
         assert!(!handle_chord(&mut h.m, &h.r, "cmd+alt+shift+z"), "unbound");
-        // An editor you are IN keeps Cmd+F; one you only arrowed to is a
-        // card, and Cmd+F letters the cards, as on a terminal.
+        // An editor you are IN keeps Cmd+F; one you only arrowed to gets
+        // its search from the app. A terminal opens the find bar; Cmd+J
+        // letters the cards.
         h.m.take_effects();
         let id = h.focused().id.clone();
         h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
@@ -1593,12 +1594,25 @@ mod tests {
         assert!(!handle_chord(&mut h.m, &h.r, "cmd+f"));
         h.m.card_mut(&id).unwrap().locked = false;
         assert!(handle_chord(&mut h.m, &h.r, "cmd+f"));
-        assert!(!h.m.selection.hints.is_empty());
-        h.m.selection.hints.clear();
+        assert!(h.m.take_effects().iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::Find,
+                ..
+            }
+        )));
         h.m.card_mut(&id).unwrap().kind = CardKind::Terminal;
         assert!(handle_chord(&mut h.m, &h.r, "cmd+f"));
+        assert!(h.m.find.open && h.m.find.card_id.as_deref() == Some(id.as_str()));
+        h.m.close_find();
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+j"));
         assert!(!h.m.selection.hints.is_empty());
         h.m.selection.hints.clear();
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+e"));
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::FindSelection(id.clone())));
         // A browser takes the zoom chords for the page.
         h.m.card_mut(&id).unwrap().kind = CardKind::Browser;
         h.m.card_mut(&id).unwrap().url = Some("https://x".into());
@@ -1948,8 +1962,10 @@ mod tests {
         let mut h = Harness::new();
         let id = h.m.cards[0].id.clone();
         h.m.set_focus(Some(&id));
+        // An editor has its own search; the bar is for pages and terminals.
+        h.m.cards[0].kind = CardKind::Editor;
         h.run("browser.find");
-        assert_eq!(h.m.notice.as_deref(), Some("not a browser card"));
+        assert_eq!(h.m.notice.as_deref(), Some("nothing to find in here"));
         assert!(!h.m.find.open);
 
         h.m.cards[0].kind = CardKind::Browser;

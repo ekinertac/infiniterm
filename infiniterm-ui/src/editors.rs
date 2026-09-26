@@ -414,6 +414,11 @@ impl AppView {
                 }
             }
             EditorAction::Find => {
+                // Cmd+F on an editor you only arrowed to: its search, and
+                // the lock that lets you type into it.
+                if let Some(tabs) = self.editor_tabs_for(card_id) {
+                    tabs.locked = true;
+                }
                 if let Some(body) = self.editor_for(card_id) {
                     body.open_search(false);
                 }

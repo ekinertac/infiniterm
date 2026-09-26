@@ -284,6 +284,9 @@ pub enum Effect {
     /// These cards are about to move: their rects as they are now, so the
     /// ui can glide each from there to wherever the command put it.
     MarkSwap(Vec<(String, Rect)>),
+    /// Cmd+E on a terminal: the ui reads its selection and calls
+    /// `Model::find_with`.
+    FindSelection(String),
     /// The late answer to an `ift` request (`edit`, when its cover closes).
     CliReply {
         id: u64,

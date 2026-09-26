@@ -757,6 +757,13 @@ impl AppView {
             .flatten()
             .and_then(|id| self.registry.get(&id))
             .map(|c| c.label.clone());
+        // The find bar's Cmd+G / Cmd+Shift+G step, as in every Mac app;
+        // with the bar closed they stay group / ungroup.
+        if self.model.find.open && (chord == "cmd+g" || chord == "cmd+shift+g") {
+            self.model.find_step(chord == "cmd+g");
+            self.perform_effects();
+            return true;
+        }
         // A confirm takes its own chords before the canvas: Cmd+D is Don't
         // Save, not a split of the card behind the dialog.
         if let Some(kind) = self.model.prompt.chord(&chord) {
