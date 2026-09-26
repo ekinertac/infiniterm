@@ -42,6 +42,8 @@ pub struct TranscriptColors {
     pub faint: Hsla,
     pub user: Hsla,
     pub assistant: Hsla,
+    /// A message from another agent session (`Role::Peer`).
+    pub peer: Hsla,
     pub sel_bg: Hsla,
     pub sel_fg: Hsla,
 }
@@ -89,6 +91,7 @@ impl TranscriptBody {
                 faint: c(0x5a6472),
                 user: c(0xe5c07b),
                 assistant: c(0x61afef),
+                peer: c(0xc678dd),
                 sel_bg: c(0xe39500),
                 sel_fg: c(0x0e101a),
             },
@@ -204,16 +207,25 @@ impl TranscriptBody {
         }
     }
 
+    /// A turn's speaker and its colour: you, the agent, another session by
+    /// its name, or the harness.
+    fn who(&self, t: &Turn) -> (String, Hsla) {
+        match t.role {
+            Role::User => ("you".into(), self.colors.user),
+            Role::Assistant => ("claude".into(), self.colors.assistant),
+            Role::Peer => (format!("\u{2190} {}", t.from), self.colors.peer),
+            Role::Notice => ("notice".into(), self.colors.faint),
+        }
+    }
+
     /// The detail as lines to draw: the head, the text wrapped, each tool's
     /// summary and, when expanded, its input and result.
     fn detail_lines(&self, cols: usize) -> Vec<(String, Hsla)> {
         let Some(t) = self.turns.get(self.cursor) else {
             return vec![];
         };
-        let who = match t.role {
-            Role::User => ("you", self.colors.user),
-            Role::Assistant => ("claude", self.colors.assistant),
-        };
+        let (who, who_c) = self.who(t);
+        let who = (who.as_str(), who_c);
         let mut out = vec![(format!("{}  {}", who.0, turn_time(&t.at)), who.1)];
         out.push((String::new(), self.colors.foreground));
         for line in t.text.lines() {
@@ -310,14 +322,9 @@ impl CardBody for TranscriptBody {
             .take(rows_visible)
         {
             let is_cursor = i == self.cursor;
-            let (mut who_c, mut fg, mut time_c) = (
-                match t.role {
-                    Role::User => self.colors.user,
-                    Role::Assistant => self.colors.assistant,
-                },
-                self.colors.foreground,
-                self.colors.faint,
-            );
+            let (who, who_c0) = self.who(t);
+            let (mut who_c, mut fg, mut time_c) =
+                (who_c0, self.colors.foreground, self.colors.faint);
             if is_cursor {
                 let row = Bounds::new(point(list.origin.x, y), size(list.size.width, line_h));
                 if focused {
@@ -335,12 +342,7 @@ impl CardBody for TranscriptBody {
                     ));
                 }
             }
-            let who = if t.role == Role::User {
-                "you"
-            } else {
-                "claude"
-            };
-            let l = crate::text::shape(window, who, font_size, &f, who_c);
+            let l = crate::text::shape(window, &who, font_size, &f, who_c);
             let _ = l.paint(point(list.origin.x + pad, y), line_h, window, cx);
             let l = crate::text::shape(
                 window,

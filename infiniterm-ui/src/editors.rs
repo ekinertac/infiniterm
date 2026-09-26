@@ -234,6 +234,8 @@ impl AppView {
             faint: self.chrome.text_faint,
             user: theme_hex("yellow").unwrap_or(self.chrome.text_mid),
             assistant: theme_hex("blue").unwrap_or(self.chrome.text_mid),
+            // Another session's message: neither you nor this agent.
+            peer: theme_hex("magenta").unwrap_or(self.chrome.text_mid),
             sel_bg: self.chrome.sel_bg,
             sel_fg: self.chrome.sel_fg,
         };
