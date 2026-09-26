@@ -12,7 +12,17 @@ set -e
 cd "$(dirname "$0")/.."
 profile=${1:-debug}
 app=target/bundle/infiniterm.app
-cargo run -q --manifest-path "$HOME/Code/cef-rs/Cargo.toml" -p cef --bin bundle-cef-app -- \
+# Built, then run as a plain binary, NOT through `cargo run`: `cargo run`
+# hands the program CARGO_MANIFEST_DIR and the other CARGO_* variables, the
+# bundler's own `cargo build` of this workspace inherited them, and `ring`'s
+# build script took the change for a new environment. Every bundle then
+# made the next `make check` rebuild ring, rustls, CEF, gpui and the ui
+# crate: 2.5 to 12 minutes a ship (2026-09-26).
+cargo build -q --manifest-path "$HOME/Code/cef-rs/Cargo.toml" -p cef --bin bundle-cef-app
+# `cargo run` also gave it CEF_PATH from .cargo/config.toml; a plain run
+# needs it said.
+CEF_PATH="${CEF_PATH:-$HOME/.local/share/cef}" \
+    "$HOME/Code/cef-rs/target/debug/bundle-cef-app" \
     infiniterm -o target/bundle --identifier dev.ekinertac.infiniterm --display-name infiniterm >/dev/null
 if [ "$profile" = release ]; then
     # The bundler only knows debug; the release binaries go in over them.
