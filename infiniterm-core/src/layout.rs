@@ -152,9 +152,122 @@ pub fn tidy(sizes: &[Size], origin: Point, gutter: f64) -> Vec<Rect> {
         .collect()
 }
 
+/// Where a new card goes on a canvas that has cards on it (`next_slot`):
+/// the lattice of `size` plus the gutter, still anchored at `anchor` (the
+/// canvas's half cell, so slots line up with cards placed before), laid
+/// over the WHOLE workspace. First the free slots inside the box the cards
+/// already cover, in block order from its top-left corner; only when that
+/// box is full does it grow, right and down, never up or left.
+///
+/// `block_slot` alone counted from the canvas origin, so a canvas whose
+/// cards had been moved up and left of it (Ekin's Personal Stuff reached
+/// x = -5237, y = -2762, 2026-09-26) never saw the holes there, and Cmd+T
+/// kept growing the block down and right past them.
+pub fn fill_slot(taken: &[Rect], size: Size, anchor: Point, gutter: f64) -> Rect {
+    let Some(b) = bounding_rect_of(taken) else {
+        return block_slot(taken, size, anchor, gutter);
+    };
+    let (sx, sy) = (size.w + gutter, size.h + gutter);
+    // The lattice point at or before the box's top-left corner.
+    let origin = Point {
+        x: anchor.x + ((b.x - anchor.x) / sx).floor() * sx,
+        y: anchor.y + ((b.y - anchor.y) / sy).floor() * sy,
+    };
+    let slot = |(c, r): (i64, i64)| Rect {
+        x: origin.x + c as f64 * sx,
+        y: origin.y + r as f64 * sy,
+        w: size.w,
+        h: size.h,
+    };
+    let free = |r: &Rect| !taken.iter().any(|&t| rects_overlap(*r, t));
+    let inside = |r: &Rect| {
+        r.x >= b.x - 0.5
+            && r.y >= b.y - 0.5
+            && r.x + r.w <= b.x + b.w + 0.5
+            && r.y + r.h <= b.y + b.h + 0.5
+    };
+    let cols = ((b.x + b.w - origin.x) / sx).ceil() as usize;
+    let rows = ((b.y + b.h - origin.y) / sy).ceil() as usize;
+    let n = cols.max(rows) + 1;
+    if let Some(r) = (0..n * n)
+        .map(|i| slot(block_order(i)))
+        .find(|r| inside(r) && free(r))
+    {
+        return r;
+    }
+    // Full: grow right and down from the box, not into the rows above it
+    // or the columns left of it that the lattice origin may reach into.
+    (0..200 * 200)
+        .map(|i| slot(block_order(i)))
+        .find(|r| r.y >= b.y - 0.5 && r.x >= b.x - 0.5 && free(r))
+        .unwrap_or_else(|| slot((cols as i64, 0)))
+}
+
+fn bounding_rect_of(rects: &[Rect]) -> Option<Rect> {
+    let first = rects.first()?;
+    let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x + first.w, first.y + first.h);
+    for r in rects {
+        x0 = x0.min(r.x);
+        y0 = y0.min(r.y);
+        x1 = x1.max(r.x + r.w);
+        y1 = y1.max(r.y + r.h);
+    }
+    Some(Rect {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const A: Point = Point { x: 12.5, y: 12.5 };
+    fn r(x: f64, y: f64, w: f64, h: f64) -> Rect {
+        Rect { x, y, w, h }
+    }
+
+    // Cards moved up and left of the canvas origin: the hole among them is
+    // filled, on the same lattice as the cards around it.
+    #[test]
+    fn a_hole_left_and_above_the_origin_is_filled() {
+        let size = Size { w: 1725., h: 2000. };
+        let taken = [
+            r(-3487.5, 12.5, 1725., 2000.),
+            // (-1737.5, 12.5) is the hole
+            r(12.5, 12.5, 1725., 2000.),
+            r(-3487.5, 2037.5, 1725., 2000.),
+            r(-1737.5, 2037.5, 1725., 2000.),
+            r(12.5, 2037.5, 1725., 2000.),
+        ];
+        assert_eq!(
+            fill_slot(&taken, size, A, 25.),
+            r(-1737.5, 12.5, 1725., 2000.)
+        );
+    }
+
+    // A full box grows right or down, never into the rows above it.
+    #[test]
+    fn a_full_canvas_grows_right_and_down_not_up() {
+        let size = Size { w: 100., h: 100. };
+        let taken = [
+            r(-212.5, -212.5, 100., 100.),
+            r(-87.5, -212.5, 100., 100.),
+            r(-212.5, -87.5, 100., 100.),
+            r(-87.5, -87.5, 100., 100.),
+        ];
+        let got = fill_slot(&taken, size, A, 25.);
+        assert!(got.y >= -212.5 && got.x >= -212.5, "{got:?}");
+        assert!(!taken.iter().any(|t| rects_overlap(*t, got)));
+    }
+
+    #[test]
+    fn an_empty_canvas_starts_at_the_origin() {
+        let size = Size { w: 100., h: 100. };
+        assert_eq!(fill_slot(&[], size, A, 25.), r(12.5, 12.5, 100., 100.));
+    }
 
     #[test]
     fn tidy_packs_mixed_sizes_into_the_block_without_overlap() {

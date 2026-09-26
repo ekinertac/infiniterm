@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-09-26
 
+- Cmd+T fills the empty slots anywhere among your cards before it grows the canvas, including above and left of where the canvas began; it used to count only from the canvas origin and kept growing past holes elsewhere.
 - The transcript card tells speakers apart: a message relayed from another agent session is its own turn, labelled with the sender's name, and a background task finishing is one faint notice line. Both used to read as your own turns, tags and all. A message the session sent reads in full as `→ name` inside the agent's turn instead of a tool line cut at 400 characters.
 
 ## 0.2.0 (build 356), 2026-09-26
@@ -40,7 +41,6 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### Releases
 
 - Notarized releases friends can install from a DMG, and an updater that checks every six hours, verifies the signature and installs on the next restart. The status bar shows the build number, and a downloaded update says so until you restart.
-- A one-line installer an agent can run to the end.
 
 ### Card states
 

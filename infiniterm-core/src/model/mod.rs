@@ -778,10 +778,10 @@ impl Model {
     /// canvas are in the way.
     fn next_slot(&self, origin: Option<Point>, avoid: &[Rect], workspace_id: &str) -> Rect {
         let size = self.default_size();
-        let origin = origin.unwrap_or(Point {
+        let anchor = Point {
             x: HALF_CELL,
             y: HALF_CELL,
-        });
+        };
         let mut taken: Vec<Rect> = self
             .cards
             .iter()
@@ -789,7 +789,11 @@ impl Model {
             .map(|c| c.rect)
             .collect();
         taken.extend_from_slice(avoid);
-        block_slot(&taken, size, origin, GUTTER)
+        match origin {
+            // A card joining a group starts from its siblings.
+            Some(origin) => block_slot(&taken, size, origin, GUTTER),
+            None => crate::layout::fill_slot(&taken, size, anchor, GUTTER),
+        }
     }
 
     pub fn add_card(&mut self, cwd: &str, opts: NewCard) -> String {
