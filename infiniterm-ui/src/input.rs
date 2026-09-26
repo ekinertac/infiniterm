@@ -684,7 +684,12 @@ impl AppView {
             };
             if self.model.handle_bare_key(bare) {
                 self.perform_effects();
-                return false;
+                // Taken, so it must stop here: a key left unmarked goes on
+                // to the input system as text (ime.rs, since 2026-09-18),
+                // and a hint letter was typed into the terminal it jumped
+                // to (2026-09-26). The `false` was from before that path,
+                // when this only meant "not a chord".
+                return true;
             }
         }
         // The physical key and the real Shift state from the NSEvent, so
