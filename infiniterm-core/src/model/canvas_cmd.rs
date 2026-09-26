@@ -164,33 +164,42 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // Cards dragged about by hand, back into the block new cards fill, in
     // the order you read them now, each keeping its size; then fit all so
     // you see the result. Cmd+Z puts them back.
+    // Groups and split clusters move as units, their inside arrangement
+    // kept (`layout::tidy_units`); loose cards each on their own.
     r.register("canvas.tidy", "Canvas: tidy the cards into a block", |m| {
-        let here: Vec<(String, crate::grid::Rect)> =
-            m.here().iter().map(|c| (c.id.clone(), c.rect)).collect();
+        let here: Vec<crate::model::Card> = m.here().into_iter().cloned().collect();
         if here.len() < 2 {
             return;
         }
-        let rects: Vec<_> = here.iter().map(|(_, r)| *r).collect();
-        let order = crate::workspaces::reading_order(&rects);
-        let origin = Point {
-            x: rects.iter().map(|r| r.x).fold(f64::INFINITY, f64::min),
-            y: rects.iter().map(|r| r.y).fold(f64::INFINITY, f64::min),
-        };
-        let sizes: Vec<_> = order
+        // A card's unit: its group, else its split cluster, else itself.
+        let mut keys: Vec<String> = vec![];
+        let mut pad: Vec<f64> = vec![];
+        let unit: Vec<usize> = here
             .iter()
-            .map(|&i| crate::grid::Size {
-                w: rects[i].w,
-                h: rects[i].h,
+            .map(|c| {
+                let (key, p) = match (&c.group_id, &c.soft_group_id) {
+                    (Some(g), _) => (format!("g:{g}"), crate::groups::GROUP_PAD),
+                    (None, Some(s)) => (format!("s:{s}"), 0.),
+                    _ => (format!("c:{}", c.id), 0.),
+                };
+                match keys.iter().position(|k| *k == key) {
+                    Some(u) => u,
+                    None => {
+                        keys.push(key);
+                        pad.push(p);
+                        keys.len() - 1
+                    }
+                }
             })
             .collect();
-        let placed = crate::layout::tidy(&sizes, origin, crate::cards::GUTTER);
+        let rects: Vec<_> = here.iter().map(|c| c.rect).collect();
+        let placed = crate::layout::tidy_units(&rects, &unit, &pad, crate::cards::GUTTER);
         m.remember_layout();
-        let ids: Vec<String> = here.iter().map(|(id, _)| id.clone()).collect();
+        let ids: Vec<String> = here.iter().map(|c| c.id.clone()).collect();
         m.mark_swap(&ids);
-        for (&i, rect) in order.iter().zip(placed) {
-            if let Some(c) = m.card_mut(&here[i].0) {
-                c.rect = rect;
-                c.soft_group_id = None;
+        for (c, rect) in here.iter().zip(placed) {
+            if let Some(card) = m.card_mut(&c.id) {
+                card.rect = rect;
             }
         }
         m.dirty_layout = true;

@@ -152,6 +152,67 @@ pub fn tidy(sizes: &[Size], origin: Point, gutter: f64) -> Vec<Rect> {
         .collect()
 }
 
+/// `tidy` for UNITS: `unit[i]` says which unit card `i` belongs to (a
+/// group, a split cluster, or the card alone) and `pad[u]` how much room
+/// unit `u`'s frame takes around it (a group's frame, `GROUP_PAD`; 0 for
+/// the rest). Each unit keeps its inside arrangement and moves as one
+/// block, measured with its frame, in the order you read the units now.
+/// Returns every card's new rect, in the input order.
+///
+/// Card by card, tidy spread a group across the block and its frame, drawn
+/// around its members, ballooned over other cards; a split pair came apart
+/// (2026-09-26).
+pub fn tidy_units(rects: &[Rect], unit: &[usize], pad: &[f64], gutter: f64) -> Vec<Rect> {
+    let n = pad.len();
+    let boxes: Vec<Rect> = (0..n)
+        .map(|u| {
+            let members: Vec<Rect> = rects
+                .iter()
+                .zip(unit)
+                .filter(|(_, &k)| k == u)
+                .map(|(r, _)| *r)
+                .collect();
+            let b = bounding_rect_of(&members).unwrap_or(Rect {
+                x: 0.,
+                y: 0.,
+                w: 0.,
+                h: 0.,
+            });
+            Rect {
+                x: b.x - pad[u],
+                y: b.y - pad[u],
+                w: b.w + pad[u] * 2.,
+                h: b.h + pad[u] * 2.,
+            }
+        })
+        .collect();
+    let Some(all) = bounding_rect_of(&boxes) else {
+        return rects.to_vec();
+    };
+    let order = crate::workspaces::reading_order(&boxes);
+    let sizes: Vec<Size> = order
+        .iter()
+        .map(|&u| Size {
+            w: boxes[u].w,
+            h: boxes[u].h,
+        })
+        .collect();
+    let placed = tidy(&sizes, Point { x: all.x, y: all.y }, gutter);
+    let mut shift = vec![(0., 0.); n];
+    for (&u, p) in order.iter().zip(&placed) {
+        shift[u] = (p.x - boxes[u].x, p.y - boxes[u].y);
+    }
+    rects
+        .iter()
+        .zip(unit)
+        .map(|(r, &u)| Rect {
+            x: r.x + shift[u].0,
+            y: r.y + shift[u].1,
+            ..*r
+        })
+        .collect()
+}
+
 /// Where a new card goes on a canvas that has cards on it (`next_slot`):
 /// the lattice of `size` plus the gutter, still anchored at `anchor` (the
 /// canvas's half cell, so slots line up with cards placed before), laid
@@ -283,6 +344,37 @@ mod tests {
 
     // Cards moved up and left of the canvas origin: the hole among them is
     // filled, on the same lattice as the cards around it.
+    // A group of three and a loose card, scattered: the group moves as a
+    // block with its inside arrangement kept, its frame's room included,
+    // and nothing overlaps; the loose card takes the next place.
+    #[test]
+    fn tidy_moves_a_group_as_one_block() {
+        let rects = [
+            r(5000., 5000., 100., 100.),
+            r(5125., 5000., 100., 50.),
+            r(5125., 5075., 100., 25.),
+            r(0., 0., 300., 200.),
+        ];
+        let unit = [0, 0, 0, 1];
+        let pad = [50., 0.];
+        let got = tidy_units(&rects, &unit, &pad, 25.);
+        // Inside the group nothing moved relative to its first card.
+        for i in 1..3 {
+            assert_eq!(got[i].x - got[0].x, rects[i].x - rects[0].x);
+            assert_eq!(got[i].y - got[0].y, rects[i].y - rects[0].y);
+        }
+        // The loose card read first (top-left), so it stays at the corner;
+        // the group's frame sits a gutter to its right, not over it.
+        assert_eq!((got[3].x, got[3].y), (0., 0.));
+        let frame_left = got[0].x - 50.;
+        assert_eq!(frame_left, 300. + 25.);
+        for (i, a) in got.iter().enumerate() {
+            for b in &got[i + 1..] {
+                assert!(!rects_overlap(*a, *b));
+            }
+        }
+    }
+
     #[test]
     fn a_hole_left_and_above_the_origin_is_filled() {
         let size = Size { w: 1725., h: 2000. };

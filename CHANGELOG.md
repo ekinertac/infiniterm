@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-09-26
 
+- Tidy keeps groups and split cards together: each moves as one block with its inside arrangement, where it used to spread their cards across the canvas.
 - Cmd+Ctrl+Enter grows a card into the gap it sits in, from whichever corner that takes, instead of always from its top-left; a half moved under another card grew down into open canvas.
 - An update downloaded while an older build ran no longer replaces a newer build installed since; the restart just restarts. It had put 0.2.0 back over a newer install.
 - Cmd+T fills the holes in your grid of cards, top row first, before it grows the canvas, wherever the grid sits; it used to count only from the canvas origin and kept growing past holes above and left of it.
