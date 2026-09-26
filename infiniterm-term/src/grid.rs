@@ -265,12 +265,26 @@ impl Grid {
         self.show_current()
     }
 
-    /// The bar closed: the colours go and the view returns to the bottom.
+    /// The bar closed: the colours go, and the match you were on stays
+    /// SELECTED where it is, so Cmd+C copies it (Ekin, 2026-09-26: Escape
+    /// used to clear it and jump to the bottom, and there was no way to
+    /// copy what you had found). The view stays on it; typing scrolls down
+    /// as it always does.
     pub fn find_clear(&mut self) {
-        if self.search.take().is_some() {
+        if let Some(s) = self.search.take() {
+            let m = &s.matches[s.current];
+            let mut sel = Selection::new(SelectionType::Simple, *m.start(), Side::Left);
+            sel.update(*m.end(), Side::Right);
+            self.term.selection = Some(sel);
             self.full_dirty = true;
-            self.term.scroll_display(Scroll::Bottom);
         }
+    }
+
+    /// The text of the match you are on, for Cmd+C while the bar is open.
+    pub fn find_current_text(&self) -> Option<String> {
+        let s = self.search.as_ref()?;
+        let m = &s.matches[s.current];
+        Some(self.term.bounds_to_string(*m.start(), *m.end()))
     }
 
     /// Scrolls the current match into view; (count, 1-based current).
@@ -874,9 +888,12 @@ mod tests {
             bgs(&frame, 0).contains(&Some(palette.ansi[3])),
             "the other is yellow"
         );
+        assert_eq!(g.find_current_text().as_deref(), Some("me"));
         g.find_clear();
         g.update_frame(&palette, &mut frame);
         assert!(!bgs(&frame, 0).contains(&Some(palette.ansi[3])));
+        // What you were on stays selected, for Cmd+C.
+        assert_eq!(g.selection_text().as_deref(), Some("me"));
     }
 
     use super::*;

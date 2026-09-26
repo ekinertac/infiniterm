@@ -223,7 +223,13 @@ fn card_value(c: &SavedCard) -> Value {
             map.insert("agentSession".into(), Value::String(agent.clone()));
         }
     }
-    if let Some(t) = c.agent_title.as_ref().filter(|_| c.agent_session.is_some()) {
+    // Not an empty one: some sessions set an empty title, and the reader
+    // takes "" for none, so writing it broke the byte-for-byte round trip.
+    if let Some(t) = c
+        .agent_title
+        .as_ref()
+        .filter(|t| !t.is_empty() && c.agent_session.is_some())
+    {
         if let Some(map) = card.as_object_mut() {
             map.insert("agentTitle".into(), Value::String(t.clone()));
         }
@@ -805,6 +811,18 @@ mod tests {
         assert_eq!(
             saved.cards[0].agent_title.as_deref(),
             Some("fix the tab dots")
+        );
+        let empty = SavedCard {
+            agent_session: Some("c0ffee".into()),
+            agent_title: Some(String::new()),
+            ..card()
+        };
+        assert!(
+            !card_value(&empty)
+                .as_object()
+                .unwrap()
+                .contains_key("agentTitle"),
+            "an empty title is not written"
         );
         let shell = SavedCard {
             agent_title: Some("zsh".into()),
@@ -1417,7 +1435,15 @@ mod tests {
             &layout.workspaces,
             layout.active_workspace_id.as_deref(),
         ));
-        let expected = text.trim_end().replace("\"tmuxWindow\":", "\"session\":");
+        // Builds 347 to 353 wrote an empty `agentTitle` (now skipped); a
+        // file saved by one of them is normalised the same way.
+        let expected: String = text
+            .trim_end()
+            .replace("\"tmuxWindow\":", "\"session\":")
+            .lines()
+            .filter(|l| l.trim() != "\"agentTitle\": \"\",")
+            .collect::<Vec<_>>()
+            .join("\n");
         assert_eq!(again, expected);
     }
 }

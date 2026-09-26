@@ -1178,9 +1178,11 @@ mod tests {
         h.run("focus.hint");
         assert_eq!(h.m.selection.hints.len(), 2);
         let key_a = h.m.selection.hints[&a];
+        h.m.take_effects();
         assert!(h.m.handle_bare_key(focus_cmd::BareKey::Char(key_a)));
         assert_eq!(h.focused().id, a);
         assert!(h.m.selection.hints.is_empty());
+        assert!(h.m.framing, "the jump fits the card, as Cmd+1 does");
         let _ = b;
     }
 

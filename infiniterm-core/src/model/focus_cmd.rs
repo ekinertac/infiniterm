@@ -222,7 +222,15 @@ impl Model {
         self.selection.hints.clear();
         let Some(id) = id else { return false };
         self.set_focus(Some(&id));
-        self.reveal_focused();
+        // A jump lands framed, as Cmd+1 would (Ekin, 2026-09-26): you
+        // jumped to it to work in it.
+        if let Some(card) = self.card(&id) {
+            let (rect, group) = (card.rect, card.soft_group_id.clone());
+            match self.slot_bounds(&[rect], &[group]) {
+                Some(bounds) => self.frame_card(bounds),
+                None => self.reveal_focused(),
+            }
+        }
         true
     }
 

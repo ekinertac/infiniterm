@@ -88,7 +88,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | `Cmd + L` | the address bar: type an address or a search, or pick a page you have been to or a card already open. On a browser card it opens holding that card's address; `Tab` scopes the search to a site (GitHub, MDN, crates.io and six more) |
 | `Cmd + [` / `Cmd + ]` | in a browser card: back and forward (elsewhere: previous / next group) |
 | `Cmd + R` | in a browser card: reload the page |
-| `Cmd + F` | find in the card: a terminal's whole scrollback or a page, every match highlighted, a count; `Enter` / `Cmd + G` steps (up the scrollback in a terminal, from the newest), `Shift + Enter` / `Cmd + Shift + G` back, `Esc` closes. A lowercase query ignores case |
+| `Cmd + F` | find in the card: a terminal's whole scrollback or a page, every match highlighted, a count; `Enter` / `Cmd + G` steps (up the scrollback in a terminal, from the newest), `Shift + Enter` / `Cmd + Shift + G` back, `Esc` closes leaving the match selected, so `Cmd + C` copies it (`Cmd + C` in the bar does too). A lowercase query ignores case |
 | `Cmd + E` | find the selected text (macOS's "use selection for find") |
 | `Cmd + Ctrl + T` | reopen the last card you closed, where it was |
 | `Cmd + Esc` | leave a browser card's page |
@@ -102,7 +102,7 @@ After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an 
 | `Cmd + Shift + T` | new card, but where: every empty slot around the cards gets a letter, press one |
 | `Cmd + D` / `Cmd + Shift + D` | split the card: new card to the right / below |
 | `Cmd + Alt + Arrow` or `Cmd + Alt + JKL` | switch cards; into an empty slot shows a hollow card, `Enter` asks what goes in it |
-| `Cmd + J` | a letter on every card; press one to jump there |
+| `Cmd + J` | a letter on every card; press one to jump there, framed as `Cmd + 1` would |
 | `Cmd + Shift + Arrow` or `Shift + click` | extend the selection, like Shift + Arrow in a text field; close, split, new card, clear, fit and group then act on all of it |
 | `Cmd + Alt + Shift + Arrow` | swap the active card with its neighbour |
 | `Cmd + Shift + [` / `Cmd + Shift + ]` | previous / next workspace |

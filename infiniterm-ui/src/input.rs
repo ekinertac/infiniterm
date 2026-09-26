@@ -764,6 +764,19 @@ impl AppView {
             self.perform_effects();
             return true;
         }
+        // Cmd+C with the bar open copies the match you are on, unless text
+        // in the search field itself is selected.
+        if self.model.find.open && chord == "cmd+c" && !self.find_field.selected() {
+            let id = self.model.find.card_id.clone().unwrap_or_default();
+            if let Some(text) = self
+                .terminal_body(&id)
+                .and_then(|b| b.grid.find_current_text())
+            {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                self.model.notify("copied");
+                return true;
+            }
+        }
         // A confirm takes its own chords before the canvas: Cmd+D is Don't
         // Save, not a split of the card behind the dialog.
         if let Some(kind) = self.model.prompt.chord(&chord) {
