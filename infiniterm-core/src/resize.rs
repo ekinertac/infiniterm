@@ -56,28 +56,27 @@ pub fn sized(
 /// (`card.size.reset`, Cmd+Ctrl+Enter): a quarter next to a half becomes
 /// the other half, not a full card refused for lack of room.
 ///
-/// From the top-left corner first, so the card stays where it is when it
-/// can. Only when that gains nothing are the other three corners tried,
-/// the largest winning: card #96 on Ekin's canvas was already full height
-/// with a card one gutter to its right, so "right and down" had no room
-/// while everything to its left was empty, and it said so.
+/// All four corners are tried, and the growth that fills a GAP wins: the
+/// one with the most sides landing a gutter from another card; on a tie,
+/// top-left (the card stays where it is), then the larger. Top-left alone came first until
+/// 2026-09-26, and a split's bottom half moved beside a card grew DOWN
+/// into open canvas instead of up into the space it sat under (Ekin's #3).
+/// Before that, card #96 (full height, a card one gutter to its right)
+/// said "no room" with the canvas empty to its left; mirrors fixed that.
 pub fn fill_from_corner(
     rect: Rect,
     default: crate::grid::Size,
     taken: &[Rect],
     gutter: f64,
 ) -> Rect {
-    let top_left = grow_from_top_left(rect, default, taken, gutter);
-    if top_left != rect {
-        return top_left;
-    }
     // The same rule in a mirrored layout is growth from another corner.
     let mirror = |r: Rect, fx: bool, fy: bool| Rect {
         x: if fx { -(r.x + r.w) } else { r.x },
         y: if fy { -(r.y + r.h) } else { r.y },
         ..r
     };
-    [(true, false), (false, true), (true, true)]
+    let enclosed = |g: &Rect| enclosure(g, taken, gutter);
+    [(false, false), (true, false), (false, true), (true, true)]
         .into_iter()
         .map(|(fx, fy)| {
             let flipped: Vec<Rect> = taken.iter().map(|&t| mirror(t, fx, fy)).collect();
@@ -87,10 +86,43 @@ pub fn fill_from_corner(
                 fy,
             )
         })
-        .fold(
-            rect,
-            |best, r| if r.w * r.h > best.w * best.h { r } else { best },
-        )
+        .enumerate()
+        .filter(|(_, r)| *r != rect)
+        // Higher is better: enclosure, then top-left (index 0), then area.
+        .max_by(|(i, a), (j, b)| {
+            (enclosed(a), *i == 0, a.w * a.h)
+                .partial_cmp(&(enclosed(b), *j == 0, b.w * b.h))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                // max_by keeps the LAST of equals; prefer the earlier corner.
+                .then(j.cmp(i))
+        })
+        .map(|(_, r)| r)
+        .unwrap_or(rect)
+}
+
+/// How many of `g`'s four sides sit a gutter from a card beside them: 4 is
+/// a hole exactly filled, 0 a card out on open canvas.
+fn enclosure(g: &Rect, taken: &[Rect], gutter: f64) -> usize {
+    let near = |a: f64, b: f64| (a - b).abs() <= 0.5;
+    let rows = |t: &Rect| t.y < g.y + g.h && g.y < t.y + t.h;
+    let cols = |t: &Rect| t.x < g.x + g.w && g.x < t.x + t.w;
+    [
+        taken
+            .iter()
+            .any(|t| rows(t) && near(t.x + t.w + gutter, g.x)),
+        taken
+            .iter()
+            .any(|t| rows(t) && near(g.x + g.w + gutter, t.x)),
+        taken
+            .iter()
+            .any(|t| cols(t) && near(t.y + t.h + gutter, g.y)),
+        taken
+            .iter()
+            .any(|t| cols(t) && near(g.y + g.h + gutter, t.y)),
+    ]
+    .iter()
+    .filter(|b| **b)
+    .count()
 }
 
 /// Growth from the top-left corner: two ways, width first then height or
@@ -172,6 +204,26 @@ pub fn resized_by(rect: Rect, dw: f64, dh: f64) -> Rect {
 
 #[cfg(test)]
 mod tests {
+
+    // Ekin's #3: a split's bottom half moved beside #10, under the top row.
+    // The gap it sits in is ABOVE it; growing down is open canvas. It
+    // grows up and fills the slot exactly.
+    #[test]
+    fn a_half_grows_into_the_gap_it_sits_in_not_onto_open_canvas() {
+        let d = crate::grid::Size { w: 1725., h: 2000. };
+        let r = |x, y, w, h| Rect { x, y, w, h };
+        let taken = [
+            r(0., -2025., 1725., 2000.),
+            r(1750., -2025., 1725., 2000.),
+            r(0., 0., 1725., 1000.),
+        ];
+        let three = r(1750., 1025., 1725., 975.);
+        assert_eq!(
+            fill_from_corner(three, d, &taken, 25.),
+            r(1750., 0., 1725., 2000.)
+        );
+    }
+
     use super::*;
     use crate::grid::{snap_center, HALF_CELL};
     const BASE: Rect = Rect {

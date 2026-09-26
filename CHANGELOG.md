@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-09-26
 
+- Cmd+Ctrl+Enter grows a card into the gap it sits in, from whichever corner that takes, instead of always from its top-left; a half moved under another card grew down into open canvas.
 - An update downloaded while an older build ran no longer replaces a newer build installed since; the restart just restarts. It had put 0.2.0 back over a newer install.
 - Cmd+T fills the holes in your grid of cards, top row first, before it grows the canvas, wherever the grid sits; it used to count only from the canvas origin and kept growing past holes above and left of it.
 - The transcript card tells speakers apart: a message relayed from another agent session is its own turn, labelled with the sender's name, and a background task finishing is one faint notice line. Both used to read as your own turns, tags and all. A message the session sent reads in full as `→ name` inside the agent's turn instead of a tool line cut at 400 characters.
