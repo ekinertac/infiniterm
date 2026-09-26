@@ -168,6 +168,9 @@ pub fn fill_slot(taken: &[Rect], size: Size, anchor: Point, gutter: f64) -> Rect
         return block_slot(taken, size, anchor, gutter);
     };
     let (sx, sy) = (size.w + gutter, size.h + gutter);
+    if let Some(r) = grid_hole(taken, size, anchor, gutter) {
+        return r;
+    }
     // The lattice point at or before the box's top-left corner.
     let origin = Point {
         x: anchor.x + ((b.x - anchor.x) / sx).floor() * sx,
@@ -201,6 +204,55 @@ pub fn fill_slot(taken: &[Rect], size: Size, anchor: Point, gutter: f64) -> Rect
         .map(|i| slot(block_order(i)))
         .find(|r| r.y >= b.y - 0.5 && r.x >= b.x - 0.5 && free(r))
         .unwrap_or_else(|| slot((cols as i64, 0)))
+}
+
+/// The GRID's holes: the lattice positions whose row and whose column
+/// already hold a card sitting on the lattice, in reading order (top row
+/// first, left to right), the first one free. Then, the grid full, the
+/// next slot growing it right and down. `None` when no card sits on the
+/// lattice, and `fill_slot`'s box rule decides.
+///
+/// Why rows and columns of lined-up cards, not the whole box: on Ekin's
+/// Personal Stuff a cluster of small cards sits above the main grid, off
+/// its lattice, and the box rule filled the strip beside it first; the gap
+/// he meant was the hole IN the grid, below #18 (2026-09-26).
+fn grid_hole(taken: &[Rect], size: Size, anchor: Point, gutter: f64) -> Option<Rect> {
+    let (sx, sy) = (size.w + gutter, size.h + gutter);
+    let on = |v: f64, a: f64, step: f64| -> Option<i64> {
+        let k = ((v - a) / step).round();
+        ((v - (a + k * step)).abs() < 0.5).then_some(k as i64)
+    };
+    let (mut cols, mut rows): (Vec<i64>, Vec<i64>) = (vec![], vec![]);
+    for t in taken {
+        if let (Some(c), Some(r)) = (on(t.x, anchor.x, sx), on(t.y, anchor.y, sy)) {
+            cols.push(c);
+            rows.push(r);
+        }
+    }
+    let (c0, c1) = (*cols.iter().min()?, *cols.iter().max()?);
+    let (r0, r1) = (*rows.iter().min()?, *rows.iter().max()?);
+    let slot = |c: i64, r: i64| Rect {
+        x: anchor.x + c as f64 * sx,
+        y: anchor.y + r as f64 * sy,
+        w: size.w,
+        h: size.h,
+    };
+    let free = |r: &Rect| !taken.iter().any(|&t| rects_overlap(*r, t));
+    for r in r0..=r1 {
+        for c in c0..=c1 {
+            let s = slot(c, r);
+            if free(&s) {
+                return Some(s);
+            }
+        }
+    }
+    // Full: grow the grid in block order from its corner, right and down.
+    (0..200 * 200)
+        .map(|i| {
+            let (c, r) = block_order(i);
+            slot(c0 + c, r0 + r)
+        })
+        .find(free)
 }
 
 fn bounding_rect_of(rects: &[Rect]) -> Option<Rect> {
@@ -249,6 +301,43 @@ mod tests {
     }
 
     // A full box grows right or down, never into the rows above it.
+    // Ekin's Personal Stuff: a cluster of small cards above the main grid,
+    // off its lattice, and a hole IN the grid below #18. The hole wins,
+    // not the strip beside the cluster.
+    #[test]
+    fn the_hole_in_the_grid_wins_over_space_beside_an_offgrid_cluster() {
+        let size = Size { w: 1725., h: 2000. };
+        let taken = [
+            r(-5187.5, -2762.5, 850., 2000.),
+            r(-4312.5, -2762.5, 850., 1000.),
+            r(-3437.5, -2762.5, 850., 1000.),
+            r(-4312.5, -1737.5, 850., 975.),
+            r(-3437.5, -1737.5, 850., 975.),
+            r(-5237.5, 12.5, 1725., 2000.),
+            r(-3487.5, 12.5, 1725., 1000.),
+            r(-1737.5, 12.5, 1725., 2000.),
+            r(12.5, 12.5, 1725., 2000.),
+            r(1762.5, 12.5, 1725., 2000.),
+            r(3512.5, 12.5, 1725., 2000.),
+            r(-3487.5, 1037.5, 1725., 975.),
+            r(-5237.5, 2037.5, 1725., 1975.),
+            r(-3487.5, 2037.5, 1725., 1975.),
+            r(-1737.5, 2037.5, 1725., 975.),
+            r(12.5, 2037.5, 1725., 1000.),
+            r(1762.5, 2037.5, 1725., 2000.),
+            r(3512.5, 2037.5, 1725., 1000.),
+            r(-1737.5, 3037.5, 1725., 975.),
+            r(12.5, 3062.5, 1725., 975.),
+            r(3512.5, 3062.5, 1725., 975.),
+            r(12.5, 4062.5, 1725., 2000.),
+        ];
+        assert_eq!(
+            fill_slot(&taken, size, A, 25.),
+            r(-5237.5, 4062.5, 1725., 2000.),
+            "below #18"
+        );
+    }
+
     #[test]
     fn a_full_canvas_grows_right_and_down_not_up() {
         let size = Size { w: 100., h: 100. };
