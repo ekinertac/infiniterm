@@ -41,6 +41,9 @@ pub struct Prompt<P> {
     pub alt_action: Option<String>,
     /// The highlighted button, an index into `buttons()`.
     pub choice: usize,
+    /// A text prompt's starting selection, as a char range, when it is not
+    /// the whole value (`ask_selecting`: the stem of `untitled.txt`).
+    pub select: Option<(usize, usize)>,
     pending: Option<P>,
 }
 
@@ -73,6 +76,7 @@ impl<P> Default for Prompt<P> {
             action: String::new(),
             alt_action: None,
             choice: 0,
+            select: None,
             pending: None,
         }
     }
@@ -89,9 +93,24 @@ impl<P> Prompt<P> {
         self.action = String::new();
         self.alt_action = None;
         self.choice = 0;
+        self.select = None;
         self.label = label.into();
         self.value = initial.into();
         self.pending = Some(pending);
+        displaced
+    }
+
+    /// `ask` with only part of the value selected, so typing replaces that
+    /// part: the name in a save-as path.
+    pub fn ask_selecting(
+        &mut self,
+        label: &str,
+        initial: &str,
+        select: (usize, usize),
+        pending: P,
+    ) -> Option<Answer<P>> {
+        let displaced = self.ask(label, initial, pending);
+        self.select = Some(select);
         displaced
     }
 

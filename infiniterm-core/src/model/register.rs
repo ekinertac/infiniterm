@@ -1716,6 +1716,88 @@ mod tests {
         assert!(h.m.notice.is_none());
     }
 
+    // An untitled editor's first save: the field starts on the card's
+    // directory and untitled.txt with the stem selected; a new path saves;
+    // a missing directory sends you back to the field with what you typed;
+    // an existing file asks before replacing it.
+    #[test]
+    fn saving_an_untitled_buffer_names_it_like_the_mac_panel() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        {
+            let c = h.m.card_mut(&id).unwrap();
+            c.kind = CardKind::Editor;
+            c.path = None;
+            c.cwd = "/Users/me/Code".into();
+        }
+        let disk = ["/Users/me/Code", "/Users/me/Code/old.txt"];
+        let exists = |p: &str| disk.contains(&p);
+        let submit = |h: &mut Harness, typed: &str| {
+            let (pending, text) = h.m.prompt.settle(Some(typed)).unwrap();
+            h.m.answer(pending, text, exists);
+            h.m.take_effects()
+        };
+        h.run("card.save");
+        assert_eq!(h.m.prompt.value, "~/Code/untitled.txt");
+        assert_eq!(h.m.prompt.select, Some((7, 15)));
+
+        submit(&mut h, "~/Code/nope/a.txt");
+        assert!(h.m.prompt.open, "back to the field");
+        assert_eq!(h.m.prompt.value, "~/Code/nope/a.txt");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("no such directory: ~/Code/nope"));
+
+        submit(&mut h, "~/Code/old.txt");
+        assert!(h.m.prompt.confirm && h.m.prompt.label.contains("old.txt exists"));
+        let (pending, text) = h.m.prompt.settle(None).unwrap();
+        h.m.answer(pending, text, exists);
+        assert_eq!(h.m.card(&id).unwrap().path, None, "not replaced");
+
+        h.run("card.save");
+        let effects = submit(&mut h, "~/Code/notes.md");
+        assert_eq!(
+            h.m.card(&id).unwrap().path.as_deref(),
+            Some("/Users/me/Code/notes.md")
+        );
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::Save,
+                ..
+            }
+        )));
+    }
+
+    // Closing an untitled buffer: Save in the sheet asks for the name, and
+    // the card closes once that save lands.
+    #[test]
+    fn saving_an_untitled_buffer_from_the_close_sheet_names_it_then_closes() {
+        use crate::prompt::ButtonKind;
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        {
+            let c = h.m.card_mut(&id).unwrap();
+            c.kind = CardKind::Editor;
+            c.path = None;
+            c.cwd = "/Users/me".into();
+            c.dirty = true;
+        }
+        h.run("card.close");
+        let (pending, text) = h.m.prompt.press(ButtonKind::Primary).unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert!(h.m.prompt.open && h.m.prompt.label == "save as");
+        let (pending, text) = h.m.prompt.settle(Some("/Users/me/n.txt")).unwrap();
+        h.m.answer(pending, text, |p: &str| p == "/Users/me");
+        assert_eq!(h.m.cards.len(), 1, "waits for the save");
+        h.m.card_mut(&id).unwrap().dirty = false;
+        h.m.tick(h.m.now_ms + 16.);
+        assert!(h.m.cards.is_empty());
+    }
+
     // A dirty editor asks the save sheet; a second Cmd+W only asks again.
     // Cancel keeps it; Don't Save discards; Save saves and closes once the
     // editor reports the file clean, and a save that never lands closes
@@ -2551,7 +2633,8 @@ mod tests {
             .iter()
             .any(|e| matches!(e, Effect::Editor { .. })));
         let (pending, text) = h.m.prompt.settle(Some("notes/todo.md")).unwrap();
-        h.m.answer(pending, text, |_| true);
+        // The directory is there, the file is not: a plain save.
+        h.m.answer(pending, text, |p: &str| p.ends_with("/notes"));
         let card = h.m.card(&id).unwrap();
         assert!(card.path.as_deref().unwrap().ends_with("/notes/todo.md"));
         assert!(card.cwd.ends_with("/notes"));

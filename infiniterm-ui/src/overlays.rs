@@ -276,7 +276,10 @@ impl AppView {
     fn sync_fields(&mut self) {
         let open = self.model.prompt.is_open();
         if open && !self.prompt_was_open {
-            self.prompt_field = crate::field::Field::open(&self.model.prompt.value, true);
+            self.prompt_field = match self.model.prompt.select {
+                Some((a, b)) => crate::field::Field::open_selecting(&self.model.prompt.value, a, b),
+                None => crate::field::Field::open(&self.model.prompt.value, true),
+            };
         }
         self.prompt_was_open = open;
         if !self.model.shortcuts_open && !self.shortcuts_field.text.is_empty() {

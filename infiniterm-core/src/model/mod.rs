@@ -422,9 +422,18 @@ pub enum Pending {
         from: Option<String>,
     },
     NavigateBrowser(String),
-    /// An untitled editor's first save: the path typed becomes the card's,
-    /// then the save runs.
-    SaveAs(String),
+    /// Naming an untitled buffer (`open_save_as`); `then_close` is the
+    /// close the save sheet's Save is waiting to finish.
+    SaveAs {
+        id: String,
+        then_close: Option<(Vec<String>, bool)>,
+    },
+    /// The typed path is a file already: replace it?
+    SaveAsReplace {
+        id: String,
+        path: String,
+        then_close: Option<(Vec<String>, bool)>,
+    },
     /// `editor.goToLine`: the number typed lands in `card.line` for the body.
     GoToLine(String),
 }

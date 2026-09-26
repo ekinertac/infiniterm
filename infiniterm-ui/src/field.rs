@@ -117,6 +117,18 @@ impl Field {
 
     /// `selected` opens with the whole text selected, which is how a prompt
     /// offers a suggestion: typing replaces it and Enter keeps it.
+    /// Opens holding `text` with the chars `start..end` selected, the caret
+    /// at `end`: a save-as path with only the name picked.
+    pub fn open_selecting(text: &str, start: usize, end: usize) -> Field {
+        let len = text.chars().count();
+        let (start, end) = (start.min(len), end.min(len));
+        Field {
+            text: text.into(),
+            caret: end,
+            anchor: (start != end).then_some(start),
+        }
+    }
+
     pub fn open(text: &str, selected: bool) -> Field {
         let len = text.chars().count();
         Field {
@@ -402,6 +414,16 @@ enum Reach {
 mod tests {
     use super::*;
     use gpui::Modifiers;
+
+    // Save-as: only the name's stem is selected, so typing replaces it and
+    // leaves the directory and the extension.
+    #[test]
+    fn a_field_can_open_with_part_of_it_selected() {
+        let f = Field::open_selecting("~/Code/untitled.txt", 7, 15);
+        assert_eq!((f.anchor, f.caret), (Some(7), 15));
+        let none = Field::open_selecting("abc", 2, 2);
+        assert_eq!(none.anchor, None, "an empty range is just a caret");
+    }
 
     fn ks(k: &str, ch: Option<&str>, mods: Modifiers) -> Keystroke {
         Keystroke {

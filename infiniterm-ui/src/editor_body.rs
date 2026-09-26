@@ -344,6 +344,23 @@ impl EditorBody {
                 };
                 self.buffer = Buffer::new(draft.as_deref().unwrap_or(&text));
             }
+            // Not there yet: a new file, vim's way. The buffer starts
+            // empty (or from its draft) and the first save creates it;
+            // closing without one leaves nothing on disk.
+            Err(_) if !std::path::Path::new(path).exists() => {
+                self.saved.clear();
+                self.disk_stamp = None;
+                let draft = if with_draft {
+                    draft_read(&self.card_id).ok().flatten()
+                } else {
+                    None
+                };
+                self.buffer = Buffer::new(draft.as_deref().unwrap_or(""));
+                self.events.push(EditorEvent::Notice(format!(
+                    "new file: {}",
+                    path.rsplit('/').next().unwrap_or(path)
+                )));
+            }
             Err(e) => {
                 eprintln!("[infiniterm/warn] could not read {path}: {e}");
                 self.events.push(EditorEvent::Notice(format!(

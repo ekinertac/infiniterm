@@ -34,7 +34,11 @@ ift — drive infiniterm from a shell
                              editor card; file:42 or file:42:7 opens at a line.
                              Run inside a card, a file opens IN PLACE over it
                              and ift waits until you close it, like vim, so
-                             EDITOR=ift works for git commit
+                             EDITOR=ift works for git commit. A file that
+                             does not exist opens empty and the first save
+                             creates it (any word that is not a command
+                             below is taken as one); its directory must
+                             exist
   ift -n <path>              a file in a card of its own, returning at once
   ift diff [path]            changes against git HEAD, as a card: a tree of the
                              changed files under path (the current directory
@@ -138,9 +142,9 @@ fn main() -> ExitCode {
         // palette, and UI actions are otherwise deliberately NOT ift's.
         Some("dev-run") => send("dev-run", rest()),
         Some("-n") => match args.get(2) {
-            Some(p) if Path::new(split_line(p).0).exists() => open_path(p, false),
-            _ => {
-                eprintln!("ift: -n takes a path that exists");
+            Some(p) => open_path(p, false),
+            None => {
+                eprintln!("ift: -n takes a path");
                 ExitCode::from(2)
             }
         },
@@ -151,11 +155,11 @@ fn main() -> ExitCode {
         None => launch(),
         // A PATH beats a verb. A directory called `ls` in front of you is what you
         // meant; the verbs are checked first only so the common ones stay short.
-        Some(arg) if Path::new(split_line(arg).0).exists() => open_path(arg, true),
-        Some(other) => {
-            eprintln!("ift: unknown command `{other}`\n\n{USAGE}");
-            ExitCode::from(2)
-        }
+        // Anything else is a path, existing or not: a word that is not a
+        // command above is a new file, vim's way (Ekin, 2026-09-26: a rule
+        // like "only if it has a dot" would be one more hidden thing). A
+        // typo'd verb opens an empty editor; nothing is written unless saved.
+        Some(arg) => open_path(arg, true),
     }
 }
 
@@ -232,9 +236,12 @@ fn install_self() -> ExitCode {
 /// in the directory the path is relative to, and the app is not.
 fn open_path(arg: &str, in_place: bool) -> ExitCode {
     let (path, line) = split_line(arg);
-    let Ok(full) = std::fs::canonicalize(path) else {
-        eprintln!("ift: cannot resolve {path}");
-        return ExitCode::from(2);
+    let full = match resolve(path) {
+        Ok(full) => full,
+        Err(e) => {
+            eprintln!("ift: {e}");
+            return ExitCode::from(2);
+        }
     };
     let kind = if full.is_dir() { "directory" } else { "file" };
     // A file, from inside a card: in place, waiting (the app's `edit`).
@@ -250,6 +257,26 @@ fn open_path(arg: &str, in_place: bool) -> ExitCode {
         args.push(line.to_string());
     }
     send("open", args)
+}
+
+/// `path` made absolute. One that exists is canonicalised; one that does
+/// not is a new file, allowed only where its directory exists, since vim
+/// finds that out at the first write and that is the worst moment to.
+fn resolve(path: &str) -> Result<PathBuf, String> {
+    if let Ok(full) = std::fs::canonicalize(path) {
+        return Ok(full);
+    }
+    let given = Path::new(path);
+    let name = given
+        .file_name()
+        .ok_or_else(|| format!("cannot resolve {path}"))?;
+    let dir = match given.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let dir = std::fs::canonicalize(&dir)
+        .map_err(|_| format!("no such directory: {}", dir.display()))?;
+    Ok(dir.join(name))
 }
 
 /// `ift diff [path]`: the changes under a directory, or of one file.
@@ -573,5 +600,22 @@ mod tests {
         assert_eq!(split_line("/tmp/nope.rs:42:7"), ("/tmp/nope.rs", Some(42)));
         assert_eq!(split_line("/tmp/nope.rs"), ("/tmp/nope.rs", None));
         assert_eq!(split_line("/tmp/nope:x"), ("/tmp/nope:x", None));
+    }
+
+    // A new file resolves where its directory exists and is refused where
+    // it does not, before anything opens.
+    #[test]
+    fn a_new_file_needs_its_directory() {
+        let dir = std::env::temp_dir().join(format!("ift-resolve-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(&dir).unwrap();
+        let new = dir.join("notes.txt");
+        assert_eq!(resolve(new.to_str().unwrap()).unwrap(), new);
+        let missing = dir.join("nope/notes.txt");
+        let err = resolve(missing.to_str().unwrap()).unwrap_err();
+        assert!(err.starts_with("no such directory"), "{err}");
+        std::fs::write(&new, "x").unwrap();
+        assert_eq!(resolve(new.to_str().unwrap()).unwrap(), new, "existing");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

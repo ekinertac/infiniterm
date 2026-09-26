@@ -8,7 +8,7 @@ use super::{
     BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
     TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
 };
-use crate::card_label::{card_label, Labelled};
+use crate::card_label::{card_label, tilde_path, Labelled};
 use crate::cards::GUTTER;
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
 use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
@@ -315,8 +315,9 @@ impl Model {
             if !card.dirty {
                 continue;
             }
+            // Untitled: name it first; the close follows the save.
             if card.path.is_none() {
-                self.notify("untitled: Cmd+S to name it first");
+                self.open_save_as(id.clone(), Some((ids.clone(), reclaim)));
                 return;
             }
             self.effects.push(Effect::Editor {
@@ -325,6 +326,39 @@ impl Model {
             });
         }
         self.close_after_save = Some((ids, reclaim, self.now_ms + SAVE_CLOSE_MS));
+    }
+
+    /// The "save as" field for an untitled buffer, starting on its
+    /// directory and `untitled.txt` with the stem selected (`save_as.rs`).
+    pub fn open_save_as(&mut self, id: String, then_close: Option<(Vec<String>, bool)>) {
+        let dir = self
+            .card(&id)
+            .map(|c| c.cwd.clone())
+            .unwrap_or_else(|| self.home.clone());
+        let (text, select) = crate::save_as::suggestion(&dir, &self.home);
+        self.prompt
+            .ask_selecting("save as", &text, select, Pending::SaveAs { id, then_close });
+    }
+
+    /// The buffer gets its path and is written; a close the save sheet
+    /// asked for follows once the editor reports it clean.
+    fn save_as(&mut self, id: String, full: String, then_close: Option<(Vec<String>, bool)>) {
+        if let Some(card) = self.card_mut(&id) {
+            card.cwd = full
+                .rsplit_once('/')
+                .map(|(dir, _)| if dir.is_empty() { "/" } else { dir })
+                .unwrap_or("/")
+                .to_string();
+            card.path = Some(full);
+            self.dirty_layout = true;
+        }
+        self.effects.push(Effect::Editor {
+            card_id: id,
+            action: EditorAction::Save,
+        });
+        if let Some((ids, reclaim)) = then_close {
+            self.close_after_save = Some((ids, reclaim, self.now_ms + SAVE_CLOSE_MS));
+        }
     }
 
     /// The close `save_then_close` is waiting on, run from `tick`.
@@ -449,25 +483,46 @@ impl Model {
             // The typed path is relative to the card's directory, `~`
             // allowed, and the card becomes that file: its directory follows
             // so "beside" and the label do.
-            Pending::SaveAs(id) => {
+            Pending::SaveAs { id, then_close } => {
                 let Some(raw) = text.filter(|t| !t.trim().is_empty()) else {
                     return;
                 };
                 let from = self.card(&id).cloned();
                 let full = self.resolve_typed_path(raw.trim(), from.as_ref());
-                if let Some(card) = self.card_mut(&id) {
-                    card.cwd = full
-                        .rsplit_once('/')
-                        .map(|(dir, _)| if dir.is_empty() { "/" } else { dir })
-                        .unwrap_or("/")
-                        .to_string();
-                    card.path = Some(full);
-                    self.dirty_layout = true;
+                match crate::save_as::target(&full, &exists) {
+                    crate::save_as::Target::New => self.save_as(id, full, then_close),
+                    crate::save_as::Target::Replace => {
+                        let name = full.rsplit('/').next().unwrap_or(&full).to_string();
+                        self.prompt.confirm(
+                            &format!("{name} exists. Replace it?"),
+                            "Replace",
+                            Pending::SaveAsReplace {
+                                id,
+                                path: full,
+                                then_close,
+                            },
+                        );
+                    }
+                    // Back to the field with what was typed, so the fix is
+                    // one edit, not a retype.
+                    crate::save_as::Target::NoDirectory(dir) => {
+                        self.prompt
+                            .ask("save as", raw.trim(), Pending::SaveAs { id, then_close });
+                        self.notify(format!(
+                            "no such directory: {}",
+                            tilde_path(&dir, &self.home)
+                        ));
+                    }
                 }
-                self.effects.push(Effect::Editor {
-                    card_id: id,
-                    action: EditorAction::Save,
-                });
+            }
+            Pending::SaveAsReplace {
+                id,
+                path,
+                then_close,
+            } => {
+                if text.is_some() {
+                    self.save_as(id, path, then_close);
+                }
             }
             Pending::GoToLine(id) => {
                 let Some(n) = text
@@ -1092,7 +1147,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             }
             // Untitled: ask where first. The answer re-enters as a save.
             if card.path.is_none() {
-                m.prompt.ask("save as", "", Pending::SaveAs(id));
+                m.open_save_as(id, None);
                 return;
             }
             m.effects.push(Effect::Editor {
