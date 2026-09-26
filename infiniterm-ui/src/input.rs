@@ -757,6 +757,12 @@ impl AppView {
             .flatten()
             .and_then(|id| self.registry.get(&id))
             .map(|c| c.label.clone());
+        // A confirm takes its own chords before the canvas: Cmd+D is Don't
+        // Save, not a split of the card behind the dialog.
+        if let Some(kind) = self.model.prompt.chord(&chord) {
+            self.prompt_press(kind);
+            return true;
+        }
         if (m.platform || m.control) && handle_chord(&mut self.model, &self.registry, &chord) {
             if self.keycast_on {
                 self.note_chord(&chord, &cast.unwrap_or_default(), now_ms());

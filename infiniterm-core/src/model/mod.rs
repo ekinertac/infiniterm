@@ -413,8 +413,8 @@ pub enum Pending {
         reclaim: bool,
     },
     /// Closing cards with unsaved changes: the ids and `reclaim` to close
-    /// with once "Discard" is chosen.
-    DiscardClose {
+    /// with, after a save or without one.
+    UnsavedClose {
         ids: Vec<String>,
         reclaim: bool,
     },
@@ -483,6 +483,9 @@ pub struct Model {
     /// Set by an `ift` verb that answers later (`edit`): the ui must not
     /// reply to this request now.
     pub reply_deferred: bool,
+    /// A close waiting for its Save to land (`save_then_close`): the ids,
+    /// `reclaim`, and when to give up.
+    pub close_after_save: Option<(Vec<String>, bool, f64)>,
     /// Each terminal card's escape-sequence scanner and the command in
     /// flight (`program_state`), by card id. Session-only: a command
     /// running across a restart is simply not known about.
@@ -599,6 +602,7 @@ impl Model {
             cover_at: HashMap::new(),
             edit_waiters: HashMap::new(),
             reply_deferred: false,
+            close_after_save: None,
             programs: std::collections::HashMap::new(),
             focus_visit: None,
             switcher: None,
@@ -649,6 +653,7 @@ impl Model {
         self.promote_focus();
         self.promote_programs();
         self.sync_covers();
+        self.close_when_saved();
         if self.notice.is_some() && now_ms >= self.notice_until {
             self.notice = None;
         }

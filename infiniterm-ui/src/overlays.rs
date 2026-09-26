@@ -222,8 +222,24 @@ impl AppView {
     pub fn prompt_key(&mut self, k: &Keystroke, cx: &mut gpui::App) -> bool {
         let confirm = self.model.prompt.confirm;
         let mut taken = true;
+        let back = k.modifiers.shift;
         let settled = match k.key.as_str() {
             "escape" => self.model.prompt.settle(None),
+            // A confirm's buttons are walked by keys and Enter presses the
+            // highlighted one (prompt.rs says why one key, not macOS's two).
+            "enter" if confirm => self.model.prompt.press_choice(),
+            "left" | "up" if confirm => {
+                self.model.prompt.move_choice(-1);
+                None
+            }
+            "right" | "down" if confirm => {
+                self.model.prompt.move_choice(1);
+                None
+            }
+            "tab" if confirm => {
+                self.model.prompt.move_choice(if back { -1 } else { 1 });
+                None
+            }
             "enter" => {
                 let v = self.model.prompt.value.clone();
                 self.model.prompt.settle(Some(&v))
@@ -787,6 +803,16 @@ impl AppView {
     }
 
     /// The dialog's verdict from a button: yes or no, then the answer.
+    /// A dialog button pressed, by what it does (a click, or a chord the
+    /// dialog takes first: Cmd+D, Cmd+.).
+    pub fn prompt_press(&mut self, kind: infiniterm_core::prompt::ButtonKind) {
+        if let Some((pending, text)) = self.model.prompt.press(kind) {
+            self.model
+                .answer(pending, text, |path| std::path::Path::new(path).exists());
+        }
+        self.perform_effects();
+    }
+
     pub fn prompt_settle(&mut self, yes: bool) {
         let v = self.model.prompt.value.clone();
         let settled = self.model.prompt.settle(yes.then_some(v.as_str()));
@@ -872,26 +898,34 @@ impl AppView {
                 .justify_end()
                 .gap(px(DIALOG_BUTTON_GAP_PX * ui))
                 .pt(px(DIALOG_GAP_PX * ui));
-            if is_confirm {
-                row = row.child(
-                    button("Cancel".into(), "esc", false, &chrome).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                            this.prompt_settle(false);
-                            cx.notify();
-                        }),
-                    ),
-                );
-            }
-            row = row.child(
-                button(p.action.clone(), "enter", true, &chrome).on_mouse_down(
+            // Left to right as macOS lays them out (Don't Save, Cancel, the
+            // action). The highlighted button wears the focus ring and the
+            // `enter` cap, since Enter presses it; the others keep their
+            // own keys.
+            use infiniterm_core::prompt::ButtonKind;
+            for (i, (label, kind)) in p.buttons().into_iter().enumerate() {
+                let lit = i == p.choice;
+                let key = if lit {
+                    "enter"
+                } else {
+                    match kind {
+                        ButtonKind::Cancel => "esc",
+                        ButtonKind::Alt => "\u{2318}D",
+                        ButtonKind::Primary => "",
+                    }
+                };
+                let mut b = button(label, key, kind == ButtonKind::Primary, &chrome);
+                if lit {
+                    b = b.border_2().border_color(chrome.focus_ring);
+                }
+                row = row.child(b.on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                        this.prompt_settle(true);
+                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                        this.prompt_press(kind);
                         cx.notify();
                     }),
-                ),
-            );
+                ));
+            }
             body = body.child(row);
         } else {
             body = body

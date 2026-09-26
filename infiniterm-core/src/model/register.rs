@@ -1716,27 +1716,65 @@ mod tests {
         assert!(h.m.notice.is_none());
     }
 
-    // A dirty editor asks in a dialog; a second Cmd+W only asks again, and
-    // nothing is discarded until the answer is yes. A no keeps the card.
+    // A dirty editor asks the save sheet; a second Cmd+W only asks again.
+    // Cancel keeps it; Don't Save discards; Save saves and closes once the
+    // editor reports the file clean, and a save that never lands closes
+    // nothing.
     #[test]
-    fn a_dirty_editor_asks_before_it_discards() {
+    fn a_dirty_editor_asks_save_dont_save_or_cancel() {
+        use crate::prompt::ButtonKind;
+        let dirty_editor = |h: &mut Harness| {
+            let id = h.focused().id.clone();
+            let c = h.m.card_mut(&id).unwrap();
+            c.kind = CardKind::Editor;
+            c.path = Some("/tmp/x.txt".into());
+            c.dirty = true;
+            id
+        };
+        let press = |h: &mut Harness, k: ButtonKind| {
+            let (pending, text) = h.m.prompt.press(k).unwrap();
+            h.m.answer(pending, text, |_| true);
+            h.m.take_effects()
+        };
         let mut h = Harness::new();
-        let id = h.focused().id.clone();
-        let c = h.m.card_mut(&id).unwrap();
-        c.kind = CardKind::Editor;
-        c.dirty = true;
+        let id = dirty_editor(&mut h);
         h.run("card.close");
         h.run("card.close");
-        assert_eq!(h.m.cards.len(), 1, "a double press is not a yes");
-        assert!(h.m.prompt.open && h.m.prompt.label.contains("unsaved"));
-        let (pending, text) = h.m.prompt.settle(None).unwrap();
-        h.m.answer(pending, text, |_| true);
-        assert_eq!(h.m.cards.len(), 1, "no keeps it");
+        assert_eq!(h.m.cards.len(), 1, "a double press is not an answer");
+        assert!(h.m.prompt.open && h.m.prompt.label.starts_with("save changes to"));
+        press(&mut h, ButtonKind::Cancel);
+        assert_eq!(h.m.cards.len(), 1, "Cancel keeps it");
+
         h.run("card.close");
-        let (pending, text) = h.m.prompt.settle(Some("")).unwrap();
-        h.m.answer(pending, text, |_| true);
-        let effects = h.m.take_effects();
-        assert!(h.m.cards.is_empty());
+        let effects = press(&mut h, ButtonKind::Primary);
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::Save,
+                ..
+            }
+        )));
+        assert_eq!(h.m.cards.len(), 1, "not before the save lands");
+        h.m.card_mut(&id).unwrap().dirty = false; // the editor's mirror
+        h.m.tick(h.m.now_ms + 16.);
+        assert!(h.m.cards.is_empty(), "saved, then closed");
+
+        let mut h = Harness::new();
+        dirty_editor(&mut h);
+        h.run("card.close");
+        press(&mut h, ButtonKind::Primary);
+        h.m.tick(h.m.now_ms + 3000.);
+        assert_eq!(
+            h.m.cards.len(),
+            1,
+            "a save that never landed closes nothing"
+        );
+
+        let mut h = Harness::new();
+        let id = dirty_editor(&mut h);
+        h.run("card.close");
+        let effects = press(&mut h, ButtonKind::Alt);
+        assert!(h.m.cards.is_empty(), "Don't Save discards");
         assert!(effects.contains(&Effect::DraftDelete(id)));
     }
 

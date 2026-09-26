@@ -23,6 +23,10 @@ use crate::sidebar::{clamp_sidebar, sidebar_extent, sidebar_width};
 use crate::split::{split_rect, SplitSide};
 use crate::swap::swap_with_neighbour;
 
+/// How long a Save from the unsaved-changes sheet may take before the close
+/// it holds is dropped: a save is one frame when it works.
+const SAVE_CLOSE_MS: f64 = 2000.;
+
 pub const ZOOM_STEP: f64 = 1.1;
 
 impl Model {
@@ -264,10 +268,10 @@ impl Model {
                 .cloned()
                 .collect();
         }
-        // Unsaved changes are asked about in a dialog, not by a second
-        // Cmd+W: a double press discarded work without the second press
-        // being meant (Ekin, 2026-09-26). A Cmd+W while it is up asks the
-        // same question again; only Enter or the Discard button discards.
+        // Unsaved changes get the macOS save sheet, not a second Cmd+W: a
+        // double press discarded work without the second press being meant
+        // (Ekin, 2026-09-26). Enter saves and closes; Don't Save (Cmd+D)
+        // discards; a Cmd+W while it is up asks the same question again.
         if !discard {
             if let Some(dirty) = ids
                 .iter()
@@ -275,9 +279,13 @@ impl Model {
                 .and_then(|id| self.card(id))
                 .cloned()
             {
-                let label = format!("discard unsaved changes to {}?", self.label_of(&dirty));
-                self.prompt
-                    .confirm(&label, "Discard", Pending::DiscardClose { ids, reclaim });
+                let label = format!("save changes to {}?", self.label_of(&dirty));
+                self.prompt.confirm3(
+                    &label,
+                    "Save",
+                    "Don't Save",
+                    Pending::UnsavedClose { ids, reclaim },
+                );
                 return;
             }
         }
@@ -293,6 +301,44 @@ impl Model {
                 self.set_focus(Some(&back));
                 self.reveal_focused();
             }
+        }
+    }
+
+    /// Save, then close once every card is clean. The save runs in the
+    /// editor, a frame away, and can fail (a read-only file) or need a
+    /// name (untitled), so the close waits for the dirty flags the editor
+    /// mirrors back (`tick`), and gives up with a notice rather than
+    /// closing on a save that did not happen.
+    fn save_then_close(&mut self, ids: Vec<String>, reclaim: bool) {
+        for id in &ids {
+            let Some(card) = self.card(id) else { continue };
+            if !card.dirty {
+                continue;
+            }
+            if card.path.is_none() {
+                self.notify("untitled: Cmd+S to name it first");
+                return;
+            }
+            self.effects.push(Effect::Editor {
+                card_id: id.clone(),
+                action: EditorAction::Save,
+            });
+        }
+        self.close_after_save = Some((ids, reclaim, self.now_ms + SAVE_CLOSE_MS));
+    }
+
+    /// The close `save_then_close` is waiting on, run from `tick`.
+    pub(super) fn close_when_saved(&mut self) {
+        let Some((ids, reclaim, until)) = self.close_after_save.clone() else {
+            return;
+        };
+        let clean = ids.iter().all(|id| self.card(id).is_none_or(|c| !c.dirty));
+        if clean {
+            self.close_after_save = None;
+            self.close_selected_confirmed(ids, reclaim, true);
+        } else if self.now_ms >= until {
+            self.close_after_save = None;
+            self.notify("not saved, so not closed");
         }
     }
 
@@ -377,11 +423,11 @@ impl Model {
                     self.close_card_with(&id, false, reclaim);
                 }
             }
-            Pending::DiscardClose { ids, reclaim } => {
-                if text.is_some() {
-                    self.close_selected_confirmed(ids, reclaim, true);
-                }
-            }
+            Pending::UnsavedClose { ids, reclaim } => match text.as_deref() {
+                None => {}
+                Some(crate::prompt::ALT) => self.close_selected_confirmed(ids, reclaim, true),
+                Some(_) => self.save_then_close(ids, reclaim),
+            },
             Pending::OpenFile { from } => {
                 let Some(raw) = text else { return };
                 let from_card = from.as_deref().and_then(|id| self.card(id)).cloned();
