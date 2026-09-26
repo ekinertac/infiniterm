@@ -26,6 +26,7 @@ The list Ekin asks about. Dates are when something landed. The rule for this fil
 - The omnibox's completion tail no longer overflows the dialog on a long history url, and the tab strip shows `card.protect`'s lock (🔒) beside `#N`, 2026-09-22.
 - A browser card can load more than one extension, 2026-09-22: `--load-extension` takes a comma-separated list, so `process::seed` returns every extension directory (the Claude one, unchanged, plus everything under `browser/extensions/*`). `ift install-extension <path|id|store-url>` puts one there, from a local unpacked directory or a Chrome Web Store id/url looked up in the user's own Chrome profile. Wanted for Dark Reader.
 - Full screen that covers the notch, 2026-09-24: `ui.fullscreen` is `cover` by default, so the green button and Cmd+Ctrl+F fill the whole screen with the title bar beside the notch instead of a black strip; `native` keeps macOS's own. Checked on the Air.
+- Editing like vim, 2026-09-26: `ift <file>` inside a terminal card opens the file in place over that card, locked for typing, and waits until it closes, so the prompt comes back and `EDITOR=ift` (or `git -c core.editor=ift`) works; `ift -n` for a card of its own. A file that does not exist opens empty and the first save creates it; a missing directory is refused up front. Closing unsaved work asks Save / Don't Save (Cmd+D) / Cancel, every confirm is walkable with arrows and Tab, and an untitled buffer's save-as starts on its directory with the name selected. `file:20` centres line 20.
 
 ## v1.5: the other agents
 
