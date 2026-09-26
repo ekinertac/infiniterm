@@ -76,6 +76,9 @@ const CAPTION_FONT_PX: f32 = 11.;
 /// An overlay's body text: the palette's rows, the prompt's field, the
 /// shortcuts list.
 pub const OVERLAY_BODY_FONT_PX: f32 = 13.;
+/// A text field's minimum height in lines of the body font, so an empty
+/// field is not a sliver (the save-as field once opened as one).
+pub const FIELD_LINE_HEIGHT: f32 = 1.4;
 /// The palette and shortcuts panel sit this far from the top, clear of the
 /// title bar.
 pub const OVERLAY_TOP_PAD_PX: f32 = 80.;
@@ -275,13 +278,15 @@ impl AppView {
     /// model reset (it always resets on open) empties the field.
     fn sync_fields(&mut self) {
         let open = self.model.prompt.is_open();
-        if open && !self.prompt_was_open {
+        let serial = self.model.prompt.serial;
+        if open && (!self.prompt_was_open || serial != self.prompt_serial) {
             self.prompt_field = match self.model.prompt.select {
                 Some((a, b)) => crate::field::Field::open_selecting(&self.model.prompt.value, a, b),
                 None => crate::field::Field::open(&self.model.prompt.value, true),
             };
         }
         self.prompt_was_open = open;
+        self.prompt_serial = serial;
         if !self.model.shortcuts_open && !self.shortcuts_field.text.is_empty() {
             self.shortcuts_field = crate::field::Field::default();
         }
@@ -943,6 +948,8 @@ impl AppView {
                         .flex()
                         .px_2()
                         .py_1()
+                        // An empty field is still a line tall.
+                        .min_h(px(OVERLAY_BODY_FONT_PX * ui * FIELD_LINE_HEIGHT))
                         .rounded_sm()
                         .bg(chrome.control_bg)
                         .border_1()

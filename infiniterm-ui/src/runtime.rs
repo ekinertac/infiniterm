@@ -67,6 +67,7 @@ impl AppView {
             clipboard_out: None,
             live_sessions: vec![],
             prompt_was_open: false,
+            prompt_serial: 0,
             suggestions: std::sync::mpsc::channel(),
             samples: vec![],
             mouse: infiniterm_core::grid::Point { x: 0., y: 0. },

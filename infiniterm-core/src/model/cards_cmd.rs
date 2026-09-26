@@ -331,9 +331,11 @@ impl Model {
     /// The "save as" field for an untitled buffer, starting on its
     /// directory and `untitled.txt` with the stem selected (`save_as.rs`).
     pub fn open_save_as(&mut self, id: String, then_close: Option<(Vec<String>, bool)>) {
+        // A card made from nothing may have no directory: home, not `/`.
         let dir = self
             .card(&id)
             .map(|c| c.cwd.clone())
+            .filter(|d| !d.is_empty())
             .unwrap_or_else(|| self.home.clone());
         let (text, select) = crate::save_as::suggestion(&dir, &self.home);
         self.prompt

@@ -44,6 +44,11 @@ pub struct Prompt<P> {
     /// A text prompt's starting selection, as a char range, when it is not
     /// the whole value (`ask_selecting`: the stem of `untitled.txt`).
     pub select: Option<(usize, usize)>,
+    /// Counts the questions asked, so the ui refills its field for a new
+    /// one even when it replaces another without the dialog closing (the
+    /// save sheet's Save opening the save-as field in the same answer;
+    /// watching `open` alone left that field empty, 2026-09-26).
+    pub serial: u64,
     pending: Option<P>,
 }
 
@@ -77,6 +82,7 @@ impl<P> Default for Prompt<P> {
             alt_action: None,
             choice: 0,
             select: None,
+            serial: 0,
             pending: None,
         }
     }
@@ -94,6 +100,7 @@ impl<P> Prompt<P> {
         self.alt_action = None;
         self.choice = 0;
         self.select = None;
+        self.serial += 1;
         self.label = label.into();
         self.value = initial.into();
         self.pending = Some(pending);
@@ -123,6 +130,7 @@ impl<P> Prompt<P> {
         self.alert = false;
         self.action = action.into();
         self.alt_action = None;
+        self.serial += 1;
         self.label = label.into();
         self.value.clear();
         self.pending = Some(pending);
@@ -280,6 +288,18 @@ mod tests {
         assert_eq!(p.choice, 1);
         assert_eq!(p.chord("cmd+d"), None);
         assert_eq!(p.chord("cmd+."), Some(ButtonKind::Cancel));
+    }
+
+    // A question replacing another with the dialog still up is still a new
+    // question: the serial moves.
+    #[test]
+    fn every_question_has_its_own_serial() {
+        let mut p = Prompt::default();
+        p.confirm3("save?", "Save", "Don't Save", 1);
+        let first = p.serial;
+        p.ask_selecting("save as", "~/untitled.txt", (2, 10), 2);
+        assert!(p.open);
+        assert_ne!(p.serial, first);
     }
 
     #[test]

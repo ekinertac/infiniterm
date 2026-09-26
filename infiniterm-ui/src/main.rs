@@ -196,6 +196,8 @@ pub struct AppView {
     /// When the last frame was painted (ms), for the far-zoom refresh gate.
     pub last_paint_ms: f64,
     pub prompt_was_open: bool,
+    /// `Prompt::serial` when the field was last filled.
+    pub prompt_serial: u64,
     /// Text an effect asked to put on the clipboard, written on the next
     /// frame: only a frame has an App to write through.
     pub clipboard_out: Option<String>,
