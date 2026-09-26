@@ -1716,6 +1716,70 @@ mod tests {
         assert!(h.m.notice.is_none());
     }
 
+    // "move card" in the palette, Enter, then the workspace: the card goes
+    // there, into a free slot (never onto the card already there), you stay
+    // where you were, and going there lands on it.
+    #[test]
+    fn a_card_moves_to_another_workspace_and_you_stay() {
+        let mut h = Harness::new();
+        let here = h.m.active_workspace.clone().unwrap();
+        let kept = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let mover = h.focused().id.clone();
+        let there = h.m.add_workspace(Some("Humbl"));
+        let resident = h.m.add_card(
+            "/Users/me",
+            NewCard {
+                workspace_id: Some(there.clone()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&mover));
+        h.run("card.moveToWorkspace");
+        assert_eq!(h.m.palette.source, Some(Source::MoveTo));
+        let rows = h.m.palette_items(Source::MoveTo, &[]);
+        let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, ["Humbl", "New workspace"], "not the one you are on");
+        assert_eq!(rows[0].hint.as_deref(), Some("1 card"));
+        h.m.palette_run(Source::MoveTo, &there);
+        let moved = h.m.card(&mover).unwrap().clone();
+        assert_eq!(moved.workspace_id, there);
+        let r = h.m.card(&resident).unwrap().rect;
+        assert!(!crate::layout::rects_overlap(moved.rect, r), "a free slot");
+        assert_eq!(
+            h.m.active_workspace.as_deref(),
+            Some(here.as_str()),
+            "you stay"
+        );
+        assert_eq!(h.focused().id, kept);
+        assert_eq!(
+            h.m.notice.as_deref(),
+            Some(format!("moved #{} to Humbl", moved.number).as_str())
+        );
+        let ws = h.m.workspaces.iter().find(|w| w.id == there).unwrap();
+        assert_eq!(
+            ws.focused.as_deref(),
+            Some(mover.as_str()),
+            "lands on it there"
+        );
+    }
+
+    #[test]
+    fn a_card_can_move_to_a_new_workspace() {
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        let mover = h.focused().id.clone();
+        let before = h.m.workspaces.len();
+        h.run("card.moveToWorkspace");
+        h.m.palette_run(
+            Source::MoveTo,
+            super::super::workspaces_cmd::NEW_WORKSPACE_ROW,
+        );
+        assert_eq!(h.m.workspaces.len(), before + 1);
+        let new_ws = h.m.workspaces.last().unwrap().id.clone();
+        assert_eq!(h.m.card(&mover).unwrap().workspace_id, new_ws);
+    }
+
     // An untitled editor's first save: the field starts on the card's
     // directory and untitled.txt with the stem selected; a new path saves;
     // a missing directory sends you back to the field with what you typed;

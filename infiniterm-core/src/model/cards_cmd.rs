@@ -1097,6 +1097,7 @@ impl Model {
                 }
             }
             Source::Snippets => self.paste_snippet(id),
+            Source::MoveTo => self.move_selection_to(id),
             Source::SlotKind => match id {
                 "terminal" => {
                     self.fill_phantom(CardKind::Terminal, None);

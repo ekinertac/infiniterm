@@ -24,6 +24,8 @@ pub enum Source {
     /// `snippet.paste` (Cmd+Ctrl+S): the snippets file's names, then a row
     /// that opens the file.
     Snippets,
+    /// `card.moveToWorkspace`: the other workspaces, then a new one.
+    MoveTo,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
@@ -40,6 +42,7 @@ impl Source {
             Source::SlotKind => "slotKind",
             Source::Sizes => "sizes",
             Source::Snippets => "snippets",
+            Source::MoveTo => "moveTo",
         }
     }
 
@@ -53,7 +56,10 @@ impl Source {
     /// tomorrow. Ranking those by use moved the rows under the hand that had
     /// learned them.
     pub fn keeps_its_order(self) -> bool {
-        matches!(self, Source::Placement | Source::SlotKind | Source::Sizes)
+        matches!(
+            self,
+            Source::Placement | Source::SlotKind | Source::Sizes | Source::MoveTo
+        )
     }
 
     /// Prompt text in the empty input.
@@ -65,6 +71,7 @@ impl Source {
             Source::SlotKind => "New card in this slot…",
             Source::Sizes => "Resize the card to…",
             Source::Snippets => "Paste a snippet…",
+            Source::MoveTo => "Move to workspace…",
         }
     }
 }
@@ -280,6 +287,30 @@ impl Model {
                 hint: None,
             })
             .collect(),
+            // The workspaces in tab order, less the one you are on, each with
+            // how many cards it holds, then a new one.
+            Source::MoveTo => {
+                let here = self.active_workspace.clone();
+                let mut rows: Vec<PaletteItem> = self
+                    .workspaces
+                    .iter()
+                    .filter(|w| Some(&w.id) != here.as_ref())
+                    .map(|w| {
+                        let n = self.cards_on(Some(&w.id)).len();
+                        PaletteItem {
+                            id: w.id.clone(),
+                            label: w.name.clone(),
+                            hint: Some(format!("{n} card{}", if n == 1 { "" } else { "s" })),
+                        }
+                    })
+                    .collect();
+                rows.push(PaletteItem {
+                    id: super::workspaces_cmd::NEW_WORKSPACE_ROW.into(),
+                    label: "New workspace".into(),
+                    hint: None,
+                });
+                rows
+            }
             // Sizes as fractions of the default card, from the card's own
             // corner. A menu, in a fixed order: the splits' shapes first.
             Source::Sizes => SIZES
