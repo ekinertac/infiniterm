@@ -1,14 +1,14 @@
-// The documentation site for infiniterm: Astro + Starlight, built locally
-// and published to GitHub Pages on the public ekinertac/infiniterm-releases
-// repo, hence the base path. The landing page will live in this project too.
+// The site for infiniterm: the landing page (src/pages/index.astro) and the
+// docs (Astro + Starlight), built locally and published to GitHub Pages on
+// the public ekinertac/infiniterm-releases repo, served at infiniterm.app
+// (public/CNAME names it for Pages; the DNS is on Cloudflare), so no base path.
 // Guide pages are hand-written; the reference pages are generated from the
 // app's own tables before every build (package.json, `reference`).
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
-  site: 'https://ekinertac.github.io',
-  base: '/infiniterm-releases',
+  site: 'https://infiniterm.app',
   integrations: [
     starlight({
       title: 'infiniterm',
