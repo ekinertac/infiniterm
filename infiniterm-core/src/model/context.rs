@@ -188,9 +188,10 @@ impl Model {
         }
     }
 
-    /// Cmd+3: the unit the focused card belongs to, the way tidy sees it
-    /// (its group, else the cards split from the same slot, else itself).
-    /// Groups alone left a split's halves with no key that framed the pair.
+    /// Cmd+3: the unit the focused card belongs to. A group is its frame;
+    /// a loose card is every loose card reachable through gutter-wide gaps
+    /// (`cluster_of`), which takes in a split's pieces and a hand-laid grid.
+    /// Groups alone left a loose card with no key that framed its block.
     pub fn fit_cluster(&mut self) {
         let Some(card) = self.focused().cloned() else {
             return;
@@ -198,16 +199,19 @@ impl Model {
         if let Some(g) = &card.group_id {
             return self.fit_group(g);
         }
-        let rects: Vec<Rect> = match &card.soft_group_id {
-            Some(s) => self
-                .cards
-                .iter()
-                .filter(|c| c.workspace_id == card.workspace_id)
-                .filter(|c| c.soft_group_id.as_deref() == Some(s.as_str()))
-                .map(|c| c.rect)
-                .collect(),
-            None => vec![card.rect],
+        let loose: Vec<Rect> = self
+            .cards
+            .iter()
+            .filter(|c| c.workspace_id == card.workspace_id && c.group_id.is_none())
+            .map(|c| c.rect)
+            .collect();
+        let Some(start) = loose.iter().position(|r| *r == card.rect) else {
+            return;
         };
+        let rects: Vec<Rect> = crate::layout::cluster_of(&loose, start, GUTTER)
+            .into_iter()
+            .map(|i| loose[i])
+            .collect();
         if let Some(bounds) = bounding_rect(&rects) {
             self.apply_viewport(fit_rect(bounds, self.view_size));
         }

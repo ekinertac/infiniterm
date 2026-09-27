@@ -38,6 +38,32 @@ pub fn best_cols(
 pub fn rects_overlap(a: Rect, b: Rect) -> bool {
     a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 }
+/// The cards reachable from `start` through gaps of at most a gutter: the
+/// block of cards laid side by side that Cmd+3 frames around a loose card.
+/// The extra pixel is tolerance, since a gutter-wide gap is the normal one.
+/// shortcut: O(n²), fine for a workspace's few dozen cards.
+pub fn cluster_of(rects: &[Rect], start: usize, gutter: f64) -> Vec<usize> {
+    let reach = gutter + 1.;
+    let grown = |r: Rect| Rect {
+        x: r.x - reach,
+        y: r.y - reach,
+        w: r.w + 2. * reach,
+        h: r.h + 2. * reach,
+    };
+    let mut found = vec![start];
+    let mut i = 0;
+    while i < found.len() {
+        let here = grown(rects[found[i]]);
+        for (j, r) in rects.iter().enumerate() {
+            if !found.contains(&j) && rects_overlap(here, *r) {
+                found.push(j);
+            }
+        }
+        i += 1;
+    }
+    found.sort();
+    found
+}
 /// cols is positive, as returned by best_cols.
 pub fn slot_rect(index: usize, size: Size, origin: Point, gutter: f64, cols: usize) -> Rect {
     Rect {
@@ -407,6 +433,19 @@ mod tests {
     const A: Point = Point { x: 12.5, y: 12.5 };
     fn r(x: f64, y: f64, w: f64, h: f64) -> Rect {
         Rect { x, y, w, h }
+    }
+
+    // A grid of cards a gutter apart is one cluster; a card further off is not.
+    #[test]
+    fn a_cluster_is_the_cards_a_gutter_apart() {
+        let rects = [
+            r(0., 0., 100., 100.),
+            r(125., 0., 100., 100.),
+            r(125., 125., 100., 100.),
+            r(400., 0., 100., 100.),
+        ];
+        assert_eq!(cluster_of(&rects, 0, 25.), vec![0, 1, 2]);
+        assert_eq!(cluster_of(&rects, 3, 25.), vec![3]);
     }
 
     // Cards moved up and left of the canvas origin: the hole among them is

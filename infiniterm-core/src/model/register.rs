@@ -1271,21 +1271,15 @@ mod tests {
         assert!(h.m.framing);
     }
 
-    // Cmd+3 frames a split's pieces together, not only a group.
+    // Cmd+3 on a loose card frames the block of cards around it (here a
+    // split's pieces and the card beside them), not only a group.
     #[test]
-    fn fit_group_frames_a_split_cluster() {
+    fn fit_group_frames_a_loose_cards_cluster() {
         let mut h = Harness::new();
         h.run("card.new.terminal");
         h.run("card.split.right");
-        let split = h.focused().soft_group_id.clone();
-        assert!(split.is_some());
-        let rects: Vec<_> =
-            h.m.cards
-                .iter()
-                .filter(|c| c.soft_group_id == split)
-                .map(|c| c.rect)
-                .collect();
-        assert_eq!(rects.len(), 2);
+        let rects: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+        assert_eq!(rects.len(), 3);
         let want = crate::viewport::bounding_rect(&rects).unwrap();
         let effects = h.run("canvas.zoom.fitGroup");
         let Some(Effect::AnimateFit(v)) =
