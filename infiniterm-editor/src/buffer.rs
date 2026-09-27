@@ -823,6 +823,44 @@ impl Buffer {
         self.extra.clear();
     }
 
+    /// Cmd+Shift+L: a selection spanning several lines becomes one
+    /// selection per line, each the original's own slice of it — Sublime's
+    /// Split into Lines, the shape Cmd+A then this is asked for most: type
+    /// over the lot and every line takes the same edit at once. A line
+    /// the selection reaches only at its very boundary (nothing of the
+    /// line itself selected) still gets a point cursor there, not a gap in
+    /// the middle of the set. Nothing to split (no selection, or one
+    /// line) is a no-op.
+    pub fn split_into_lines(&mut self) {
+        let Some(r) = self.selection() else {
+            return;
+        };
+        let first = self.line_of(r.start);
+        let last = self.line_of(r.end.saturating_sub(1).max(r.start));
+        if first == last {
+            return;
+        }
+        let ranges: Vec<(usize, usize)> = (first..=last)
+            .map(|line| {
+                let start = r.start.max(self.line_start(line));
+                let end = r.end.min(self.line_end(line));
+                (start, end)
+            })
+            .collect();
+        let mut iter = ranges.into_iter();
+        let (a, b) = iter.next().expect("first..=last is never empty");
+        self.cursor = b;
+        self.anchor = (a != b).then_some(a);
+        self.goal_col = None;
+        self.extra = iter
+            .map(|(a, b)| CursorState {
+                cursor: b,
+                anchor: (a != b).then_some(a),
+                goal_col: None,
+            })
+            .collect();
+    }
+
     /// Runs `f` once per cursor, right to left by position so an edit at
     /// one cannot shift a still-unprocessed cursor further left; every
     /// buffer method stays written for exactly one cursor and this is the
@@ -1581,6 +1619,37 @@ mod tests {
         assert_eq!(b.cursor_count(), 3);
         b.collapse_to_primary();
         assert_eq!(b.cursor_count(), 1);
+    }
+
+    #[test]
+    fn split_into_lines_gives_one_selection_per_line_of_the_original() {
+        // Cmd+A then Cmd+Shift+L: the whole buffer, one cursor per line,
+        // each selecting that whole line (Ekin's own most-used case).
+        let mut b = Buffer::new("one\ntwo\nthree");
+        b.select_all();
+        b.split_into_lines();
+        assert_eq!(b.cursor_count(), 3);
+        assert_eq!(
+            b.all_selections(),
+            vec![(3, Some(0)), (7, Some(4)), (13, Some(8))]
+        );
+        // A partial multi-line selection keeps only each line's own slice.
+        let mut b = Buffer::new("one\ntwo\nthree");
+        b.select_range(1..10); // "ne\ntwo\nth"
+        b.split_into_lines();
+        assert_eq!(b.all_selections(), vec![(3, Some(1)), (7, Some(4)), (10, Some(8))]);
+        // A selection that never leaves one line is a no-op: nothing to split.
+        let mut b = Buffer::new("one\ntwo");
+        b.select_range(0..2);
+        b.split_into_lines();
+        assert_eq!(b.cursor_count(), 1);
+        assert_eq!(b.selection(), Some(0..2));
+        // No selection at all is a no-op too.
+        let mut b = Buffer::new("one\ntwo");
+        b.set_cursor(1);
+        b.split_into_lines();
+        assert_eq!(b.cursor_count(), 1);
+        assert_eq!(b.selection(), None);
     }
 
     #[test]

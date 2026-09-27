@@ -1062,6 +1062,9 @@ impl EditorBody {
                     }
                 }
                 "d" => self.buffer.select_word_or_next(),
+                // Cmd+Shift+L: split first (Ekin's most-used multi-cursor
+                // move, 2026-09-27); plain Cmd+L stays expand-to-line.
+                "l" if shift => self.buffer.split_into_lines(),
                 "l" => self.buffer.expand_line_selection(),
                 "j" if shift => {
                     if !ro {
