@@ -56,11 +56,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     }
     r.register(
         "canvas.zoom.fitGroup",
-        "Canvas: fit the active group",
-        |m| {
-            if let Some(g) = m.group_of_active() {
-                m.fit_group(&g);
-            }
-        },
+        "Canvas: fit the active group or split",
+        |m| m.fit_cluster(),
     );
 }

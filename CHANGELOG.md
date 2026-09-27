@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-09-27
 
+- Cmd+3 fits the focused card's split cluster too, not only its group; a loose card is fitted on its own.
 - Dragging a card shows the grid's slots for a card of its size, halves for a half and so on, and the card snaps to them, so cards placed by hand stay in line with the cards Cmd+T makes.
 - Tidy puts cards back on that grid, packed a gutter apart.
 - A dragged card snaps to a slot only when it is close to one, and otherwise goes where you put it.

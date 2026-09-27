@@ -1271,6 +1271,31 @@ mod tests {
         assert!(h.m.framing);
     }
 
+    // Cmd+3 frames a split's pieces together, not only a group.
+    #[test]
+    fn fit_group_frames_a_split_cluster() {
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        h.run("card.split.right");
+        let split = h.focused().soft_group_id.clone();
+        assert!(split.is_some());
+        let rects: Vec<_> =
+            h.m.cards
+                .iter()
+                .filter(|c| c.soft_group_id == split)
+                .map(|c| c.rect)
+                .collect();
+        assert_eq!(rects.len(), 2);
+        let want = crate::viewport::bounding_rect(&rects).unwrap();
+        let effects = h.run("canvas.zoom.fitGroup");
+        let Some(Effect::AnimateFit(v)) =
+            effects.iter().find(|e| matches!(e, Effect::AnimateFit(_)))
+        else {
+            panic!("no fit")
+        };
+        assert_eq!(*v, crate::viewport::fit_rect(want, h.m.view_size));
+    }
+
     fn edit_from(h: &mut Harness, card: Option<&str>, path: &str) -> crate::cli::CliReply {
         h.m.run_ift(
             &crate::cli::CliRequest {

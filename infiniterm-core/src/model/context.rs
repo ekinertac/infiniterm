@@ -188,6 +188,31 @@ impl Model {
         }
     }
 
+    /// Cmd+3: the unit the focused card belongs to, the way tidy sees it
+    /// (its group, else the cards split from the same slot, else itself).
+    /// Groups alone left a split's halves with no key that framed the pair.
+    pub fn fit_cluster(&mut self) {
+        let Some(card) = self.focused().cloned() else {
+            return;
+        };
+        if let Some(g) = &card.group_id {
+            return self.fit_group(g);
+        }
+        let rects: Vec<Rect> = match &card.soft_group_id {
+            Some(s) => self
+                .cards
+                .iter()
+                .filter(|c| c.workspace_id == card.workspace_id)
+                .filter(|c| c.soft_group_id.as_deref() == Some(s.as_str()))
+                .map(|c| c.rect)
+                .collect(),
+            None => vec![card.rect],
+        };
+        if let Some(bounds) = bounding_rect(&rects) {
+            self.apply_viewport(fit_rect(bounds, self.view_size));
+        }
+    }
+
     /// Opens what a path resolved to beside `from`, in its group and on its
     /// canvas, exactly as a new card would. Returns the new card's id, or
     /// nothing for a refused plan (the reason goes to the notice).
