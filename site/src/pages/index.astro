@@ -151,7 +151,13 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
       </section>
 
       <section class="film">
-        <iframe data-src={`${base}film.html?play`} title="infiniterm in 54 seconds"></iframe>
+        <div class="stage">
+          <iframe data-src={`${base}film.html?play`} title="infiniterm in 54 seconds"></iframe>
+          <button type="button" class="play" aria-label="Play the 54-second film">
+            <span class="play-icon" aria-hidden="true"></span>
+            <span>Play the film <span class="len">54 s</span></span>
+          </button>
+        </div>
       </section>
 
       <section class="states">
@@ -279,26 +285,17 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     </footer>
 
     <script>
-      // The film plays once and holds its end card, so it starts only when
-      // half of it is on screen; loaded with the page it would be half over
-      // before anyone scrolled to it.
+      // The film waits for a click: nothing on the page moves on its own
+      // besides the hero's one lighting-up moment. The iframe is only given
+      // its src on that click, so nothing of the film loads before it.
       const film = document.querySelector<HTMLIFrameElement>('.film iframe');
-      if (film) {
-        const start = () => (film.src = film.dataset.src ?? '');
-        if ('IntersectionObserver' in window) {
-          const io = new IntersectionObserver(
-            (entries) => {
-              if (entries.some((e) => e.isIntersecting)) {
-                start();
-                io.disconnect();
-              }
-            },
-            { threshold: 0.5 },
-          );
-          io.observe(film);
-        } else start();
-      }
-
+      const play = document.querySelector<HTMLButtonElement>('.film .play');
+      play?.addEventListener('click', () => {
+        if (!film) return;
+        film.src = film.dataset.src ?? '';
+        play.remove();
+        film.focus();
+      });
     </script>
   </body>
 </html>
@@ -477,14 +474,54 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
   }
 
   .film { padding-bottom: 120px; }
-  .film iframe {
-    display: block;
-    width: 100%;
+  .film .stage {
+    position: relative;
     aspect-ratio: 16 / 9;
-    border: 0;
     border-radius: 12px;
+    overflow: hidden;
     background: #0e0f13;
     box-shadow: 0 0 0 1px var(--card-edge);
+  }
+  .film iframe { display: block; width: 100%; height: 100%; border: 0; }
+  /* The poster is the button: the stage's dark with the canvas's dot grid,
+     and one play control in the middle. */
+  .film .play {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    gap: 18px;
+    border: 0;
+    cursor: pointer;
+    color: #cdd6f4;
+    font: 600 1.15rem var(--sans);
+    background-color: #0e0f13;
+    background-image: radial-gradient(#26263a 1.2px, transparent 1.4px);
+    background-size: 24px 24px;
+  }
+  .film .play .len { color: #6c7086; font-weight: 500; margin-left: 6px; }
+  .film .play-icon {
+    width: 84px;
+    height: 84px;
+    border-radius: 50%;
+    background: var(--working);
+    position: relative;
+    transition: transform 150ms ease-out;
+  }
+  .film .play-icon::after {
+    content: '';
+    position: absolute;
+    left: 34px;
+    top: 26px;
+    border-style: solid;
+    border-width: 16px 0 16px 26px;
+    border-color: transparent transparent transparent #17161f;
+  }
+  .film .play:hover .play-icon { transform: scale(1.06); }
+  .film .play:focus-visible { outline-offset: -6px; }
+  @media (prefers-reduced-motion: reduce) {
+    .film .play-icon { transition: none; }
   }
 
   main > section:not(.hero):not(.film) { padding-block: 72px; }
