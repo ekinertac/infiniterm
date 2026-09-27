@@ -1271,6 +1271,39 @@ mod tests {
             .any(|e| matches!(e, Effect::AnimateFit(v) if v.scale == 1.)));
     }
 
+    // Cmd+= / Cmd+- size the terminal font, one point a press, saved, and
+    // stop at the ends; the canvas does not zoom.
+    #[test]
+    fn the_font_keys_size_the_terminal_font_and_save_it() {
+        let mut h = Harness::new();
+        h.m.config.terminal.font_size = 14.;
+        let effects = h.run("terminal.font.bigger");
+        assert_eq!(h.m.config.terminal.font_size, 15.);
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::SaveSetting { path, value } if path == "terminal.fontSize" && value == 15.
+        )));
+        assert!(!effects
+            .iter()
+            .any(|e| matches!(e, Effect::AnimateZoom { .. })));
+        h.run("terminal.font.smaller");
+        h.run("terminal.font.smaller");
+        assert_eq!(h.m.config.terminal.font_size, 13.);
+        h.m.config.terminal.font_size = 6.;
+        let effects = h.run("terminal.font.smaller");
+        assert_eq!(h.m.config.terminal.font_size, 6.);
+        assert!(!effects
+            .iter()
+            .any(|e| matches!(e, Effect::SaveSetting { .. })));
+        assert_eq!(
+            h.m.keymap
+                .iter()
+                .find(|(c, _)| c == "cmd+=")
+                .map(|(_, id)| id.as_str()),
+            Some("terminal.font.bigger")
+        );
+    }
+
     // A held zoom key chains from the pending target, not the passing scale.
     #[test]
     fn zoom_chains_from_the_pending_scale() {

@@ -129,14 +129,15 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
     ),
     ("cmd+1", "canvas.zoom.fitCard", ""),
     ("cmd+2", "canvas.zoom.fitAll", ""),
-    // Keyboard zoom, since scroll-zoom needs Cmd held and a pinch is awkward
-    // mid-keystroke.
+    // The terminal's font size, iTerm2's and every Mac terminal's keys
+    // (2026-09-28, Ekin). They zoomed the canvas before; the canvas still
+    // zooms with Cmd+scroll, a pinch and the palette.
     (
         "cmd+=",
-        "canvas.zoom.in",
-        "scroll-zoom needs Cmd held; a pinch is awkward mid-keystroke",
+        "terminal.font.bigger",
+        "the terminal font, as in every Mac terminal",
     ),
-    ("cmd+-", "canvas.zoom.out", ""),
+    ("cmd+-", "terminal.font.smaller", ""),
     // Shift on the same keys sizes the INTERFACE rather than the canvas:
     // labels, borders and the status bar are screen-constant by design and
     // so are the one thing zoom cannot reach.

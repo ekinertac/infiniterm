@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-09-28
+
+- Cmd+= and Cmd+- make the terminal font bigger and smaller, one point a press, for every terminal card, and the size is saved. They zoomed the canvas before; zoom with Cmd+scroll, a pinch or the palette. "Terminal: default font size" in the palette goes back to 14.
+
 ### 2026-09-27
 
 - The zsh command line selects like a Mac text field: Shift+Left/Right, Shift+Alt+Left/Right and Shift+Home/End select, typing or pasting replaces the selection, Backspace deletes it, Cmd+C copies it and Cmd+X cuts it. Cmd+Backspace and Cmd+Delete delete to the start and end of the line (in Claude Code too). Only in shells started after the update.

@@ -1291,6 +1291,16 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     });
     r.register("browser.find", "Browser: find in page", Model::open_find);
     r.register("card.find", "Card: find in this card", Model::find_in_card);
+    r.register("terminal.font.bigger", "Terminal: bigger font", |m| {
+        m.step_terminal_font(1.)
+    });
+    r.register("terminal.font.smaller", "Terminal: smaller font", |m| {
+        m.step_terminal_font(-1.)
+    });
+    r.register("terminal.font.reset", "Terminal: default font size", |m| {
+        let d = crate::config::default_config().terminal.font_size;
+        m.set_terminal_font(d)
+    });
     r.register(
         "terminal.visual",
         "Terminal: visual mode, a cursor over the output",
@@ -1658,5 +1668,33 @@ pub fn dir_name(dir: Direction) -> &'static str {
         Direction::Right => "right",
         Direction::Up => "up",
         Direction::Down => "down",
+    }
+}
+
+/// The smallest and largest terminal font a key can reach: `config.rs`
+/// clamps `terminal.fontSize` to the same range.
+const TERMINAL_FONT_MIN: f64 = 6.;
+const TERMINAL_FONT_MAX: f64 = 96.;
+
+impl Model {
+    /// Cmd+= / Cmd+-: one point at a time, for every terminal card, written
+    /// to settings.json so it survives a relaunch. The ui measures the cell
+    /// from the config each frame, so the cards refit at once.
+    pub fn step_terminal_font(&mut self, by: f64) {
+        let next = (self.config.terminal.font_size + by).round();
+        self.set_terminal_font(next);
+    }
+
+    fn set_terminal_font(&mut self, size: f64) {
+        let size = size.clamp(TERMINAL_FONT_MIN, TERMINAL_FONT_MAX);
+        if size == self.config.terminal.font_size {
+            return;
+        }
+        self.config.terminal.font_size = size;
+        self.effects.push(Effect::SaveSetting {
+            path: "terminal.fontSize".into(),
+            value: serde_json::json!(size),
+        });
+        self.notify(format!("terminal font {size} pt"));
     }
 }
