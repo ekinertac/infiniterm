@@ -151,6 +151,7 @@ impl AppView {
             w: f32::from(bounds.size.width) as f64,
             h: f32::from(bounds.size.height) as f64,
         };
+        self.model.app_active = window.is_window_active();
         self.model.tick(now);
         self.last_paint_ms = now;
         self.note_window(window.window_bounds(), now);

@@ -21,7 +21,7 @@ use infiniterm_core::palette::{highlight, rank, sectionise, step_index, RankedIt
 use infiniterm_core::palette_usage::{recent_keys, usage_bonus, use_key, RECENT_LIMIT};
 use infiniterm_core::saved_layout::CardKind;
 use infiniterm_core::shortcuts::{filter_shortcuts, shortcut_sections, GESTURES};
-use infiniterm_core::workspaces::{reading_order, tab_dots};
+use infiniterm_core::workspaces::reading_order;
 
 /// Rows the palette shows at once; the selection is kept inside the window.
 const PALETTE_ROWS: usize = 14;
@@ -460,18 +460,15 @@ impl AppView {
         for ws in &self.model.workspaces {
             let cards = self.model.cards_on(Some(&ws.id));
             let is_active = active.as_deref() == Some(&ws.id);
-            // In the cards' reading order on the canvas, so the row of dots
-            // is the row of cards.
+            // One dot per card, in the cards' reading order on the canvas, so
+            // the row of dots is the row of cards, each the card's own
+            // colour: a done card is green only until you have looked at
+            // it (`Model::clear_seen_done`), so a lit dot is news.
             let rects: Vec<_> = cards.iter().map(|c| c.rect).collect();
-            let timed: Vec<_> = reading_order(&rects)
+            let dots: Vec<_> = reading_order(&rects)
                 .into_iter()
-                .map(|i| (cards[i].agent, cards[i].last_event_at))
+                .map(|i| cards[i].agent)
                 .collect();
-            let dots = tab_dots(
-                &timed,
-                self.model.left_at.get(&ws.id).copied().unwrap_or(0.),
-                is_active,
-            );
             let id = ws.id.clone();
             let mut tab = div()
                 .id(gpui::SharedString::from(format!("tab-{}", ws.id)))

@@ -463,6 +463,8 @@ impl AppView {
             "body"
         } else if self.model.notice_expired(now) {
             "notice"
+        } else if self.model.done_seen_due(now) {
+            "seen"
         } else {
             "idle"
         }
@@ -494,6 +496,7 @@ impl AppView {
                 let due = !self.far() || now - self.last_paint_ms >= crate::chrome::FAR_REFRESH_MS;
                 (content && due)
                     || self.model.notice_expired(now)
+                    || self.model.done_seen_due(now)
                     || self
                         .keycasts
                         .iter()

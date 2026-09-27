@@ -1,7 +1,7 @@
-//! Workspace naming, navigation, and the agent dots a workspace tab wears.
+//! Workspace naming, navigation, and the order of the dots a workspace tab wears.
 //! Port of workspaces.ts and its tests; callers supply ids and states explicitly.
 //! Switching workspaces never removes cards or their PTYs and never follows activity.
-use crate::{agent_state::AgentState, grid::Rect, viewport::Viewport};
+use crate::{grid::Rect, viewport::Viewport};
 #[derive(Clone, Debug, PartialEq)]
 pub struct Workspace {
     pub id: String,
@@ -18,26 +18,6 @@ pub const INITIAL_VIEWPORT: Viewport = Viewport {
     y: 0.,
     scale: 1.,
 };
-/// The dots a workspace's tab wears: ONE PER CARD, in the card's order, a
-/// grey one for a card with nothing to say and the card's own hue when an
-/// agent in it is working, waiting or freshly done, so the tab is a row of
-/// lamps and you watch them light one at a time. `cards` is `(state, when
-/// its last hook event arrived)`; a card's dot keeps its place whatever it
-/// does, which is what makes the row readable. A Done card lights only
-/// when its Stop arrived after you LEFT the workspace (`left_at`) and never
-/// on the active tab (`active`), because a Done card stays Done until its
-/// next turn and lighting every one lit the tab for good, which is the
-/// same as having no dot; otherwise it is grey like a shell.
-pub fn tab_dots(cards: &[(AgentState, f64)], left_at: f64, active: bool) -> Vec<AgentState> {
-    cards
-        .iter()
-        .map(|&(s, at)| match s {
-            AgentState::Waiting | AgentState::Failed | AgentState::Working => s,
-            AgentState::Done if !active && at > left_at => s,
-            _ => AgentState::None,
-        })
-        .collect()
-}
 /// The order the tab's dots follow: the cards as they lie on the canvas,
 /// read like a page, top row first and left to right within it. Two cards
 /// are on one row when their tops are within `ROW_SLACK` of each other,
@@ -101,27 +81,6 @@ mod tests {
     use super::*;
     fn ids(s: &[&str]) -> Vec<String> {
         s.iter().map(|s| s.to_string()).collect()
-    }
-    #[test]
-    fn one_dot_per_card_in_place_grey_when_nothing_to_say() {
-        use AgentState::*;
-        let cards = [(Working, 1.), (None, 2.), (Waiting, 3.), (None, 4.)];
-        assert_eq!(
-            tab_dots(&cards, 0., false),
-            vec![Working, None, Waiting, None]
-        );
-        assert_eq!(tab_dots(&[], 0., false), vec![]);
-    }
-    #[test]
-    fn done_lights_only_turns_finished_since_the_workspace_was_left() {
-        use AgentState::*;
-        let cards = [(Done, 10.), (Done, 30.), (Working, 40.)];
-        assert_eq!(tab_dots(&cards, 20., false), vec![None, Done, Working]);
-        assert_eq!(tab_dots(&cards, 0., false), vec![Done, Done, Working]);
-        // Seen already: grey like a shell.
-        assert_eq!(tab_dots(&cards, 30., false), vec![None, None, Working]);
-        // The active workspace shows the cards themselves.
-        assert_eq!(tab_dots(&cards, 0., true), vec![None, None, Working]);
     }
     #[test]
     fn dots_read_the_canvas_like_a_page() {

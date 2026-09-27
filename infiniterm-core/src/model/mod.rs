@@ -444,6 +444,10 @@ pub enum Pending {
 /// How long a notice stays up after the last one.
 pub const NOTICE_MS: f64 = 5000.;
 
+/// How long a done card is looked at before it counts as seen: the
+/// switcher's dwell, so a card walked past is not a card read.
+pub const SEEN_MS: f64 = crate::switcher::TRAIL_DWELL_MS;
+
 /// Every card's rect on one canvas at one moment. Cards closed since are
 /// skipped on the way back; cards made since are left where they are.
 #[derive(Clone, Debug, PartialEq)]
@@ -482,10 +486,12 @@ pub struct Model {
     /// The card last focused inside each group (`UNGROUPED` for the loose
     /// set), so stepping back into a group returns to where you were.
     pub last_focused: HashMap<String, String>,
-    /// When each workspace was last left (`now_ms`), so its tab can show
-    /// the turns that finished while you were elsewhere and stop once you
-    /// have been back. Not saved: after a restart nothing is unseen.
-    pub left_at: HashMap<String, f64>,
+    /// The window is the key window; the ui sets it before each tick. A
+    /// done card is only SEEN while the app is in front.
+    pub app_active: bool,
+    /// The focused done card and since when it has been watched, with the
+    /// app in front (`clear_seen_done`). Session-only.
+    pub done_watch: Option<(String, f64)>,
     /// Every card focused this session, oldest first, each once. Closing
     /// the focused card goes back along it; not saved, a restart has no
     /// "before".
@@ -612,7 +618,8 @@ impl Model {
             active_workspace: None,
             selection: Selection::default(),
             last_focused: HashMap::new(),
-            left_at: HashMap::new(),
+            app_active: true,
+            done_watch: None,
             focus_trail: Vec::new(),
             covers: HashMap::new(),
             cover_at: HashMap::new(),
@@ -668,6 +675,7 @@ impl Model {
         // leave it: the trail is read by the switcher and by a close.
         self.promote_focus();
         self.promote_programs();
+        self.clear_seen_done();
         self.sync_covers();
         self.close_when_saved();
         if self.notice.is_some() && now_ms >= self.notice_until {
@@ -935,6 +943,58 @@ impl Model {
             v.typed = true;
         }
         self.promote_focus();
+        // Typing into a done card is reading it.
+        if let Some(id) = self
+            .focused()
+            .filter(|c| c.agent == AgentState::Done)
+            .map(|c| c.id.clone())
+        {
+            self.mark_seen(&id);
+        }
+    }
+
+    /// Done means "finished and you have not looked": once the focused done
+    /// card has been watched `SEEN_MS` with the app in front, it goes grey.
+    /// Before 2026-09-27 a done card stayed green until its next turn, and
+    /// seven green cards on one canvas said nothing (Ekin). The dwell is
+    /// the switcher's (`TRAIL_DWELL_MS`), so walking past a card with
+    /// Cmd+Alt+Arrow does not count as reading it.
+    fn clear_seen_done(&mut self) {
+        let watched = self
+            .focused()
+            .filter(|c| self.app_active && c.agent == AgentState::Done)
+            .map(|c| c.id.clone());
+        let Some(id) = watched else {
+            self.done_watch = None;
+            return;
+        };
+        match &self.done_watch {
+            Some((w, since)) if *w == id => {
+                if self.now_ms - since >= SEEN_MS {
+                    self.mark_seen(&id);
+                }
+            }
+            _ => self.done_watch = Some((id, self.now_ms)),
+        }
+    }
+
+    fn mark_seen(&mut self, id: &str) {
+        self.done_watch = None;
+        if let Some(c) = self.card_mut(id) {
+            c.agent = AgentState::None;
+        }
+        self.effects.push(Effect::AgentLog(format!(
+            "{}  seen -> none",
+            &id[..8.min(id.len())]
+        )));
+    }
+
+    /// A seen done card is due to go grey: the ui asks for a frame then,
+    /// since nothing else may be drawing.
+    pub fn done_seen_due(&self, now_ms: f64) -> bool {
+        self.done_watch
+            .as_ref()
+            .is_some_and(|(_, since)| now_ms - since >= SEEN_MS)
     }
 
     /// Put the current visit in the trail if it has earned its place. Run
@@ -1132,7 +1192,6 @@ impl Model {
         {
             leaving.viewport = vp;
             leaving.focused = leaving_focus;
-            self.left_at.insert(leaving.id.clone(), self.now_ms);
         }
         let Some(entering) = self.workspaces.iter().find(|w| w.id == id) else {
             return;

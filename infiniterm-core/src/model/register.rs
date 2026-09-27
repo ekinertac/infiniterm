@@ -280,6 +280,41 @@ mod tests {
         assert_eq!(h.m.focus_trail.last(), Some(&ids[2]), "typed in: earned");
     }
 
+    // A done card goes grey once it has been looked at, with the app in
+    // front; the others stay green until you get to them.
+    #[test]
+    fn a_done_card_clears_once_seen() {
+        use crate::agent_state::AgentState::{Done, None};
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        for id in &ids {
+            h.m.card_mut(id).unwrap().agent = Done;
+        }
+        h.m.set_focus(Some(&ids[1]));
+        let t = h.m.now_ms;
+        h.m.tick(t);
+        h.m.tick(t + crate::model::SEEN_MS - 1.);
+        assert_eq!(
+            h.m.card(&ids[1]).unwrap().agent,
+            Done,
+            "a glance is not a read"
+        );
+        assert!(h.m.done_seen_due(t + crate::model::SEEN_MS));
+        h.m.tick(t + crate::model::SEEN_MS);
+        assert_eq!(h.m.card(&ids[1]).unwrap().agent, None);
+        assert_eq!(h.m.card(&ids[2]).unwrap().agent, Done, "not looked at");
+        // With another app in front nothing is seen.
+        h.m.app_active = false;
+        h.m.set_focus(Some(&ids[2]));
+        h.m.tick(t + 10_000.);
+        h.m.tick(t + 20_000.);
+        assert_eq!(h.m.card(&ids[2]).unwrap().agent, Done);
+        // Typing into it reads it at once.
+        h.m.app_active = true;
+        h.m.note_input();
+        assert_eq!(h.m.card(&ids[2]).unwrap().agent, None);
+    }
+
     // Release commits: the selected card is focused; Escape leaves things
     // where they were. A card in another workspace brings its workspace.
     #[test]
