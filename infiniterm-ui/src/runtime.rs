@@ -25,7 +25,18 @@ const SWEEP_MS: f64 = 5000.;
 
 impl AppView {
     pub fn new(focus: FocusHandle, scale_factor: f32) -> AppView {
-        let mut registry = CommandRegistry::new(|line| eprintln!("[infiniterm] {line}"));
+        let mut registry = CommandRegistry::new(|line| {
+            eprintln!("[infiniterm] {line}");
+            // Every command that runs, however it was asked for, for
+            // `ift usage` (usage_log.rs). Local only.
+            if let Some(id) = line.strip_prefix("cmd ").and_then(|r| r.split(' ').next()) {
+                let _ = infiniterm_core::usage_log::record(
+                    &infiniterm_core::paths::usage_log_path(),
+                    id,
+                    crate::now_ms() as u64,
+                );
+            }
+        });
         register_commands(&mut registry);
         registry.set_context(describe_context);
         // The settings are read here rather than in `startup`, which runs

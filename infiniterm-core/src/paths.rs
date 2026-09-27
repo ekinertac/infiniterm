@@ -113,6 +113,12 @@ pub fn sessions_dir() -> PathBuf {
     app_support_dir().join("s")
 }
 
+/// Every command run, one line each, for `ift usage` (`usage_log.rs`).
+/// Local only, beside `agent.log`.
+pub fn usage_log_path() -> PathBuf {
+    app_support_dir().join("usage.log")
+}
+
 /// The zsh integration a card's shell loads through ZDOTDIR
 /// (`shell_integration`), rewritten at every launch.
 pub fn shell_integration_dir() -> PathBuf {

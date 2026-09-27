@@ -56,6 +56,9 @@ ift — drive infiniterm from a shell
                              its id or by the card's number (#7 on its
                              label, the same after a reboot; the id is not);
                              Ctrl-\\ (0x1c) detaches, leaving it running
+  ift usage [days]           the commands and mouse gestures you used in the
+                             last 30 days (or [days]), then the ones you
+                             never did; from a log kept only on this Mac
   ift commands               every command the app registers: id, label,
                              key; the palette's list as text (the default
                              keybindings file has only the bound ones)
@@ -83,13 +86,14 @@ Exit codes: 0 ok, 1 infiniterm not running, 2 bad usage.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 13] = [
+pub const SUBCOMMANDS: [&str; 14] = [
     "diff",
     "ls",
     "sessions",
     "attach",
     "omni",
     "commands",
+    "usage",
     "name",
     "group",
     "install",
@@ -127,6 +131,7 @@ fn main() -> ExitCode {
         },
         Some("ls") => send_table("ls", &LS_HEADER),
         Some("commands") => send_table("commands", &["id", "label", "key"]),
+        Some("usage") => send("usage", rest()),
         Some("sessions") => attach::sessions_cmd(args.contains(&"--full".to_string())),
         Some("attach") => match args.get(1) {
             Some(id) => attach::attach(id),

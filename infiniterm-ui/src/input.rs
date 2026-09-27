@@ -141,6 +141,7 @@ impl AppView {
             _ => return,
         };
         if infiniterm_core::pan_mode::chord_fits_all(button, self.left_on_canvas) {
+            self.note_use("mouse.fitAll.chord");
             self.run_command("canvas.zoom.fitAll");
             self.perform_effects();
             return;
@@ -163,6 +164,7 @@ impl AppView {
                 // A double-click on bare canvas fits everything, Cmd+2 for
                 // the mouse, the way a double-click on a frame is Cmd+1.
                 if e.click_count >= 2 {
+                    self.note_use("mouse.fitAll.doubleclick");
                     self.run_command("canvas.zoom.fitAll");
                     self.perform_effects();
                     return;
@@ -210,6 +212,7 @@ impl AppView {
                 // terminal), and the frame is the one part of a card that
                 // is ours and never the program's.
                 if e.click_count >= 2 {
+                    self.note_use("mouse.fitCard.doubleclick");
                     self.run_command("canvas.zoom.fitCard");
                     self.perform_effects();
                     return;
@@ -472,6 +475,7 @@ impl AppView {
             return;
         }
         if was_dragging {
+            self.note_use("mouse.canvas.pan");
             let v = velocity_from(&self.samples, now_ms());
             self.samples.clear();
             if self.model.config.canvas.momentum {
@@ -483,12 +487,18 @@ impl AppView {
             // A single card's drop: to the ghost, or a swap with the card
             // under it.
             if let (GestureKind::Move, Some(ghost)) = (&g.kind, g.ghost) {
+                self.note_use("mouse.card.drag");
                 self.model.drop_card(&g.card, ghost);
                 self.perform_effects();
                 return;
             }
             // The drop: snapped, or put back if it landed on another card.
             // Remembered from the start rects, so Cmd+Z has the "before".
+            self.note_use(match &g.kind {
+                GestureKind::MoveGroup(_) => "mouse.group.drag",
+                GestureKind::Resize(_) => "mouse.card.resize",
+                GestureKind::Move => "mouse.card.drag",
+            });
             let (ids, start): (Vec<String>, Vec<(String, Rect)>) = match &g.kind {
                 GestureKind::MoveGroup(_) => (
                     g.start_rects.iter().map(|(id, _)| id.clone()).collect(),
@@ -514,6 +524,15 @@ impl AppView {
                 body.mouse_up(local, e.button, &e.modifiers);
             }
         }
+    }
+
+    /// One finished mouse gesture, for `ift usage` (usage_log.rs).
+    pub fn note_use(&mut self, gesture: &str) {
+        let _ = infiniterm_core::usage_log::record(
+            &infiniterm_core::paths::usage_log_path(),
+            gesture,
+            now_ms() as u64,
+        );
     }
 
     /// Cmd+scroll (and a trackpad pinch, which arrives as ctrl) zooms about
@@ -552,6 +571,14 @@ impl AppView {
         }
         if e.modifiers.platform || e.modifiers.control {
             self.animator.cancel();
+            // One usage line per zoom gesture, not per wheel event.
+            static LAST_ZOOM_MS: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
+            let now = now_ms() as u64;
+            let last = LAST_ZOOM_MS.swap(now, std::sync::atomic::Ordering::Relaxed);
+            if now.saturating_sub(last) > infiniterm_core::usage_log::ZOOM_GESTURE_GAP_MS {
+                self.note_use("mouse.canvas.zoom");
+            }
             let sensitivity = self.model.config.canvas.zoom_sensitivity;
             // gpui's delta is positive when scrolling up, the DOM's negative.
             let factor = (dy * 0.002 * sensitivity).exp();

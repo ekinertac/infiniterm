@@ -54,6 +54,18 @@ impl Model {
             // `ift commands`: every registered command with its chord, the
             // list keybindings.default.json only shows the bound part of.
             // From the running app, so it cannot drift from the palette.
+            // `ift usage [days]`: what you ran, and what you never did.
+            "usage" => {
+                let days = req.args.first().and_then(|d| d.parse().ok()).unwrap_or(30);
+                let text =
+                    std::fs::read_to_string(crate::paths::usage_log_path()).unwrap_or_default();
+                ok(crate::usage_log::report(
+                    &text,
+                    self.now_ms as u64,
+                    days,
+                    commands,
+                ))
+            }
             "commands" => {
                 let mut rows: Vec<(String, String, String)> = commands
                     .iter()

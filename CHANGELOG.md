@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-09-27
 
+- `ift usage` shows which commands and mouse gestures you used in the last 30 days and which you never did, from a log kept only on your Mac.
 - "Card: clear the state colour" in the palette greys a card's ring and tab dot once you have seen what it had to say.
 
 ### 2026-09-26
