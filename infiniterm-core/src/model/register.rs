@@ -1531,6 +1531,24 @@ mod tests {
         assert_eq!(back, before);
     }
 
+    // Clearing a card's state greys its ring and dot until it has something
+    // new to say; a card with nothing to say stays as it is.
+    #[test]
+    fn a_cards_state_colour_can_be_cleared_by_hand() {
+        use crate::agent_state::AgentState::*;
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().agent = Failed;
+        let effects = h.run("card.clearState");
+        assert_eq!(h.focused().agent, None);
+        assert!(effects.iter().any(|e| matches!(e, Effect::AgentLog(_))));
+        let effects = h.run("card.clearState");
+        assert!(
+            !effects.iter().any(|e| matches!(e, Effect::AgentLog(_))),
+            "nothing to log"
+        );
+    }
+
     // A shell command that runs long colours its card from the marks in
     // its output: working after five seconds, done when it ends well, and
     // a quiet build is not taken for a crashed agent by the sweep. A

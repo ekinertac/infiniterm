@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-09-27
+
+- "Card: clear the state colour" in the palette greys a card's ring and tab dot once you have seen what it had to say.
+
 ### 2026-09-26
 
 - Tidy keeps groups and split cards together: each moves as one block with its inside arrangement, where it used to spread their cards across the canvas.

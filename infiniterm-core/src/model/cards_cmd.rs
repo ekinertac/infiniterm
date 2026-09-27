@@ -1530,6 +1530,27 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // A maximised card is the one most worth masking, so not `for_selected`.
     // The card that must not go: a long job, a session you keep coming
     // back to. Every selected card, so a split pair locks as one.
+    // You have seen it: the ring and the tab dot go grey until the card
+    // has something new to say (the next hook, a long or failed command).
+    // Palette only, as Ekin asked (2026-09-27).
+    r.register("card.clearState", "Card: clear the state colour", |m| {
+        let ids = m.selected_ids();
+        let mut cleared = 0;
+        for id in &ids {
+            if let Some(c) = m.card_mut(id) {
+                if c.agent != crate::agent_state::AgentState::None {
+                    c.agent = crate::agent_state::AgentState::None;
+                    cleared += 1;
+                }
+            }
+        }
+        if cleared > 0 {
+            m.effects.push(Effect::AgentLog(format!(
+                "{} card(s)  cleared by hand -> none",
+                cleared
+            )));
+        }
+    });
     r.register("card.protect", "Card: lock against closing / unlock", |m| {
         for id in m.selected_ids() {
             let on = !m.card(&id).is_some_and(|c| c.protected);
