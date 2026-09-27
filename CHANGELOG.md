@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-09-27
 
+- Dragging a card shows the grid's slots for a card of its size, halves for a half and so on, and the card snaps to them, so cards placed by hand stay in line with the cards Cmd+T makes.
+- Tidy puts cards back on that grid.
 - `ift usage` shows which commands and mouse gestures you used in the last 30 days and which you never did, from a log kept only on your Mac.
 - "Card: clear the state colour" in the palette greys a card's ring and tab dot once you have seen what it had to say.
 

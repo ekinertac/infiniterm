@@ -1520,11 +1520,13 @@ mod tests {
         );
         let r: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
         let (w, g) = (r[0].w, crate::cards::GUTTER);
-        // Reading order was card 3 (top-left), 0, 2, 1.
-        assert_eq!((r[3].x, r[3].y), (25., 25.));
-        assert_eq!((r[0].x, r[0].y), (25. + w + g, 25.));
-        assert_eq!((r[2].x, r[2].y), (25., 25. + r[0].h + g));
-        assert_eq!((r[1].x, r[1].y), (25. + w + g, 25. + r[0].h + g));
+        // Reading order was card 3 (top-left), 0, 2, 1, on the placement
+        // grid (anchored at the half cell), not wherever card 3 happened to be.
+        let o = crate::grid::HALF_CELL;
+        assert_eq!((r[3].x, r[3].y), (o, o));
+        assert_eq!((r[0].x, r[0].y), (o + w + g, o));
+        assert_eq!((r[2].x, r[2].y), (o, o + r[0].h + g));
+        assert_eq!((r[1].x, r[1].y), (o + w + g, o + r[0].h + g));
         assert!(r.iter().zip(&before).all(|(a, b)| (a.w, a.h) == (b.w, b.h)));
         h.run("layout.undo");
         let back: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();

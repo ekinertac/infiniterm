@@ -193,7 +193,14 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             })
             .collect();
         let rects: Vec<_> = here.iter().map(|c| c.rect).collect();
-        let placed = crate::layout::tidy_units(&rects, &unit, &pad, crate::cards::GUTTER);
+        let grid = (
+            Point {
+                x: crate::grid::HALF_CELL,
+                y: crate::grid::HALF_CELL,
+            },
+            m.default_size(),
+        );
+        let placed = crate::layout::tidy_units(&rects, &unit, &pad, crate::cards::GUTTER, grid);
         m.remember_layout();
         let ids: Vec<String> = here.iter().map(|c| c.id.clone()).collect();
         m.mark_swap(&ids);

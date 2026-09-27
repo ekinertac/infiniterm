@@ -23,6 +23,10 @@ use crate::sidebar::{clamp_sidebar, sidebar_extent, sidebar_width};
 use crate::split::{split_rect, SplitSide};
 use crate::swap::swap_with_neighbour;
 
+/// How many full slots around a dragged ghost show their slots: enough to
+/// see where the card could go next, not the whole canvas.
+const GHOST_SLOT_REACH: i64 = 2;
+
 /// How long a Save from the unsaved-changes sheet may take before the close
 /// it holds is dropped: a save is one frame when it works.
 const SAVE_CLOSE_MS: f64 = 2000.;
@@ -757,28 +761,35 @@ impl Model {
         self.dirty_layout = true;
     }
 
-    /// The ghost of a dragged card, snapped to the slots the cards around
-    /// it offer (`slot_snap`), for the ui to draw and to drop.
+    /// The ghost of a dragged card, snapped to the grid's nearest slot of
+    /// its own size (`slot_snap`), for the ui to draw and to drop.
     pub fn snap_ghost(&self, id: &str, free: Rect) -> Rect {
-        let Some(card) = self.card(id) else {
+        if self.card(id).is_none() {
             return free;
-        };
-        let ws = card.workspace_id.clone();
-        let others: Vec<Rect> = self
-            .cards
-            .iter()
-            .filter(|c| c.workspace_id == ws && c.id != id)
-            .map(|c| c.rect)
-            .collect();
+        }
         crate::slot_snap::snap_ghost(
             free,
-            &others,
             self.default_size(),
             Point {
                 x: HALF_CELL,
                 y: HALF_CELL,
             },
             GUTTER,
+        )
+    }
+
+    /// The slots of the ghost's size around it, for the drag to draw
+    /// (`slot_snap::slots_near`).
+    pub fn ghost_slots(&self, ghost: Rect) -> Vec<Rect> {
+        crate::slot_snap::slots_near(
+            ghost,
+            self.default_size(),
+            Point {
+                x: HALF_CELL,
+                y: HALF_CELL,
+            },
+            GUTTER,
+            GHOST_SLOT_REACH,
         )
     }
 

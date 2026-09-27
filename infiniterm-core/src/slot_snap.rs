@@ -1,76 +1,84 @@
-//! Where a dragged card's ghost snaps: the slots a card of its size can
-//! occupy, not the 25 px grid. Ekin's ask, 2026-09-19: a quarter card
-//! dragged over empty space should land in quarter slots.
+//! Where a dragged card's ghost snaps: the SLOTS of the app's grid for a
+//! card of its size, and what the drag draws to show them.
 //!
-//! There is no fixed lattice of slots: a split makes halves of 1000 and
-//! 975 from 2000, so a quarter's real slots are wherever the cards around
-//! it leave room. The ghost snaps each axis to the nearest EDGE the cards
-//! on the canvas offer (a card's left or top edge, or its right or bottom
-//! edge plus the gutter, or the same minus the ghost's own size, so it
-//! sits flush on either side), within `SNAP_RANGE` of the pointer's
-//! position; past that range, on empty canvas, to the lattice the
-//! placement uses (the default size plus the gutter from the origin). Each
-//! axis snaps on its own, so a card can share a row with one neighbour
-//! and a column with another.
+//! Since 2026-09-27 the grid decides, not the neighbours. The ghost used to
+//! snap to the nearest edge a card nearby offered, so a canvas arranged by
+//! hand drifted off the grid one drag at a time, and every card Cmd+T made
+//! afterwards landed out of line with them (Ekin's Streaming workspace).
+//! Now each axis snaps to the nearest slot start, and the drag draws the
+//! slots around the ghost (`slots_near`), so where a card belongs is
+//! visible before the drop.
 //!
-//! Called from `Model::snap_ghost`; drawn by `paint.rs`; the drop itself is
-//! `Model::drop_card`. Related: `layout::nearest_free_slot` (the same
-//! lattice), `alignment.rs` (the guides, which want exact matches and so
-//! benefit from this).
-use crate::grid::{Point, Rect, Size};
+//! Slots come in paper sizes (Ekin: "a card like an A4 paper, half A5,
+//! then A6"): a card smaller than the full slot gets the full slot divided
+//! the way a split divides it (`pieces`), so halves are 850 + 25 + 850 of
+//! 1725 wide and 1000 + 25 + 975 of 2000 tall, quarters divide again, and
+//! every piece lines up with the full grid.
+//!
+//! Called from `Model::snap_ghost` and `Model::ghost_slots`; drawn by
+//! `paint.rs`; the drop itself is `Model::drop_card`. Related:
+//! `layout::fill_slot` (the same grid, anchored at the canvas's half cell).
+use crate::grid::{Point, Rect, Size, GRID_SIZE};
 
-/// How far (in world px) a ghost is pulled to an edge. A quarter of the
-/// ghost's own extent on that axis: far enough that a slot is easy to
-/// hit, near enough that the pull is never surprising.
-pub const SNAP_RANGE_RATIO: f64 = 0.25;
+/// How many pieces of `size` a full slot of `full` holds along one axis,
+/// and where each starts inside it: the split's rule, the first pieces
+/// rounded up to the grid and the last taking what is left.
+pub fn pieces(full: f64, size: f64, gutter: f64) -> Vec<f64> {
+    let n = ((full + gutter) / (size + gutter)).round().max(1.) as usize;
+    if n == 1 {
+        return vec![0.];
+    }
+    let piece = ((full - (n - 1) as f64 * gutter) / n as f64 / GRID_SIZE).ceil() * GRID_SIZE;
+    (0..n).map(|i| i as f64 * (piece + gutter)).collect()
+}
 
-/// The ghost at `free` (the pointer's unsnapped rect) snapped to the slots
-/// `others` and the lattice offer. `default` is the default card size,
-/// `origin` the lattice's origin.
-pub fn snap_ghost(free: Rect, others: &[Rect], default: Size, origin: Point, gutter: f64) -> Rect {
-    let xs: Vec<f64> = others
-        .iter()
-        .flat_map(|o| {
-            [
-                o.x,
-                o.x + o.w + gutter,
-                o.x - gutter - free.w,
-                o.x + o.w - free.w,
-            ]
-        })
-        .collect();
-    let ys: Vec<f64> = others
-        .iter()
-        .flat_map(|o| {
-            [
-                o.y,
-                o.y + o.h + gutter,
-                o.y - gutter - free.h,
-                o.y + o.h - free.h,
-            ]
-        })
-        .collect();
+/// Slot starts along one axis for a card of `size`, over the full slots
+/// from `from` to `to` (full-slot indices from `origin`).
+fn starts(from: i64, to: i64, full: f64, size: f64, origin: f64, gutter: f64) -> Vec<f64> {
+    let step = full + gutter;
+    let offsets = pieces(full, size, gutter);
+    (from..=to)
+        .flat_map(|k| offsets.iter().map(move |o| origin + k as f64 * step + o))
+        .collect()
+}
+
+fn nearest(at: f64, full: f64, size: f64, origin: f64, gutter: f64) -> f64 {
+    let k = ((at - origin) / (full + gutter)).floor() as i64;
+    starts(k - 1, k + 1, full, size, origin, gutter)
+        .into_iter()
+        .min_by(|a, b| (a - at).abs().partial_cmp(&(b - at).abs()).unwrap())
+        .unwrap_or(at)
+}
+
+/// The ghost at `free` (the pointer's unsnapped rect) snapped to the
+/// nearest slot of its own size. `default` is the full slot's card size,
+/// `origin` the grid's anchor.
+pub fn snap_ghost(free: Rect, default: Size, origin: Point, gutter: f64) -> Rect {
     Rect {
-        x: snap_axis(free.x, &xs, free.w, default.w, origin.x, gutter),
-        y: snap_axis(free.y, &ys, free.h, default.h, origin.y, gutter),
+        x: nearest(free.x, default.w, free.w, origin.x, gutter),
+        y: nearest(free.y, default.h, free.h, origin.y, gutter),
         w: free.w,
         h: free.h,
     }
 }
 
-fn snap_axis(at: f64, edges: &[f64], extent: f64, pitch: f64, origin: f64, gutter: f64) -> f64 {
-    let range = extent * SNAP_RANGE_RATIO;
-    let nearest = edges
-        .iter()
-        .copied()
-        .filter(|e| (e - at).abs() <= range)
-        .min_by(|a, b| (a - at).abs().partial_cmp(&(b - at).abs()).unwrap());
-    if let Some(e) = nearest {
-        return e;
-    }
-    // Empty canvas: the placement's own lattice.
-    let step = pitch + gutter;
-    origin + ((at - origin) / step).round() * step
+/// The slots of `ghost`'s size within `reach` full slots of it, for the
+/// drag to draw.
+pub fn slots_near(ghost: Rect, default: Size, origin: Point, gutter: f64, reach: i64) -> Vec<Rect> {
+    let kx = ((ghost.x - origin.x) / (default.w + gutter)).floor() as i64;
+    let ky = ((ghost.y - origin.y) / (default.h + gutter)).floor() as i64;
+    let xs = starts(kx - reach, kx + reach, default.w, ghost.w, origin.x, gutter);
+    let ys = starts(ky - reach, ky + reach, default.h, ghost.h, origin.y, gutter);
+    ys.iter()
+        .flat_map(|&y| {
+            xs.iter().map(move |&x| Rect {
+                x,
+                y,
+                w: ghost.w,
+                h: ghost.h,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -83,49 +91,54 @@ mod tests {
     const O: Point = Point { x: 12.5, y: 12.5 };
     const G: f64 = 25.;
 
-    // A quarter dragged near the gap a split left lands exactly in it,
-    // whichever of the two uneven halves the gap is.
+    // Paper sizes: a half is 850 + 25 + 850 of the width and 1000 + 25 +
+    // 975 of the height, as a split makes them; a full card has one slot.
+    #[test]
+    fn a_full_slot_divides_the_way_a_split_does() {
+        assert_eq!(pieces(1725., 1725., G), [0.]);
+        assert_eq!(pieces(1725., 850., G), [0., 875.]);
+        assert_eq!(pieces(2000., 975., G), [0., 1025.]);
+        assert_eq!(pieces(2000., 1000., G), [0., 1025.]);
+        assert_eq!(pieces(1725., 400., G).len(), 4, "quarters");
+    }
+
+    // A quarter dragged near the gap a split left lands exactly in it.
     #[test]
     fn a_quarter_snaps_into_the_gap_beside_a_split_half() {
-        // The kept half (1000 tall) at the top; the freed space below it
-        // starts at y = 12.5 + 1000 + 25 = 1037.5, x flush with it.
-        let kept = r(12.5, 12.5, 850., 1000.);
         let ghost = r(40., 1060., 850., 975.);
-        let s = snap_ghost(ghost, &[kept], D, O, G);
-        assert_eq!((s.x, s.y), (12.5, 1037.5));
-        // Right of the kept half: x = 12.5 + 850 + 25.
+        assert_eq!(snap_ghost(ghost, D, O, G), r(12.5, 1037.5, 850., 975.));
         let ghost = r(900., 30., 850., 1000.);
-        let s = snap_ghost(ghost, &[kept], D, O, G);
-        assert_eq!((s.x, s.y), (887.5, 12.5));
+        assert_eq!(snap_ghost(ghost, D, O, G), r(887.5, 12.5, 850., 1000.));
     }
 
-    // Flush on the far side too: a ghost just left of a card ends where its
-    // right edge meets the card's left edge minus the gutter.
+    // A full card snaps to the grid, not to a neighbour that drifted off it.
     #[test]
-    fn a_ghost_left_of_a_card_sits_flush_against_it() {
-        let card = r(2000., 12.5, 1725., 2000.);
-        let ghost = r(200., 12.5, 1725., 2000.);
-        let s = snap_ghost(ghost, &[card], D, O, G);
-        assert_eq!(s.x, 2000. - 25. - 1725.);
-    }
-
-    // Out on empty canvas nothing pulls, so the lattice does: default
-    // pitch from the origin.
-    #[test]
-    fn empty_canvas_uses_the_placement_lattice() {
+    fn a_full_card_snaps_to_the_grid_not_a_drifted_neighbour() {
         let ghost = r(1800., 2100., 1725., 2000.);
-        let s = snap_ghost(ghost, &[], D, O, G);
-        assert_eq!((s.x, s.y), (12.5 + 1750., 12.5 + 2025.));
+        assert_eq!(
+            snap_ghost(ghost, D, O, G),
+            r(12.5 + 1750., 12.5 + 2025., 1725., 2000.)
+        );
+        let ghost = r(1500., 300., 1725., 2000.);
+        assert_eq!(snap_ghost(ghost, D, O, G), r(1762.5, 12.5, 1725., 2000.));
     }
 
-    // Each axis on its own: the row from one neighbour, the column from
-    // another.
+    // What the drag draws: slots of the ghost's own size around it, halves
+    // for a half, all on the grid.
     #[test]
-    fn axes_snap_independently() {
-        let row = r(12.5, 3000., 1725., 2000.);
-        let col = r(5000., 12.5, 1725., 2000.);
-        let ghost = r(5020., 3010., 1725., 2000.);
-        let s = snap_ghost(ghost, &[row, col], D, O, G);
-        assert_eq!((s.x, s.y), (5000., 3000.));
+    fn the_drag_shows_slots_of_the_cards_own_size() {
+        let half = r(900., 30., 850., 2000.);
+        let slots = slots_near(half, D, O, G, 1);
+        assert!(slots.iter().all(|s| s.w == 850. && s.h == 2000.));
+        assert!(slots.contains(&r(887.5, 12.5, 850., 2000.)));
+        assert!(
+            slots.contains(&r(1762.5, 12.5, 850., 2000.)),
+            "the next full slot's first half"
+        );
+        assert_eq!(
+            slots.len(),
+            6 * 3,
+            "three full slots across, two halves each, three rows"
+        );
     }
 }

@@ -88,6 +88,9 @@ fn paint_hover_band(
     }
 }
 
+/// The grid's slots drawn around a dragged ghost: there to be seen, never
+/// louder than the cards.
+const GHOST_SLOT_ALPHA: f32 = 0.35;
 /// The ghost's fill: enough to read as a slot, not enough to hide what is
 /// under it.
 const GHOST_FILL_ALPHA: f32 = 0.08;
@@ -636,6 +639,15 @@ impl AppView {
         // focus ring's colour when the space is free and the warning colour
         // when a card is in the way, so the answer is known before the drop.
         if let Some((id, r)) = &ghost {
+            // The grid's slots for a card this size, faint, so where it
+            // belongs is visible before the drop (slot_snap.rs).
+            let slot_color = crate::chrome::with_alpha(chrome.focus_ring, GHOST_SLOT_ALPHA);
+            for s in self.model.ghost_slots(*r) {
+                window.paint_quad(
+                    outline(at(s), slot_color, BorderStyle::Dashed)
+                        .border_widths(px(crate::chrome::HAIRLINE_PX as f32)),
+                );
+            }
             let free = self
                 .model
                 .rect_free_for(id, infiniterm_core::grid::snap_rect(*r));

@@ -162,7 +162,17 @@ pub fn tidy(sizes: &[Size], origin: Point, gutter: f64) -> Vec<Rect> {
 /// Card by card, tidy spread a group across the block and its frame, drawn
 /// around its members, ballooned over other cards; a split pair came apart
 /// (2026-09-26).
-pub fn tidy_units(rects: &[Rect], unit: &[usize], pad: &[f64], gutter: f64) -> Vec<Rect> {
+/// `grid` is the placement grid's anchor and full slot size: the block
+/// starts on a grid point at or before the units' top-left, and each
+/// column and row is rounded up to whole slots, so a tidied canvas sits on
+/// the grid new cards use (a group's cards sit its frame's pad inside).
+pub fn tidy_units(
+    rects: &[Rect],
+    unit: &[usize],
+    pad: &[f64],
+    gutter: f64,
+    grid: (Point, Size),
+) -> Vec<Rect> {
     let n = pad.len();
     let boxes: Vec<Rect> = (0..n)
         .map(|u| {
@@ -190,14 +200,23 @@ pub fn tidy_units(rects: &[Rect], unit: &[usize], pad: &[f64], gutter: f64) -> V
         return rects.to_vec();
     };
     let order = crate::workspaces::reading_order(&boxes);
+    let (anchor, full) = grid;
+    let (sx, sy) = (full.w + gutter, full.h + gutter);
+    // Whole slots: a unit's extent rounded up so the next column or row
+    // starts on the grid.
+    let whole = |v: f64, step: f64| ((v + gutter) / step).ceil() * step - gutter;
     let sizes: Vec<Size> = order
         .iter()
         .map(|&u| Size {
-            w: boxes[u].w,
-            h: boxes[u].h,
+            w: whole(boxes[u].w, sx),
+            h: whole(boxes[u].h, sy),
         })
         .collect();
-    let placed = tidy(&sizes, Point { x: all.x, y: all.y }, gutter);
+    let origin = Point {
+        x: anchor.x + ((all.x - anchor.x) / sx).floor() * sx,
+        y: anchor.y + ((all.y - anchor.y) / sy).floor() * sy,
+    };
+    let placed = tidy(&sizes, origin, gutter);
     let mut shift = vec![(0., 0.); n];
     for (&u, p) in order.iter().zip(&placed) {
         shift[u] = (p.x - boxes[u].x, p.y - boxes[u].y);
@@ -357,7 +376,13 @@ mod tests {
         ];
         let unit = [0, 0, 0, 1];
         let pad = [50., 0.];
-        let got = tidy_units(&rects, &unit, &pad, 25.);
+        let got = tidy_units(
+            &rects,
+            &unit,
+            &pad,
+            25.,
+            (Point { x: 0., y: 0. }, Size { w: 300., h: 200. }),
+        );
         // Inside the group nothing moved relative to its first card.
         for i in 1..3 {
             assert_eq!(got[i].x - got[0].x, rects[i].x - rects[0].x);
