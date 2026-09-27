@@ -116,4 +116,65 @@ mod tests {
         // `exit` starts a command too, and never reports an end.
         assert_eq!(marks, ["C", "D;0", "C", "D;1", "C"], "{text:?}");
     }
+
+    /// Input-field selection in a real zsh on a pty (zpty, so zle runs):
+    /// two Shift+Left select "lo", the selection is reported as an OSC 52
+    /// "selection", typing replaces it, and Ctrl+U (Cmd+Backspace) is bound
+    /// to delete only what is left of the cursor. The binding is read back
+    /// rather than typed: a zpty's line discipline swallowed a typed ^U as
+    /// its kill character before zle saw it.
+    #[test]
+    fn a_real_zsh_selects_like_an_input_field() {
+        if !Path::new("/bin/zsh").exists() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("ift-zsel-{}", std::process::id()));
+        let shim = install(&root.join("shim")).unwrap();
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".zshrc"), "PS1='> '\n").unwrap();
+        // The keys a card sends: Shift+Left is CSI 1;2D, Ctrl+U is 0x15.
+        let script = r#"
+zmodload zsh/zpty
+zpty -b z /bin/zsh -i
+sleep 0.5
+zpty -w -n z $'echo hello\e[1;2D\e[1;2DXY\r'
+sleep 0.3
+zpty -w -n z $'bindkey "^U"\r'
+sleep 0.3
+zpty -w -n z $'exit\r'
+for i in {1..30}; do
+  if zpty -r -t z line; then print -rn -- "$line"; else sleep 0.1; fi
+done
+zpty -d z
+"#;
+        let out = Command::new("/bin/zsh")
+            .arg("-f")
+            .arg("-c")
+            .arg(script)
+            .env_clear()
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin")
+            .env("TERM", "xterm-256color")
+            .envs(zsh_env("/bin/zsh", &shim, None))
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            text.contains("helXY"),
+            "typing replaced the selection: {text:?}"
+        );
+        // base64("lo") is "bG8=".
+        assert!(
+            text.contains("\x1b]52;s;bG8=\x07"),
+            "selection reported: {text:?}"
+        );
+        assert!(
+            text.contains("\"^U\" backward-kill-line"),
+            "Cmd+Backspace deletes to the line start: {text:?}"
+        );
+        assert!(!text.contains("command not found"), "{text:?}");
+    }
 }

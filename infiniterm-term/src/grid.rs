@@ -18,6 +18,7 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionRange, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
+use alacritty_terminal::term::ClipboardType;
 use alacritty_terminal::term::{viewport_to_point, Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 use std::cell::RefCell;
@@ -32,6 +33,10 @@ pub enum TermEvent {
     Bell,
     /// OSC 52: the program put text on the clipboard.
     Clipboard(String),
+    /// OSC 52 with the "selection" buffer: what the shell's line editor has
+    /// selected (our zsh integration reports it on every change, empty
+    /// when the selection ends), so Cmd+C can copy it. Not the clipboard.
+    LineSelection(String),
 }
 
 #[derive(Clone, Default)]
@@ -44,6 +49,9 @@ impl EventListener for Listener {
             Event::PtyWrite(s) => out.push(TermEvent::Write(s)),
             Event::Title(t) => out.push(TermEvent::Title(t)),
             Event::Bell => out.push(TermEvent::Bell),
+            Event::ClipboardStore(ClipboardType::Selection, s) => {
+                out.push(TermEvent::LineSelection(s))
+            }
             Event::ClipboardStore(_, s) => out.push(TermEvent::Clipboard(s)),
             Event::ColorRequest(index, format) => {
                 // Answered from the default palette; a theme change re-answers
@@ -982,6 +990,19 @@ impl Grid {
 
 #[cfg(test)]
 mod tests {
+
+    // The shell's selection comes as OSC 52 "s" and is not the clipboard.
+    #[test]
+    fn an_osc52_selection_is_the_line_selection_not_the_clipboard() {
+        let mut g = Grid::new(20, 2, 100);
+        g.advance(b"\x1b]52;s;bG8=\x07\x1b]52;c;aGk=\x07");
+        let got: Vec<String> = g
+            .take_events()
+            .into_iter()
+            .map(|e| format!("{e:?}"))
+            .collect();
+        assert_eq!(got, ["LineSelection(\"lo\")", "Clipboard(\"hi\")"]);
+    }
 
     // Visual mode: the cursor walks the output, Shift selects the Mac's
     // way, and Escape puts everything back.

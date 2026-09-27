@@ -121,6 +121,10 @@ pub struct TerminalBody {
     pub title: Option<String>,
     /// OSC 52: text a program put on the clipboard, taken by the ui.
     pub clipboard_out: Option<String>,
+    /// What the shell's line editor has selected (Shift+Arrow at a zsh
+    /// prompt, shell/infiniterm.zsh), for Cmd+C and Cmd+X when the grid
+    /// has no selection of its own.
+    line_selection: Option<String>,
     /// `terminal.cursorBlink`, `ui.inactiveDim`; the ui keeps them current.
     pub blink: bool,
     pub inactive_dim: f64,
@@ -281,6 +285,7 @@ impl TerminalBody {
             wheel_carry: crate::chrome::WheelCarry::default(),
             title: None,
             clipboard_out: None,
+            line_selection: None,
             blink: true,
             inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             blink_epoch: 0.,
@@ -368,6 +373,9 @@ impl TerminalBody {
                 // The reference does nothing on a bell either.
                 TermEvent::Bell => {}
                 TermEvent::Clipboard(text) => self.clipboard_out = Some(text),
+                TermEvent::LineSelection(text) => {
+                    self.line_selection = Some(text).filter(|t| !t.is_empty())
+                }
             }
         }
     }
@@ -960,8 +968,22 @@ impl CardBody for TerminalBody {
         // The app owns Cmd; the Cmd keys a terminal answers are copy, paste
         // and the line-movement arrows the encoder knows.
         if m.platform && k.key == "c" {
-            if let Some(text) = self.grid.selection_text() {
+            // A mouse selection first, else what the command line selected.
+            if let Some(text) = self
+                .grid
+                .selection_text()
+                .or_else(|| self.line_selection.clone())
+            {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            return BodyAction::None;
+        }
+        // Cut: copy the command line's selection and delete it (Backspace
+        // deletes a selection in our zsh integration).
+        if m.platform && k.key == "x" {
+            if let Some(text) = self.line_selection.take() {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                self.write(vec![0x7f]);
             }
             return BodyAction::None;
         }
