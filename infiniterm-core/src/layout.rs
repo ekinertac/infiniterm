@@ -162,10 +162,13 @@ pub fn tidy(sizes: &[Size], origin: Point, gutter: f64) -> Vec<Rect> {
 /// Card by card, tidy spread a group across the block and its frame, drawn
 /// around its members, ballooned over other cards; a split pair came apart
 /// (2026-09-26).
-/// `grid` is the placement grid's anchor and full slot size: the block
-/// starts on a grid point at or before the units' top-left, and each
-/// column and row is rounded up to whole slots, so a tidied canvas sits on
-/// the grid new cards use (a group's cards sit its frame's pad inside).
+/// `grid` is the placement grid's anchor and full slot size. Units are
+/// packed a gutter apart, but every column and row starts on a HALF-slot
+/// line of that grid (the A5 grid: 850 + 25 + 850 of 1725), so full and
+/// half cards sit tight and on the grid new cards use. Neighbours are a
+/// gutter apart unless two frames' `pad`s need more (with `GROUP_PAD` at
+/// half the gutter they never do). Whole slots first, which left about
+/// 875 px beside every half card (2026-09-27).
 pub fn tidy_units(
     rects: &[Rect],
     unit: &[usize],
@@ -174,7 +177,7 @@ pub fn tidy_units(
     grid: (Point, Size),
 ) -> Vec<Rect> {
     let n = pad.len();
-    let boxes: Vec<Rect> = (0..n)
+    let inner: Vec<Rect> = (0..n)
         .map(|u| {
             let members: Vec<Rect> = rects
                 .iter()
@@ -182,44 +185,89 @@ pub fn tidy_units(
                 .filter(|(_, &k)| k == u)
                 .map(|(r, _)| *r)
                 .collect();
-            let b = bounding_rect_of(&members).unwrap_or(Rect {
+            bounding_rect_of(&members).unwrap_or(Rect {
                 x: 0.,
                 y: 0.,
                 w: 0.,
                 h: 0.,
-            });
-            Rect {
-                x: b.x - pad[u],
-                y: b.y - pad[u],
-                w: b.w + pad[u] * 2.,
-                h: b.h + pad[u] * 2.,
-            }
+            })
         })
         .collect();
-    let Some(all) = bounding_rect_of(&boxes) else {
+    let padded: Vec<Rect> = (0..n)
+        .map(|u| Rect {
+            x: inner[u].x - pad[u],
+            y: inner[u].y - pad[u],
+            w: inner[u].w + pad[u] * 2.,
+            h: inner[u].h + pad[u] * 2.,
+        })
+        .collect();
+    let Some(all) = bounding_rect_of(&padded) else {
         return rects.to_vec();
     };
-    let order = crate::workspaces::reading_order(&boxes);
     let (anchor, full) = grid;
-    let (sx, sy) = (full.w + gutter, full.h + gutter);
-    // Whole slots: a unit's extent rounded up so the next column or row
-    // starts on the grid.
-    let whole = |v: f64, step: f64| ((v + gutter) / step).ceil() * step - gutter;
-    let sizes: Vec<Size> = order
-        .iter()
-        .map(|&u| Size {
-            w: whole(boxes[u].w, sx),
-            h: whole(boxes[u].h, sy),
+    let order = crate::workspaces::reading_order(&padded);
+    let cells: Vec<(usize, usize)> = (0..order.len())
+        .map(|i| {
+            let (c, r) = block_order(i);
+            (c as usize, r as usize)
         })
         .collect();
-    let origin = Point {
-        x: anchor.x + ((all.x - anchor.x) / sx).floor() * sx,
-        y: anchor.y + ((all.y - anchor.y) / sy).floor() * sy,
+    let cols = cells.iter().map(|&(c, _)| c + 1).max().unwrap_or(0);
+    let rows = cells.iter().map(|&(_, r)| r + 1).max().unwrap_or(0);
+    let (mut w, mut pw, mut h, mut ph) = (
+        vec![0f64; cols],
+        vec![0f64; cols],
+        vec![0f64; rows],
+        vec![0f64; rows],
+    );
+    for (&u, &(c, r)) in order.iter().zip(&cells) {
+        w[c] = w[c].max(inner[u].w);
+        pw[c] = pw[c].max(pad[u]);
+        h[r] = h[r].max(inner[u].h);
+        ph[r] = ph[r].max(pad[u]);
+    }
+    // The first half-slot line at or after `v`, on one axis.
+    let line = |v: f64, a: f64, full: f64| -> f64 {
+        let step = full + gutter;
+        let half = crate::slot_snap::pieces(full, (full - gutter) / 2., gutter);
+        let k = ((v - a) / step).floor() as i64;
+        (k..k + 3)
+            .flat_map(|k| half.iter().map(move |o| a + k as f64 * step + o))
+            .find(|s| *s >= v - 0.5)
+            .unwrap_or(v)
     };
-    let placed = tidy(&sizes, origin, gutter);
+    let starts = |len: &[f64], pads: &[f64], lo: f64, a: f64, full: f64| -> Vec<f64> {
+        let mut out = Vec::with_capacity(len.len());
+        // Neighbours a gutter apart, unless two frames' pads need more.
+        let mut at = lo;
+        for i in 0..len.len() {
+            out.push(at);
+            if i + 1 < len.len() {
+                at = line(at + len[i] + gutter.max(pads[i] + pads[i + 1]), a, full);
+            }
+        }
+        out
+    };
+    // Start on the half-slot line nearest the cards themselves (not their
+    // frames, which pushed a whole row up and a column left).
+    let cards = bounding_rect_of(&inner).unwrap_or(all);
+    let nearest_line = |v: f64, a: f64, full: f64| -> f64 {
+        let down = line(v - (full + gutter) / 2., a, full);
+        let up = line(v, a, full);
+        // Past `line`'s half-pixel tolerance, or it returns `down` again.
+        let below = line(down + 1., a, full);
+        [down, below, up]
+            .into_iter()
+            .min_by(|x, y| (x - v).abs().partial_cmp(&(y - v).abs()).unwrap())
+            .unwrap_or(up)
+    };
+    let lo_x = nearest_line(cards.x, anchor.x, full.w);
+    let lo_y = nearest_line(cards.y, anchor.y, full.h);
+    let xs = starts(&w, &pw, lo_x, anchor.x, full.w);
+    let ys = starts(&h, &ph, lo_y, anchor.y, full.h);
     let mut shift = vec![(0., 0.); n];
-    for (&u, p) in order.iter().zip(&placed) {
-        shift[u] = (p.x - boxes[u].x, p.y - boxes[u].y);
+    for (&u, &(c, r)) in order.iter().zip(&cells) {
+        shift[u] = (xs[c] - inner[u].x, ys[r] - inner[u].y);
     }
     rects
         .iter()
@@ -391,8 +439,13 @@ mod tests {
         // The loose card read first (top-left), so it stays at the corner;
         // the group's frame sits a gutter to its right, not over it.
         assert_eq!((got[3].x, got[3].y), (0., 0.));
-        let frame_left = got[0].x - 50.;
-        assert_eq!(frame_left, 300. + 25.);
+        // The group's cards on a half-slot line past the loose card, its
+        // frame clear of it.
+        assert_eq!(got[0].x, 500.);
+        assert!(
+            got[0].x - 50. > 300. + 25. - 0.5,
+            "the frame clears the loose card"
+        );
         for (i, a) in got.iter().enumerate() {
             for b in &got[i + 1..] {
                 assert!(!rects_overlap(*a, *b));

@@ -8,7 +8,12 @@ use crate::{
     grid::{Rect, Size, GRID_SIZE},
     viewport::bounding_rect,
 };
-pub const GROUP_PAD: f64 = GRID_SIZE * 2.;
+/// Room a group's frame keeps around its cards: half the gutter, so two
+/// frames, or a frame and a card, fit in one gutter and groups sit on the
+/// placement grid like any card. It was two grid cells (50) until
+/// 2026-09-27, twice the gutter, and every tidy and every Cmd+T beside a
+/// group had to skip half a slot to clear the frame.
+pub const GROUP_PAD: f64 = GRID_SIZE / 2.;
 pub const GROUP_RESERVE_COLS: usize = 2;
 pub const GROUP_RESERVE_ROWS: usize = 2;
 pub const UNGROUPED: &str = "ungrouped";
@@ -105,9 +110,10 @@ mod tests {
             Some(r(0., 0., 400., 150.))
         );
     }
+    // Two frames, or a frame and a card, fit in one gutter.
     #[test]
-    fn default_padding_two_cells() {
-        assert_eq!(GROUP_PAD, 50.);
+    fn a_frame_fits_in_half_a_gutter() {
+        assert_eq!(GROUP_PAD * 2., crate::cards::GUTTER);
         assert_eq!(
             bounds(&[r(0., 0., 100., 100.)]),
             Some(r(

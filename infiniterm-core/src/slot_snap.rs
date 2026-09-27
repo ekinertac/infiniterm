@@ -42,12 +42,23 @@ fn starts(from: i64, to: i64, full: f64, size: f64, origin: f64, gutter: f64) ->
         .collect()
 }
 
+/// How close (as a share of the ghost's own extent on that axis) a slot
+/// start must be before the ghost jumps to it. Past it the ghost follows
+/// the pointer on the 25 px grid: always snapping pulled a full card up to
+/// half a slot, 875 px, and nothing could sit between slots (Ekin,
+/// 2026-09-27: "too strong").
+pub const SNAP_RANGE_RATIO: f64 = 0.1;
+
 fn nearest(at: f64, full: f64, size: f64, origin: f64, gutter: f64) -> f64 {
     let k = ((at - origin) / (full + gutter)).floor() as i64;
     starts(k - 1, k + 1, full, size, origin, gutter)
         .into_iter()
+        .filter(|s| (s - at).abs() <= size * SNAP_RANGE_RATIO)
         .min_by(|a, b| (a - at).abs().partial_cmp(&(b - at).abs()).unwrap())
-        .unwrap_or(at)
+        .unwrap_or_else(|| {
+            let off = origin.rem_euclid(GRID_SIZE);
+            ((at - off) / GRID_SIZE).round() * GRID_SIZE + off
+        })
 }
 
 /// The ghost at `free` (the pointer's unsnapped rect) snapped to the
@@ -111,16 +122,20 @@ mod tests {
         assert_eq!(snap_ghost(ghost, D, O, G), r(887.5, 12.5, 850., 1000.));
     }
 
-    // A full card snaps to the grid, not to a neighbour that drifted off it.
+    // Near a slot a card snaps to it; between slots it goes where the
+    // pointer puts it.
     #[test]
-    fn a_full_card_snaps_to_the_grid_not_a_drifted_neighbour() {
+    fn a_card_snaps_near_a_slot_and_moves_freely_between() {
         let ghost = r(1800., 2100., 1725., 2000.);
         assert_eq!(
             snap_ghost(ghost, D, O, G),
             r(12.5 + 1750., 12.5 + 2025., 1725., 2000.)
         );
-        let ghost = r(1500., 300., 1725., 2000.);
+        let ghost = r(1600., 150., 1725., 2000.);
         assert_eq!(snap_ghost(ghost, D, O, G), r(1762.5, 12.5, 1725., 2000.));
+        // Between slots: where the pointer puts it, on the 25 px grid.
+        let ghost = r(1100., 900., 1725., 2000.);
+        assert_eq!(snap_ghost(ghost, D, O, G), r(1112.5, 912.5, 1725., 2000.));
     }
 
     // What the drag draws: slots of the ghost's own size around it, halves
