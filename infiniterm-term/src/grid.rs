@@ -125,6 +125,34 @@ pub enum CursorKind {
     Hidden,
 }
 
+/// A move of the visual-mode cursor (`Grid::visual_move`), named for what
+/// it does rather than as alacritty's `ViMotion`, so the ui crate needs no
+/// alacritty types. Mac keys and vim keys both land here (terminal_body.rs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CursorMove {
+    Up,
+    Down,
+    Left,
+    Right,
+    WordLeft,
+    WordRight,
+    WordEnd,
+    LineStart,
+    LineEnd,
+    Top,
+    Bottom,
+    HalfPageUp,
+    HalfPageDown,
+}
+
+/// What `v`, `V` and Ctrl+V start in visual mode: vim's three selections.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisualSelect {
+    Cells,
+    Lines,
+    Block,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Frame {
     pub rows: Vec<Row>,
@@ -136,6 +164,9 @@ pub struct Frame {
     /// Whether any row carries selection colours, so clearing the
     /// selection rebuilds them.
     pub selected: bool,
+    /// Visual mode is on: `cursor` is the visual cursor, in viewport rows,
+    /// and is drawn even while the view is up in the scrollback.
+    pub visual: bool,
 }
 
 /// How many cells short of the width a row may end and still count as
@@ -164,6 +195,10 @@ pub struct Grid {
     /// The last frame drew search colours, so the next rebuilds every row
     /// to clear them.
     search_painted: bool,
+    /// Visual mode's selection came from `v` / `V` / Ctrl+V, vim's way, so
+    /// plain moves extend it; one made with Shift+move is the Mac's, and a
+    /// plain move drops it.
+    visual_sticky: bool,
 }
 
 /// What `find` found, in order from the top of the scrollback.
@@ -217,7 +252,127 @@ impl Grid {
             kitty_asked: false,
             search: None,
             search_painted: false,
+            visual_sticky: false,
         }
+    }
+
+    /// Visual mode (Cmd+Shift+C, 2026-09-27): a cursor over the output and
+    /// the scrollback, moved by keys, selecting as it goes, for copying
+    /// without the mouse. alacritty's vi mode underneath: its cursor, its
+    /// motions and its selection, which is what tmux's copy mode and
+    /// WezTerm's are too. Nothing reaches the program while it is on.
+    pub fn visual(&self) -> bool {
+        self.term.mode().contains(TermMode::VI)
+    }
+
+    /// Starts at the terminal's own cursor, or the top-left of the view
+    /// when that is off screen (alacritty's rule).
+    pub fn visual_enter(&mut self) {
+        if !self.visual() {
+            self.term.toggle_vi_mode();
+        }
+        self.term.selection = None;
+        self.visual_sticky = false;
+        self.full_dirty = true;
+    }
+
+    /// Escape, and only Escape (Ekin: leave deliberately, a copy does not):
+    /// the selection goes and the view returns to the prompt.
+    pub fn visual_leave(&mut self) {
+        if self.visual() {
+            self.term.toggle_vi_mode();
+        }
+        self.term.selection = None;
+        self.visual_sticky = false;
+        self.term.scroll_display(Scroll::Bottom);
+        self.full_dirty = true;
+    }
+
+    /// Moves the visual cursor, keeping it in view. `extend` (Shift held)
+    /// grows the selection from where the cursor was, starting one if
+    /// there is none; a plain move drops a Shift selection and extends a
+    /// `v` one.
+    pub fn visual_move(&mut self, m: CursorMove, extend: bool) {
+        use alacritty_terminal::vi_mode::ViMotion as V;
+        if !self.visual() {
+            return;
+        }
+        if extend || self.visual_sticky {
+            if !self.has_selection() {
+                self.select_at_cursor(SelectionType::Simple);
+            }
+        } else {
+            self.term.selection = None;
+        }
+        let half = (self.size.rows / 2).max(1) as i32;
+        match m {
+            CursorMove::Top => {
+                let p = Point::new(self.term.topmost_line(), Column(0));
+                self.term.vi_goto_point(p);
+            }
+            CursorMove::Bottom => {
+                let p = Point::new(self.term.bottommost_line(), Column(0));
+                self.term.vi_goto_point(p);
+            }
+            CursorMove::HalfPageUp | CursorMove::HalfPageDown => {
+                let lines = if m == CursorMove::HalfPageUp {
+                    half
+                } else {
+                    -half
+                };
+                let p = self.term.vi_mode_cursor.scroll(&self.term, lines).point;
+                self.term.vi_goto_point(p);
+            }
+            _ => {
+                self.term.vi_motion(match m {
+                    CursorMove::Up => V::Up,
+                    CursorMove::Down => V::Down,
+                    CursorMove::Left => V::Left,
+                    CursorMove::Right => V::Right,
+                    CursorMove::WordLeft => V::SemanticLeft,
+                    CursorMove::WordRight => V::SemanticRight,
+                    CursorMove::WordEnd => V::SemanticRightEnd,
+                    CursorMove::LineStart => V::First,
+                    _ => V::Last,
+                });
+                let p = self.term.vi_mode_cursor.point;
+                self.term.scroll_to_point(p);
+            }
+        }
+        self.full_dirty = true;
+    }
+
+    /// `v`, `V`, Ctrl+V: vim's toggle. The same kind again ends the
+    /// selection; another kind converts it; none starts one at the cursor.
+    pub fn visual_select(&mut self, kind: VisualSelect) {
+        let ty = match kind {
+            VisualSelect::Cells => SelectionType::Simple,
+            VisualSelect::Lines => SelectionType::Lines,
+            VisualSelect::Block => SelectionType::Block,
+        };
+        match self.term.selection.as_mut() {
+            Some(sel) if self.visual_sticky && sel.ty == ty => {
+                self.term.selection = None;
+                self.visual_sticky = false;
+            }
+            Some(sel) => {
+                sel.ty = ty;
+                self.visual_sticky = true;
+            }
+            None => {
+                self.select_at_cursor(ty);
+                self.visual_sticky = true;
+            }
+        }
+        self.full_dirty = true;
+    }
+
+    /// A selection covering the cell under the visual cursor. `include_all`
+    /// makes it non-empty, without which alacritty never extends it.
+    fn select_at_cursor(&mut self, ty: SelectionType) {
+        let mut sel = Selection::new(ty, self.term.vi_mode_cursor.point, Side::Left);
+        sel.include_all();
+        self.term.selection = Some(sel);
     }
 
     /// Searches the whole scrollback for `query` (smart case: a lowercase
@@ -675,7 +830,16 @@ impl Grid {
             line: Line(line),
             column: Column(col),
         } = cursor_point;
-        frame.cursor = (col, line.max(0) as usize);
+        frame.visual = self.visual();
+        frame.cursor = if frame.visual {
+            // The visual cursor can be up in the history: grid line to
+            // viewport row. The terminal's own cursor is drawn only at the
+            // bottom, where the two agree.
+            frame.cursor_kind = CursorKind::Block;
+            (col, (line + offset as i32).max(0) as usize)
+        } else {
+            (col, line.max(0) as usize)
+        };
         frame.display_offset = offset;
         frame.cols = cols;
         damaged
@@ -818,6 +982,68 @@ impl Grid {
 
 #[cfg(test)]
 mod tests {
+
+    // Visual mode: the cursor walks the output, Shift selects the Mac's
+    // way, and Escape puts everything back.
+    #[test]
+    fn visual_mode_moves_selects_and_leaves() {
+        let mut g = Grid::new(20, 3, 100);
+        g.advance(b"alpha beta\r\ngamma\r\n$ ");
+        g.visual_enter();
+        assert!(g.visual());
+        let pal = Palette::default_palette();
+        assert_eq!(
+            g.frame(&pal).cursor,
+            (2, 2),
+            "starts at the prompt's cursor"
+        );
+        g.visual_move(CursorMove::Top, false);
+        assert_eq!(g.frame(&pal).cursor, (0, 0));
+        g.visual_move(CursorMove::WordRight, true);
+        g.visual_move(CursorMove::Left, true);
+        g.visual_move(CursorMove::Left, true);
+        assert_eq!(g.selection_text().as_deref(), Some("alpha"));
+        // A plain move drops a Shift selection.
+        g.visual_move(CursorMove::Down, false);
+        assert!(!g.has_selection());
+        g.visual_leave();
+        assert!(!g.visual());
+        assert!(!g.has_selection());
+    }
+
+    // `v` makes the selection follow plain moves; `V` takes whole lines;
+    // the same key again ends it.
+    #[test]
+    fn visual_v_selections_follow_plain_moves() {
+        let mut g = Grid::new(20, 3, 100);
+        g.advance(b"one\r\ntwo\r\n$ ");
+        g.visual_enter();
+        g.visual_move(CursorMove::Top, false);
+        g.visual_select(VisualSelect::Lines);
+        g.visual_move(CursorMove::Down, false);
+        assert_eq!(
+            g.selection_text().as_deref(),
+            Some("one\ntwo\n"),
+            "whole lines, as vim yanks them"
+        );
+        g.visual_select(VisualSelect::Lines);
+        assert!(!g.has_selection());
+    }
+
+    // The cursor can go up into the scrollback and the view follows it.
+    #[test]
+    fn visual_top_scrolls_the_history_into_view() {
+        let mut g = Grid::new(10, 2, 100);
+        g.advance(b"1\r\n2\r\n3\r\n4\r\n5");
+        g.visual_enter();
+        g.visual_move(CursorMove::Top, false);
+        let f = g.frame(&Palette::default_palette());
+        assert!(f.display_offset > 0);
+        assert_eq!(f.cursor, (0, 0));
+        assert!(f.visual);
+        g.visual_leave();
+        assert_eq!(g.frame(&Palette::default_palette()).display_offset, 0);
+    }
 
     fn fed(text: &str) -> Grid {
         let mut g = Grid::new(20, 4, 100);

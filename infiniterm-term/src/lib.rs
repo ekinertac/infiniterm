@@ -10,3 +10,4 @@ pub mod keys;
 pub mod mouse;
 pub mod palette;
 pub mod scheduler;
+pub mod visual_keys;

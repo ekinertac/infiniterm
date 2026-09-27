@@ -355,6 +355,12 @@ impl AppView {
                 // for a clipboard is the wrong trade. The frame flushes it,
                 // the same way a terminal's OSC 52 text is flushed.
                 Effect::Copy(text) => self.clipboard_out = Some(text),
+                Effect::Visual(card_id) => {
+                    if let Some(b) = self.terminal_body(&card_id) {
+                        b.grid.visual_enter();
+                        b.dirty = true;
+                    }
+                }
                 Effect::Log(line) => eprintln!("[infiniterm] {line}"),
                 Effect::Warn(line) => eprintln!("[infiniterm/warn] {line}"),
                 Effect::AgentLog(line) => append_agent_log(&line),

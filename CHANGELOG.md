@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-09-27
 
+- Visual mode on a terminal card (Cmd+Shift+C): a cursor over the output and the scrollback, moved with the arrows, Alt/Cmd+arrows, Home/End and Page Up/Down or with vim's h j k l, w b e, 0 $, g G. Shift+move or v / V / Ctrl+V selects, Cmd+C or y copies, Escape leaves. Nothing you type reaches the shell while it is on.
 - Multiple cursors in the editor: Cmd+click adds or removes one, Ctrl+Shift+Up/Down adds a column, Cmd+D adds the next occurrence, Ctrl+Cmd+G selects every occurrence, Cmd+Shift+L splits a selection into lines, Escape goes back to one cursor. Typing, deleting and moving work at every cursor; copy, paste and the line commands still act on the main one, and an edit made at several cursors takes several Cmd+Z to undo.
 - A green (done) card turns grey once you have looked at it for a moment or typed into it, and the workspace tab's dots show every done card you have not looked at yet. Before, a card stayed green until its next turn and the tab forgot it the moment you visited the workspace.
 - Cmd+3 on a card outside a group fits the block of cards around it (every card within a gutter of the next), not only a group.

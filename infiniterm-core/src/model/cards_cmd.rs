@@ -1292,6 +1292,19 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("browser.find", "Browser: find in page", Model::open_find);
     r.register("card.find", "Card: find in this card", Model::find_in_card);
     r.register(
+        "terminal.visual",
+        "Terminal: visual mode, a cursor over the output",
+        |m| {
+            m.with_active_card(|m, id| {
+                if m.card(&id).map(|c| c.kind) == Some(CardKind::Terminal) {
+                    m.effects.push(Effect::Visual(id));
+                } else {
+                    m.notify("visual mode works in terminals");
+                }
+            })
+        },
+    );
+    r.register(
         "card.findSelection",
         "Find: use selection for find",
         Model::find_selection,

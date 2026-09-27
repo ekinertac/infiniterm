@@ -343,6 +343,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "card.findSelection",
         "use selection for find, macOS's",
     ),
+    // A cursor over a terminal's output for copying without the mouse
+    // (2026-09-27): iTerm2's key for its copy mode, free here.
+    (
+        "cmd+shift+c",
+        "terminal.visual",
+        "visual mode: move a cursor over the output, Esc leaves",
+    ),
     // A letter on every card, one keystroke to any of them: jump. Cmd+F
     // until 2026-09-26; Cmd+H was the first choice and is Hide on macOS.
     ("cmd+j", "focus.hint", "jump to a card by its letter"),

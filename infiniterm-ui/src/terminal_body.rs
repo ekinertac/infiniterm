@@ -602,6 +602,68 @@ const AUTOSCROLL_MAX_LINES: f64 = 4.;
 pub const READOPT_POLL_MS: f64 = 1000.;
 
 impl TerminalBody {
+    /// A key in visual mode: move, select, copy (staying in the mode) or
+    /// leave on Escape.
+    fn visual_key(&mut self, k: &Keystroke, cx: &mut App) {
+        use infiniterm_term::visual_keys::{visual_key, VisualKey};
+        let m = &k.modifiers;
+        let key = Key {
+            name: &k.key,
+            text: k.key_char.as_deref(),
+            ctrl: m.control,
+            alt: m.alt,
+            shift: m.shift,
+            cmd: m.platform,
+        };
+        match visual_key(&key) {
+            VisualKey::Move(to, extend) => self.grid.visual_move(to, extend),
+            VisualKey::Select(kind) => self.grid.visual_select(kind),
+            VisualKey::Copy => {
+                if let Some(text) = self.grid.selection_text() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }
+            VisualKey::Leave => self.grid.visual_leave(),
+            VisualKey::Swallow => return,
+        }
+        self.dirty = true;
+    }
+
+    /// The tag in the card's bottom-right corner while visual mode is on,
+    /// in the cursor's colour, so a card that ignores typing says why.
+    fn paint_visual_tag(
+        &self,
+        bounds: Bounds<Pixels>,
+        scale: f64,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let size_px = px((ERROR_FONT_PX * scale) as f32);
+        if size_px < crate::chrome::legible_font_px(window.scale_factor()) {
+            return;
+        }
+        let pad = px((ERROR_PAD_PX * scale) as f32);
+        let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
+        let f = term_font(&self.font_family);
+        let line = crate::text::shape(window, "VISUAL", size_px, &f, rgb(self.palette.background));
+        let w = line.width + pad * 2.;
+        let h = line_h + pad;
+        let origin = point(
+            bounds.origin.x + bounds.size.width - w - pad,
+            bounds.origin.y + bounds.size.height - h - pad,
+        );
+        window.paint_quad(fill(
+            Bounds::new(origin, size(w, h)),
+            rgb(self.palette.cursor),
+        ));
+        let _ = line.paint(
+            point(origin.x + pad, origin.y + pad / 2.),
+            line_h,
+            window,
+            cx,
+        );
+    }
+
     /// One line across the top, over the frozen screen: what happened and
     /// that nothing needs doing.
     fn paint_displaced(
@@ -704,9 +766,11 @@ impl CardBody for TerminalBody {
             font_size >= crate::chrome::legible_font_px(window.scale_factor()) && !self.crowded;
         // The cursor under the text: solid when focused and on, hollow when
         // the card is not focused, nothing while scrolled into history.
-        if frame.cursor_kind != CursorKind::Hidden
-            && frame.display_offset == 0
-            && (!focused || self.painted_phase)
+        // The visual cursor is drawn anywhere in the history, and solid.
+        if frame.visual
+            || frame.cursor_kind != CursorKind::Hidden
+                && frame.display_offset == 0
+                && (!focused || self.painted_phase)
         {
             let (col, row) = frame.cursor;
             let x = origin.x + cell_w * col as f32;
@@ -869,7 +933,11 @@ impl CardBody for TerminalBody {
             );
             timing_add(3, t);
         }
+        let visual = frame.visual;
         self.frame = frame;
+        if visual {
+            self.paint_visual_tag(bounds, scale, window, cx);
+        }
         self.paint_scrim(bounds, focused, window);
     }
 
@@ -884,6 +952,11 @@ impl CardBody for TerminalBody {
             return BodyAction::None;
         }
         let m = &k.modifiers;
+        // Visual mode takes every key and sends none (visual_keys.rs).
+        if self.grid.visual() {
+            self.visual_key(k, cx);
+            return BodyAction::None;
+        }
         // The app owns Cmd; the Cmd keys a terminal answers are copy, paste
         // and the line-movement arrows the encoder knows.
         if m.platform && k.key == "c" {
@@ -926,7 +999,7 @@ impl CardBody for TerminalBody {
     /// The emoji panel, a finished composition, an input method's commit:
     /// text with no key behind it, sent as if typed.
     fn insert_text(&mut self, text: &str) {
-        if text.is_empty() {
+        if text.is_empty() || self.grid.visual() {
             return;
         }
         self.grid.scroll_to_bottom();
