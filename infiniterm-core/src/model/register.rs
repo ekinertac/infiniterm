@@ -1271,6 +1271,37 @@ mod tests {
             .any(|e| matches!(e, Effect::AnimateFit(v) if v.scale == 1.)));
     }
 
+    // A dialog owns the keyboard: the group-name prompt is modal, the
+    // switcher is not (it runs on Ctrl held down).
+    #[test]
+    fn a_dialog_is_modal_and_the_switcher_is_not() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        h.m.set_focus(Some(&ids[0]));
+        h.m.extend_to(&ids[1]);
+        assert!(!h.m.modal_open());
+        h.run("group.new");
+        assert!(h.m.prompt.is_open(), "Cmd+G asks for the name");
+        assert!(h.m.modal_open());
+    }
+
+    // Shift+click: the card clicked takes the focus, the one it left stays
+    // selected, and a second Shift+click on a member takes it out.
+    #[test]
+    fn shift_click_builds_a_selection_and_takes_cards_out() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        h.m.set_focus(Some(&ids[0]));
+        h.m.extend_to(&ids[1]);
+        h.m.extend_to(&ids[2]);
+        assert_eq!(h.m.selection.focused_id.as_deref(), Some(ids[2].as_str()));
+        assert_eq!(h.m.selection.extra, vec![ids[0].clone(), ids[1].clone()]);
+        h.m.tick(h.m.now_ms + 5_000.);
+        assert_eq!(h.m.selection.extra.len(), 2, "nothing clears it on its own");
+        h.m.extend_to(&ids[0]);
+        assert_eq!(h.m.selection.extra, vec![ids[1].clone()]);
+    }
+
     // Cmd+= / Cmd+- size the terminal font, one point a press, saved, and
     // stop at the ends; the canvas does not zoom.
     #[test]

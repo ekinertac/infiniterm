@@ -157,6 +157,13 @@ impl Model {
             || self.switcher.is_some()
     }
 
+    /// An overlay that owns the keyboard: while one is up no chord reaches
+    /// the canvas behind it (input.rs `key_down`). The card switcher is left
+    /// out: it is driven by Ctrl held down and handles its keys first.
+    pub fn modal_open(&self) -> bool {
+        self.overlay_open() && self.switcher.is_none()
+    }
+
     /// Recomputed every time it is asked for, so it is never stale.
     pub fn palette_items(
         &self,

@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-09-28
 
+- A dialog, the command palette, the address bar and the shortcuts panel keep every Cmd and Ctrl shortcut to themselves while they are open, so text shortcuts work in their fields and nothing moves the canvas behind them. Cmd+Alt+Arrow in the group-name dialog walked the cards, and Cmd+Shift+[ switched workspace with the dialog still open.
+- Shift+click on a card's label or frame adds it to the selection, as it already did inside the card.
 - Cmd+= and Cmd+- make the terminal font bigger and smaller, one point a press, for every terminal card, and the size is saved. They zoomed the canvas before; zoom with Cmd+scroll, a pinch or the palette. "Terminal: default font size" in the palette goes back to 14.
 
 ### 2026-09-27

@@ -205,6 +205,15 @@ impl AppView {
                 });
             }
             Hit::CardEdge { id, edge } => {
+                // Shift+click on the frame or the label chip, the parts of a
+                // card that are always ours: the body's rule, and before
+                // 2026-09-28 a plain focus here, so a Shift+click aimed at
+                // the label (the obvious place zoomed out) selected nothing.
+                if e.modifiers.shift && button == 0 {
+                    self.model.extend_to(&id);
+                    self.perform_effects();
+                    return;
+                }
                 self.model.set_focus(Some(&id));
                 // A double-click on the frame fits the card, which is Cmd+1
                 // for the mouse. The frame and not the body: a double-click
@@ -813,6 +822,24 @@ impl AppView {
         // Save, not a split of the card behind the dialog.
         if let Some(kind) = self.model.prompt.chord(&chord) {
             self.prompt_press(kind);
+            return true;
+        }
+        // A dialog, the palette, the address bar or the shortcuts panel is
+        // modal: a chord goes to it (a field's Cmd+Arrow, Alt+Backspace,
+        // Cmd+V) and one it does not take goes nowhere. Before 2026-09-28
+        // the canvas had every chord first: Cmd+Alt+Arrow in the group-name
+        // dialog walked the cards behind it, and Cmd+Shift+[ switched
+        // workspace with the dialog still up (Ekin).
+        if (m.platform || m.control) && self.model.modal_open() {
+            if self.model.palette_open() {
+                self.palette_key(k, cx);
+            } else if self.model.omni.open {
+                self.omni_key(k, cx);
+            } else if self.model.prompt.is_open() {
+                self.prompt_key(k, cx);
+            } else if self.model.shortcuts_open {
+                self.shortcuts_key(k, cx);
+            }
             return true;
         }
         if (m.platform || m.control) && handle_chord(&mut self.model, &self.registry, &chord) {
