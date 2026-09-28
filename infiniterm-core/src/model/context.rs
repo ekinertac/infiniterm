@@ -196,6 +196,18 @@ impl Model {
         let Some(card) = self.focused().cloned() else {
             return;
         };
+        // A selection of several cards is the unit you named: fit them.
+        if !self.selection.extra.is_empty() {
+            let rects: Vec<Rect> = self
+                .selected_ids()
+                .iter()
+                .filter_map(|id| self.card(id).map(|c| c.rect))
+                .collect();
+            if let Some(bounds) = bounding_rect(&rects) {
+                self.apply_viewport(fit_rect(bounds, self.view_size));
+            }
+            return;
+        }
         if let Some(g) = &card.group_id {
             return self.fit_group(g);
         }

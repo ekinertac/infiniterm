@@ -1271,6 +1271,28 @@ mod tests {
             .any(|e| matches!(e, Effect::AnimateFit(v) if v.scale == 1.)));
     }
 
+    // Cmd+3 with several cards selected fits exactly those cards; with one
+    // it fits that card's block.
+    #[test]
+    fn fit_group_fits_a_selection_of_cards() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        h.m.set_focus(Some(&ids[0]));
+        h.m.extend_to(&ids[3]);
+        let rects: Vec<_> = [&ids[0], &ids[3]]
+            .iter()
+            .map(|id| h.m.card(id).unwrap().rect)
+            .collect();
+        let want = crate::viewport::fit_rect(
+            crate::viewport::bounding_rect(&rects).unwrap(),
+            h.m.view_size,
+        );
+        let effects = h.run("canvas.zoom.fitGroup");
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::AnimateFit(v) if *v == want)));
+    }
+
     // A closed terminal's session is parked, not killed: a reopen takes it
     // back and it is no longer due to end; one nobody reopens is ended
     // after PARK_MS.

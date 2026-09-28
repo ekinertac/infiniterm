@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-09-29
 
+- Cmd+3 with several cards selected fits exactly those cards. With one card it still fits its group or the block around it.
 - Closing a terminal card keeps its program running for a minute: reopen the card (Cmd+Z or Cmd+Shift+T) and an agent comes back mid-work, where before it was killed and only the folder came back.
 - Cmd+Shift+T reopens the last closed card, as in a browser. The placement menu moved to Cmd+Ctrl+T.
 - Leftover sessions from closed cards are now reliably ended at launch; with a long scrollback the kill could be lost.
