@@ -37,9 +37,10 @@ pub const CLOSED_RING: usize = 10;
 
 /// How long a closed terminal's session keeps running for a reopen (Cmd+Z,
 /// Cmd+Shift+T) to take back mid-work. Ekin's mouse had Cmd+W on a thumb
-/// button and closed running agents; ten minutes is long enough to notice,
-/// short enough that closed cards do not pile up as hidden processes.
-pub const PARK_MS: f64 = 10. * 60. * 1000.;
+/// button and closed running agents. One minute (Ekin's call; ten was the
+/// first try): an accident is noticed at once, and a card closed on purpose
+/// does not linger as a hidden process.
+pub const PARK_MS: f64 = 60. * 1000.;
 
 impl Model {
     /// `already_exited` says the shell is gone, so there is nothing to kill.
