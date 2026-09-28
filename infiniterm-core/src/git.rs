@@ -45,8 +45,10 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The repository a path is in, or an error saying it is in none.
-fn repo_of(path: &Path) -> Result<std::path::PathBuf, String> {
+/// The repository a path is in, or an error saying it is in none. Public
+/// for the editor's gutter, which wants only the root (to call
+/// `git_show_head` with) and not a full `git_changes` numstat for it.
+pub fn repo_of(path: &Path) -> Result<std::path::PathBuf, String> {
     let dir = if path.is_dir() {
         path
     } else {
