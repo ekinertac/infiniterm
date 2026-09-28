@@ -755,6 +755,7 @@ impl Model {
         if card.number == 0 || self.cards.iter().any(|c| c.number == card.number) {
             card.number = self.take_number();
         }
+        self.unpark(card.session.as_deref());
         self.cards.push(card);
         self.set_focus(Some(&id));
         self.reveal_focused();

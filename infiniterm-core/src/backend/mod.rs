@@ -242,6 +242,29 @@ impl Panes {
         }
     }
 
+    /// A closed card's pane, kept alive for a reopen: the daemon detaches
+    /// and the session keeps running (true); the others cannot keep a pane
+    /// nobody reads, so it is killed (false).
+    pub fn park(&self, pane: PaneId) -> bool {
+        match self {
+            Panes::Daemon(b) => {
+                b.detach_now(pane);
+                true
+            }
+            _ => {
+                self.kill(pane);
+                false
+            }
+        }
+    }
+
+    /// Ends a parked session whose time ran out.
+    pub fn kill_session(&self, session_id: &str) {
+        if let Panes::Daemon(b) = self {
+            b.kill_session(session_id)
+        }
+    }
+
     pub fn write(&self, pane: PaneId, bytes: &[u8]) {
         self.write_now(pane, bytes)
     }

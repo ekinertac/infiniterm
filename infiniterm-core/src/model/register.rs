@@ -1271,6 +1271,62 @@ mod tests {
             .any(|e| matches!(e, Effect::AnimateFit(v) if v.scale == 1.)));
     }
 
+    // A closed terminal's session is parked, not killed: a reopen takes it
+    // back and it is no longer due to end; one nobody reopens is ended
+    // after PARK_MS.
+    #[test]
+    fn a_closed_terminal_is_parked_and_a_reopen_takes_it_back() {
+        use crate::model::lifecycle::PARK_MS;
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        for (i, id) in ids.iter().enumerate() {
+            let c = h.m.card_mut(id).unwrap();
+            c.pane_id = Some(100 + i as u32);
+            c.session = Some(format!("s{i}"));
+            c.agent = crate::agent_state::AgentState::Working;
+        }
+        h.m.set_focus(Some(&ids[0]));
+        let effects = h.run("card.close");
+        assert!(effects.iter().any(|e| matches!(e, Effect::ParkPane(100))));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::KillPane(_))));
+        assert_eq!(h.m.parked.len(), 1);
+        let effects = h.run("card.reopen");
+        assert!(h.m.parked.is_empty(), "taken back");
+        let back = h.m.card(&ids[0]).unwrap();
+        assert_eq!(back.session.as_deref(), Some("s0"));
+        assert_eq!(
+            back.agent,
+            crate::agent_state::AgentState::Working,
+            "still mid-work"
+        );
+        assert!(!effects.iter().any(|e| matches!(e, Effect::KillSession(_))));
+        h.m.set_focus(Some(&ids[1]));
+        h.run("card.close");
+        let t = h.m.now_ms;
+        h.m.tick(t + PARK_MS - 1.);
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::KillSession(_))));
+        h.m.tick(t + PARK_MS);
+        assert!(h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::KillSession(s) if s == "s1")));
+        assert!(h.m.parked.is_empty());
+        // Cmd+Shift+T reopens, as in a browser; the placement menu moved.
+        let chord = |c: &str| {
+            h.m.keymap
+                .iter()
+                .find(|(k, _)| k == c)
+                .map(|(_, id)| id.clone())
+        };
+        assert_eq!(chord("cmd+shift+t").as_deref(), Some("card.reopen"));
+        assert_eq!(chord("cmd+ctrl+t").as_deref(), Some("card.place"));
+    }
+
     // A dialog owns the keyboard: the group-name prompt is modal, the
     // switcher is not (it runs on Ctrl held down).
     #[test]

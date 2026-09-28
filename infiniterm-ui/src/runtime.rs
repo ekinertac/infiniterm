@@ -284,6 +284,20 @@ impl AppView {
                     });
                 }
                 Effect::KillPane(pane) => self.backend.pty.kill(pane),
+                // Parked: the session keeps running and is listed as live,
+                // so a reopened card adopts it (`reconcile_terminals`).
+                Effect::ParkPane(pane) => {
+                    let session = self.backend.pty.session_id(pane);
+                    if self.backend.pty.park(pane) {
+                        if let Some(s) = session {
+                            self.live_sessions.push(s);
+                        }
+                    }
+                }
+                Effect::KillSession(session) => {
+                    self.backend.pty.kill_session(&session);
+                    self.live_sessions.retain(|s| s != &session);
+                }
                 Effect::KillAllPanes => self.backend.pty.kill_all(),
                 Effect::ClearPane(pane) => {
                     if let Some(body) = self.terminal_for_pane(pane) {

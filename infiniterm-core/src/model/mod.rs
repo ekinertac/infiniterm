@@ -259,6 +259,11 @@ pub enum Effect {
     /// Direct manipulation or a fit began; any in-flight animation stops.
     CancelAnimation,
     KillPane(PaneId),
+    /// A closed terminal card's pane: detached, its session left running
+    /// for `PARK_MS` so a reopen takes the program back mid-work.
+    ParkPane(PaneId),
+    /// A parked session nobody reopened in time.
+    KillSession(String),
     KillAllPanes,
     /// `app.keycast`: the ui owns the overlay and its clock.
     ToggleKeycast,
@@ -583,6 +588,10 @@ pub struct Model {
     /// as every other runtime fact. Cheap closing is what keeps a canvas
     /// from silting up, and it is only cheap if it is undoable.
     pub closed: Vec<Card>,
+    /// Sessions of closed cards still running, with when they end
+    /// (`lifecycle.rs` `PARK_MS`). Runtime-only: a relaunch's orphan sweep
+    /// ends whatever is left.
+    pub parked: Vec<(String, f64)>,
     /// `dev.stress.zoom` in progress: the step taken so far and when the
     /// next is due. Steps run from `tick`, which is the model's only clock.
     pub stress_zoom: Option<(u32, f64)>,
@@ -664,6 +673,7 @@ impl Model {
             dev_build: cfg!(debug_assertions),
             config_pairs: vec![],
             closed: vec![],
+            parked: vec![],
             stress_zoom: None,
             now_ms: 0.,
             effects: vec![],
@@ -679,6 +689,7 @@ impl Model {
         self.promote_focus();
         self.promote_programs();
         self.clear_seen_done();
+        self.end_parked();
         self.sync_covers();
         self.close_when_saved();
         if self.notice.is_some() && now_ms >= self.notice_until {

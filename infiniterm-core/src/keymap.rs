@@ -215,12 +215,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "card.size",
         "a size from the default's fractions: full, halves, quarter, doubles",
     ),
-    // The undo for Cmd+W. Cmd+Shift+T is the browser's chord for this and
-    // is already the placement menu here, so the close chord takes Ctrl.
+    // The undo for Cmd+W, on the browser's chord for it: Ekin reached for
+    // Cmd+Shift+T by reflex after a close. Cmd+Ctrl+T held it until
+    // 2026-09-28 and the placement menu had Shift; they swapped.
     (
-        "cmd+ctrl+t",
+        "cmd+shift+t",
         "card.reopen",
-        "Cmd+Shift+T is already the placement menu",
+        "reopen the card you closed, the browser's chord",
     ),
     // The editor's save. A terminal has nothing to save, so the key is inert
     // there rather than reaching the shell, the same as every Cmd key.
@@ -312,7 +313,7 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
     ),
     // Cmd+T with Shift: a new terminal, but WHERE is the question. A short
     // menu whose first entry letters every empty slot around the cards.
-    ("cmd+shift+t", "card.place", "a new terminal, but WHERE"),
+    ("cmd+ctrl+t", "card.place", "a new terminal, but WHERE"),
     // Snippets: Cmd+Ctrl+S, chosen by Ekin over Cmd+Shift+V; Ctrl with
     // Shift or Cmd is comfortable where Ctrl with Alt is not.
     (

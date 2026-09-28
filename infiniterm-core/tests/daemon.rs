@@ -270,3 +270,46 @@ fn adopting_a_session_makes_the_program_repaint() {
 
     backend2.kill_now(pane2);
 }
+
+// A closed card's pane is PARKED: `detach_now` lets go of that one pane
+// while the session runs on, the same backend adopts it back with its
+// ring, and `kill_session` ends a parked session by id (a reopen too late).
+#[test]
+fn a_parked_pane_is_adopted_back_and_kill_session_ends_it() {
+    ensure_iftd_on_path();
+    let dir = TempDir::new();
+    let (backend, rx) = DaemonBackend::new(dir.path().to_path_buf(), 4);
+    let pane = backend
+        .spawn_now(Path::new("/tmp"), None, vec![])
+        .expect("iftd starts");
+    backend.write_now(pane, b"echo parked-42\n");
+    assert!(wait_for_event(
+        &rx,
+        pane,
+        |e| matches!(e, PaneEvent::Output(b) if String::from_utf8_lossy(b).contains("parked-42")),
+    )
+    .is_some());
+    let session_id = backend.session_id(pane).expect("a session id");
+    backend.detach_now(pane);
+    assert!(
+        wait_for_event(&rx, pane, |e| matches!(e, PaneEvent::Detached)).is_some(),
+        "the reader lets go"
+    );
+    let socket = dir.path().join(format!("{session_id}.sock"));
+    assert!(socket.exists(), "the session is still running");
+
+    let pane2 = backend.adopt(&session_id).expect("taken back");
+    assert!(wait_for_event(
+        &rx,
+        pane2,
+        |e| matches!(e, PaneEvent::Replay(b) if String::from_utf8_lossy(b).contains("parked-42")),
+    )
+    .is_some());
+
+    backend.detach_now(pane2);
+    backend.kill_session(&session_id);
+    assert!(
+        wait_until(|| !socket.exists()),
+        "a parked session nobody reopened is ended"
+    );
+}

@@ -35,6 +35,12 @@ fn short(id: &str) -> &str {
 /// shallow enough that it is an undo and not a graveyard.
 pub const CLOSED_RING: usize = 10;
 
+/// How long a closed terminal's session keeps running for a reopen (Cmd+Z,
+/// Cmd+Shift+T) to take back mid-work. Ekin's mouse had Cmd+W on a thumb
+/// button and closed running agents; ten minutes is long enough to notice,
+/// short enough that closed cards do not pile up as hidden processes.
+pub const PARK_MS: f64 = 10. * 60. * 1000.;
+
 impl Model {
     /// `already_exited` says the shell is gone, so there is nothing to kill.
     pub fn close_card(&mut self, id: &str, already_exited: bool) {
@@ -77,16 +83,37 @@ impl Model {
             }
             return;
         }
-        // Remembered before anything is torn down, so Cmd+Ctrl+T can put it
+        // A terminal's session is PARKED rather than killed: it keeps
+        // running for `PARK_MS`, and a reopen in that time adopts it, the
+        // program still mid-work (`end_parked` kills it after).
+        let parked = match (already_exited, card.pane_id, &card.session) {
+            (false, Some(pane), Some(session)) if card.kind == CardKind::Terminal => {
+                self.parked.push((session.clone(), self.now_ms + PARK_MS));
+                self.effects.push(Effect::ParkPane(pane));
+                true
+            }
+            _ => false,
+        };
+        // Remembered before anything is torn down, so Cmd+Shift+T can put it
         // back. Runtime facts are stripped for the same reason the save file
         // strips them: a restored card is a fresh shell in the same
         // directory, never a resurrected process claiming to be working.
+        // A parked card keeps its agent's state and transcript: its process
+        // IS still running and comes back with it.
         self.closed.push(Card {
             pane_id: None,
-            agent: crate::agent_state::AgentState::None,
+            agent: if parked {
+                card.agent
+            } else {
+                crate::agent_state::AgentState::None
+            },
             dirty: false,
             command: None,
-            transcript_path: None,
+            transcript_path: if parked {
+                card.transcript_path.clone()
+            } else {
+                None
+            },
             ..card.clone()
         });
         if self.closed.len() > CLOSED_RING {
@@ -99,7 +126,7 @@ impl Model {
 
         // Kill the PTY explicitly: dropping the body would leave the shell
         // running with nothing reading it.
-        if let (false, Some(pane)) = (already_exited, card.pane_id) {
+        if let (false, false, Some(pane)) = (parked, already_exited, card.pane_id) {
             self.effects.push(Effect::KillPane(pane));
         }
         // Closing is the one act that means "discard": the unsaved buffer
@@ -223,6 +250,28 @@ impl Model {
             self.reveal_focused();
         } else {
             self.selection.extra.retain(|e| e != id);
+        }
+    }
+}
+
+impl Model {
+    /// A parked session whose time is up is ended; run from `tick`.
+    pub(super) fn end_parked(&mut self) {
+        let now = self.now_ms;
+        let (done, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.parked)
+            .into_iter()
+            .partition(|(_, until)| now >= *until);
+        self.parked = keep;
+        for (session, _) in done {
+            self.effects.push(Effect::KillSession(session));
+        }
+    }
+
+    /// A reopened card takes its parked session back: it is no longer due
+    /// to be ended.
+    pub(super) fn unpark(&mut self, session: Option<&str>) {
+        if let Some(s) = session {
+            self.parked.retain(|(p, _)| p != s);
         }
     }
 }

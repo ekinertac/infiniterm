@@ -6,6 +6,12 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-09-29
+
+- Closing a terminal card keeps its program running for 10 minutes: reopen the card (Cmd+Z or Cmd+Shift+T) and an agent comes back mid-work, where before it was killed and only the folder came back.
+- Cmd+Shift+T reopens the last closed card, as in a browser. The placement menu moved to Cmd+Ctrl+T.
+- Leftover sessions from closed cards are now reliably ended at launch; with a long scrollback the kill could be lost.
+
 ### 2026-09-28
 
 - A dialog, the command palette, the address bar and the shortcuts panel keep every Cmd and Ctrl shortcut to themselves while they are open, so text shortcuts work in their fields and nothing moves the canvas behind them. Cmd+Alt+Arrow in the group-name dialog walked the cards, and Cmd+Shift+[ switched workspace with the dialog still open.

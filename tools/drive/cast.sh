@@ -317,7 +317,7 @@ take() {
     slow "cd $APP_DIR && git diff --stat"
     enter
     hold 2
-    cmd_shift t
+    key t "command down, control down"
     hold 1.5
     shot 05-placement 1
     esc

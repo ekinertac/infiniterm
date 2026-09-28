@@ -336,6 +336,30 @@ impl DaemonBackend {
         credit.close();
     }
 
+    /// Lets go of one pane WITHOUT ending its session: the card closed but
+    /// may come back (`Model::parked`), and `adopt` takes it back. The
+    /// reader sees EOF and reports `Detached`, which no card owns any more.
+    pub fn detach_now(&self, pane: PaneId) {
+        let found = {
+            let panes = self.panes.lock().unwrap();
+            panes
+                .get(&pane)
+                .map(|p| (p.stream.clone(), p.credit.clone()))
+        };
+        let Some((stream, credit)) = found else {
+            return;
+        };
+        let _ = stream.lock().unwrap().shutdown(Shutdown::Both);
+        credit.close();
+    }
+
+    /// Ends a session no pane of ours holds: a parked card's, once nobody
+    /// reopened it in time. `kill_orphans`' way, for one id.
+    pub fn kill_session(&self, session_id: &str) {
+        let socket = self.sessions_dir.join(format!("{session_id}.sock"));
+        std::thread::spawn(move || send_kill(&socket));
+    }
+
     pub fn ack_now(&self, pane: PaneId, bytes: usize) {
         let credit = self
             .panes
@@ -366,9 +390,7 @@ impl DaemonBackend {
                 continue;
             }
             let socket = self.sessions_dir.join(format!("{id}.sock"));
-            if let Ok(mut s) = UnixStream::connect(&socket) {
-                let _ = s.write_all(&Frame::Kill.encode());
-            }
+            std::thread::spawn(move || send_kill(&socket));
         }
         // A dead session's ring that no saved card will ask for (the card
         // was closed while the app was down) is a leftover, not scrollback.
@@ -570,6 +592,31 @@ fn run_reader(
     if !exited {
         let _ = tx.send((id, PaneEvent::Detached));
     }
+}
+
+/// How long `send_kill` waits for a daemon to greet and then to go.
+const KILL_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Ends the session behind `socket` from a connection of its own. iftd
+/// greets every client with `Hello` and the whole ring BEFORE it reads a
+/// frame, and drops a client whose greeting fails to send; a Kill written
+/// on connect and the socket closed straight after was lost that way
+/// whenever the ring outgrew the socket buffer (found 2026-09-29 by the
+/// parked-session test). So: read the greeting, send Kill, and hold the
+/// connection until the daemon closes it. Blocking; callers run it on a
+/// thread of its own.
+fn send_kill(socket: &Path) {
+    let Ok(mut s) = UnixStream::connect(socket) else {
+        return;
+    };
+    if read_hello(&mut s).is_err() {
+        return;
+    }
+    // After the greeting: `read_hello` sets its own short poll.
+    let _ = s.set_read_timeout(Some(KILL_WAIT));
+    let _ = s.write_all(&Frame::Kill.encode());
+    let mut sink = [0u8; 8192];
+    while matches!(s.read(&mut sink), Ok(n) if n > 0) {}
 }
 
 /// After a replay ends, jog the pane's width down one column and back so a
