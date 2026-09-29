@@ -242,26 +242,22 @@ impl Panes {
         }
     }
 
-    /// A closed card's pane, kept alive for a reopen: the daemon detaches
-    /// and the session keeps running (true); the others cannot keep a pane
-    /// nobody reads, so it is killed (false).
-    pub fn park(&self, pane: PaneId) -> bool {
+    /// Only the daemon can hand a closed card's running program back to a
+    /// reopened one (`Model::can_park`): the local backend has no session
+    /// to adopt, and tmux was left as it was.
+    pub fn can_park(&self) -> bool {
+        matches!(self, Panes::Daemon(_))
+    }
+
+    /// Lets go of a parked card's pane so its reopened card can adopt the
+    /// session again. True when the session is left running for that.
+    pub fn release(&self, pane: PaneId) -> bool {
         match self {
             Panes::Daemon(b) => {
                 b.detach_now(pane);
                 true
             }
-            _ => {
-                self.kill(pane);
-                false
-            }
-        }
-    }
-
-    /// Ends a parked session whose time ran out.
-    pub fn kill_session(&self, session_id: &str) {
-        if let Panes::Daemon(b) = self {
-            b.kill_session(session_id)
+            _ => false,
         }
     }
 

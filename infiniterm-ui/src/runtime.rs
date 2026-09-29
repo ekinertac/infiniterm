@@ -284,19 +284,16 @@ impl AppView {
                     });
                 }
                 Effect::KillPane(pane) => self.backend.pty.kill(pane),
-                // Parked: the session keeps running and is listed as live,
-                // so a reopened card adopts it (`reconcile_terminals`).
-                Effect::ParkPane(pane) => {
+                // A parked card reopened: the session keeps running and is
+                // listed as live, so its new body adopts it and the ring's
+                // replay redraws what it missed (`reconcile_terminals`).
+                Effect::ReleasePane(pane) => {
                     let session = self.backend.pty.session_id(pane);
-                    if self.backend.pty.park(pane) {
+                    if self.backend.pty.release(pane) {
                         if let Some(s) = session {
                             self.live_sessions.push(s);
                         }
                     }
-                }
-                Effect::KillSession(session) => {
-                    self.backend.pty.kill_session(&session);
-                    self.live_sessions.retain(|s| s != &session);
                 }
                 Effect::KillAllPanes => self.backend.pty.kill_all(),
                 Effect::ClearPane(pane) => {
@@ -569,10 +566,13 @@ impl AppView {
             // what the state WAS: "the card went colourless and I do not
             // know which event did it" is not answerable from a screenshot.
             let before = self.model.card(&report.card_id).map(|c| c.agent);
+            let waiting = self.model.waiting_parked().map(|c| c.id.clone());
             self.model.apply_hook(&report);
             let after = self.model.card(&report.card_id).map(|c| c.agent);
             log_agent_event(&report, before, after);
-            self.redraw |= before != after;
+            // A closed card's agent starting to wait changes the status bar.
+            self.redraw |=
+                before != after || waiting != self.model.waiting_parked().map(|c| c.id.clone());
         }
         while let Ok(statuses) = self.backend.pane_status.try_recv() {
             self.model.apply_pane_statuses(&statuses);
@@ -785,6 +785,7 @@ pub fn startup(app: &mut AppView) {
     app.animator.animations_on = app.model.config.ui.animations && !app.reduce_motion;
     // Before any card exists: which sessions the last launch left running.
     app.live_sessions = app.backend.pty.live_sessions();
+    app.model.can_park = app.backend.pty.can_park();
     app.model
         .load_layout(infiniterm_core::layout_file::read_layout().as_deref());
     // The omnibox ranks against this; a missing file is an empty history.

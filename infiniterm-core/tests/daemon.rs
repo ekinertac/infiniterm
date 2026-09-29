@@ -271,11 +271,11 @@ fn adopting_a_session_makes_the_program_repaint() {
     backend2.kill_now(pane2);
 }
 
-// A closed card's pane is PARKED: `detach_now` lets go of that one pane
-// while the session runs on, the same backend adopts it back with its
-// ring, and `kill_session` ends a parked session by id (a reopen too late).
+// A reopened card takes its closed program back: `detach_now` lets go of
+// that one pane while the session runs on, and the same backend adopts it
+// back with its ring.
 #[test]
-fn a_parked_pane_is_adopted_back_and_kill_session_ends_it() {
+fn a_released_pane_is_adopted_back_with_its_ring() {
     ensure_iftd_on_path();
     let dir = TempDir::new();
     let (backend, rx) = DaemonBackend::new(dir.path().to_path_buf(), 4);
@@ -306,10 +306,6 @@ fn a_parked_pane_is_adopted_back_and_kill_session_ends_it() {
     )
     .is_some());
 
-    backend.detach_now(pane2);
-    backend.kill_session(&session_id);
-    assert!(
-        wait_until(|| !socket.exists()),
-        "a parked session nobody reopened is ended"
-    );
+    backend.kill_now(pane2);
+    assert!(wait_until(|| !socket.exists()), "and it ends when killed");
 }

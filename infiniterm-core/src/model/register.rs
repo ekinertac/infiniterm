@@ -1293,51 +1293,76 @@ mod tests {
             .any(|e| matches!(e, Effect::AnimateFit(v) if *v == want)));
     }
 
-    // A closed terminal's session is parked, not killed: a reopen takes it
-    // back and it is no longer due to end; one nobody reopens is ended
-    // after PARK_MS.
+    // A closed terminal is watched, not timed: kept while it works, ended
+    // after PARK_MS of quiet, kept while its agent waits for you (Alt+T
+    // brings that one back), and a reopen takes the running program back.
     #[test]
-    fn a_closed_terminal_is_parked_and_a_reopen_takes_it_back() {
+    fn a_closed_terminal_runs_until_quiet_and_a_reopen_takes_it_back() {
+        use crate::agent_state::AgentState::{Waiting, Working};
+        use crate::backend::PaneEvent;
         use crate::model::lifecycle::PARK_MS;
         let mut h = Harness::new();
+        h.m.can_park = true;
         let ids = four_cards(&mut h);
         for (i, id) in ids.iter().enumerate() {
             let c = h.m.card_mut(id).unwrap();
             c.pane_id = Some(100 + i as u32);
             c.session = Some(format!("s{i}"));
-            c.agent = crate::agent_state::AgentState::Working;
         }
+        let kills = |h: &mut Harness| -> Vec<u32> {
+            h.m.take_effects()
+                .into_iter()
+                .filter_map(|e| match e {
+                    Effect::KillPane(p) => Some(p),
+                    _ => None,
+                })
+                .collect()
+        };
+        // A build: output keeps it alive past the minute, quiet ends it.
         h.m.set_focus(Some(&ids[0]));
         let effects = h.run("card.close");
-        assert!(effects.iter().any(|e| matches!(e, Effect::ParkPane(100))));
         assert!(!effects.iter().any(|e| matches!(e, Effect::KillPane(_))));
-        assert_eq!(h.m.parked.len(), 1);
-        let effects = h.run("card.reopen");
-        assert!(h.m.parked.is_empty(), "taken back");
-        let back = h.m.card(&ids[0]).unwrap();
-        assert_eq!(back.session.as_deref(), Some("s0"));
-        assert_eq!(
-            back.agent,
-            crate::agent_state::AgentState::Working,
-            "still mid-work"
-        );
-        assert!(!effects.iter().any(|e| matches!(e, Effect::KillSession(_))));
-        h.m.set_focus(Some(&ids[1]));
-        h.run("card.close");
         let t = h.m.now_ms;
         h.m.tick(t + PARK_MS - 1.);
-        assert!(!h
-            .m
-            .take_effects()
-            .iter()
-            .any(|e| matches!(e, Effect::KillSession(_))));
-        h.m.tick(t + PARK_MS);
-        assert!(h
-            .m
-            .take_effects()
-            .iter()
-            .any(|e| matches!(e, Effect::KillSession(s) if s == "s1")));
+        h.m.apply_pane_event(100, &PaneEvent::Output(b"compiling".to_vec()));
+        h.m.tick(t + PARK_MS + 1.);
+        assert!(kills(&mut h).is_empty(), "still printing, still running");
+        let later = h.m.now_ms;
+        h.m.tick(later + PARK_MS);
+        assert_eq!(kills(&mut h), vec![100], "a quiet minute ends it");
         assert!(h.m.parked.is_empty());
+
+        // An agent waiting for you is kept however long, and Alt+T
+        // reopens it with the state it has now.
+        h.m.set_focus(Some(&ids[1]));
+        h.m.card_mut(&ids[1]).unwrap().agent = Working;
+        h.run("card.close");
+        h.m.parked[0].card.agent = Waiting;
+        let t = h.m.now_ms;
+        h.m.tick(t + 10. * PARK_MS);
+        assert!(kills(&mut h).is_empty());
+        assert_eq!(
+            h.m.waiting_parked().map(|c| c.id.clone()),
+            Some(ids[1].clone())
+        );
+        // Another card closed since does not change what Alt+T brings.
+        h.m.set_focus(Some(&ids[2]));
+        h.run("card.close");
+        assert!(h.m.reopen_waiting());
+        let effects = h.m.take_effects();
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::ReleasePane(101))));
+        assert_eq!(h.m.card(&ids[1]).unwrap().agent, Waiting);
+        assert!(h.m.waiting_parked().is_none());
+        // Cmd+Shift+T is still the card closed last.
+        h.run("card.reopen");
+        assert!(h.m.card(&ids[2]).is_some());
+        // Undoing the waiting card's close now finds it back already.
+        let before = h.m.cards.len();
+        h.m.reopen_card(h.m.card(&ids[1]).unwrap().clone());
+        assert_eq!(h.m.cards.len(), before, "no twin");
+
         // Cmd+Shift+T reopens, as in a browser; the placement menu moved.
         let chord = |c: &str| {
             h.m.keymap

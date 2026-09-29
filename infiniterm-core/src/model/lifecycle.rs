@@ -35,12 +35,29 @@ fn short(id: &str) -> &str {
 /// shallow enough that it is an undo and not a graveyard.
 pub const CLOSED_RING: usize = 10;
 
-/// How long a closed terminal's session keeps running for a reopen (Cmd+Z,
-/// Cmd+Shift+T) to take back mid-work. Ekin's mouse had Cmd+W on a thumb
-/// button and closed running agents. One minute (Ekin's call; ten was the
-/// first try): an accident is noticed at once, and a card closed on purpose
-/// does not linger as a hidden process.
+/// How long a closed terminal card's program must be QUIET before it is
+/// ended: no output, nothing under its shell on the CPU (`inspect` `busy`),
+/// no agent turn running. A closed card is watched, not timed (Ekin,
+/// 2026-09-29): a five-minute build closed after one minute runs to the end,
+/// an idle dev server or shell goes after this, and an agent WAITING for
+/// you is kept until the app quits (it is unfinished work, and Alt+T
+/// brings it back). Ekin's mouse had Cmd+W on a thumb button and closed
+/// running agents; a fixed minute (ten on the first day) killed builds
+/// closed on purpose.
 pub const PARK_MS: f64 = 60. * 1000.;
+
+/// A closed terminal card whose program is still running, watched until
+/// it is quiet. The pane stays attached, so its output keeps being read
+/// (and thrown away: a noisy build must not stall on a full buffer).
+#[derive(Clone, Debug)]
+pub struct Parked {
+    /// The card as it was closed, its agent state kept current by hooks.
+    pub card: Card,
+    pub pane: crate::backend::PaneId,
+    /// The last sign of work: output, CPU, an agent turn. Starts at the
+    /// close.
+    pub active_at: f64,
+}
 
 impl Model {
     /// `already_exited` says the shell is gone, so there is nothing to kill.
@@ -88,9 +105,12 @@ impl Model {
         // running for `PARK_MS`, and a reopen in that time adopts it, the
         // program still mid-work (`end_parked` kills it after).
         let parked = match (already_exited, card.pane_id, &card.session) {
-            (false, Some(pane), Some(session)) if card.kind == CardKind::Terminal => {
-                self.parked.push((session.clone(), self.now_ms + PARK_MS));
-                self.effects.push(Effect::ParkPane(pane));
+            (false, Some(pane), Some(_)) if self.can_park && card.kind == CardKind::Terminal => {
+                self.parked.push(Parked {
+                    card: card.clone(),
+                    pane,
+                    active_at: self.now_ms,
+                });
                 true
             }
             _ => false,
@@ -256,23 +276,86 @@ impl Model {
 }
 
 impl Model {
-    /// A parked session whose time is up is ended; run from `tick`.
+    /// A parked card that has been quiet `PARK_MS` is ended; one whose
+    /// agent is mid-turn is busy; one whose agent waits for you is kept.
+    /// Run from `tick`.
     pub(super) fn end_parked(&mut self) {
+        use crate::agent_state::AgentState;
         let now = self.now_ms;
-        let (done, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.parked)
-            .into_iter()
-            .partition(|(_, until)| now >= *until);
-        self.parked = keep;
-        for (session, _) in done {
-            self.effects.push(Effect::KillSession(session));
+        let mut ended = vec![];
+        self.parked.retain_mut(|p| match p.card.agent {
+            AgentState::Waiting => true,
+            AgentState::Working => {
+                p.active_at = now;
+                true
+            }
+            _ if now - p.active_at >= PARK_MS => {
+                ended.push((p.pane, p.card.id.clone()));
+                false
+            }
+            _ => true,
+        });
+        for (pane, id) in ended {
+            self.effects.push(Effect::KillPane(pane));
+            self.log(format!(
+                "ended closed card {} after {} s quiet",
+                short(&id),
+                PARK_MS / 1000.
+            ));
         }
     }
 
-    /// A reopened card takes its parked session back: it is no longer due
-    /// to be ended.
-    pub(super) fn unpark(&mut self, session: Option<&str>) {
-        if let Some(s) = session {
-            self.parked.retain(|(p, _)| p != s);
+    /// Output from a parked card's pane: a sign of work. An exit means the
+    /// program is gone and there is nothing left to end.
+    pub(super) fn parked_pane_event(
+        &mut self,
+        pane: crate::backend::PaneId,
+        event: &crate::backend::PaneEvent,
+    ) {
+        use crate::backend::PaneEvent;
+        let now = self.now_ms;
+        match event {
+            PaneEvent::Output(_) => {
+                if let Some(p) = self.parked.iter_mut().find(|p| p.pane == pane) {
+                    p.active_at = now;
+                }
+            }
+            PaneEvent::Exited { .. } => self.parked.retain(|p| p.pane != pane),
+            _ => {}
         }
+    }
+
+    /// The closed card an agent is waiting in, newest first: what the
+    /// status bar names and Alt+T reopens.
+    pub fn waiting_parked(&self) -> Option<&Card> {
+        self.parked
+            .iter()
+            .rev()
+            .map(|p| &p.card)
+            .find(|c| c.agent == crate::agent_state::AgentState::Waiting)
+    }
+
+    /// Alt+T while a closed card waits for you: that card comes back.
+    pub fn reopen_waiting(&mut self) -> bool {
+        let Some(card) = self.waiting_parked().cloned() else {
+            return false;
+        };
+        self.closed.retain(|c| c.id != card.id);
+        self.reopen_card(card);
+        true
+    }
+
+    /// A reopened card takes its parked program back: the pane is let go
+    /// and adopted again by the new body (`Effect::ReleasePane`), and the
+    /// card wears the state the program has now.
+    pub(super) fn unpark(&mut self, card: &mut Card) {
+        let Some(i) = self.parked.iter().position(|p| p.card.id == card.id) else {
+            return;
+        };
+        let p = self.parked.remove(i);
+        card.agent = p.card.agent;
+        card.agent_session = p.card.agent_session.clone();
+        card.transcript_path = p.card.transcript_path.clone();
+        self.effects.push(Effect::ReleasePane(p.pane));
     }
 }

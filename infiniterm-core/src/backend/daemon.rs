@@ -353,13 +353,6 @@ impl DaemonBackend {
         credit.close();
     }
 
-    /// Ends a session no pane of ours holds: a parked card's, once nobody
-    /// reopened it in time. `kill_orphans`' way, for one id.
-    pub fn kill_session(&self, session_id: &str) {
-        let socket = self.sessions_dir.join(format!("{session_id}.sock"));
-        std::thread::spawn(move || send_kill(&socket));
-    }
-
     pub fn ack_now(&self, pane: PaneId, bytes: usize) {
         let credit = self
             .panes

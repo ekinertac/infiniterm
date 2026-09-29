@@ -614,6 +614,14 @@ impl AppView {
                         self.browser_lock_indicator()
                             .map(|label| div().text_color(chrome.warn).child(label)),
                     )
+                    // A closed card whose agent waits for you, and the key
+                    // that brings it back (lifecycle.rs, parked).
+                    .children(m.waiting_parked().map(|c| {
+                        div().text_color(chrome.warn).child(format!(
+                            "{} (closed) is waiting for you: Alt+T",
+                            m.numbered_label(c)
+                        ))
+                    }))
                     // A downloaded update stays said, in the colour that
                     // asks for attention, until the restart installs it;
                     // the notice alone faded before Ekin could read it.

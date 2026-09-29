@@ -824,6 +824,13 @@ impl AppView {
             self.prompt_press(kind);
             return true;
         }
+        // Alt+T is the terminal's (a word swap, a composed character) except
+        // while a closed card's agent waits for you: then it reopens that
+        // card, the key the status bar names (lifecycle.rs, parked).
+        if chord == "alt+t" && !self.model.modal_open() && self.model.reopen_waiting() {
+            self.perform_effects();
+            return true;
+        }
         // A dialog, the palette, the address bar or the shortcuts panel is
         // modal: a chord goes to it (a field's Cmd+Arrow, Alt+Backspace,
         // Cmd+V) and one it does not take goes nowhere. Before 2026-09-28

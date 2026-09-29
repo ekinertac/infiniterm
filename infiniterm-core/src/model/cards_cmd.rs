@@ -729,6 +729,11 @@ impl Model {
     /// still free, else beside whatever is there now (the old rect is a
     /// preference, not a claim). `card.reopen` and an undone close share it.
     pub fn reopen_card(&mut self, mut card: Card) {
+        // Already back (Alt+T reopened it, then an undo step names it too):
+        // a second copy would be a twin on one session.
+        if self.card(&card.id).is_some() {
+            return;
+        }
         let ws = self.active_workspace.clone().unwrap_or_default();
         card.workspace_id = ws.clone();
         let taken: Vec<Rect> = self
@@ -755,7 +760,7 @@ impl Model {
         if card.number == 0 || self.cards.iter().any(|c| c.number == card.number) {
             card.number = self.take_number();
         }
-        self.unpark(card.session.as_deref());
+        self.unpark(&mut card);
         self.cards.push(card);
         self.set_focus(Some(&id));
         self.reveal_focused();

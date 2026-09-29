@@ -259,11 +259,10 @@ pub enum Effect {
     /// Direct manipulation or a fit began; any in-flight animation stops.
     CancelAnimation,
     KillPane(PaneId),
-    /// A closed terminal card's pane: detached, its session left running
-    /// for `PARK_MS` so a reopen takes the program back mid-work.
-    ParkPane(PaneId),
-    /// A parked session nobody reopened in time.
-    KillSession(String),
+    /// A parked card was reopened: let go of its pane (it stays running)
+    /// and list its session as live, so the new body adopts it and the
+    /// ring's replay redraws the screen the card missed while closed.
+    ReleasePane(PaneId),
     KillAllPanes,
     /// `app.keycast`: the ui owns the overlay and its clock.
     ToggleKeycast,
@@ -588,10 +587,13 @@ pub struct Model {
     /// as every other runtime fact. Cheap closing is what keeps a canvas
     /// from silting up, and it is only cheap if it is undoable.
     pub closed: Vec<Card>,
-    /// Sessions of closed cards still running, with when they end
-    /// (`lifecycle.rs` `PARK_MS`). Runtime-only: a relaunch's orphan sweep
+    /// Closed terminal cards whose program is still running and watched
+    /// (lifecycle.rs, `Parked`). Runtime-only: a relaunch's orphan sweep
     /// ends whatever is left.
-    pub parked: Vec<(String, f64)>,
+    pub parked: Vec<lifecycle::Parked>,
+    /// The backend can keep a closed card's program for a reopen (the
+    /// daemon); set by the ui at startup. False in tests unless set.
+    pub can_park: bool,
     /// `dev.stress.zoom` in progress: the step taken so far and when the
     /// next is due. Steps run from `tick`, which is the model's only clock.
     pub stress_zoom: Option<(u32, f64)>,
@@ -674,6 +676,7 @@ impl Model {
             config_pairs: vec![],
             closed: vec![],
             parked: vec![],
+            can_park: false,
             stress_zoom: None,
             now_ms: 0.,
             effects: vec![],

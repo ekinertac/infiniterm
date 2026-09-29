@@ -14,6 +14,16 @@ impl Model {
     /// cards still at `None`, so a card running an agent never flickers.
     pub fn apply_hook(&mut self, report: &HookReport) {
         let now = self.now_ms;
+        // A closed card still running (lifecycle.rs, parked): its agent's
+        // state is what decides when it ends, and what Alt+T offers.
+        if let Some(p) = self.parked.iter_mut().find(|p| p.card.id == report.card_id) {
+            p.card.agent = apply_hook_event(p.card.agent, &report.event);
+            p.active_at = now;
+            if let Some(s) = &report.session {
+                p.card.agent_session = Some(s.clone());
+            }
+            return;
+        }
         let Some(card) = self.card_mut(&report.card_id) else {
             return;
         };
@@ -62,6 +72,12 @@ impl Model {
     /// overwritten when the report has one; lsof can fail for a process that
     /// exits mid-poll.
     pub fn apply_pane_statuses(&mut self, statuses: &[PaneStatus]) {
+        let now = self.now_ms;
+        for p in &mut self.parked {
+            if statuses.iter().any(|s| s.pane == p.pane && s.busy) {
+                p.active_at = now;
+            }
+        }
         for card in &mut self.cards {
             let status = card
                 .pane_id
@@ -87,7 +103,10 @@ impl Model {
             .iter()
             .find(|c| c.pane_id == Some(pane))
             .map(|c| c.id.clone());
-        let Some(id) = card_id else { return };
+        let Some(id) = card_id else {
+            self.parked_pane_event(pane, event);
+            return;
+        };
         match event {
             PaneEvent::Output(bytes) => {
                 if let Some(c) = self.card_mut(&id) {
