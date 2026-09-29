@@ -53,7 +53,12 @@ Interface size is separate from zoom: `Cmd Shift =` and `Cmd Shift -` make the a
 - `Cmd J` puts a letter on every card; press one to go there and frame it. (`Cmd F` finds text inside the card you are on.)
 - The palette lists every card by name.
 
-`Cmd Shift` + arrow extends a selection. Shift + click on a card, its label or its frame adds it to the selection or takes it out. Close, split, fit and group then act on all of it.
+Several cards can be selected at once, and close, split, fit and group then act on all of them:
+
+- Drag on empty canvas to draw a selection rectangle. Every card it touches is selected, and the card nearest where the drag started gets the focus. `Shift` + drag adds to the selection, and `Escape` during the drag puts the previous selection back. A click without a drag deselects.
+- `Cmd` + click a card to add it, or a selected card to take it out. On the one card you are in, `Cmd` + click still opens links.
+- `Shift` + click on a card's body, label or frame also adds it or takes it out.
+- `Cmd Shift` + arrow extends the selection to the neighbour.
 
 While a dialog, the palette, the address bar or the shortcuts panel is open, it keeps every Cmd and Ctrl shortcut to itself, so text shortcuts work in its field and nothing moves the canvas behind it.
 
