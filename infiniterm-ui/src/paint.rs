@@ -658,6 +658,18 @@ impl AppView {
             window.paint_quad(fill(b, crate::chrome::with_alpha(color, GHOST_FILL_ALPHA)));
         }
 
+        // The selection rectangle being dragged: the selection's blue, a
+        // hairline and a faint fill, like the ghost.
+        if let Some(mq) = self.marquee.as_ref().filter(|m| m.active) {
+            let b = at(mq.rect());
+            let blue = chrome.selection_ring;
+            window.paint_quad(fill(b, crate::chrome::with_alpha(blue, GHOST_FILL_ALPHA)));
+            window.paint_quad(
+                outline(b, blue, BorderStyle::Solid)
+                    .border_widths(px(crate::chrome::HAIRLINE_PX as f32)),
+            );
+        }
+
         // Alignment guides, over everything: one screen pixel, the focus
         // ring's colour, where a moving edge or centre lines up with another
         // card's (or the ghost's).

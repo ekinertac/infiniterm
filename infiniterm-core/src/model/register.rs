@@ -1374,6 +1374,69 @@ mod tests {
         assert_eq!(chord("cmd+ctrl+t").as_deref(), Some("card.place"));
     }
 
+    // A rectangle selects the cards it touches, the nearest to where it
+    // began leading; Shift keeps what was selected; Cmd+click toggles.
+    #[test]
+    fn a_marquee_selects_what_it_touches_and_cmd_click_toggles() {
+        use crate::grid::{Point, Rect};
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        let r: Vec<Rect> = ids.iter().map(|id| h.m.card(id).unwrap().rect).collect();
+        // From just outside card 0's top-left, across cards 0 and 1 only.
+        let start = Point {
+            x: r[0].x - 5.,
+            y: r[0].y - 5.,
+        };
+        let span = Rect {
+            x: start.x,
+            y: start.y,
+            w: (r[1].x + 10.) - start.x,
+            h: 10.,
+        };
+        h.m.marquee_select(span, start, None);
+        h.m.marquee_done();
+        let mut got = h.m.selected_ids();
+        got.sort();
+        let mut want = vec![ids[0].clone(), ids[1].clone()];
+        want.sort();
+        assert_eq!(got, want);
+        assert_eq!(
+            h.m.selection.focused_id.as_deref(),
+            Some(ids[0].as_str()),
+            "nearest leads"
+        );
+        // Shift+drag over card 2 alone adds it.
+        let kept = h.m.selected_ids();
+        let c2 = Rect {
+            x: r[2].x + 1.,
+            y: r[2].y + 1.,
+            w: 5.,
+            h: 5.,
+        };
+        h.m.marquee_select(c2, Point { x: c2.x, y: c2.y }, Some(&kept));
+        assert_eq!(h.m.selected_ids().len(), 3);
+        // A drag over nothing, without Shift, selects nothing.
+        let far = Rect {
+            x: -1e6,
+            y: -1e6,
+            w: 5.,
+            h: 5.,
+        };
+        h.m.marquee_select(far, Point { x: far.x, y: far.y }, None);
+        assert!(h.m.selected_ids().is_empty());
+        // Cmd+click: adds a card, takes a selected one out, and a lone
+        // focused card is left to its body.
+        h.m.set_focus(Some(&ids[0]));
+        assert!(
+            !h.m.toggle_selected(&ids[0]),
+            "a link click on the card you are in"
+        );
+        assert!(h.m.toggle_selected(&ids[3]));
+        assert_eq!(h.m.selected_ids().len(), 2);
+        assert!(h.m.toggle_selected(&ids[0]));
+        assert_eq!(h.m.selected_ids(), vec![ids[3].clone()]);
+    }
+
     // A dialog owns the keyboard: the group-name prompt is modal, the
     // switcher is not (it runs on Ctrl held down).
     #[test]

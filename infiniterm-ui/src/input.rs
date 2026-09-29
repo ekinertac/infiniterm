@@ -169,12 +169,28 @@ impl AppView {
                     self.perform_effects();
                     return;
                 }
-                // A left press that missed every card deselects. It does not
-                // pan: a plain drag means text selection on a card.
+                // A left press that missed every card deselects, and a drag
+                // from it draws the selection rectangle (Shift adds to what
+                // is selected). It does not pan: Cmd+drag and the middle
+                // button do.
                 if button == 0 {
                     self.left_on_canvas = true;
+                    let at = world_pos_of(p, self.model.viewport);
+                    self.marquee = Some(crate::Marquee {
+                        start: p,
+                        from: at,
+                        to: at,
+                        kept: e.modifiers.shift.then(|| self.model.selected_ids()),
+                        before: (
+                            self.model.selection.focused_id.clone(),
+                            self.model.selection.extra.clone(),
+                        ),
+                        active: false,
+                    });
                 }
-                self.model.set_focus(None);
+                if !(button == 0 && e.modifiers.shift) {
+                    self.model.set_focus(None);
+                }
                 self.model.selection.phantom = None;
                 self.animator.cancel();
             }
@@ -293,6 +309,23 @@ impl AppView {
     pub fn mouse_move(&mut self, e: &MouseMoveEvent) {
         let p = self.to_content(e.position);
         self.mouse = p;
+        if let Some(mq) = self.marquee.as_mut() {
+            // The button came up outside the window: nothing to finish.
+            if e.pressed_button != Some(MouseButton::Left) {
+                self.marquee = None;
+                return;
+            }
+            if !mq.active && (p.x - mq.start.x).hypot(p.y - mq.start.y) >= DRAG_SLOP {
+                mq.active = true;
+            }
+            if mq.active {
+                mq.to = world_pos_of(p, self.model.viewport);
+                let (rect, from, kept) = (mq.rect(), mq.from, mq.kept.clone());
+                self.model.marquee_select(rect, from, kept.as_deref());
+                self.redraw = true;
+            }
+            return;
+        }
         match self.pan {
             Some(Pan::Pending(start)) => {
                 if (p.x - start.x).hypot(p.y - start.y) >= DRAG_SLOP {
@@ -463,6 +496,15 @@ impl AppView {
                 self.perform_effects();
             }
         }
+        if let Some(mq) = self.marquee.take() {
+            if mq.active {
+                self.note_use("mouse.marquee");
+                self.model.marquee_done();
+                self.redraw = true;
+                self.perform_effects();
+                return;
+            }
+        }
         let was_dragging = matches!(self.pan, Some(Pan::Dragging(_)));
         // A Cmd+press that never moved far enough to pan was a CLICK, and the
         // body never saw the press: `starts_pan` claims every Cmd+left press
@@ -473,7 +515,19 @@ impl AppView {
         let was_click = matches!(self.pan, Some(Pan::Pending(_))) && e.modifiers.platform;
         self.pan = None;
         if was_click {
-            if let Hit::CardBody { id, local } = self.hit(p) {
+            // Cmd+click adds a card to the selection or takes it out
+            // (`toggle_selected`); on the card you are alone in, it is the
+            // body's click, which is how a link opens.
+            let hit = self.hit(p);
+            if let Hit::CardBody { id, .. } | Hit::CardEdge { id, .. } = &hit {
+                if self.model.toggle_selected(id) {
+                    self.note_use("mouse.card.cmdclick");
+                    self.redraw = true;
+                    self.perform_effects();
+                    return;
+                }
+            }
+            if let Hit::CardBody { id, local } = hit {
                 let action = match self.live_body(&id) {
                     Some(body) => body.mouse_down(local, e.button, &e.modifiers, e.click_count),
                     None => crate::body::BodyAction::None,
@@ -746,6 +800,15 @@ impl AppView {
         let chord = chord_for(&press);
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
             eprintln!("[chord] {chord} (key {:?}, code {:?})", k.key, code);
+        }
+        // Escape mid-rectangle: the selection from before the press.
+        if k.key == "escape" && self.marquee.is_some() {
+            if let Some(mq) = self.marquee.take() {
+                self.model.selection.focused_id = mq.before.0;
+                self.model.selection.extra = mq.before.1;
+            }
+            self.redraw = true;
+            return true;
         }
         // Escape mid-drag: the ghost goes, the card never moved; a group
         // drag or a resize goes back to where it started.

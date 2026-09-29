@@ -412,6 +412,76 @@ impl Model {
         self.focus_extended(id, extra);
     }
 
+    /// A rectangle dragged on bare canvas (2026-09-29): every card of this
+    /// workspace it touches is selected, the one nearest where the drag
+    /// began taking the focus. `kept` is the selection from before a
+    /// Shift+drag, which stays in; `None` replaces it. Set directly, not
+    /// through the focus trail: this runs on every mouse move, and
+    /// `marquee_done` lands the result once at the release.
+    pub fn marquee_select(&mut self, rect: Rect, anchor: Point, kept: Option<&[String]>) {
+        let dist = |r: &Rect| {
+            let (cx, cy) = (r.x + r.w / 2., r.y + r.h / 2.);
+            (cx - anchor.x).hypot(cy - anchor.y)
+        };
+        let mut touched: Vec<(f64, String)> = self
+            .here()
+            .iter()
+            .filter(|c| crate::layout::rects_overlap(rect, c.rect))
+            .map(|c| (dist(&c.rect), c.id.clone()))
+            .collect();
+        touched.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut ids: Vec<String> = kept.map(<[String]>::to_vec).unwrap_or_default();
+        for (_, id) in touched {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        // The nearest touched card leads; with nothing touched, whatever
+        // Shift kept.
+        let first = kept.map_or(0, |k| k.len());
+        let focus = ids.get(first).or_else(|| ids.first()).cloned();
+        self.selection.extra = ids
+            .into_iter()
+            .filter(|id| Some(id) != focus.as_ref())
+            .collect();
+        self.selection.focused_id = focus;
+    }
+
+    /// The drag let go: the selection it made becomes a real focus change
+    /// (the trail, the phantom dismissed), once.
+    pub fn marquee_done(&mut self) {
+        let extra = self.selection.extra.clone();
+        match self.selection.focused_id.clone() {
+            Some(id) => self.focus_extended(&id, extra),
+            None => self.set_focus(None),
+        }
+    }
+
+    /// Cmd+click on a card: out of the selection when it is in it, into it
+    /// when it is not (Finder's rule, Ekin 2026-09-29). A lone focused card
+    /// is not a selection to toggle: that click is the body's (a link).
+    /// Returns whether the click was taken.
+    pub fn toggle_selected(&mut self, id: &str) -> bool {
+        let focused = self.selection.focused_id.clone();
+        if let Some(i) = self.selection.extra.iter().position(|x| x == id) {
+            self.selection.extra.remove(i);
+            return true;
+        }
+        if focused.as_deref() == Some(id) {
+            if self.selection.extra.is_empty() {
+                return false;
+            }
+            let next = self.selection.extra.pop();
+            let extra = self.selection.extra.clone();
+            if let Some(next) = next {
+                self.focus_extended(&next, extra);
+            }
+            return true;
+        }
+        self.extend_to(id);
+        true
+    }
+
     /// The top-level things on the canvas: whole groups, and every loose card
     /// as a single trailing stop. Scoped to the visible canvas.
     fn units(&self) -> Vec<CanvasUnit> {

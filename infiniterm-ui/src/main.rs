@@ -121,6 +121,32 @@ pub type SuggestChannel = (
     std::sync::mpsc::Receiver<(u64, Vec<String>)>,
 );
 
+/// A selection rectangle in progress. `from` and `to` are canvas points;
+/// `start` is where the press was in window pixels, for the drag slop.
+pub struct Marquee {
+    pub start: infiniterm_core::grid::Point,
+    pub from: infiniterm_core::grid::Point,
+    pub to: infiniterm_core::grid::Point,
+    /// The selection a Shift+drag adds to; `None` replaces.
+    pub kept: Option<Vec<String>>,
+    /// The selection before the press, for Escape.
+    pub before: (Option<String>, Vec<String>),
+    /// Past the drag slop: until then the press is a click.
+    pub active: bool,
+}
+
+impl Marquee {
+    /// The rectangle, whichever way it was dragged.
+    pub fn rect(&self) -> infiniterm_core::grid::Rect {
+        infiniterm_core::grid::Rect {
+            x: self.from.x.min(self.to.x),
+            y: self.from.y.min(self.to.y),
+            w: (self.from.x - self.to.x).abs(),
+            h: (self.from.y - self.to.y).abs(),
+        }
+    }
+}
+
 pub struct AppView {
     pub model: Model,
     pub registry: CommandRegistry<Model>,
@@ -144,6 +170,9 @@ pub struct AppView {
     /// `app.emoji` asked; the next frame, which has the window, opens it.
     pub show_character_palette: bool,
     pub pan: Option<Pan>,
+    /// A rectangle being dragged on bare canvas to select cards (input.rs,
+    /// `Model::marquee_select`).
+    pub marquee: Option<Marquee>,
     /// The left button went down on empty canvas and has not come up: a
     /// right click now fits everything (`pan_mode::chord_fits_all`).
     pub left_on_canvas: bool,
