@@ -16,7 +16,9 @@ A shell doing nothing has no colour. Four hues rather than shades of one, becaus
 
 ## Agents
 
-Claude Code and Pi report through hooks (`ift install-claude-hooks`, `ift install-pi-hooks`). The card goes violet when a turn starts, yellow when the agent asks for permission or asks you something, and green when the turn ends. A done card stays green until its next turn.
+Claude Code and Pi report through hooks (`ift install-claude-hooks`, `ift install-pi-hooks`). The card goes violet when a turn starts, yellow when the agent asks for permission or asks you something, and green when the turn ends.
+
+Green is news, so it does not stay: once you have looked at a done card for a moment (about a second and a half) or typed into it, it goes grey. "Card: clear the state colour" in the palette greys any card's ring and dot by hand once you have seen what it had to say.
 
 Codex and OpenCode have no adapter yet.
 
@@ -35,7 +37,7 @@ Only zsh gets the marks for now, and only shells started after you installed or 
 
 ## Workspace tabs
 
-Each workspace tab wears one dot per card, in reading order, grey until that card has something to say. A done card lights its dot only if the turn finished after you left that workspace, and never on the tab you are on.
+Each workspace tab wears one dot per card, in reading order, grey until that card has something to say. A done card keeps its dot green until you have looked at that card, so a workspace you only passed through still tells you which turns finished there.
 
 ## When a colour looks wrong
 
