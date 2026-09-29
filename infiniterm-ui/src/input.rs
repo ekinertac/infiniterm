@@ -230,6 +230,32 @@ impl AppView {
                     self.perform_effects();
                     return;
                 }
+                // A press on the frame or label of a card in a selection of
+                // several moves them all; focusing it here would have
+                // dropped the selection before the drag began (Ekin: a
+                // rectangle selection could not be moved).
+                let selected = self.model.selected_ids();
+                if edge.is_none()
+                    && button == 0
+                    && e.click_count < 2
+                    && selected.len() > 1
+                    && selected.contains(&id)
+                {
+                    let start_rects: Vec<(String, Rect)> = selected
+                        .iter()
+                        .filter_map(|s| self.model.card(s).map(|c| (s.clone(), c.rect)))
+                        .collect();
+                    let start_rect = self.model.card(&id).map(|c| c.rect).unwrap_or_default();
+                    self.gesture = Some(Gesture {
+                        card: id,
+                        kind: GestureKind::MoveSelection,
+                        start_px: p,
+                        start_rect,
+                        start_rects,
+                        ghost: None,
+                    });
+                    return;
+                }
                 self.model.set_focus(Some(&id));
                 // A double-click on the frame fits the card, which is Cmd+1
                 // for the mouse. The frame and not the body: a double-click
@@ -377,7 +403,7 @@ impl AppView {
                         c.rect = r;
                     }
                 }
-                GestureKind::MoveGroup(_) => {
+                GestureKind::MoveGroup(_) | GestureKind::MoveSelection => {
                     let moves: Vec<(String, Rect)> = g
                         .start_rects
                         .iter()
@@ -559,11 +585,12 @@ impl AppView {
             // Remembered from the start rects, so Cmd+Z has the "before".
             self.note_use(match &g.kind {
                 GestureKind::MoveGroup(_) => "mouse.group.drag",
+                GestureKind::MoveSelection => "mouse.selection.drag",
                 GestureKind::Resize(_) => "mouse.card.resize",
                 GestureKind::Move => "mouse.card.drag",
             });
             let (ids, start): (Vec<String>, Vec<(String, Rect)>) = match &g.kind {
-                GestureKind::MoveGroup(_) => (
+                GestureKind::MoveGroup(_) | GestureKind::MoveSelection => (
                     g.start_rects.iter().map(|(id, _)| id.clone()).collect(),
                     g.start_rects.clone(),
                 ),

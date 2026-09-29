@@ -428,7 +428,7 @@ impl AppView {
             .and_then(|g| g.ghost.map(|r| (g.card.clone(), r)));
         let moving: Vec<String> = match &self.gesture {
             Some(g) => match &g.kind {
-                crate::GestureKind::MoveGroup(_) => {
+                crate::GestureKind::MoveGroup(_) | crate::GestureKind::MoveSelection => {
                     g.start_rects.iter().map(|(id, _)| id.clone()).collect()
                 }
                 _ if ghost.is_some() => vec![],

@@ -26,6 +26,10 @@ pub const MOUSE_GESTURES: &[(&str, &str)] = &[
     ("mouse.canvas.pan", "Mouse: pan the canvas by dragging"),
     ("mouse.marquee", "Mouse: drag a rectangle to select cards"),
     (
+        "mouse.selection.drag",
+        "Mouse: drag several selected cards together",
+    ),
+    (
         "mouse.card.cmdclick",
         "Mouse: Cmd+click to add or remove a card",
     ),

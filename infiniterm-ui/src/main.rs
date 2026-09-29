@@ -92,6 +92,9 @@ pub enum GestureKind {
     Resize(Edge),
     /// Dragging a group by its name tab: every member moves together.
     MoveGroup(String),
+    /// Dragging one card of a selection of several by its frame or label:
+    /// every selected card moves together, the group drag's way.
+    MoveSelection,
 }
 
 pub struct Gesture {

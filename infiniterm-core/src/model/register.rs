@@ -1437,6 +1437,38 @@ mod tests {
         assert_eq!(h.m.selected_ids(), vec![ids[3].clone()]);
     }
 
+    // A selection dragged together lands when the space is free, even when
+    // its cards belong to different groups; onto another card it goes back.
+    #[test]
+    fn a_selection_across_groups_moves_as_one() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        let ga = h.m.add_group("a");
+        let gb = h.m.add_group("b");
+        h.m.card_mut(&ids[0]).unwrap().group_id = Some(ga);
+        h.m.card_mut(&ids[1]).unwrap().group_id = Some(gb);
+        let moved = [ids[0].clone(), ids[1].clone()];
+        let start: Vec<_> = moved
+            .iter()
+            .map(|id| (id.clone(), h.m.card(id).unwrap().rect))
+            .collect();
+        let far = 100_000.;
+        for id in &moved {
+            h.m.card_mut(id).unwrap().rect.y += far;
+        }
+        assert!(h.m.end_gesture(&moved, &start), "free space: it lands");
+        assert_eq!(h.m.card(&ids[0]).unwrap().rect.y, start[0].1.y + far);
+        // Onto card 2: back where it started.
+        let back: Vec<_> = moved
+            .iter()
+            .map(|id| (id.clone(), h.m.card(id).unwrap().rect))
+            .collect();
+        let target = h.m.card(&ids[2]).unwrap().rect;
+        h.m.card_mut(&ids[0]).unwrap().rect = target;
+        assert!(!h.m.end_gesture(&moved, &back));
+        assert_eq!(h.m.card(&ids[0]).unwrap().rect, back[0].1);
+    }
+
     // A dialog owns the keyboard: the group-name prompt is modal, the
     // switcher is not (it runs on Ctrl held down).
     #[test]

@@ -555,17 +555,26 @@ impl Model {
     /// the move stood.
     pub fn end_gesture(&mut self, ids: &[String], start: &[(String, Rect)]) -> bool {
         let ws = self.active_workspace.clone().unwrap_or_default();
-        let group = ids
-            .first()
-            .and_then(|id| self.card(id))
-            .and_then(|c| c.group_id.clone());
+        // The frames of every group a moved card belongs to follow the
+        // move, so none of them is in the way: a selection dragged across
+        // two groups' cards bounced back on its own frames when only the
+        // first card's group was spared.
+        let moved_groups: Vec<String> = ids
+            .iter()
+            .filter_map(|id| self.card(id).and_then(|c| c.group_id.clone()))
+            .collect();
         let mut occupied: Vec<Rect> = self
             .cards
             .iter()
             .filter(|c| c.workspace_id == ws && !ids.contains(&c.id))
             .map(|c| c.rect)
             .collect();
-        occupied.extend(self.other_frames(group.as_deref(), &ws));
+        occupied.extend(
+            self.groups
+                .iter()
+                .filter(|g| !moved_groups.contains(&g.id))
+                .filter_map(|g| self.group_frame(&g.id, &ws)),
+        );
         let moved: Vec<Rect> = ids
             .iter()
             .filter_map(|id| self.card(id))
