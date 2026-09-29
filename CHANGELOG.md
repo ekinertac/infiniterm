@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-09-29
 
+- Ctrl+- jumps the editor's caret back to where it was before its last leap (go to line, a search match, the top or bottom of the file, a matching bracket, a click far away), and Ctrl+Shift+- goes forward again.
 - Cmd+3 with several cards selected fits exactly those cards. With one card it still fits its group or the block around it.
 - Closing a terminal card keeps its program running for a minute: reopen the card (Cmd+Z or Cmd+Shift+T) and an agent comes back mid-work, where before it was killed and only the folder came back.
 - Cmd+Shift+T reopens the last closed card, as in a browser. The placement menu moved to Cmd+Ctrl+T.
