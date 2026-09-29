@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-09-29
 
+- Folding in the editor: Cmd+Alt+[ folds the block the caret is in (everything indented under a line), Cmd+Alt+] opens it, and with Shift they fold or open every top-level block. Clicking a line's number in the gutter does the same for that line. A folded block shows a small chip after its first line, arrow keys step over it, and a search match, go to line or a caret that lands inside it opens it. An edit made across folded text opens the fold; edits above it move it along.
 - Cmd+3 with several cards selected fits exactly those cards. With one card it still fits its group or the block around it.
 - Closing a terminal card keeps its program running for a minute: reopen the card (Cmd+Z or Cmd+Shift+T) and an agent comes back mid-work, where before it was killed and only the folder came back.
 - Cmd+Shift+T reopens the last closed card, as in a browser. The placement menu moved to Cmd+Ctrl+T.
