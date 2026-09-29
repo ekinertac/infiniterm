@@ -73,7 +73,7 @@ Every card has a label in its corner: the name you gave it (`Cmd Shift R`), else
 
 A card closes when its shell exits, so `exit` or Ctrl+D does what `Cmd W` does. `Cmd Shift T` reopens the last card you closed, where it was, as in a browser.
 
-Closing a terminal card does not kill its program on the spot. It keeps running for a minute, so `Cmd Shift T` or `Cmd Z` brings the card back with an agent still mid-work rather than a fresh shell in the same folder.
+Closing a terminal card does not kill its program on the spot: a build or an agent mid-turn runs to its end, and `Cmd Shift T` or `Cmd Z` brings the card back with it still live. See [Terminal cards](../terminal/#closing-a-card).
 
 `Cmd Shift L` protects a card: `Cmd W` refuses it, its workspace will not close around it, and if its shell exits a fresh one takes over.
 

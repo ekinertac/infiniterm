@@ -39,7 +39,13 @@ This comes from the shell integration the app installs, so it works only in shel
 
 ## Closing a card
 
-Closing a terminal card does not kill its program on the spot. A program keeps running for a minute after the card closes, so `Cmd Shift T` or `Cmd Z` brings the card back with its program still live: an agent comes back mid-work, not as a fresh shell in the same folder.
+Closing a terminal card does not kill its program on the spot:
+
+- A build, or an agent in the middle of a turn, runs to its end. Anything that has been quiet for a minute (no output, no CPU under its shell, no agent turn) is then ended.
+- A closed card whose agent is waiting for you is kept until the app quits. The status bar says so, "#7 … (closed) is waiting for you: Alt+T", and `Alt T` reopens it. At any other time `Alt T` goes to the terminal as usual.
+- `Cmd Z` or `Cmd Shift T` reopen the card with its program still live and the screen redrawn from its scrollback, as long as it has not ended yet.
+
+This needs the default backend (`terminal.backend: "daemon"`). Under `pty` or `tmux` a closed card's program ends at once.
 
 ## Links and paths
 
