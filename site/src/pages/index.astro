@@ -20,6 +20,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 const BUY_URL = '';
 const PRICE = '$29';
 const INSTALL = 'curl -fsSL https://infiniterm.app/install.sh | sh';
+const BREW = 'brew install --cask ekinertac/tap/infiniterm';
 const DOWNLOAD_URL = 'https://github.com/ekinertac/infiniterm-releases/releases/latest';
 const SOURCE_URL = 'https://github.com/ekinertac/infiniterm';
 
@@ -114,13 +115,25 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
             infiniterm puts every terminal on one zoomable canvas. Each card keeps its place, and its border says what the
             agent inside is doing: working, waiting on you, failed, or done.
           </p>
-          <div class="install">
-            <code id="install-line">{INSTALL}</code>
-            <button type="button" id="copy" aria-label="Copy the install command">Copy</button>
+          <div class="methods" role="tablist" aria-label="Install with">
+            <button type="button" role="tab" aria-selected="true" aria-controls="m-script" id="t-script">Script</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="m-brew" id="t-brew" tabindex="-1">Homebrew</button>
+            <button type="button" role="tab" aria-selected="false" aria-controls="m-dmg" id="t-dmg" tabindex="-1">DMG</button>
+          </div>
+          <div class="install" role="tabpanel" id="m-script" aria-labelledby="t-script">
+            <code>{INSTALL}</code>
+            <button type="button" class="copy" aria-label="Copy the install command">Copy</button>
+          </div>
+          <div class="install" role="tabpanel" id="m-brew" aria-labelledby="t-brew" hidden>
+            <code>{BREW}</code>
+            <button type="button" class="copy" aria-label="Copy the Homebrew command">Copy</button>
+          </div>
+          <div class="install dmg" role="tabpanel" id="m-dmg" aria-labelledby="t-dmg" hidden>
+            <span>Signed and notarized. Drag it into Applications.</span>
+            <a href={DOWNLOAD_URL}>Download</a>
           </div>
           <p class="fine">
-            macOS 13 or later on Apple Silicon. Or <a href={DOWNLOAD_URL}>download the DMG</a>. Free for personal use,
-            <a href="#pricing">$29 for work</a>.
+            macOS 13 or later on Apple Silicon. Free for personal use, <a href="#pricing">$29 for work</a>.
           </p>
         </div>
 
@@ -293,18 +306,39 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
         play.remove();
         film.focus();
       });
-      // The copy button puts the install line on the clipboard and says so in
-      // its own label for a moment; that label change is the confirmation.
-      const copy = document.getElementById('copy');
-      copy?.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(document.getElementById('install-line')?.textContent ?? '');
-          copy.textContent = 'Copied';
-        } catch {
-          copy.textContent = 'Select it';
+      // Install methods: three tabs over three panels, arrows move between
+      // tabs as a tablist should. A copy button copies the code beside it and
+      // says so in its own label for a moment; that is the confirmation.
+      const tabs = [...document.querySelectorAll<HTMLButtonElement>('.methods [role=tab]')];
+      const pick = (t: HTMLButtonElement) => {
+        for (const o of tabs) {
+          const on = o === t;
+          o.setAttribute('aria-selected', String(on));
+          o.tabIndex = on ? 0 : -1;
+          document.getElementById(o.getAttribute('aria-controls') ?? '')?.toggleAttribute('hidden', !on);
         }
-        setTimeout(() => (copy.textContent = 'Copy'), 1600);
+      };
+      tabs.forEach((t, i) => {
+        t.addEventListener('click', () => pick(t));
+        t.addEventListener('keydown', (e) => {
+          const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+          if (!step) return;
+          const next = tabs[(i + step + tabs.length) % tabs.length];
+          pick(next);
+          next.focus();
+        });
       });
+      for (const b of document.querySelectorAll<HTMLButtonElement>('.install .copy')) {
+        b.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(b.previousElementSibling?.textContent ?? '');
+            b.textContent = 'Copied';
+          } catch {
+            b.textContent = 'Select it';
+          }
+          setTimeout(() => (b.textContent = 'Copy'), 1600);
+        });
+      }
     </script>
   </body>
 </html>
@@ -407,9 +441,34 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     padding-block: 40px 96px;
   }
   .lede { font-size: 1.25rem; color: var(--ink-soft); margin: 28px 0 32px; }
+  .methods { display: flex; gap: 4px; margin-bottom: 8px; }
+  .methods button {
+    font: 600 0.9rem var(--sans);
+    color: var(--ink-soft);
+    background: none;
+    border: 0;
+    border-radius: 7px;
+    padding: 7px 12px;
+    cursor: pointer;
+  }
+  .methods button[aria-selected='true'] { color: var(--ink); background: color-mix(in srgb, var(--ink) 10%, transparent); }
+  .install[hidden] { display: none; }
+  .install.dmg { align-items: center; justify-content: space-between; padding-left: 16px; font-size: 0.95rem; }
+  .install.dmg a {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    font-weight: 600;
+    text-decoration: none;
+    background: var(--working);
+    color: #17161f;
+  }
   .install {
     display: flex;
     align-items: stretch;
+    /* The same height for all three tabs, so switching them does not shift the page. */
+    min-height: 50px;
     max-width: 640px;
     background: var(--card);
     color: var(--card-text);
