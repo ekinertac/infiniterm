@@ -703,7 +703,7 @@ mod tests {
             &[c],
             &[SavedGroup {
                 id: "g1".into(),
-                name: "humbl.ai".into(),
+                name: "acme.dev".into(),
             }],
         )
         .unwrap();
@@ -711,7 +711,7 @@ mod tests {
             saved.groups,
             [SavedGroup {
                 id: "g1".into(),
-                name: "humbl.ai".into()
+                name: "acme.dev".into()
             }]
         );
         assert_eq!(saved.cards[0].group_id.as_deref(), Some("g1"));
@@ -1186,7 +1186,7 @@ mod tests {
     fn workspaces_survive_a_round_trip_viewport_and_all() {
         let ws = vec![SavedWorkspace {
             id: "w1".into(),
-            name: "humbl.ai".into(),
+            name: "acme.dev".into(),
             viewport: vp(10., 20., 0.5),
             focused: None,
         }];

@@ -165,7 +165,7 @@ impl Model {
                     return err("nothing to call the group");
                 }
                 // An existing group of that name is JOINED rather than
-                // duplicated: two groups called humbl.ai is never what anyone
+                // duplicated: two groups called acme.dev is never what anyone
                 // typing this meant.
                 let existing = self
                     .groups

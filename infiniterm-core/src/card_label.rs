@@ -126,7 +126,7 @@ pub fn card_label(card: &Labelled, home: &str) -> String {
 /// Splits a label so the last path segment can be kept when the card is too
 /// narrow for the whole thing: the head ellipsises, the tail never does.
 /// Exists because the obvious CSS for a left-hand ellipsis (`direction:
-/// rtl`) reordered `~/Code/humbl.ai` into `Code/humbl.ai/~`; the native
+/// rtl`) reordered `~/Code/acme.dev` into `Code/acme.dev/~`; the native
 /// frame lays out the two halves and needs no bidi either. A label with no
 /// slash (a process name) is all tail.
 pub fn split_label(label: &str) -> (&str, &str) {
@@ -302,8 +302,8 @@ mod tests {
     #[test]
     fn split_label_keeps_the_last_segment_whole() {
         assert_eq!(
-            split_label("~/Code/humbl.ai/gunicorn_workers"),
-            ("~/Code/humbl.ai", "/gunicorn_workers")
+            split_label("~/Code/acme.dev/gunicorn_workers"),
+            ("~/Code/acme.dev", "/gunicorn_workers")
         );
     }
 
