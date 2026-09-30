@@ -13,6 +13,11 @@ export default defineConfig({
     starlight({
       title: 'infiniterm',
       favicon: '/favicon.png',
+      // Link previews for the docs pages use the landing page's share image.
+      head: [
+        { tag: 'meta', attrs: { property: 'og:image', content: 'https://infiniterm.app/og.png' } },
+        { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' } },
+      ],
       description: 'Terminal cards on an infinite canvas, with the state of every coding agent visible at a glance.',
       social: [
         { icon: 'github', label: 'Releases', href: 'https://github.com/ekinertac/infiniterm-releases' },
