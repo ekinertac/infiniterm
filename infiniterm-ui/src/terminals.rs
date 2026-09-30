@@ -73,6 +73,18 @@ impl AppView {
         let palette = self.palette.clone();
         let blink = self.model.config.terminal.cursor_blink;
         let inactive_dim = self.model.config.ui.inactive_dim;
+        let copy_on_select = self.model.config.terminal.copy_on_select;
+        let scroll_multiplier = self.model.config.terminal.scroll_multiplier;
+        let padding = self.model.config.terminal.padding;
+        let extra_env: Vec<(String, String)> = self
+            .model
+            .config
+            .terminal
+            .env
+            .iter()
+            .filter_map(|kv| kv.split_once('='))
+            .map(|(k, v)| (k.trim().to_string(), v.to_string()))
+            .collect();
         let cards: Vec<_> = self
             .model
             .cards
@@ -132,6 +144,10 @@ impl AppView {
             }
             body.blink = blink;
             body.inactive_dim = inactive_dim;
+            body.copy_on_select = copy_on_select;
+            body.scroll_multiplier = scroll_multiplier;
+            // A padding change refits the grid through `refit_to` below.
+            body.pad = padding;
             let metrics_changed = body.font_family != metrics.family
                 || body.weight != metrics.weight
                 || body.bold_weight != metrics.bold_weight
@@ -245,13 +261,17 @@ impl AppView {
                 // `terminal.shell` when set, else the backend's $SHELL; a card
                 // made to run one program runs that instead.
                 let command = card.command.clone().or_else(|| shell.clone());
-                let mut env = vec![
+                // The user's own `terminal.env` first, so ours below win
+                // over a clash: INFINITERM_CARD_ID is what `ift` finds its
+                // card by.
+                let mut env = extra_env.clone();
+                env.extend([
                     ("INFINITERM_CARD_ID".to_string(), card.id.clone()),
                     (
                         "INFINITERM_HISTFILE".to_string(),
                         history.to_string_lossy().to_string(),
                     ),
-                ];
+                ]);
                 // A shell card's zsh loads our command marks, so a long
                 // command colours its card (program_state.rs). Not a card
                 // made to run one program: it has no prompt to mark.
@@ -380,6 +400,14 @@ impl AppView {
             let owed = self.ledger.note(pane, n);
             if owed > 0 {
                 self.backend.pty.ack_now(pane, owed);
+            }
+        }
+        // `terminal.copyOnSelect`: a selection finished with the mouse.
+        for body in self.bodies.values_mut() {
+            if let Some(t) = body.as_any_mut().downcast_mut::<TerminalBody>() {
+                if let Some(text) = t.clipboard_out.take() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                }
             }
         }
         // Small outputs must not wait for a batch to fill.

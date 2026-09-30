@@ -64,7 +64,8 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "terminal.shell",
         &[
-            "Program to run in a new card. Empty uses your login shell ($SHELL).",
+            "Program to run in a new card, with any arguments (\"/bin/zsh -l\",",
+            "\"fish --private\"). Empty uses your login shell ($SHELL).",
             "Only affects cards opened afterwards; a running shell is not restarted.",
         ],
     ),
@@ -102,6 +103,25 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "terminal.lineHeight",
         &["Multiple of the font size. 1.2 is tighter than the 1.25 a font asks for."],
+    ),
+    (
+        "terminal.copyOnSelect",
+        &["Copy a mouse selection to the clipboard as soon as it is made."],
+    ),
+    (
+        "terminal.scrollMultiplier",
+        &["Scroll speed: lines per wheel step, times this. 0.1 to 10."],
+    ),
+    (
+        "terminal.padding",
+        &["Space between a card's edge and its text, in points at 100% zoom. 0 to 60."],
+    ),
+    (
+        "terminal.env",
+        &[
+            "Extra environment for every new card, as \"KEY=value\" strings,",
+            "e.g. [\"EDITOR=ift\", \"LANG=en_US.UTF-8\"]. Cards already open keep theirs.",
+        ],
     ),
     (
         "terminal.scrollback",

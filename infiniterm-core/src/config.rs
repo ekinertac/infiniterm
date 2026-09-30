@@ -85,6 +85,15 @@ pub struct Terminal {
     /// screen: a program that looks like work and says nothing. Empty
     /// falls back to the default.
     pub decoy_command: String,
+    /// A mouse selection goes to the clipboard as it is made (iTerm2's
+    /// "copy to pasteboard on selection").
+    pub copy_on_select: bool,
+    /// Lines per wheel step, as a multiple of the normal rate.
+    pub scroll_multiplier: f64,
+    /// Space between a card's edge and its text, in points at 100%.
+    pub padding: f64,
+    /// `KEY=value` pairs added to every new card's environment.
+    pub env: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +246,12 @@ pub fn default_config() -> Config {
             line_height: 1.2,
             scrollback: 10_000.,
             session_buffer: 4.,
+            copy_on_select: false,
+            scroll_multiplier: 1.,
+            // The inset cards have had since the first day
+            // (terminal_body.rs `PAD`).
+            padding: 6.,
+            env: vec![],
             // Live, dense, unreadable at a glance, on every Mac. Not
             // system.log: unified logging left it a line every ten minutes.
             // `command` bypasses zsh's own builtin `log` (a login shell
@@ -299,6 +314,21 @@ fn num(value: Option<&Value>, fallback: f64, min: f64, max: f64) -> f64 {
         Some(n) if n.is_finite() => n.clamp(min, max),
         _ => fallback,
     }
+}
+
+/// `terminal.env`: the `KEY=value` strings with a key before the `=`;
+/// anything else in the list is skipped rather than failing the file.
+fn env_pairs(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .filter(|s| s.split_once('=').is_some_and(|(k, _)| !k.trim().is_empty()))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn bool_(value: Option<&Value>, fallback: bool) -> bool {
@@ -424,6 +454,15 @@ pub fn merge_config(raw: &Value) -> Config {
                 s if s.is_empty() => d.terminal.decoy_command.clone(),
                 s => s,
             },
+            copy_on_select: bool_(t.get("copyOnSelect"), d.terminal.copy_on_select),
+            scroll_multiplier: num(
+                t.get("scrollMultiplier"),
+                d.terminal.scroll_multiplier,
+                0.1,
+                10.,
+            ),
+            padding: num(t.get("padding"), d.terminal.padding, 0., 60.),
+            env: env_pairs(t.get("env")),
         },
         cards: Cards {
             // Floors that keep a card usable: below about 40 columns a
@@ -513,6 +552,26 @@ pub fn merge_config(raw: &Value) -> Config {
 
 #[cfg(test)]
 mod tests {
+
+    // The four settings added for people coming from other terminals.
+    #[test]
+    fn copy_on_select_scroll_padding_and_env_are_read_and_clamped() {
+        let c = merge_config(&serde_json::json!({
+            "terminal.copyOnSelect": true,
+            "terminal.scrollMultiplier": 50,
+            "terminal.padding": 12,
+            "terminal.env": ["EDITOR=ift", "no equals sign", "=novalue", 7, "LANG=en_US.UTF-8"],
+        }));
+        assert!(c.terminal.copy_on_select);
+        assert_eq!(c.terminal.scroll_multiplier, 10., "clamped");
+        assert_eq!(c.terminal.padding, 12.);
+        assert_eq!(c.terminal.env, ["EDITOR=ift", "LANG=en_US.UTF-8"]);
+        let d = default_config();
+        assert!(!d.terminal.copy_on_select);
+        assert_eq!((d.terminal.scroll_multiplier, d.terminal.padding), (1., 6.));
+        assert!(d.terminal.env.is_empty());
+    }
+
     use super::*;
 
     #[test]

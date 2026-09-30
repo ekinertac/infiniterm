@@ -128,6 +128,14 @@ pub struct TerminalBody {
     /// `terminal.cursorBlink`, `ui.inactiveDim`; the ui keeps them current.
     pub blink: bool,
     pub inactive_dim: f64,
+    /// `terminal.padding`: the inset between the card's edge and its
+    /// text. `PAD` until the reconcile hands over the setting.
+    pub pad: f64,
+    /// `terminal.copyOnSelect`: a finished mouse selection goes to the
+    /// clipboard (through `clipboard_out`, flushed with the output).
+    pub copy_on_select: bool,
+    /// `terminal.scrollMultiplier`.
+    pub scroll_multiplier: f64,
     /// Too many cells on screen for glyphs to be affordable this frame;
     /// set by `paint_world` from the frame's budget.
     crowded: bool,
@@ -260,8 +268,12 @@ impl TerminalBody {
         scrollback: usize,
         cwd: String,
     ) -> TerminalBody {
-        let (cols, rows) =
-            Self::cells_for(world, metrics.cell_w, metrics.font_px * metrics.line_height);
+        let (cols, rows) = Self::cells_for(
+            world,
+            metrics.cell_w,
+            metrics.font_px * metrics.line_height,
+            PAD,
+        );
         TerminalBody {
             pane: None,
             grid: Grid::new(cols, rows, scrollback),
@@ -283,6 +295,9 @@ impl TerminalBody {
             replies: vec![],
             dirty: true,
             wheel_carry: crate::chrome::WheelCarry::default(),
+            pad: PAD,
+            copy_on_select: false,
+            scroll_multiplier: 1.,
             title: None,
             clipboard_out: None,
             line_selection: None,
@@ -305,9 +320,9 @@ impl TerminalBody {
         }
     }
 
-    fn cells_for(world: Size, cell_w: f64, line_h: f64) -> (usize, usize) {
-        let cols = ((world.w - PAD * 2.) / cell_w).floor().max(2.) as usize;
-        let rows = ((world.h - PAD * 2.) / line_h).floor().max(1.) as usize;
+    fn cells_for(world: Size, cell_w: f64, line_h: f64, pad: f64) -> (usize, usize) {
+        let cols = ((world.w - pad * 2.) / cell_w).floor().max(2.) as usize;
+        let rows = ((world.h - pad * 2.) / line_h).floor().max(1.) as usize;
         (cols, rows)
     }
 
@@ -413,7 +428,12 @@ impl TerminalBody {
     }
 
     fn refit(&mut self, world: Size) -> bool {
-        let (cols, rows) = Self::cells_for(world, self.cell_w, self.font_px * self.line_height);
+        let (cols, rows) = Self::cells_for(
+            world,
+            self.cell_w,
+            self.font_px * self.line_height,
+            self.pad,
+        );
         if cols == self.cols && rows == self.rows {
             return false;
         }
@@ -448,12 +468,12 @@ impl TerminalBody {
     /// The pointer is in the right half of its cell: a drag ending there
     /// takes the character.
     fn right_half(&self, local: Point) -> bool {
-        ((local.x - PAD) / self.cell_w).fract() > 0.5
+        ((local.x - self.pad) / self.cell_w).fract() > 0.5
     }
 
     fn cell_at(&self, local: Point) -> (usize, usize) {
-        let col = ((local.x - PAD) / self.cell_w).floor().max(0.) as usize;
-        let row = ((local.y - PAD) / (self.font_px * self.line_height))
+        let col = ((local.x - self.pad) / self.cell_w).floor().max(0.) as usize;
+        let row = ((local.y - self.pad) / (self.font_px * self.line_height))
             .floor()
             .max(0.) as usize;
         (
@@ -762,7 +782,7 @@ impl CardBody for TerminalBody {
         let font_size = px((self.font_px * scale) as f32);
         let line_h = px((self.font_px * self.line_height * scale) as f32);
         let cell_w = px((self.cell_w * scale) as f32);
-        let pad = px((PAD * scale) as f32);
+        let pad = px((self.pad * scale) as f32);
         let origin = point(bounds.origin.x + pad, bounds.origin.y + pad);
         let mut base = term_font(&self.font_family);
         base.weight = self.weight;
@@ -1049,7 +1069,7 @@ impl CardBody for TerminalBody {
         let (col, row) = self.frame.cursor;
         let line_h = px((self.font_px * self.line_height * scale) as f32);
         let cell_w = px((self.cell_w * scale) as f32);
-        let pad = px((PAD * scale) as f32);
+        let pad = px((self.pad * scale) as f32);
         Some(Bounds::new(
             point(
                 painted.origin.x + pad + cell_w * col as f32,
@@ -1145,6 +1165,8 @@ impl CardBody for TerminalBody {
             if !self.grid.has_selection() {
                 self.grid.clear_selection();
                 self.dirty = true;
+            } else if self.copy_on_select {
+                self.clipboard_out = self.grid.selection_text();
             }
             return;
         }
@@ -1174,10 +1196,12 @@ impl CardBody for TerminalBody {
             // letting go. Applied per frame in `paint`.
             let line_h = self.font_px * self.line_height;
             let height = self.rows as f64 * line_h;
-            self.autoscroll = if local.y < PAD {
-                -(((PAD - local.y) / line_h).ceil().min(AUTOSCROLL_MAX_LINES))
-            } else if local.y > PAD + height {
-                ((local.y - PAD - height) / line_h)
+            self.autoscroll = if local.y < self.pad {
+                -(((self.pad - local.y) / line_h)
+                    .ceil()
+                    .min(AUTOSCROLL_MAX_LINES))
+            } else if local.y > self.pad + height {
+                ((local.y - self.pad - height) / line_h)
                     .ceil()
                     .min(AUTOSCROLL_MAX_LINES)
             } else {
@@ -1198,7 +1222,10 @@ impl CardBody for TerminalBody {
     /// on the alternate screen (`less`); the scrollback otherwise. `dy` is in
     /// card pixels, positive up.
     fn wheel(&mut self, local: Point, _dx: f64, dy: f64, modifiers: &gpui::Modifiers) {
-        let lines = self.wheel_carry.lines(dy, self.font_px * self.line_height) as i32;
+        let lines = self
+            .wheel_carry
+            .lines(dy * self.scroll_multiplier, self.font_px * self.line_height)
+            as i32;
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
             eprintln!(
                 "[wheel]   terminal: {lines} lines, mouse-mode {} alt-scroll {} offset {}",
@@ -1643,6 +1670,30 @@ mod tests {
         assert!(!under_hover(Some((9, 3)), 3, 5, 4));
         assert!(!under_hover(Some((5, 2)), 3, 5, 4));
         assert!(!under_hover(Some((4, 3)), 3, 5, 4));
+    }
+
+    // `terminal.copyOnSelect`: a finished drag hands its text to the
+    // clipboard; off (the default), nothing is copied until Cmd+C.
+    #[test]
+    fn copy_on_select_copies_a_finished_selection() {
+        let at = |col: f64, row: f64| Point {
+            x: PAD + col * 8.4 + 1.,
+            y: PAD + row * 14. * 1.2 + 1.,
+        };
+        let onto = |col: f64, row: f64| Point {
+            x: PAD + col * 8.4 + 7.,
+            y: PAD + row * 14. * 1.2 + 1.,
+        };
+        let plain = gpui::Modifiers::default();
+        for on in [false, true] {
+            let mut b = body();
+            b.copy_on_select = on;
+            b.feed(b"one two\r\n");
+            b.mouse_down(at(0., 0.), gpui::MouseButton::Left, &plain, 1);
+            b.mouse_move(onto(2., 0.), &plain);
+            b.mouse_up(onto(2., 0.), gpui::MouseButton::Left, &plain);
+            assert_eq!(b.clipboard_out.as_deref(), on.then_some("one"));
+        }
     }
 
     // Shift+click grows the selection to the click instead of starting a

@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-09-30
+
+- Four new settings for terminals: `terminal.copyOnSelect` copies a mouse selection as soon as it is made, `terminal.scrollMultiplier` sets the scroll speed, `terminal.padding` sets the space between a card's edge and its text, and `terminal.env` adds environment variables to new cards (`["EDITOR=ift"]`). `terminal.shell` takes arguments too (`"/bin/zsh -l"`).
+
 ### 2026-09-29
 
 - Drag any selected card by its frame or label to move the whole selection together. A drop onto other cards puts them all back.
