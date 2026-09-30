@@ -12,25 +12,14 @@ import '@fontsource-variable/schibsted-grotesk';
 import '@fontsource-variable/jetbrains-mono';
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
-// Lite and Pro, as decided in ekinertac/notes#50: the public source builds
-// Lite for free (personal use, no browser cards); the signed, notarized,
-// auto-updating DMG with browser cards and the work licence is Pro, sold on
-// Lemon Squeezy. No free binary is linked from here, ever. Empty BUY_URL or
-// PRICE means "not on sale yet" and the page says so instead of inventing one.
+// One app, every feature, free for personal use; working with it needs a
+// commercial licence, one per person, one time (Ekin, 2026-09-30, replacing
+// the Lite/Pro split of ekinertac/notes#50). Sold through Lemon Squeezy:
+// until the product exists BUY_URL is empty and the button says so rather
+// than pointing nowhere.
 const BUY_URL = '';
-const PRICE = '';
-// Friends' test-drive builds (free DMGs and zips, with latest.json) sit in
-// the public ekinertac/infiniterm-releases until Pro goes on sale, Ekin's
-// call on 2026-09-26. Setting BUY_URL is that moment, so the build refuses
-// to ship a buy button while the free builds may still be up: take them
-// down (and move the updater's feed), then flip this to true.
-const FREE_BUILDS_TAKEN_DOWN = false;
-if (BUY_URL && !FREE_BUILDS_TAKEN_DOWN) {
-  throw new Error(
-    'Pro is going on sale but the free builds in ekinertac/infiniterm-releases were never taken down. ' +
-      'Remove them (and point the updater at the paid feed), then set FREE_BUILDS_TAKEN_DOWN = true in src/pages/index.astro.',
-  );
-}
+const PRICE = '$29';
+const DOWNLOAD_URL = 'https://github.com/ekinertac/infiniterm-releases/releases/latest';
 const SOURCE_URL = 'https://github.com/ekinertac/infiniterm';
 
 // The hero canvas, in reading order. `state` is what the card settles on;
@@ -112,6 +101,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
       <nav>
         <a href={`${base}guide/install/`}>Docs</a>
         <a href="#pricing">Pricing</a>
+        <a href={DOWNLOAD_URL}>Download</a>
       </nav>
     </header>
 
@@ -124,8 +114,8 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
             agent inside is doing: working, waiting on you, failed, or done.
           </p>
           <div class="ctas">
-            <a class="btn primary" href="#pricing">Get infiniterm Pro</a>
-            <a class="btn" href="#pricing">Build Lite from source</a>
+            <a class="btn primary" href={DOWNLOAD_URL}>Download for Mac</a>
+            <a class="btn" href="#pricing">Pricing</a>
           </div>
           <p class="fine">For macOS 13 or later on Apple Silicon.</p>
         </div>
@@ -214,7 +204,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
           <div><dt>Editor cards</dt><dd>Syntax highlighting for 17 languages, a file tree, find and replace. No LSP, on purpose.</dd></div>
           <div><dt>Diff cards</dt><dd><code>ift diff</code> shows your changes against HEAD, with a blame gutter on <kbd>Cmd</kbd> <kbd>B</kbd>.</dd></div>
           <div><dt>Transcript cards</dt><dd>A Claude Code or Pi session as turns, tool calls folded, following along while it runs.</dd></div>
-          <div><dt>Browser cards <span class="pro">Pro</span></dt><dd>Chromium with the Claude in Chrome extension, so an agent can drive a browser that lives next to it.</dd></div>
+          <div><dt>Browser cards</dt><dd>Chromium with the Claude in Chrome extension, so an agent can drive a browser that lives next to it.</dd></div>
           <div><dt>Shells that outlive the window</dt><dd>Each card's shell runs under its own small daemon. Quit the app and they keep running; reopen it and they are back.</dd></div>
         </dl>
       </section>
@@ -244,30 +234,30 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
       </section>
 
       <section class="end" id="pricing">
-        <h2>Build it yourself, or buy the build.</h2>
+        <h2>Free for personal use. $29 for work.</h2>
         <div class="plans">
           <div class="plan">
-            <h3>Lite</h3>
-            <p class="price">Free to build</p>
+            <h3>Personal</h3>
+            <p class="price">Free</p>
             <ul>
-              <li>Everything on this page except browser cards</li>
-              <li>Built from the public source with Rust</li>
-              <li>For personal use</li>
+              <li>The whole app, every feature, signed and self-updating</li>
+              <li>Side projects, learning, open source in your own time</li>
+              <li>Or build it from the source yourself</li>
             </ul>
-            <a class="btn" href={SOURCE_URL}>Get the source</a>
+            <a class="btn" href={DOWNLOAD_URL}>Download for Mac</a>
           </div>
           <div class="plan pro-plan">
-            <h3>Pro</h3>
-            <p class="price">{PRICE ? `${PRICE}, one time` : 'One-time purchase'}</p>
+            <h3>Commercial</h3>
+            <p class="price">{PRICE} per person, one time</p>
             <ul>
-              <li>A signed, notarized app that updates itself</li>
-              <li>Browser cards, with the Claude in Chrome extension</li>
-              <li>A licence for work, one per person</li>
+              <li>Any paid work, freelance and client work included</li>
+              <li>One licence per person, on every Mac they own or control</li>
+              <li>Try it at work for 30 days first</li>
             </ul>
             {BUY_URL ? (
-              <a class="btn primary" href={BUY_URL}>Buy Pro</a>
+              <a class="btn primary" href={BUY_URL}>Buy a licence</a>
             ) : (
-              <span class="btn primary disabled" aria-disabled="true">Not on sale yet</span>
+              <span class="btn primary disabled" aria-disabled="true">Available soon</span>
             )}
           </div>
         </div>
@@ -607,15 +597,6 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
   .plan ul { margin: 0 0 8px; padding-left: 1.1em; display: grid; gap: 8px; }
   .plan .btn { justify-self: start; border-color: var(--card-text); color: var(--card-text); }
   .plan .btn.primary { color: #17161f; border-color: var(--working); }
-  .pro {
-    font: 600 0.72rem var(--mono);
-    vertical-align: 0.2em;
-    margin-left: 6px;
-    padding: 2px 7px;
-    border-radius: 5px;
-    background: var(--working);
-    color: #17161f;
-  }
 
   footer {
     display: flex;

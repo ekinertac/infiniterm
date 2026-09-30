@@ -3,13 +3,13 @@ title: Install and first launch
 description: Download the app, put ift on your PATH, and wire up agent state.
 ---
 
-infiniterm runs on Apple Silicon Macs with macOS 13 or later. It comes two ways: Pro, a signed app you buy, and Lite, which you build from the source yourself.
+infiniterm runs on Apple Silicon Macs with macOS 13 or later. It is free for personal use; paid work, freelance included, needs a commercial licence, $29 per person, one time.
 
-## Pro
+## Download
 
-Pro is the signed and notarized app, so Gatekeeper opens it without a warning, and it updates itself. It adds browser cards and carries the licence for using infiniterm at work.
+The app is signed and notarized, so Gatekeeper opens it without a warning, and it updates itself.
 
-1. Buy it; the receipt links the `.dmg`.
+1. Download the `.dmg` from the [latest release](https://github.com/ekinertac/infiniterm-releases/releases/latest).
 2. Open it and drag infiniterm into Applications, then launch it once.
 3. In any card, put `ift` on your PATH:
 
@@ -19,9 +19,9 @@ Pro is the signed and notarized app, so Gatekeeper opens it without a warning, a
 
    This symlinks `ift` into `~/.local/bin` and writes its zsh completion. If either directory is not on your `PATH` or `fpath`, it prints the line to add.
 
-## Lite
+## Build from source
 
-Lite is everything except browser cards, built from the public source, for personal use. You need Rust; the source's README has the steps. Builds are yours to use, not to hand to anyone else.
+The source is public. You need Rust, the CEF binary distribution and a checkout of cef-rs for its bundler; the README has the steps. Builds are yours to use, not to hand to anyone else.
 
 ## Agent hooks
 
@@ -48,7 +48,7 @@ Outside infiniterm the variable is unset and your usual history file is used.
 
 ## Updates
 
-Pro checks for a new build at launch and every six hours. A newer build is downloaded, its signature and notarization are checked, and it is installed the next time the app restarts. The status bar says "update N ready" until then. "Check for Updates…" in the app menu checks now.
+The app checks for a new build at launch and every six hours. A newer build is downloaded, its signature and notarization are checked, and it is installed the next time the app restarts. The status bar says "update N ready" until then. "Check for Updates…" in the app menu checks now.
 
 The check is a plain GET of `latest.json` with nothing about you in it.
 

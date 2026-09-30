@@ -11,7 +11,7 @@ Every card sits on one canvas you pan and zoom. Cards never move on their own: a
 - **Editor**: a file with syntax highlighting (17 tree-sitter grammars), multiple cursors, find and replace, and a file tree beside it (`Cmd K`). No LSP and no completion, on purpose. See [Editor cards](../editor/).
 - **Diff**: `ift diff` opens the changes against git HEAD, the changed files on the left and one file's diff on the right. `Cmd B` adds a blame gutter.
 - **Transcript**: `Cmd I` on a card running Claude Code or Pi opens its session beside it as turns, with tool calls folded under each.
-- **Browser** (Pro): Chromium inside the card, with the Claude in Chrome extension loaded, so Claude Code can drive a browser on your canvas. `Cmd L` opens the address bar.
+- **Browser**: Chromium inside the card, with the Claude in Chrome extension loaded, so Claude Code can drive a browser on your canvas. `Cmd L` opens the address bar.
 
 ## Where a new card goes
 
