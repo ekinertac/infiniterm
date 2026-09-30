@@ -1,0 +1,47 @@
+# The bug report form. It asks up front for what every infiniterm bug
+# needs first: the build (the status bar shows it), the Mac and macOS, the
+# terminal backend, and for a wrong card colour the agent.log lines, which
+# record every state change. Blank issues stay allowed for anything else.
+name: Bug report
+description: Something in infiniterm does not work the way it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: Steps to get there if you have them. A screenshot helps for anything on the canvas.
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Build
+      description: The bottom-right corner of the status bar says it, e.g. "build 395".
+      placeholder: build 395
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac and macOS
+      placeholder: MacBook Air M3, macOS 15.3
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Terminal backend
+      description: '"terminal.backend" in ~/.config/infiniterm/settings.json; the default if you never set it.'
+      options:
+        - daemon (the default)
+        - pty
+        - tmux
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: agent.log, for a card showing the wrong colour
+      description: The lines around the time it happened, from ~/Library/Application Support/dev.ekinertac.infiniterm/agent.log.
+      render: text
