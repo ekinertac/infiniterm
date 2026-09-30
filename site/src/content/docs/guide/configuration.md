@@ -44,7 +44,7 @@ Chords follow the physical key, not the character your layout prints on it, so `
 
 ## Themes
 
-All 500-odd schemes from iTerm2-Color-Schemes ship with the app; Catppuccin Mocha is the default. Your own `.itermcolors` files go in:
+All 500-odd schemes from iTerm2-Color-Schemes ship with the app; Violite is the default. Your own `.itermcolors` files go in:
 
 ```
 ~/Library/Application Support/dev.ekinertac.infiniterm/themes/

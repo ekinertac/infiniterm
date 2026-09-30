@@ -357,11 +357,11 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     --dot: #c9c7d6;
     --ink: #17161f;
     --ink-soft: #4a4858;
-    /* A terminal card, Catppuccin Mocha, the app's default theme. */
-    --card: #1e1e2e;
-    --card-edge: #3a3a50;
-    --card-text: #cdd6f4;
-    --card-dim: #6c7086;
+    /* A terminal card in Violite, the app's default theme. */
+    --card: #241c36;
+    --card-edge: #3d2f5c;
+    --card-text: #eef4f6;
+    --card-dim: #8a7cab;
     /* The four states, the app's own values (chrome.rs). */
     --working: #9d7cd8;
     --waiting: #ffc400;
@@ -378,8 +378,8 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
       --dot: #2a2837;
       --ink: #ecebf5;
       --ink-soft: #a6a4b8;
-      --card: #1e1e2e;
-      --card-edge: #34344a;
+      --card: #241c36;
+      --card-edge: #3d2f5c;
       color-scheme: dark;
     }
   }
@@ -388,7 +388,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     --dot: #2a2837;
     --ink: #ecebf5;
     --ink-soft: #a6a4b8;
-    --card-edge: #34344a;
+    --card-edge: #3d2f5c;
     color-scheme: dark;
   }
 
@@ -549,7 +549,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     color: var(--card-dim);
   }
   .bars { display: grid; gap: 6px; }
-  .bars i { display: block; height: 4px; max-width: 100%; border-radius: 2px; background: #45475a; }
+  .bars i { display: block; height: 4px; max-width: 100%; border-radius: 2px; background: #56447a; }
   .card pre {
     margin: 0;
     font: 11px/1.45 var(--mono);
@@ -674,9 +674,9 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     color: var(--card-dim);
     font: 500 1.05rem var(--mono);
   }
-  .tab.active { background: #313244; color: var(--card-text); }
+  .tab.active { background: #49376d; color: var(--card-text); }
   .dots { display: flex; gap: 7px; flex-wrap: wrap; }
-  .dots i { width: 12px; height: 12px; border-radius: 50%; background: #585b70; }
+  .dots i { width: 12px; height: 12px; border-radius: 50%; background: #56447a; }
   .dots .d-working { background: var(--working); }
   .dots .d-waiting { background: var(--waiting); }
   .dots .d-failed { background: var(--failed); }

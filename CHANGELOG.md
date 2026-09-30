@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-09-30
 
+- A fresh install opens in the Violite colour scheme instead of Catppuccin Mocha. A theme you picked yourself stays as it is.
 - Four new settings for terminals: `terminal.copyOnSelect` copies a mouse selection as soon as it is made, `terminal.scrollMultiplier` sets the scroll speed, `terminal.padding` sets the space between a card's edge and its text, and `terminal.env` adds environment variables to new cards (`["EDITOR=ift"]`). `terminal.shell` takes arguments too (`"/bin/zsh -l"`).
 
 ### 2026-09-29

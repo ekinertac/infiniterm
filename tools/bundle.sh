@@ -41,9 +41,13 @@ cargo build $( [ "$profile" = release ] && echo --release ) -p infiniterm-cli -p
 cp "target/$profile/ift" "target/$profile/infiniterm-hook" "target/$profile/iftd" "$app/Contents/MacOS/"
 # The Tauri app's icon, as it was.
 cp assets/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
-themes="$HOME/Code/infiniterm-tauri/src-tauri/resources/themes"
+# The 522 iTerm2-Color-Schemes files, kept in the repo (assets/themes, MIT,
+# licence inside). They were copied from the archived Tauri checkout, and a
+# Mac without it built a bundle with no themes at all, silently; a missing
+# folder now stops the build instead.
+[ -d assets/themes ] || { echo "bundle: assets/themes is missing" >&2; exit 1; }
 mkdir -p "$app/Contents/Resources/themes"
-[ -d "$themes" ] && ditto "$themes" "$app/Contents/Resources/themes"
+ditto assets/themes "$app/Contents/Resources/themes"
 plist="$app/Contents/Info.plist"
 for kv in "CFBundleIconFile AppIcon" "CFBundleIconName AppIcon" "CFBundleName infiniterm" "LSMinimumSystemVersion 13.0"; do
     set -- $kv

@@ -226,9 +226,11 @@ pub const BROWSER_ZOOM_MAX: f64 = 3.;
 
 pub fn default_config() -> Config {
     Config {
-        // Bundled with the app, so a fresh install has colours rather than
-        // the fallback palette.
-        theme: Some("Catppuccin Mocha".into()),
+        // Bundled with the app (assets/themes), so a fresh install has
+        // colours rather than the fallback palette. Violite since
+        // 2026-09-30: Ekin's own, chosen over Catppuccin Mocha for a first
+        // launch.
+        theme: Some("Violite".into()),
         starting_dir: String::new(),
         terminal: Terminal {
             shell: String::new(),

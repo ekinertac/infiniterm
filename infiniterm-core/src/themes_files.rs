@@ -5,7 +5,7 @@
 //! copies it into the themes directory once per process, each file only if
 //! it is not there yet: this adds, never overwrites, so a scheme you edited
 //! or deleted stays that way. `theme: null` in the settings means the
-//! default (Catppuccin Mocha), not "no theme".
+//! default (Violite, `config::default_config`), not "no theme".
 use crate::paths::themes_dir;
 use std::path::{Path, PathBuf};
 use std::sync::Once;
@@ -75,6 +75,18 @@ pub fn read_theme(dir: &Path, name: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The default theme names a file the bundle must carry. tools/bundle.sh
+    // copies assets/themes; a default missing from it is a first launch in
+    // the fallback palette, which is what a build without the folder did.
+    #[test]
+    fn the_default_theme_ships_in_assets_themes() {
+        let name = crate::config::default_config().theme.unwrap();
+        let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../assets/themes")
+            .join(format!("{name}.itermcolors"));
+        assert!(file.exists(), "{} is not in assets/themes", file.display());
+    }
 
     // Native check: seeding adds and never overwrites, and listing is sorted
     // without extensions.
