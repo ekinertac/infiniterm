@@ -154,6 +154,13 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
         </div>
       </section>
 
+      <section class="shot">
+        <figure>
+          <img src={`${base}canvas.png`} width="1600" height="1452" loading="lazy" alt="An infiniterm window at 19% zoom: 33 terminal cards in groups and loose on a dark canvas, their borders violet, green and yellow by state, three workspace tabs with a row of dots each." />
+          <figcaption>A real canvas: 33 cards at 19% zoom, grouped and loose, the borders showing which agents are working, done or waiting. Each workspace tab carries a dot per card.</figcaption>
+        </figure>
+      </section>
+
       <section class="states">
         <h2>Four colours, because there are four questions.</h2>
         <p class="section-lede">
@@ -554,7 +561,11 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     .film .play-icon { transition: none; }
   }
 
-  main > section:not(.hero):not(.film) { padding-block: 72px; }
+  main > section:not(.hero):not(.film):not(.shot) { padding-block: 72px; }
+  .shot { padding-bottom: 48px; }
+  .shot figure { margin: 0; }
+  .shot img { display: block; width: 100%; height: auto; border-radius: 12px; }
+  .shot figcaption { margin-top: 14px; font-size: 0.95rem; color: var(--ink-soft); max-width: 70ch; }
   .section-lede { color: var(--ink-soft); margin: 20px 0 40px; }
 
   .state-row {
