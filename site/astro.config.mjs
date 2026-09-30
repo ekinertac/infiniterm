@@ -24,6 +24,8 @@ export default defineConfig({
             'guide/install',
             'guide/canvas',
             'guide/card-states',
+            'guide/terminal',
+            'guide/editor',
             'guide/ift-and-sessions',
             'guide/configuration',
           ],
