@@ -7,7 +7,12 @@ Terminal cards on an infinite canvas, with the state of every coding agent visib
 ## Setup
 
 ```sh
-curl -fsSL https://infiniterm.app/install.sh | sh    # or
+curl -fsSL https://infiniterm.app/install.sh | sh
+```
+
+Or with Homebrew:
+
+```sh
 brew install --cask ekinertac/tap/infiniterm
 ```
 
