@@ -12,25 +12,15 @@ import '@fontsource-variable/schibsted-grotesk';
 import '@fontsource-variable/jetbrains-mono';
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
-// Lite and Pro, as decided in ekinertac/notes#50: the public source builds
-// Lite for free (personal use, no browser cards); the signed, notarized,
-// auto-updating DMG with browser cards and the work licence is Pro, sold on
-// Lemon Squeezy. No free binary is linked from here, ever. Empty BUY_URL or
-// PRICE means "not on sale yet" and the page says so instead of inventing one.
+// One app, every feature, free for personal use; working with it needs a
+// commercial licence, one per person, one time (Ekin, 2026-09-30, replacing
+// the Lite/Pro split of ekinertac/notes#50). Sold through Lemon Squeezy:
+// until the product exists BUY_URL is empty and the button says so rather
+// than pointing nowhere.
 const BUY_URL = '';
-const PRICE = '';
-// Friends' test-drive builds (free DMGs and zips, with latest.json) sit in
-// the public ekinertac/infiniterm-releases until Pro goes on sale, Ekin's
-// call on 2026-09-26. Setting BUY_URL is that moment, so the build refuses
-// to ship a buy button while the free builds may still be up: take them
-// down (and move the updater's feed), then flip this to true.
-const FREE_BUILDS_TAKEN_DOWN = false;
-if (BUY_URL && !FREE_BUILDS_TAKEN_DOWN) {
-  throw new Error(
-    'Pro is going on sale but the free builds in ekinertac/infiniterm-releases were never taken down. ' +
-      'Remove them (and point the updater at the paid feed), then set FREE_BUILDS_TAKEN_DOWN = true in src/pages/index.astro.',
-  );
-}
+const PRICE = '$29';
+const INSTALL = 'curl -fsSL https://infiniterm.app/install.sh | sh';
+const DOWNLOAD_URL = 'https://github.com/ekinertac/infiniterm-releases/releases/latest';
 const SOURCE_URL = 'https://github.com/ekinertac/infiniterm';
 
 // The hero canvas, in reading order. `state` is what the card settles on;
@@ -112,6 +102,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
       <nav>
         <a href={`${base}guide/install/`}>Docs</a>
         <a href="#pricing">Pricing</a>
+        <a href={DOWNLOAD_URL}>Download</a>
       </nav>
     </header>
 
@@ -123,11 +114,14 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
             infiniterm puts every terminal on one zoomable canvas. Each card keeps its place, and its border says what the
             agent inside is doing: working, waiting on you, failed, or done.
           </p>
-          <div class="ctas">
-            <a class="btn primary" href="#pricing">Get infiniterm Pro</a>
-            <a class="btn" href="#pricing">Build Lite from source</a>
+          <div class="install">
+            <code id="install-line">{INSTALL}</code>
+            <button type="button" id="copy" aria-label="Copy the install command">Copy</button>
           </div>
-          <p class="fine">For macOS 13 or later on Apple Silicon.</p>
+          <p class="fine">
+            macOS 13 or later on Apple Silicon. Or <a href={DOWNLOAD_URL}>download the DMG</a>. Free for personal use,
+            <a href="#pricing">$29 for work</a>.
+          </p>
         </div>
 
         <div class="hero-canvas" aria-hidden="true">
@@ -152,12 +146,19 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
 
       <section class="film">
         <div class="stage">
-          <iframe data-src={`${base}film.html?play`} title="infiniterm in 54 seconds"></iframe>
-          <button type="button" class="play" aria-label="Play the 54-second film">
+          <iframe data-src={`${base}film.html?play`} title="infiniterm in 65 seconds"></iframe>
+          <button type="button" class="play" aria-label="Play the 65-second film">
             <span class="play-icon" aria-hidden="true"></span>
-            <span>Play the film <span class="len">54 s</span></span>
+            <span>Play the film <span class="len">65 s</span></span>
           </button>
         </div>
+      </section>
+
+      <section class="shot">
+        <figure>
+          <img src={`${base}canvas.png`} width="1600" height="1452" loading="lazy" alt="An infiniterm window at 19% zoom: 33 terminal cards in groups and loose on a dark canvas, their borders violet, green and yellow by state, three workspace tabs with a row of dots each." />
+          <figcaption>A real canvas: 33 cards at 19% zoom, grouped and loose, the borders showing which agents are working, done or waiting. Each workspace tab carries a dot per card.</figcaption>
+        </figure>
       </section>
 
       <section class="states">
@@ -214,7 +215,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
           <div><dt>Editor cards</dt><dd>Syntax highlighting for 17 languages, a file tree, find and replace. No LSP, on purpose.</dd></div>
           <div><dt>Diff cards</dt><dd><code>ift diff</code> shows your changes against HEAD, with a blame gutter on <kbd>Cmd</kbd> <kbd>B</kbd>.</dd></div>
           <div><dt>Transcript cards</dt><dd>A Claude Code or Pi session as turns, tool calls folded, following along while it runs.</dd></div>
-          <div><dt>Browser cards <span class="pro">Pro</span></dt><dd>Chromium with the Claude in Chrome extension, so an agent can drive a browser that lives next to it.</dd></div>
+          <div><dt>Browser cards</dt><dd>Chromium with the Claude in Chrome extension, so an agent can drive a browser that lives next to it.</dd></div>
           <div><dt>Shells that outlive the window</dt><dd>Each card's shell runs under its own small daemon. Quit the app and they keep running; reopen it and they are back.</dd></div>
         </dl>
       </section>
@@ -244,30 +245,30 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
       </section>
 
       <section class="end" id="pricing">
-        <h2>Build it yourself, or buy the build.</h2>
+        <h2>Free for personal use. $29 for work.</h2>
         <div class="plans">
           <div class="plan">
-            <h3>Lite</h3>
-            <p class="price">Free to build</p>
+            <h3>Personal</h3>
+            <p class="price">Free</p>
             <ul>
-              <li>Everything on this page except browser cards</li>
-              <li>Built from the public source with Rust</li>
-              <li>For personal use</li>
+              <li>The whole app, every feature, signed and self-updating</li>
+              <li>Side projects, learning, open source in your own time</li>
+              <li>Or build it from the source yourself</li>
             </ul>
-            <a class="btn" href={SOURCE_URL}>Get the source</a>
+            <a class="btn" href={DOWNLOAD_URL}>Download for Mac</a>
           </div>
           <div class="plan pro-plan">
-            <h3>Pro</h3>
-            <p class="price">{PRICE ? `${PRICE}, one time` : 'One-time purchase'}</p>
+            <h3>Commercial</h3>
+            <p class="price">{PRICE} per person, one time</p>
             <ul>
-              <li>A signed, notarized app that updates itself</li>
-              <li>Browser cards, with the Claude in Chrome extension</li>
-              <li>A licence for work, one per person</li>
+              <li>Any paid work, freelance and client work included</li>
+              <li>One licence per person, on every Mac they own or control</li>
+              <li>Try it at work for 30 days first</li>
             </ul>
             {BUY_URL ? (
-              <a class="btn primary" href={BUY_URL}>Buy Pro</a>
+              <a class="btn primary" href={BUY_URL}>Buy a licence</a>
             ) : (
-              <span class="btn primary disabled" aria-disabled="true">Not on sale yet</span>
+              <span class="btn primary disabled" aria-disabled="true">Available soon</span>
             )}
           </div>
         </div>
@@ -291,6 +292,18 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
         film.src = film.dataset.src ?? '';
         play.remove();
         film.focus();
+      });
+      // The copy button puts the install line on the clipboard and says so in
+      // its own label for a moment; that label change is the confirmation.
+      const copy = document.getElementById('copy');
+      copy?.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(document.getElementById('install-line')?.textContent ?? '');
+          copy.textContent = 'Copied';
+        } catch {
+          copy.textContent = 'Select it';
+        }
+        setTimeout(() => (copy.textContent = 'Copy'), 1600);
       });
     </script>
   </body>
@@ -394,7 +407,35 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     padding-block: 40px 96px;
   }
   .lede { font-size: 1.25rem; color: var(--ink-soft); margin: 28px 0 32px; }
-  .ctas { display: flex; flex-wrap: wrap; gap: 12px; }
+  .install {
+    display: flex;
+    align-items: stretch;
+    max-width: 640px;
+    background: var(--card);
+    color: var(--card-text);
+    border-radius: 10px;
+    border: 1px solid var(--card-edge);
+    overflow: hidden;
+  }
+  .install code {
+    flex: 1;
+    min-width: 0;
+    font: 0.86rem/1.4 var(--mono);
+    padding: 15px 16px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .install code::before { content: '$ '; color: var(--card-dim); }
+  .install button {
+    font: 600 0.9rem var(--sans);
+    background: var(--working);
+    color: #17161f;
+    border: 0;
+    padding: 0 20px;
+    cursor: pointer;
+    min-width: 92px;
+  }
+  .install button:hover { background: #b39ae3; }
   .btn {
     display: inline-block;
     font: 600 1rem var(--sans);
@@ -520,7 +561,11 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     .film .play-icon { transition: none; }
   }
 
-  main > section:not(.hero):not(.film) { padding-block: 72px; }
+  main > section:not(.hero):not(.film):not(.shot) { padding-block: 72px; }
+  .shot { padding-bottom: 48px; }
+  .shot figure { margin: 0; }
+  .shot img { display: block; width: 100%; height: auto; border-radius: 12px; }
+  .shot figcaption { margin-top: 14px; font-size: 0.95rem; color: var(--ink-soft); max-width: 70ch; }
   .section-lede { color: var(--ink-soft); margin: 20px 0 40px; }
 
   .state-row {
@@ -607,15 +652,6 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
   .plan ul { margin: 0 0 8px; padding-left: 1.1em; display: grid; gap: 8px; }
   .plan .btn { justify-self: start; border-color: var(--card-text); color: var(--card-text); }
   .plan .btn.primary { color: #17161f; border-color: var(--working); }
-  .pro {
-    font: 600 0.72rem var(--mono);
-    vertical-align: 0.2em;
-    margin-left: 6px;
-    padding: 2px 7px;
-    border-radius: 5px;
-    background: var(--working);
-    color: #17161f;
-  }
 
   footer {
     display: flex;
@@ -642,5 +678,6 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     .state-row { grid-template-columns: 1fr; }
     .keys li { grid-template-columns: 1fr; gap: 4px; }
     .plans { grid-template-columns: 1fr; }
+    .install code { font-size: 0.75rem; }
   }
 </style>
