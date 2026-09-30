@@ -27,7 +27,9 @@ plist="$app/Contents/Info.plist"
 version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist")
 build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$plist")
 name="infiniterm-$version-$build-arm64"
-tag="v$version-$build"
+# Semver, the open source convention (#19); the build rides in the
+# release title and notes. Was v<version>-<build>.
+tag="v$version"
 out=target/dist
 rm -rf "$out"
 mkdir -p "$out"
