@@ -3,7 +3,8 @@
 # as a GitHub Release marked latest: the DMG for a first install, the zip
 # the updater downloads, and latest.json, which the running app polls at
 # releases/latest/download/latest.json (updater.rs), a URL GitHub always
-# points at the newest release. Then tags the source commit release-<build>.
+# points at the newest release. Then points the Homebrew cask in
+# ekinertac/homebrew-tap at it and tags the source commit release-<build>.
 #
 # The releases repo is PUBLIC: notes go there as written. They default to
 # one line; pass NOTES="..." for more. Commit subjects are not copied over,
@@ -28,6 +29,9 @@ notes=${NOTES:-"infiniterm $version, build $build."}
 gh release create "$tag" --repo "$repo" --latest \
     --title "infiniterm $version ($build)" --notes "$notes" \
     "$out"/*.dmg "$out"/*.zip "$out/latest.json"
+# The Homebrew cask follows the release, or `brew install` hands out the
+# previous build until someone remembers (tools/bump-cask.sh).
+tools/bump-cask.sh "$version" "$build" "$(ls "$out"/*.dmg)"
 git tag -a "release-$build" -m "Published as $tag on $repo"
 git push -q origin "release-$build"
 echo "publish: https://github.com/$repo/releases/tag/$tag"
