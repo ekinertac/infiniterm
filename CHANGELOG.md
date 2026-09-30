@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-01
 
+- Releases are tagged with plain version numbers (`v0.3.0`) from the next one on.
 - The status bar's frame counter no longer shows a low number in orange when the canvas is simply at rest; it counts only while something is animating or moving, and is off by default (`ui.showFps`).
 
 ### 2026-09-30

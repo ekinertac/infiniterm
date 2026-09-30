@@ -8,7 +8,9 @@
 # of publishing and not a separate chore to remember.
 #
 # Edits through the GitHub contents API, one commit, no clone. The cask's
-# URL is built from the version, so only those two lines change; anything
+# URL is built from the version; the version and sha256 lines change, and
+# the url line is set to the semver tag's download path (#19: releases were
+# tagged v<version>-<build> before), a no-op once the tap has it. Anything
 # else in the file is left exactly as the tap has it.
 #
 #   tools/bump-cask.sh <version> <build> <dmg>
@@ -28,7 +30,10 @@ blob=$(printf '%s' "$meta" | python3 -c 'import json,sys; print(json.load(sys.st
 old=$(printf '%s' "$meta" | python3 -c 'import json,sys,base64; print(base64.b64decode(json.load(sys.stdin)["content"]).decode(), end="")')
 new=$(printf '%s\n' "$old" | sed -E \
     -e "s/^(  version \")[^\"]*(\")/\1$version,$build\2/" \
-    -e "s/^(  sha256 \")[0-9a-f]{64}(\")/\1$sha\2/")
+    -e "s/^(  sha256 \")[0-9a-f]{64}(\")/\1$sha\2/" \
+    -e 's|/download/v#{version.csv.first}-#{version.csv.second}/|/download/v#{version.csv.first}/|' \
+    -e 's|^# current for fresh installs. Release tags are v<version>-<build>, so the$|# current for fresh installs. Release tags are v<version> and the DMG names|' \
+    -e 's|^# version is "<version>,<build>" and the csv parts rebuild the URL.$|# the build, so the version is "<version>,<build>" and the csv parts rebuild the URL.|')
 printf '%s\n' "$new" | grep -q "version \"$version,$build\"" || { echo "bump-cask: no version line to update in $path" >&2; exit 1; }
 printf '%s\n' "$new" | grep -q "sha256 \"$sha\"" || { echo "bump-cask: no sha256 line to update in $path" >&2; exit 1; }
 
