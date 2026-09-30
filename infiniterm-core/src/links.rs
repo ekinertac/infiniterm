@@ -244,10 +244,10 @@ mod tests {
         );
         // A port is the host's, not a line number. (A port AND a path is
         // cut at the port by the path pattern; rare enough to leave.)
-        let f = at("on www.humbl.ai:8443", "www.humbl.ai:8443").unwrap();
+        let f = at("on www.acme.dev:8443", "www.acme.dev:8443").unwrap();
         assert_eq!(
             (f.target.as_str(), f.line),
-            ("https://www.humbl.ai:8443", None)
+            ("https://www.acme.dev:8443", None)
         );
         assert_eq!(
             at("site.com.tr", "site.com.tr").unwrap().kind,

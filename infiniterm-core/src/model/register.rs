@@ -2078,7 +2078,7 @@ mod tests {
         let kept = h.focused().id.clone();
         h.run("card.new.terminal");
         let mover = h.focused().id.clone();
-        let there = h.m.add_workspace(Some("Humbl"));
+        let there = h.m.add_workspace(Some("Acme"));
         let resident = h.m.add_card(
             "/Users/me",
             NewCard {
@@ -2091,7 +2091,7 @@ mod tests {
         assert_eq!(h.m.palette.source, Some(Source::MoveTo));
         let rows = h.m.palette_items(Source::MoveTo, &[]);
         let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
-        assert_eq!(labels, ["Humbl", "New workspace"], "not the one you are on");
+        assert_eq!(labels, ["Acme", "New workspace"], "not the one you are on");
         assert_eq!(rows[0].hint.as_deref(), Some("1 card"));
         h.m.palette_run(Source::MoveTo, &there);
         let moved = h.m.card(&mover).unwrap().clone();
@@ -2106,7 +2106,7 @@ mod tests {
         assert_eq!(h.focused().id, kept);
         assert_eq!(
             h.m.notice.as_deref(),
-            Some(format!("moved #{} to Humbl", moved.number).as_str())
+            Some(format!("moved #{} to Acme", moved.number).as_str())
         );
         let ws = h.m.workspaces.iter().find(|w| w.id == there).unwrap();
         assert_eq!(

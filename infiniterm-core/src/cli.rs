@@ -149,9 +149,9 @@ mod tests {
     #[test]
     fn parses_a_request() {
         let (cmd, args, card) =
-            parse_request(r#"{"cmd":"group","args":["humbl.ai"],"card_id":"c1"}"#).unwrap();
+            parse_request(r#"{"cmd":"group","args":["acme.dev"],"card_id":"c1"}"#).unwrap();
         assert_eq!(cmd, "group");
-        assert_eq!(args, ["humbl.ai"]);
+        assert_eq!(args, ["acme.dev"]);
         assert_eq!(card.as_deref(), Some("c1"));
     }
 

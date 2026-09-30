@@ -2,231 +2,44 @@
 
 Terminal cards on an infinite canvas, with the state of every coding agent visible at a glance.
 
-It started as a way out of iTerm2: ten to fifteen tabs, two or three splits in each, some panes made full screen, and at that point the trail is lost and finding one particular session among twenty to fifty means opening them one by one. Every session on one infinite canvas, where each keeps a place, is what fixes that. Running coding agents made it worse: you cannot tell which are still working, which are blocked waiting for an answer, and which have finished without cycling through them, so infiniterm colours each card's border from its agent's state.
+![An infiniterm window at 19% zoom: 33 terminal cards, their borders coloured by each agent's state](assets/screenshot-canvas.png)
 
-Reading that state is the point. Being interrupted by it is not: nothing flashes, nothing steals focus, nothing sends a notification. You switch agents when you are ready, not when one finishes.
+## Setup
 
-Native macOS app in Rust: gpui draws the canvas, `alacritty_terminal` parses the shells, CEF hosts the browser cards. Single binary plus the Chromium framework, no Electron, no account, no telemetry. Early, and in active development.
+```sh
+curl -fsSL https://infiniterm.app/install.sh | sh    # or
+brew install --cask ekinertac/tap/infiniterm
+```
 
-## What it does
+Or [download the DMG](https://github.com/ekinertac/infiniterm-releases/releases/latest). macOS 13 or later on Apple Silicon. Free for personal use; paid work needs a licence, $29 per person, one time. Docs at [infiniterm.app](https://infiniterm.app).
 
-- Real shells in cards on a pan-and-zoom canvas, snapped to a 25 px grid. A new card is 16:9 and sized to fill the window at 100% (`cards.shape`, `cards.width`, `cards.height` change that). New cards fill a square block from the top-left corner, the same place whichever card you were on, so four cards are a 2x2 and the canvas stays screen-shaped at any count
-- Card borders, and only card borders, in four colours because there are four questions: working (violet), blocked on you (yellow: it wants permission, or it asked something), failed (red) and finished (green). Claude Code and Pi report through hooks; any other command reports through zsh's command marks, so a build that runs 5 s or more goes violet then green, and any failing command goes red. A shell doing nothing has no colour
-- Keyboard-first. Every action is a command; `Cmd` is the app's modifier, and everything else goes to the terminal untouched
-- Card labels and group names take a colour of their own from the terminal theme's palette, derived from the card's id so it never changes
-- Several workspaces, each a canvas of its own, with a dot on the tab per card, grey until the agent in it is blocked waiting on you, still working, or finished after you left (once you have been back, that one goes grey again). A card moves to another one from the palette: "Card: move to workspace…", then pick the workspace (or a new one); it lands in a free slot there and you stay where you are
-- Groups: a named frame around a set of cards, placed clear of the loose ones. The frame carries no agent colour of its own: it holds several sessions, and one colour could not say which of them wants you
-- Card labels that track what the card is doing: the running process while one runs, the current directory otherwise; editors carry badges for language, read-only and unsaved. Zoomed out, the name is drawn large across the card and the text becomes texture, so a full card reads as full at 10%
-- Splits, iTerm2's keys: a card gives up half of itself to a new one, and the halves remember each other, so closing one hands its space back
-- Free drag and resize from the card's edges, with alignment guides against the other cards, and a card dropped on another goes back where it started
-- Multi-select with `Cmd + Shift + Arrow` or Shift + click, and every command that can sensibly mean several cards acts on all of them. The active card keeps its white ring so you know where you are; the rest wear blue
-- No mouse needed to reach anything: arrow into an empty slot to get a hollow card you can fill, `Cmd + Shift + T` letters every empty slot, `Cmd + J` letters every card
-- Drag a file in from the Finder: onto a terminal it arrives as the shell-escaped path, the way it does in iTerm2, so it works mid-command; onto a browser card the page goes to the file; anywhere else it opens as a card, the same as `ift <path>`
-- Terminals select with the mouse (two clicks a word, three a line), `Cmd + C` copies, links and paths that exist underline when you hold `Cmd` over them and `Cmd + click` opens them beside the card. `htop`, `vim` and friends get the mouse
-- Editor cards: a file opens in an editor that is a card like any other, coloured by the terminal theme. Syntax highlighting for fifteen languages through tree-sitter, find and replace, go to line, comment toggle, undo, save; long lines wrap in prose files. No LSP, no completion, on purpose. From `ift <file>` (`file:42` opens at a line; run inside a terminal card it opens IN PLACE over that card and `ift` waits until you close it, like `vim`, so `EDITOR=ift` works for `git commit`; `ift -n <file>` gives it a card of its own; a file that does not exist yet opens empty and the first save creates it), `Cmd + N` for an empty one, the palette, the new-card menu, or `Cmd + click` on a path. A file tree beside the buffer, from `ift <dir>` or `Cmd + K`, keyboard-driven. Unsaved changes survive a quit, the way Sublime keeps them; closing the card discards them. A file changed on disk under a clean buffer is reloaded
-- Diff cards: `ift diff` (or `ift diff <path>`) opens the changes against git HEAD as a card: the changed files with their `+12 −5` on the left, one file's diff on the right, read-only, in the theme's red and green, unchanged stretches folded. `Cmd + B` adds a blame gutter: hash, author, age per line
-- Browser cards: Chromium inside the card, with the Claude in Chrome extension loaded, so Claude Code can drive a browser that lives on your canvas and sign-ins work. `Cmd + L` for the address bar, `Browser: open a URL` from the palette, or `Cmd + click` a URL in any terminal. The page zooms with the canvas and asks for more pixels above 100%. `Cmd + Esc` leaves it, `Cmd + =` / `Cmd + -` zoom the page. A card can hold several tabs: a popup, a `target=_blank` link, a Cmd+click on a link or "Open link in new tab" opens one on the same card rather than a new card beside it; "Open link in new card" is still there when you want that instead. `Cmd + Shift + click` sends a link to the system browser
-- A browser card's keyboard locks to the page on the first interaction that isn't just focusing it — a click that reaches the page, or `Enter` on a card that is focused but not yet locked (the keyboard's way in, for a card you arrow-focused rather than clicked) — the same way alt-tabbing into a real Chrome window would: every Cmd chord and `Cmd+Shift+]` / `Cmd+Shift+[` become Chrome's own bindings rather than this app's, so `Cmd+T` opens a tab instead of a card and `Cmd+C` etc. reach the page instead of the app. Double-`Escape` (within 400 ms) unlocks it. `Cmd+L` (the omnibox) and `Cmd+Esc` (leave the page) still work while locked, and so does workspace switching (`Ctrl+1..9`). A locked card's ring turns the same colour as a warning, and the status bar names it too, so the keyboard meaning something different is never just a fact you have to remember
-- Transcript cards: `Cmd + I` on a card running Claude Code or Pi opens its session beside it as turns: you / claude on the left with a first line and a time, the chosen turn on the right with every tool call folded under it. Follows the session while it runs. Thinking blocks and subagent chatter are left out
-- A red badge on any card sitting in an SSH session, with the destination
-- Terminal themes from `.itermcolors` files, applied to open terminals live
-- Configuration in `~/.config/infiniterm/`, Sublime style: your overrides beside a commented defaults file, watched and applied without a restart
-- Cmd+Shift+P finds commands, cards and workspaces by name; Enter on a card switches there and fits it. Cmd+Ctrl+Space opens the emoji panel, dead keys and input methods compose into any card or field, and Shift+Enter breaks the line in Claude Code and Pi.
-- Shells that outlive the window: `terminal.backend: "daemon"`, the default, gives each card its own small `iftd` sidecar holding the pty, so quitting leaves your work running and reopening replays what it printed straight into the same emulator, no second one in the path. Opt-in for now, pending the falsification test in `tools/drive/daemon.sh` (a shell running Claude Code, quit, relaunch, look). `terminal.backend: "tmux"` is still there too: same idea, a real tmux window per card, reachable with `tmux attach -t infiniterm` from any terminal, at the cost of being a second terminal emulator in the path
-- The canvas survives a restart too: cards, their positions and sizes, groups, workspaces, the viewport. The window reopens where and how you left it
+## What it is
 
-Twenty-six cards all running `yes` at once paint at 110 fps on a 120 Hz display; a zoom over twenty-six idle cards runs at 55 to 105. Three things do that: the PTY reader stops at 256 KiB unacknowledged per pane, so a fast program waits at the kernel's buffer the way it always has on a slow terminal; output is parsed one frame's budget at a time on the UI thread; and only the rows the terminal changed are rebuilt and reshaped. An idle canvas paints twice a second, for the cursor.
+It started as a way out of iTerm2: fifteen tabs with splits in each, and finding one session among thirty meant opening them one by one. Here every session is a card on one canvas and keeps its place. With coding agents in those cards, you also could not tell which were working, which were waiting on you and which had finished, so each card's border says it: violet working, yellow waiting on you, red failed, green done. Claude Code and Pi report through hooks; any zsh command reports too.
 
-Not done yet: adapters for Codex and OpenCode.
+Nothing flashes, nothing steals focus, nothing sends a notification. You switch when you are ready.
 
-## Running it
+- Terminal, editor, diff, transcript and browser cards on the same canvas, in groups and workspaces.
+- Keyboard-first: `Cmd` is the app's, everything else goes to the shell untouched. Every action is a command in the palette.
+- Shells outlive the window: each card's shell runs under its own small daemon, so quitting the app keeps your work running.
+- `ift`, the command line side: `ift file.rs` edits a file over the terminal you are in, `ift diff` opens your changes, `ift attach 7` reaches card #7's shell from any terminal.
+
+Native Rust: gpui draws the canvas, `alacritty_terminal` parses the shells, Chromium (CEF) runs the browser cards. No Electron, no account, no telemetry; the one request the app makes on its own is the update check. Early, and in active development.
+
+## Building from source
 
 Needs Rust, the CEF binary distribution under `~/.local/share/cef` and a checkout of [cef-rs](https://github.com/tauri-apps/cef-rs) at `~/Code/cef-rs` for its bundler.
 
 ```sh
-make run          # build, bundle, launch on a scratch copy of your canvas
+make run          # build, bundle, launch on a scratch data dir
 make check        # fmt, clippy, tests
 make release      # optimised bundle in target/bundle/infiniterm.app
 ```
 
-The app runs only from the bundle: the Chromium framework is loaded from beside the executable, and a bare binary gets no key events from macOS.
-
-To install it:
-
-```sh
-make release
-ditto target/bundle/infiniterm.app /Applications/infiniterm.app
-/Applications/infiniterm.app/Contents/MacOS/ift install      # ift on your PATH, zsh completion on fpath (it says what to add)
-ift install-claude-hooks                                     # agent state from Claude Code
-ift install-pi-hooks [DIR]                                   # same for Pi; DIR for a wrapper with its own agent dir
-```
-
-After that, `ift` alone launches the app or focuses it, `ift ~/Code/x` opens an editor card with a file tree rooted there, `ift some/file.ts` an editor on the file, `ift diff` the changes against HEAD, and the hooks point at the copy inside the bundle.
-
-## Keys
-
-| | |
-| --- | --- |
-| `Cmd + T` / `Cmd + W` | new card / close card (a dirty editor asks Save, Don't Save (Cmd+D) or Cancel, as macOS does; a browser or editor card with several tabs asks once, since closing it takes every tab) |
-| `Cmd + Ctrl + W` | close card and leave its space free: the split partner keeps its size |
-| `Cmd + Ctrl + Enter` | grow into the free space beside and below, up to the default size: a quarter next to a half becomes the other half |
-| `Cmd + Z` / `Cmd + Shift + Z` | undo / redo on the canvas: a move, swap, drop or resize, a closed card (back in its slot, a fresh shell); undo never closes a card; inside an editor these stay the buffer's |
-| drag a card | the card stays; an outline snaps to the slots the cards around it offer, blue where it fits, orange where it doesn't; drop on free space to move, on a card to swap, Esc to cancel |
-| `Cmd + Alt + Arrows` in an editor | between the text and the tree first (the tree lies left or above); at the card's edge, on to the next card as everywhere else. `Cmd + K` shows and hides the tree |
-| palette: "App: show pressed shortcuts" | every chord you press appears bottom right with the command it ran, stacked, fading; for screencasts and for showing somebody |
-| `Cmd + Shift + L` | lock the card against closing: Cmd+W, its workspace closing and its shell exiting all leave it (a fresh shell takes over); the label wears a lock on the warning colour |
-| `Cmd + Alt + S` | resize to a fraction of the default: full, half wide, half tall, quarter, double wide, double tall; shrinking leaves the space free, growing needs it |
-| `Ctrl + Tab` | switch cards, Cmd+Tab style: hold Ctrl, Tab steps through the cards you worked in (most recent first; cards you only crossed with the arrows are left out), release goes there, Escape cancels; `Ctrl + Shift + Tab` or the arrows step through it too |
-| `Cmd + Ctrl + S` | paste a snippet into the focused card as Cmd+V would, so Claude gets a multi-line prompt as one block. Snippets are plain files in `~/.config/infiniterm/snippets/`, one per snippet, named for what the picker shows; the last row opens the folder, and a saved edit is live on the next open |
-| double-click | on a card's frame or label fits it (`Cmd + 1`); on empty canvas fits everything (`Cmd + 2`) |
-| | every card wears a number (`#7`) ahead of its label, for naming it to somebody: the lowest free one, kept across restarts (a closed card's number is reused), in `ift ls` and `ift sessions` as trailing columns; `ift attach 7` reaches that card's shell from any terminal, app running or not |
-| `Cmd + S` / `Cmd + N` | save the editor card's file / new empty editor |
-| `Cmd + F`, `Cmd + G`, `Cmd + Alt + F`, `Cmd + /` | in an editor: find, next, replace, comment (elsewhere `Cmd + G` is group and `Cmd + /` the shortcut list) |
-| `Cmd + B` | in a diff: git blame in the gutter |
-| `Cmd + K` | clear the terminal; in an editor or diff, show or hide the file list |
-| `Cmd + I` | the agent's transcript, as a card beside this one |
-| `Cmd + L` | the address bar: type an address or a search, or pick a page you have been to or a card already open. On a browser card it opens holding that card's address; `Tab` scopes the search to a site (GitHub, MDN, crates.io and six more) |
-| `Cmd + [` / `Cmd + ]` | in a browser card: back and forward (elsewhere: previous / next group) |
-| `Cmd + R` | in a browser card: reload the page |
-| `Cmd + F` | find in the card: a terminal's whole scrollback or a page, every match highlighted, a count; `Enter` / `Cmd + G` steps (up the scrollback in a terminal, from the newest), `Shift + Enter` / `Cmd + Shift + G` back, `Esc` closes leaving the match selected, so `Cmd + C` copies it (`Cmd + C` in the bar does too). A lowercase query ignores case |
-| `Cmd + E` | find the selected text (macOS's "use selection for find") |
-| `Cmd + Ctrl + T` | reopen the last card you closed, where it was |
-| `Cmd + Esc` | leave a browser card's page |
-| double-`Escape` | on a focused browser card's page, unlocks its keyboard (see below) |
-| `Alt + Enter` in the omnibox | open what you typed as a new tab on the focused browser card, instead of navigating it in place |
-| `Cmd + T` / `Cmd + W` | on a locked browser or editor card: new tab / close tab (closes the card only when it was the last tab) |
-| `Cmd + Shift + T` | on a locked browser card: reopen the last closed tab |
-| `Cmd + 1` … `Cmd + 8` / `Cmd + 9` | on a locked browser card: jump to tab N / the last tab |
-| `Cmd + Shift + ]` / `Cmd + Shift + [` | on a locked browser card: next / previous tab (elsewhere, see below: previous / next workspace) |
-| `Cmd + Alt + T` | new card outside any group |
-| `Cmd + Shift + T` | new card, but where: every empty slot around the cards gets a letter, press one |
-| `Cmd + D` / `Cmd + Shift + D` | split the card: new card to the right / below |
-| `Cmd + Alt + Arrow` or `Cmd + Alt + JKL` | switch cards; into an empty slot shows a hollow card, `Enter` asks what goes in it |
-| `Cmd + J` | a letter on every card; press one to jump there, framed as `Cmd + 1` would |
-| `Cmd + Shift + Arrow` or `Shift + click` | extend the selection, like Shift + Arrow in a text field; close, split, new card, clear, fit and group then act on all of it |
-| `Cmd + Alt + Shift + Arrow` | swap the active card with its neighbour |
-| `Cmd + Shift + [` / `Cmd + Shift + ]` | previous / next workspace |
-| `Alt + Left/Right`, `Cmd + Left/Right` | word and line movement in the shell, as in iTerm2 |
-| `Ctrl + 1` … `Ctrl + 9` | go straight to that workspace |
-| `Cmd + Shift + Enter` | maximise / restore |
-| `Cmd + 0` / `Cmd + 1` / `Cmd + 2` | actual size / fit card / fit all |
-| `Cmd + =` / `Cmd + -` | zoom, centred on the active card (in a browser card: the page) |
-| `Cmd + Shift + =` / `Cmd + Shift + -` | interface bigger / smaller |
-| `Cmd + Shift + 0` | interface at 100% |
-| `Cmd + Shift + R` | rename the active card |
-| `Cmd + G` / `Cmd + Shift + G` | group the active card / dissolve its group |
-| `Cmd + [` / `Cmd + ]` | go to the previous / next group, with the loose cards as one stop |
-| `Cmd + Alt + [` / `Cmd + Alt + ]` | move the active card between groups |
-| `Cmd + 3` | fit the active group to screen |
-| `Cmd + Alt + R` | rename the active group |
-| `Cmd + ,` / `Cmd + Shift + ,` | settings / keybindings, as two editor cards: the defaults read-only beside your file |
-| `Cmd + Shift + P` | command palette |
-| `Cmd + /` | outside an editor: show every shortcut, searchable |
-
-`Cmd + drag` or middle-drag pans, `Cmd + scroll` zooms; bare scroll and bare drag belong to the card under the cursor. `Cmd + H`, `Cmd + M` and `Cmd + Q` are the menu's and cannot be rebound.
-
-Interface scaling is separate from zoom on purpose. Zoom changes how much canvas you see; scaling changes how big the app's own furniture is on the display you are on. It reaches everything that is the app's own: card labels, group name tabs, the title bar and its workspace tabs, the status bar, the palette, the dialogs and the shortcuts panel, and deliberately not terminal text, card borders or focus rings.
-
-Chords follow the physical key, not the character your layout prints on it, so `Cmd + =` is the key right of `-` on every keyboard, and the shortcuts panel spells them the US way.
-
-`Cmd + Shift + P` runs any command by name, with fuzzy matching: `ntc` finds "New terminal card". The keybinding is searchable too, so typing `Cmd + T` finds what it is bound to. The five most recently run sit in their own section at the top, in the order you used them, so their positions stay put. Everything below is ranked by match, nudged by how often you have run it.
-
-A card closes when its shell exits, so `exit` or Ctrl+D closes it the same way `Cmd + W` does. Closing the last one leaves an empty canvas rather than opening a replacement.
-
-## Configuration
-
-`~/.config/infiniterm/`, four files in two pairs:
-
-```
-settings.json              yours, only what you changed
-settings.default.json      every setting with its default, commented
-keybindings.json           yours, only what you rebound
-keybindings.default.json   every binding, commented
-```
-
-The `.default` files are rewritten on every launch, which is what makes them read-only in practice. Read them to learn what exists, copy a line across to change it. That split is also why an upgrade never touches your files: new settings appear in the defaults, not in yours.
-
-Keys are flat and dotted, the way VS Code writes them, so an override is one line:
-
-```jsonc
-{
-  "terminal.fontSize": 16,
-  "ui.showFps": true
-}
-```
-
-Each card's shell gets its own history file (`INFINITERM_HISTFILE`, under the data dir by card id) so a new card does not open with every other card's past, and after a reboot the card that ran Claude has `claude --resume <id>` as its last entry: Up, Enter. macOS sets `HISTFILE` before your `.zshrc` runs, so the shell takes it from one line there:
-
-```zsh
-HISTFILE="${INFINITERM_HISTFILE:-$HOME/.zsh_history}"
-```
-
-The `terminal.` keys cover the shell, cursor, font and the decoy; `cards.` how big a new card is and whether it inherits the active card's directory; `canvas.` zoom sensitivity and pan momentum; `editor.` the selection colours, line wash and wrapping; `browser.` the page zoom and search; `ui.` chrome sizes, dimming, animation and the frame counter. A file in the older nested shape (`"terminal": { "fontSize": 16 }`) still reads. `settings.default.json` is the documentation.
-
-Comments and trailing commas work in both. `Cmd + ,` opens settings and `Cmd + Shift + ,` keybindings, each as a pair of editor cards on the canvas. Both apply on save without a restart. The `snippets/` folder beside them holds the snippet picker's files and is read as the picker opens.
-
-A binding set to `null` is removed, which is how you give a key back to the terminal:
-
-```json
-{ "cmd+k": null }
-```
-
-Every chord must include `cmd`, with one exception: `ctrl` plus a digit. A focused terminal consumes ctrl, alt and bare keys and has to keep consuming them or TUI applications break, but `ctrl`+letter always means something to a shell while `ctrl`+digit mostly does not, which is why workspaces are numbered there. On an xterm-compatible terminal `Ctrl+3` sends ESC; if you live in vim, rebind it.
-
-## Themes
-
-All 500-odd schemes from iTerm2-Color-Schemes ship with the app (Catppuccin Mocha is the default). For your own, drop `.itermcolors` files into:
-
-```
-~/Library/Application Support/dev.ekinertac.infiniterm/themes/
-```
-
-"Switch theme" in the palette opens the picker. Each scheme is applied as you move through the list, because 500 of them cannot be chosen by name. Escape puts back the one you started on; Enter keeps the new one and writes it to `theme` in your settings.
-
-A theme drives the app's own chrome as well as the terminal, the editor's syntax colours and the colour each card and group label takes.
-
-## Persistence
-
-The canvas is saved to `~/Library/Application Support/dev.ekinertac.infiniterm/workspace.json`, half a second after any change and again on quit. Application Support rather than `~/.config` because the app writes it constantly and you should never have to edit it; deleting it resets the canvas without touching your settings. The window's own frame is `window.json` beside it, and the browser's profile and the Claude in Chrome extension live under `browser/` there.
-
-Agent state is deliberately not saved. A restored card starts with no agent, so nothing comes back claiming to be working days after the agent died. A file from a newer build is never written back; the app runs on it read-only.
-
-The one runtime fact that IS saved is the session id each card's shell lives in under `tmux` or `daemon` (a tmux window id, or an `iftd` socket's id), because the shell really is still there and without it the card would start a second one beside it and orphan the first. It is written only for cards that have one, so a canvas that never used either backend is the same file it always was.
-
-Sessions this app made and no card comes back for are killed at the next launch: that is what a crash leaves behind. Every one it makes is tagged, so a tmux window you opened yourself with `tmux neww -t infiniterm` is never touched.
-
-One instance at a time: the unix socket `ift` and the hooks talk to is the lock, and a second launch activates the first.
-
-## What it touches
-
-A terminal can reach everything on the machine, so here is everything this one does:
-
-- Your shells, one PTY per card, started as your login shell in the card's directory with `INFINITERM_CARD_ID` in the environment. Nothing is typed into them that you did not type. With `terminal.backend: "tmux"` they are tmux windows in a session named `infiniterm` on tmux's usual socket instead, which is how you can reach them from another terminal; the app talks to tmux as a `tmux -C` client and never asks it to draw anything.
-- `~/.config/infiniterm/` for settings and keybindings; `~/Library/Application Support/dev.ekinertac.infiniterm/` for the canvas, drafts, themes, the window frame and the browser profile. Nothing else is written.
-- A unix socket in the system temp directory, which `ift` and the hook binaries connect to.
-- `tmux`, `ps`, `lsof` and `git` run as subprocesses: to label cards with their process and directory, to spot an SSH session, and for the diff and blame cards. `open` hands URLs and files to the system.
-- The network only from browser cards, which are Chromium loading the page you asked for, and the Claude in Chrome extension inside them talking to Claude Code the way it does in Chrome. There is no telemetry and no account. The app's one request of its own is the update check: at launch and every six hours, the copy installed in Applications fetches `latest.json` from the public [releases repo](https://github.com/ekinertac/infiniterm-releases), a plain GET with nothing about you in it, and downloads a newer build only when there is one. The one exception is off by default: turning on `browser.suggestions` sends what you type in the address bar to Google as you type it.
-- Every agent state change, in `agent.log` beside the save file: the time, the card, the hook event, and what it did. It answers "why did that card go grey", it is capped at half a megabyte, and it never leaves the machine.
-- Where browser cards have been, in `history.json` beside the save file, so the address bar can rank what you visit often above what you saw once. Nothing reads it but the address bar, and deleting the file clears it.
-
-The source is public so all of that can be checked, and a release is a tagged commit built with the CEF version named in `Cargo.lock`, signed and notarized.
-
-## Bundled font
-
-`assets/fonts/SymbolsNerdFontMono-Regular.ttf` is the icons-only font from [Nerd Fonts](https://github.com/ryanoasis/nerd-fonts) (MIT, licence beside it). Every terminal card falls back to it, so a prompt's icons draw even when the card's font is not a Nerd Font.
-
-## The icon
-
-Two cards on the canvas grid, the front one wearing the border colour an agent working in it would paint. `assets/AppIcon.icns` and `assets/icon.png`; the source SVG is in the archived Tauri repo under `docs/icons/`.
-
-## History
-
-infiniterm was a Tauri and Svelte app until September 2026; that repo is archived as [infiniterm-tauri](https://github.com/ekinertac/infiniterm-tauri) and its notes carry the rationale for most of the rules above. The rewrite is native because a browser card there could be either an iframe that cannot log in anywhere or a native view nothing could paint over or scale, and because twenty-five terminals under a zoom deserve a renderer that draws them. `HANDOVER.md` is the rewrite's log, phase by phase, with the measurements.
-
-## Prior art
-
-`0-AI-UG/cate` and `blueberrycongee/termcanvas` cover adjacent ground. Both are Electron, both are mouse-first, and neither treats agent state as part of a card.
+The app runs only from the bundle: the Chromium framework is loaded from beside the executable. See `CONTRIBUTING.md` before a pull request, and `CLAUDE.md` for how the code is laid out and why.
 
 ## License
 
-Source-available, not open source. You can read the source, build it, change it and run it on your own machines for free for personal use. Using it for work, including freelance work, needs a paid license, one per person. You cannot hand a compiled build to anyone else: no casks, no release attachments on a fork, no app stores. Full terms in `LICENSE.txt`.
+Source-available, not open source. You can read, build and change it and run it on your own machines for free for personal use. Using it for work, freelance included, needs a licence, $29 per person. You cannot hand a build to anyone else; the official builds and the `ekinertac/tap` cask are the only ones. Full terms in `LICENSE.txt`.
+
+The bundled `assets/fonts/SymbolsNerdFontMono-Regular.ttf` is from [Nerd Fonts](https://github.com/ryanoasis/nerd-fonts), MIT, licence beside it.
