@@ -6,6 +6,7 @@ pub mod buffer;
 pub mod diff;
 pub mod explorer;
 pub mod highlight;
+pub mod jumps;
 pub mod language;
 pub mod search;
 pub mod transforms;

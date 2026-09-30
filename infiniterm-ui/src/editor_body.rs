@@ -40,6 +40,7 @@ use infiniterm_editor::buffer::Buffer;
 use infiniterm_editor::diff::{gutter_marks, GutterMark};
 use infiniterm_editor::explorer::{Entry, Tree, TreeAction};
 use infiniterm_editor::highlight::{Highlighting, Span};
+use infiniterm_editor::jumps::Jumps;
 use infiniterm_editor::language::Language;
 use infiniterm_editor::search::Search;
 use infiniterm_editor::wrap::wrap_line;
@@ -59,6 +60,9 @@ const PAD_Y: f64 = 6.;
 /// A blink is slower than the terminal's: CodeMirror's 1200 ms period.
 const BLINK_MS: f64 = 600.;
 const DISK_POLL_MS: f64 = 2000.;
+/// A click this many lines from the caret is a leap worth a Ctrl+- back;
+/// a click within the screenful is just placing the caret.
+const JUMP_CLICK_LINES: usize = 20;
 const DRAFT_MS: f64 = 500.;
 
 /// Digits reserved in the gutter before it grows past three: line numbers
@@ -191,6 +195,8 @@ pub struct EditorBody {
     /// buffer's version and the load count, so switching files does not
     /// paint the previous one's marks for one frame.
     gutter: (u64, u64, Vec<GutterMark>, Vec<usize>),
+    /// Where the caret was before it last leapt: Ctrl+- and Ctrl+Shift+-.
+    jumps: Jumps,
     /// The column a visual up/down keeps aiming at, with the caret it was
     /// set for: a caret moved by anything else forgets it.
     visual_goal: Option<(usize, usize)>,
@@ -273,6 +279,7 @@ impl EditorBody {
             git_head: None,
             last_git_check: 0.,
             gutter: (u64::MAX, 0, vec![], vec![]),
+            jumps: Jumps::default(),
             visual_goal: None,
             search: None,
             query: Field::default(),
@@ -521,7 +528,30 @@ impl EditorBody {
         self.dirty = true;
     }
 
+    /// The caret is about to leap: remember where it is.
+    fn note_jump(&mut self) {
+        self.jumps.record(self.buffer.cursor());
+    }
+
+    /// Ctrl+- (`forward` false) and Ctrl+Shift+-: back to where the caret
+    /// last leapt from, and again forward.
+    fn jump_history(&mut self, forward: bool) {
+        let here = self.buffer.cursor();
+        let to = if forward {
+            self.jumps.forward(here)
+        } else {
+            self.jumps.back(here)
+        };
+        if let Some(to) = to {
+            self.buffer.collapse_to_primary();
+            self.buffer.set_cursor(to.min(self.buffer.len_chars()));
+            self.centre_cursor();
+            self.centre_pending = true;
+        }
+    }
+
     pub fn go_to_line(&mut self, line: usize) {
+        self.note_jump();
         self.buffer.go_to_line(line);
         self.buffer.reveal_cursors();
         // Centre it: the cursor row halfway down the visible rows.
@@ -629,6 +659,7 @@ impl EditorBody {
     fn show_match(&mut self) {
         if let Some((a, b)) = self.search.as_ref().and_then(|s| s.current_range()) {
             // Jumping to a match is a reset, the same as `go_to_line`.
+            self.note_jump();
             self.buffer.collapse_to_primary();
             self.buffer.select_range(a..b);
             self.buffer.reveal_cursors();
@@ -1130,8 +1161,14 @@ impl EditorBody {
                         self.buffer.swap_line_down(now)
                     }
                 }
-                "up" => self.buffer.for_each_cursor(|b| b.move_doc_start(shift)),
-                "down" => self.buffer.for_each_cursor(|b| b.move_doc_end(shift)),
+                "up" => {
+                    self.note_jump();
+                    self.buffer.for_each_cursor(|b| b.move_doc_start(shift))
+                }
+                "down" => {
+                    self.note_jump();
+                    self.buffer.for_each_cursor(|b| b.move_doc_end(shift))
+                }
                 "backspace" => {
                     if !ro {
                         self.buffer.for_each_cursor(|b| b.delete_to_line_start(now))
@@ -1217,6 +1254,11 @@ impl EditorBody {
             }
         } else if m.control {
             match key {
+                // Ctrl+- / Ctrl+Shift+-: jump back / forward. By the physical
+                // key, since `key` is the shifted glyph on some layouts.
+                _ if crate::keycode::last_code() == Some("Minus") => {
+                    self.jump_history(crate::keycode::last_shift())
+                }
                 "a" => self.buffer.for_each_cursor(|b| b.move_line_start(shift)),
                 "e" => self.buffer.for_each_cursor(|b| b.move_line_end(shift)),
                 "k" if shift => {
@@ -1227,6 +1269,7 @@ impl EditorBody {
                 "m" if shift => self.buffer.expand_to_brackets(),
                 "m" => {
                     if let Some((a, b)) = self.buffer.matching_bracket() {
+                        self.note_jump();
                         let c = self.buffer.cursor();
                         let at_open = c == a || c == a + 1;
                         self.buffer.set_cursor(if at_open { b + 1 } else { a + 1 });
@@ -2345,6 +2388,13 @@ impl CardBody for EditorBody {
                     self.buffer.select_to(idx);
                     self.selecting = true;
                 } else {
+                    let far = self
+                        .buffer
+                        .line_of(idx)
+                        .abs_diff(self.buffer.line_of(self.buffer.cursor()));
+                    if far >= JUMP_CLICK_LINES {
+                        self.note_jump();
+                    }
                     self.buffer.set_cursor(idx);
                     self.selecting = true;
                 }
@@ -2679,6 +2729,26 @@ mod tests {
         b.scroll_line = 100;
         b.set_rows_visible(30);
         assert_eq!(b.scroll_line, 100, "only once");
+    }
+
+    #[test]
+    fn a_go_to_line_can_be_jumped_back_from_and_forward_again() {
+        let mut b = body();
+        let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
+        b.buffer = Buffer::new(&text);
+        b.rows_visible = 40;
+        b.buffer.go_to_line(5);
+        let start = b.buffer.cursor();
+        b.go_to_line(150);
+        let far = b.buffer.cursor();
+        assert_ne!(start, far);
+        b.jump_history(false);
+        assert_eq!(b.buffer.cursor(), start);
+        b.jump_history(true);
+        assert_eq!(b.buffer.cursor(), far);
+        // Nothing further forward: the caret stays.
+        b.jump_history(true);
+        assert_eq!(b.buffer.cursor(), far);
     }
 
     // Cmd+End in a long file: the view lands with the last line at the
