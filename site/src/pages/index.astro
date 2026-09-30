@@ -19,6 +19,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 // than pointing nowhere.
 const BUY_URL = '';
 const PRICE = '$29';
+const INSTALL = 'curl -fsSL https://infiniterm.app/install.sh | sh';
 const DOWNLOAD_URL = 'https://github.com/ekinertac/infiniterm-releases/releases/latest';
 const SOURCE_URL = 'https://github.com/ekinertac/infiniterm';
 
@@ -113,11 +114,14 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
             infiniterm puts every terminal on one zoomable canvas. Each card keeps its place, and its border says what the
             agent inside is doing: working, waiting on you, failed, or done.
           </p>
-          <div class="ctas">
-            <a class="btn primary" href={DOWNLOAD_URL}>Download for Mac</a>
-            <a class="btn" href="#pricing">Pricing</a>
+          <div class="install">
+            <code id="install-line">{INSTALL}</code>
+            <button type="button" id="copy" aria-label="Copy the install command">Copy</button>
           </div>
-          <p class="fine">For macOS 13 or later on Apple Silicon.</p>
+          <p class="fine">
+            macOS 13 or later on Apple Silicon. Or <a href={DOWNLOAD_URL}>download the DMG</a>. Free for personal use,
+            <a href="#pricing">$29 for work</a>.
+          </p>
         </div>
 
         <div class="hero-canvas" aria-hidden="true">
@@ -282,6 +286,18 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
         play.remove();
         film.focus();
       });
+      // The copy button puts the install line on the clipboard and says so in
+      // its own label for a moment; that label change is the confirmation.
+      const copy = document.getElementById('copy');
+      copy?.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(document.getElementById('install-line')?.textContent ?? '');
+          copy.textContent = 'Copied';
+        } catch {
+          copy.textContent = 'Select it';
+        }
+        setTimeout(() => (copy.textContent = 'Copy'), 1600);
+      });
     </script>
   </body>
 </html>
@@ -384,7 +400,35 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     padding-block: 40px 96px;
   }
   .lede { font-size: 1.25rem; color: var(--ink-soft); margin: 28px 0 32px; }
-  .ctas { display: flex; flex-wrap: wrap; gap: 12px; }
+  .install {
+    display: flex;
+    align-items: stretch;
+    max-width: 640px;
+    background: var(--card);
+    color: var(--card-text);
+    border-radius: 10px;
+    border: 1px solid var(--card-edge);
+    overflow: hidden;
+  }
+  .install code {
+    flex: 1;
+    min-width: 0;
+    font: 0.86rem/1.4 var(--mono);
+    padding: 15px 16px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .install code::before { content: '$ '; color: var(--card-dim); }
+  .install button {
+    font: 600 0.9rem var(--sans);
+    background: var(--working);
+    color: #17161f;
+    border: 0;
+    padding: 0 20px;
+    cursor: pointer;
+    min-width: 92px;
+  }
+  .install button:hover { background: #b39ae3; }
   .btn {
     display: inline-block;
     font: 600 1rem var(--sans);
@@ -623,5 +667,6 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     .state-row { grid-template-columns: 1fr; }
     .keys li { grid-template-columns: 1fr; gap: 4px; }
     .plans { grid-template-columns: 1fr; }
+    .install code { font-size: 0.75rem; }
   }
 </style>

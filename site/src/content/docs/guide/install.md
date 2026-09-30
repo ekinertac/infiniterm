@@ -5,7 +5,17 @@ description: Download the app, put ift on your PATH, and wire up agent state.
 
 infiniterm runs on Apple Silicon Macs with macOS 13 or later. It is free for personal use; paid work, freelance included, needs a commercial licence, $29 per person, one time.
 
-## Download
+## Install
+
+```sh
+curl -fsSL https://infiniterm.app/install.sh | sh
+```
+
+It downloads the latest release, checks its checksum, its signature and its notarization the way the app's own updater does, copies it into `/Applications`, and puts `ift` on your PATH. An app already installed is left alone, since it updates itself. [Read the script](/install.sh) first if you like.
+
+Claude Code and Pi hooks edit their config, so the script asks before wiring them, and only for the ones it finds. With nobody at a terminal to answer (an agent running the install, a CI job) it skips them and prints the commands. To decide up front, end the line with `| sh -s -- --hooks claude,pi` or `| sh -s -- --no-hooks`.
+
+## Download by hand
 
 The app is signed and notarized, so Gatekeeper opens it without a warning, and it updates itself.
 
