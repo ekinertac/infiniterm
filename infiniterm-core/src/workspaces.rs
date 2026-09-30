@@ -117,7 +117,7 @@ mod tests {
     #[test]
     fn custom_names_ignored() {
         assert_eq!(
-            next_name(&ids(&["humbl.ai", "side project"]), "workspace"),
+            next_name(&ids(&["acme.dev", "side project"]), "workspace"),
             "workspace 1"
         );
     }

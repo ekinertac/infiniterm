@@ -192,7 +192,7 @@ mod tests {
     }
 
     fn names(id: &str) -> Option<String> {
-        (id == "g1").then(|| "humbl.ai".to_string())
+        (id == "g1").then(|| "acme.dev".to_string())
     }
 
     fn row(text: &str) -> Vec<&str> {
@@ -216,7 +216,7 @@ mod tests {
             names,
             ""
         )
-        .contains("humbl.ai"));
+        .contains("acme.dev"));
     }
 
     // Field counts must never vary, or cut -f4 reads a different column per row.
