@@ -14,6 +14,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 - Drag any selected card by its frame or label to move the whole selection together. A drop onto other cards puts them all back.
 - Drag on empty canvas to draw a selection rectangle: every card it touches is selected, the one nearest where you started gets the focus. Shift+drag adds to the selection, Escape mid-drag puts the old one back. Cmd+click a card to add it to the selection, or Cmd+click a selected card to take it out; on the only card you are in, Cmd+click still opens links.
+- Git gutter in the editor: a green bar beside a line that is new since the last commit, a yellow one beside a changed line, and a small red mark where lines were removed. Files outside a git repository and untitled buffers show none.
 - Cmd+3 with several cards selected fits exactly those cards. With one card it still fits its group or the block around it.
 - Closing a terminal card no longer kills what runs in it straight away. A build or an agent mid-turn runs to its end; anything quiet for a minute (an idle shell, an idle dev server) is then ended. A closed card whose agent is waiting for you is kept, the status bar says so, and Alt+T brings it back. Reopening a card (Cmd+Z, Cmd+Shift+T) before it ends gives you the program back mid-work.
 - Cmd+Shift+T reopens the last closed card, as in a browser. The placement menu moved to Cmd+Ctrl+T.

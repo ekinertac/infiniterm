@@ -34,8 +34,10 @@ use infiniterm_core::editor_theme::{EditorColors, SyntaxRule};
 use infiniterm_core::files::{
     dir_list, draft_delete, draft_read, draft_write, file_mtime, file_read, file_write,
 };
+use infiniterm_core::git::{git_show_head, repo_of};
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_editor::buffer::Buffer;
+use infiniterm_editor::diff::{gutter_marks, GutterMark};
 use infiniterm_editor::explorer::{Entry, Tree, TreeAction};
 use infiniterm_editor::highlight::{Highlighting, Span};
 use infiniterm_editor::language::Language;
@@ -68,6 +70,17 @@ const GUTTER_EXTRA_PAD_PX: f64 = 16.;
 /// The offset from the gutter's right edge to its separator line: the same
 /// margin as the padding reserved beyond the line numbers.
 const GUTTER_SEPARATOR_OFFSET_PX: f64 = 8.;
+/// The git gutter's mark: a thin bar in the pad between the line numbers
+/// and the separator, which has room to spare (`GUTTER_EXTRA_PAD_PX` is
+/// wider than this plus `GUTTER_SEPARATOR_OFFSET_PX`), so it costs no
+/// extra gutter width.
+const GUTTER_MARK_W_PX: f64 = 3.;
+const GUTTER_MARK_INSET_PX: f64 = 2.;
+const GUTTER_MARK_ADDED: &str = "#4caf50";
+const GUTTER_MARK_MODIFIED: &str = "#e3b341";
+const GUTTER_MARK_DELETED: &str = "#f85149";
+/// The deleted-lines marker's height: a notch, not a full row.
+const GUTTER_MARK_DELETED_H_PX: f64 = 3.;
 /// The find-and-replace panel's height in line-heights: two field rows.
 const SEARCH_PANEL_ROWS_REPLACE: f64 = 2.6;
 /// The find-only panel's height in line-heights: one field row.
@@ -166,6 +179,14 @@ pub struct EditorBody {
     spans: (u64, u64, Vec<Span>),
     /// Bumped by every load, for the span cache's key.
     loads: u64,
+    /// HEAD's text for the current path (`refresh_git_head`); `None`
+    /// outside a git repo, or for a file HEAD does not have.
+    git_head: Option<String>,
+    last_git_check: f64,
+    /// The git gutter's marks, cached the same way `spans` is: the
+    /// buffer's version and the load count, so switching files does not
+    /// paint the previous one's marks for one frame.
+    gutter: (u64, u64, Vec<GutterMark>, Vec<usize>),
     /// The column a visual up/down keeps aiming at, with the caret it was
     /// set for: a caret moved by anything else forgets it.
     visual_goal: Option<(usize, usize)>,
@@ -245,6 +266,9 @@ impl EditorBody {
             highlighting: Highlighting::default(),
             spans: (u64::MAX, 0, vec![]),
             loads: 0,
+            git_head: None,
+            last_git_check: 0.,
+            gutter: (u64::MAX, 0, vec![], vec![]),
             visual_goal: None,
             search: None,
             query: Field::default(),
@@ -372,6 +396,7 @@ impl EditorBody {
         if let Some(line) = self.pending_line.take() {
             self.go_to_line(line as usize);
         }
+        self.refresh_git_head();
         self.dirty = true;
         self.blink_epoch = now;
     }
@@ -382,6 +407,7 @@ impl EditorBody {
             self.buffer = Buffer::new(&draft);
         }
         self.loads += 1;
+        self.git_head = None;
         self.dirty = true;
     }
 
@@ -442,6 +468,15 @@ impl EditorBody {
                     self.dirty = true;
                 }
             }
+        }
+        // The gutter's own poll: HEAD moves on a commit, checkout or
+        // stash elsewhere, not on every keystroke, so it is not worth a
+        // shell-out that often either. Same cadence as the disk poll, its
+        // own timer so the two do not have to land on the same frame.
+        if now - self.last_git_check >= DISK_POLL_MS {
+            self.last_git_check = now;
+            self.refresh_git_head();
+            self.dirty = true;
         }
     }
 
@@ -1463,6 +1498,36 @@ impl EditorBody {
         &self.spans.2
     }
 
+    /// Re-reads HEAD's text for this path over git: at load and on the
+    /// disk poll's cadence, never per keystroke (a shell-out). `None`
+    /// outside a repo, or for a picture, where there is no text to gutter.
+    fn refresh_git_head(&mut self) {
+        self.git_head = self
+            .path
+            .as_deref()
+            .filter(|_| self.image.is_none())
+            .and_then(|path| {
+                let repo = repo_of(std::path::Path::new(path)).ok()?;
+                let repo = repo.to_string_lossy();
+                let rel = path.strip_prefix(&format!("{}/", repo.trim_end_matches('/')))?;
+                git_show_head(&repo, rel).ok()
+            });
+    }
+
+    /// The gutter's marks for the buffer's current text against the HEAD
+    /// last fetched, cached like `spans_for`. Empty without a git HEAD to
+    /// diff against (no repo, or an untitled buffer).
+    fn gutter_for(&mut self) -> (&[GutterMark], &[usize]) {
+        if (self.gutter.0, self.gutter.1) != (self.buffer.version, self.loads) {
+            let (marks, deleted) = match &self.git_head {
+                Some(head) => gutter_marks(head, &self.buffer.text()),
+                None => (vec![], vec![]),
+            };
+            self.gutter = (self.buffer.version, self.loads, marks, deleted);
+        }
+        (&self.gutter.2, &self.gutter.3)
+    }
+
     fn rule_for(&self, capture: &str) -> Option<&SyntaxRule> {
         self.rules.iter().find(|r| r.tag == capture)
     }
@@ -1822,6 +1887,10 @@ impl CardBody for EditorBody {
         ));
         // Byte offsets of the lines shown, for the spans, which are bytes.
         let spans: Vec<Span> = self.spans_for().to_vec();
+        let (gutter_marks, gutter_deleted): (Vec<GutterMark>, Vec<usize>) = {
+            let (m, d) = self.gutter_for();
+            (m.to_vec(), d.to_vec())
+        };
         let mut span_i = 0;
         // Runs for the line being drawn, built once per line and sliced
         // per visual row.
@@ -1856,6 +1925,34 @@ impl CardBody for EditorBody {
                     window,
                     cx,
                 );
+            }
+            if vrow.a == 0 {
+                let mark_x = origin.x + gutter_w - s(GUTTER_EXTRA_PAD_PX) + s(GUTTER_MARK_INSET_PX);
+                if let Some(mark) = gutter_marks
+                    .get(line_no)
+                    .filter(|m| **m != GutterMark::Clean)
+                {
+                    let color = hex(match mark {
+                        GutterMark::Added => GUTTER_MARK_ADDED,
+                        GutterMark::Modified => GUTTER_MARK_MODIFIED,
+                        GutterMark::Clean => unreachable!(),
+                    });
+                    window.paint_quad(fill(
+                        Bounds::new(point(mark_x, y), size(s(GUTTER_MARK_W_PX), line_h)),
+                        color,
+                    ));
+                }
+                let deleted_before_this = gutter_deleted.contains(&(line_no + 1))
+                    || (line_no == 0 && gutter_deleted.contains(&0));
+                if deleted_before_this {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(mark_x, y),
+                            size(s(GUTTER_MARK_W_PX) * 2., s(GUTTER_MARK_DELETED_H_PX)),
+                        ),
+                        hex(GUTTER_MARK_DELETED),
+                    ));
+                }
             }
             // A range of buffer chars as a quad on this row.
             let range_quad = |a: usize, b: usize, color: Hsla, window: &mut Window| {
