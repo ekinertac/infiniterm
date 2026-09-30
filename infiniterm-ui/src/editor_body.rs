@@ -81,6 +81,10 @@ const GUTTER_MARK_MODIFIED: &str = "#e3b341";
 const GUTTER_MARK_DELETED: &str = "#f85149";
 /// The deleted-lines marker's height: a notch, not a full row.
 const GUTTER_MARK_DELETED_H_PX: f64 = 3.;
+/// The folded-block chip after a header: this many cells wide, at this
+/// alpha of the text colour.
+const FOLD_CHIP_CELLS: f32 = 3.;
+const FOLD_CHIP_ALPHA: f32 = 0.25;
 /// The find-and-replace panel's height in line-heights: two field rows.
 const SEARCH_PANEL_ROWS_REPLACE: f64 = 2.6;
 /// The find-only panel's height in line-heights: one field row.
@@ -519,6 +523,7 @@ impl EditorBody {
 
     pub fn go_to_line(&mut self, line: usize) {
         self.buffer.go_to_line(line);
+        self.buffer.reveal_cursors();
         // Centre it: the cursor row halfway down the visible rows.
         self.centre_cursor();
         self.centre_pending = true;
@@ -626,6 +631,7 @@ impl EditorBody {
             // Jumping to a match is a reset, the same as `go_to_line`.
             self.buffer.collapse_to_primary();
             self.buffer.select_range(a..b);
+            self.buffer.reveal_cursors();
             self.ensure_cursor_visible();
         }
     }
@@ -851,6 +857,10 @@ impl EditorBody {
         let count = self.buffer.line_count();
         let mut line = self.scroll_line.min(count.saturating_sub(1));
         while line < count && out.len() < max_rows {
+            if self.buffer.is_line_hidden(line) {
+                line += 1;
+                continue;
+            }
             if self.wrap {
                 for (a, b) in wrap_line(&self.buffer.line(line), cols) {
                     if out.len() >= max_rows {
@@ -1142,6 +1152,23 @@ impl EditorBody {
                         self.buffer.join_lines(now)
                     }
                 }
+                // Cmd+Alt+[ / ] fold and unfold the block at the caret, with
+                // Shift every outermost block. By physical key: Option turns
+                // the bracket into another glyph on most layouts.
+                _ if m.alt
+                    && matches!(
+                        crate::keycode::last_code(),
+                        Some("BracketLeft" | "BracketRight")
+                    ) =>
+                {
+                    let open = crate::keycode::last_code() == Some("BracketRight");
+                    match (open, crate::keycode::last_shift()) {
+                        (false, false) => self.buffer.fold_at_cursor(),
+                        (false, true) => self.buffer.fold_all(),
+                        (true, false) => self.buffer.unfold_at_cursor(),
+                        (true, true) => self.buffer.unfold_all(),
+                    }
+                }
                 "]" => {
                     if !ro {
                         self.buffer.indent_line(now)
@@ -1285,6 +1312,7 @@ impl EditorBody {
                 }
             }
         }
+        self.buffer.reveal_cursors();
         self.ensure_cursor_visible();
         self.now_dirty(now);
         if self.search.is_some() {
@@ -1916,6 +1944,20 @@ impl CardBody for EditorBody {
                     crate::chrome::with_alpha(gpui::rgb(0x808080).into(), ACTIVE_LINE_ALPHA),
                 ));
             }
+            // A folded block: a chip after the header's text says lines are
+            // hidden under it.
+            if legible
+                && self.buffer.has_folds()
+                && vrow.a + row_len == line_len
+                && self.buffer.is_fold_header(line_no)
+            {
+                let chip_x = text_x + cell_w * (row_len as f32 + 1.);
+                let chip = Bounds::new(
+                    point(chip_x, y + line_h * 0.2),
+                    size(cell_w * FOLD_CHIP_CELLS, line_h * 0.6),
+                );
+                window.paint_quad(fill(chip, crate::chrome::with_alpha(fg, FOLD_CHIP_ALPHA)));
+            }
             if legible && vrow.a == 0 {
                 let num = (line_no + 1).to_string();
                 let l = crate::text::shape(window, &num, font_size, &base, gutter_fg);
@@ -2272,6 +2314,12 @@ impl CardBody for EditorBody {
         self.focus = Focus::Buffer;
         self.tree_focused = false;
         let idx = self.index_at(local, world);
+        // A click in the line-number gutter folds or opens that line's block.
+        if local.x - t_origin.x - PAD_X < self.gutter_w() {
+            self.buffer.toggle_fold_line(self.buffer.line_of(idx));
+            self.dirty = true;
+            return BodyAction::None;
+        }
         // A plain click is a reset to one cursor; Cmd+Click manages
         // `extra` itself below and must not be collapsed out from under.
         if !modifiers.platform {

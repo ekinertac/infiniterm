@@ -61,6 +61,10 @@ pub struct Buffer {
     /// long as nothing has added one: `for_each_cursor` is the only place
     /// in this file that knows this field exists.
     extra: Vec<CursorState>,
+    /// Folded blocks (2026-09-29), each the hidden char range from the end
+    /// of the header line to the end of the block's last line; edits shift
+    /// them (`shift_folds`) and an edit that touches one drops it.
+    folds: Vec<(usize, usize)>,
     undo: Vec<Edit>,
     redo: Vec<Edit>,
     /// Bumped by every change, so a view can cache against it.
@@ -79,6 +83,7 @@ impl Buffer {
             anchor: None,
             goal_col: None,
             extra: vec![],
+            folds: vec![],
             undo: vec![],
             redo: vec![],
             version: 0,
@@ -104,8 +109,9 @@ impl Buffer {
         );
         self.anchor = None;
         // A whole-document replace (a save, a disk reload) invalidates
-        // whatever the extra cursors pointed at.
+        // whatever the extra cursors and the folds pointed at.
         self.extra.clear();
+        self.folds.clear();
     }
 
     pub fn text(&self) -> String {
@@ -259,7 +265,21 @@ impl Buffer {
             self.place(self.len_chars(), select);
             return;
         }
-        let target = target as usize;
+        let mut target = target as usize;
+        // A folded block's lines are not there to land on: keep going the
+        // same way until one is, or the document ends.
+        while self.is_line_hidden(target) {
+            let next = target as i64 + delta.signum();
+            if next < 0 {
+                self.place(0, select);
+                return;
+            }
+            if next as usize >= self.line_count() {
+                self.place(self.len_chars(), select);
+                return;
+            }
+            target = next as usize;
+        }
         let len = self.line(target).chars().count();
         let idx = self.line_start(target) + col.min(len);
         self.place(idx, select);
@@ -385,6 +405,7 @@ impl Buffer {
         let old_len = old.chars().count();
         self.text.remove(at..at + old_len);
         self.text.insert(at, &new);
+        self.shift_folds(at, old_len, new.chars().count());
         let cursor_before = self.cursor;
         self.cursor = cursor_after.min(self.len_chars());
         self.anchor = None;
@@ -702,6 +723,193 @@ impl Buffer {
                 goal_col: None,
             });
         }
+    }
+
+    // ----- folding (Batch 2, 2026-09-29) -----
+
+    /// Leading blanks of a line: what "deeper" means for a fold. A tab
+    /// counts as one, so a file that mixes tabs and spaces folds oddly.
+    fn indent_of(text: &str) -> usize {
+        text.chars().take_while(|c| *c == ' ' || *c == '\t').count()
+    }
+
+    /// The hidden range a fold starting at `line` would have: the line's
+    /// end to the end of the last following line indented deeper than it
+    /// (blank lines inside a block belong to it; blank lines after it do
+    /// not). `None` when nothing is indented under it.
+    fn fold_range_at(&self, line: usize) -> Option<(usize, usize)> {
+        let text = self.line(line);
+        if text.trim().is_empty() {
+            return None;
+        }
+        let base = Self::indent_of(&text);
+        let mut last = None;
+        for l in line + 1..self.line_count() {
+            let t = self.line(l);
+            if t.trim().is_empty() {
+                continue;
+            }
+            if Self::indent_of(&t) > base {
+                last = Some(l);
+            } else {
+                break;
+            }
+        }
+        Some((self.line_end(line), self.line_end(last?)))
+    }
+
+    /// The nearest line at or above `line` that can fold: itself when a
+    /// block starts there, else the header of the block it sits in.
+    fn enclosing_fold_line(&self, line: usize) -> Option<usize> {
+        if self.fold_range_at(line).is_some() {
+            return Some(line);
+        }
+        let mut want = Self::indent_of(&self.line(line));
+        for l in (0..line).rev() {
+            let t = self.line(l);
+            if t.trim().is_empty() {
+                continue;
+            }
+            let ind = Self::indent_of(&t);
+            if ind < want {
+                if self.fold_range_at(l).is_some() {
+                    return Some(l);
+                }
+                want = ind;
+            }
+        }
+        None
+    }
+
+    /// Whether `line` is inside a folded block, so not drawn or landed on.
+    pub fn is_line_hidden(&self, line: usize) -> bool {
+        if self.folds.is_empty() {
+            return false;
+        }
+        let ls = self.line_start(line);
+        self.folds.iter().any(|(s, e)| ls > *s && ls <= *e)
+    }
+
+    /// Whether a fold starts on `line`, for the marker after its text.
+    pub fn is_fold_header(&self, line: usize) -> bool {
+        self.folds.iter().any(|(s, _)| self.line_of(*s) == line)
+    }
+
+    /// Whether anything is folded at all, the painter's cheap way out.
+    pub fn has_folds(&self) -> bool {
+        !self.folds.is_empty()
+    }
+
+    /// Cmd+Alt+[: fold the block the caret's line starts or sits in, and
+    /// leave the caret on its header so it does not land in what it hid.
+    pub fn fold_at_cursor(&mut self) {
+        let line = self.line_of(self.cursor);
+        let Some(header) = self.enclosing_fold_line(line) else {
+            return;
+        };
+        let Some(range) = self.fold_range_at(header) else {
+            return;
+        };
+        if !self.folds.contains(&range) {
+            self.folds.push(range);
+        }
+        self.extra.clear();
+        self.set_cursor(range.0);
+    }
+
+    /// A click in the gutter: fold the block `line` starts, or open the one
+    /// it heads. A line with nothing under it does nothing (unlike
+    /// `fold_at_cursor`, which finds the block around it).
+    pub fn toggle_fold_line(&mut self, line: usize) {
+        let end = self.line_end(line);
+        if self.folds.iter().any(|(s, _)| *s == end) {
+            self.folds.retain(|(s, _)| *s != end);
+        } else if let Some(range) = self.fold_range_at(line) {
+            self.folds.push(range);
+            let c = self.cursor;
+            if c > range.0 && c <= range.1 {
+                self.set_cursor(range.0);
+            }
+        }
+    }
+
+    /// Cmd+Alt+]: open the fold the caret's line heads or hides in.
+    pub fn unfold_at_cursor(&mut self) {
+        let c = self.cursor;
+        let line = self.line_of(c);
+        let end = self.line_end(line);
+        self.folds
+            .retain(|(s, e)| !(*s == end || (c > *s && c <= *e)));
+    }
+
+    pub fn unfold_all(&mut self) {
+        self.folds.clear();
+    }
+
+    /// Folds every outermost block: the lines at the file's smallest
+    /// indent that have something under them.
+    pub fn fold_all(&mut self) {
+        let count = self.line_count();
+        let base = (0..count)
+            .map(|l| self.line(l))
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| Self::indent_of(&t))
+            .min()
+            .unwrap_or(0);
+        let mut folds = vec![];
+        let mut l = 0;
+        while l < count {
+            let t = self.line(l);
+            if !t.trim().is_empty() && Self::indent_of(&t) == base {
+                if let Some(range) = self.fold_range_at(l) {
+                    l = self.line_of(range.1);
+                    folds.push(range);
+                }
+            }
+            l += 1;
+        }
+        self.folds = folds;
+        let c = self.cursor;
+        if self.folds.iter().any(|(s, e)| c > *s && c <= *e) {
+            let s = self.folds.iter().find(|(s, e)| c > *s && c <= *e).unwrap().0;
+            self.set_cursor(s);
+        }
+        self.extra.clear();
+    }
+
+    /// A caret or selection end inside a folded block opens it: whatever
+    /// moved there (a search match, an undo, a click) meant to see it.
+    pub fn reveal_cursors(&mut self) {
+        if self.folds.is_empty() {
+            return;
+        }
+        let points: Vec<usize> = self
+            .all_cursor_states()
+            .iter()
+            .flat_map(|c| [Some(c.cursor), c.anchor])
+            .flatten()
+            .collect();
+        self.folds
+            .retain(|(s, e)| !points.iter().any(|p| *p > *s && *p <= *e));
+    }
+
+    /// An edit replaced `old_len` chars at `at` with `new_len`: folds
+    /// wholly before it stay, folds wholly after it move by the length
+    /// change, and one the edit touches is dropped.
+    fn shift_folds(&mut self, at: usize, old_len: usize, new_len: usize) {
+        if self.folds.is_empty() {
+            return;
+        }
+        let delta = new_len as i64 - old_len as i64;
+        self.folds.retain_mut(|(s, e)| {
+            if at + old_len <= *s {
+                *s = (*s as i64 + delta) as usize;
+                *e = (*e as i64 + delta) as usize;
+                true
+            } else {
+                at >= *e
+            }
+        });
     }
 
     // ----- multi-cursor (Batch 2, 2026-09-25) -----
@@ -1154,6 +1362,7 @@ impl Buffer {
         let new_len = e.new.chars().count();
         self.text.remove(e.at..e.at + new_len);
         self.text.insert(e.at, &e.old);
+        self.shift_folds(e.at, new_len, e.old.chars().count());
         self.cursor = e.cursor_before.min(self.len_chars());
         self.anchor = None;
         self.goal_col = None;
@@ -1168,6 +1377,7 @@ impl Buffer {
         let old_len = e.old.chars().count();
         self.text.remove(e.at..e.at + old_len);
         self.text.insert(e.at, &e.new);
+        self.shift_folds(e.at, old_len, e.new.chars().count());
         self.cursor = e.cursor_after.min(self.len_chars());
         self.anchor = None;
         self.goal_col = None;
@@ -1687,6 +1897,81 @@ mod tests {
         b.for_each_cursor(|buf| buf.type_char('x', 0.));
         assert_eq!(b.text(), "axbc");
         assert_eq!(b.cursor(), 2);
+    }
+
+    const CODE: &str = "fn a() {\n    x();\n\n    y();\n}\nfn b() {\n    z();\n}";
+
+    #[test]
+    fn folding_hides_the_block_under_a_line_and_lands_the_caret_on_its_header() {
+        let mut b = Buffer::new(CODE);
+        b.set_cursor(2); // in "fn a() {"
+        b.fold_at_cursor();
+        assert!(b.is_fold_header(0));
+        assert!(b.is_line_hidden(1) && b.is_line_hidden(2) && b.is_line_hidden(3));
+        assert!(!b.is_line_hidden(4), "the closing brace is at the header's indent");
+        assert!(!b.is_line_hidden(5));
+        // From inside the block, the block folds and the caret goes up to its header.
+        let mut b = Buffer::new(CODE);
+        b.set_cursor(b.line_start(3) + 4); // in "y();"
+        b.fold_at_cursor();
+        assert!(b.is_fold_header(0));
+        assert_eq!(b.line_of(b.cursor()), 0);
+        // A line with nothing under it does not fold.
+        let mut b = Buffer::new("a\nb");
+        b.fold_at_cursor();
+        assert!(!b.has_folds());
+    }
+
+    #[test]
+    fn vertical_movement_steps_over_folded_lines() {
+        let mut b = Buffer::new(CODE);
+        b.set_cursor(0);
+        b.fold_at_cursor();
+        b.move_down(false);
+        assert_eq!(b.line_of(b.cursor()), 4, "from the header to the brace after the block");
+        b.move_up(false);
+        assert_eq!(b.line_of(b.cursor()), 0);
+    }
+
+    #[test]
+    fn folds_follow_edits_above_them_and_die_when_touched() {
+        let mut b = Buffer::new(CODE);
+        b.set_cursor(0);
+        b.fold_at_cursor();
+        // A line added above: the fold now heads line 1 and hides the same lines.
+        b.set_cursor(0);
+        b.insert("// new\n", 0.);
+        assert!(b.is_fold_header(1));
+        assert!(b.is_line_hidden(2) && b.is_line_hidden(4));
+        assert!(!b.is_line_hidden(5));
+        // Undo puts the text back and the fold with it.
+        b.undo();
+        assert!(b.is_fold_header(0) && b.is_line_hidden(1));
+        // An edit across the hidden text drops the fold.
+        b.replace_range(9..20, "", 1.);
+        assert!(!b.has_folds());
+    }
+
+    #[test]
+    fn unfold_reveal_and_the_all_versions() {
+        let mut b = Buffer::new(CODE);
+        b.fold_all();
+        assert!(b.is_fold_header(0) && b.is_fold_header(5));
+        assert!(b.is_line_hidden(1) && b.is_line_hidden(6));
+        // The caret ends up on a header, not inside a block.
+        assert!(!b.is_line_hidden(b.line_of(b.cursor())));
+        b.unfold_all();
+        assert!(!b.has_folds());
+        // Opening at the caret: only the fold it heads.
+        b.fold_all();
+        b.set_cursor(0);
+        b.unfold_at_cursor();
+        assert!(!b.is_fold_header(0) && b.is_fold_header(5));
+        // A caret that arrives inside a fold opens it.
+        b.fold_all();
+        b.set_cursor(b.line_start(6) + 2);
+        b.reveal_cursors();
+        assert!(!b.is_fold_header(5));
     }
 
     #[test]
