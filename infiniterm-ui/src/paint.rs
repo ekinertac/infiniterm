@@ -138,15 +138,10 @@ impl AppView {
     /// element's paint callback with the content area's bounds.
     pub fn frame(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
         let now = now_ms();
-        self.frames += 1;
+        self.frame_rate.frame(now);
         // Cleared first: anything drained below that changes the chrome sets
         // it again, and `needs_frame` is asked right after this returns.
         self.redraw = false;
-        if self.fps_window.elapsed().as_secs_f32() >= 1. {
-            self.fps = self.frames as f32 / self.fps_window.elapsed().as_secs_f32();
-            self.frames = 0;
-            self.fps_window = std::time::Instant::now();
-        }
         self.model.view_size = Size {
             w: f32::from(bounds.size.width) as f64,
             h: f32::from(bounds.size.height) as f64,

@@ -300,8 +300,9 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "ui.showFps",
         &[
-            "Frame counter in the status bar, orange below 50. It holds a permanent",
-            "animation frame loop, so the app never fully idles while it is on.",
+            "Frame counter in the status bar, shown while frames are drawn back to back",
+            "(a zoom, a pan, a drag, fast output); nothing at rest, where the app draws",
+            "only when something changes. Orange below 50.",
         ],
     ),
     (

@@ -294,7 +294,9 @@ pub fn default_config() -> Config {
             group_label_size: 15.,
             status_bar_size: 11.,
             animations: true,
-            show_fps: true,
+            // A development number; the release does not show it by
+            // default (issue #16).
+            show_fps: false,
             // Native full screen on a notched MacBook leaves the strip
             // beside the camera black; cover puts the title bar there.
             fullscreen: FullscreenMode::Cover,

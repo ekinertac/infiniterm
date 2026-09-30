@@ -58,6 +58,7 @@ pub mod editor_keys;
 pub mod editor_theme;
 pub mod extensions;
 pub mod files;
+pub mod frame_rate;
 pub mod fullscreen;
 pub mod fuzzy;
 pub mod git;

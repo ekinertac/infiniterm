@@ -90,12 +90,10 @@ impl AppView {
             glides: Default::default(),
             marked: Default::default(),
             body_sizes: Default::default(),
-            frames: 0,
-            fps_window: std::time::Instant::now(),
             timing: (0., 0., 0, 0.),
             window_seen: None,
             window_save_due: None,
-            fps: 0.,
+            frame_rate: Default::default(),
             themes_dir: PathBuf::new(),
             scale_factor,
             cef_running: false,
@@ -431,7 +429,10 @@ impl AppView {
                     }
                 }
                 Effect::RunCommand(id) => self.run_command(&id),
-                Effect::LogFps(n) => eprintln!("[infiniterm] stress zoom {n}: {:.0} fps", self.fps),
+                Effect::LogFps(n) => eprintln!(
+                    "[infiniterm] stress zoom {n}: {:.0} fps",
+                    self.frame_rate.shown(now_ms()).unwrap_or(0.)
+                ),
                 Effect::LogDims => {
                     for (id, body) in self.bodies.iter_mut() {
                         if let Some(t) = body
@@ -515,6 +516,7 @@ impl AppView {
                 (content && due)
                     || self.model.notice_expired(now)
                     || self.model.done_seen_due(now)
+                    || self.frame_rate.expired(now)
                     || self
                         .keycasts
                         .iter()

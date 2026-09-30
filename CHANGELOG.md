@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-01
+
+- The status bar's frame counter no longer shows a low number in orange when the canvas is simply at rest; it counts only while something is animating or moving, and is off by default (`ui.showFps`).
+
 ### 2026-09-30
 
 - A fresh install opens in the Violite colour scheme instead of Catppuccin Mocha. A theme you picked yourself stays as it is.
