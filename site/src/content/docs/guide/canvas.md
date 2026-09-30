@@ -59,6 +59,7 @@ Several cards can be selected at once, and close, split, fit and group then act 
 - `Cmd` + click a card to add it, or a selected card to take it out. On the one card you are in, `Cmd` + click still opens links.
 - `Shift` + click on a card's body, label or frame also adds it or takes it out.
 - `Cmd Shift` + arrow extends the selection to the neighbour.
+- Dragging any selected card by its frame or label moves the whole selection.
 
 While a dialog, the palette, the address bar or the shortcuts panel is open, it keeps every Cmd and Ctrl shortcut to itself, so text shortcuts work in its field and nothing moves the canvas behind it.
 

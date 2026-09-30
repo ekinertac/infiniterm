@@ -47,6 +47,16 @@ Closing a terminal card does not kill its program on the spot:
 
 This needs the default backend (`terminal.backend: "daemon"`). Under `pty` or `tmux` a closed card's program ends at once.
 
+## Settings worth knowing
+
+These go in `settings.json`; every setting is on the [settings reference](../../reference/settings/).
+
+- `"terminal.copyOnSelect": true` copies a mouse selection the moment you let go.
+- `"terminal.scrollMultiplier"` sets scroll speed, from 0.1 to 10 (default 1).
+- `"terminal.padding"` is the space between a card's edge and its text, 0 to 60 (default 6). Open cards resize to it at once.
+- `"terminal.env": ["EDITOR=ift"]` adds environment variables to new cards.
+- `"terminal.shell"` takes arguments too, like `"/bin/zsh -l"`.
+
 ## Links and paths
 
 Hold `Cmd` over a link or a path that exists and it underlines; `Cmd` + click opens it beside the card, a file in an editor card and a URL in a browser card. Dropping a file from the Finder onto a terminal pastes its shell-escaped path.
