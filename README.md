@@ -10,7 +10,7 @@ Terminal cards on an infinite canvas, with the state of every coding agent visib
 curl -fsSL https://infiniterm.app/install.sh | sh
 ```
 
-Free for personal use; paid work needs a $29 licence per person. Docs at [infiniterm.app](https://infiniterm.app).
+Or `brew install --cask ekinertac/tap/infiniterm`. Free for personal use; paid work needs a $29 licence per person. Docs at [infiniterm.app](https://infiniterm.app).
 
 It started as a way out of iTerm2: ten to fifteen tabs, two or three splits in each, some panes made full screen, and at that point the trail is lost and finding one particular session among twenty to fifty means opening them one by one. Every session on one infinite canvas, where each keeps a place, is what fixes that. Running coding agents made it worse: you cannot tell which are still working, which are blocked waiting for an answer, and which have finished without cycling through them, so infiniterm colours each card's border from its agent's state.
 

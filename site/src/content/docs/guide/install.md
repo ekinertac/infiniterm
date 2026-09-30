@@ -15,6 +15,14 @@ It downloads the latest release, checks its checksum, its signature and its nota
 
 Claude Code and Pi hooks edit their config, so the script asks before wiring them, and only for the ones it finds. With nobody at a terminal to answer (an agent running the install, a CI job) it skips them and prints the commands. To decide up front, end the line with `| sh -s -- --hooks claude,pi` or `| sh -s -- --no-hooks`.
 
+## Homebrew
+
+```sh
+brew install --cask ekinertac/tap/infiniterm
+```
+
+The cask links `ift` onto your PATH too. The app updates itself, so `brew upgrade` leaves it alone. If you installed the app from the DMG before, add `--adopt` so Homebrew takes over the copy you have.
+
 ## Download by hand
 
 The app is signed and notarized, so Gatekeeper opens it without a warning, and it updates itself.
