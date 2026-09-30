@@ -57,7 +57,6 @@ use infiniterm_core::model::Model;
 use infiniterm_core::momentum::Sample;
 use infiniterm_core::resize::Edge;
 use std::collections::HashMap;
-use std::time::Instant;
 
 pub const TITLEBAR_H: f32 = 44.;
 
@@ -251,9 +250,9 @@ pub struct AppView {
     pub marked: HashMap<String, Rect>,
     /// Each body's size as last told to it, so `resized` fires on a change.
     pub body_sizes: HashMap<String, infiniterm_core::grid::Size>,
-    pub frames: u32,
-    pub fps_window: Instant,
-    pub fps: f32,
+    /// The status bar's frame rate, counted only over frames drawn back
+    /// to back (`frame_rate.rs`).
+    pub frame_rate: infiniterm_core::frame_rate::FrameRate,
     /// Under `INFINITERM_KEYLOG`: feed ms, paint ms, frames, last report.
     pub timing: (f64, f64, u32, f64),
     /// The window frame as last seen, and when a changed one is due to be

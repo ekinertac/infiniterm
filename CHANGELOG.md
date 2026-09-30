@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-01
+
+- The status bar's frame counter no longer shows a low number in orange when the canvas is simply at rest; it counts only while something is animating or moving, and is off by default (`ui.showFps`).
+
 ### 2026-09-30
 
 - Four new settings for terminals: `terminal.copyOnSelect` copies a mouse selection as soon as it is made, `terminal.scrollMultiplier` sets the scroll speed, `terminal.padding` sets the space between a card's edge and its text, and `terminal.env` adds environment variables to new cards (`["EDITOR=ift"]`). `terminal.shell` takes arguments too (`"/bin/zsh -l"`).

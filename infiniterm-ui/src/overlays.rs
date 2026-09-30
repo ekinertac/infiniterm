@@ -580,12 +580,16 @@ impl AppView {
             left.push_str("   maximised");
         }
         let notice = m.notice.clone().unwrap_or_default();
-        let right = if m.config.ui.show_fps {
-            format!("{:.0} fps", self.fps)
-        } else {
-            String::new()
-        };
-        let fps_color = if self.fps < LOW_FPS_THRESHOLD && self.fps > 0. {
+        // Only while frames are drawn back to back; at rest, nothing
+        // (issue #16: a rationed canvas read "6 fps" in the warn colour).
+        let rate = m
+            .config
+            .ui
+            .show_fps
+            .then(|| self.frame_rate.shown(crate::now_ms()))
+            .flatten();
+        let right = rate.map(|r| format!("{r:.0} fps")).unwrap_or_default();
+        let fps_color = if rate.is_some_and(|r| r < LOW_FPS_THRESHOLD as f64) {
             chrome.warn
         } else {
             chrome.text_faint
