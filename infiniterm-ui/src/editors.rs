@@ -28,7 +28,9 @@ use infiniterm_editor::language::Language;
 /// The generated config files are rewritten on every launch, so an edit
 /// to one is lost by design; read-only says so at the keystroke.
 fn is_generated(path: &str) -> bool {
-    path.ends_with("/settings.default.json") || path.ends_with("/keybindings.default.json")
+    path.ends_with("/settings.default.json")
+        || path.ends_with("/keybindings.default.json")
+        || std::path::Path::new(path) == infiniterm_core::welcome::welcome_path()
 }
 
 impl AppView {

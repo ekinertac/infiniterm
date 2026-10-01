@@ -329,6 +329,19 @@ impl CardBody for EditorTabs {
         // Swallowed rather than ignored, so macOS neither repeats a Cmd key
         // nor hands a letter to the input context behind our back.
         if !self.locked {
+            let read_only = self.active_body_ref().is_some_and(|b| b.read_only);
+            // A read-only file (the settings defaults, the welcome card) never
+            // locks: nothing can be typed into it, so a lock would only take
+            // the canvas keys away. Copy still reaches it, so a line can be
+            // taken out of it without getting in.
+            if read_only {
+                if copies(k) {
+                    if let Some(b) = self.active_body() {
+                        return b.key(k, now, cx);
+                    }
+                }
+                return BodyAction::None;
+            }
             if enters(k) {
                 self.locked = true;
                 self.dirty = true;
@@ -358,9 +371,14 @@ impl CardBody for EditorTabs {
             return BodyAction::None;
         }
         let below = self.below_strip(local);
-        // A click into the text locks; the tree and the find bar do not.
+        // A click into the text locks; the tree and the find bar do not, and
+        // a read-only file never does (see `key`): the click still places the
+        // caret and starts a selection, the canvas keeps its keys. A first
+        // launch puts the welcome card under the pointer; locking on that
+        // click left a newcomer with no canvas keys and no idea why.
         let on_tree = self.active_body_ref().is_some_and(|b| b.is_on_tree(below));
-        if !on_tree && button == gpui::MouseButton::Left {
+        let read_only = self.active_body_ref().is_some_and(|b| b.read_only);
+        if !on_tree && !read_only && button == gpui::MouseButton::Left {
             self.locked = true;
             self.dirty = true;
         }
@@ -410,6 +428,12 @@ impl CardBody for EditorTabs {
     }
 }
 
+/// Cmd+C, the one key an unlocked read-only file takes (`EditorTabs::key`).
+fn copies(k: &Keystroke) -> bool {
+    let m = &k.modifiers;
+    k.key == "c" && m.platform && !m.control && !m.alt && !m.shift
+}
+
 /// Whether a key pressed at an editor you are not in puts you in it: a bare
 /// Enter, and nothing else (`EditorTabs::key`).
 fn enters(k: &Keystroke) -> bool {
@@ -419,6 +443,15 @@ fn enters(k: &Keystroke) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_cmd_c_reaches_an_unlocked_read_only_file() {
+        let k = |s: &str| gpui::Keystroke::parse(s).unwrap();
+        assert!(copies(&k("cmd-c")));
+        assert!(!copies(&k("cmd-shift-c")));
+        assert!(!copies(&k("c")));
+        assert!(!copies(&k("cmd-v")));
+    }
+
     #[test]
     fn only_a_bare_enter_gets_you_into_an_editor() {
         let k = |s: &str| gpui::Keystroke::parse(s).unwrap();
