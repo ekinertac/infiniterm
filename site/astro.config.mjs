@@ -6,18 +6,6 @@
 // app's own tables before every build (package.json, `reference`).
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
-import { readdirSync, readFileSync } from 'node:fs';
-
-// The Blog group shows once a post is published: with only drafts it would
-// be an empty heading on the live site. `astro dev` shows drafts, so there
-// the group is always on.
-const blogDir = new URL('./src/content/docs/blog/', import.meta.url);
-const dev = process.argv.includes('dev');
-const published = readdirSync(blogDir).filter(
-  (f) => /\.mdx?$/.test(f) && !/^draft:\s*true$/m.test(readFileSync(new URL(f, blogDir), 'utf8')),
-);
-const blog = dev || published.length > 0 ? [{ label: 'Blog', items: [{ autogenerate: { directory: 'blog' } }] }] : [];
-
 export default defineConfig({
   site: 'https://infiniterm.app',
   integrations: [
@@ -53,7 +41,6 @@ export default defineConfig({
         // Posts are docs pages under blog/, newest listed first by their
         // `sidebar.order`; a post with `draft: true` shows in `npm run dev`
         // and is left out of the published build.
-        ...blog,
       ],
     }),
   ],
