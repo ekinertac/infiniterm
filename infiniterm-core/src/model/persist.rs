@@ -103,6 +103,7 @@ impl Model {
         // on, and a file written before workspaces existed has none.
         self.ensure_workspace();
         self.loaded = true;
+        self.first_run = text.is_none();
         self.dirty_layout = false;
     }
 
@@ -205,8 +206,36 @@ impl Model {
                 ..Default::default()
             },
         );
+        // A first launch also opens the "Start here" card beside it: the
+        // canvas is the thing nobody knows how to drive yet. The terminal
+        // keeps the focus, so typing works at once.
+        if self.first_run {
+            self.open_welcome(Some(&id));
+        }
         self.set_focus(Some(&id));
         // The seed is the canvas's floor, not something to undo.
         self.layout_undo.clear();
+    }
+
+    /// Opens the welcome card (`welcome::welcome_path`, written by the ui at
+    /// launch) beside `after`, or focuses it when one is already open.
+    pub fn open_welcome(&mut self, after: Option<&str>) -> Option<String> {
+        let path = crate::welcome::welcome_path()
+            .to_string_lossy()
+            .into_owned();
+        let existing = self
+            .here()
+            .into_iter()
+            .find(|c| {
+                c.kind == crate::saved_layout::CardKind::Editor
+                    && c.path.as_deref() == Some(path.as_str())
+            })
+            .map(|c| c.id.clone());
+        existing.or_else(|| {
+            self.open_in_card(
+                crate::ift::open_plan(&path, crate::ift::PathKind::File, None),
+                after,
+            )
+        })
     }
 }

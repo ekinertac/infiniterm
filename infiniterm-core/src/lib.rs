@@ -31,6 +31,7 @@ pub mod program_state;
 pub mod save_as;
 pub mod shell_integration;
 pub mod usage_log;
+pub mod welcome;
 
 pub mod groups;
 

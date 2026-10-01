@@ -251,6 +251,12 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         "App: open settings, beside the defaults",
         |m| m.open_config_pair(false),
     );
+    r.register("help.welcome", "Help: open the welcome card", |m| {
+        let from = m.focused().map(|c| c.id.clone());
+        if let Some(id) = m.open_welcome(from.as_deref()) {
+            m.set_focus(Some(&id));
+        }
+    });
     r.register(
         "app.keybindings",
         "App: open keybindings, beside the defaults",
