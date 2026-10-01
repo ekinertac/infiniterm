@@ -50,7 +50,13 @@ ift install-claude-hooks      # edits ~/.claude/settings.json
 ift install-pi-hooks          # installs the Pi extension into ~/.pi/agent
 ```
 
-`ift install-pi-hooks DIR` takes a different agent directory, for a wrapper that runs Pi against its own. Both accept `--dry-run`.
+`ift install-pi-hooks DIR` takes a different agent directory, for a wrapper that runs Pi against its own. Both accept `--dry-run`, which prints what would change and changes nothing.
+
+Both are safe to run again, after an update or from a dotfiles script: they add nothing the second time. `install-claude-hooks` merges eight hook entries into your `settings.json` and leaves everything else in it alone (permissions, env, other hooks), and it refuses to touch a file that does not parse. Each prints the file it changed.
+
+A Claude Code or Pi session that was already running keeps the settings it started with, so start a new session to see its card change colour. To check it works, give the agent a prompt: the card's border goes violet. If it does not, `agent.log` in `~/Library/Application Support/dev.ekinertac.infiniterm/` shows whether any hook event arrived.
+
+To remove them: delete the entries whose command runs `infiniterm-hook` from `~/.claude/settings.json`, and delete `~/.pi/agent/extensions/infiniterm.ts`.
 
 Other commands need no setup: a zsh started in a card reports each command's start and exit status to the app. See [Card states](../card-states/).
 
