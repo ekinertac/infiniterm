@@ -404,6 +404,18 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
 }
 
+/// What every installer says when `hook_binary` finds nothing: the bundle
+/// ships it beside `ift`, and a checkout builds it into the workspace's
+/// `target/` beside `ift` too (the old `crates/infiniterm-hook` path was
+/// the Tauri app's, #31).
+fn hook_missing() -> ExitCode {
+    eprintln!("ift: cannot find the infiniterm-hook binary");
+    eprintln!("ift: in a checkout, build it beside ift:");
+    eprintln!("  cargo build --release -p infiniterm-hook");
+    eprintln!("ift: or put it on $PATH next to ift");
+    ExitCode::from(2)
+}
+
 /// Where `infiniterm-hook` is, given where `ift` is.
 ///
 /// `None` when it cannot be found, which the caller treats very differently from
@@ -492,13 +504,7 @@ fn wire_hook_file(
         // name here, which REWROTE working absolute paths into `infiniterm-hook`
         // and silently broke a setup that was already correct — the one outcome
         // this command exists to prevent.
-        eprintln!("ift: cannot find the infiniterm-hook binary");
-        eprintln!("ift: build it first:");
-        eprintln!(
-            "  cargo build --release --manifest-path crates/infiniterm-hook/Cargo.toml"
-        );
-        eprintln!("ift: or put it on $PATH next to ift");
-        return ExitCode::from(2);
+        return hook_missing();
     };
     let changed = claude_hooks::install_events(&mut settings, &binary, events, agent);
 
@@ -555,9 +561,7 @@ fn opencode_plugin_path() -> std::path::PathBuf {
 
 fn install_opencode(dry_run: bool) -> ExitCode {
     let Some(binary) = hook_binary() else {
-        eprintln!("ift: cannot find the infiniterm-hook binary");
-        eprintln!("ift: or put it on $PATH next to ift");
-        return ExitCode::from(2);
+        return hook_missing();
     };
     let path = opencode_plugin_path();
     write_adapter(&path, &opencode_adapter_source(&binary), &binary, "opencode", dry_run)
@@ -626,11 +630,7 @@ fn expand_home(path: &str) -> std::path::PathBuf {
 
 fn install_pi(dir: Option<&str>, dry_run: bool) -> ExitCode {
     let Some(binary) = hook_binary() else {
-        eprintln!("ift: cannot find the infiniterm-hook binary");
-        eprintln!("ift: build it first:");
-        eprintln!("  cargo build --release --manifest-path crates/infiniterm-hook/Cargo.toml");
-        eprintln!("ift: or put it on $PATH next to ift");
-        return ExitCode::from(2);
+        return hook_missing();
     };
     let agent_dir = pi_agent_dir(dir);
     let path = agent_dir.join("extensions").join("infiniterm.ts");
