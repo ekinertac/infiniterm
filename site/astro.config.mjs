@@ -38,9 +38,6 @@ export default defineConfig({
           label: 'Reference',
           items: ['reference/keys', 'reference/commands', 'reference/settings'],
         },
-        // Posts are docs pages under blog/, newest listed first by their
-        // `sidebar.order`; a post with `draft: true` shows in `npm run dev`
-        // and is left out of the published build.
       ],
     }),
   ],
