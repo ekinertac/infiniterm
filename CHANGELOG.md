@@ -6,58 +6,55 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-01
+## 0.3.0 (build 456), 2026-10-01
 
-- When `ift`'s hook installers cannot find `infiniterm-hook`, the advice names a build command that works (`cargo build --release -p infiniterm-hook`).
-- OpenCode cards show their agent's state too: working, waiting for a permission or an answer, failed and done. Run `ift install-opencode-hooks` once. After a reboot a lost OpenCode session offers `opencode --session <id>`.
-- Codex cards show their agent's state like Claude Code's: working, waiting for your approval and done. Run `ift install-codex-hooks` once, then approve the hooks with `/hooks` inside Codex. A Codex turn that fails is not reported (Codex sends nothing for it). After a reboot a lost Codex session offers `codex resume <id>`.
-- Releases are tagged with plain version numbers (`v0.3.0`) from the next one on.
-- The status bar's frame counter no longer shows a low number in orange when the canvas is simply at rest; it counts only while something is animating or moving, and is off by default (`ui.showFps`).
+### Agents
 
-### 2026-09-30
+- Codex and OpenCode cards show their agent's state, like Claude Code and Pi. Run `ift install-codex-hooks` (then approve the hooks with `/hooks` inside Codex) or `ift install-opencode-hooks` once. Codex sends nothing when a turn fails, so a failed Codex turn is not shown. After a reboot a lost session offers its own agent's resume command (`codex resume <id>`, `opencode --session <id>`).
+- A green (done) card turns grey once you have looked at it for a moment or typed into it, and the workspace tab's dots show every done card you have not looked at yet.
+- "Card: clear the state colour" in the palette greys a card's ring and tab dot by hand.
+- The transcript card tells speakers apart: a message from another agent session is its own turn with the sender's name, a background task finishing is one faint line, and a message the session sent reads in full.
 
-- A fresh install opens in the Violite colour scheme instead of Catppuccin Mocha. A theme you picked yourself stays as it is.
-- Four new settings for terminals: `terminal.copyOnSelect` copies a mouse selection as soon as it is made, `terminal.scrollMultiplier` sets the scroll speed, `terminal.padding` sets the space between a card's edge and its text, and `terminal.env` adds environment variables to new cards (`["EDITOR=ift"]`). `terminal.shell` takes arguments too (`"/bin/zsh -l"`).
+### Closing and reopening cards
 
-### 2026-09-29
-
-- Drag any selected card by its frame or label to move the whole selection together. A drop onto other cards puts them all back.
-- Drag on empty canvas to draw a selection rectangle: every card it touches is selected, the one nearest where you started gets the focus. Shift+drag adds to the selection, Escape mid-drag puts the old one back. Cmd+click a card to add it to the selection, or Cmd+click a selected card to take it out; on the only card you are in, Cmd+click still opens links.
-- Git gutter in the editor: a green bar beside a line that is new since the last commit, a yellow one beside a changed line, and a small red mark where lines were removed. Files outside a git repository and untitled buffers show none.
-- Folding in the editor: Cmd+Alt+[ folds the block the caret is in (everything indented under a line), Cmd+Alt+] opens it, and with Shift they fold or open every top-level block. Clicking a line's number in the gutter does the same for that line. A folded block shows a small chip after its first line, arrow keys step over it, and a search match, go to line or a caret that lands inside it opens it. An edit made across folded text opens the fold; edits above it move it along.
-- Ctrl+- jumps the editor's caret back to where it was before its last leap (go to line, a search match, the top or bottom of the file, a matching bracket, a click far away), and Ctrl+Shift+- goes forward again.
-- Cmd+3 with several cards selected fits exactly those cards. With one card it still fits its group or the block around it.
-- Closing a terminal card no longer kills what runs in it straight away. A build or an agent mid-turn runs to its end; anything quiet for a minute (an idle shell, an idle dev server) is then ended. A closed card whose agent is waiting for you is kept, the status bar says so, and Alt+T brings it back. Reopening a card (Cmd+Z, Cmd+Shift+T) before it ends gives you the program back mid-work.
+- Closing a terminal card no longer kills what runs in it straight away. A build or an agent mid-turn runs to its end; anything quiet for a minute is then ended. A closed card whose agent is waiting for you is kept, the status bar says so, and Alt+T brings it back. Reopening a card (Cmd+Z, Cmd+Shift+T) before it ends gives you the program back mid-work.
 - Cmd+Shift+T reopens the last closed card, as in a browser. The placement menu moved to Cmd+Ctrl+T.
-- Leftover sessions from closed cards are now reliably ended at launch; with a long scrollback the kill could be lost.
 
-### 2026-09-28
+### Canvas
 
-- A dialog, the command palette, the address bar and the shortcuts panel keep every Cmd and Ctrl shortcut to themselves while they are open, so text shortcuts work in their fields and nothing moves the canvas behind them. Cmd+Alt+Arrow in the group-name dialog walked the cards, and Cmd+Shift+[ switched workspace with the dialog still open.
-- Shift+click on a card's label or frame adds it to the selection, as it already did inside the card.
-- Cmd+= and Cmd+- make the terminal font bigger and smaller, one point a press, for every terminal card, and the size is saved. They zoomed the canvas before; zoom with Cmd+scroll, a pinch or the palette. "Terminal: default font size" in the palette goes back to 14.
+- Drag on empty canvas to draw a selection rectangle; Shift+drag adds to the selection. Cmd+click adds a card to the selection or takes it out, and Shift+click works on a card's label and frame too. Drag any selected card by its frame or label to move the whole selection.
+- Dragging a card shows the grid's slots for a card of its size and snaps to one when it is close; tidy puts cards back on that grid, groups and split cards kept together, and group frames hug their cards.
+- Cmd+3 fits the selected cards when several are selected, else the focused card's group, else the block of cards around it.
+- Cmd+T fills the holes in your grid of cards before it grows the canvas, wherever the grid sits.
+- Cmd+Ctrl+Enter grows a card into the gap it sits in, from whichever corner that takes.
+- A dialog, the palette, the address bar and the shortcuts panel keep every Cmd and Ctrl shortcut to themselves while they are open.
 
-### 2026-09-27
+### Terminal
 
-- The zsh command line selects like a Mac text field: Shift+Left/Right, Shift+Alt+Left/Right and Shift+Home/End select, typing or pasting replaces the selection, Backspace deletes it, Cmd+C copies it and Cmd+X cuts it. Cmd+Backspace and Cmd+Delete delete to the start and end of the line (in Claude Code too). Only in shells started after the update.
-- Visual mode on a terminal card (Cmd+Shift+C): a cursor over the output and the scrollback, moved with the arrows, Alt/Cmd+arrows, Home/End and Page Up/Down or with vim's h j k l, w b e, 0 $, g G. Shift+move or v / V / Ctrl+V selects, Cmd+C or y copies, Escape leaves. Nothing you type reaches the shell while it is on.
-- Multiple cursors in the editor: Cmd+click adds or removes one, Ctrl+Shift+Up/Down adds a column, Cmd+D adds the next occurrence, Ctrl+Cmd+G selects every occurrence, Cmd+Shift+L splits a selection into lines, Escape goes back to one cursor. Typing, deleting and moving work at every cursor; copy, paste and the line commands still act on the main one, and an edit made at several cursors takes several Cmd+Z to undo.
-- A green (done) card turns grey once you have looked at it for a moment or typed into it, and the workspace tab's dots show every done card you have not looked at yet. Before, a card stayed green until its next turn and the tab forgot it the moment you visited the workspace.
-- Cmd+3 on a card outside a group fits the block of cards around it (every card within a gutter of the next), not only a group.
-- Dragging a card shows the grid's slots for a card of its size, halves for a half and so on, and the card snaps to them, so cards placed by hand stay in line with the cards Cmd+T makes.
-- Tidy puts cards back on that grid, packed a gutter apart.
-- A dragged card snaps to a slot only when it is close to one, and otherwise goes where you put it.
-- A group's frame hugs its cards more closely, so groups sit on the grid beside other cards.
-- `ift usage` shows which commands and mouse gestures you used in the last 30 days and which you never did, from a log kept only on your Mac.
-- "Card: clear the state colour" in the palette greys a card's ring and tab dot once you have seen what it had to say.
+- Cmd+= and Cmd+- change the terminal font size for every terminal card, and the size is saved; the canvas zooms with Cmd+scroll, a pinch or the palette.
+- Visual mode (Cmd+Shift+C): a keyboard cursor over the output and the scrollback, with Mac keys and vim keys, to select and copy without the mouse. Escape leaves.
+- The zsh command line selects like a Mac text field: Shift with the arrows, Alt+arrows, Home and End selects, typing or pasting replaces the selection, Cmd+C and Cmd+X copy and cut it. Cmd+Backspace and Cmd+Delete delete to the start and end of the line.
+- New settings: `terminal.copyOnSelect`, `terminal.scrollMultiplier`, `terminal.padding` and `terminal.env`; `terminal.shell` takes arguments.
+- A fresh install opens in the Violite colour scheme.
 
-### 2026-09-26
+### Editor
 
-- Tidy keeps groups and split cards together: each moves as one block with its inside arrangement, where it used to spread their cards across the canvas.
-- Cmd+Ctrl+Enter grows a card into the gap it sits in, from whichever corner that takes, instead of always from its top-left; a half moved under another card grew down into open canvas.
-- An update downloaded while an older build ran no longer replaces a newer build installed since; the restart just restarts. It had put 0.2.0 back over a newer install.
-- Cmd+T fills the holes in your grid of cards, top row first, before it grows the canvas, wherever the grid sits; it used to count only from the canvas origin and kept growing past holes above and left of it.
-- The transcript card tells speakers apart: a message relayed from another agent session is its own turn, labelled with the sender's name, and a background task finishing is one faint notice line. Both used to read as your own turns, tags and all. A message the session sent reads in full as `→ name` inside the agent's turn instead of a tool line cut at 400 characters.
+- Multiple cursors: Cmd+click, Ctrl+Shift+Up/Down, Cmd+D, Ctrl+Cmd+G, Cmd+Shift+L; Escape goes back to one.
+- Folding by indentation: Cmd+Alt+[ and Cmd+Alt+], with Shift for every top-level block, or a click on a line number.
+- A git gutter: green, yellow and red marks beside lines added, changed or removed since the last commit.
+- Ctrl+- jumps the caret back to where it was before its last leap, Ctrl+Shift+- forward again.
+
+### `ift`
+
+- `ift usage` lists the commands and mouse gestures you used in the last 30 days and the ones you never did, from a log kept only on your Mac.
+- When a hook installer cannot find `infiniterm-hook`, the advice names a build command that works.
+
+### Fixes
+
+- An update downloaded while an older build ran no longer replaces a newer build installed since.
+- Leftover sessions from closed cards are reliably ended at launch.
+- The status bar's frame counter no longer shows a low number in orange at rest, and is off by default (`ui.showFps`).
+- Releases are tagged with plain version numbers (`v0.3.0`).
 
 ## 0.2.0 (build 356), 2026-09-26
 
