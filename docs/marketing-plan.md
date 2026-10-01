@@ -18,7 +18,7 @@ Written 2026-10-01. The goal for the first month is users and feedback, not sale
 ## Week 0: ready (2 to 3 days)
 
 1. `tools/usage-stats.sh`: download counts per release and the daily active-Mac estimate from `latest.json`.
-2. A blog on infiniterm.app (`/blog`), the one owned channel. A narrative post on our own domain has done better than a Show HN before (34 points against 1 or 2).
+2. Posts go on Ekin's own blog, [ekinertac.com](https://ekinertac.com/blog/), not on infiniterm.app: the stories are personal, that blog already has readers, RSS and visitor counts (Umami), and a narrative post there has done better than a Show HN before (34 points against 1 or 2). infiniterm.app links to them.
 3. The film as an MP4 (typereel renders it) for Reddit and X, which cannot play the HTML version.
 4. A first run on a clean Mac: install on the MacBook Air from nothing and screenshot what a stranger sees first. Fix what reads as broken.
 
