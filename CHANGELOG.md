@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-01
+
+- The shortcuts panel (Cmd+/) lists every mouse gesture: selecting cards with a rectangle, Cmd+click and Shift+click, dragging a selection, pinch to zoom, and the double-click and hold-left-click-right fits. Before, it showed six and left out most of these.
+
 ## 0.3.0 (build 456), 2026-10-01
 
 ### Agents
