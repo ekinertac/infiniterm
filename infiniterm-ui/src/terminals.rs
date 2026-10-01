@@ -244,12 +244,14 @@ impl AppView {
                     .as_deref()
                     .and_then(|s| self.backend.pty.take_ring(s))
                 {
-                    let resume = card.agent_session.as_deref();
-                    body.feed_lost_session(&ring, &when, resume);
+                    // The agent's own resume command (`resume_command`).
+                    let resume = card.agent_session.as_deref().and_then(|id| {
+                        infiniterm_core::agent_state::resume_command(card.agent_kind.as_deref(), id)
+                    });
+                    body.feed_lost_session(&ring, &when, resume.as_deref());
                     // And the same command as the card's last history entry,
                     // so Up in the new shell is all it takes.
-                    if let Some(id) = resume {
-                        let cmd = format!("claude --resume {id}");
+                    if let Some(cmd) = resume {
                         if let Err(e) = infiniterm_core::shell_history::append(&history, &cmd) {
                             eprintln!(
                                 "[infiniterm/warn] could not write {}: {e}",

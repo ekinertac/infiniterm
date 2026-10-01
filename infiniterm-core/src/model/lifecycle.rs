@@ -355,6 +355,7 @@ impl Model {
         let p = self.parked.remove(i);
         card.agent = p.card.agent;
         card.agent_session = p.card.agent_session.clone();
+        card.agent_kind = p.card.agent_kind.clone();
         card.transcript_path = p.card.transcript_path.clone();
         self.effects.push(Effect::ReleasePane(p.pane));
     }

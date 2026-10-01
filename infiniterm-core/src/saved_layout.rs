@@ -115,6 +115,10 @@ pub struct SavedCard {
     /// The last Claude Code session the card ran, for `claude --resume`
     /// after a reboot. Written only when there is one.
     pub agent_session: Option<String>,
+    /// Which agent that session belongs to (`codex`, `opencode`, `pi`), as
+    /// its adapter names itself; none is Claude Code, whose hooks predate
+    /// the name. Picks the resume command (`agent_state::resume_command`).
+    pub agent_kind: Option<String>,
     /// The name the agent gave its session (its terminal title), for the
     /// label after a relaunch: the title escape is sent when the name is
     /// set, and a long session's ring no longer holds it. Written only for
@@ -221,6 +225,9 @@ fn card_value(c: &SavedCard) -> Value {
     if let Some(agent) = &c.agent_session {
         if let Some(map) = card.as_object_mut() {
             map.insert("agentSession".into(), Value::String(agent.clone()));
+            if let Some(kind) = &c.agent_kind {
+                map.insert("agentKind".into(), Value::String(kind.clone()));
+            }
         }
     }
     // Not an empty one: some sessions set an empty title, and the reader
@@ -342,6 +349,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
     let session = non_empty(c.get("session")).or_else(|| non_empty(c.get("tmuxWindow")));
     let kitty_keys = c.get("kittyKeys").and_then(Value::as_bool).unwrap_or(false);
     let agent_session = non_empty(c.get("agentSession"));
+    let agent_kind = non_empty(c.get("agentKind"));
     let agent_title = non_empty(c.get("agentTitle"));
     let number = c.get("number").and_then(Value::as_u64).unwrap_or(0) as u32;
     let protected = c.get("protected").and_then(Value::as_bool).unwrap_or(false);
@@ -421,6 +429,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         session,
         kitty_keys,
         agent_session,
+        agent_kind,
         agent_title,
         number,
         protected,
@@ -607,6 +616,7 @@ mod tests {
             z: 0.,
             kitty_keys: false,
             agent_session: None,
+            agent_kind: None,
             agent_title: None,
             number: 0,
             protected: false,
@@ -773,6 +783,22 @@ mod tests {
             .as_object()
             .unwrap()
             .contains_key("number"));
+    }
+
+    // Whose session it is travels with the id, so a Codex card offers
+    // `codex resume` after a reboot.
+    #[test]
+    fn the_agent_kind_rides_with_the_session() {
+        let saved = round_trip(
+            &[SavedCard {
+                agent_session: Some("c0ffee".into()),
+                agent_kind: Some("codex".into()),
+                ..card()
+            }],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(saved.cards[0].agent_kind.as_deref(), Some("codex"));
     }
 
     // After a reboot the shell is new and the ring is all that is left of

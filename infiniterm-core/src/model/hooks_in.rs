@@ -21,6 +21,7 @@ impl Model {
             p.active_at = now;
             if let Some(s) = &report.session {
                 p.card.agent_session = Some(s.clone());
+                p.card.agent_kind = report.agent.clone();
             }
             return;
         }
@@ -32,8 +33,9 @@ impl Model {
         }
         let mut layout_changed = false;
         if let Some(s) = &report.session {
-            if card.agent_session.as_deref() != Some(s) {
+            if card.agent_session.as_deref() != Some(s) || card.agent_kind != report.agent {
                 card.agent_session = Some(s.clone());
+                card.agent_kind = report.agent.clone();
                 layout_changed = true;
             }
         }

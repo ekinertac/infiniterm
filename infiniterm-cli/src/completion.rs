@@ -56,6 +56,7 @@ _ift() {
     'group:put this card in a group'
     'install:put ift on $PATH and this completion on fpath'
     'install-claude-hooks:wire infiniterm into ~/.claude/settings.json'
+    'install-codex-hooks:wire infiniterm into ~/.codex/hooks.json'
     'install-pi-hooks:install the Pi extension'
     'install-extension:add an extension the browser cards load'
     'completion:print the zsh completion'
@@ -71,6 +72,7 @@ _ift() {
     group) _ift_groups ;;
     install-pi-hooks) _arguments '--dry-run[show the edit, write nothing]' '1:agent dir:_files -/' ;;
     install-claude-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
+    install-codex-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
     install-extension) _files -/ ;;
     sessions) _arguments '--full[every column: id, pid, cwd, command, started]' ;;
     completion) _values 'shell' zsh ;;

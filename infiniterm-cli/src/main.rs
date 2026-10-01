@@ -70,6 +70,8 @@ ift — drive infiniterm from a shell
                              its zsh completion on fpath
   ift completion zsh         print the zsh completion function
   ift install-claude-hooks   wire infiniterm into ~/.claude/settings.json
+  ift install-codex-hooks    wire infiniterm into ~/.codex/hooks.json (or
+                             $CODEX_HOME); approve them once with /hooks
   ift install-pi-hooks [DIR] install the Pi extension into ~/.pi/agent (or
                              $PI_CODING_AGENT_DIR, or DIR: a wrapper that
                              runs Pi against its own agent dir needs its own)
@@ -86,7 +88,7 @@ Exit codes: 0 ok, 1 infiniterm not running, 2 bad usage.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 14] = [
+pub const SUBCOMMANDS: [&str; 15] = [
     "diff",
     "ls",
     "sessions",
@@ -98,6 +100,7 @@ pub const SUBCOMMANDS: [&str; 14] = [
     "group",
     "install",
     "install-claude-hooks",
+    "install-codex-hooks",
     "install-pi-hooks",
     "install-extension",
     "completion",
@@ -113,6 +116,7 @@ fn main() -> ExitCode {
 
     match args.first().map(String::as_str) {
         Some("install-claude-hooks") => install_hooks(args.contains(&"--dry-run".to_string())),
+        Some("install-codex-hooks") => install_codex(args.contains(&"--dry-run".to_string())),
         Some("install-pi-hooks") => install_pi(
             args.iter().skip(1).find(|a| !a.starts_with("--")).map(String::as_str),
             args.contains(&"--dry-run".to_string()),
@@ -432,7 +436,38 @@ fn which_on_path(name: &str) -> Option<String> {
 
 fn install_hooks(dry_run: bool) -> ExitCode {
     let path = home().join(".claude").join("settings.json");
-    let existing = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into());
+    wire_hook_file(&path, &claude_hooks::EVENTS, None, dry_run)
+}
+
+/// Codex reads hooks from `$CODEX_HOME/hooks.json`, `~/.codex` by default,
+/// in Claude's shape. It asks once before running hooks it did not write
+/// itself, so the install says where to approve them.
+fn install_codex(dry_run: bool) -> ExitCode {
+    let dir = std::env::var_os("CODEX_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home().join(".codex"));
+    let code = wire_hook_file(
+        &dir.join("hooks.json"),
+        &claude_hooks::CODEX_EVENTS,
+        Some("codex"),
+        dry_run,
+    );
+    if code == ExitCode::SUCCESS && !dry_run {
+        println!("  Codex runs them once you approve them: type /hooks in codex");
+    }
+    code
+}
+
+/// Merges infiniterm's hooks into a JSON hook file of Claude's shape
+/// (`claude_hooks::install_events`) and writes it back, refusing a file
+/// that does not parse.
+fn wire_hook_file(
+    path: &std::path::Path,
+    events: &[&str],
+    agent: Option<&str>,
+    dry_run: bool,
+) -> ExitCode {
+    let existing = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".into());
 
     let mut settings: serde_json::Value = match serde_json::from_str(&existing) {
         Ok(v) => v,
@@ -459,7 +494,7 @@ fn install_hooks(dry_run: bool) -> ExitCode {
         eprintln!("ift: or put it on $PATH next to ift");
         return ExitCode::from(2);
     };
-    let changed = claude_hooks::install(&mut settings, &binary);
+    let changed = claude_hooks::install_events(&mut settings, &binary, events, agent);
 
     if changed.is_empty() {
         println!("already wired: {}", path.display());
@@ -482,7 +517,7 @@ fn install_hooks(dry_run: bool) -> ExitCode {
     // settings.json — which would take the user's permissions and env with it.
     let tmp = path.with_extension("json.ift-tmp");
     let body = serde_json::to_string_pretty(&settings).unwrap_or_default() + "\n";
-    if let Err(e) = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, &path)) {
+    if let Err(e) = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, path)) {
         eprintln!("ift: could not write {}: {e}", path.display());
         return ExitCode::from(2);
     }

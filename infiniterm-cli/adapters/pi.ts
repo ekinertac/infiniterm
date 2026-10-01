@@ -39,7 +39,7 @@ export default function (pi: ExtensionAPI) {
       () =>
         new Promise<void>((done) => {
           try {
-            const child = spawn(HOOK, [event], { stdio: ["pipe", "ignore", "ignore"] });
+            const child = spawn(HOOK, [event, "pi"], { stdio: ["pipe", "ignore", "ignore"] });
             child.on("error", () => done());
             child.on("close", () => done());
             child.stdin.on("error", () => {});

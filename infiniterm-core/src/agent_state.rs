@@ -63,9 +63,25 @@ pub fn apply_hook_event(prev: AgentState, event: &str) -> AgentState {
         // A permission prompt can only happen while a turn is running.
         "Notification" if prev == AgentState::Working => AgentState::Waiting,
         "Notification" => prev,
+        // Codex's approval prompt (and Claude's, where it sends one): an
+        // explicit request, blocked on you whenever it comes.
+        "PermissionRequest" => AgentState::Waiting,
         "Stop" => AgentState::Done,
         "SessionStart" | "SessionEnd" => AgentState::None,
         _ => prev,
+    }
+}
+/// The command that resumes an agent's session in a fresh shell, offered
+/// as a lost session's last history line (terminals.rs). `kind` is the
+/// card's `agent_kind`; none is Claude Code. Checked against each CLI:
+/// `codex resume <SESSION_ID>`, `opencode --session <id>`.
+pub fn resume_command(kind: Option<&str>, session: &str) -> Option<String> {
+    match kind {
+        None | Some("claude") => Some(format!("claude --resume {session}")),
+        Some("codex") => Some(format!("codex resume {session}")),
+        Some("opencode") => Some(format!("opencode --session {session}")),
+        // Pi reports a session file, not an id it resumes by.
+        _ => None,
     }
 }
 pub fn staleness(
@@ -83,6 +99,34 @@ pub fn staleness(
 
 #[cfg(test)]
 mod tests {
+    // Each agent's own resume command, and none for an agent without one.
+    #[test]
+    fn the_resume_command_is_the_agents_own() {
+        assert_eq!(
+            resume_command(Option::None, "a1").as_deref(),
+            Some("claude --resume a1")
+        );
+        assert_eq!(
+            resume_command(Some("codex"), "a1").as_deref(),
+            Some("codex resume a1")
+        );
+        assert_eq!(
+            resume_command(Some("opencode"), "a1").as_deref(),
+            Some("opencode --session a1")
+        );
+        assert_eq!(resume_command(Some("pi"), "a1"), Option::None);
+    }
+
+    #[test]
+    fn a_permission_request_is_waiting_whenever_it_comes() {
+        use super::AgentState as S;
+        assert_eq!(
+            apply_hook_event(S::Working, "PermissionRequest"),
+            S::Waiting
+        );
+        assert_eq!(apply_hook_event(S::Done, "PermissionRequest"), S::Waiting);
+    }
+
     use super::*;
     use AgentState::*;
     #[test]
