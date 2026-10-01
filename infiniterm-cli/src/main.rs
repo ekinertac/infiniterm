@@ -72,6 +72,8 @@ ift — drive infiniterm from a shell
   ift install-claude-hooks   wire infiniterm into ~/.claude/settings.json
   ift install-codex-hooks    wire infiniterm into ~/.codex/hooks.json (or
                              $CODEX_HOME); approve them once with /hooks
+  ift install-opencode-hooks install the OpenCode plugin into
+                             ~/.config/opencode/plugins (or $XDG_CONFIG_HOME)
   ift install-pi-hooks [DIR] install the Pi extension into ~/.pi/agent (or
                              $PI_CODING_AGENT_DIR, or DIR: a wrapper that
                              runs Pi against its own agent dir needs its own)
@@ -88,7 +90,7 @@ Exit codes: 0 ok, 1 infiniterm not running, 2 bad usage.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 15] = [
+pub const SUBCOMMANDS: [&str; 16] = [
     "diff",
     "ls",
     "sessions",
@@ -101,6 +103,7 @@ pub const SUBCOMMANDS: [&str; 15] = [
     "install",
     "install-claude-hooks",
     "install-codex-hooks",
+    "install-opencode-hooks",
     "install-pi-hooks",
     "install-extension",
     "completion",
@@ -117,6 +120,9 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("install-claude-hooks") => install_hooks(args.contains(&"--dry-run".to_string())),
         Some("install-codex-hooks") => install_codex(args.contains(&"--dry-run".to_string())),
+        Some("install-opencode-hooks") => {
+            install_opencode(args.contains(&"--dry-run".to_string()))
+        }
         Some("install-pi-hooks") => install_pi(
             args.iter().skip(1).find(|a| !a.starts_with("--")).map(String::as_str),
             args.contains(&"--dry-run".to_string()),
@@ -528,6 +534,69 @@ fn wire_hook_file(
     ExitCode::SUCCESS
 }
 
+/// The OpenCode plugin, with the hook path filled in; see
+/// adapters/opencode.js for what it does.
+const OPENCODE_ADAPTER: &str = include_str!("../adapters/opencode.js");
+
+fn opencode_adapter_source(hook: &str) -> String {
+    OPENCODE_ADAPTER.replace("__INFINITERM_HOOK__", hook)
+}
+
+/// OpenCode loads plugins from `$XDG_CONFIG_HOME/opencode/plugins`, else
+/// `~/.config/opencode/plugins` (it globs `plugin` and `plugins` alike).
+fn opencode_plugin_path() -> std::path::PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home().join(".config"))
+        .join("opencode")
+        .join("plugins")
+        .join("infiniterm.js")
+}
+
+fn install_opencode(dry_run: bool) -> ExitCode {
+    let Some(binary) = hook_binary() else {
+        eprintln!("ift: cannot find the infiniterm-hook binary");
+        eprintln!("ift: or put it on $PATH next to ift");
+        return ExitCode::from(2);
+    };
+    let path = opencode_plugin_path();
+    write_adapter(&path, &opencode_adapter_source(&binary), &binary, "opencode", dry_run)
+}
+
+/// Writes an adapter file (write-then-rename), saying so; unchanged files
+/// are left alone.
+fn write_adapter(
+    path: &std::path::Path,
+    body: &str,
+    binary: &str,
+    agent: &str,
+    dry_run: bool,
+) -> ExitCode {
+    if std::fs::read_to_string(path).ok().as_deref() == Some(body) {
+        println!("already installed: {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+    if dry_run {
+        println!("would write {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("ift: could not create {}: {e}", parent.display());
+            return ExitCode::from(2);
+        }
+    }
+    let tmp = path.with_extension("ift-tmp");
+    if let Err(e) = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, path)) {
+        eprintln!("ift: could not write {}: {e}", path.display());
+        return ExitCode::from(2);
+    }
+    println!("installed {}", path.display());
+    println!("  hook: {binary}");
+    println!("  takes effect in the next {agent} session");
+    ExitCode::SUCCESS
+}
+
 /// The Pi adapter, with the hook path filled in. Baked into the binary so
 /// `ift` is the one thing to install; see adapters/pi.ts for what it does.
 const PI_ADAPTER: &str = include_str!("../adapters/pi.ts");
@@ -616,6 +685,18 @@ fn install_extension(source: Option<&str>) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The OpenCode plugin is the template with the hook path in it, one
+    // plugin export (OpenCode calls every export as a plugin), and it names
+    // itself to the hook so the card knows whose session it is.
+    #[test]
+    fn the_opencode_adapter_gets_the_hook_path_and_names_its_agent() {
+        let src = opencode_adapter_source("/Applications/x.app/Contents/MacOS/infiniterm-hook");
+        assert!(src.contains("const HOOK = \"/Applications/x.app/Contents/MacOS/infiniterm-hook\";"));
+        assert!(!src.contains("__INFINITERM_HOOK__"));
+        assert!(src.contains("[event, \"opencode\"]"));
+        assert_eq!(src.matches("export ").count(), 1);
+    }
 
     #[test]
     fn the_pi_adapter_gets_the_hook_path_and_nothing_else_changes() {

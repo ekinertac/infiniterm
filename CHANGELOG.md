@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-01
 
+- OpenCode cards show their agent's state too: working, waiting for a permission or an answer, failed and done. Run `ift install-opencode-hooks` once. After a reboot a lost OpenCode session offers `opencode --session <id>`.
 - Codex cards show their agent's state like Claude Code's: working, waiting for your approval and done. Run `ift install-codex-hooks` once, then approve the hooks with `/hooks` inside Codex. A Codex turn that fails is not reported (Codex sends nothing for it). After a reboot a lost Codex session offers `codex resume <id>`.
 - Releases are tagged with plain version numbers (`v0.3.0`) from the next one on.
 - The status bar's frame counter no longer shows a low number in orange when the canvas is simply at rest; it counts only while something is animating or moving, and is off by default (`ui.showFps`).
