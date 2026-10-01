@@ -52,7 +52,11 @@ if ! "$root/apps/infiniterm.app/Contents/MacOS/ift" --help | grep -q install-cod
     set -e
     check "an adapter this build lacks is skipped with exit 0" '[ "$code" = 0 ] && grep -q "no ift install-codex-hooks yet" "$root/out"'
 else
-    echo "skip old-build case: this release already has the Codex adapter"
+    fresh
+    INFINITERM_ZIP="$root/cached.zip" HOME="$root/home" INFINITERM_APPS_DIR="$root/apps" XDG_CONFIG_HOME="$root/home/.config" \
+        sh "$script" --hooks codex,opencode </dev/null >"$root/out" 2>&1
+    check "--hooks codex writes hooks.json" 'grep -q infiniterm-hook "$root/home/.codex/hooks.json"'
+    check "--hooks opencode writes the plugin" '[ -f "$root/home/.config/opencode/plugins/infiniterm.js" ]'
 fi
 
 # 3. A second run leaves the installed app to its own updater.
