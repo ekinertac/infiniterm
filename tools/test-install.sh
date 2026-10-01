@@ -43,6 +43,18 @@ INFINITERM_ZIP="$root/cached.zip" HOME="$root/home" INFINITERM_APPS_DIR="$root/a
     sh "$script" --hooks claude </dev/null >"$root/out" 2>&1
 check "--hooks claude writes the hook" 'grep -q infiniterm "$root/home/.claude/settings.json"'
 
+# 2b. An agent the installed build has no installer for is skipped, not
+# fatal: build 356 (0.2.0) predates the Codex and OpenCode adapters.
+if ! "$root/apps/infiniterm.app/Contents/MacOS/ift" --help | grep -q install-codex-hooks; then
+    set +e
+    INFINITERM_ZIP="$root/cached.zip" HOME="$root/home" INFINITERM_APPS_DIR="$root/apps" \
+        sh "$script" --hooks codex </dev/null >"$root/out" 2>&1; code=$?
+    set -e
+    check "an adapter this build lacks is skipped with exit 0" '[ "$code" = 0 ] && grep -q "no ift install-codex-hooks yet" "$root/out"'
+else
+    echo "skip old-build case: this release already has the Codex adapter"
+fi
+
 # 3. A second run leaves the installed app to its own updater.
 touch "$root/apps/infiniterm.app/marker"
 INFINITERM_ZIP="$root/cached.zip" run --no-hooks
@@ -56,7 +68,7 @@ set +e; INFINITERM_ZIP="$root/fake.zip" run --no-hooks; code=$?; set -e
 check "unsigned zip refused with exit 1" '[ "$code" = 1 ] && [ ! -e "$root/apps/infiniterm.app" ]'
 
 # 5. Bad usage is exit 2.
-set +e; run --hooks codex; code=$?; set -e
+set +e; run --hooks nosuch; code=$?; set -e
 check "unknown hook is exit 2" '[ "$code" = 2 ]'
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

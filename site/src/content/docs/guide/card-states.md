@@ -16,11 +16,20 @@ A shell doing nothing has no colour. Four hues rather than shades of one, becaus
 
 ## Agents
 
-Claude Code and Pi report through hooks (`ift install-claude-hooks`, `ift install-pi-hooks`). The card goes violet when a turn starts, yellow when the agent asks for permission or asks you something, and green when the turn ends.
+Claude Code, Pi, Codex and OpenCode report through hooks (`ift install-claude-hooks`, `install-pi-hooks`, `install-codex-hooks`, `install-opencode-hooks`; see [Install](../install/#agent-hooks)). The card goes violet when a turn starts, yellow when the agent asks for permission or asks you something, and green when the turn ends.
+
+What each agent reports differs a little:
+
+| Agent | Working | Waiting | Failed | Done |
+| --- | --- | --- | --- | --- |
+| Claude Code | yes | permission prompts and questions | yes | yes |
+| Pi | yes | its prompts | no | yes |
+| Codex | yes | approval prompts only | no | yes |
+| OpenCode | yes | permission prompts and questions | yes | yes |
+
+Pi and Codex send nothing when a turn fails, so a failed turn there does not turn the card red; Codex's questions do not show as waiting either. OpenCode keeps its sessions in a database, so it has no transcript card (`Cmd I`).
 
 Green is news, so it does not stay: once you have looked at a done card for a moment (about a second and a half) or typed into it, it goes grey. "Card: clear the state colour" in the palette greys any card's ring and dot by hand once you have seen what it had to say.
-
-Codex and OpenCode have no adapter yet.
 
 ## Any command
 

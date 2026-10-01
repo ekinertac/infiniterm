@@ -7,7 +7,7 @@ Written 2026-10-01. The goal for the first month is users and feedback, not sale
 - Source public at [ekinertac/infiniterm](https://github.com/ekinertac/infiniterm) under a source-available licence: free for personal use, $29 per person for work.
 - Signed, notarized builds, installed three ways: `curl -fsSL https://infiniterm.app/install.sh | sh`, `brew install --cask ekinertac/tap/infiniterm`, or the DMG.
 - [infiniterm.app](https://infiniterm.app): landing page, the launch film (HTML, click to play), a real canvas screenshot, docs with keys, commands and settings generated from the app.
-- Known limits a newcomer will hit: Apple Silicon only, macOS 13 or later, shell state colours from zsh only, agent hooks for Claude Code and Pi only (Codex and OpenCode not yet).
+- Known limits a newcomer will hit: Apple Silicon only, macOS 13 or later, shell state colours from zsh only, agent hooks for Claude Code, Pi, Codex and OpenCode (Pi and Codex do not report a failed turn).
 
 ## How we know it worked
 
