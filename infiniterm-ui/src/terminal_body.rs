@@ -1475,16 +1475,16 @@ fn row_paints_nothing(row: &infiniterm_term::grid::Row) -> bool {
 /// What is appended after a dead session's ring. The order matters: the
 /// alternate screen is left first so the notice lands on the primary
 /// screen, and the reset of attributes comes last so the shell starts clean.
-/// `resume` is the Claude session the card was running, when known: the
-/// command to get it back is printed on its own line, plain (no dim) so it
-/// selects and pastes as typed.
+/// `resume` is the command that gets the card's agent session back, when
+/// known (`agent_state::resume_command`): printed on its own line, plain
+/// (no dim) so it selects and pastes as typed.
 pub fn lost_session_tail(when: &str, resume: Option<&str>) -> String {
     let mut out = format!(
         "\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[<u\x1b[?25h\x1b[0m\r\n\x1b[2m[session lost {when}; this is a new shell]\x1b[0m\r\n"
     );
-    if let Some(id) = resume {
+    if let Some(cmd) = resume {
         out.push_str(&format!(
-            "\x1b[2mto pick the agent up where it was:\x1b[0m claude --resume {id}\r\n"
+            "\x1b[2mto pick the agent up where it was:\x1b[0m {cmd}\r\n"
         ));
     }
     out

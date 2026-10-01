@@ -5,7 +5,10 @@
 //! fail loudly. It ALWAYS exits 0 — no socket, no card id, bad input, broken pipe:
 //! all are success, because a hook that breaks an agent turn is worse than no hook.
 //!
-//! Usage: infiniterm-hook <EventName>   (the harness pipes its JSON on stdin)
+//! Usage: infiniterm-hook <EventName> [agent]   (the harness pipes its JSON on stdin)
+//!
+//! `agent` names the agent that is not Claude Code (`codex`, `opencode`,
+//! `pi`), so the card knows which resume command its session takes.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -17,6 +20,7 @@ fn main() {
 
 fn try_report() -> Option<()> {
     let event = std::env::args().nth(1)?;
+    let agent = std::env::args().nth(2);
     let card_id = std::env::var("INFINITERM_CARD_ID").ok()?;
 
     let mut payload = String::new();
@@ -34,10 +38,15 @@ fn try_report() -> Option<()> {
         .set_write_timeout(Some(std::time::Duration::from_millis(200)))
         .ok()?;
 
+    let agent = match agent {
+        Some(a) => format!(",\"agent\":{}", json_string(&a)),
+        None => String::new(),
+    };
     let line = format!(
-        "{{\"card_id\":{},\"event\":{},\"payload\":{}}}\n",
+        "{{\"card_id\":{},\"event\":{}{},\"payload\":{}}}\n",
         json_string(&card_id),
         json_string(&event),
+        agent,
         payload
     );
     stream.write_all(line.as_bytes()).ok()?;

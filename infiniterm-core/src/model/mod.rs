@@ -105,6 +105,9 @@ pub struct Card {
     /// `claude --resume <id>` ready to paste. Never cleared by the app;
     /// the next hook event overwrites it.
     pub agent_session: Option<String>,
+    /// The agent that session belongs to, by its adapter's name; `None` is
+    /// Claude Code. SAVED (`agentKind`) beside `agent_session`.
+    pub agent_kind: Option<String>,
     /// `card.protect` (Cmd+Shift+L): the card cannot be closed, by Cmd+W,
     /// by its workspace closing, or by its shell exiting (a fresh shell
     /// takes the pane instead). SAVED (`protected`); the label wears a lock
@@ -855,6 +858,7 @@ impl Model {
             command: opts.command,
             transcript_path: None,
             agent_session: None,
+            agent_kind: None,
             number: self.take_number(),
             session: None,
             kitty_keys: false,

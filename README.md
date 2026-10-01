@@ -20,7 +20,7 @@ Or [download the DMG](https://github.com/ekinertac/infiniterm-releases/releases/
 
 ## What it is
 
-It started as a way out of iTerm2: fifteen tabs with splits in each, and finding one session among thirty meant opening them one by one. Here every session is a card on one canvas and keeps its place. With coding agents in those cards, you also could not tell which were working, which were waiting on you and which had finished, so each card's border says it: violet working, yellow waiting on you, red failed, green done. Claude Code and Pi report through hooks; any zsh command reports too.
+It started as a way out of iTerm2: fifteen tabs with splits in each, and finding one session among thirty meant opening them one by one. Here every session is a card on one canvas and keeps its place. With coding agents in those cards, you also could not tell which were working, which were waiting on you and which had finished, so each card's border says it: violet working, yellow waiting on you, red failed, green done. Claude Code, Codex and Pi report through hooks; any zsh command reports too.
 
 Nothing flashes, nothing steals focus, nothing sends a notification. You switch when you are ready.
 

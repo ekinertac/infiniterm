@@ -1793,6 +1793,7 @@ mod tests {
             tool: None,
             transcript: Some("/s/x.jsonl".into()),
             session: Some("sess-1".into()),
+            agent: None,
         };
         h.m.apply_hook(&report("PreToolUse"));
         assert_eq!(h.focused().agent, crate::agent_state::AgentState::Working);

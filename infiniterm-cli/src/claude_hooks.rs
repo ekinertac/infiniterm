@@ -1,4 +1,6 @@
-//! Wiring `infiniterm-hook` into `~/.claude/settings.json`.
+//! Wiring `infiniterm-hook` into `~/.claude/settings.json`, and into Codex's
+//! `~/.codex/hooks.json`, which has the same shape and the same event names
+//! (Codex 0.145+, issue #26).
 //!
 //! This replaces eight hand-written JSON entries pointing at an absolute path,
 //! which is the one piece of setup infiniterm still asks for by hand — and the
@@ -37,6 +39,19 @@ pub const EVENTS: [&str; 8] = [
     "SessionEnd",
 ];
 
+/// The Codex hook events infiniterm reads: Claude's names, plus
+/// `PermissionRequest` (its approval prompt). Codex has no failure hook and
+/// no `Notification`; a turn that errors never reaches `Stop`.
+pub const CODEX_EVENTS: [&str; 7] = [
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PermissionRequest",
+    "Stop",
+    "SessionStart",
+    "SessionEnd",
+];
+
 /// True when a hook entry runs our binary, whatever path it was installed at.
 ///
 /// Two ways to be ours, and both are needed:
@@ -63,7 +78,22 @@ fn is_ours(command: &str, hook_binary: &str) -> bool {
 ///
 /// An empty return means the file already said the right thing, and the caller
 /// should leave it alone rather than rewriting it byte for byte.
+/// Claude Code's events, no agent name; the tests' shorthand for
+/// `install_events`.
+#[cfg(test)]
 pub fn install(settings: &mut Value, hook_binary: &str) -> Vec<String> {
+    install_events(settings, hook_binary, &EVENTS, None)
+}
+
+/// `install` for any agent with Claude's hook file shape: `events` to wire,
+/// and the `agent` name passed to the hook binary after the event, so the
+/// card knows whose session it is (none for Claude Code).
+pub fn install_events(
+    settings: &mut Value,
+    hook_binary: &str,
+    events: &[&str],
+    agent: Option<&str>,
+) -> Vec<String> {
     let mut changed = Vec::new();
 
     // `settings.json` may be `{}` on a first run, or may have no hooks key.
@@ -79,8 +109,11 @@ pub fn install(settings: &mut Value, hook_binary: &str) -> Vec<String> {
     }
     let hooks = hooks.as_object_mut().expect("just made it an object");
 
-    for event in EVENTS {
-        let want = format!("{hook_binary} {event}");
+    for &event in events {
+        let want = match agent {
+            Some(a) => format!("{hook_binary} {event} {a}"),
+            None => format!("{hook_binary} {event}"),
+        };
         let list = hooks
             .entry(event.to_string())
             .or_insert_with(|| Value::Array(Vec::new()));
@@ -135,6 +168,20 @@ mod tests {
             .flat_map(|g| g["hooks"].as_array().unwrap())
             .map(|h| h["command"].as_str().unwrap().to_string())
             .collect()
+    }
+
+    /// Codex takes the same file shape: its own events, each naming the
+    /// agent after the event, so the card knows it is a Codex session.
+    #[test]
+    fn codex_gets_its_events_with_the_agent_named() {
+        let mut s = json!({});
+        let changed = install_events(&mut s, "/bin/ih", &CODEX_EVENTS, Some("codex"));
+        assert_eq!(changed.len(), CODEX_EVENTS.len());
+        assert_eq!(
+            commands(&s, "PermissionRequest"),
+            vec!["/bin/ih PermissionRequest codex".to_string()]
+        );
+        assert!(install_events(&mut s, "/bin/ih", &CODEX_EVENTS, Some("codex")).is_empty());
     }
 
     #[test]

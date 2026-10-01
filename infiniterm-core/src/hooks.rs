@@ -30,6 +30,9 @@ pub struct HookReport {
     /// Claude Code's `session_id`, the argument to `claude --resume`. Pi's
     /// adapter does not send one.
     pub session: Option<String>,
+    /// The agent that sent it (`codex`, `opencode`, `pi`), from the hook
+    /// binary's second argument; absent for Claude Code.
+    pub agent: Option<String>,
 }
 
 /// A report with no `card_id` is dropped: without it there is no card to
@@ -52,6 +55,11 @@ pub fn parse_hook_line(line: &str) -> Option<HookReport> {
         tool: field("tool_name"),
         transcript: field("transcript_path"),
         session: field("session_id"),
+        agent: v
+            .get("agent")
+            .and_then(|a| a.as_str())
+            .filter(|a| !a.is_empty())
+            .map(str::to_string),
     })
 }
 
@@ -107,6 +115,17 @@ pub fn listen(path: &Path, reports: Sender<HookReport>, cli: Arc<CliState>) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The hook binary's second argument names the agent; Claude's hooks
+    // send none.
+    #[test]
+    fn a_report_names_its_agent_when_it_has_one() {
+        let r = parse_hook_line(r#"{"card_id":"a","event":"Stop","agent":"codex","payload":{}}"#)
+            .unwrap();
+        assert_eq!(r.agent.as_deref(), Some("codex"));
+        let r = parse_hook_line(r#"{"card_id":"a","event":"Stop","payload":{}}"#).unwrap();
+        assert_eq!(r.agent, None);
+    }
 
     // A second copy must not steal a live socket from the first.
     #[test]
