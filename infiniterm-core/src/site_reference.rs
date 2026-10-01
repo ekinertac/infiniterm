@@ -163,7 +163,7 @@ fn keys_page(commands: &[(String, String)]) -> String {
         out.push('\n');
     }
     out.push_str("## Mouse\n\n| Gesture | Does |\n| --- | --- |\n");
-    for (gesture, does) in GESTURES {
+    for (gesture, does, _) in GESTURES {
         out.push_str(&format!("| {} | {} |\n", cell(gesture), cell(does)));
     }
     out.push('\n');

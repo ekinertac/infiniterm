@@ -1068,7 +1068,7 @@ impl AppView {
         let q = query.trim().to_lowercase();
         let gestures: Vec<_> = GESTURES
             .iter()
-            .filter(|(keys, label)| {
+            .filter(|(keys, label, _)| {
                 q.is_empty()
                     || label.to_lowercase().contains(&q)
                     || keys.to_lowercase().contains(&q)
@@ -1084,7 +1084,7 @@ impl AppView {
                     .text_color(chrome.text_muted)
                     .child("GESTURES"),
             );
-            for (keys, label) in gestures {
+            for (keys, label, _) in gestures {
                 list = list.child(
                     div()
                         .flex()

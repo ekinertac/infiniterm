@@ -134,14 +134,73 @@ pub fn shortcut_sections(bindings: &Keymap, commands: &[(&str, &str)]) -> Vec<Sh
 
 /// Gestures, which are not commands and so cannot be derived. They are the
 /// least discoverable thing in the app, which is exactly why they belong in
-/// the panel even though they break its one-source rule.
-pub const GESTURES: [(&str, &str); 6] = [
-    ("Cmd scroll", "Zoom about the pointer"),
-    ("Cmd drag", "Pan the canvas"),
-    ("middle drag", "Pan the canvas"),
-    ("drag top edge", "Move a card"),
-    ("drag any other edge", "Resize a card"),
-    ("drag the name tab", "Move a whole group"),
+/// the panel even though they break its one-source rule. The panel and the
+/// site's keys page both read this list.
+///
+/// Each row: what you do, what it does, and the id `usage_log` records the
+/// gesture under ("" when it records none). The ids are what keep the list
+/// whole: a test fails when `usage_log::MOUSE_GESTURES` names a gesture no
+/// row here carries, which is how marquee selection shipped and stayed off
+/// this panel for days (2026-10-01).
+pub const GESTURES: &[(&str, &str, &str)] = &[
+    (
+        "Cmd scroll or pinch",
+        "Zoom about the pointer",
+        "mouse.canvas.zoom",
+    ),
+    ("Cmd drag", "Pan the canvas", "mouse.canvas.pan"),
+    ("middle drag", "Pan the canvas", "mouse.canvas.pan"),
+    (
+        "drag the top edge or the label",
+        "Move a card",
+        "mouse.card.drag",
+    ),
+    ("drag any other edge", "Resize a card", "mouse.card.resize"),
+    (
+        "drag the name tab",
+        "Move a whole group",
+        "mouse.group.drag",
+    ),
+    (
+        "drag on empty canvas",
+        "Select every card it touches",
+        "mouse.marquee",
+    ),
+    (
+        "Shift drag on empty canvas",
+        "Add to the selection",
+        "mouse.marquee",
+    ),
+    (
+        "Cmd click a card",
+        "Add it to the selection or take it out",
+        "mouse.card.cmdclick",
+    ),
+    (
+        "Shift click a label or frame",
+        "Add it to the selection or take it out",
+        "",
+    ),
+    (
+        "drag a selected card",
+        "Move the whole selection",
+        "mouse.selection.drag",
+    ),
+    (
+        "double-click a frame or label",
+        "Fit the card",
+        "mouse.fitCard.doubleclick",
+    ),
+    (
+        "double-click empty canvas",
+        "Fit everything",
+        "mouse.fitAll.doubleclick",
+    ),
+    (
+        "hold left, click right",
+        "Fit everything",
+        "mouse.fitAll.chord",
+    ),
 ];
 
 /// The sections with only the shortcuts matching `query`, empty sections
@@ -174,6 +233,31 @@ pub fn filter_shortcuts(sections: &[ShortcutSection], query: &str) -> Vec<Shortc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Every gesture the usage log counts has a row in the panel: a gesture
+    // that is recorded but not listed is one a user cannot find.
+    #[test]
+    fn every_recorded_mouse_gesture_is_in_the_panel() {
+        for (id, label) in crate::usage_log::MOUSE_GESTURES {
+            assert!(
+                GESTURES.iter().any(|(_, _, g)| g == id),
+                "{id} ({label}) is recorded in usage.log but missing from GESTURES"
+            );
+        }
+    }
+
+    #[test]
+    fn every_usage_id_in_the_panel_is_one_the_log_knows() {
+        for (keys, _, id) in GESTURES {
+            assert!(
+                id.is_empty()
+                    || crate::usage_log::MOUSE_GESTURES
+                        .iter()
+                        .any(|(g, _)| g == id),
+                "{keys}: {id} is not in usage_log::MOUSE_GESTURES"
+            );
+        }
+    }
     use crate::keymap::DEFAULT_KEYMAP;
 
     fn km(pairs: &[(&str, &str)]) -> Keymap {
