@@ -118,6 +118,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     <main>
       <section class="hero">
         <div class="hero-copy">
+          <img class="app-icon" src={`${base}icon.png`} width="112" height="112" alt="The infiniterm app icon: four cards in a grid, bordered violet, yellow, red and green." />
           <h1>See which agent needs you without opening a single tab.</h1>
           <p class="lede">
             infiniterm puts every terminal on one zoomable canvas. Each card keeps its place, and its border says what the
@@ -449,6 +450,9 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     padding-block: 40px 96px;
   }
   .lede { font-size: 1.25rem; color: var(--ink-soft); margin: 28px 0 32px; }
+  /* The app icon, big: its four borders are the four states the page is about. */
+  .app-icon { display: block; width: 112px; height: 112px; margin: 0 0 28px -6px; }
+  @media (max-width: 560px) { .app-icon { width: 80px; height: 80px; margin-bottom: 20px; } }
   .methods { display: flex; gap: 4px; margin-bottom: 8px; }
   .methods button {
     font: 600 0.9rem var(--sans);
