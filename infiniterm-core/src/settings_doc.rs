@@ -276,6 +276,20 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.fitPadding",
+        &[
+            "Screen pixels left around a card or cluster when it is fitted (Cmd+1, Cmd+2,",
+            "Cmd+3). 0 lets a card touch the window's edges.",
+        ],
+    ),
+    (
+        "ui.fitMagnify",
+        &[
+            "Let a fit zoom past 100% so a card fills the window. Off: a fit never magnifies,",
+            "and a card smaller than the window sits in open canvas.",
+        ],
+    ),
+    (
         "ui.unfocusedDim",
         &[
             "How much the whole canvas is dimmed while another app is in front, 0 to 1.",

@@ -9,7 +9,7 @@ use crate::config_files::{config_path, ConfigFile};
 use crate::grid::Point;
 use crate::ift::{open_plan, PathKind};
 use crate::saved_layout::CardKind;
-use crate::viewport::{bounding_rect, centre_on, fit_rect, viewport_centre, MAX_SCALE, MIN_SCALE};
+use crate::viewport::{bounding_rect, centre_on, viewport_centre, MAX_SCALE, MIN_SCALE};
 
 impl Model {
     /// Keyboard zoom, pinned to the active card at the MIDDLE of the view.
@@ -98,7 +98,7 @@ impl Model {
             .map(|c| c.rect)
             .collect();
         if let Some(bounds) = bounding_rect(&rects) {
-            self.apply_viewport(fit_rect(bounds, self.view_size));
+            self.apply_viewport(self.fit_viewport(bounds));
         }
     }
 
@@ -157,7 +157,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("canvas.zoom.fitAll", "Canvas: fit all cards", |m| {
         let rects: Vec<_> = m.here().iter().map(|c| c.rect).collect();
         if let Some(bounds) = bounding_rect(&rects) {
-            let next = fit_rect(bounds, m.view_size);
+            let next = m.fit_viewport(bounds);
             m.apply_viewport(next);
         }
     });
@@ -212,7 +212,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.dirty_layout = true;
         let all: Vec<_> = m.here().iter().map(|c| c.rect).collect();
         if let Some(bounds) = bounding_rect(&all) {
-            let next = fit_rect(bounds, m.view_size);
+            let next = m.fit_viewport(bounds);
             m.apply_viewport(next);
         }
     });

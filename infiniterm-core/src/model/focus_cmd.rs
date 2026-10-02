@@ -17,7 +17,7 @@ use crate::navigate::{
 };
 use crate::saved_layout::CardKind;
 use crate::slots::{free_slots_around, Slot, SLOT_KEYS};
-use crate::viewport::{bounding_rect, fit_rect};
+use crate::viewport::bounding_rect;
 
 /// A key without Cmd, as the ui sees it: named (`enter`, `escape`) or one
 /// character.
@@ -166,7 +166,7 @@ impl Model {
         let mut all = rects;
         all.extend(slots.iter().map(|s| s.rect));
         if let Some(bounds) = bounding_rect(&all) {
-            self.apply_viewport(fit_rect(bounds, self.view_size));
+            self.apply_viewport(self.fit_viewport(bounds));
         }
     }
 
@@ -208,7 +208,7 @@ impl Model {
             .map(|((id, _), k)| (id.clone(), k))
             .collect();
         if let Some(bounds) = bounding_rect(&here.iter().map(|(_, r)| *r).collect::<Vec<_>>()) {
-            self.apply_viewport(fit_rect(bounds, self.view_size));
+            self.apply_viewport(self.fit_viewport(bounds));
         }
     }
 
@@ -517,7 +517,7 @@ impl Model {
             .cloned();
         let target = remembered.or_else(|| unit.card_ids.first().cloned());
         self.set_focus(target.as_deref());
-        self.apply_viewport(fit_rect(unit.rect, self.view_size));
+        self.apply_viewport(self.fit_viewport(unit.rect));
     }
 
     fn step_units(&mut self, groups_only: bool, step: isize) {
