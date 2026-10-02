@@ -45,9 +45,13 @@ Canvas: tidy, in the palette, packs the cards back onto the grid in reading orde
 
 Zoomed far out, text is drawn as bars, one per word, so a full card still reads as full. The line is set by what the screen can draw, not a fixed zoom level.
 
-### One card at a time
+### Maximising a card
 
-`"ui.maximised": true` in your settings keeps the focused card filling the window: through new cards, closes, workspace switches and moving between cards, the card you are on is the whole screen and the canvas sits behind it. `Cmd 2` still shows the whole canvas to look around, and the next move to a card goes back to full window. `Cmd Shift Enter` turns it off until the app restarts. `"ui.hideLabelWhenMaximised": true` leaves the card's label off while it fills the window.
+`Cmd Shift Enter` makes the focused card fill the window, and pressing it again puts the card back. `"ui.hideLabelWhenMaximised": true` leaves the card's label off while it fills the window.
+
+### How a fit frames the cards
+
+Every fit (`Cmd 1`, `Cmd 2`, `Cmd 3`, the double-clicks) leaves `"ui.fitPadding"` pixels around what it frames, 48 by default; `0` lets the cards touch the window's edges. A fit never zooms past 100%, so a small card stays its own size in the middle of the window; `"ui.fitMagnify": true` lifts that, and a fit then zooms in until the card fills the window.
 
 Interface size is separate from zoom: `Cmd Shift =` and `Cmd Shift -` make the app's own chrome (labels, title bar, status bar, palette, dialogs) bigger or smaller, never terminal text.
 
