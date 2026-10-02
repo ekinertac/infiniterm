@@ -3,7 +3,7 @@ title: Install and first launch
 description: Download the app, put ift on your PATH, and wire up agent state.
 ---
 
-infiniterm runs on Apple Silicon Macs with macOS 13 or later. It is free for personal use; paid work, freelance included, needs a commercial licence, $29 per person, one time.
+infiniterm runs on Apple Silicon Macs with macOS 13 or later. It is free for personal use; paid work, freelance included, needs a [commercial licence](https://infiniterm.lemonsqueezy.com/checkout/buy/0b6837dd-c037-493e-a530-72f6273fdf3c), $29 per person, one time.
 
 ## Install
 
