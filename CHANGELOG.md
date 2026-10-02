@@ -6,20 +6,22 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-03
+## 0.5.1 (build 549), 2026-10-03
 
-- `ui.workspaceIsolation` (default off): Ctrl+Tab switches between the current workspace's cards only, and the status bar counts this workspace's cards. The palette still lists every card. Asked for by Tarık Kavaz.
-- `ui.cardOpacity` (0.1 to 1) makes a card's background see-through so the canvas, the grid and a background image show behind it. Text stays solid. Cells a program colours itself (vim's status line) and browser cards stay opaque.
+### App
+
 - An About window: the icon, name, version and build, the author and the website, with a Check for Updates button. Open it from the app menu (About infiniterm) or the palette (App: about infiniterm). Asked for by Tarık Kavaz.
-- `ui.backgroundImage` puts a picture behind the canvas: three come with the app (`"dusk"`, `"aurora"`, `"ember"`) or give a path to your own; `ui.backgroundImageFit` is `cover` (default) or `contain`. Turn the grid off with `ui.showGrid` if the lines get in the way.
-
-### 2026-10-02
-
-- `ui.windowOpacity` (0.1 to 1) makes the window see-through: the canvas, title bar and status bar fade while cards stay solid. `ui.windowBlur` blurs what is behind it.
-- `ui.showGrid` turns the canvas grid off (default on).
 - Opening the settings (or the keybindings) focuses your own file alone. Both cards were selected before, so you had to deselect before typing. They still open side by side and close together.
-- `ui.maximised` is gone: always-maximised was a way of working infiniterm is not built for. `Cmd Shift Enter` still maximises one card, and `ui.fitPadding` / `ui.fitMagnify` make a fit fill the window.
+
+### Canvas
+
+- `ui.backgroundImage` puts a picture behind the canvas: three come with the app (`"dusk"`, `"aurora"`, `"ember"`) or give a path to your own; `ui.backgroundImageFit` is `cover` (default) or `contain`.
+- `ui.windowOpacity` (0.1 to 1) makes the window see-through: the canvas, title bar and status bar fade while cards stay solid. `ui.windowBlur` blurs what is behind it.
+- `ui.cardOpacity` (0.1 to 1) makes a card's background see-through so the canvas, the grid and a background image show behind it. Text stays solid. Cells a program colours itself (vim's status line) and browser cards stay opaque.
+- `ui.showGrid` turns the canvas grid off (default on).
 - Two settings for fitting a card (Cmd+1, Cmd+2, Cmd+3): `ui.fitPadding` sets the margin around it in pixels (default 48, 0 lets it touch the window edges) and `ui.fitMagnify` lets a fit zoom past 100% so a card fills the window.
+- `ui.workspaceIsolation` (default off): Ctrl+Tab switches between the current workspace's cards only, and the status bar counts this workspace's cards. The palette still lists every card. Asked for by Tarık Kavaz.
+- `ui.maximised` from 0.5.0 is gone: always-maximised was a way of working infiniterm is not built for. `Cmd Shift Enter` still maximises one card, and the fit settings above make a fit fill the window.
 
 ## 0.5.0 (build 523), 2026-10-02
 
