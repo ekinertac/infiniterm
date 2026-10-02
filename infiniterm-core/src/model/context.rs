@@ -14,7 +14,7 @@ use crate::ift::OpenPlan;
 use crate::layout::{best_cols, first_free_slot};
 use crate::navigate::{ensure_visible, REVEAL_PADDING};
 use crate::saved_layout::CardKind;
-use crate::viewport::{bounding_rect, fit_rect, Viewport};
+use crate::viewport::{bounding_rect, fit_rect_with, Viewport, MAX_FIT_SCALE, MAX_SCALE};
 
 /// Direction words that read as English in a command label: "Swap card
 /// with the one to the up" is what the raw direction gives, and labels are
@@ -171,8 +171,20 @@ impl Model {
         bounding_rect(cards)
     }
 
+    /// The viewport every fit lands on, with the margin and the magnify
+    /// ceiling from `ui.fitPadding` / `ui.fitMagnify` (#87).
+    pub fn fit_viewport(&self, rect: Rect) -> Viewport {
+        let ui = &self.config.ui;
+        let ceiling = if ui.fit_magnify {
+            MAX_SCALE
+        } else {
+            MAX_FIT_SCALE
+        };
+        fit_rect_with(rect, self.view_size, ui.fit_padding, ceiling)
+    }
+
     pub fn frame_card(&mut self, rect: Rect) {
-        self.apply_viewport(fit_rect(rect, self.view_size));
+        self.apply_viewport(self.fit_viewport(rect));
         self.framing = true;
     }
 
@@ -184,7 +196,7 @@ impl Model {
             .map(|c| c.rect)
             .collect();
         if let Some(bounds) = group_bounds(&rects, GROUP_PAD) {
-            self.apply_viewport(fit_rect(bounds, self.view_size));
+            self.apply_viewport(self.fit_viewport(bounds));
         }
     }
 
@@ -204,7 +216,7 @@ impl Model {
                 .filter_map(|id| self.card(id).map(|c| c.rect))
                 .collect();
             if let Some(bounds) = bounding_rect(&rects) {
-                self.apply_viewport(fit_rect(bounds, self.view_size));
+                self.apply_viewport(self.fit_viewport(bounds));
             }
             return;
         }
@@ -225,7 +237,7 @@ impl Model {
             .map(|i| loose[i])
             .collect();
         if let Some(bounds) = bounding_rect(&rects) {
-            self.apply_viewport(fit_rect(bounds, self.view_size));
+            self.apply_viewport(self.fit_viewport(bounds));
         }
     }
 

@@ -26,6 +26,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::viewport::FIT_PADDING;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
@@ -238,6 +240,10 @@ pub struct Ui {
     /// The focused card always fills the window (`Model::maximise_sticky`,
     /// #63): a friend's way of working, a setting so it can be tried.
     pub maximised: bool,
+    /// Screen pixels left around a card or cluster when it is fitted (#87).
+    pub fit_padding: f64,
+    /// Whether a fit may zoom past 100% to fill the window.
+    pub fit_magnify: bool,
     /// Chrome font sizes in SCREEN pixels, before the UI-scale multiplier.
     /// Three values because they are read at three distances: a card label
     /// has to survive 10% zoom, a group name sits above a block, the status
@@ -341,6 +347,8 @@ pub fn default_config() -> Config {
             inactive_dim: 0.45,
             unfocused_dim: 0.4,
             maximised: false,
+            fit_padding: FIT_PADDING,
+            fit_magnify: false,
             card_label_size: 15.,
             card_label_position: LabelCorner::TopRight,
             hide_label_when_maximised: false,
@@ -591,6 +599,8 @@ pub fn merge_config(raw: &Value) -> Config {
             inactive_dim: num(u.get("inactiveDim"), d.ui.inactive_dim, 0., 1.),
             unfocused_dim: num(u.get("unfocusedDim"), d.ui.unfocused_dim, 0., 1.),
             maximised: bool_(u.get("maximised"), d.ui.maximised),
+            fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
+            fit_magnify: bool_(u.get("fitMagnify"), d.ui.fit_magnify),
             card_label_size: num(u.get("cardLabelSize"), d.ui.card_label_size, 6., 64.),
             card_label_position: label_corner(u.get("cardLabelPosition"), d.ui.card_label_position),
             hide_label_when_maximised: bool_(

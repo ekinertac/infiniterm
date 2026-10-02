@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-02
+
+- Two settings for fitting a card (Cmd+1, Cmd+2, Cmd+3): `ui.fitPadding` sets the margin around it in pixels (default 48, 0 lets it touch the window edges) and `ui.fitMagnify` lets a fit zoom past 100% so a card fills the window.
+
 ## 0.5.0 (build 523), 2026-10-02
 
 ### App

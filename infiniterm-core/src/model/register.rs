@@ -1722,6 +1722,37 @@ mod tests {
         assert_eq!(*v, crate::viewport::fit_rect(want, h.m.view_size));
     }
 
+    // #87: `ui.fitPadding` is the margin around a fit and `ui.fitMagnify`
+    // lets it pass 100%; the defaults are the old fixed 48 px and the cap.
+    #[test]
+    fn fit_settings_set_the_margin_and_the_ceiling() {
+        use crate::viewport::{fit_rect_with, FIT_PADDING, MAX_FIT_SCALE, MAX_SCALE};
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        let rect = h.m.card(&ids[0]).unwrap().rect;
+        let size = h.m.view_size;
+        assert_eq!(
+            h.m.fit_viewport(rect),
+            fit_rect_with(rect, size, FIT_PADDING, MAX_FIT_SCALE),
+            "defaults are the old fit"
+        );
+        h.m.apply_settings_text(r#"{"ui.fitPadding": 0, "ui.fitMagnify": true}"#);
+        assert_eq!(
+            h.m.fit_viewport(rect),
+            fit_rect_with(rect, size, 0., MAX_SCALE)
+        );
+        // A card smaller than the window grows past 100% only when asked.
+        let small = crate::grid::Rect {
+            x: 0.,
+            y: 0.,
+            w: 100.,
+            h: 100.,
+        };
+        assert!(h.m.fit_viewport(small).scale > 1.);
+        h.m.apply_settings_text(r#"{"ui.fitPadding": 0}"#);
+        assert_eq!(h.m.fit_viewport(small).scale, 1.);
+    }
+
     fn edit_from(h: &mut Harness, card: Option<&str>, path: &str) -> crate::cli::CliReply {
         h.m.run_ift(
             &crate::cli::CliRequest {
