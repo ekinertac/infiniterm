@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-03
+
+- `ui.backgroundImage` puts a picture behind the canvas: three come with the app (`"dusk"`, `"aurora"`, `"ember"`) or give a path to your own; `ui.backgroundImageFit` is `cover` (default) or `contain`. Turn the grid off with `ui.showGrid` if the lines get in the way.
+
 ### 2026-10-02
 
 - `ui.windowOpacity` (0.1 to 1) makes the window see-through: the canvas, title bar and status bar fade while cards stay solid. `ui.windowBlur` blurs what is behind it.

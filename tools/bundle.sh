@@ -48,6 +48,10 @@ cp assets/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 [ -d assets/themes ] || { echo "bundle: assets/themes is missing" >&2; exit 1; }
 mkdir -p "$app/Contents/Resources/themes"
 ditto assets/themes "$app/Contents/Resources/themes"
+# The pictures ui.backgroundImage can name (assets/backgrounds, #97).
+[ -d assets/backgrounds ] || { echo "bundle: assets/backgrounds is missing" >&2; exit 1; }
+mkdir -p "$app/Contents/Resources/backgrounds"
+ditto assets/backgrounds "$app/Contents/Resources/backgrounds"
 plist="$app/Contents/Info.plist"
 for kv in "CFBundleIconFile AppIcon" "CFBundleIconName AppIcon" "CFBundleName infiniterm" "LSMinimumSystemVersion 13.0"; do
     set -- $kv

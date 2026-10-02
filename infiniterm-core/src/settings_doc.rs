@@ -279,6 +279,18 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["Blur what is behind the window. Only does anything while ui.windowOpacity is below 1."],
     ),
     (
+        "ui.backgroundImage",
+        &[
+            "A picture behind the canvas: the name of one that comes with the app (\"dusk\",",
+            "\"aurora\", \"ember\") or a path to your own, \"~\" allowed. Empty for none. It is",
+            "drawn opaque, so ui.windowOpacity does not show the desktop through it.",
+        ],
+    ),
+    (
+        "ui.backgroundImageFit",
+        &["\"cover\" fills the window and crops the edges; \"contain\" shows the whole picture."],
+    ),
+    (
         "ui.showGrid",
         &["Draw the canvas grid. Off leaves the canvas background plain."],
     ),

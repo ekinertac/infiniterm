@@ -98,6 +98,15 @@ pub struct Terminal {
     pub env: Vec<String>,
 }
 
+/// How the background picture fills the window (`ui.backgroundImageFit`,
+/// #97): `cover` fills it and crops, `contain` shows all of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundFit {
+    Cover,
+    Contain,
+}
+
 /// A card label's corner (`ui.cardLabelPosition`). Written "top right";
 /// "right top" reads the same (`label_corner`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -241,6 +250,9 @@ pub struct Ui {
     pub window_opacity: f64,
     /// Blur what is behind a see-through window; nothing at opacity 1.
     pub window_blur: bool,
+    /// A bundled picture's name or a path; empty for none (#97).
+    pub background_image: String,
+    pub background_image_fit: BackgroundFit,
     /// Whether the canvas draws its grid (#96).
     pub show_grid: bool,
     /// Screen pixels left around a card or cluster when it is fitted (#87).
@@ -351,6 +363,8 @@ pub fn default_config() -> Config {
             unfocused_dim: 0.4,
             window_opacity: 1.,
             window_blur: false,
+            background_image: String::new(),
+            background_image_fit: BackgroundFit::Cover,
             show_grid: true,
             fit_padding: FIT_PADDING,
             fit_magnify: false,
@@ -605,6 +619,16 @@ pub fn merge_config(raw: &Value) -> Config {
             unfocused_dim: num(u.get("unfocusedDim"), d.ui.unfocused_dim, 0., 1.),
             window_opacity: num(u.get("windowOpacity"), d.ui.window_opacity, 0.1, 1.),
             window_blur: bool_(u.get("windowBlur"), d.ui.window_blur),
+            background_image: u
+                .get("backgroundImage")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+            background_image_fit: match u.get("backgroundImageFit").and_then(Value::as_str) {
+                Some(s) if s.eq_ignore_ascii_case("contain") => BackgroundFit::Contain,
+                _ => BackgroundFit::Cover,
+            },
             show_grid: bool_(u.get("showGrid"), d.ui.show_grid),
             fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
             fit_magnify: bool_(u.get("fitMagnify"), d.ui.fit_magnify),
@@ -983,6 +1007,22 @@ mod tests {
         assert_eq!(m(json!({"ui.windowOpacity": 0})).ui.window_opacity, 0.1);
         assert_eq!(m(json!({"ui.windowOpacity": 3})).ui.window_opacity, 1.);
         assert!(m(json!({"ui.windowBlur": true})).ui.window_blur);
+    }
+
+    #[test]
+    fn the_background_image_settings_default_to_none_and_cover() {
+        let ui = m(json!({})).ui;
+        assert_eq!(ui.background_image, "");
+        assert_eq!(ui.background_image_fit, BackgroundFit::Cover);
+        let ui = m(json!({"ui.backgroundImage": " dusk ", "ui.backgroundImageFit": "Contain"})).ui;
+        assert_eq!(ui.background_image, "dusk");
+        assert_eq!(ui.background_image_fit, BackgroundFit::Contain);
+        assert_eq!(
+            m(json!({"ui.backgroundImageFit": "stretch"}))
+                .ui
+                .background_image_fit,
+            BackgroundFit::Cover
+        );
     }
 
     #[test]

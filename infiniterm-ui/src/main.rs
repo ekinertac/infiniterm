@@ -271,6 +271,8 @@ pub struct AppView {
     pub window_seen: Option<window_state::WindowState>,
     pub window_save_due: Option<f64>,
     pub themes_dir: std::path::PathBuf,
+    /// The pictures `ui.backgroundImage` can name: the bundle's, else the checkout's.
+    pub backgrounds_dir: Option<std::path::PathBuf>,
     pub scale_factor: f32,
     /// CEF initialised in this process: browser cards can open surfaces.
     pub cef_running: bool,

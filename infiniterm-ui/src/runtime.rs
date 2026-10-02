@@ -99,6 +99,7 @@ impl AppView {
             window_save_due: None,
             frame_rate: Default::default(),
             themes_dir: PathBuf::new(),
+            backgrounds_dir: AppView::bundled_backgrounds(),
             scale_factor,
             cef_running: false,
             reduce_motion: false,
@@ -123,6 +124,21 @@ impl AppView {
             return Some(in_bundle);
         }
         let dev = home_dir().join("Code/infiniterm-tauri/src-tauri/resources/themes");
+        dev.is_dir().then_some(dev)
+    }
+
+    /// The bundle's `backgrounds`, else this checkout's while developing.
+    fn bundled_backgrounds() -> Option<PathBuf> {
+        let exe = std::env::current_exe().ok()?;
+        let in_bundle = exe
+            .parent()?
+            .parent()?
+            .join("Resources")
+            .join("backgrounds");
+        if in_bundle.is_dir() {
+            return Some(in_bundle);
+        }
+        let dev = home_dir().join("Code/infiniterm/assets/backgrounds");
         dev.is_dir().then_some(dev)
     }
 
