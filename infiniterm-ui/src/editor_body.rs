@@ -57,6 +57,11 @@ struct VRow {
 /// The terminal host's inset, so the first column lines up across cards.
 const PAD_X: f64 = 8.;
 const PAD_Y: f64 = 6.;
+/// The status bar under the text, in lines: a line of text and some air,
+/// the height VS Code and Zed give theirs.
+const STATUS_HEIGHT_LINES: f64 = 1.4;
+/// Spaces between the status bar's fields on the right.
+const STATUS_FIELD_GAP: &str = "   ";
 /// A blink is slower than the terminal's: CodeMirror's 1200 ms period.
 const BLINK_MS: f64 = 600.;
 const DISK_POLL_MS: f64 = 2000.;
@@ -230,6 +235,12 @@ pub struct EditorBody {
     pub sidebar_w: f64,
     pub sidebar_top: bool,
     selecting: bool,
+    /// The file on disk had Windows line endings, for the status bar.
+    crlf: bool,
+    /// Selected text in the status bar, as (anchor, end) columns of the
+    /// bar's line (`status_line`); `selecting_status` while it is dragged.
+    status_sel: Option<(usize, usize)>,
+    selecting_status: bool,
     /// The rows visible at the last paint, for scrolling the cursor into view.
     rows_visible: usize,
     /// A `go_to_line` that ran before the first paint, when `rows_visible`
@@ -312,6 +323,9 @@ impl EditorBody {
             sidebar_w: 0.,
             sidebar_top: false,
             selecting: false,
+            crlf: false,
+            status_sel: None,
+            selecting_status: false,
             rows_visible: 1,
             centre_pending: false,
             shaped: HashMap::new(),
@@ -370,6 +384,7 @@ impl EditorBody {
         }
         match file_read(path) {
             Ok(text) => {
+                self.crlf = text.contains("\r\n");
                 self.saved = text.clone();
                 self.disk_stamp = file_mtime(path);
                 let draft = if with_draft {
@@ -873,7 +888,153 @@ impl EditorBody {
         }
         y += self.panel_h();
         h -= self.panel_h();
+        if self.image.is_none() {
+            h -= self.status_h();
+        }
         (Point { x, y }, Size { w, h })
+    }
+
+    fn status_h(&self) -> f64 {
+        self.line_h() * STATUS_HEIGHT_LINES
+    }
+
+    /// The facts the status bar reports (`infiniterm_editor::status`).
+    fn status(&self) -> infiniterm_editor::status::Status {
+        let cursor = self.buffer.cursor();
+        let selected = self
+            .buffer
+            .all_selections()
+            .iter()
+            .filter_map(|(c, a)| a.map(|a| a.abs_diff(*c)))
+            .sum();
+        infiniterm_editor::status::Status {
+            path: self.path.clone(),
+            line: self.buffer.line_of(cursor) + 1,
+            col: self.buffer.col_of(cursor) + 1,
+            language: self.language,
+            selected,
+            cursors: self.buffer.cursor_count(),
+            indent: infiniterm_editor::status::Indent::Spaces2,
+            crlf: self.crlf,
+            read_only: self.read_only,
+        }
+    }
+
+    /// The bar as one line of `cols` monospace cells: the path on the left,
+    /// the fields on the right, the path cut from its front with an ellipsis
+    /// when both do not fit. One line so a selection is a range of columns.
+    fn status_line(&self, cols: usize) -> Vec<char> {
+        let s = self.status();
+        let home = std::env::var("HOME").unwrap_or_default();
+        let left: Vec<char> = infiniterm_editor::status::left(&s, home.trim_end_matches('/'))
+            .chars()
+            .collect();
+        let right: Vec<char> = infiniterm_editor::status::right(&s)
+            .join(STATUS_FIELD_GAP)
+            .chars()
+            .collect();
+        let room = cols.saturating_sub(right.len() + STATUS_FIELD_GAP.len());
+        let left: Vec<char> = if left.len() > room {
+            let keep = room.saturating_sub(1);
+            std::iter::once('…')
+                .chain(left[left.len() - keep..].iter().copied())
+                .take(room)
+                .collect()
+        } else {
+            left
+        };
+        let mut line = left;
+        let pad = cols.saturating_sub(line.len() + right.len());
+        line.extend(std::iter::repeat_n(' ', pad));
+        line.extend(right);
+        line
+    }
+
+    fn status_cols(&self, world: Size) -> usize {
+        let (_, size) = self.text_area(world);
+        ((size.w - PAD_X * 2.) / self.metrics.cell_w)
+            .floor()
+            .max(0.) as usize
+    }
+
+    /// The column of the bar under `local`, or `None` when it is not on the bar.
+    fn status_col_at(&self, local: Point, world: Size) -> Option<usize> {
+        if self.image.is_some() {
+            return None;
+        }
+        let (o, size) = self.text_area(world);
+        let top = o.y + size.h;
+        if local.y < top || local.y > top + self.status_h() || local.x < o.x {
+            return None;
+        }
+        Some(
+            ((local.x - o.x - PAD_X) / self.metrics.cell_w)
+                .floor()
+                .max(0.) as usize,
+        )
+    }
+
+    /// The selected text of the bar, trimmed, when there is any.
+    fn status_selection(&self) -> Option<String> {
+        let (a, b) = self.status_sel?;
+        let (a, b) = (a.min(b), a.max(b));
+        let line = self.status_line(self.status_cols(self.world));
+        let text: String = line.get(a..b.min(line.len()))?.iter().collect();
+        let text = text.trim().to_string();
+        (!text.is_empty()).then_some(text)
+    }
+
+    fn paint_status(&self, bounds: Bounds<Pixels>, scale: f64, window: &mut Window, cx: &mut App) {
+        let s = |v: f64| px((v * scale) as f32);
+        let (o, area) = self.text_area(self.world);
+        let bar = Bounds::new(
+            point(bounds.origin.x + s(o.x), bounds.origin.y + s(o.y + area.h)),
+            size(s(area.w), s(self.status_h())),
+        );
+        // A hairline over it in the gutter's colour: the bar is chrome, not text.
+        window.paint_quad(fill(
+            Bounds::new(
+                bar.origin,
+                size(
+                    bar.size.width,
+                    px((scale as f32).max(crate::chrome::HAIRLINE_PX as f32)),
+                ),
+            ),
+            hex(&self.colors.gutter).opacity(0.35),
+        ));
+        let line = self.status_line(self.status_cols(self.world));
+        let text: String = line.iter().collect();
+        let font_size = px((self.metrics.font_px * scale) as f32);
+        let line_h = px((self.line_h() * scale) as f32);
+        let x0 = bar.origin.x + s(PAD_X);
+        let y0 = bar.origin.y + (bar.size.height - line_h) / 2.;
+        if let Some((a, b)) = self.status_sel {
+            let (a, b) = (a.min(b), a.max(b).min(line.len()));
+            if b > a {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(x0 + s(self.metrics.cell_w * a as f64), y0),
+                        size(s(self.metrics.cell_w * (b - a) as f64), line_h),
+                    ),
+                    hex(&self.colors.selection),
+                ));
+            }
+        }
+        let run = TextRun {
+            len: text.len(),
+            font: self.metrics.font(),
+            color: hex(&self.colors.gutter),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        // Painted cell by cell from one shape, like the terminal, so the
+        // selection's columns line up with the glyphs.
+        let shaped =
+            window
+                .text_system()
+                .shape_line(SharedString::from(text), font_size, &[run], None);
+        let _ = shaped.paint(point(x0, y0), line_h, window, cx);
     }
 
     fn cols_visible(&self, world: Size) -> usize {
@@ -1096,9 +1257,13 @@ impl EditorBody {
                 // A whole line, unselected, is what Sublime's
                 // `copy_with_empty_selection` copies and cuts.
                 "c" => {
-                    let t = self.buffer.selected_text().or_else(|| {
-                        Some(self.buffer.line(self.buffer.line_of(self.buffer.cursor())))
-                    });
+                    // Text selected in the status bar is the copy, when there is some.
+                    let t = self
+                        .status_selection()
+                        .or_else(|| self.buffer.selected_text())
+                        .or_else(|| {
+                            Some(self.buffer.line(self.buffer.line_of(self.buffer.cursor())))
+                        });
                     if let Some(t) = t {
                         cx.write_to_clipboard(ClipboardItem::new_string(t));
                     }
@@ -2295,6 +2460,9 @@ impl CardBody for EditorBody {
         }
         // Keep the shaping cache to the visible lines.
         self.shaped.retain(|(l, _), _| *l >= first && *l < last);
+        if legible {
+            self.paint_status(bounds, scale, window, cx);
+        }
     }
 
     fn caret_bounds(&self) -> Option<Bounds<Pixels>> {
@@ -2320,6 +2488,22 @@ impl CardBody for EditorBody {
             return BodyAction::None;
         }
         let world = self.world;
+        // The status bar: its text selects like any text, a double-click
+        // takes one field whole (the path, "Ln 3, Col 9"), Cmd+C copies it.
+        if let Some(col) = self.status_col_at(local, world) {
+            self.status_sel = if clicks >= 2 {
+                let line = self.status_line(self.status_cols(world));
+                Some(field_around(&line, col))
+            } else {
+                Some((col, col))
+            };
+            self.selecting_status = clicks < 2;
+            self.dirty = true;
+            return BodyAction::None;
+        }
+        if self.status_sel.take().is_some() {
+            self.dirty = true;
+        }
         // The tree.
         if let Some(tree) = &self.tree {
             let in_tree = if self.sidebar_top {
@@ -2412,9 +2596,21 @@ impl CardBody for EditorBody {
         _modifiers: &gpui::Modifiers,
     ) {
         self.selecting = false;
+        self.selecting_status = false;
     }
 
     fn mouse_move(&mut self, local: Point, _modifiers: &gpui::Modifiers) {
+        if self.selecting_status {
+            let (o, _) = self.text_area(self.world);
+            let col = ((local.x - o.x - PAD_X) / self.metrics.cell_w)
+                .floor()
+                .max(0.) as usize;
+            if let Some((a, _)) = self.status_sel {
+                self.status_sel = Some((a, col));
+                self.dirty = true;
+            }
+            return;
+        }
         if self.selecting {
             let world = self.world;
             let idx = self.index_at(local, world);
@@ -2442,7 +2638,7 @@ impl CardBody for EditorBody {
     }
 
     fn captures_drag(&self) -> bool {
-        self.selecting
+        self.selecting || self.selecting_status
     }
 
     fn resized(&mut self, world: Size) {
@@ -2545,9 +2741,51 @@ fn recolor(runs: Vec<TextRun>, a: usize, b: usize, color: Hsla) -> Vec<TextRun> 
     out
 }
 
+/// The field of the status bar around `col`: the run of text between two
+/// gaps of two or more spaces, so a double-click takes "Ln 3, Col 9" or the
+/// whole path, never one word of it.
+fn field_around(line: &[char], col: usize) -> (usize, usize) {
+    if line.is_empty() {
+        return (0, 0);
+    }
+    let col = col.min(line.len() - 1);
+    let gap = |i: usize| {
+        line[i] == ' ' && (line.get(i + 1) == Some(&' ') || (i > 0 && line[i - 1] == ' '))
+    };
+    if gap(col) {
+        return (col, col);
+    }
+    let mut a = col;
+    while a > 0 && !gap(a - 1) {
+        a -= 1;
+    }
+    let mut b = col;
+    while b < line.len() && !gap(b) {
+        b += 1;
+    }
+    (a, b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_double_click_on_the_status_bar_takes_one_field_whole() {
+        let line: Vec<char> = "~/Code/a b.rs      Ln 3, Col 9   UTF-8".chars().collect();
+        let field = |col| {
+            let (a, b) = field_around(&line, col);
+            line[a..b].iter().collect::<String>()
+        };
+        assert_eq!(
+            field(2),
+            "~/Code/a b.rs",
+            "one space inside a field does not split it"
+        );
+        assert_eq!(field(22), "Ln 3, Col 9");
+        assert_eq!(field(36), "UTF-8");
+        assert_eq!(field_around(&line, 15), (15, 15), "a gap selects nothing");
+    }
 
     fn run(len: usize) -> TextRun {
         TextRun {
