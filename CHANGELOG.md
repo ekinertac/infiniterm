@@ -6,17 +6,26 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-02
+## 0.5.0 (build 523), 2026-10-02
+
+### App
+
+- A new app icon: four cards whose borders are the four card states, violet, yellow, red and green. Designed by Tarık Kavaz.
+
+### Canvas
+
+- `"ui.maximised": true` keeps the focused card filling the window, through new cards, closes, workspace switches and focus moves: one card at a time with the canvas behind it. Cmd+2 still shows the whole canvas, and Cmd+Shift+Enter turns it off for the session.
+- The card label can sit in any corner (`ui.cardLabelPosition`: "top right", the default, "top left", "bottom left", "bottom right"), and `ui.hideLabelWhenMaximised` leaves it off a maximised card.
+- The cursor is a closed hand while you pan the canvas with Cmd+drag or the middle button.
+
+### Editor
 
 - "Editor: open a file" opens the macOS file panel instead of asking for a typed path; a file opens in an editor card, a folder with its tree.
-- Two settings for the card label: `ui.cardLabelPosition` puts it in any corner ("top right", the default, "top left", "bottom left", "bottom right"), and `ui.hideLabelWhenMaximised` leaves it off a maximised card.
-- In the shortcuts panel (Cmd+/), Up and Down highlight a command and Cmd+C copies its id, ready for keybindings.json; a click highlights a row too.
-- The shortcuts panel (Cmd+/) shows each command's id beside its name, the string keybindings.json binds, and finds a command by it.
-- The theme picker marks the theme you have with "active" and a line under it, then lists the rest A to Z; it no longer reorders by the themes you picked recently.
-- The theme picker keeps its order while you move through it; it re-sorted on every preview, so the highlighted row and the theme being shown drifted apart.
-- A setting for working one card at a time: with `"ui.maximised": true` the focused card always fills the window, through new cards, closes, workspace switches and focus moves. Cmd+2 still shows the whole canvas, and Cmd+Shift+Enter turns it off for the session.
-- The cursor is a closed hand while you pan the canvas with Cmd+drag or the middle button, as it is while you drag a card.
-- A new app icon: four cards whose borders are the four card states, violet, yellow, red and green.
+
+### Shortcuts and themes
+
+- The shortcuts panel (Cmd+/) shows each command's id, the string keybindings.json binds, and finds a command by it. Up and Down highlight a command and Cmd+C copies its id.
+- The theme picker marks the theme you have with "active" and a line under it, then lists the rest A to Z, and keeps its order while you preview; it used to re-sort on every move, so the highlighted row and the theme shown drifted apart.
 
 ## 0.4.1 (build 487), 2026-10-02
 
