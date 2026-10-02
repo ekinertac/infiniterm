@@ -253,6 +253,8 @@ pub struct Ui {
     /// A bundled picture's name or a path; empty for none (#97).
     pub background_image: String,
     pub background_image_fit: BackgroundFit,
+    /// Alpha of a card's background fill, text untouched (#98).
+    pub card_opacity: f64,
     /// Whether the canvas draws its grid (#96).
     pub show_grid: bool,
     /// Screen pixels left around a card or cluster when it is fitted (#87).
@@ -365,6 +367,7 @@ pub fn default_config() -> Config {
             window_blur: false,
             background_image: String::new(),
             background_image_fit: BackgroundFit::Cover,
+            card_opacity: 1.,
             show_grid: true,
             fit_padding: FIT_PADDING,
             fit_magnify: false,
@@ -629,6 +632,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 Some(s) if s.eq_ignore_ascii_case("contain") => BackgroundFit::Contain,
                 _ => BackgroundFit::Cover,
             },
+            card_opacity: num(u.get("cardOpacity"), d.ui.card_opacity, 0.1, 1.),
             show_grid: bool_(u.get("showGrid"), d.ui.show_grid),
             fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
             fit_magnify: bool_(u.get("fitMagnify"), d.ui.fit_magnify),
@@ -1023,6 +1027,14 @@ mod tests {
                 .background_image_fit,
             BackgroundFit::Cover
         );
+    }
+
+    #[test]
+    fn card_opacity_defaults_opaque_and_clamps() {
+        assert_eq!(m(json!({})).ui.card_opacity, 1.);
+        assert_eq!(m(json!({"ui.cardOpacity": 0.7})).ui.card_opacity, 0.7);
+        assert_eq!(m(json!({"ui.cardOpacity": 0})).ui.card_opacity, 0.1);
+        assert_eq!(m(json!({"ui.cardOpacity": 2})).ui.card_opacity, 1.);
     }
 
     #[test]

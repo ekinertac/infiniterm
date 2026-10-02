@@ -778,7 +778,10 @@ impl CardBody for TerminalBody {
         let t = std::time::Instant::now();
         self.refresh_links(&frame, &rebuilt);
         timing_add(1, t);
-        window.paint_quad(fill(bounds, rgb(self.palette.background)));
+        window.paint_quad(fill(
+            bounds,
+            crate::chrome::card_fill(cx, rgb(self.palette.background)),
+        ));
         let font_size = px((self.font_px * scale) as f32);
         let line_h = px((self.font_px * self.line_height * scale) as f32);
         let cell_w = px((self.cell_w * scale) as f32);

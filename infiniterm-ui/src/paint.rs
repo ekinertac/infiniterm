@@ -319,6 +319,10 @@ impl AppView {
         let chrome = self.chrome.clone();
         window.paint_quad(fill(bounds, self.window_fill(chrome.canvas_bg)));
         self.paint_background(bounds, window, cx);
+        let opacity = crate::chrome::CardOpacity(self.model.config.ui.card_opacity as f32);
+        if cx.try_global::<crate::chrome::CardOpacity>() != Some(&opacity) {
+            cx.set_global(opacity);
+        }
         // Another app is in front: a glance must say keys are going
         // elsewhere. Every card ends up washed ONCE: the canvas here, under
         // the cards; the focused card over its body, below; an unfocused

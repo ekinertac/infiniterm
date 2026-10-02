@@ -496,7 +496,7 @@ impl CardBody for DiffBody {
         };
         self.world = world;
         let bg = hex(&self.colors.background);
-        window.paint_quad(fill(bounds, bg));
+        window.paint_quad(fill(bounds, crate::chrome::card_fill(cx, bg)));
         let s = |v: f64| px((v * scale) as f32);
         let font_size = px((self.metrics.font_px * scale) as f32);
         let line_h = px((self.line_h() * scale) as f32);
