@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-01
 
+- Editor cards have a status bar: the file's path on the left, and the line and column, the selection size, the cursor count, the indentation, the encoding, the line endings and the language on the right. Its text selects like any text, a double-click takes one field whole, and `Cmd C` copies it.
 - A first launch opens a "Start here" card beside the first terminal: the keys to start with, the mouse gestures, what the border colours mean, and which coding agents on your Mac are wired, with the one command for each that is not. "Help: open the welcome card" in the palette brings it back.
 - The docs are in the app: "Help: open the docs" opens the same pages as infiniterm.app in a read-only card, the list of pages beside it and `Cmd F` to search. They come with each build, so they match the version you run, offline.
 - Clicking into a read-only file (the welcome card, the settings and keybindings defaults) no longer takes the keyboard away from the canvas: there is nothing to type there. `Cmd C` still copies the selection, or the line under the caret.
