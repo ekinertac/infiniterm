@@ -312,7 +312,7 @@ impl AppView {
 
         // The grid, one line per world coordinate, +0.5 so a 1 px stroke sits
         // on a pixel rather than straddling two.
-        if is_grid_visible(vp.scale) {
+        if self.model.config.ui.show_grid && is_grid_visible(vp.scale) {
             let hairline = px(crate::chrome::HAIRLINE_PX as f32);
             for x in grid_line_offsets(vp.x, view.w, vp.scale) {
                 let sx = origin.x + px(x.round() as f32 + GRID_LINE_SNAP_OFFSET);
