@@ -258,9 +258,23 @@ impl AppView {
                 w: card.rect.w,
                 h: card.rect.h,
             };
-            let body = self.bodies.entry(card.id.clone()).or_insert_with(|| {
-                Box::new(PageBody::new(path.clone(), &metrics, colors.clone(), world))
-            });
+            // Replaced, not merely inserted: `paint` puts a `Blank` in every
+            // card's slot before the bodies are built, and keeping it drew
+            // an empty page.
+            let built = self
+                .bodies
+                .get_mut(&card.id)
+                .and_then(|b| b.as_any_mut().downcast_mut::<PageBody>())
+                .is_some();
+            if !built {
+                self.bodies.insert(
+                    card.id.clone(),
+                    Box::new(PageBody::new(path.clone(), &metrics, colors.clone(), world)),
+                );
+            }
+            let Some(body) = self.bodies.get_mut(&card.id) else {
+                continue;
+            };
             let Some(body) = body.as_any_mut().downcast_mut::<PageBody>() else {
                 continue;
             };
