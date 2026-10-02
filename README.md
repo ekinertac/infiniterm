@@ -43,6 +43,7 @@ Needs Rust, the CEF binary distribution under `~/.local/share/cef` and a checkou
 
 ```sh
 make run          # build, bundle, launch on a scratch data dir
+make run-clean    # the same with empty settings, as a new user sees it
 make check        # fmt, clippy, tests
 make release      # optimised bundle in target/bundle/infiniterm.app
 ```

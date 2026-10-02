@@ -74,7 +74,7 @@ Outside infiniterm the variable is unset and your usual history file is used.
 
 ## Updates
 
-The app checks for a new build at launch and every six hours. A newer build is downloaded, its signature and notarization are checked, and it is installed the next time the app restarts. The status bar says "update N ready" until then. "Check for Updates…" in the app menu checks now.
+The app checks for a new build at launch and every six hours. A newer build is downloaded, its signature and notarization are checked, and it is installed the next time the app restarts. The status bar says "update N ready" until then. "Check for Updates…" in the app menu checks now. "About infiniterm" in the app menu (or "App: about infiniterm" in the palette) shows the version and build you are running.
 
 The check is a plain GET of `latest.json` with nothing about you in it.
 

@@ -45,9 +45,13 @@ Canvas: tidy, in the palette, packs the cards back onto the grid in reading orde
 
 Zoomed far out, text is drawn as bars, one per word, so a full card still reads as full. The line is set by what the screen can draw, not a fixed zoom level.
 
-### One card at a time
+### Maximising a card
 
-`"ui.maximised": true` in your settings keeps the focused card filling the window: through new cards, closes, workspace switches and moving between cards, the card you are on is the whole screen and the canvas sits behind it. `Cmd 2` still shows the whole canvas to look around, and the next move to a card goes back to full window. `Cmd Shift Enter` turns it off until the app restarts. `"ui.hideLabelWhenMaximised": true` leaves the card's label off while it fills the window.
+`Cmd Shift Enter` makes the focused card fill the window, and pressing it again puts the card back. `"ui.hideLabelWhenMaximised": true` leaves the card's label off while it fills the window.
+
+### How a fit frames the cards
+
+Every fit (`Cmd 1`, `Cmd 2`, `Cmd 3`, the double-clicks) leaves `"ui.fitPadding"` pixels around what it frames, 48 by default; `0` lets the cards touch the window's edges. A fit never zooms past 100%, so a small card stays its own size in the middle of the window; `"ui.fitMagnify": true` lifts that, and a fit then zooms in until the card fills the window.
 
 Interface size is separate from zoom: `Cmd Shift =` and `Cmd Shift -` make the app's own chrome (labels, title bar, status bar, palette, dialogs) bigger or smaller, never terminal text.
 
@@ -73,6 +77,8 @@ While a dialog, the palette, the address bar or the shortcuts panel is open, it 
 A group is a named frame around a set of cards: `Cmd G` groups the focused card, `Cmd Shift G` dissolves its group, `Cmd [` and `Cmd ]` step between groups.
 
 A workspace is a separate canvas with a tab in the title bar. `Cmd Shift N` makes one, `Ctrl 1` to `Ctrl 9` jump to one, `Cmd Shift [` and `Cmd Shift ]` step. Each tab wears one dot per card, in the cards' reading order, lit in the card's state colour, so you can see from another workspace that something there wants you.
+
+With `"ui.workspaceIsolation": true`, `Ctrl Tab` walks only the current workspace's cards and the status bar counts only them; the palette still lists every card, so it stays the way across.
 
 "Card: move to workspace…" in the palette sends the focused card, or the selection, to another workspace or a new one. The card takes a free slot there and you stay where you are.
 
