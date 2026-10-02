@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-02
 
+- The cursor is a closed hand while you pan the canvas with Cmd+drag or the middle button, as it is while you drag a card.
 - A new app icon: four cards whose borders are the four card states, violet, yellow, red and green.
 
 ## 0.4.1 (build 487), 2026-10-02

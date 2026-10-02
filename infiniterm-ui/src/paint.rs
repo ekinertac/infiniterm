@@ -193,7 +193,11 @@ impl AppView {
             };
             window.set_window_cursor_style(style);
         }
-        if self.gesture.is_some() {
+        // Holding something: a card, a group, a selection, or the canvas
+        // itself while a Cmd+drag or a middle-button drag pans it (#60; a
+        // pan kept the arrow, as if nothing were held). A press that has
+        // not moved yet is not a pan: a Cmd+click is still a link click.
+        if self.gesture.is_some() || matches!(self.pan, Some(crate::Pan::Dragging(_))) {
             window.set_window_cursor_style(gpui::CursorStyle::ClosedHand);
         }
         let t2 = std::time::Instant::now();
