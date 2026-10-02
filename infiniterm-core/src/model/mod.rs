@@ -449,6 +449,8 @@ pub enum Pending {
         path: String,
         then_close: Option<(Vec<String>, bool)>,
     },
+    /// The About window (`app.about`): yes is "Check for Updates".
+    About,
     /// `editor.goToLine`: the number typed lands in `card.line` for the body.
     GoToLine(String),
 }

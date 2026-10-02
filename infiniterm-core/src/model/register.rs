@@ -1070,6 +1070,31 @@ mod tests {
         assert!(h.m.card(&id).is_none(), "confirmed: closed");
     }
 
+    // #90: `app.about` opens the About window; its action asks for an update
+    // check and Close asks for nothing.
+    #[test]
+    fn about_opens_and_its_action_checks_for_updates() {
+        let mut h = Harness::new();
+        h.run("app.about");
+        assert!(h.m.prompt.is_open() && h.m.prompt.about);
+        let (pending, text) = h.m.prompt.settle(Some("")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert!(h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::CheckForUpdate)));
+        h.m.effects.clear();
+        h.run("app.about");
+        let (pending, text) = h.m.prompt.settle(None).unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert!(!h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::CheckForUpdate)));
+    }
+
     // Grouping moves the selection to a free block right of the grid, as one block.
     #[test]
     fn grouping_names_the_group_and_moves_the_cards_together() {

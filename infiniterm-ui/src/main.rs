@@ -305,7 +305,8 @@ actions!(
         Zoom,
         ToggleFullScreen,
         ShowCharacterPalette,
-        CheckForUpdates
+        CheckForUpdates,
+        AboutApp
     ]
 );
 
@@ -405,6 +406,8 @@ fn main() {
             Menu {
                 name: "infiniterm".into(),
                 items: vec![
+                    MenuItem::action("About infiniterm", AboutApp),
+                    MenuItem::separator(),
                     // Where a Mac user looks for it; handled on the view
                     // (overlays.rs), which runs `app.update.check`.
                     MenuItem::action("Check for Updates…", CheckForUpdates),
