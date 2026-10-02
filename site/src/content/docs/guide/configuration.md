@@ -40,7 +40,7 @@ Comments and trailing commas are allowed. Every setting is on the [settings refe
 
 A binding set to `null` is removed, which gives the key back to the terminal. Every chord must hold `cmd`, with two exceptions: `ctrl` plus a digit, and `ctrl+tab`. A terminal needs Ctrl, Alt and bare keys for itself, but Ctrl plus a digit mostly means nothing to a shell. (On an xterm-compatible terminal `Ctrl 3` sends Escape; if you live in vim, rebind it.)
 
-Chords follow the physical key, not the character your layout prints on it, so `cmd+=` is the key right of `-` on every keyboard. `Cmd H`, `Cmd M` and `Cmd Q` belong to the menu and cannot be rebound. Every command id is on the [commands reference](../../reference/commands/).
+Chords follow the physical key, not the character your layout prints on it, so `cmd+=` is the key right of `-` on every keyboard. `Cmd H`, `Cmd M` and `Cmd Q` belong to the menu and cannot be rebound. Every command id is on the [commands reference](../../reference/commands/). In the app, the shortcuts panel (`Cmd /`) shows each command's id beside its label and finds commands by it: Up and Down highlight one, and `Cmd C` copies its id, ready to paste into `keybindings.json`.
 
 ## Themes
 
@@ -50,7 +50,7 @@ All 500-odd schemes from iTerm2-Color-Schemes ship with the app; Violite is the 
 ~/Library/Application Support/dev.ekinertac.infiniterm/themes/
 ```
 
-"Switch theme" in the palette applies each scheme as you move through the list. `Escape` puts back the one you started on; `Enter` keeps the new one. The theme colours the app's chrome, the editor's syntax and the card labels too.
+"Switch theme" in the palette lists the theme you have first, marked active, then every other one A to Z. Each one is applied as you move through the list, and the list keeps its order while you do. `Escape` puts back the one you started on; `Enter` keeps the new one. The theme colours the app's chrome, the editor's syntax and the card labels too.
 
 ## Snippets
 

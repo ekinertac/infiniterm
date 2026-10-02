@@ -45,6 +45,10 @@ Canvas: tidy, in the palette, packs the cards back onto the grid in reading orde
 
 Zoomed far out, text is drawn as bars, one per word, so a full card still reads as full. The line is set by what the screen can draw, not a fixed zoom level.
 
+### One card at a time
+
+`"ui.maximised": true` in your settings keeps the focused card filling the window: through new cards, closes, workspace switches and moving between cards, the card you are on is the whole screen and the canvas sits behind it. `Cmd 2` still shows the whole canvas to look around, and the next move to a card goes back to full window. `Cmd Shift Enter` turns it off until the app restarts. `"ui.hideLabelWhenMaximised": true` leaves the card's label off while it fills the window.
+
 Interface size is separate from zoom: `Cmd Shift =` and `Cmd Shift -` make the app's own chrome (labels, title bar, status bar, palette, dialogs) bigger or smaller, never terminal text.
 
 ## Moving between cards
@@ -75,6 +79,8 @@ A workspace is a separate canvas with a tab in the title bar. `Cmd Shift N` make
 ## Card labels and numbers
 
 Every card has a label in its corner: the name you gave it (`Cmd Shift R`), else the running process, else the directory. It also wears a number, `#7`, the lowest one free. `ift attach 7` reaches that card's shell from any terminal.
+
+The label sits top right by default. `"ui.cardLabelPosition"` moves it to `"top left"`, `"bottom left"` or `"bottom right"` (the words in either order); a card in an ssh session shows its ssh badge at the other end of the same edge.
 
 ## Closing and protecting
 
