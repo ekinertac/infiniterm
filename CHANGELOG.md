@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-02
 
+- The shortcuts panel (Cmd+/) shows each command's id beside its name, the string keybindings.json binds, and finds a command by it.
 - The theme picker marks the theme you have with "active" and a line under it, then lists the rest A to Z; it no longer reorders by the themes you picked recently.
 - The theme picker keeps its order while you move through it; it re-sorted on every preview, so the highlighted row and the theme being shown drifted apart.
 - A setting for working one card at a time: with `"ui.maximised": true` the focused card always fills the window, through new cards, closes, workspace switches and focus moves. Cmd+2 still shows the whole canvas, and Cmd+Shift+Enter turns it off for the session.
