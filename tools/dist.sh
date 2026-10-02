@@ -35,9 +35,12 @@ rm -rf "$out"
 mkdir -p "$out"
 
 # notarytool's exit status is 0 for an Invalid submission too; the status
-# line is the answer, and the log is what says why.
+# line is the answer, and the log is what says why. Its status is caught
+# with `|| true`: under `set -e` a failing `$(...)` ended the script before
+# the result was printed, and an expired Apple agreement (HTTP 403) showed
+# as nothing but "Error 1" (#35).
 notarize() {
-    result=$(xcrun notarytool submit "$1" --keychain-profile AC_PASSWORD --wait 2>&1)
+    result=$(xcrun notarytool submit "$1" --keychain-profile AC_PASSWORD --wait 2>&1) || true
     echo "$result" | tail -3
     if ! echo "$result" | grep -q "status: Accepted"; then
         id=$(echo "$result" | sed -n 's/^ *id: //p' | head -1)
