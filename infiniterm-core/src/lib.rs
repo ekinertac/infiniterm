@@ -7,6 +7,8 @@ pub mod viewport;
 
 pub mod grid;
 
+pub mod background;
+
 pub mod layout;
 
 pub mod resize;
