@@ -805,6 +805,20 @@ pub fn startup(app: &mut AppView) {
         if let Err(e) = written {
             eprintln!("[infiniterm/warn] could not write {}: {e}", path.display());
         }
+        // The in-app docs (`help.docs`), the same pages as infiniterm.app,
+        // rewritten every launch so they match this build.
+        let dir = infiniterm_core::help_docs::docs_dir();
+        let written = std::fs::create_dir_all(&dir).and_then(|()| {
+            infiniterm_core::help_docs::files()
+                .into_iter()
+                .try_for_each(|(name, text)| std::fs::write(dir.join(name), text))
+        });
+        if let Err(e) = written {
+            eprintln!(
+                "[infiniterm/warn] could not write the docs to {}: {e}",
+                dir.display()
+            );
+        }
     }
     app.animator.animations_on = app.model.config.ui.animations && !app.reduce_motion;
     // Before any card exists: which sessions the last launch left running.

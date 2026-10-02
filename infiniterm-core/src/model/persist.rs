@@ -217,6 +217,33 @@ impl Model {
         self.layout_undo.clear();
     }
 
+    /// Opens the in-app docs (`help_docs.rs`, written by the ui at launch):
+    /// the first page, with the folder's tree beside it as the contents.
+    /// Focuses the docs card instead when one is already open.
+    pub fn open_docs(&mut self, after: Option<&str>) -> Option<String> {
+        let dir = crate::help_docs::docs_dir().to_string_lossy().into_owned();
+        let existing = self
+            .here()
+            .into_iter()
+            .find(|c| {
+                c.kind == crate::saved_layout::CardKind::Editor
+                    && c.root.as_deref() == Some(dir.as_str())
+            })
+            .map(|c| c.id.clone());
+        existing.or_else(|| {
+            let first = crate::help_docs::docs_dir().join(crate::help_docs::FIRST_PAGE);
+            self.open_in_card(
+                crate::ift::OpenPlan::Editor {
+                    cwd: dir.clone(),
+                    path: Some(first.to_string_lossy().into_owned()),
+                    root: Some(dir.clone()),
+                    line: None,
+                },
+                after,
+            )
+        })
+    }
+
     /// Opens the welcome card (`welcome::welcome_path`, written by the ui at
     /// launch) beside `after`, or focuses it when one is already open.
     pub fn open_welcome(&mut self, after: Option<&str>) -> Option<String> {

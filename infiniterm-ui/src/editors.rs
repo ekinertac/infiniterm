@@ -31,6 +31,7 @@ fn is_generated(path: &str) -> bool {
     path.ends_with("/settings.default.json")
         || path.ends_with("/keybindings.default.json")
         || std::path::Path::new(path) == infiniterm_core::welcome::welcome_path()
+        || std::path::Path::new(path).starts_with(infiniterm_core::help_docs::docs_dir())
 }
 
 impl AppView {

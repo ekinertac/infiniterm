@@ -99,7 +99,7 @@ pub fn render(keymap: &Keymap, agents: &[Agent]) -> String {
     }
     out.push_str(
         "\n## When you are done\n\n\
-         Close this card with `Cmd W`. \"Help: open the welcome card\" in the palette brings it back. \
+         Close this card with `Cmd W`. \"Help: open the welcome card\" in the palette brings it back, and \"Help: open the docs\" opens the whole manual in a card like this one. \
          The full docs are at https://infiniterm.app.\n\n\
          This file is rewritten at every launch, so edits to it do not last.\n",
     );

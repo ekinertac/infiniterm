@@ -470,6 +470,24 @@ mod tests {
     }
 
     #[test]
+    fn help_docs_opens_the_first_page_with_the_folder_beside_it() {
+        let mut h = Harness::new();
+        h.run("help.docs");
+        let dir = crate::help_docs::docs_dir().to_string_lossy().into_owned();
+        let card = h.focused().clone();
+        assert_eq!(card.kind, CardKind::Editor);
+        assert_eq!(card.root.as_deref(), Some(dir.as_str()));
+        assert!(card.explorer, "the tree is the table of contents");
+        assert!(card
+            .path
+            .as_deref()
+            .unwrap()
+            .ends_with(crate::help_docs::FIRST_PAGE));
+        h.run("help.docs");
+        assert_eq!(h.m.cards.len(), 2, "a second run focuses the open one");
+    }
+
+    #[test]
     fn help_welcome_opens_the_card_once() {
         let mut h = Harness::new();
         h.run("help.welcome");
