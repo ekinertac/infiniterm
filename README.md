@@ -16,7 +16,7 @@ Or with Homebrew:
 brew install --cask ekinertac/tap/infiniterm
 ```
 
-Or [download the DMG](https://github.com/ekinertac/infiniterm-releases/releases/latest). macOS 13 or later on Apple Silicon. Free for personal use; paid work needs a licence, $29 per person, one time. Docs at [infiniterm.app](https://infiniterm.app).
+Or [download the DMG](https://github.com/ekinertac/infiniterm/releases/latest). macOS 13 or later on Apple Silicon. Free for personal use; paid work needs a licence, $29 per person, one time. Docs at [infiniterm.app](https://infiniterm.app).
 
 ## What it is
 

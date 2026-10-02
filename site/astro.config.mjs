@@ -1,6 +1,6 @@
 // The site for infiniterm: the landing page (src/pages/index.astro) and the
 // docs (Astro + Starlight), built locally and published to GitHub Pages on
-// the public ekinertac/infiniterm-releases repo, served at infiniterm.app
+// the gh-pages branch of ekinertac/infiniterm, served at infiniterm.app
 // (public/CNAME names it for Pages; the DNS is on Cloudflare), so no base path.
 // Guide pages are hand-written; the reference pages are generated from the
 // app's own tables before every build (package.json, `reference`).
@@ -38,7 +38,7 @@ export default defineConfig({
           ],
           optionalLinks: [
             { label: 'Source', url: 'https://github.com/ekinertac/infiniterm', description: 'the code, CLAUDE.md (how it is built and why), CHANGELOG.md' },
-            { label: 'Releases', url: 'https://github.com/ekinertac/infiniterm-releases/releases/latest', description: 'signed DMG and zip; latest.json is the update feed' },
+            { label: 'Releases', url: 'https://github.com/ekinertac/infiniterm/releases/latest', description: 'signed DMG and zip; latest.json is the update feed' },
           ],
         }),
       ],
@@ -49,7 +49,7 @@ export default defineConfig({
       ],
       description: 'Terminal cards on an infinite canvas, with the state of every coding agent visible at a glance.',
       social: [
-        { icon: 'github', label: 'Releases', href: 'https://github.com/ekinertac/infiniterm-releases' },
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/ekinertac/infiniterm' },
       ],
       sidebar: [
         {

@@ -26,7 +26,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-REPO = "ekinertac/infiniterm-releases"
+REPO = "ekinertac/infiniterm"
 # At launch plus every six hours: four a day for a Mac that stays up, more
 # for one relaunched. Four keeps the estimate on the low side.
 FETCHES_PER_MAC_PER_DAY = 4

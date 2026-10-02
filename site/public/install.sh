@@ -24,7 +24,7 @@
 # tools/test-install.sh. Exit codes: 0 ok, 1 install failed, 2 bad usage.
 set -eu
 
-REPO="ekinertac/infiniterm-releases"
+REPO="ekinertac/infiniterm"
 LATEST="https://github.com/$REPO/releases/latest/download"
 TEAM='anchor apple generic and certificate leaf[subject.OU] = "QKN7RYV5PD"'
 APPS="${INFINITERM_APPS_DIR:-/Applications}"

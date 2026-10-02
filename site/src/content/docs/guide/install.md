@@ -27,7 +27,7 @@ The cask links `ift` onto your PATH too. The app updates itself, so `brew upgrad
 
 The app is signed and notarized, so Gatekeeper opens it without a warning, and it updates itself.
 
-1. Download the `.dmg` from the [latest release](https://github.com/ekinertac/infiniterm-releases/releases/latest).
+1. Download the `.dmg` from the [latest release](https://github.com/ekinertac/infiniterm/releases/latest).
 2. Open it and drag infiniterm into Applications, then launch it once.
 3. In any card, put `ift` on your PATH:
 
