@@ -52,6 +52,10 @@ All 500-odd schemes from iTerm2-Color-Schemes ship with the app; Violite is the 
 
 "Switch theme" in the palette lists the theme you have first, marked active, then every other one A to Z. Each one is applied as you move through the list, and the list keeps its order while you do. `Escape` puts back the one you started on; `Enter` keeps the new one. The theme colours the app's chrome, the editor's syntax and the card labels too.
 
+## The window and the canvas
+
+`ui.windowOpacity` (0.1 to 1) lets the desktop show through the canvas, title bar and status bar, and `ui.windowBlur` blurs it. `ui.backgroundImage` puts a picture behind the canvas: `"dusk"`, `"aurora"` or `"ember"` come with the app, or give a path to your own; `ui.backgroundImageFit` is `"cover"` (crop to fill) or `"contain"`. A picture is opaque, so it hides the desktop. `ui.cardOpacity` lets the canvas and the picture show through card backgrounds while the text stays solid; browser cards stay opaque. `"ui.showGrid": false` leaves the canvas plain.
+
 ## Snippets
 
 `Cmd Ctrl S` lists your snippets and pastes the one you pick into the focused card, the same way `Cmd V` would, so Claude takes a multi-line prompt as one block.
