@@ -14,10 +14,10 @@ import '@fontsource-variable/jetbrains-mono';
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 // One app, every feature, free for personal use; working with it needs a
 // commercial licence, one per person, one time (Ekin, 2026-09-30, replacing
-// the Lite/Pro split of ekinertac/notes#50). Sold through Lemon Squeezy:
-// until the product exists BUY_URL is empty and the button says so rather
-// than pointing nowhere.
-const BUY_URL = '';
+// the Lite/Pro split of ekinertac/notes#50). Sold through Lemon Squeezy's
+// hosted checkout (live since 2026-10-03); an empty BUY_URL turns the button
+// into "Available soon" rather than a link pointing nowhere.
+const BUY_URL = 'https://infiniterm.lemonsqueezy.com/checkout/buy/0b6837dd-c037-493e-a530-72f6273fdf3c';
 const PRICE = '$29';
 const INSTALL = 'curl -fsSL https://infiniterm.app/install.sh | sh';
 const BREW = 'brew install --cask ekinertac/tap/infiniterm';
