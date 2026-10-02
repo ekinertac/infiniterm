@@ -1085,7 +1085,16 @@ impl AppView {
                         .justify_between()
                         .px_4()
                         .py(px(SHORTCUTS_ROW_PAD_PX * ui))
-                        .child(div().text_color(chrome.text).child(sc.label))
+                        // The id beside the label, faint: what keybindings.json
+                        // binds, which nothing in the app showed (#74).
+                        .child(
+                            div()
+                                .flex()
+                                .items_baseline()
+                                .gap_2()
+                                .child(div().text_color(chrome.text).child(sc.label))
+                                .child(div().text_color(chrome.text_faint).child(sc.id)),
+                        )
                         .child(keys),
                 );
             }

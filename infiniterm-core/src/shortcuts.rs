@@ -204,8 +204,9 @@ pub const GESTURES: &[(&str, &str, &str)] = &[
 ];
 
 /// The sections with only the shortcuts matching `query`, empty sections
-/// gone. Matches on the label OR the keys, since "close" and "cmd w" are
-/// the two questions a cheat sheet gets asked. Fuzzy like the palette but
+/// gone. Matches on the label, the keys or the command id, since "close",
+/// "cmd w" and "card.close" are the questions a cheat sheet gets asked (the
+/// id is what keybindings.json binds, #74). Fuzzy like the palette but
 /// unranked: a list you scan wants stable positions more than a best guess.
 pub fn filter_shortcuts(sections: &[ShortcutSection], query: &str) -> Vec<ShortcutSection> {
     let q = query.trim();
@@ -222,6 +223,7 @@ pub fn filter_shortcuts(sections: &[ShortcutSection], query: &str) -> Vec<Shortc
                 .filter(|sc| {
                     fuzzy_match(q, &sc.label).is_some()
                         || sc.chords.iter().any(|c| fuzzy_match(q, c).is_some())
+                        || fuzzy_match(q, &sc.id).is_some()
                 })
                 .cloned()
                 .collect(),
@@ -233,6 +235,26 @@ pub fn filter_shortcuts(sections: &[ShortcutSection], query: &str) -> Vec<Shortc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The id is searchable: what you type into keybindings.json finds its
+    // row (#74).
+    #[test]
+    fn the_filter_matches_a_command_id() {
+        let km: Keymap = vec![];
+        let s = shortcut_sections(
+            &km,
+            &[
+                ("theme.pick", "Theme: switch"),
+                ("card.close", "Card: close"),
+            ],
+        );
+        let hits = filter_shortcuts(&s, "theme.pick");
+        let ids: Vec<&str> = hits
+            .iter()
+            .flat_map(|s| s.shortcuts.iter().map(|sc| sc.id.as_str()))
+            .collect();
+        assert_eq!(ids, ["theme.pick"]);
+    }
 
     // Every gesture the usage log counts has a row in the panel: a gesture
     // that is recorded but not listed is one a user cannot find.
