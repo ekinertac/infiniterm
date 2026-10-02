@@ -228,6 +228,9 @@ pub struct AppView {
     /// so anything drained there (a find count, the omnibox's suggestions)
     /// is a frame behind and would sit unseen until the next keystroke.
     pub redraw: bool,
+    /// The window background last handed to gpui (`ui.windowOpacity`,
+    /// `ui.windowBlur`), so it is set again only when it changes.
+    pub window_bg: Option<gpui::WindowBackgroundAppearance>,
     /// The pressed-shortcut overlay (`keycast.rs`): on or off, and what
     /// is showing.
     pub keycast_on: bool,

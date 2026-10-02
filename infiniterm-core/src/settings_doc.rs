@@ -268,6 +268,17 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.windowOpacity",
+        &[
+            "How opaque the window's own fill is, 0.1 to 1: the canvas background, title bar",
+            "and status bar. Below 1 the desktop shows through; cards stay solid.",
+        ],
+    ),
+    (
+        "ui.windowBlur",
+        &["Blur what is behind the window. Only does anything while ui.windowOpacity is below 1."],
+    ),
+    (
         "ui.showGrid",
         &["Draw the canvas grid. Off leaves the canvas background plain."],
     ),
