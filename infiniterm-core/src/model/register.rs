@@ -2956,6 +2956,16 @@ mod tests {
         assert_eq!(items[0].id, "Current", "the theme in force is listed first");
         h.m.palette_preview(Source::Themes, Some("A"));
         assert!(h.m.take_effects().contains(&Effect::LoadTheme("A".into())));
+        // The preview makes A the theme in force; the rows must not move
+        // under the highlight because of it (#67).
+        h.m.theme_current = Some("A".into());
+        let ids: Vec<String> = h
+            .m
+            .palette_items(Source::Themes, &[])
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
+        assert_eq!(ids, ["Current", "A", "B"], "the order holds while previewing");
         h.m.close_palette(false);
         assert!(h
             .m
