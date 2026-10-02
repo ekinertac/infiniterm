@@ -39,7 +39,7 @@ fi
 # exactly this directory.
 cargo build $( [ "$profile" = release ] && echo --release ) -p infiniterm-cli -p infiniterm-hook -p infiniterm-session
 cp "target/$profile/ift" "target/$profile/infiniterm-hook" "target/$profile/iftd" "$app/Contents/MacOS/"
-# The Tauri app's icon, as it was.
+# The app icon (#57): four cards whose borders are the four card states.
 cp assets/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 # The 522 iTerm2-Color-Schemes files, kept in the repo (assets/themes, MIT,
 # licence inside). They were copied from the archived Tauri checkout, and a
