@@ -2954,6 +2954,8 @@ mod tests {
         assert_eq!(h.m.palette.source, Some(Source::Themes));
         let items = h.m.palette_items(Source::Themes, &[]);
         assert_eq!(items[0].id, "Current", "the theme in force is listed first");
+        assert_eq!(items[0].hint.as_deref(), Some("active"), "and says so");
+        assert!(items[1..].iter().all(|i| i.hint.is_none()));
         h.m.palette_preview(Source::Themes, Some("A"));
         assert!(h.m.take_effects().contains(&Effect::LoadTheme("A".into())));
         // The preview makes A the theme in force; the rows must not move
@@ -2982,7 +2984,10 @@ mod tests {
             .take_effects()
             .iter()
             .any(|e| matches!(e, Effect::SaveSetting { path, .. } if path == "theme")));
-        assert_eq!(h.m.usage.len(), 1);
+        assert!(
+            h.m.usage.is_empty(),
+            "the theme list keeps its order, so a pick is not recorded (#72)"
+        );
     }
 
     // A menu is muscle memory. The placement menu and the phantom's kind
@@ -2998,8 +3003,8 @@ mod tests {
             "hundreds of commands: recency helps"
         );
         assert!(
-            !Source::Themes.keeps_its_order(),
-            "hundreds of themes: recency helps"
+            Source::Themes.keeps_its_order(),
+            "the active theme on top, then A to Z (#72)"
         );
         h.m.note_use(Source::Placement, "claude");
         h.m.note_use(Source::SlotKind, "browser");
