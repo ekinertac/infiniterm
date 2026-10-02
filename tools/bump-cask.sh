@@ -10,7 +10,9 @@
 # Edits through the GitHub contents API, one commit, no clone. The cask's
 # URL is built from the version; the version and sha256 lines change, and
 # the url line is set to the semver tag's download path (#19: releases were
-# tagged v<version>-<build> before), a no-op once the tap has it. Anything
+# tagged v<version>-<build> before) and the main repo's releases (#52; the
+# old ekinertac/infiniterm-releases before), a no-op once the tap has them.
+# Anything
 # else in the file is left exactly as the tap has it.
 #
 #   tools/bump-cask.sh <version> <build> <dmg>
@@ -32,6 +34,8 @@ new=$(printf '%s\n' "$old" | sed -E \
     -e "s/^(  version \")[^\"]*(\")/\1$version,$build\2/" \
     -e "s/^(  sha256 \")[0-9a-f]{64}(\")/\1$sha\2/" \
     -e 's|/download/v#{version.csv.first}-#{version.csv.second}/|/download/v#{version.csv.first}/|' \
+    -e 's|github.com/ekinertac/infiniterm-releases/|github.com/ekinertac/infiniterm/|g' \
+    -e 's|^# The DMG on ekinertac/infiniterm-releases is|# The DMG on ekinertac/infiniterm'"'"'s releases is|' \
     -e 's|^# current for fresh installs. Release tags are v<version>-<build>, so the$|# current for fresh installs. Release tags are v<version> and the DMG names|' \
     -e 's|^# version is "<version>,<build>" and the csv parts rebuild the URL.$|# the build, so the version is "<version>,<build>" and the csv parts rebuild the URL.|')
 printf '%s\n' "$new" | grep -q "version \"$version,$build\"" || { echo "bump-cask: no version line to update in $path" >&2; exit 1; }

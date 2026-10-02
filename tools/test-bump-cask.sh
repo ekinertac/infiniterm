@@ -18,9 +18,10 @@ DRY_RUN=1 "$here/bump-cask.sh" 9.8.7 999 "$tmp/fake.dmg" > "$tmp/new.rb"
 check "version line bumped" 'grep -q "^  version \"9.8.7,999\"$" "$tmp/new.rb"'
 check "sha256 line is the dmg's" 'grep -q "^  sha256 \"$sha\"$" "$tmp/new.rb"'
 check "the url downloads from the semver tag" 'grep -q "/download/v#{version.csv.first}/infiniterm-#{version.csv.first}-#{version.csv.second}-arm64.dmg" "$tmp/new.rb"'
-# The version, sha256 and url lines, and the two comment lines naming the
-# tag format, until the tap carries the semver url; then only the first two.
-check "nothing else changed" 'n=$(diff "$tmp/live.rb" "$tmp/new.rb" | grep -c "^[<>]"); [ "$n" = 10 ] || [ "$n" = 4 ]'
+check "the cask downloads and checks from the main repo" '! grep -q "infiniterm-releases/" "$tmp/new.rb" && grep -q "github.com/ekinertac/infiniterm/releases/latest/download/latest.json" "$tmp/new.rb"'
+# The version and sha256 lines always; the url, livecheck and comment lines
+# only until the tap carries the main repo's addresses.
+check "nothing else changed" 'n=$(diff "$tmp/live.rb" "$tmp/new.rb" | grep -c "^[<>]"); [ "$n" -le 10 ] && [ "$n" -ge 4 ]'
 
 set +e
 "$here/bump-cask.sh" 1 2 >/dev/null 2>&1; code=$?

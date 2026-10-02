@@ -29,7 +29,7 @@ help:
 	@echo "make release    optimised build and bundle, signed with the Developer ID"
 	@echo "make install    make release, then into /Applications (the running app keeps its cards: iftd holds them)"
 	@echo "make dist       notarized, stapled DMG + update zip + latest.json in target/dist"
-	@echo "make publish    put target/dist on ekinertac/infiniterm-releases (NOTES=...)"
+	@echo "make publish    put target/dist on ekinertac/infiniterm's releases (NOTES=..., BRIDGE=1)"
 
 build:
 	cargo build $(if $(filter release,$(PROFILE)),--release,) -p infiniterm-ui
