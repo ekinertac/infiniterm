@@ -6,6 +6,9 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-02
+
+- The welcome card is a page now: the document rendered, with headings, lists, code and links you can click, and it never takes the keyboard. The wheel or the arrows scroll it while every other key stays the canvas's. Read-only editors (the docs, the settings defaults) take the keyboard on a click again, so the arrows, Page Down and Cmd+F work in them.
 ### 2026-10-01
 
 - Editor cards have a status bar: the file's path on the left, and the line and column, the selection size, the cursor count, the indentation, the encoding, the line endings and the language on the right. Its text selects like any text, a double-click takes one field whole, and `Cmd C` copies it.

@@ -32,6 +32,7 @@ mod keycode;
 mod middle_drag;
 mod omnibox;
 mod overlays;
+mod page_body;
 mod paint;
 mod runtime;
 mod switcher_view;

@@ -14,6 +14,7 @@ use crate::editor_body::{EditorBody, EditorEvent};
 use crate::editor_tabs::EditorTabs;
 use crate::tab_strip::StripStyle;
 
+use crate::page_body::{PageBody, PageColors};
 use crate::transcript_body::{TranscriptBody, TranscriptColors};
 use crate::AppView;
 use gpui::Window;
@@ -55,6 +56,7 @@ impl AppView {
     pub fn reconcile_editors(&mut self, window: &Window) {
         self.reconcile_diffs(window);
         self.reconcile_transcripts(window);
+        self.reconcile_pages(window);
         let metrics = self.metrics(window);
         let cfg = self.model.config.clone();
         let chrome = EditorChrome {
@@ -217,6 +219,60 @@ impl AppView {
                 c.locked = locked;
             }
             self.redraw = true;
+        }
+    }
+
+    /// One `PageBody` per Page card (#42). The chrome's text on the card's
+    /// ground, the theme's blue for headings, green for code and cyan for
+    /// links.
+    fn reconcile_pages(&mut self, window: &Window) {
+        let metrics = self.metrics(window);
+        let theme_hex = |k: &str| {
+            self.chrome
+                .theme
+                .as_ref()
+                .and_then(|t| t.get(k))
+                .and_then(|s| crate::chrome::hex(s))
+        };
+        let colors = PageColors {
+            background: self.chrome.card_bg,
+            text: self.chrome.card_fg,
+            faint: self.chrome.text_faint,
+            heading: theme_hex("blue").unwrap_or(self.chrome.text),
+            code: theme_hex("green").unwrap_or(self.chrome.text_mid),
+            link: theme_hex("cyan").unwrap_or(self.chrome.focus_ring),
+        };
+        let inactive_dim = self.model.config.ui.inactive_dim;
+        let cards: Vec<_> = self
+            .model
+            .cards
+            .iter()
+            .filter(|c| c.kind == CardKind::Page)
+            .cloned()
+            .collect();
+        for card in cards {
+            let Some(path) = card.path.clone() else {
+                continue;
+            };
+            let world = Size {
+                w: card.rect.w,
+                h: card.rect.h,
+            };
+            let body = self.bodies.entry(card.id.clone()).or_insert_with(|| {
+                Box::new(PageBody::new(path.clone(), &metrics, colors.clone(), world))
+            });
+            let Some(body) = body.as_any_mut().downcast_mut::<PageBody>() else {
+                continue;
+            };
+            if body.metrics != metrics {
+                body.metrics = metrics.clone();
+                body.mark_dirty();
+            }
+            if body.colors != colors {
+                body.colors = colors.clone();
+                body.mark_dirty();
+            }
+            body.inactive_dim = inactive_dim;
         }
     }
 
@@ -471,6 +527,8 @@ impl AppView {
                 d.idle(now);
             } else if let Some(t) = body.as_any_mut().downcast_mut::<TranscriptBody>() {
                 t.idle(now);
+            } else if let Some(p) = body.as_any_mut().downcast_mut::<PageBody>() {
+                p.idle(now);
             }
         }
     }

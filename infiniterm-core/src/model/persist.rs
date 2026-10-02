@@ -254,15 +254,16 @@ impl Model {
             .here()
             .into_iter()
             .find(|c| {
-                c.kind == crate::saved_layout::CardKind::Editor
+                c.kind == crate::saved_layout::CardKind::Page
                     && c.path.as_deref() == Some(path.as_str())
             })
             .map(|c| c.id.clone());
         existing.or_else(|| {
-            self.open_in_card(
-                crate::ift::open_plan(&path, crate::ift::PathKind::File, None),
-                after,
-            )
+            // A Page, not a read-only editor: it never takes the keyboard,
+            // which a newcomer clicking it needs, while the docs keep an
+            // editor's keys (#41, #42).
+            let cwd = self.start_dir.clone();
+            self.open_in_card(crate::ift::OpenPlan::Page { cwd, path }, after)
         })
     }
 }

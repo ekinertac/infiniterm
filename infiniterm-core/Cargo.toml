@@ -26,6 +26,7 @@ portable-pty = "0.9"
 anyhow = "1"
 # Card, group and workspace ids, as the reference makes them (crypto.randomUUID).
 uuid = { version = "1", features = ["v4"] }
+pulldown-cmark = { version = "0.13.4", default-features = false }
 
 [dev-dependencies]
 # The PTY tests are async because SessionBackend::spawn is (tmux assigns ids

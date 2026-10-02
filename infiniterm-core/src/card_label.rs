@@ -99,6 +99,13 @@ pub fn card_label(card: &Labelled, home: &str) -> String {
         let start = name.rfind('_').map_or(0, |i| i + 1);
         return name[start..].chars().take(8).collect();
     }
+    // A page is named by its document, without the `.md`: "Start here".
+    if card.kind == Some(CardKind::Page) {
+        if let Some(path) = card.path {
+            let name = last_segment(path);
+            return name.strip_suffix(".md").unwrap_or(name).to_string();
+        }
+    }
     if let Some(path) = card.path {
         return last_segment(path).to_string();
     }

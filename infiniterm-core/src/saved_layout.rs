@@ -49,6 +49,9 @@ pub enum CardKind {
     Diff,
     Browser,
     Transcript,
+    /// A Markdown document rendered read-only (page.rs, #42): the welcome
+    /// card, and later the docs and "what's new".
+    Page,
 }
 
 impl CardKind {
@@ -59,6 +62,7 @@ impl CardKind {
             CardKind::Diff => "diff",
             CardKind::Browser => "browser",
             CardKind::Transcript => "transcript",
+            CardKind::Page => "page",
         }
     }
 }
@@ -378,6 +382,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         Some("editor") => CardKind::Editor,
         Some("diff") => CardKind::Diff,
         Some("transcript") if path.is_some() => CardKind::Transcript,
+        Some("page") if path.is_some() => CardKind::Page,
         Some("browser") if url.is_some() => CardKind::Browser,
         _ => CardKind::Terminal,
     };

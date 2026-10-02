@@ -253,6 +253,7 @@ impl Model {
             OpenPlan::Transcript { cwd, path } => {
                 (CardKind::Transcript, cwd, Some(path), None, None, None)
             }
+            OpenPlan::Page { cwd, path } => (CardKind::Page, cwd, Some(path), None, None, None),
             OpenPlan::Refused { text } => {
                 self.notify(text);
                 return None;
