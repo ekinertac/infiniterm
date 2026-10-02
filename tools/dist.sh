@@ -2,7 +2,8 @@
 # The build that leaves this Mac: target/dist/ gets the notarized, stapled
 # DMG friends install from, the notarized, stapled zip the updater
 # downloads (updater.rs), and latest.json, the manifest the updater polls.
-# `tools/publish.sh` puts all three on ekinertac/infiniterm-releases.
+# `tools/publish.sh` puts all three on ekinertac/infiniterm (#52; on
+# ekinertac/infiniterm-releases before, which it can still bridge to).
 #
 # Order matters. The app is notarized and stapled FIRST, because both the
 # zip and the DMG must carry a stapled app (a Mac offline at first launch
@@ -79,7 +80,7 @@ xcrun stapler validate -q "$out/$name.dmg"
 
 echo "--- latest.json"
 sha=$(shasum -a 256 "$out/$name.zip" | cut -d' ' -f1)
-base="https://github.com/ekinertac/infiniterm-releases/releases/download/$tag"
+base="https://github.com/ekinertac/infiniterm/releases/download/$tag"
 cat > "$out/latest.json" <<JSON
 {
   "version": "$version",

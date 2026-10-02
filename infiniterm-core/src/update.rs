@@ -24,9 +24,19 @@
 use std::path::Path;
 
 /// Where the running app looks. GitHub points `releases/latest/download`
-/// at the newest release's asset of that name, so this never changes.
+/// at the newest release's asset of that name. The main repo since #52:
+/// releases lived on `ekinertac/infiniterm-releases` while the source was
+/// private, and builds up to 0.4.0 still poll that one (a bridge release
+/// there carries them over, `tools/publish.sh BRIDGE=1`).
 pub const LATEST_URL: &str =
-    "https://github.com/ekinertac/infiniterm-releases/releases/latest/download/latest.json";
+    "https://github.com/ekinertac/infiniterm/releases/latest/download/latest.json";
+
+/// Where an update's zip may come from, whatever a manifest says: the
+/// main repo, and the old releases repo, which the bridge release serves.
+pub const DOWNLOAD_PREFIXES: [&str; 2] = [
+    "https://github.com/ekinertac/infiniterm/releases/download/",
+    "https://github.com/ekinertac/infiniterm-releases/releases/download/",
+];
 
 /// How often a running app looks again after the check at launch. Six
 /// hours: a friend who leaves it open all week still hears about a fix the
@@ -64,12 +74,12 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
         .and_then(|b| b.as_u64())
         .ok_or("latest.json has no build number")?;
     let url = s("url")?;
-    // Only from the releases repo, whatever the manifest says: a manifest
-    // is not trusted to send the app elsewhere even though the code
-    // signature check would catch a foreign build anyway.
-    if !url.starts_with("https://github.com/ekinertac/infiniterm-releases/") {
+    // Only from our release downloads, whatever the manifest says: a
+    // manifest is not trusted to send the app elsewhere even though the
+    // code signature check would catch a foreign build anyway.
+    if !DOWNLOAD_PREFIXES.iter().any(|p| url.starts_with(p)) {
         return Err(format!(
-            "latest.json points outside the releases repo: {url}"
+            "latest.json points outside the release downloads: {url}"
         ));
     }
     Ok(Manifest {
@@ -176,6 +186,24 @@ mod tests {
         assert!(parse_manifest(&elsewhere).is_err());
         assert!(parse_manifest(r#"{"version": "0.1.0"}"#).is_err());
         assert!(parse_manifest("not json").is_err());
+    }
+
+    // The main repo's downloads are accepted as the old releases repo's
+    // were; a lookalike path on github.com is not.
+    #[test]
+    fn downloads_come_from_either_release_repo_and_nowhere_else() {
+        let main = GOOD.replace(
+            "https://github.com/ekinertac/infiniterm-releases/",
+            "https://github.com/ekinertac/infiniterm/",
+        );
+        assert!(parse_manifest(&main).is_ok());
+        assert!(parse_manifest(GOOD).is_ok());
+        let lookalike = GOOD.replace(
+            "https://github.com/ekinertac/infiniterm-releases/",
+            "https://github.com/ekinertac/infiniterm-evil/",
+        );
+        assert!(parse_manifest(&lookalike).is_err());
+        assert!(LATEST_URL.starts_with("https://github.com/ekinertac/infiniterm/releases/"));
     }
 
     #[test]
