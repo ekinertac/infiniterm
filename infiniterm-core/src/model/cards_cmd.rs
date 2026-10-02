@@ -116,7 +116,7 @@ impl Model {
         if self.fill_phantom(CardKind::Terminal, None) {
             return;
         }
-        self.selection.maximized = false;
+        self.selection.maximized = self.maximise_sticky;
         // One beside each selected card; with nothing selected, one at the top.
         let mut froms: Vec<Option<Card>> = self.selected().into_iter().cloned().map(Some).collect();
         if froms.is_empty() {
@@ -154,7 +154,7 @@ impl Model {
         let from = self.focused().cloned();
         let group_id = from.as_ref().and_then(|c| c.group_id.clone());
         let ws = self.active_workspace.clone().unwrap_or_default();
-        self.selection.maximized = false;
+        self.selection.maximized = self.maximise_sticky;
         let id = self.add_card(
             &self.cwd_beside(from.as_ref()),
             NewCard {
@@ -1571,6 +1571,11 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("card.maximize.toggle", "Card: maximise / restore", |m| {
         if m.selection.focused_id.is_some() {
             m.selection.maximized = !m.selection.maximized;
+            // With `ui.maximised` on, this is the session's off switch (and
+            // back on): the mode stays as the key leaves it.
+            if m.config.ui.maximised {
+                m.maximise_sticky = m.selection.maximized;
+            }
         }
     });
     // Somebody is reading your screen. The card keeps running under a decoy
