@@ -131,7 +131,22 @@ impl AppView {
         // the source listed it. See `Source::keeps_its_order`.
         if source.keeps_its_order() {
             let ranked = rank(&items, &self.model.palette.query, MAX_RESULTS, |_| 0.);
-            return (ranked.items, ranked.total, vec![]);
+            // The active theme stands apart from the choices: an untitled
+            // heading after it is a rule (#72). Only while it leads the list;
+            // typing may filter it away.
+            let active_first = ranked.items.first().is_some_and(|i| {
+                i.item.hint.as_deref()
+                    == Some(infiniterm_core::model::palette_state::ACTIVE_THEME_HINT)
+            });
+            let heads = if source == infiniterm_core::model::palette_state::Source::Themes
+                && active_first
+                && ranked.items.len() > 1
+            {
+                vec![(String::new(), 1)]
+            } else {
+                vec![]
+            };
+            return (ranked.items, ranked.total, heads);
         }
         let usage = &self.model.usage;
         let ranked = rank(&items, &self.model.palette.query, MAX_RESULTS, |id| {
@@ -688,20 +703,26 @@ impl AppView {
         }
         for (i, item) in flat.iter().enumerate().skip(start).take(PALETTE_ROWS) {
             if let Some((title, at)) = heads.iter().find(|(_, at)| *at == i) {
-                list = list.child(
-                    div()
-                        .px_3()
-                        .pt_2()
-                        .pb_1()
-                        // A rule above every heading but the first, so the
-                        // split is visible before the words are read.
-                        .when(*at > 0, |d| {
-                            d.border_t_1().border_color(chrome.bar_border).mt_1()
-                        })
-                        .text_size(px(PALETTE_SECTION_FONT_PX * ui))
-                        .text_color(chrome.text_faint)
-                        .child(title.clone()),
-                );
+                if title.is_empty() {
+                    // An untitled heading is a plain rule: the line under
+                    // the active theme (#72), no room kept for words.
+                    list = list.child(div().mx_3().my_1().h(px(1.)).bg(chrome.bar_border));
+                } else {
+                    list = list.child(
+                        div()
+                            .px_3()
+                            .pt_2()
+                            .pb_1()
+                            // A rule above every heading but the first, so the
+                            // split is visible before the words are read.
+                            .when(*at > 0, |d| {
+                                d.border_t_1().border_color(chrome.bar_border).mt_1()
+                            })
+                            .text_size(px(PALETTE_SECTION_FONT_PX * ui))
+                            .text_color(chrome.text_faint)
+                            .child(title.clone()),
+                    );
+                }
             }
             let selected = i == index;
             let id = item.item.id.clone();
@@ -736,7 +757,12 @@ impl AppView {
                 // A hint is a chord, one cap per key, for every source but
                 // the snippets, whose hint is the text's first line and
                 // reads as prose: faint, one line, cut with an ellipsis.
-                if source == infiniterm_core::model::palette_state::Source::Snippets {
+                // The themes' "active" is a word, not a chord.
+                if matches!(
+                    source,
+                    infiniterm_core::model::palette_state::Source::Snippets
+                        | infiniterm_core::model::palette_state::Source::Themes
+                ) {
                     row = row.child(
                         div()
                             .max_w(px(SNIPPET_HINT_MAX_W_PX * ui))

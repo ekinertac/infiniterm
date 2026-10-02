@@ -33,6 +33,9 @@ pub enum Source {
 pub const CARD_ROW: &str = "card:";
 pub const WORKSPACE_ROW: &str = "workspace:";
 
+/// The hint the theme picker puts beside the theme in force.
+pub const ACTIVE_THEME_HINT: &str = "active";
+
 impl Source {
     pub fn id(self) -> &'static str {
         match self {
@@ -54,11 +57,13 @@ impl Source {
     /// on a phantom, then Enter again, has to mean "terminal" every time,
     /// and Cmd+Shift+T then the second row has to be the same second row
     /// tomorrow. Ranking those by use moved the rows under the hand that had
-    /// learned them.
+    /// learned them. The themes keep theirs too (#72): the active one is
+    /// pinned on top under its "active" hint, and recency only reshuffled
+    /// the rest under it.
     pub fn keeps_its_order(self) -> bool {
         matches!(
             self,
-            Source::Placement | Source::SlotKind | Source::Sizes | Source::MoveTo
+            Source::Placement | Source::SlotKind | Source::Sizes | Source::MoveTo | Source::Themes
         )
     }
 
@@ -242,7 +247,9 @@ impl Model {
                     .map(|name| PaletteItem {
                         id: name.clone(),
                         label: name.clone(),
-                        hint: None,
+                        // Said, not only placed first (#72).
+                        hint: (Some(name) == current.as_ref())
+                            .then(|| ACTIVE_THEME_HINT.to_string()),
                     })
                     .collect()
             }
