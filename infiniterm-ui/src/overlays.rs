@@ -89,6 +89,12 @@ const PROMPT_TOP_PAD_PX: f32 = 120.;
 const PROMPT_WIDTH_PX: f32 = 480.;
 /// The dialog's insides: padding, the gap between its rows, and the buttons.
 const DIALOG_PAD_PX: f32 = 16.;
+/// The About window: the icon's side, the space between its lines, the
+/// name's size, and the address it links to.
+const ABOUT_ICON_PX: f32 = 96.;
+const ABOUT_GAP_PX: f32 = 6.;
+const ABOUT_TITLE_FONT_PX: f32 = 18.;
+const ABOUT_SITE: &str = "https://infiniterm.app";
 const DIALOG_GAP_PX: f32 = 10.;
 const DIALOG_BUTTON_GAP_PX: f32 = 8.;
 const DIALOG_BUTTON_PAD_X_PX: f32 = 12.;
@@ -446,6 +452,10 @@ impl Render for AppView {
                     // the same key again as a key down.
                     cx.stop_propagation();
                 }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &crate::AboutApp, _, cx| {
+                this.run_command("app.about");
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &crate::CheckForUpdates, _, cx| {
@@ -962,6 +972,54 @@ impl AppView {
     /// buttons) and an alert (message, OK). Centred, modal in look, and
     /// every button has its key beside it because the keyboard is how the
     /// app is used; the buttons are there so a mouse is not refused.
+    /// What the About window says (#90): the icon, the name, the version and
+    /// build, who made it and where it lives. The website is a link.
+    fn about_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use std::sync::{Arc, OnceLock};
+        static ICON: OnceLock<Arc<gpui::Image>> = OnceLock::new();
+        let icon = ICON
+            .get_or_init(|| {
+                Arc::new(gpui::Image::from_bytes(
+                    gpui::ImageFormat::Png,
+                    include_bytes!("../../assets/icon.png").to_vec(),
+                ))
+            })
+            .clone();
+        let ui = self.model.ui_scale as f32;
+        let chrome = &self.chrome;
+        let version = match self.build {
+            Some(b) => format!("Version {} (build {b})", env!("CARGO_PKG_VERSION")),
+            None => format!("Version {}", env!("CARGO_PKG_VERSION")),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(ABOUT_GAP_PX * ui))
+            .child(gpui::img(icon).size(px(ABOUT_ICON_PX * ui)))
+            .child(
+                div()
+                    .text_color(chrome.text_bright)
+                    .text_size(px(ABOUT_TITLE_FONT_PX * ui))
+                    .child("infiniterm"),
+            )
+            .child(div().text_color(chrome.text_muted).child(version))
+            .child(div().text_color(chrome.text_muted).child("by Ekin Ertac"))
+            .child(
+                div()
+                    .id("about-site")
+                    .text_color(chrome.focus_ring)
+                    .cursor_pointer()
+                    .child(ABOUT_SITE.trim_start_matches("https://"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_, _: &MouseDownEvent, _, cx| {
+                            cx.open_url(ABOUT_SITE);
+                        }),
+                    ),
+            )
+    }
+
     fn render_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
         let ui = self.model.ui_scale as f32;
@@ -1026,7 +1084,11 @@ impl AppView {
         if is_confirm || is_alert {
             // The question, then the buttons: Cancel on the left, the verb on
             // the right in the selection colour, as macOS lays them out.
-            body = body.child(div().text_color(chrome.text_bright).child(p.label.clone()));
+            body = if p.about {
+                body.child(self.about_card(cx))
+            } else {
+                body.child(div().text_color(chrome.text_bright).child(p.label.clone()))
+            };
             let mut row = div()
                 .flex()
                 .justify_end()

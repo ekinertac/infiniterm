@@ -35,6 +35,9 @@ pub struct Prompt<P> {
     pub confirm: bool,
     /// A message with one button; settles yes on Enter, no on Escape.
     pub alert: bool,
+    /// The About window (#90): a confirm whose Cancel reads "Close" and
+    /// whose body the ui draws itself, icon and details, not `label`.
+    pub about: bool,
     /// The verb on the confirming button ("Close workspace"), "OK" for an alert.
     pub action: String,
     /// A third button (`confirm3`): "Don't Save".
@@ -78,6 +81,7 @@ impl<P> Default for Prompt<P> {
             value: String::new(),
             confirm: false,
             alert: false,
+            about: false,
             action: String::new(),
             alt_action: None,
             choice: 0,
@@ -128,6 +132,7 @@ impl<P> Prompt<P> {
         self.open = true;
         self.confirm = true;
         self.alert = false;
+        self.about = false;
         self.action = action.into();
         self.alt_action = None;
         self.serial += 1;
@@ -166,7 +171,8 @@ impl<P> Prompt<P> {
         if let Some(alt) = &self.alt_action {
             b.push((alt.clone(), ButtonKind::Alt));
         }
-        b.push(("Cancel".into(), ButtonKind::Cancel));
+        let cancel = if self.about { "Close" } else { "Cancel" };
+        b.push((cancel.into(), ButtonKind::Cancel));
         b.push((self.action.clone(), ButtonKind::Primary));
         b
     }
@@ -214,6 +220,13 @@ impl<P> Prompt<P> {
             "cmd+." => Some(ButtonKind::Cancel),
             _ => None,
         }
+    }
+
+    /// The About window: Check for Updates is the action, Close the way out.
+    pub fn about(&mut self, pending: P) -> Option<Answer<P>> {
+        let displaced = self.confirm("about", "Check for Updates", pending);
+        self.about = true;
+        displaced
     }
 
     /// Opens a message with one button. Settles like a confirm.
@@ -374,5 +387,22 @@ mod tests {
         // A text prompt after that carries neither.
         p.ask("name", "", 4);
         assert!(!p.confirm && !p.alert);
+    }
+
+    #[test]
+    fn about_is_a_confirm_whose_cancel_reads_close() {
+        let mut p: Prompt<u8> = Prompt::default();
+        p.about(1);
+        assert!(p.open && p.about);
+        let labels: Vec<_> = p.buttons().into_iter().map(|(l, _)| l).collect();
+        assert_eq!(labels, ["Close", "Check for Updates"]);
+        // Enter is the update check, Escape closes without one.
+        assert_eq!(p.press_choice(), Some((1, Some(String::new()))));
+        p.about(2);
+        assert_eq!(p.settle(None), Some((2, None)));
+        // A later confirm is not an About.
+        p.confirm("sure?", "Yes", 3);
+        assert!(!p.about);
+        assert_eq!(p.buttons()[0].0, "Cancel");
     }
 }

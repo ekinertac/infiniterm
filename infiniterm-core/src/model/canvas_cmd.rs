@@ -233,6 +233,9 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("app.emoji", "App: emoji & symbols", |m| {
         m.effects.push(Effect::ShowCharacterPalette);
     });
+    r.register("app.about", "App: about infiniterm", |m| {
+        m.prompt.about(super::Pending::About);
+    });
     r.register("app.shortcuts", "App: keyboard shortcuts", |m| {
         m.shortcuts_open = !m.shortcuts_open
     });

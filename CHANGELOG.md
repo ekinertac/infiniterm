@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-03
 
+- An About window: the icon, name, version and build, the author and the website, with a Check for Updates button. Open it from the app menu (About infiniterm) or the palette (App: about infiniterm). Asked for by Tarık Kavaz.
 - `ui.backgroundImage` puts a picture behind the canvas: three come with the app (`"dusk"`, `"aurora"`, `"ember"`) or give a path to your own; `ui.backgroundImageFit` is `cover` (default) or `contain`. Turn the grid off with `ui.showGrid` if the lines get in the way.
 
 ### 2026-10-02

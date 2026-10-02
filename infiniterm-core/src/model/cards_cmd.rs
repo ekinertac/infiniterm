@@ -467,6 +467,11 @@ impl Model {
                 Some(crate::prompt::ALT) => self.close_selected_confirmed(ids, reclaim, true),
                 Some(_) => self.save_then_close(ids, reclaim),
             },
+            Pending::About => {
+                if text.is_some() {
+                    self.effects.push(Effect::CheckForUpdate);
+                }
+            }
             Pending::NavigateBrowser(id) => {
                 if let (Some(url), Some(card)) =
                     (Model::normalise_url(text.as_deref()), self.card_mut(&id))
