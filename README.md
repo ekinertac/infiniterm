@@ -1,6 +1,12 @@
-# infiniterm
+<p align="center">
+  <img src="assets/icon.png" width="128" height="128" alt="infiniterm's icon: four cards in a grid, bordered violet, yellow, red and green">
+</p>
 
-Terminal cards on an infinite canvas, with the state of every coding agent visible at a glance.
+<h1 align="center">infiniterm</h1>
+
+<p align="center">Terminal cards on an infinite canvas, with the state of every coding agent visible at a glance.</p>
+
+<p align="center"><a href="https://infiniterm.app">infiniterm.app</a> &nbsp;&nbsp; <a href="https://infiniterm.app/guide/install/">Docs</a> &nbsp;&nbsp; <a href="https://github.com/ekinertac/infiniterm/releases/latest">Download</a></p>
 
 ![An infiniterm window at 19% zoom: 33 terminal cards, their borders coloured by each agent's state](assets/screenshot-canvas.png)
 
