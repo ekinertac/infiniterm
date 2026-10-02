@@ -221,10 +221,67 @@ impl AppView {
     }
 
     /// The panel takes the keys while open: Escape closes, typing filters.
+    /// The commands the panel shows for its filter, in order, with the list
+    /// child each row is (a section's heading comes before its rows), for
+    /// the highlight, the copy and the scroll.
+    fn shortcut_rows(&self) -> Vec<(String, usize)> {
+        let labels = self.command_labels();
+        let labels_ref: Vec<(&str, &str)> = labels
+            .iter()
+            .map(|(i, l)| (i.as_str(), l.as_str()))
+            .collect();
+        let sections = filter_shortcuts(
+            &shortcut_sections(&self.model.keymap, &labels_ref),
+            &self.shortcuts_field.text,
+        );
+        let mut rows = vec![];
+        let mut child = 0;
+        for s in sections {
+            child += 1;
+            for sc in s.shortcuts {
+                rows.push((sc.id, child));
+                child += 1;
+            }
+        }
+        rows
+    }
+
     pub fn shortcuts_key(&mut self, k: &Keystroke, cx: &mut gpui::App) -> bool {
         if k.key == "escape" {
             self.model.shortcuts_open = false;
             self.shortcuts_field = crate::field::Field::default();
+            self.shortcuts_index = 0;
+            return true;
+        }
+        let m = &k.modifiers;
+        let plain = !m.platform && !m.alt && !m.control && !m.shift;
+        let rows = self.shortcut_rows();
+        // Up and Down walk the rows; the scroll follows the highlight.
+        if plain && (k.key == "down" || k.key == "up") {
+            let last = rows.len().saturating_sub(1);
+            self.shortcuts_index = if k.key == "down" {
+                (self.shortcuts_index + 1).min(last)
+            } else {
+                self.shortcuts_index.saturating_sub(1)
+            };
+            if let Some((_, child)) = rows.get(self.shortcuts_index) {
+                self.shortcuts_scroll.scroll_to_item(*child);
+            }
+            return true;
+        }
+        // Cmd+C copies the highlighted command's id, what keybindings.json
+        // binds (#76); a selection in the filter field is copied instead.
+        if m.platform
+            && !m.shift
+            && !m.alt
+            && !m.control
+            && k.key == "c"
+            && !self.shortcuts_field.selected()
+        {
+            if let Some((id, _)) = rows.get(self.shortcuts_index) {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(id.clone()));
+                self.model.notify(format!("copied {id}"));
+            }
             return true;
         }
         let paste = (k.modifiers.platform && k.key == "v")
@@ -233,6 +290,11 @@ impl AppView {
         let edit = self.shortcuts_field.key(k, paste.as_deref());
         if let Some(text) = edit.clipboard() {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
+        }
+        // A new filter starts the highlight on its first match.
+        if edit.changed() {
+            self.shortcuts_index = 0;
+            self.shortcuts_scroll.scroll_to_item(0);
         }
         !matches!(edit, crate::field::Edit::Ignored)
     }
@@ -327,7 +389,7 @@ impl Render for AppView {
         let status_bar = self.render_status_bar(cx);
         let palette = self.model.palette_open().then(|| self.render_palette(cx));
         let prompt = self.model.prompt.is_open().then(|| self.render_prompt(cx));
-        let shortcuts = self.model.shortcuts_open.then(|| self.render_shortcuts());
+        let shortcuts = self.model.shortcuts_open.then(|| self.render_shortcuts(cx));
         let omnibox = self.model.omni.open.then(|| self.render_omnibox(cx));
         let find_bar = self.model.find.open.then(|| self.render_find_bar(cx));
         let context_menu = self
@@ -1040,7 +1102,7 @@ impl AppView {
     /// The palette's shape and place, on purpose: the two are the same kind
     /// of thing, a searchable list of what the app can do. Taller, because
     /// this one is meant to be read as well as searched.
-    fn render_shortcuts(&self) -> impl IntoElement {
+    fn render_shortcuts(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
         let ui = self.model.ui_scale as f32;
         let chrome = &self.chrome;
@@ -1053,11 +1115,14 @@ impl AppView {
         let sections =
             filter_shortcuts(&shortcut_sections(&self.model.keymap, &labels_ref), &query);
         let key_box = |key: &str| key_cap_box(key, chrome, ui);
+        let mut row_ix = 0usize;
+        let highlighted = self.shortcuts_index;
         let mut list = div()
             .id("shortcuts-list")
             .flex()
             .flex_col()
             .overflow_y_scroll()
+            .track_scroll(&self.shortcuts_scroll)
             .max_h(px(SHORTCUTS_LIST_MAX_H_PX * ui))
             .pb_2();
         for s in sections {
@@ -1079,12 +1144,24 @@ impl AppView {
                     }
                     keys = keys.child(k);
                 }
+                let this_row = row_ix;
+                row_ix += 1;
                 list = list.child(
                     div()
+                        .id(gpui::SharedString::from(format!("sc-{}", sc.id)))
                         .flex()
                         .justify_between()
                         .px_4()
                         .py(px(SHORTCUTS_ROW_PAD_PX * ui))
+                        .when(this_row == highlighted, |d| d.bg(chrome.row_selected))
+                        // A click highlights the row, for Cmd+C (#76).
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                this.shortcuts_index = this_row;
+                                cx.notify();
+                            }),
+                        )
                         // The id beside the label, faint: what keybindings.json
                         // binds, which nothing in the app showed (#74).
                         .child(

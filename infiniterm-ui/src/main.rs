@@ -211,6 +211,10 @@ pub struct AppView {
     pub query_field: field::Field,
     /// The shortcuts panel's filter.
     pub shortcuts_field: field::Field,
+    /// The shortcuts panel's highlighted row among the filtered commands,
+    /// whose id Cmd+C copies (#76), and the list's scroll, kept on it.
+    pub shortcuts_index: usize,
+    pub shortcuts_scroll: gpui::ScrollHandle,
     /// The omnibox's text, opened selected so typing replaces a prefilled
     /// address the way it does in a browser.
     pub omni_field: field::Field,

@@ -70,6 +70,8 @@ impl AppView {
             prompt_field: Default::default(),
             query_field: Default::default(),
             shortcuts_field: Default::default(),
+            shortcuts_index: 0,
+            shortcuts_scroll: gpui::ScrollHandle::new(),
             omni_field: crate::field::Field::default(),
             find_field: crate::field::Field::default(),
             redraw: false,
