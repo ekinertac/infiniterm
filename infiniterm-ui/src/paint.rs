@@ -877,6 +877,7 @@ impl AppView {
             CardKind::Diff => badges.push("diff".into()),
             CardKind::Browser => badges.push("browser".into()),
             CardKind::Transcript => badges.push("transcript".into()),
+            CardKind::Page => badges.push("page".into()),
             CardKind::Terminal => {}
         }
         for badge in badges {

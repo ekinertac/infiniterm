@@ -14,8 +14,9 @@
 //! heading and a one-line summary, and the `<kbd>` tags the reference pages
 //! use become backticks. Links stay as written; they point at the site's
 //! paths and read fine. `files` is pure and tested; the ui writes them
-//! (`runtime.rs`) and `editors.rs` marks the folder read-only, so a click in
-//! a page never locks the keyboard.
+//! (`runtime.rs`) and `editors.rs` marks the folder read-only: a click locks
+//! the keyboard like any editor's (#41), so the arrows, Page Down and Cmd+F
+//! work, and typing does nothing.
 use crate::paths::app_support_dir;
 use std::path::PathBuf;
 

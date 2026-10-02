@@ -449,7 +449,7 @@ mod tests {
         let welcome = crate::welcome::welcome_path()
             .to_string_lossy()
             .into_owned();
-        let card = m.cards.iter().find(|c| c.kind == CardKind::Editor).unwrap();
+        let card = m.cards.iter().find(|c| c.kind == CardKind::Page).unwrap();
         assert_eq!(card.path.as_deref(), Some(welcome.as_str()));
         assert_eq!(m.focused().unwrap().kind, CardKind::Terminal);
         assert!(m.layout_undo.is_empty(), "the seed is not an undo step");
@@ -492,7 +492,7 @@ mod tests {
         let mut h = Harness::new();
         h.run("help.welcome");
         assert_eq!(h.m.cards.len(), 2);
-        assert_eq!(h.focused().kind, CardKind::Editor);
+        assert_eq!(h.focused().kind, CardKind::Page);
         h.run("help.welcome");
         assert_eq!(h.m.cards.len(), 2, "a second run focuses the open one");
     }

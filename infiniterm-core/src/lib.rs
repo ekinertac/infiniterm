@@ -75,6 +75,7 @@ pub mod links;
 pub mod links_fs;
 pub mod model;
 pub mod omni;
+pub mod page;
 pub mod palette;
 pub mod palette_usage;
 pub mod paths;

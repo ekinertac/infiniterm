@@ -57,7 +57,7 @@ pub fn render(keymap: &Keymap, agents: &[Agent]) -> String {
         "# Start here\n\n\
          Every terminal is a card on one canvas. Cards stay where you put them, and a new one takes the next free slot of a grid that starts at the top left.\n\n\
          Cmd is the app's key. Everything else (Ctrl, Alt, bare keys) goes to the terminal, so vim, tmux and your shell work as usual.\n\n\
-         Click into a file in an editor card to type in it: the keyboard is the file's until you press Escape twice. This card is read-only: click into it and select a line to copy it with `Cmd C`, then Escape twice to give the keys back.\n\n\
+         Click into a file in an editor card to type in it: the keyboard is the file's until you press Escape twice. This card is a page: the wheel or the arrows scroll it, and it never takes the keyboard.\n\n\
          ## Keys to start with\n\n",
     );
     for (id, does) in KEYS {

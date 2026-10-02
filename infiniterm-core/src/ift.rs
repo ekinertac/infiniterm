@@ -98,6 +98,11 @@ pub enum OpenPlan {
         cwd: String,
         path: String,
     },
+    /// A Markdown document as a Page card (page.rs).
+    Page {
+        cwd: String,
+        path: String,
+    },
     Refused {
         text: String,
     },
