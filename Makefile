@@ -6,16 +6,21 @@
 # "Verifying without being at the Mac"). `make run DATA=...` moves it.
 
 DATA ?= /tmp/infiniterm-dev
+# Where the scratch app reads settings.json and keybindings.json. Empty keeps
+# the real ~/.config/infiniterm; run-clean points it at an empty directory.
+CONFIG_DIR ?=
+CLEAN_CONFIG = /tmp/infiniterm-dev-config
 PROFILE ?= debug
 APP = target/bundle/infiniterm.app
 REAL = $(HOME)/Library/Application\ Support/dev.ekinertac.infiniterm/workspace.json
 CRATES = -p infiniterm-core -p infiniterm-ui -p infiniterm-term
 
-.PHONY: help build release install dist publish bundle run run-fresh stop log test check fmt clippy drive drive-drag drive-panel cast cast-seed shot clean
+.PHONY: help build release install dist publish bundle run run-fresh run-clean stop log test check fmt clippy drive drive-drag drive-panel cast cast-seed shot clean
 
 help:
 	@echo "make run        build, bundle and launch on a copy of the real canvas ($(DATA))"
 	@echo "make run-fresh  the same on an empty canvas"
+	@echo "make run-clean  an empty canvas AND empty settings, as a new user sees the app"
 	@echo "make stop       quit the running native app"
 	@echo "make log        follow the app's log (run.log)"
 	@echo "make test       cargo test, the whole workspace"
@@ -54,15 +59,19 @@ publish:
 	tools/publish.sh
 
 run: bundle stop
-	@mkdir -p $(DATA)
+	@mkdir -p $(DATA) $(CONFIG_DIR)
 	@[ -f $(DATA)/workspace.json ] || cp $(REAL) $(DATA)/workspace.json 2>/dev/null || true
 	@: > run.log
-	open --stderr "$(PWD)/run.log" --stdout "$(PWD)/run.log" --env INFINITERM_DATA_DIR=$(DATA) --env INFINITERM_KEYLOG=1 $(APP)
+	open --stderr "$(PWD)/run.log" --stdout "$(PWD)/run.log" --env INFINITERM_DATA_DIR=$(DATA) $(if $(CONFIG_DIR),--env INFINITERM_CONFIG_DIR=$(CONFIG_DIR)) --env INFINITERM_KEYLOG=1 $(APP)
 	@echo "running on $(DATA); make log to follow"
 
 run-fresh: stop
 	rm -rf $(DATA)
 	$(MAKE) run DATA=$(DATA)
+
+run-clean: stop
+	rm -rf $(DATA) $(CLEAN_CONFIG)
+	$(MAKE) run DATA=$(DATA) CONFIG_DIR=$(CLEAN_CONFIG) REAL=/nonexistent
 
 stop:
 	-pkill -f "$(CURDIR)/target/bundle/infiniterm.app/Contents/MacOS/infiniterm$$" 2>/dev/null; sleep 0.3
