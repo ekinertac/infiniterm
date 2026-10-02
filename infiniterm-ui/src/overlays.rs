@@ -350,6 +350,30 @@ impl AppView {
 }
 
 impl AppView {
+    /// A window-level fill (canvas, title bar, status bar) at the window's
+    /// opacity; cards, dialogs and text keep theirs.
+    pub fn window_fill(&self, c: gpui::Hsla) -> gpui::Hsla {
+        crate::chrome::with_alpha(c, c.a * self.model.config.ui.window_opacity as f32)
+    }
+
+    /// Tells gpui whether the window may show the desktop through it, and
+    /// whether blurred. Only on a change: the call touches the NSWindow.
+    fn sync_window_background(&mut self, window: &mut Window) {
+        use gpui::WindowBackgroundAppearance as Bg;
+        let ui = &self.model.config.ui;
+        let want = if ui.window_opacity >= 1. {
+            Bg::Opaque
+        } else if ui.window_blur {
+            Bg::Blurred
+        } else {
+            Bg::Transparent
+        };
+        if self.window_bg != Some(want) {
+            window.set_background_appearance(want);
+            self.window_bg = Some(want);
+        }
+    }
+
     /// Keeps the two fields in step with the model's strings: a prompt that
     /// just opened gets its suggestion selected; a palette query that the
     /// model reset (it always resets on open) empties the field.
@@ -380,8 +404,9 @@ impl AppView {
 }
 
 impl Render for AppView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_fields();
+        self.sync_window_background(window);
         let chrome = self.chrome.clone();
         let entity = cx.entity();
         let focus = self.focus.clone();
@@ -409,7 +434,11 @@ impl Render for AppView {
             .size_full()
             .flex()
             .flex_col()
-            .bg(chrome.canvas_bg)
+            .bg(if self.model.config.ui.window_opacity < 1. {
+                crate::chrome::with_alpha(chrome.canvas_bg, 0.)
+            } else {
+                chrome.canvas_bg
+            })
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 if this.key_down(e, cx) {
@@ -619,7 +648,7 @@ impl AppView {
             .items_center()
             .pl(px(TITLE_BAR_TRAFFIC_LIGHT_INSET_PX))
             .pr_2()
-            .bg(chrome.bar_bg)
+            .bg(self.window_fill(chrome.bar_bg))
             .border_b_1()
             .border_color(chrome.bar_border)
             .font_family("Menlo")
@@ -678,7 +707,7 @@ impl AppView {
             .items_center()
             .justify_between()
             .px_2()
-            .bg(chrome.bar_bg)
+            .bg(self.window_fill(chrome.bar_bg))
             .border_t_1()
             .border_color(chrome.bar_border)
             .font_family("Menlo")

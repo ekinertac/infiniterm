@@ -76,6 +76,7 @@ impl AppView {
             omni_field: crate::field::Field::default(),
             find_field: crate::field::Field::default(),
             redraw: false,
+            window_bg: None,
             keycast_on: false,
             keycasts: Vec::new(),
             last_paint_ms: 0.,

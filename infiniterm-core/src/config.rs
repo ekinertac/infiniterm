@@ -237,6 +237,10 @@ pub struct Ui {
     pub inactive_dim: f64,
     /// How much the whole canvas is dimmed while another app is in front.
     pub unfocused_dim: f64,
+    /// Alpha of the window's own fill: canvas, title bar, status bar (#84).
+    pub window_opacity: f64,
+    /// Blur what is behind a see-through window; nothing at opacity 1.
+    pub window_blur: bool,
     /// Whether the canvas draws its grid (#96).
     pub show_grid: bool,
     /// Screen pixels left around a card or cluster when it is fitted (#87).
@@ -345,6 +349,8 @@ pub fn default_config() -> Config {
         ui: Ui {
             inactive_dim: 0.45,
             unfocused_dim: 0.4,
+            window_opacity: 1.,
+            window_blur: false,
             show_grid: true,
             fit_padding: FIT_PADDING,
             fit_magnify: false,
@@ -597,6 +603,8 @@ pub fn merge_config(raw: &Value) -> Config {
         ui: Ui {
             inactive_dim: num(u.get("inactiveDim"), d.ui.inactive_dim, 0., 1.),
             unfocused_dim: num(u.get("unfocusedDim"), d.ui.unfocused_dim, 0., 1.),
+            window_opacity: num(u.get("windowOpacity"), d.ui.window_opacity, 0.1, 1.),
+            window_blur: bool_(u.get("windowBlur"), d.ui.window_blur),
             show_grid: bool_(u.get("showGrid"), d.ui.show_grid),
             fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
             fit_magnify: bool_(u.get("fitMagnify"), d.ui.fit_magnify),
@@ -965,6 +973,16 @@ mod tests {
             5.
         );
         assert!(!m(json!({"canvas": {"momentum": false}})).canvas.momentum);
+    }
+
+    #[test]
+    fn window_opacity_defaults_opaque_and_clamps() {
+        assert_eq!(m(json!({})).ui.window_opacity, 1.);
+        assert!(!m(json!({})).ui.window_blur);
+        assert_eq!(m(json!({"ui.windowOpacity": 0.6})).ui.window_opacity, 0.6);
+        assert_eq!(m(json!({"ui.windowOpacity": 0})).ui.window_opacity, 0.1);
+        assert_eq!(m(json!({"ui.windowOpacity": 3})).ui.window_opacity, 1.);
+        assert!(m(json!({"ui.windowBlur": true})).ui.window_blur);
     }
 
     #[test]

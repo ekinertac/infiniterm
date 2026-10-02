@@ -273,7 +273,7 @@ impl AppView {
         let vp = self.model.viewport;
         let view = self.model.view_size;
         let chrome = self.chrome.clone();
-        window.paint_quad(fill(bounds, chrome.canvas_bg));
+        window.paint_quad(fill(bounds, self.window_fill(chrome.canvas_bg)));
         // Another app is in front: a glance must say keys are going
         // elsewhere. Every card ends up washed ONCE: the canvas here, under
         // the cards; the focused card over its body, below; an unfocused
