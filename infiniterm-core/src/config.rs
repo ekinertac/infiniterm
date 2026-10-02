@@ -96,6 +96,49 @@ pub struct Terminal {
     pub env: Vec<String>,
 }
 
+/// A card label's corner (`ui.cardLabelPosition`). Written "top right";
+/// "right top" reads the same (`label_corner`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LabelCorner {
+    #[serde(rename = "top right")]
+    TopRight,
+    #[serde(rename = "top left")]
+    TopLeft,
+    #[serde(rename = "bottom left")]
+    BottomLeft,
+    #[serde(rename = "bottom right")]
+    BottomRight,
+}
+
+impl LabelCorner {
+    pub fn left(self) -> bool {
+        matches!(self, LabelCorner::TopLeft | LabelCorner::BottomLeft)
+    }
+    pub fn bottom(self) -> bool {
+        matches!(self, LabelCorner::BottomLeft | LabelCorner::BottomRight)
+    }
+}
+
+/// `ui.cardLabelPosition`, either word first, any case; anything else keeps
+/// the fallback.
+fn label_corner(value: Option<&Value>, fallback: LabelCorner) -> LabelCorner {
+    let Some(s) = value.and_then(Value::as_str) else {
+        return fallback;
+    };
+    let words: Vec<String> = s.split_whitespace().map(str::to_lowercase).collect();
+    let has = |w: &str| words.iter().any(|x| x == w);
+    if words.len() != 2 {
+        return fallback;
+    }
+    match (has("top"), has("bottom"), has("left"), has("right")) {
+        (true, false, false, true) => LabelCorner::TopRight,
+        (true, false, true, false) => LabelCorner::TopLeft,
+        (false, true, true, false) => LabelCorner::BottomLeft,
+        (false, true, false, true) => LabelCorner::BottomRight,
+        _ => fallback,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorStyle {
@@ -200,6 +243,10 @@ pub struct Ui {
     /// has to survive 10% zoom, a group name sits above a block, the status
     /// bar is always at arm's length.
     pub card_label_size: f64,
+    /// Which corner of a card its label sits in (#71).
+    pub card_label_position: LabelCorner,
+    /// No label on the card a maximised view fills: the status bar names it.
+    pub hide_label_when_maximised: bool,
     pub group_label_size: f64,
     pub status_bar_size: f64,
     /// Whether the canvas animates at all. Reduced motion still wins.
@@ -295,6 +342,8 @@ pub fn default_config() -> Config {
             unfocused_dim: 0.4,
             maximised: false,
             card_label_size: 15.,
+            card_label_position: LabelCorner::TopRight,
+            hide_label_when_maximised: false,
             group_label_size: 15.,
             status_bar_size: 11.,
             animations: true,
@@ -543,6 +592,11 @@ pub fn merge_config(raw: &Value) -> Config {
             unfocused_dim: num(u.get("unfocusedDim"), d.ui.unfocused_dim, 0., 1.),
             maximised: bool_(u.get("maximised"), d.ui.maximised),
             card_label_size: num(u.get("cardLabelSize"), d.ui.card_label_size, 6., 64.),
+            card_label_position: label_corner(u.get("cardLabelPosition"), d.ui.card_label_position),
+            hide_label_when_maximised: bool_(
+                u.get("hideLabelWhenMaximised"),
+                d.ui.hide_label_when_maximised,
+            ),
             group_label_size: num(u.get("groupLabelSize"), d.ui.group_label_size, 6., 64.),
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),
             animations: bool_(u.get("animations"), d.ui.animations),
@@ -561,6 +615,25 @@ pub fn merge_config(raw: &Value) -> Config {
 
 #[cfg(test)]
 mod tests {
+
+    // Either word first, any case; nonsense keeps the default (#71).
+    #[test]
+    fn the_label_corner_reads_either_way_round() {
+        let c = |v: &str| {
+            merge_config(&serde_json::json!({ "ui.cardLabelPosition": v }))
+                .ui
+                .card_label_position
+        };
+        assert_eq!(c("bottom left"), LabelCorner::BottomLeft);
+        assert_eq!(c("Left Bottom"), LabelCorner::BottomLeft);
+        assert_eq!(c("right top"), LabelCorner::TopRight);
+        assert_eq!(c("top top"), LabelCorner::TopRight);
+        assert_eq!(c("middle"), LabelCorner::TopRight);
+        assert_eq!(
+            default_config().ui.card_label_position,
+            LabelCorner::TopRight
+        );
+    }
 
     // The four settings added for people coming from other terminals.
     #[test]

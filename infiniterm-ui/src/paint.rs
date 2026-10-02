@@ -766,6 +766,13 @@ impl AppView {
         ) {
             return;
         }
+        let ui = &self.model.config.ui;
+        // A maximised card fills the window and the status bar names it, so
+        // its chips can go (#71). The ssh warning below them stays.
+        let hide = ui.hide_label_when_maximised
+            && self.model.selection.maximized
+            && self.model.selection.focused_id.as_deref() == Some(card.id.as_str());
+        let corner = ui.card_label_position;
         let chrome = &self.chrome;
         let inv = inverse_scale(scale, self.model.ui_scale) as f32;
         // Screen-sized, so it never shrinks with the canvas, and stepped
@@ -814,8 +821,30 @@ impl AppView {
             (label_bg, label_fg)
         };
         let h = label_px * LABEL_BADGE_HEIGHT_RATIO;
-        let mut right = b.origin.x + b.size.width - border;
-        if !label.is_empty() {
+        // The chips run inward from `ui.cardLabelPosition`'s corner (#71):
+        // the name first, then the kind badges, leftward from a right corner
+        // and rightward from a left one, along the top or the bottom edge.
+        let top = if corner.bottom() {
+            b.origin.y + b.size.height - border - h
+        } else {
+            b.origin.y + border
+        };
+        let mut edge = if corner.left() {
+            b.origin.x + border
+        } else {
+            b.origin.x + b.size.width - border
+        };
+        let mut place = |w: Pixels| -> Pixels {
+            if corner.left() {
+                let x = edge;
+                edge += w;
+                x
+            } else {
+                edge -= w;
+                edge
+            }
+        };
+        if !label.is_empty() && !hide {
             // The head ellipsises from the left, the tail never does: the last
             // segment is what tells cards apart, and half the directories
             // anyone works in are called `src`.
@@ -849,7 +878,7 @@ impl AppView {
                 line = crate::text::shape(window, &text, label_px, &chrome.ui_font, label_fg);
             }
             let w = line.width + label_px;
-            let lb = Bounds::new(point(right - w, b.origin.y + border), size(w, h));
+            let lb = Bounds::new(point(place(w), top), size(w, h));
             // Remembered for the hit test, in the content coordinates the
             // mouse arrives in (the title bar is above the canvas).
             self.label_hits.push((
@@ -863,7 +892,6 @@ impl AppView {
             ));
             window.paint_quad(fill(lb, label_bg));
             crate::text::paint_in(window, cx, &line, lb, label_px / 2.);
-            right -= w;
         }
         // What kind of card, as its own badge in the chrome's muted colour:
         // the name says WHICH, this says WHAT. Terminals carry no badge.
@@ -884,23 +912,26 @@ impl AppView {
             CardKind::Page => badges.push("page".into()),
             CardKind::Terminal => {}
         }
-        for badge in badges {
+        for badge in badges.into_iter().filter(|_| !hide) {
             let line =
                 crate::text::shape(window, &badge, label_px, &chrome.ui_font, chrome.text_muted);
             let w = line.width + label_px;
-            let bb = Bounds::new(point(right - w, b.origin.y + border), size(w, h));
+            let bb = Bounds::new(point(place(w), top), size(w, h));
             window.paint_quad(fill(bb, chrome.badge_bg));
             crate::text::paint_in(window, cx, &line, bb, label_px / 2.);
-            right -= w;
         }
         // Red: the one thing on a card that changes what a keystroke does.
         if let Some(remote) = &card.remote {
             let line =
                 crate::text::shape(window, remote, label_px, &chrome.ui_font, chrome.remote_fg);
-            let rb = Bounds::new(
-                point(b.origin.x + border, b.origin.y + border),
-                size(line.width + label_px, h),
-            );
+            // The other end of the label's edge, so the two never overlap.
+            let w = line.width + label_px;
+            let x = if corner.left() {
+                b.origin.x + b.size.width - border - w
+            } else {
+                b.origin.x + border
+            };
+            let rb = Bounds::new(point(x, top), size(w, h));
             window.paint_quad(fill(rb, chrome.remote_bg));
             crate::text::paint_in(window, cx, &line, rb, label_px / 2.);
         }
