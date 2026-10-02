@@ -253,7 +253,7 @@ impl Model {
         // Only when the card that closed was the active one: a shell exiting
         // in some other card must not steal focus from what you are in.
         if self.selection.focused_id.as_deref() == Some(id) {
-            self.selection.maximized = self.maximise_sticky;
+            self.selection.maximized = false;
             let before = self
                 .focus_trail
                 .iter()

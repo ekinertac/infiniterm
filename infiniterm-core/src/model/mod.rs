@@ -599,11 +599,6 @@ pub struct Model {
     /// Closed terminal cards whose program is still running and watched
     /// (lifecycle.rs, `Parked`). Runtime-only: a relaunch's orphan sweep
     /// ends whatever is left.
-    /// Maximised mode stays on through new cards, closes, workspace
-    /// switches and focus moves (`ui.maximised`, #63); Cmd+Shift+Enter
-    /// clears it for the session. Off, maximise drops out the way it always
-    /// did.
-    pub maximise_sticky: bool,
     pub parked: Vec<lifecycle::Parked>,
     /// The backend can keep a closed card's program for a reopen (the
     /// daemon); set by the ui at startup. False in tests unless set.
@@ -691,7 +686,6 @@ impl Model {
             config_pairs: vec![],
             closed: vec![],
             parked: vec![],
-            maximise_sticky: false,
             can_park: false,
             stress_zoom: None,
             now_ms: 0.,
@@ -1061,11 +1055,6 @@ impl Model {
     }
 
     fn land_focus(&mut self, id: Option<&str>, deliberate: bool) {
-        // Sticky maximise: whatever gets the focus fills the window, which
-        // is also how a look around with Cmd+2 ends at the next focus move.
-        if self.maximise_sticky && id.is_some() {
-            self.selection.maximized = true;
-        }
         // The visit that is ending: it keeps its place only if it earned
         // one. Then the new visit starts, earned at once when it was
         // chosen rather than walked into.
@@ -1258,7 +1247,7 @@ impl Model {
                 });
             self.set_focus(back.as_deref());
         }
-        self.selection.maximized = self.maximise_sticky;
+        self.selection.maximized = false;
         self.dirty_layout = true;
     }
 
