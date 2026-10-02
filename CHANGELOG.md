@@ -6,16 +6,22 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-02
+## 0.4.0 (build 483), 2026-10-02
+
+### Getting started
+
+- A first launch opens a "Start here" card beside the first terminal: the keys to start with, the mouse gestures, what the border colours mean, and which coding agents on your Mac are wired, with the one command for each that is not. "Help: open the welcome card" brings it back.
+- The welcome card is a page: the document rendered, with headings, lists, code and links you can click. It never takes the keyboard; the wheel or the arrows scroll it while every other key stays the canvas's.
+- The docs are in the app: "Help: open the docs" opens the same pages as infiniterm.app, with the list of pages beside them and `Cmd F` to search. They come with each build, so they match the version you run, offline.
+- The shortcuts panel (Cmd+/) lists every mouse gesture, not six of them.
+
+### Editor
+
+- Editor cards have a status bar: the file's path, and the line and column, the selection size, the cursor count, the indentation, the encoding, the line endings and the language. Its text selects like any text, and `Cmd C` copies it.
+
+### Fixes
 
 - `ift -n <file>` opens the file in a card of its own again; it answered "-n takes a path" when given one.
-- The welcome card is a page now: the document rendered, with headings, lists, code and links you can click, and it never takes the keyboard. The wheel or the arrows scroll it while every other key stays the canvas's. Read-only editors (the docs, the settings defaults) take the keyboard on a click again, so the arrows, Page Down and Cmd+F work in them.
-### 2026-10-01
-
-- Editor cards have a status bar: the file's path on the left, and the line and column, the selection size, the cursor count, the indentation, the encoding, the line endings and the language on the right. Its text selects like any text, a double-click takes one field whole, and `Cmd C` copies it.
-- A first launch opens a "Start here" card beside the first terminal: the keys to start with, the mouse gestures, what the border colours mean, and which coding agents on your Mac are wired, with the one command for each that is not. "Help: open the welcome card" in the palette brings it back.
-- The docs are in the app: "Help: open the docs" opens the same pages as infiniterm.app in a read-only card, the list of pages beside it and `Cmd F` to search. They come with each build, so they match the version you run, offline.
-- The shortcuts panel (Cmd+/) lists every mouse gesture: selecting cards with a rectangle, Cmd+click and Shift+click, dragging a selection, pinch to zoom, and the double-click and hold-left-click-right fits. Before, it showed six and left out most of these.
 
 ## 0.3.0 (build 456), 2026-10-01
 
