@@ -82,6 +82,7 @@ The check is a plain GET of `latest.json` with nothing about you in it.
 
 - `Cmd T` opens a terminal card. `Cmd W` closes it.
 - `Cmd Shift P` is the command palette: everything the app does is in it.
+- A first launch opens a "Start here" page beside the first terminal; "Help: open the welcome card" brings it back.
 - `Cmd /` lists every shortcut, searchable.
 - "Help: open the docs" in the palette opens these pages inside the app, as a card with the page list beside it.
 - `Cmd` + scroll zooms, `Cmd` + drag pans. Bare scroll and drag belong to the card under the pointer.
