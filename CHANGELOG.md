@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-02
 
+- `ift -n <file>` opens the file in a card of its own again; it answered "-n takes a path" when given one.
 - The welcome card is a page now: the document rendered, with headings, lists, code and links you can click, and it never takes the keyboard. The wheel or the arrows scroll it while every other key stays the canvas's. Read-only editors (the docs, the settings defaults) take the keyboard on a click again, so the arrows, Page Down and Cmd+F work in them.
 ### 2026-10-01
 
