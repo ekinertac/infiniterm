@@ -214,6 +214,9 @@ pub struct AppView {
     /// The shortcuts panel's highlighted row among the filtered commands,
     /// whose id Cmd+C copies (#76), and the list's scroll, kept on it.
     pub shortcuts_index: usize,
+    /// "Open a file" asked for the open panel (`Effect::PickFile`); the idle
+    /// timer, which has the app, shows it (#64). The card it opens beside.
+    pub pick_request: Option<Option<String>>,
     pub shortcuts_scroll: gpui::ScrollHandle,
     /// The omnibox's text, opened selected so typing replaces a prefilled
     /// address the way it does in a browser.
@@ -488,6 +491,32 @@ fn main() {
                         this.schedule_save(now_ms());
                         this.schedule_window_save(now_ms());
                         this.idle_editors(now_ms());
+                        // The macOS open panel, asked for by "Open a file"
+                        // (#64). Its answer arrives later, on its own task.
+                        if let Some(from) = this.pick_request.take() {
+                            let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+                                files: true,
+                                directories: true,
+                                multiple: false,
+                                prompt: Some("Open".into()),
+                            });
+                            cx.spawn(async move |view, cx| {
+                                let path = picked
+                                    .await
+                                    .ok()
+                                    .and_then(Result::ok)
+                                    .flatten()
+                                    .and_then(|paths| paths.into_iter().next());
+                                let Some(path) = path else { return };
+                                let _ = view.update(cx, |this, cx| {
+                                    this.model
+                                        .open_picked(&path.to_string_lossy(), from.as_deref());
+                                    this.perform_effects();
+                                    cx.notify();
+                                });
+                            })
+                            .detach();
+                        }
                         // The green button has no model to ask; an atomic
                         // store is cheaper than noticing a settings change.
                         fullscreen::set_mode(this.model.config.ui.fullscreen);

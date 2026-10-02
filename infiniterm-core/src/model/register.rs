@@ -1577,6 +1577,33 @@ mod tests {
         );
     }
 
+    // "Open a file" asks for the macOS panel, and what it picks opens as
+    // `ift <path>` would: a file in an editor, a folder with its tree (#64).
+    #[test]
+    fn open_a_file_shows_the_panel_and_opens_the_pick() {
+        let mut h = Harness::new();
+        let effects = h.run("card.open.file");
+        assert!(effects.iter().any(|e| matches!(e, Effect::PickFile { .. })));
+        let dir = std::env::temp_dir().join(format!("ift-pick-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.md");
+        std::fs::write(&file, "x").unwrap();
+        let from = h.focused().id.clone();
+        let id =
+            h.m.open_picked(&file.to_string_lossy(), Some(&from))
+                .unwrap();
+        let card = h.m.card(&id).unwrap();
+        assert_eq!(card.kind, CardKind::Editor);
+        assert_eq!(card.path.as_deref(), Some(file.to_string_lossy().as_ref()));
+        let id =
+            h.m.open_picked(&dir.to_string_lossy(), Some(&from))
+                .unwrap();
+        assert!(
+            h.m.card(&id).unwrap().explorer,
+            "a folder opens with its tree"
+        );
+    }
+
     // A dialog owns the keyboard: the group-name prompt is modal, the
     // switcher is not (it runs on Ctrl held down).
     #[test]

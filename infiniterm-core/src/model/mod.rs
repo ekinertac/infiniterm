@@ -294,6 +294,11 @@ pub enum Effect {
     /// Cmd+E on a terminal: the ui reads its selection and calls
     /// `Model::find_with`.
     FindSelection(String),
+    /// "Editor: open a file": the ui shows the macOS open panel (#64) and
+    /// hands the pick to `Model::open_picked`, beside `from`.
+    PickFile {
+        from: Option<String>,
+    },
     /// Cmd+Shift+C: visual mode on this terminal card; the grid is the
     /// body's, so the ui turns it on (`Grid::visual_enter`).
     Visual(String),
@@ -430,9 +435,6 @@ pub enum Pending {
     UnsavedClose {
         ids: Vec<String>,
         reclaim: bool,
-    },
-    OpenFile {
-        from: Option<String>,
     },
     NavigateBrowser(String),
     /// Naming an untitled buffer (`open_save_as`); `then_close` is the
