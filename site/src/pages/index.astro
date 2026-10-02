@@ -95,7 +95,8 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>infiniterm</title>
     <meta name="description" content="Terminal cards on an infinite canvas for macOS. Each card's border shows whether the agent in it is working, waiting on you, failed or done." />
-    <link rel="icon" href={`${base}favicon.png`} />
+    <link rel="icon" href={`${base}favicon.ico`} sizes="any" />
+    <link rel="icon" href={`${base}favicon.png`} type="image/png" />
     <link rel="apple-touch-icon" href={`${base}apple-touch-icon.png`} />
     <meta property="og:title" content="infiniterm" />
     <meta property="og:description" content="Terminal cards on an infinite canvas for macOS. Each card's border shows whether the agent in it is working, waiting on you, failed or done." />
@@ -107,7 +108,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
   </head>
   <body>
     <header class="top">
-      <a class="mark" href={base}><img src={`${base}favicon.png`} alt="" width="28" height="28" />infiniterm</a>
+      <a class="mark" href={base}><img src={`${base}icon.png`} alt="" width="32" height="32" />infiniterm</a>
       <nav>
         <a href={`${base}guide/install/`}>Docs</a>
         <a href="#pricing">Pricing</a>
@@ -121,7 +122,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     <main>
       <section class="hero">
         <div class="hero-copy">
-          <img class="app-icon" src={`${base}icon.png`} width="112" height="112" alt="The infiniterm app icon: four cards in a grid, bordered violet, yellow, red and green." />
+          <img class="app-icon" src={`${base}icon.png`} width="128" height="128" alt="The infiniterm app icon: four cards in a grid, bordered violet, yellow, red and green." />
           <h1>See which agent needs you without opening a single tab.</h1>
           <p class="lede">
             infiniterm puts every terminal on one zoomable canvas. Each card keeps its place, and its border says what the
@@ -457,7 +458,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
   }
   .lede { font-size: 1.25rem; color: var(--ink-soft); margin: 28px 0 32px; }
   /* The app icon, big: its four borders are the four states the page is about. */
-  .app-icon { display: block; width: 112px; height: 112px; margin: 0 0 28px -6px; }
+  .app-icon { display: block; width: 128px; height: 128px; margin: 0 0 20px -14px; }
   @media (max-width: 560px) { .app-icon { width: 80px; height: 80px; margin-bottom: 20px; } }
   .methods { display: flex; gap: 4px; margin-bottom: 8px; }
   .methods button {
