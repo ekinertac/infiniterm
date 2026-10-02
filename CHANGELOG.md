@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-02
 
+- `ui.showGrid` turns the canvas grid off (default on).
 - Opening the settings (or the keybindings) focuses your own file alone. Both cards were selected before, so you had to deselect before typing. They still open side by side and close together.
 - `ui.maximised` is gone: always-maximised was a way of working infiniterm is not built for. `Cmd Shift Enter` still maximises one card, and `ui.fitPadding` / `ui.fitMagnify` make a fit fill the window.
 - Two settings for fitting a card (Cmd+1, Cmd+2, Cmd+3): `ui.fitPadding` sets the margin around it in pixels (default 48, 0 lets it touch the window edges) and `ui.fitMagnify` lets a fit zoom past 100% so a card fills the window.

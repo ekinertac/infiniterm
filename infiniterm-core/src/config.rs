@@ -237,6 +237,8 @@ pub struct Ui {
     pub inactive_dim: f64,
     /// How much the whole canvas is dimmed while another app is in front.
     pub unfocused_dim: f64,
+    /// Whether the canvas draws its grid (#96).
+    pub show_grid: bool,
     /// Screen pixels left around a card or cluster when it is fitted (#87).
     pub fit_padding: f64,
     /// Whether a fit may zoom past 100% to fill the window.
@@ -343,6 +345,7 @@ pub fn default_config() -> Config {
         ui: Ui {
             inactive_dim: 0.45,
             unfocused_dim: 0.4,
+            show_grid: true,
             fit_padding: FIT_PADDING,
             fit_magnify: false,
             card_label_size: 15.,
@@ -594,6 +597,7 @@ pub fn merge_config(raw: &Value) -> Config {
         ui: Ui {
             inactive_dim: num(u.get("inactiveDim"), d.ui.inactive_dim, 0., 1.),
             unfocused_dim: num(u.get("unfocusedDim"), d.ui.unfocused_dim, 0., 1.),
+            show_grid: bool_(u.get("showGrid"), d.ui.show_grid),
             fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
             fit_magnify: bool_(u.get("fitMagnify"), d.ui.fit_magnify),
             card_label_size: num(u.get("cardLabelSize"), d.ui.card_label_size, 6., 64.),
@@ -961,6 +965,13 @@ mod tests {
             5.
         );
         assert!(!m(json!({"canvas": {"momentum": false}})).canvas.momentum);
+    }
+
+    #[test]
+    fn the_grid_is_on_unless_turned_off() {
+        assert!(m(json!({})).ui.show_grid);
+        assert!(!m(json!({"ui.showGrid": false})).ui.show_grid);
+        assert!(m(json!({"ui.showGrid": "no"})).ui.show_grid);
     }
 
     #[test]

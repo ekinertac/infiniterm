@@ -268,6 +268,10 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.showGrid",
+        &["Draw the canvas grid. Off leaves the canvas background plain."],
+    ),
+    (
         "ui.fitPadding",
         &[
             "Screen pixels left around a card or cluster when it is fitted (Cmd+1, Cmd+2,",
