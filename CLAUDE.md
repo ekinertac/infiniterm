@@ -108,6 +108,7 @@ make publish            # target/dist onto ekinertac/infiniterm-releases as the 
 make drive              # a scripted GUI run with screenshots; tools/drive/<scenario>.sh for the rest
 tools/drive/ift.sh      # headless: drives a scratch instance with ift and the hook binary over the socket
 tools/drive/apps.sh     # TUI programs in a card; CONFIG=<settings file> TAG=<name> runs the same take under pty and tmux for an A/B
+make run-clean          # an empty canvas AND empty settings (INFINITERM_CONFIG_DIR), as a new user sees the app; `make run` reads your real ~/.config/infiniterm
 make run DATA=/tmp/x    # any data dir; INFINITERM_CONFIG_DIR moves ~/.config/infiniterm the same way
 ```
 
