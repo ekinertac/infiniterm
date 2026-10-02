@@ -686,8 +686,8 @@ impl AppView {
         let mut left = format!(
             "{}   {} card{}",
             format_zoom(m.viewport.scale),
-            m.cards.len(),
-            if m.cards.len() == 1 { "" } else { "s" }
+            m.card_count(),
+            if m.card_count() == 1 { "" } else { "s" }
         );
         if let Some(c) = m.focused() {
             left.push_str(&format!("   {}", m.numbered_label(c)));

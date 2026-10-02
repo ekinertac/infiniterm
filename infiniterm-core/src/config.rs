@@ -253,6 +253,9 @@ pub struct Ui {
     /// A bundled picture's name or a path; empty for none (#97).
     pub background_image: String,
     pub background_image_fit: BackgroundFit,
+    /// Ctrl+Tab and the status bar's card count look at the current
+    /// workspace only (#101).
+    pub workspace_isolation: bool,
     /// Alpha of a card's background fill, text untouched (#98).
     pub card_opacity: f64,
     /// Whether the canvas draws its grid (#96).
@@ -367,6 +370,7 @@ pub fn default_config() -> Config {
             window_blur: false,
             background_image: String::new(),
             background_image_fit: BackgroundFit::Cover,
+            workspace_isolation: false,
             card_opacity: 1.,
             show_grid: true,
             fit_padding: FIT_PADDING,
@@ -632,6 +636,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 Some(s) if s.eq_ignore_ascii_case("contain") => BackgroundFit::Contain,
                 _ => BackgroundFit::Cover,
             },
+            workspace_isolation: bool_(u.get("workspaceIsolation"), d.ui.workspace_isolation),
             card_opacity: num(u.get("cardOpacity"), d.ui.card_opacity, 0.1, 1.),
             show_grid: bool_(u.get("showGrid"), d.ui.show_grid),
             fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
@@ -1026,6 +1031,16 @@ mod tests {
                 .ui
                 .background_image_fit,
             BackgroundFit::Cover
+        );
+    }
+
+    #[test]
+    fn workspace_isolation_is_off_unless_asked_for() {
+        assert!(!m(json!({})).ui.workspace_isolation);
+        assert!(
+            m(json!({"ui.workspaceIsolation": true}))
+                .ui
+                .workspace_isolation
         );
     }
 

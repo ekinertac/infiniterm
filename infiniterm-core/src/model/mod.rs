@@ -777,6 +777,16 @@ impl Model {
     /// The cards on the active canvas you can see: a terminal under an
     /// in-place editor (`cover.rs`) is left out, so navigation, tidy and
     /// fit-all treat the pair as the one card on screen.
+    /// The number the status bar shows: every card, or this workspace's
+    /// with `ui.workspaceIsolation` (#101).
+    pub fn card_count(&self) -> usize {
+        if self.config.ui.workspace_isolation {
+            self.here().len()
+        } else {
+            self.cards.len()
+        }
+    }
+
     pub fn here(&self) -> Vec<&Card> {
         self.cards_on(self.active_workspace.as_deref())
             .into_iter()

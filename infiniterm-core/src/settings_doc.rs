@@ -291,6 +291,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["\"cover\" fills the window and crops the edges; \"contain\" shows the whole picture."],
     ),
     (
+        "ui.workspaceIsolation",
+        &[
+            "Ctrl+Tab switches between the current workspace's cards only, and the status bar",
+            "counts this workspace's cards, not every workspace's. The palette still lists",
+            "every card, so it stays the way to jump to another workspace.",
+        ],
+    ),
+    (
         "ui.cardOpacity",
         &[
             "How opaque a card's background is, 0.1 to 1. Text stays solid, so it never gets",
