@@ -283,6 +283,17 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.cardLabelPosition",
+        &[
+            "The corner of a card its label sits in: \"top right\", \"top left\", \"bottom left\"",
+            "or \"bottom right\". An ssh chip moves to the other side of the same edge.",
+        ],
+    ),
+    (
+        "ui.hideLabelWhenMaximised",
+        &["No label on a maximised card: it fills the window and the status bar names it."],
+    ),
+    (
         "ui.cardLabelSize",
         &[
             "Screen pixels, before the Cmd+Shift+= multiplier, at 60% zoom and closer;",
