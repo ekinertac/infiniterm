@@ -87,10 +87,11 @@ impl Model {
                 .collect();
             self.config_pairs.push(ConfigPair { ids, return_to });
         }
-        // Focus set through the extend path, so the extras (the defaults
-        // card) survive the focus landing on the user's file.
-        let extra = defaults.iter().filter(|d| **d != user).cloned().collect();
-        self.focus_extended(&user, extra);
+        // Your file alone is focused and selected: the defaults card is for
+        // reading, and a two-card selection meant deselecting before the
+        // file you came for would take a key (#91). Both stay in view, and
+        // the pair still closes as one (`config_pairs`).
+        self.focus_extended(&user, vec![]);
         let rects: Vec<_> = defaults
             .iter()
             .chain(std::iter::once(&user))

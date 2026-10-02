@@ -1536,6 +1536,23 @@ mod tests {
         assert_eq!(h.m.card(&ids[0]).unwrap().rect, back[0].1);
     }
 
+    // #91: opening the settings focuses the user's file alone; the defaults
+    // card beside it is not part of a selection.
+    #[test]
+    fn opening_settings_selects_only_the_users_file() {
+        let mut h = Harness::new();
+        four_cards(&mut h);
+        h.run("app.settings");
+        let focused = h.m.focused().cloned().expect("a focused card");
+        assert!(focused
+            .path
+            .as_deref()
+            .unwrap_or("")
+            .ends_with("settings.json"));
+        assert_eq!(h.m.selected().len(), 1, "one card selected");
+        assert_eq!(h.m.config_pairs.len(), 1, "the pair is still remembered");
+    }
+
     // "Open a file" asks for the macOS panel, and what it picks opens as
     // `ift <path>` would: a file in an editor, a folder with its tree (#64).
     #[test]
