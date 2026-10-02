@@ -221,12 +221,16 @@ impl Model {
                 }
                 items
             }
-            // The theme in force is listed FIRST, so opening the picker
-            // previews what you already have instead of whatever sorts first.
+            // The theme you had when the picker opened is listed FIRST, so
+            // opening it previews what you already have instead of whatever
+            // sorts first. Not the theme in force: the preview changes that
+            // on every move, and listing it first re-sorted the rows under
+            // the highlight (#67).
             Source::Themes => {
                 let current = self
-                    .theme_current
+                    .theme_before_preview
                     .clone()
+                    .or_else(|| self.theme_current.clone())
                     .filter(|c| self.theme_names.contains(c));
                 current
                     .iter()
