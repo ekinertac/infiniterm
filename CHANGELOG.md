@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-02
 
+- In the shortcuts panel (Cmd+/), Up and Down highlight a command and Cmd+C copies its id, ready for keybindings.json; a click highlights a row too.
 - The shortcuts panel (Cmd+/) shows each command's id beside its name, the string keybindings.json binds, and finds a command by it.
 - The theme picker marks the theme you have with "active" and a line under it, then lists the rest A to Z; it no longer reorders by the themes you picked recently.
 - The theme picker keeps its order while you move through it; it re-sorted on every preview, so the highlighted row and the theme being shown drifted apart.
