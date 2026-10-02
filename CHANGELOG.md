@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-02
+
+- A new app icon: four cards whose borders are the four card states, violet, yellow, red and green.
+
 ## 0.4.1 (build 487), 2026-10-02
 
 - Releases and updates come from https://github.com/ekinertac/infiniterm/releases, beside the source, from this version on. Copies on 0.4.0 and earlier found this one where they always looked and move over with it.
