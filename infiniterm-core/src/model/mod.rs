@@ -567,6 +567,10 @@ pub struct Model {
     /// Saved-layout state: nothing is saved until `loaded`; nothing is ever
     /// saved while `read_only` (the file was written by a newer build).
     pub loaded: bool,
+    /// No save file existed at load: the very first launch on this Mac (or
+    /// in this data dir). It is what makes the first seed the welcome canvas
+    /// rather than one bare terminal (`seed_first_card`, `welcome.rs`).
+    pub first_run: bool,
     pub read_only: bool,
     pub dirty_layout: bool,
     pub config: Config,
@@ -664,6 +668,7 @@ impl Model {
             notice: None,
             notice_until: 0.,
             loaded: false,
+            first_run: false,
             read_only: false,
             dirty_layout: false,
             config: default_config(),

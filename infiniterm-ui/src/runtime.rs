@@ -785,6 +785,41 @@ pub fn startup(app: &mut AppView) {
     app.refresh_themes();
     app.model.apply_settings_text(&settings);
     app.model.apply_keymap_text(&keys);
+    // The "Start here" card's file, rewritten every launch like the defaults
+    // so its keys follow the keymap in force and its agent list follows what
+    // is installed now. A first launch opens it (`seed_first_card`).
+    {
+        use infiniterm_core::welcome;
+        let env_path = |k: &str| std::env::var_os(k).map(std::path::PathBuf::from);
+        let home = infiniterm_core::paths::home_dir();
+        let agents = welcome::agents_on_this_mac(
+            &home,
+            env_path("XDG_CONFIG_HOME").as_deref(),
+            env_path("CODEX_HOME").as_deref(),
+        );
+        let path = welcome::welcome_path();
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&path, welcome::render(&app.model.keymap, &agents)));
+        if let Err(e) = written {
+            eprintln!("[infiniterm/warn] could not write {}: {e}", path.display());
+        }
+        // The in-app docs (`help.docs`), the same pages as infiniterm.app,
+        // rewritten every launch so they match this build.
+        let dir = infiniterm_core::help_docs::docs_dir();
+        let written = std::fs::create_dir_all(&dir).and_then(|()| {
+            infiniterm_core::help_docs::files()
+                .into_iter()
+                .try_for_each(|(name, text)| std::fs::write(dir.join(name), text))
+        });
+        if let Err(e) = written {
+            eprintln!(
+                "[infiniterm/warn] could not write the docs to {}: {e}",
+                dir.display()
+            );
+        }
+    }
     app.animator.animations_on = app.model.config.ui.animations && !app.reduce_motion;
     // Before any card exists: which sessions the last launch left running.
     app.live_sessions = app.backend.pty.live_sessions();

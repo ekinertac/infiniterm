@@ -261,8 +261,10 @@ impl Model {
         let group_id = from.as_ref().and_then(|c| c.group_id.clone());
         let opts = NewCard {
             kind,
-            // An editor on a directory shows its tree; a diff always shows its list.
-            explorer: root.is_some() && (kind == CardKind::Diff || path.is_none()),
+            // An editor given a root shows its tree (a directory, or the
+            // in-app docs: a page with the folder beside it); a diff always
+            // shows its list.
+            explorer: root.is_some(),
             path,
             root,
             line,
