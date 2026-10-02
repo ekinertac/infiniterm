@@ -209,7 +209,10 @@ impl CardBody for PageBody {
             w: f32::from(bounds.size.width) as f64 / scale,
             h: f32::from(bounds.size.height) as f64 / scale,
         };
-        window.paint_quad(fill(bounds, self.colors.background));
+        window.paint_quad(fill(
+            bounds,
+            crate::chrome::card_fill(cx, self.colors.background),
+        ));
         let font_size = px((self.metrics.font_px * scale) as f32);
         if font_size < crate::chrome::legible_font_px(window.scale_factor()) {
             return;

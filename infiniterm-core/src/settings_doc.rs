@@ -291,6 +291,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["\"cover\" fills the window and crops the edges; \"contain\" shows the whole picture."],
     ),
     (
+        "ui.cardOpacity",
+        &[
+            "How opaque a card's background is, 0.1 to 1. Text stays solid, so it never gets",
+            "blurry; below 1 the canvas, the grid and ui.backgroundImage show through. Cells a",
+            "program colours itself (vim's status line) and browser cards stay opaque.",
+        ],
+    ),
+    (
         "ui.showGrid",
         &["Draw the canvas grid. Off leaves the canvas background plain."],
     ),

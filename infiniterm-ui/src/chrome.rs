@@ -257,6 +257,26 @@ pub fn hex(s: &str) -> Option<Hsla> {
     Some(rgb(v).into())
 }
 
+/// `ui.cardOpacity` for the frame being painted, as a gpui global so every
+/// body's `paint` can reach it without a new parameter on `CardBody`
+/// (#98). Set once a frame in `paint_world`; absent means opaque.
+#[derive(Clone, Copy, PartialEq)]
+pub struct CardOpacity(pub f32);
+impl gpui::Global for CardOpacity {}
+
+/// A card's background fill at the card opacity. Only the fill across the
+/// whole body goes through this: text, selections and cells a program
+/// coloured keep their own alpha.
+pub fn card_fill(cx: &gpui::App, c: Hsla) -> Hsla {
+    scaled_alpha(c, cx.try_global::<CardOpacity>().map_or(1., |o| o.0))
+}
+
+/// `c` with its own alpha multiplied by `factor`: a fill that was already
+/// translucent stays proportionally so.
+pub fn scaled_alpha(c: Hsla, factor: f32) -> Hsla {
+    with_alpha(c, c.a * factor)
+}
+
 pub fn with_alpha(c: Hsla, a: f32) -> Hsla {
     Hsla { a, ..c }
 }
@@ -340,6 +360,26 @@ impl Chrome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #98: a card's fill takes the card opacity times its own alpha, and
+    // nothing else about the colour changes.
+    #[test]
+    fn a_fill_scales_its_alpha_and_keeps_its_colour() {
+        let c = Hsla {
+            h: 0.5,
+            s: 0.4,
+            l: 0.3,
+            a: 1.,
+        };
+        let half = scaled_alpha(c, 0.5);
+        assert_eq!((half.h, half.s, half.l, half.a), (0.5, 0.4, 0.3, 0.5));
+        assert_eq!(
+            scaled_alpha(half, 0.5).a,
+            0.25,
+            "already translucent stays so"
+        );
+        assert_eq!(scaled_alpha(c, 1.), c);
+    }
 
     #[test]
     fn the_legible_line_is_pixels_on_1x_and_size_on_retina() {
