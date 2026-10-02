@@ -16,11 +16,13 @@
 //! could drift from the palette's.
 //!
 //! Exit codes are API once anything scripts against them: 0 success, 1 infiniterm
-//! is not running, 2 bad usage.
+//! is not running, 2 bad usage; `ift licence` adds 3 (rejected) and 4 (Lemon
+//! Squeezy unreachable) for itself only.
 
 mod attach;
 mod claude_hooks;
 mod completion;
+mod licence_cmd;
 mod socket;
 
 use std::path::{Path, PathBuf};
@@ -66,6 +68,11 @@ ift — drive infiniterm from a shell
                              ranked against the real history and open cards
   ift name <text>            name the card this is run from
   ift group <name>           put this card in a group, creating it if needed
+  ift licence [<email> <key>]
+                             register this Mac with its commercial licence
+                             key (optional; asks Lemon Squeezy once, then
+                             the About window says who it is licensed to);
+                             bare, says whether it is registered
   ift install                put ift on $PATH (a symlink in ~/.local/bin) and
                              its zsh completion on fpath
   ift completion zsh         print the zsh completion function
@@ -85,12 +92,13 @@ ift — drive infiniterm from a shell
                              directly, so it must be installed there
                              first); takes effect on the app's next launch
 
-Exit codes: 0 ok, 1 infiniterm not running, 2 bad usage.
+Exit codes: 0 ok, 1 infiniterm not running, 2 bad usage; for ift licence
+only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 ";
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 16] = [
+pub const SUBCOMMANDS: [&str; 17] = [
     "diff",
     "ls",
     "sessions",
@@ -101,6 +109,7 @@ pub const SUBCOMMANDS: [&str; 16] = [
     "name",
     "group",
     "install",
+    "licence",
     "install-claude-hooks",
     "install-codex-hooks",
     "install-opencode-hooks",
@@ -129,6 +138,7 @@ fn main() -> ExitCode {
         ),
         Some("install-extension") => install_extension(args.get(1).map(String::as_str)),
         Some("install") => install_self(),
+        Some("licence") => licence_cmd::run(&args[1..]),
         Some("completion") => match args.get(1).map(String::as_str) {
             Some("zsh") => {
                 print!("{}", completion::ZSH);

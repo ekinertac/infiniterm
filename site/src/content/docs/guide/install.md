@@ -72,6 +72,16 @@ HISTFILE="${INFINITERM_HISTFILE:-$HOME/.zsh_history}"
 
 Outside infiniterm the variable is unset and your usual history file is used.
 
+## Registering a licence
+
+Optional. The app never asks for the key and works the same without it; the key in your receipt email is your proof of purchase either way. To have the About window say who the Mac is licensed to:
+
+```sh
+ift licence you@example.com XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
+```
+
+It asks Lemon Squeezy once whether the key is an infiniterm licence bought with that email, and saves it in `licence.json` beside the canvas. Nothing re-checks it later. Bare `ift licence` says whether this Mac is registered. It exits 3 when the key or email is refused and 4 when Lemon Squeezy cannot be reached.
+
 ## Updates
 
 The app checks for a new build at launch and every six hours. A newer build is downloaded, its signature and notarization are checked, and it is installed the next time the app restarts. The status bar says "update N ready" until then. "Check for Updates…" in the app menu checks now. "About infiniterm" in the app menu (or "App: about infiniterm" in the palette) shows the version and build you are running.

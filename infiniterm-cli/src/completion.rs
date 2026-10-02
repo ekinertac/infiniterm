@@ -52,6 +52,7 @@ _ift() {
     'omni:what the omnibox would show for a term'
     'commands:every command the app registers, with its key'
     'usage:the commands and gestures you used, and the ones you never did'
+    'licence:register this Mac with its commercial licence key'
     'name:name the card this is run from'
     'group:put this card in a group'
     'install:put ift on $PATH and this completion on fpath'
