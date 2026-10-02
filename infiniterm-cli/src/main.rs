@@ -156,7 +156,7 @@ fn main() -> ExitCode {
         // harness can be driven from a script instead of by typing into the
         // palette, and UI actions are otherwise deliberately NOT ift's.
         Some("dev-run") => send("dev-run", rest()),
-        Some("-n") => match args.get(2) {
+        Some("-n") => match new_card_path(&args) {
             Some(p) => open_path(p, false),
             None => {
                 eprintln!("ift: -n takes a path");
@@ -398,6 +398,13 @@ fn send(cmd: &str, args: Vec<String>) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// The path after `-n`. `args` already left the program name out, so it
+/// is the second argument; it read the third, and `ift -n <file>` said
+/// "-n takes a path" (#48).
+fn new_card_path(args: &[String]) -> Option<&str> {
+    args.get(1).map(String::as_str).filter(|p| !p.is_empty())
 }
 
 fn home() -> PathBuf {
@@ -685,6 +692,14 @@ fn install_extension(source: Option<&str>) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `ift -n <file>`: the path is the argument right after `-n`.
+    #[test]
+    fn dash_n_takes_the_next_argument_as_its_path() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(new_card_path(&a(&["-n", "CLAUDE.md"])), Some("CLAUDE.md"));
+        assert_eq!(new_card_path(&a(&["-n"])), None);
+    }
 
     // The OpenCode plugin is the template with the hook path in it, one
     // plugin export (OpenCode calls every export as a plugin), and it names
