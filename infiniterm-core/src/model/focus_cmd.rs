@@ -596,7 +596,11 @@ impl Model {
     /// comes up (`switcher_commit`), or Escape puts it back.
     pub fn switcher_step(&mut self, delta: isize) {
         if self.switcher.is_none() {
-            let all: Vec<String> = self.cards.iter().map(|c| c.id.clone()).collect();
+            let all: Vec<String> = if self.config.ui.workspace_isolation {
+                self.here().iter().map(|c| c.id.clone()).collect()
+            } else {
+                self.cards.iter().map(|c| c.id.clone()).collect()
+            };
             let list = crate::switcher::order(
                 self.selection.focused_id.as_deref(),
                 &self.focus_trail,

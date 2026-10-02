@@ -340,6 +340,38 @@ mod tests {
         assert_eq!(h.m.switcher.as_ref().unwrap().index, 3);
     }
 
+    // #101: with `ui.workspaceIsolation` the switcher lists this workspace's
+    // cards only and the count is this workspace's.
+    #[test]
+    fn workspace_isolation_limits_the_switcher_and_the_count() {
+        let mut h = Harness::new();
+        let here = four_cards(&mut h);
+        let first_workspace = h.m.here().len();
+        h.run("workspace.new");
+        h.run("card.new.terminal");
+        let there = h.focused().id.clone();
+        assert!(!here.contains(&there));
+        let all = h.m.cards.len();
+        assert!(
+            all > first_workspace,
+            "the new workspace has cards of its own"
+        );
+        h.m.set_focus(Some(&here[0]));
+        // Off: the other workspace's card is a row and counts.
+        assert_eq!(h.m.card_count(), all);
+        h.run("card.switcher.next");
+        assert_eq!(h.m.switcher.as_ref().unwrap().list.len(), all);
+        h.m.switcher_cancel();
+        h.m.apply_settings_text(r#"{"ui.workspaceIsolation": true}"#);
+        h.run("workspace.prev");
+        h.m.set_focus(Some(&here[0]));
+        assert_eq!(h.m.card_count(), first_workspace);
+        h.run("card.switcher.next");
+        let list = h.m.switcher.as_ref().unwrap().list.clone();
+        assert_eq!(list.len(), first_workspace);
+        assert!(!list.contains(&there));
+    }
+
     // Ctrl+Tab is a way out of a locked browser card, like Cmd+Escape.
     #[test]
     fn ctrl_tab_reaches_the_switcher_from_a_locked_card() {
