@@ -6,9 +6,9 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-02
+## 0.4.1 (build 487), 2026-10-02
 
-- Releases and updates come from https://github.com/ekinertac/infiniterm/releases, beside the source. Copies on 0.4.0 and earlier find the next release where they always looked and move over with it.
+- Releases and updates come from https://github.com/ekinertac/infiniterm/releases, beside the source, from this version on. Copies on 0.4.0 and earlier found this one where they always looked and move over with it.
 
 ## 0.4.0 (build 483), 2026-10-02
 
