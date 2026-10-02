@@ -192,6 +192,9 @@ pub struct Ui {
     pub inactive_dim: f64,
     /// How much the whole canvas is dimmed while another app is in front.
     pub unfocused_dim: f64,
+    /// The focused card always fills the window (`Model::maximise_sticky`,
+    /// #63): a friend's way of working, a setting so it can be tried.
+    pub maximised: bool,
     /// Chrome font sizes in SCREEN pixels, before the UI-scale multiplier.
     /// Three values because they are read at three distances: a card label
     /// has to survive 10% zoom, a group name sits above a block, the status
@@ -290,6 +293,7 @@ pub fn default_config() -> Config {
         ui: Ui {
             inactive_dim: 0.45,
             unfocused_dim: 0.4,
+            maximised: false,
             card_label_size: 15.,
             group_label_size: 15.,
             status_bar_size: 11.,
@@ -537,6 +541,7 @@ pub fn merge_config(raw: &Value) -> Config {
         ui: Ui {
             inactive_dim: num(u.get("inactiveDim"), d.ui.inactive_dim, 0., 1.),
             unfocused_dim: num(u.get("unfocusedDim"), d.ui.unfocused_dim, 0., 1.),
+            maximised: bool_(u.get("maximised"), d.ui.maximised),
             card_label_size: num(u.get("cardLabelSize"), d.ui.card_label_size, 6., 64.),
             group_label_size: num(u.get("groupLabelSize"), d.ui.group_label_size, 6., 64.),
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),

@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-02
 
+- A setting for working one card at a time: with `"ui.maximised": true` the focused card always fills the window, through new cards, closes, workspace switches and focus moves. Cmd+2 still shows the whole canvas, and Cmd+Shift+Enter turns it off for the session.
 - The cursor is a closed hand while you pan the canvas with Cmd+drag or the middle button, as it is while you drag a card.
 - A new app icon: four cards whose borders are the four card states, violet, yellow, red and green.
 

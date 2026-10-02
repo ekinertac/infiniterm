@@ -279,7 +279,7 @@ impl Model {
             ..Default::default()
         };
         let id = self.add_card(&cwd, opts);
-        self.selection.maximized = false;
+        self.selection.maximized = self.maximise_sticky;
         self.set_focus(Some(&id));
         self.reveal_focused();
         Some(id)

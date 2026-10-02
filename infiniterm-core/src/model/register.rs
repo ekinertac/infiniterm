@@ -1536,6 +1536,47 @@ mod tests {
         assert_eq!(h.m.card(&ids[0]).unwrap().rect, back[0].1);
     }
 
+    // `ui.maximised`: the focused card fills the window through a new card,
+    // a close and a workspace switch; Cmd+2 is a look around that the next
+    // focus move ends; Cmd+Shift+Enter turns it off for the session.
+    #[test]
+    fn maximised_mode_stays_on_with_the_setting() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        h.m.set_focus(Some(&ids[0]));
+        h.m.apply_settings_text(r#"{"ui.maximised": true}"#);
+        assert!(h.m.selection.maximized, "on at once");
+        h.run("card.new.terminal");
+        assert!(h.m.selection.maximized, "a new card opens maximised");
+        h.run("card.close");
+        assert!(h.m.selection.maximized, "the next card shows maximised");
+        h.run("workspace.new");
+        h.run("card.new.terminal");
+        assert!(h.m.selection.maximized, "a workspace switch keeps it");
+        h.run("canvas.zoom.fitAll");
+        assert!(!h.m.selection.maximized, "Cmd+2 looks around");
+        let next = ids[1].clone();
+        h.m.set_focus(Some(&next));
+        assert!(
+            h.m.selection.maximized,
+            "the next focus fills the window again"
+        );
+        h.run("card.maximize.toggle");
+        assert!(!h.m.selection.maximized);
+        h.run("card.new.terminal");
+        assert!(
+            !h.m.selection.maximized,
+            "off for the session after the key"
+        );
+        h.m.apply_settings_text("{}");
+        h.run("card.maximize.toggle");
+        h.run("card.new.terminal");
+        assert!(
+            !h.m.selection.maximized,
+            "without the setting, maximise drops out as before"
+        );
+    }
+
     // A dialog owns the keyboard: the group-name prompt is modal, the
     // switcher is not (it runs on Ctrl held down).
     #[test]

@@ -57,7 +57,7 @@ impl Model {
         self.covers.insert(id.clone(), base.to_string());
         self.cover_at.insert(id.clone(), base_card.rect);
         self.edit_waiters.insert(id.clone(), waiter);
-        self.selection.maximized = false;
+        self.selection.maximized = self.maximise_sticky;
         self.set_focus(Some(&id));
         Some(id)
     }
