@@ -18,7 +18,6 @@ pub const EMPTY_KEYBINDINGS: &str = "// Your keybindings. Anything here override
 
 impl Model {
     pub fn apply_settings_text(&mut self, text: &str) {
-        let was_maximised = self.config.ui.maximised;
         match parse_jsonc(text) {
             Ok(raw) => {
                 self.config = merge_config(&raw);
@@ -30,12 +29,6 @@ impl Model {
                     .push(Effect::Warn(format!("settings.json: {e}")));
                 self.config = default_config();
             }
-        }
-        // `ui.maximised` turned on or off: the mode follows at once, and
-        // a launch with it on starts maximised (the first focus lands it).
-        if self.config.ui.maximised != was_maximised {
-            self.maximise_sticky = self.config.ui.maximised;
-            self.selection.maximized = self.maximise_sticky && self.selection.focused_id.is_some();
         }
         if let Some(dir) = Some(self.config.starting_dir.clone()).filter(|d| !d.is_empty()) {
             self.start_dir = dir;

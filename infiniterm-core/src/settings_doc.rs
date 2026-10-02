@@ -268,14 +268,6 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
-        "ui.maximised",
-        &[
-            "The focused card always fills the window, like a tabbed terminal with the canvas",
-            "behind it: new cards, closes, workspace switches and focus moves keep it so.",
-            "Cmd+2 still shows the whole canvas; Cmd+Shift+Enter turns it off for the session.",
-        ],
-    ),
-    (
         "ui.fitPadding",
         &[
             "Screen pixels left around a card or cluster when it is fitted (Cmd+1, Cmd+2,",
