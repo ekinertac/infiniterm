@@ -410,7 +410,6 @@ impl Model {
     }
 
     /// A prompt's answer, for the questions the card commands ask.
-    /// `exists` is asked of the filesystem by the caller for `OpenFile`.
     pub fn answer(
         &mut self,
         pending: Pending,
@@ -468,16 +467,6 @@ impl Model {
                 Some(crate::prompt::ALT) => self.close_selected_confirmed(ids, reclaim, true),
                 Some(_) => self.save_then_close(ids, reclaim),
             },
-            Pending::OpenFile { from } => {
-                let Some(raw) = text else { return };
-                let from_card = from.as_deref().and_then(|id| self.card(id)).cloned();
-                let full = self.resolve_typed_path(&raw, from_card.as_ref());
-                if !exists(&full) {
-                    self.notify(format!("{raw}: no such file"));
-                    return;
-                }
-                self.open_in_card(open_plan(&full, PathKind::File, None), from.as_deref());
-            }
             Pending::NavigateBrowser(id) => {
                 if let (Some(url), Some(card)) =
                     (Model::normalise_url(text.as_deref()), self.card_mut(&id))
@@ -1173,9 +1162,12 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             })
         })
     });
+    // The macOS open panel, not a typed path: typing paths was tiring and
+    // the panel has search, recents and the sidebar (#64). `ift <path>`
+    // still opens a typed one.
     r.register("card.open.file", "Editor: open a file", |m| {
         let from = m.selection.focused_id.clone();
-        m.prompt.ask("file to open", "", Pending::OpenFile { from });
+        m.effects.push(Effect::PickFile { from });
     });
     // The agents with an adapter: each gets a new-card entry, in the active
     // card's directory like any new card.
@@ -1716,5 +1708,19 @@ impl Model {
             value: serde_json::json!(size),
         });
         self.notify(format!("terminal font {size} pt"));
+    }
+}
+
+impl Model {
+    /// What the open panel picked (`Effect::PickFile`): a file opens in an
+    /// editor card, a folder in one with its tree, beside `from`, exactly as
+    /// `ift <path>` would.
+    pub fn open_picked(&mut self, path: &str, from: Option<&str>) -> Option<String> {
+        let kind = if std::path::Path::new(path).is_dir() {
+            PathKind::Directory
+        } else {
+            PathKind::File
+        };
+        self.open_in_card(open_plan(path, kind, None), from)
     }
 }

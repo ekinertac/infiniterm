@@ -71,6 +71,7 @@ impl AppView {
             query_field: Default::default(),
             shortcuts_field: Default::default(),
             shortcuts_index: 0,
+            pick_request: None,
             shortcuts_scroll: gpui::ScrollHandle::new(),
             omni_field: crate::field::Field::default(),
             find_field: crate::field::Field::default(),
@@ -367,6 +368,7 @@ impl AppView {
                 // for a clipboard is the wrong trade. The frame flushes it,
                 // the same way a terminal's OSC 52 text is flushed.
                 Effect::Copy(text) => self.clipboard_out = Some(text),
+                Effect::PickFile { from } => self.pick_request = Some(from),
                 Effect::Visual(card_id) => {
                     if let Some(b) = self.terminal_body(&card_id) {
                         b.grid.visual_enter();

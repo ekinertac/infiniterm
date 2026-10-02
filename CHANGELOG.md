@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-02
 
+- "Editor: open a file" opens the macOS file panel instead of asking for a typed path; a file opens in an editor card, a folder with its tree.
 - Two settings for the card label: `ui.cardLabelPosition` puts it in any corner ("top right", the default, "top left", "bottom left", "bottom right"), and `ui.hideLabelWhenMaximised` leaves it off a maximised card.
 - In the shortcuts panel (Cmd+/), Up and Down highlight a command and Cmd+C copies its id, ready for keybindings.json; a click highlights a row too.
 - The shortcuts panel (Cmd+/) shows each command's id beside its name, the string keybindings.json binds, and finds a command by it.
