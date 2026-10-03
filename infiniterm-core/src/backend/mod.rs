@@ -90,6 +90,14 @@ impl Panes {
         buffer_mib: usize,
     ) -> (Panes, Receiver<(PaneId, PaneEvent)>, Option<String>) {
         match backend {
+            // A remote instance (`ift connect`) runs its cards on the host
+            // `INFINITERM_REMOTE` names, whatever the setting says, and needs no
+            // `iftd` on THIS Mac: the daemons are on the server.
+            _ if remote::from_env().is_some() => {
+                let host = remote::from_env().expect("checked by the guard");
+                let (backend, rx) = daemon::DaemonBackend::new_remote(host, buffer_mib);
+                (Panes::Daemon(backend), rx, None)
+            }
             TerminalBackend::Pty => {
                 let (pty, rx) = local_pty::LocalPtyBackend::new();
                 (Panes::Local(pty), rx, None)
@@ -194,7 +202,7 @@ impl Panes {
         match self {
             Panes::Local(_) => vec![],
             Panes::Tmux(_) => tmux::TmuxBackend::live_windows(),
-            Panes::Daemon(b) => daemon::DaemonBackend::live_sessions(b.sessions_dir()),
+            Panes::Daemon(b) => b.live_sessions_now(),
         }
     }
 

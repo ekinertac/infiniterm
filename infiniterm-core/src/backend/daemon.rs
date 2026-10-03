@@ -140,6 +140,9 @@ pub struct DaemonBackend {
     panes: Arc<Mutex<HashMap<PaneId, Pane>>>,
     tx: Sender<(PaneId, PaneEvent)>,
     next_id: AtomicU32,
+    /// Set in a remote instance (#118): every spawn and adopt goes to this
+    /// host over ssh and the sessions are listed by asking it.
+    remote: Option<super::remote::RemoteHost>,
 }
 
 impl DaemonBackend {
@@ -151,8 +154,35 @@ impl DaemonBackend {
             panes: Arc::new(Mutex::new(HashMap::new())),
             tx,
             next_id: AtomicU32::new(1),
+            remote: None,
         };
         (backend, rx)
+    }
+
+    /// A backend whose sessions live on `host`. The local sessions directory
+    /// is still named, because the pieces that read it (the orphan sweep, the
+    /// ring from disk, `attached`) find nothing there and do nothing.
+    pub fn new_remote(
+        host: super::remote::RemoteHost,
+        buffer_mib: usize,
+    ) -> (Self, Receiver<(PaneId, PaneEvent)>) {
+        let (mut backend, rx) = Self::new(crate::paths::sessions_dir(), buffer_mib);
+        backend.remote = Some(host);
+        (backend, rx)
+    }
+
+    /// Which sessions can be adopted at launch: the server's (one ssh), or the
+    /// local sockets. A server that cannot be asked yields an empty list and
+    /// the reason on stderr; `ift connect` checks reachability before it
+    /// opens the app, so this is the rare case.
+    pub fn live_sessions_now(&self) -> Vec<String> {
+        match &self.remote {
+            Some(host) => super::remote::list_sessions(host).unwrap_or_else(|e| {
+                eprintln!("[infiniterm] could not list the sessions on {}", e);
+                Vec::new()
+            }),
+            None => Self::live_sessions(&self.sessions_dir),
+        }
     }
 
     pub fn spawn_now(
@@ -161,6 +191,9 @@ impl DaemonBackend {
         cmd: Option<&str>,
         env: Vec<(String, String)>,
     ) -> anyhow::Result<PaneId> {
+        if let Some(host) = &self.remote {
+            return self.spawn_remote(host, &cwd.to_string_lossy(), cmd, env);
+        }
         let session_id = new_session_id();
         let socket = self.sessions_dir.join(format!("{session_id}.sock"));
         check_socket_path(&socket)?;
@@ -210,6 +243,9 @@ impl DaemonBackend {
     /// never arrives; the caller spawns a fresh shell instead, same as a
     /// `local_pty` card that never had a session to come back to.
     pub fn adopt(&self, session_id: &str) -> Option<PaneId> {
+        if let Some(host) = &self.remote {
+            return self.adopt_remote(host, session_id);
+        }
         let socket = self.sessions_dir.join(format!("{session_id}.sock"));
         let mut stream = UnixStream::connect(&socket).ok()?;
         let (pid, cols, rows, reader) = read_hello(&mut stream, HELLO_DEADLINE).ok()?;

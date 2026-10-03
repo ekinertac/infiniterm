@@ -169,3 +169,31 @@ fn ssh_failing_says_why_and_does_not_hang() {
     let msg = err.to_string();
     assert!(msg.contains("test@server") && msg.contains("Permission denied"), "{msg}");
 }
+
+// #118: a remote instance's backend is told the host once; then the plain
+// spawn, adopt and session list all go over ssh.
+#[test]
+fn a_backend_made_for_a_host_spawns_lists_and_adopts_over_ssh() {
+    assert!(profile_dir().join("iftd").is_file(), "cargo build -p infiniterm-session first");
+    let server = Scratch::new("srv2");
+    let client = Scratch::new("cli2");
+    let ssh = stand_in_ssh(&client.0, &server.0);
+    let (backend, rx) = DaemonBackend::new_remote(host(&ssh), 4);
+
+    assert!(backend.live_sessions_now().is_empty(), "the server has no sessions yet");
+    let pane = backend
+        .spawn_now(
+            std::path::Path::new("/tmp"),
+            Some("printf READY2; exec sleep 60"),
+            vec![],
+        )
+        .unwrap();
+    wait_for(&rx, pane, "READY2");
+    let id = backend.session_id(pane).unwrap();
+    assert_eq!(backend.live_sessions_now(), vec![id.clone()], "the server lists it");
+
+    backend.detach_now(pane);
+    let again = backend.adopt(&id).expect("adopted over ssh");
+    wait_for(&rx, again, "READY2");
+    backend.kill_now(again);
+}
