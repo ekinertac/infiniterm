@@ -23,6 +23,7 @@ mod attach;
 mod claude_hooks;
 mod completion;
 mod licence_cmd;
+mod proxy;
 mod socket;
 
 use std::path::{Path, PathBuf};
@@ -139,6 +140,9 @@ fn main() -> ExitCode {
         Some("install-extension") => install_extension(args.get(1).map(String::as_str)),
         Some("install") => install_self(),
         Some("licence") => licence_cmd::run(&args[1..]),
+        // Plumbing for the remote instances, called over ssh by the app, so it
+        // is in neither USAGE nor the completion (like dev-run).
+        Some("proxy") => proxy::run(&args[1..]),
         Some("completion") => match args.get(1).map(String::as_str) {
             Some("zsh") => {
                 print!("{}", completion::ZSH);
