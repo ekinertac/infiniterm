@@ -73,6 +73,7 @@ pub mod itermcolors;
 pub mod jsonc;
 pub mod keymap;
 pub mod layout_file;
+pub mod licence;
 pub mod links;
 pub mod links_fs;
 pub mod model;

@@ -67,6 +67,6 @@ Snippets are plain files in `~/.config/infiniterm/snippets/`, one per snippet. T
 - Your shells, one per card, started as your login shell with `INFINITERM_CARD_ID` in the environment. Nothing is typed into them that you did not type.
 - `~/.config/infiniterm/` for settings, keybindings and snippets, and `~/Library/Application Support/dev.ekinertac.infiniterm/` for the canvas, drafts, themes, the window frame, `agent.log`, the browser profile and address-bar history. Deleting `workspace.json` there resets the canvas and leaves your settings alone.
 - `ps`, `lsof` and `git` as subprocesses, to label cards and for the diff and blame cards.
-- The network only from browser cards, the update check, and address-bar suggestions from Google, which are off unless you turn on `browser.suggestions`.
+- The network only from browser cards, the update check, address-bar suggestions from Google, which are off unless you turn on `browser.suggestions`, and one request to api.lemonsqueezy.com when you run `ift licence <email> <key>`.
 
 No account, no telemetry.

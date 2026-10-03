@@ -973,7 +973,9 @@ impl AppView {
     /// every button has its key beside it because the keyboard is how the
     /// app is used; the buttons are there so a mouse is not refused.
     /// What the About window says (#90): the icon, the name, the version and
-    /// build, who made it and where it lives. The website is a link.
+    /// build, who made it and where it lives. The website is a link. A Mac
+    /// registered with `ift licence` (#106) also says who it is licensed to;
+    /// an unregistered one says nothing, by design: no nag.
     fn about_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
         use std::sync::{Arc, OnceLock};
         static ICON: OnceLock<Arc<gpui::Image>> = OnceLock::new();
@@ -1005,6 +1007,15 @@ impl AppView {
             )
             .child(div().text_color(chrome.text_muted).child(version))
             .child(div().text_color(chrome.text_muted).child("by Ekin Ertac"))
+            // shortcut: reads a tiny file each frame the About window is
+            // drawn, and frames come on demand, so a handful per opening.
+            .children(
+                infiniterm_core::licence::read(&infiniterm_core::licence::path()).map(|l| {
+                    div()
+                        .text_color(chrome.text_muted)
+                        .child(infiniterm_core::licence::licensed_to(&l))
+                }),
+            )
             .child(
                 div()
                     .id("about-site")
