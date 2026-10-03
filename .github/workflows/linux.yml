@@ -1,7 +1,14 @@
 # Linux builds of the three binaries a server needs (#118): `iftd` (the
 # session daemon), `ift` (the CLI) and `infiniterm-hook`. The app itself is
 # macOS only; this proves the rest still compiles and runs on Linux, and
-# leaves static musl binaries as artifacts for the remote-instance work.
+# packages static musl binaries for the remote-instance work.
+#
+# When a release is published (`make publish`, from the Mac) the same build
+# runs on the release's tag and attaches `infiniterm-server-<tag>-linux-
+# <arch>.tar.gz` and its `.sha256` to that release, so `ift connect` can fetch
+# what matches the app. Nothing in tools/publish.sh changes: the release event
+# starts it. The upload step only runs for that event, so it is first proven
+# by the first release after this lands.
 #
 # Static musl so no glibc version on the server matters. x86_64 on a normal
 # runner, aarch64 on GitHub's arm runner: each builds natively, no cross
@@ -21,6 +28,8 @@ on:
       - ".github/workflows/linux.yml"
   push:
     branches: [master]
+  release:
+    types: [published]
   workflow_dispatch:
 
 env:
@@ -55,13 +64,44 @@ jobs:
           cd target/${{ matrix.target }}/release
           ls -la iftd ift infiniterm-hook
           file iftd ift infiniterm-hook
+      - name: package
+        id: pkg
+        run: |
+          arch=${{ matrix.target }}
+          arch=${arch%%-*}
+          tag=${{ github.event.release.tag_name || 'dev' }}
+          name=infiniterm-server-$tag-linux-$arch.tar.gz
+          mkdir -p dist
+          tar -czf dist/$name -C target/${{ matrix.target }}/release iftd ift infiniterm-hook
+          (cd dist && sha256sum $name > $name.sha256)
+          ls -la dist
+          echo "name=$name" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.target }}
-          path: |
-            target/${{ matrix.target }}/release/iftd
-            target/${{ matrix.target }}/release/ift
-            target/${{ matrix.target }}/release/infiniterm-hook
+          path: dist/*
+
+  # Only for a published release: put the packages on it.
+  release-assets:
+    name: attach to the release
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          pattern: linux-*
+          merge-multiple: true
+      - name: upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la assets
+          gh release upload "${{ github.event.release.tag_name }}" assets/* \
+            --repo "${{ github.repository }}" --clobber
 
   test:
     name: test
