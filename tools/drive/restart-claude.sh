@@ -23,17 +23,19 @@ HOOK="$APP/Contents/MacOS/infiniterm-hook"
 rm -rf "$DATA" "$CONFIG" "$FAKE"; mkdir -p "$DATA" "$CONFIG" "$FAKE"
 cat > "$FAKE/claude" <<'FAKE'
 #!/bin/sh
-# --named: a session with a name, whose hint is the name in quotes, and a prompt
-# with text in it, which uses the first Ctrl+C to clear itself (so three).
-need=2
+# --named: a session with a name, whose hint is the name in quotes. It leaves
+# on a typed /exit, or on a second Ctrl+C (a first only prints a reminder).
 id=${2:-11111111-2222-3333-4444-555555555555}
-if [ "$1" = --named ]; then need=3; id='"fake-name"'; fi
+if [ "$1" = --named ]; then id='"fake-name"'; fi
 if [ "$1" = --resume ]; then echo "FAKE-CLAUDE RESUMED $id"; else echo "FAKE-CLAUDE STARTED $id"; fi
 n=0
 # Leaving takes two seconds after the hint, and anything typed meanwhile is
 # swallowed (read one line from the terminal), as a real Claude's shutdown does.
-trap 'n=$((n+1)); if [ $n -ge $need ]; then echo; echo "Resume this session with:"; echo "claude --resume $id"; perl -e "alarm 2; <STDIN>"; exit 0; else echo "(Press Ctrl-C again to exit)"; fi' INT
-while :; do sleep 0.2; done
+leave() { echo; echo "Resume this session with:"; echo "claude --resume $id"; perl -e "alarm 2; <STDIN>"; exit 0; }
+trap 'n=$((n+1)); if [ $n -ge 2 ]; then leave; else echo "(Press Ctrl-C again to exit)"; fi' INT
+while :; do
+    if read -r line; then [ "$line" = /exit ] && leave; fi
+done
 FAKE
 chmod +x "$FAKE/claude"
 printf '{\n}\n' > "$CONFIG/settings.json"
@@ -49,7 +51,16 @@ cleanup() {
     pkill -f "iftd --socket $DATA" 2>/dev/null || true
 }
 trap cleanup EXIT
-fail() { echo "FAIL: $*"; "$IFT" read 1 --all | tail -12; exit 1; }
+fail() {
+    echo "FAIL: $*"
+    echo "--- the card's screen:"; "$IFT" read 1 --all | tail -20
+    echo "--- ift ls --agents:"; "$IFT" ls --agents
+    echo "--- ift sessions:"; "$IFT" sessions
+    spid=$("$IFT" sessions | awk -F'\t' '$6 == "#1" { print $2 }' | head -1)
+    echo "--- children of the card's shell ($spid):"
+    ps -o pid=,ppid=,command= -p "$(pgrep -P "$spid" | tr '\n' ',' | sed 's/,$//')" 2>&1 | head -5
+    exit 1
+}
 
 "$IFT" send 1 "$FAKE/claude" --enter
 sleep 1.5
@@ -58,6 +69,14 @@ sleep 0.5
 echo "--- ls --agents"
 "$IFT" ls --agents
 "$IFT" ls --agents | grep -q "$SID" || fail "the card has no session id"
+
+# The window is not drawing: hidden, as with another app in front or another
+# Space showing. Terminal output is parsed inside a frame, so a read would be
+# stale or empty unless `ift read` parses it itself. (Needs System Events, so
+# unlike the rest of this scenario it is not for a locked Mac.)
+PID=$(pgrep -f "$APP/Contents/MacOS/infiniterm$" | head -1)
+osascript -e "tell application \"System Events\" to set visible of (first process whose unix id is $PID) to false" || true
+sleep 1
 
 echo "--- from inside the card: skipped"
 OUT=$(INFINITERM_CARD_ID=$CARD IFT="$IFT" "$RESTART" --dry-run) || true
@@ -77,10 +96,8 @@ sleep 1.5
 "$IFT" read 1 --lines 6
 "$IFT" read 1 --lines 6 | grep -q "FAKE-CLAUDE RESUMED $SID" || fail "the card did not resume"
 
-echo "--- a named session, and a prompt that eats the first Ctrl+C"
-"$IFT" send 1 --key ctrl-c
-sleep 0.6
-"$IFT" send 1 --key ctrl-c
+echo "--- a named session"
+"$IFT" send 1 "/exit" --enter
 sleep 2
 "$IFT" send 1 "$FAKE/claude --named" --enter
 sleep 1.5
@@ -91,4 +108,20 @@ sleep 1.5
 "$IFT" read 1 --lines 5
 "$IFT" read 1 --lines 5 | grep -q 'claude --resume "fake-name"' || fail "the card did not get the quoted name"
 "$IFT" read 1 --lines 3 | grep -q "FAKE-CLAUDE RESUMED fake-name" || fail "the named session did not resume"
+
+echo "--- nothing running in the card: left alone, no Ctrl+C sent to a prompt"
+"$IFT" send 1 "/exit" --enter
+sleep 3
+OUT=$(IFT="$IFT" "$RESTART" --wait 5) || true
+echo "$OUT"
+case $OUT in *"#1: nothing is running in it, left alone"*) ;; *) fail "did not notice an idle shell" ;; esac
+
+echo "--- something else running (not Claude): left alone"
+"$IFT" send 1 "sleep 300" --enter
+sleep 1.5
+OUT=$(IFT="$IFT" "$RESTART" --wait 5) || true
+echo "$OUT"
+case $OUT in *"#1: runs sleep, not Claude, left alone"*) ;; *) fail "touched a card that is not running Claude" ;; esac
+"$IFT" read 1 --lines 4 | grep -q '\^C' && fail "a Ctrl+C reached the other program"
+"$IFT" send 1 --key ctrl-c
 echo "PASS"

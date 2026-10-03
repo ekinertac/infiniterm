@@ -217,6 +217,8 @@ pub struct AppView {
     /// "Open a file" asked for the open panel (`Effect::PickFile`); the idle
     /// timer, which has the app, shows it (#64). The card it opens beside.
     pub pick_request: Option<Option<String>>,
+    /// `ift read` requests the poll timer answers once the output is parsed.
+    pub read_requests: Vec<crate::terminals::ReadRequest>,
     pub shortcuts_scroll: gpui::ScrollHandle,
     /// The omnibox's text, opened selected so typing replaces a prefilled
     /// address the way it does in a browser.
@@ -501,6 +503,7 @@ fn main() {
                         this.idle_editors(now_ms());
                         // The macOS open panel, asked for by "Open a file"
                         // (#64). Its answer arrives later, on its own task.
+                        this.answer_reads(now_ms(), cx);
                         if let Some(from) = this.pick_request.take() {
                             let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
                                 files: true,

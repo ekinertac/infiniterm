@@ -385,6 +385,39 @@ impl AppView {
         self.redraw = true;
     }
 
+    /// Answers the `ift read` requests waiting. The grid only holds what
+    /// `feed_terminals` has parsed, and that runs inside a frame, so a window
+    /// that is not drawing (hidden, behind others, on another Space) leaves
+    /// output unparsed and a read would be stale or empty. So the output is
+    /// fed here first, from the poll timer, which runs either way. The loop
+    /// is bounded: a flooding card must not hold the timer.
+    pub fn answer_reads(&mut self, now: f64, cx: &mut gpui::App) {
+        if self.read_requests.is_empty() {
+            return;
+        }
+        for _ in 0..READ_FEED_PASSES {
+            if !self.scheduler.pending() {
+                break;
+            }
+            self.feed_terminals(now, cx);
+        }
+        for r in std::mem::take(&mut self.read_requests) {
+            let text = self
+                .bodies
+                .get_mut(&r.card_id)
+                .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
+                .map(|t| t.grid.text(r.last, r.scrollback));
+            match text {
+                Some(text) => self.backend.cli.reply(r.request_id, true, text),
+                None => self.backend.cli.reply(
+                    r.request_id,
+                    false,
+                    "that card has no terminal to read".into(),
+                ),
+            }
+        }
+    }
+
     /// One budget of output across the panes, then the acks and the replies.
     pub fn feed_terminals(&mut self, now: f64, cx: &mut gpui::App) {
         let pieces = self.scheduler.take(now);
@@ -529,6 +562,18 @@ fn gated_writes(answer: bool, per_pane: Vec<PaneWrites>) -> Vec<(u32, Vec<u8>)> 
         }
     }
     writes
+}
+
+/// How many frame-sized budgets `answer_reads` will parse before reading: a
+/// quiet card needs one, and the cap keeps a flood from holding the timer.
+const READ_FEED_PASSES: usize = 64;
+
+/// An `ift read` waiting for its card's output to be parsed (see `answer_reads`).
+pub struct ReadRequest {
+    pub request_id: u64,
+    pub card_id: String,
+    pub last: Option<usize>,
+    pub scrollback: bool,
 }
 
 #[cfg(test)]

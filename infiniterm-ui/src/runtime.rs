@@ -72,6 +72,7 @@ impl AppView {
             shortcuts_field: Default::default(),
             shortcuts_index: 0,
             pick_request: None,
+            read_requests: vec![],
             shortcuts_scroll: gpui::ScrollHandle::new(),
             omni_field: crate::field::Field::default(),
             find_field: crate::field::Field::default(),
@@ -330,22 +331,15 @@ impl AppView {
                     last,
                     scrollback,
                 } => {
-                    let text = self
-                        .bodies
-                        .get_mut(&card_id)
-                        .and_then(|b| {
-                            b.as_any_mut()
-                                .downcast_mut::<crate::terminal_body::TerminalBody>()
-                        })
-                        .map(|t| t.grid.text(last, scrollback));
-                    match text {
-                        Some(text) => self.backend.cli.reply(request_id, true, text),
-                        None => self.backend.cli.reply(
-                            request_id,
-                            false,
-                            "that card has no terminal to read".into(),
-                        ),
-                    }
+                    // Answered by the poll timer after the card's pending
+                    // output is parsed (`answer_reads`), not here: a window
+                    // that is not drawing has not parsed it.
+                    self.read_requests.push(crate::terminals::ReadRequest {
+                        request_id,
+                        card_id,
+                        last,
+                        scrollback,
+                    });
                 }
                 Effect::CliReply { id, ok, text } => {
                     self.backend.cli.reply(id, ok, text);
