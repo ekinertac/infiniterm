@@ -6,7 +6,9 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-03
+## 0.5.2 (build 560), 2026-10-03
+
+### App
 
 - `ift licence <email> <key>` registers this Mac with its commercial licence key, and the About window then says who it is licensed to. Optional: nothing in the app asks for it.
 
