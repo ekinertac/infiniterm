@@ -55,6 +55,76 @@ impl RemoteHost {
     }
 }
 
+/// The remote host this process was told to run its cards on, from the
+/// environment `ift connect` sets (#118): `INFINITERM_REMOTE` is the ssh
+/// target; `INFINITERM_REMOTE_ARGS` (extra ssh arguments, space separated),
+/// `INFINITERM_REMOTE_IFT` (`ift` on the server) and `INFINITERM_REMOTE_SSH`
+/// (the program, for a test) are optional.
+pub fn from_env() -> Option<RemoteHost> {
+    let var = |k: &str| std::env::var(k).ok();
+    from_vars(
+        var("INFINITERM_REMOTE").as_deref(),
+        var("INFINITERM_REMOTE_ARGS").as_deref(),
+        var("INFINITERM_REMOTE_IFT").as_deref(),
+        var("INFINITERM_REMOTE_SSH").as_deref(),
+    )
+}
+
+/// `from_env` over explicit values, so the rules are tested without touching
+/// the process environment. An empty target is no remote at all.
+pub fn from_vars(
+    target: Option<&str>,
+    args: Option<&str>,
+    ift: Option<&str>,
+    ssh: Option<&str>,
+) -> Option<RemoteHost> {
+    let target = target.map(str::trim).filter(|t| !t.is_empty())?;
+    let mut host = RemoteHost::new(target);
+    if let Some(a) = args {
+        host.ssh_args = a.split_whitespace().map(str::to_string).collect();
+    }
+    if let Some(i) = ift.map(str::trim).filter(|i| !i.is_empty()) {
+        host.ift = i.to_string();
+    }
+    if let Some(s) = ssh.map(str::trim).filter(|s| !s.is_empty()) {
+        host.ssh = s.to_string();
+    }
+    Some(host)
+}
+
+/// The session ids `ift sessions` printed on the server. Into a pipe it
+/// prints every column, tab separated, the id first; blank lines are skipped.
+pub fn parse_sessions(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| l.split('\t').next())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Which sessions the server still runs: `ssh host ift sessions`. One short
+/// ssh at launch tells which saved cards can be adopted and which are gone.
+pub fn list_sessions(host: &RemoteHost) -> std::io::Result<Vec<String>> {
+    let mut args = ssh_args(host, "x", None);
+    // The last argument is the remote command; replace it.
+    args.pop();
+    args.push(format!("{} sessions", shell_quote(&host.ift)));
+    let out = Command::new(&host.ssh)
+        .args(args)
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()?;
+    if !out.status.success() {
+        return Err(std::io::Error::other(format!(
+            "{}: {}",
+            host.target,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(parse_sessions(&String::from_utf8_lossy(&out.stdout)))
+}
+
 /// What `--spawn` asks the server's `iftd` for.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct SpawnSpec {
@@ -217,6 +287,35 @@ mod tests {
             remote_command("/opt/ift", "abc", None),
             "/opt/ift proxy session abc"
         );
+    }
+
+    #[test]
+    fn the_remote_comes_from_the_environment_values() {
+        assert_eq!(from_vars(None, None, None, None), None);
+        assert_eq!(from_vars(Some("  "), None, None, None), None);
+        let h = from_vars(Some("root@100.1.1.1"), None, None, None).unwrap();
+        assert_eq!((h.ssh.as_str(), h.ift.as_str()), ("ssh", "ift"));
+        assert!(h.ssh_args.is_empty());
+        let h = from_vars(
+            Some("srv"),
+            Some("-p 2222 -i /k"),
+            Some("/opt/ift"),
+            Some("/tmp/fake-ssh"),
+        )
+        .unwrap();
+        assert_eq!(h.ssh_args, ["-p", "2222", "-i", "/k"]);
+        assert_eq!(
+            (h.ssh.as_str(), h.ift.as_str()),
+            ("/tmp/fake-ssh", "/opt/ift")
+        );
+    }
+
+    #[test]
+    fn the_session_list_is_the_first_column_of_each_row() {
+        let text =
+            "abc123\t4242\t/srv\tzsh\t2026-10-03T00:00:00Z\t#3\twork\n\nd4e5\t9\t/x\tsh\t-\t-\t-\n";
+        assert_eq!(parse_sessions(text), ["abc123", "d4e5"]);
+        assert!(parse_sessions("").is_empty());
     }
 
     #[test]
