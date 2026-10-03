@@ -103,18 +103,24 @@ pub fn parse_sessions(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Which sessions the server still runs: `ssh host ift sessions`. One short
-/// ssh at launch tells which saved cards can be adopted and which are gone.
-pub fn list_sessions(host: &RemoteHost) -> std::io::Result<Vec<String>> {
+/// Runs one command on the host over ssh and returns what it printed. The
+/// command goes through the server's login shell, so quote what you put in it.
+pub fn run_on(host: &RemoteHost, command: &str) -> std::io::Result<std::process::Output> {
     let mut args = ssh_args(host, "x", None);
     // The last argument is the remote command; replace it.
     args.pop();
-    args.push(format!("{} sessions", shell_quote(&host.ift)));
-    let out = Command::new(&host.ssh)
+    args.push(command.to_string());
+    Command::new(&host.ssh)
         .args(args)
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
-        .output()?;
+        .output()
+}
+
+/// Which sessions the server still runs: `ssh host ift sessions`. One short
+/// ssh at launch tells which saved cards can be adopted and which are gone.
+pub fn list_sessions(host: &RemoteHost) -> std::io::Result<Vec<String>> {
+    let out = run_on(host, &format!("{} sessions", shell_quote(&host.ift)))?;
     if !out.status.success() {
         return Err(std::io::Error::other(format!(
             "{}: {}",
@@ -123,6 +129,44 @@ pub fn list_sessions(host: &RemoteHost) -> std::io::Result<Vec<String>> {
         )));
     }
     Ok(parse_sessions(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// The script `check` runs on the server: `ift` is there, `iftd` is beside it
+/// or on the PATH, and `ift sessions` works (so its data directory does). Each
+/// failure says what is missing on stderr and uses its own exit status.
+pub fn check_command(ift: &str) -> String {
+    let script = format!(
+        concat!(
+            "ift={ift}; ",
+            "p=$(command -v \"$ift\") || {{ echo 'ift is not installed on the server' >&2; exit 11; }}; ",
+            "d=$(dirname \"$p\"); ",
+            "[ -x \"$d/iftd\" ] || command -v iftd >/dev/null || ",
+            "{{ echo 'iftd is not installed on the server' >&2; exit 12; }}; ",
+            "\"$ift\" sessions >/dev/null"
+        ),
+        ift = shell_quote(ift)
+    );
+    format!("sh -c {}", shell_quote(&script))
+}
+
+/// Can this host run infiniterm's server half: ssh works without a prompt,
+/// `ift` and `iftd` are installed, and the sessions folder answers. The error
+/// is a sentence for a person.
+pub fn check(host: &RemoteHost) -> Result<(), String> {
+    let out = run_on(host, &check_command(&host.ift))
+        .map_err(|e| format!("could not run {}: {e}", host.ssh))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    Err(match out.status.code() {
+        Some(11) | Some(12) => format!("{}: {said}", host.target),
+        Some(255) => format!(
+            "{}: ssh could not log in without a prompt: {said}",
+            host.target
+        ),
+        _ => format!("{}: {said}", host.target),
+    })
 }
 
 /// What `--spawn` asks the server's `iftd` for.
@@ -316,6 +360,18 @@ mod tests {
             "abc123\t4242\t/srv\tzsh\t2026-10-03T00:00:00Z\t#3\twork\n\nd4e5\t9\t/x\tsh\t-\t-\t-\n";
         assert_eq!(parse_sessions(text), ["abc123", "d4e5"]);
         assert!(parse_sessions("").is_empty());
+    }
+
+    #[test]
+    fn the_server_check_quotes_the_ift_path_and_names_each_failure() {
+        let cmd = check_command("/opt/my ift/ift");
+        assert!(cmd.starts_with("sh -c '"), "{cmd}");
+        assert!(cmd.contains("ift is not installed on the server"));
+        assert!(cmd.contains("iftd is not installed on the server"));
+        assert!(
+            cmd.contains("'\\''/opt/my ift/ift'\\''"),
+            "the path is quoted inside the script: {cmd}"
+        );
     }
 
     #[test]
