@@ -39,7 +39,29 @@ ift omni rust          # what the address bar would show for "rust"
 
 On a terminal these print a padded table. Into a pipe they print tab-separated rows without a header, so `ift ls | cut -f1` works.
 
+`ift ls --agents` lists only the cards that run an agent, one tab-separated line each: card number, agent, session id, state, directory. The session id is the one `claude --resume` takes.
+
 Exit codes: 0 ok, 1 infiniterm is not running, 2 bad usage.
+
+## Driving another card
+
+These take a card by its number (`7` or `#7`, the one on its label, which stays the same after a reboot) or by its id.
+
+```sh
+ift send 7 "npm test" --enter     # type into card 7's shell and press Enter
+ift send 7 --key ctrl-c           # just a key
+ift read 7                        # what card 7's terminal shows now
+ift read 7 --lines 20             # only the last 20 lines
+ift read 7 --all                  # the scrollback too
+ift close 7                       # close it, like Cmd+W
+ift run canvas.tidy               # run any command from `ift commands`
+```
+
+`ift send` types into the card without moving the focus or the view. The text goes first, then the keys in the order you give them. `--enter` presses Enter; `--key` takes `enter`, `esc`, `tab`, `backspace`, `ctrl-c`, `ctrl-d`, `ctrl-l`, `ctrl-z`, `up`, `down`, `left` or `right`, and can be given more than once.
+
+`ift read` prints the live screen, also when the window is hidden. `ift close` follows the same rules as `Cmd W`, so a closed terminal is parked first; a protected card (`Cmd Shift L`) refuses and says how to unprotect it. `ift run` runs a command on the card in focus, as the palette would, and refuses an id it does not know.
+
+Together they let a script watch one card and answer in it. [tools/restart-claude.sh](https://github.com/ekinertac/infiniterm/blob/master/tools/restart-claude.sh) is one: it finds every Claude card with `ift ls --agents`, sends `/exit`, reads the resume command Claude prints, and types `claude --resume` back into the same card. It is an example, not a feature: it clears a prompt line you had not sent, and it does not keep a `CLAUDE_CONFIG_DIR` other than the default.
 
 ## Sessions that outlive the window
 
