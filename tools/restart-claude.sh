@@ -3,10 +3,12 @@
 # after changing something Claude only reads at start (a mod, a plugin, a
 # setting). Needs an `ift` newer than 0.5.2: `ls --agents`, `send` and `read`.
 #
-# For each Claude card: two Ctrl+C make Claude leave, it prints the session id
-# to resume on its way out, and that id (not the one saved on the card, which
-# a /clear or a fork can leave behind) goes into `claude --resume <id>` typed
-# into the same card, so the shell is still in the same directory.
+# For each Claude card: Ctrl+C makes Claude leave (up to three: a prompt with
+# unsent text uses the first to clear itself), it prints what to resume on its
+# way out, and that, exactly as printed (not the id saved on the card, which a
+# /clear or a fork can leave behind, and a UUID or a quoted session name), goes
+# into `claude --resume <that>` typed into the same card, so the shell is still
+# in the same directory. An unsent line in the prompt is lost.
 #
 #   tools/restart-claude.sh [--dry-run] [--include-working] [--only 3,7]
 #                           [--cmd 'claude --resume {id}'] [--wait SECONDS]
@@ -88,14 +90,19 @@ while IFS=$TAB read -r number kind session state cwd; do
         continue
     fi
     before=$(hints "$number")
-    "$IFT" send "$number" --key ctrl-c
-    sleep 0.4
-    "$IFT" send "$number" --key ctrl-c
+    presses=0
+    while [ "$presses" -lt 3 ]; do
+        "$IFT" send "$number" --key ctrl-c
+        presses=$((presses + 1))
+        sleep 0.6
+        [ "$(hints "$number")" -gt "$before" ] && break
+    done
     id=""
     waited=0
     while [ "$waited" -lt "$WAIT" ]; do
         if [ "$(hints "$number")" -gt "$before" ]; then
-            id=$("$IFT" read "$number" --all | sed -n 's/.*--resume \([0-9A-Za-z-]\{8,\}\).*/\1/p' | tail -1)
+            # Everything after --resume on the last hint line, as printed.
+            id=$("$IFT" read "$number" --all | sed -n 's/.*--resume \(.*[^ ]\) *$/\1/p' | tail -1)
             [ -n "$id" ] && break
         fi
         waited=$((waited + 1))
@@ -108,7 +115,9 @@ while IFS=$TAB read -r number kind session state cwd; do
     fi
     # The shell prompt is back a moment after the hint.
     sleep 0.5
-    cmd=$(printf '%s' "$TEMPLATE" | sed "s/{id}/$id/g")
+    # The first {id} in the template, replaced without sed: a session name can
+    # hold a slash or an ampersand.
+    cmd="${TEMPLATE%%\{id\}*}$id${TEMPLATE#*\{id\}}"
     "$IFT" send "$number" "$cmd" --enter
     echo "#$number: restarted $id"
 done < "$list"
