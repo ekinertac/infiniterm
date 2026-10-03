@@ -1102,6 +1102,41 @@ mod tests {
         assert!(h.m.card(&id).is_none(), "confirmed: closed");
     }
 
+    // #118: a remote instance has no browser cards, however one is asked for.
+    #[test]
+    fn a_remote_instance_refuses_browser_cards() {
+        let mut h = Harness::new();
+        let before = h.m.cards.len();
+        h.m.remote = crate::remote_identity::RemoteIdentity::from_vars(Some("ops@box"), None, None);
+        h.m.new_beside_active(CardKind::Browser, None, Some("https://a".into()));
+        assert_eq!(h.m.cards.len(), before, "no card");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .unwrap_or("")
+            .contains("remote instance"));
+        h.m.notice = None;
+        h.run("card.new.browser");
+        assert!(
+            !h.m.omni.open,
+            "the address bar does not open for a new card"
+        );
+        assert!(h.m.notice.is_some());
+        let plan = crate::ift::OpenPlan::Browser {
+            cwd: "/tmp".into(),
+            url: "https://a".into(),
+        };
+        assert_eq!(h.m.open_in_card(plan, None), None);
+        assert_eq!(h.m.cards.len(), before);
+        // A terminal is still fine, and so is a browser once it is not remote.
+        h.run("card.new.terminal");
+        assert_eq!(h.m.cards.len(), before + 1);
+        h.m.remote = None;
+        h.m.new_beside_active(CardKind::Browser, None, Some("https://a".into()));
+        assert_eq!(h.m.cards.len(), before + 2);
+    }
+
     // #90: `app.about` opens the About window; its action asks for an update
     // check and Close asks for nothing.
     #[test]

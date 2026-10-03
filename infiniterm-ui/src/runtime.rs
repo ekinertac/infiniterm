@@ -78,6 +78,7 @@ impl AppView {
             find_field: crate::field::Field::default(),
             redraw: false,
             window_bg: None,
+            window_titled: false,
             keycast_on: false,
             keycasts: Vec::new(),
             last_paint_ms: 0.,
@@ -860,6 +861,13 @@ pub fn startup(app: &mut AppView) {
     }
     app.animator.animations_on = app.model.config.ui.animations && !app.reduce_motion;
     // Before any card exists: which sessions the last launch left running.
+    // A remote instance (`ift connect`): what it is called, its colour, and
+    // a Dock icon badged with it. Before any card, since the model refuses
+    // browser cards once this is set.
+    app.model.remote = infiniterm_core::remote_identity::RemoteIdentity::from_env();
+    if let Some(r) = &app.model.remote {
+        crate::instance_icon::set_badge(r.color);
+    }
     app.live_sessions = app.backend.pty.live_sessions();
     app.model.can_park = app.backend.pty.can_park();
     app.model

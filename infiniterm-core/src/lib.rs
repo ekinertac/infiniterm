@@ -9,6 +9,8 @@ pub mod grid;
 
 pub mod background;
 
+pub mod remote_identity;
+
 pub mod layout;
 
 pub mod resize;

@@ -151,6 +151,9 @@ impl Model {
         command: Option<&str>,
         url: Option<String>,
     ) {
+        if kind == CardKind::Browser && self.browser_refused() {
+            return;
+        }
         let from = self.focused().cloned();
         let group_id = from.as_ref().and_then(|c| c.group_id.clone());
         let ws = self.active_workspace.clone().unwrap_or_default();
@@ -1214,6 +1217,9 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // (`open_omnibox`'s own rule, and wrong here), so this is its own
     // entry point rather than `card.omnibox` with different arguments.
     r.register("card.new.browser", "Browser: open a URL", |m| {
+        if m.browser_refused() {
+            return;
+        }
         m.open_omnibox_for_new_card(false);
     });
     r.register("browser.navigate", "Browser: go to a URL", |m| {

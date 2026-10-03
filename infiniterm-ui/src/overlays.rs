@@ -91,6 +91,8 @@ const PROMPT_WIDTH_PX: f32 = 480.;
 const DIALOG_PAD_PX: f32 = 16.;
 /// The About window: the icon's side, the space between its lines, the
 /// name's size, and the address it links to.
+/// How far a remote instance's title bar leans toward its host's colour.
+const REMOTE_BAR_TINT: f32 = 0.32;
 const ABOUT_ICON_PX: f32 = 96.;
 const ABOUT_GAP_PX: f32 = 6.;
 const ABOUT_TITLE_FONT_PX: f32 = 18.;
@@ -413,6 +415,12 @@ impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_fields();
         self.sync_window_background(window);
+        if !self.window_titled {
+            if let Some(r) = &self.model.remote {
+                window.set_window_title(&format!("infiniterm: {}", r.name));
+                self.window_titled = true;
+            }
+        }
         let chrome = self.chrome.clone();
         let entity = cx.entity();
         let focus = self.focus.clone();
@@ -651,18 +659,47 @@ impl AppView {
                 )
                 .child("+"),
         );
+        // A remote instance wears its host's colour: the bar leans toward it and
+        // a chip on the right names the host, so it is never taken for the
+        // local canvas (#118).
+        let remote = self.model.remote.clone();
+        let bar = match &remote {
+            Some(r) => crate::chrome::tint(chrome.bar_bg, r.color, REMOTE_BAR_TINT),
+            None => chrome.bar_bg,
+        };
+        let chip = remote.map(|r| {
+            let color = gpui::rgb(
+                ((r.color.0 as u32) << 16) | ((r.color.1 as u32) << 8) | r.color.2 as u32,
+            );
+            let luma =
+                0.299 * r.color.0 as f32 + 0.587 * r.color.1 as f32 + 0.114 * r.color.2 as f32;
+            div()
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .bg(color)
+                .text_color(if luma > 140. {
+                    gpui::black()
+                } else {
+                    gpui::white()
+                })
+                .text_size(px(TAB_LABEL_FONT_PX * ui))
+                .child(r.name)
+        });
         div()
             .h(px(self.titlebar_h()))
             .w_full()
             .flex()
             .items_center()
+            .justify_between()
             .pl(px(TITLE_BAR_TRAFFIC_LIGHT_INSET_PX))
             .pr_2()
-            .bg(self.window_fill(chrome.bar_bg))
+            .bg(self.window_fill(bar))
             .border_b_1()
             .border_color(chrome.bar_border)
             .font_family("Menlo")
             .child(tabs)
+            .children(chip)
     }
 
     /// Whether the focused card is a locked browser: the one fact the

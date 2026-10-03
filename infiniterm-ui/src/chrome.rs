@@ -277,6 +277,20 @@ pub fn scaled_alpha(c: Hsla, factor: f32) -> Hsla {
     with_alpha(c, c.a * factor)
 }
 
+/// `base` pulled `amount` (0 to 1) of the way toward `rgb`, in RGB space, alpha
+/// kept: the title bar of a remote instance in its host's colour.
+pub fn tint(base: Hsla, rgb: (u8, u8, u8), amount: f32) -> Hsla {
+    let b: gpui::Rgba = base.into();
+    let mix = |from: f32, to: u8| from + (to as f32 / 255. - from) * amount;
+    gpui::Rgba {
+        r: mix(b.r, rgb.0),
+        g: mix(b.g, rgb.1),
+        b: mix(b.b, rgb.2),
+        a: b.a,
+    }
+    .into()
+}
+
 pub fn with_alpha(c: Hsla, a: f32) -> Hsla {
     Hsla { a, ..c }
 }
@@ -379,6 +393,18 @@ mod tests {
             "already translucent stays so"
         );
         assert_eq!(scaled_alpha(c, 1.), c);
+    }
+
+    #[test]
+    fn a_tint_moves_toward_the_colour_and_keeps_the_alpha() {
+        let base = gpui::rgba(0x101010ff);
+        let none: gpui::Rgba = tint(base.into(), (255, 0, 0), 0.).into();
+        let full: gpui::Rgba = tint(base.into(), (255, 0, 0), 1.).into();
+        let half: gpui::Rgba = tint(gpui::rgba(0x10101080).into(), (255, 0, 0), 0.5).into();
+        assert!((none.r - base.r).abs() < 0.01);
+        assert!((full.r - 1.).abs() < 0.01 && full.g < 0.01 && full.b < 0.01);
+        assert!(half.r > base.r && half.r < 1.);
+        assert!((half.a - 128. / 255.).abs() < 0.01, "alpha is kept");
     }
 
     #[test]

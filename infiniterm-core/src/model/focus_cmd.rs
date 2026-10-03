@@ -51,6 +51,9 @@ impl Model {
     /// Fills the phantom (and any extras) with a card of `kind`. Returns
     /// false when there was no phantom.
     pub fn fill_phantom(&mut self, kind: CardKind, url: Option<String>) -> bool {
+        if kind == CardKind::Browser && self.browser_refused() {
+            return true;
+        }
         let Some(p) = self.selection.phantom.take() else {
             return false;
         };

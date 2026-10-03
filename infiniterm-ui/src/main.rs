@@ -27,6 +27,7 @@ mod fullscreen;
 mod icon_font;
 mod ime;
 mod input;
+mod instance_icon;
 mod keycast;
 mod keycode;
 mod middle_drag;
@@ -233,6 +234,8 @@ pub struct AppView {
     /// The window background last handed to gpui (`ui.windowOpacity`,
     /// `ui.windowBlur`), so it is set again only when it changes.
     pub window_bg: Option<gpui::WindowBackgroundAppearance>,
+    /// The title of the window has been set for a remote instance.
+    pub window_titled: bool,
     /// The pressed-shortcut overlay (`keycast.rs`): on or off, and what
     /// is showing.
     pub keycast_on: bool,
