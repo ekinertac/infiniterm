@@ -22,6 +22,7 @@
 mod attach;
 mod claude_hooks;
 mod completion;
+mod connect;
 mod licence_cmd;
 mod proxy;
 mod socket;
@@ -62,6 +63,13 @@ ift — drive infiniterm from a shell
                              its id or by the card's number (#7 on its
                              label, the same after a reboot; the id is not);
                              Ctrl-\\ (0x1c) detaches, leaving it running
+  ift connect <[user@]host> [--name N] [--color RRGGBB] [--check]
+                             open a second infiniterm for a host: its own
+                             window, Dock icon and canvas, with terminal cards
+                             that run on that host over ssh (key login; ift
+                             and iftd installed there). Connecting again
+                             brings the same cards back. --check only tests
+                             the host. Settings start as a copy of yours.
   ift send <card> [text] [--enter] [--key NAME]...
                              type into a card's shell, without moving the
                              focus; the card is its number (#7) or its id;
@@ -113,11 +121,12 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 21] = [
+pub const SUBCOMMANDS: [&str; 22] = [
     "diff",
     "ls",
     "sessions",
     "attach",
+    "connect",
     "send",
     "read",
     "close",
@@ -158,6 +167,7 @@ fn main() -> ExitCode {
         Some("install-extension") => install_extension(args.get(1).map(String::as_str)),
         Some("install") => install_self(),
         Some("licence") => licence_cmd::run(&args[1..]),
+        Some("connect") => connect::run(&args[1..]),
         // Plumbing for the remote instances, called over ssh by the app, so it
         // is in neither USAGE nor the completion (like dev-run).
         Some("proxy") => proxy::run(&args[1..]),
