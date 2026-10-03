@@ -30,7 +30,7 @@ export default defineConfig({
             'curl -fsSL https://infiniterm.app/install.sh | sh -s -- --hooks claude',
             '```',
             '',
-            'Or `brew install --cask ekinertac/tap/infiniterm`, then `ift install-claude-hooks` (and `install-codex-hooks`, `install-opencode-hooks`, `install-pi-hooks`). `ift` is the command-line side: `ift <file>` edits a file over the current terminal card, `ift diff` opens changes against HEAD, `ift ls` lists cards, `ift commands` lists every command, `ift licence <email> <key>` registers a commercial licence (optional).',
+            'Or `brew install --cask ekinertac/tap/infiniterm`, then `ift install-claude-hooks` (and `install-codex-hooks`, `install-opencode-hooks`, `install-pi-hooks`). `ift` is the command-line side: `ift <file>` edits a file over the current terminal card, `ift diff` opens changes against HEAD, `ift ls` lists cards, `ift commands` lists every command, `ift send`, `ift read`, `ift close` and `ift run` drive another card by its number, `ift licence <email> <key>` registers a commercial licence (optional).',
           ].join('\n'),
           customSets: [
             { label: 'Guide', paths: ['guide/**'], description: 'install, the canvas, card states, terminal and editor cards, ift and sessions, configuration' },
