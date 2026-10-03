@@ -66,8 +66,6 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-24.04
-    # Not yet a gate: the first run says what on Linux is still macOS-shaped.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal
