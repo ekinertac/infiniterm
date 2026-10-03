@@ -49,6 +49,9 @@ ift — drive infiniterm from a shell
   ift ls                     cards: id, group, directory, state, remote, number
                              (the #7 on the card's label); a table on a
                              terminal, tab separated without a header into a pipe
+  ift ls --agents            the cards with an agent: number, agent, session
+                             id, state, directory, tab separated; the session
+                             id is what `claude --resume` takes
   ift sessions [--full]      session daemons still running, app or no app:
                              card number and label (or directory) on a
                              terminal, every column with --full (id, pid,
@@ -59,6 +62,17 @@ ift — drive infiniterm from a shell
                              its id or by the card's number (#7 on its
                              label, the same after a reboot; the id is not);
                              Ctrl-\\ (0x1c) detaches, leaving it running
+  ift send <card> [text] [--enter] [--key NAME]...
+                             type into a card's shell, without moving the
+                             focus; the card is its number (#7) or its id;
+                             keys: enter esc tab backspace ctrl-c ctrl-d
+                             ctrl-l ctrl-z up down left right
+  ift read <card> [--lines N] [--all]
+                             print what a card's terminal shows (the last N
+                             lines of it; --all reaches into the history)
+  ift close <card>           close a card like Cmd+W; a locked card refuses
+  ift run <command-id>       run a registered command as the palette would,
+                             on the card in focus (ift commands lists them)
   ift usage [days]           the commands and mouse gestures you used in the
                              last 30 days (or [days]), then the ones you
                              never did; from a log kept only on this Mac
@@ -99,11 +113,15 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 17] = [
+pub const SUBCOMMANDS: [&str; 21] = [
     "diff",
     "ls",
     "sessions",
     "attach",
+    "send",
+    "read",
+    "close",
+    "run",
     "omni",
     "commands",
     "usage",
@@ -153,7 +171,12 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        Some("ls") if args.iter().any(|a| a == "--agents") => send("ls", rest()),
         Some("ls") => send_table("ls", &LS_HEADER),
+        Some("send") => send("send", rest()),
+        Some("read") => send("read", rest()),
+        Some("close") => send("close", rest()),
+        Some("run") => send("run", rest()),
         Some("commands") => send_table("commands", &["id", "label", "key"]),
         Some("usage") => send("usage", rest()),
         Some("sessions") => attach::sessions_cmd(args.contains(&"--full".to_string())),

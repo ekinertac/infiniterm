@@ -302,6 +302,14 @@ pub enum Effect {
     /// Cmd+Shift+C: visual mode on this terminal card; the grid is the
     /// body's, so the ui turns it on (`Grid::visual_enter`).
     Visual(String),
+    /// `ift read`: the ui answers request `request_id` with the card's text,
+    /// since only the terminal body holds its grid (#127).
+    ReadCard {
+        request_id: u64,
+        card_id: String,
+        last: Option<usize>,
+        scrollback: bool,
+    },
     /// The late answer to an `ift` request (`edit`, when its cover closes).
     CliReply {
         id: u64,

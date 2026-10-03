@@ -181,6 +181,99 @@ pub fn open_plan(path: &str, kind: PathKind, line: Option<f64>) -> OpenPlan {
     }
 }
 
+/// How a script names a card (#127): the number on its label, `7` or `#7`
+/// (the same after a reboot, unlike an id), else the id itself.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CardRef {
+    Number(u32),
+    Id(String),
+}
+
+pub fn parse_card_ref(arg: &str) -> Option<CardRef> {
+    let arg = arg.trim();
+    if arg.is_empty() {
+        return None;
+    }
+    match arg.strip_prefix('#').unwrap_or(arg).parse::<u32>() {
+        Ok(n) => Some(CardRef::Number(n)),
+        Err(_) => Some(CardRef::Id(arg.to_string())),
+    }
+}
+
+/// The bytes a named key sends, for `ift send --key`. Names a person would
+/// type; `ctrl-c` twice is how Claude Code is told to leave.
+pub fn key_bytes(name: &str) -> Option<&'static [u8]> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "enter" | "return" => b"\r",
+        "esc" | "escape" => b"\x1b",
+        "tab" => b"\t",
+        "backspace" => b"\x7f",
+        "ctrl-c" => b"\x03",
+        "ctrl-d" => b"\x04",
+        "ctrl-l" => b"\x0c",
+        "ctrl-z" => b"\x1a",
+        "up" => b"\x1b[A",
+        "down" => b"\x1b[B",
+        "right" => b"\x1b[C",
+        "left" => b"\x1b[D",
+        _ => return None,
+    })
+}
+
+/// `ift send <card> [text...] [--enter] [--key NAME]...`: the card, then the
+/// bytes to type, the text first and the keys after it in the order given.
+pub fn parse_send(args: &[String]) -> Result<(String, Vec<u8>), String> {
+    let card = args.first().ok_or("send takes a card and what to type")?;
+    let mut text: Vec<&str> = vec![];
+    let mut keys: Vec<u8> = vec![];
+    let mut it = args[1..].iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--enter" => keys.extend_from_slice(b"\r"),
+            "--key" => {
+                let name = it.next().ok_or("--key takes a key name")?;
+                keys.extend_from_slice(key_bytes(name).ok_or(format!("no key called {name}"))?);
+            }
+            other => text.push(other),
+        }
+    }
+    let mut bytes = text.join(" ").into_bytes();
+    bytes.extend(keys);
+    if bytes.is_empty() {
+        return Err("nothing to send".into());
+    }
+    Ok((card.clone(), bytes))
+}
+
+/// `ift read <card> [--lines N] [--all]`: the card, how many of the last
+/// lines (none: the whole screen), and whether to reach into the history.
+pub fn parse_read(args: &[String]) -> Result<(String, Option<usize>, bool), String> {
+    let card = args.first().ok_or("read takes a card")?;
+    let mut last = None;
+    let mut scrollback = false;
+    let mut it = args[1..].iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--all" => scrollback = true,
+            "--lines" => {
+                let n = it.next().ok_or("--lines takes a number")?;
+                last = Some(n.parse().map_err(|_| format!("not a number: {n}"))?);
+            }
+            other => return Err(format!("unknown option {other}")),
+        }
+    }
+    Ok((card.clone(), last, scrollback))
+}
+
+/// `ift ls --agents`: one line per card that has an agent, for scripts that
+/// restart them: number, agent, session id, state, directory, tab separated.
+pub fn format_agents(rows: &[(u32, &str, &str, &str, &str)]) -> String {
+    rows.iter()
+        .map(|(n, kind, session, state, cwd)| format!("{n}\t{kind}\t{session}\t{state}\t{cwd}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,5 +454,68 @@ mod tests {
                 url: "https://example.com/a".into()
             }
         );
+    }
+
+    fn v(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_card_is_named_by_number_or_id() {
+        assert_eq!(parse_card_ref("7"), Some(CardRef::Number(7)));
+        assert_eq!(parse_card_ref("#7"), Some(CardRef::Number(7)));
+        assert_eq!(
+            parse_card_ref("5949c24e"),
+            Some(CardRef::Id("5949c24e".into()))
+        );
+        assert_eq!(parse_card_ref("  "), None);
+    }
+
+    #[test]
+    fn send_types_the_text_then_the_keys_in_order() {
+        assert_eq!(
+            parse_send(&v(&["#7", "/exit", "--enter"])).unwrap(),
+            ("#7".to_string(), b"/exit\r".to_vec())
+        );
+        assert_eq!(
+            parse_send(&v(&["7", "--key", "ctrl-c", "--key", "ctrl-c"]))
+                .unwrap()
+                .1,
+            b"\x03\x03"
+        );
+        assert_eq!(
+            parse_send(&v(&["7", "claude", "--resume", "abc", "--enter"]))
+                .unwrap()
+                .1,
+            b"claude --resume abc\r"
+        );
+        assert!(parse_send(&v(&[])).is_err());
+        assert!(parse_send(&v(&["7"])).is_err());
+        assert!(parse_send(&v(&["7", "--key", "nope"])).is_err());
+        assert!(parse_send(&v(&["7", "--key"])).is_err());
+    }
+
+    #[test]
+    fn read_takes_a_card_a_line_count_and_all() {
+        assert_eq!(parse_read(&v(&["3"])).unwrap(), ("3".into(), None, false));
+        assert_eq!(
+            parse_read(&v(&["3", "--lines", "20", "--all"])).unwrap(),
+            ("3".into(), Some(20), true)
+        );
+        assert!(parse_read(&v(&[])).is_err());
+        assert!(parse_read(&v(&["3", "--lines", "x"])).is_err());
+        assert!(parse_read(&v(&["3", "--what"])).is_err());
+    }
+
+    #[test]
+    fn the_agents_list_is_one_tab_separated_line_per_card() {
+        assert_eq!(
+            format_agents(&[
+                (7, "claude", "abc-123", "done", "/a"),
+                (9, "codex", "z", "working", "/b")
+            ]),
+            "7\tclaude\tabc-123\tdone\t/a\n9\tcodex\tz\tworking\t/b"
+        );
+        assert_eq!(format_agents(&[]), "");
     }
 }
