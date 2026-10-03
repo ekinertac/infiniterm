@@ -113,7 +113,26 @@ while IFS=$TAB read -r number kind session state cwd; do
         failed=1
         continue
     fi
-    # The shell prompt is back a moment after the hint.
+    # Claude prints the hint and then needs a moment to shut down; text typed
+    # in that moment is discarded with it, and the card is left at a prompt
+    # with nothing run. So wait until the card's shell has no child left.
+    pid=$("$IFT" sessions | awk -F'\t' -v n="#$number" '$6 == n { print $2 }' | head -1)
+    if [ -n "$pid" ]; then
+        gone=0
+        while pgrep -P "$pid" > /dev/null 2>&1; do
+            gone=$((gone + 1))
+            [ "$gone" -gt $((WAIT * 3)) ] && break
+            sleep 0.33
+        done
+        if pgrep -P "$pid" > /dev/null 2>&1; then
+            echo "#$number: Claude is still shutting down after ${WAIT}s, left alone" >&2
+            failed=1
+            continue
+        fi
+    else
+        sleep 3
+    fi
+    # The prompt is drawn a moment after the shell is free.
     sleep 0.5
     # The first {id} in the template, replaced without sed: a session name can
     # hold a slash or an ampersand.

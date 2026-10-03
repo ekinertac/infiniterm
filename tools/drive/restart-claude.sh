@@ -16,6 +16,9 @@ export INFINITERM_DATA_DIR=$DATA
 export INFINITERM_CONFIG_DIR=$CONFIG
 APP="$ROOT/target/bundle/infiniterm.app"
 IFT="$APP/Contents/MacOS/ift"
+# The script under test; RESTART=<path> runs another one (an older one, to see
+# this scenario fail).
+RESTART=${RESTART:-$ROOT/tools/restart-claude.sh}
 HOOK="$APP/Contents/MacOS/infiniterm-hook"
 rm -rf "$DATA" "$CONFIG" "$FAKE"; mkdir -p "$DATA" "$CONFIG" "$FAKE"
 cat > "$FAKE/claude" <<'FAKE'
@@ -27,7 +30,9 @@ id=${2:-11111111-2222-3333-4444-555555555555}
 if [ "$1" = --named ]; then need=3; id='"fake-name"'; fi
 if [ "$1" = --resume ]; then echo "FAKE-CLAUDE RESUMED $id"; else echo "FAKE-CLAUDE STARTED $id"; fi
 n=0
-trap 'n=$((n+1)); if [ $n -ge $need ]; then echo; echo "Resume this session with:"; echo "claude --resume $id"; exit 0; else echo "(Press Ctrl-C again to exit)"; fi' INT
+# Leaving takes two seconds after the hint, and anything typed meanwhile is
+# swallowed (read one line from the terminal), as a real Claude's shutdown does.
+trap 'n=$((n+1)); if [ $n -ge $need ]; then echo; echo "Resume this session with:"; echo "claude --resume $id"; perl -e "alarm 2; <STDIN>"; exit 0; else echo "(Press Ctrl-C again to exit)"; fi' INT
 while :; do sleep 0.2; done
 FAKE
 chmod +x "$FAKE/claude"
@@ -55,17 +60,17 @@ echo "--- ls --agents"
 "$IFT" ls --agents | grep -q "$SID" || fail "the card has no session id"
 
 echo "--- from inside the card: skipped"
-OUT=$(INFINITERM_CARD_ID=$CARD IFT="$IFT" "$ROOT/tools/restart-claude.sh" --dry-run) || true
+OUT=$(INFINITERM_CARD_ID=$CARD IFT="$IFT" "$RESTART" --dry-run) || true
 echo "$OUT"
 case $OUT in *"this card"*) ;; *) fail "did not skip its own card" ;; esac
 
 echo "--- dry run"
-OUT=$(IFT="$IFT" "$ROOT/tools/restart-claude.sh" --dry-run) || true
+OUT=$(IFT="$IFT" "$RESTART" --dry-run) || true
 echo "$OUT"
 case $OUT in *"would restart session $SID"*) ;; *) fail "dry run said nothing useful" ;; esac
 
 echo "--- restart"
-OUT=$(IFT="$IFT" "$ROOT/tools/restart-claude.sh" --wait 15 --cmd "$FAKE/claude --resume {id}") || true
+OUT=$(IFT="$IFT" "$RESTART" --wait 15 --cmd "$FAKE/claude --resume {id}") || true
 echo "$OUT"
 case $OUT in *"#1: restarted $SID"*) ;; *) fail "not restarted" ;; esac
 sleep 1.5
@@ -79,7 +84,7 @@ sleep 0.6
 sleep 2
 "$IFT" send 1 "$FAKE/claude --named" --enter
 sleep 1.5
-OUT=$(IFT="$IFT" "$ROOT/tools/restart-claude.sh" --wait 15 --cmd "$FAKE/claude --resume {id}") || true
+OUT=$(IFT="$IFT" "$RESTART" --wait 15 --cmd "$FAKE/claude --resume {id}") || true
 echo "$OUT"
 case $OUT in *'#1: restarted "fake-name"'*) ;; *) fail "the named session was not restarted" ;; esac
 sleep 1.5
