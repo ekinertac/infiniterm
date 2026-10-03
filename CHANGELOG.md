@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-04
+
+- `ift connect user@host` opens a second infiniterm for a server: its own window, Dock icon and canvas, with terminal cards that run on that host over ssh. The shells live in `iftd` on the server, so closing the window leaves them running and connecting again brings the same cards back. Each host gets its own colour (a tinted title bar, a chip with its name, a badge on the Dock icon; `--color` sets it), its own settings (a copy of yours the first time) and no browser cards. `ift connect user@host --check` only tests the host. It needs key login and `ift` and `iftd` installed on the server: static Linux builds (x86_64 and aarch64) are attached to each release from the next one.
+
 ### 2026-10-03
 
 - Four `ift` commands to drive cards from a script. `ift send <card> text --enter` types into a card's shell without moving the focus (`--key ctrl-c` and others for keys). `ift read <card> --lines 20` prints what a card's terminal shows, `--all` for its history too. `ift close <card>` closes a card like Cmd+W. `ift run <command-id>` runs any command from `ift commands`. A card is its number (`7` or `#7`) or its id. `ift ls --agents` lists the cards that have an agent with the session id `claude --resume` takes.
