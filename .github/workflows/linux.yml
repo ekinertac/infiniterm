@@ -1,0 +1,72 @@
+# Linux builds of the three binaries a server needs (#118): `iftd` (the
+# session daemon), `ift` (the CLI) and `infiniterm-hook`. The app itself is
+# macOS only; this proves the rest still compiles and runs on Linux, and
+# leaves static musl binaries as artifacts for the remote-instance work.
+#
+# Static musl so no glibc version on the server matters. x86_64 on a normal
+# runner, aarch64 on GitHub's arm runner: each builds natively, no cross
+# toolchain. Related: infiniterm-session/Cargo.toml, tools/publish.sh.
+name: linux
+
+on:
+  pull_request:
+    paths:
+      - "infiniterm-core/**"
+      - "infiniterm-term/**"
+      - "infiniterm-session/**"
+      - "infiniterm-cli/**"
+      - "infiniterm-hook/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/linux.yml"
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq musl-tools
+      - name: build
+        run: >
+          cargo build --release --locked --target ${{ matrix.target }}
+          -p infiniterm-session -p infiniterm-cli -p infiniterm-hook
+      - name: what came out
+        run: |
+          cd target/${{ matrix.target }}/release
+          ls -la iftd ift infiniterm-hook
+          file iftd ift infiniterm-hook
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/iftd
+            target/${{ matrix.target }}/release/ift
+            target/${{ matrix.target }}/release/infiniterm-hook
+
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo test --locked -p infiniterm-core -p infiniterm-term -p infiniterm-session
