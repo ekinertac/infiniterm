@@ -571,6 +571,29 @@ impl Grid {
         }
     }
 
+    /// What the terminal shows as plain text, for `ift read`: the screen, or
+    /// with `scrollback` the history above it too, trailing blanks dropped
+    /// from every line and from the end, and with `last` only the final N
+    /// lines. Wrapped rows are one line.
+    pub fn text(&self, last: Option<usize>, scrollback: bool) -> String {
+        let screen = self.term.screen_lines() as i32;
+        let history = self.term.history_size() as i32;
+        let top = if scrollback { -history } else { 0 };
+        let raw = self.term.bounds_to_string(
+            Point::new(Line(top), Column(0)),
+            Point::new(Line(screen - 1), Column(self.size.cols.saturating_sub(1))),
+        );
+        let mut lines: Vec<&str> = raw.lines().map(str::trim_end).collect();
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        if let Some(n) = last {
+            let from = lines.len().saturating_sub(n);
+            lines.drain(..from);
+        }
+        lines.join("\n")
+    }
+
     /// The selection as text, `None` when nothing is selected. Trailing
     /// spaces of each line are dropped, as alacritty and xterm do.
     ///
@@ -990,6 +1013,22 @@ impl Grid {
 
 #[cfg(test)]
 mod tests {
+
+    // `ift read`: the screen, the history above it, and the last N lines.
+    #[test]
+    fn text_is_the_screen_or_the_history_trimmed() {
+        let mut g = Grid::new(20, 3, 100);
+        g.advance(b"one\r\ntwo   \r\nthree\r\nfour");
+        assert_eq!(g.text(None, false), "two\nthree\nfour");
+        assert_eq!(g.text(None, true), "one\ntwo\nthree\nfour");
+        assert_eq!(g.text(Some(2), true), "three\nfour");
+        assert_eq!(g.text(Some(9), false), "two\nthree\nfour");
+        // Blank rows under the cursor are not part of the text.
+        let mut h = Grid::new(20, 5, 100);
+        h.advance(b"only");
+        assert_eq!(h.text(None, true), "only");
+        assert_eq!(Grid::new(20, 3, 100).text(None, true), "");
+    }
 
     // The shell's selection comes as OSC 52 "s" and is not the clipboard.
     #[test]

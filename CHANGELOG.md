@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-03
+
+- Four `ift` commands to drive cards from a script. `ift send <card> text --enter` types into a card's shell without moving the focus (`--key ctrl-c` and others for keys). `ift read <card> --lines 20` prints what a card's terminal shows, `--all` for its history too. `ift close <card>` closes a card like Cmd+W. `ift run <command-id>` runs any command from `ift commands`. A card is its number (`7` or `#7`) or its id. `ift ls --agents` lists the cards that have an agent with the session id `claude --resume` takes.
+
 ## 0.5.2 (build 560), 2026-10-03
 
 ### App

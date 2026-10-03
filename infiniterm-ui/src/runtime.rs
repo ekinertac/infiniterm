@@ -324,6 +324,29 @@ impl AppView {
                 Effect::DraftDelete(id) => {
                     let _ = infiniterm_core::files::draft_delete(&id);
                 }
+                Effect::ReadCard {
+                    request_id,
+                    card_id,
+                    last,
+                    scrollback,
+                } => {
+                    let text = self
+                        .bodies
+                        .get_mut(&card_id)
+                        .and_then(|b| {
+                            b.as_any_mut()
+                                .downcast_mut::<crate::terminal_body::TerminalBody>()
+                        })
+                        .map(|t| t.grid.text(last, scrollback));
+                    match text {
+                        Some(text) => self.backend.cli.reply(request_id, true, text),
+                        None => self.backend.cli.reply(
+                            request_id,
+                            false,
+                            "that card has no terminal to read".into(),
+                        ),
+                    }
+                }
                 Effect::CliReply { id, ok, text } => {
                     self.backend.cli.reply(id, ok, text);
                 }
