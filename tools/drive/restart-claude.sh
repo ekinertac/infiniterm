@@ -20,10 +20,14 @@ HOOK="$APP/Contents/MacOS/infiniterm-hook"
 rm -rf "$DATA" "$CONFIG" "$FAKE"; mkdir -p "$DATA" "$CONFIG" "$FAKE"
 cat > "$FAKE/claude" <<'FAKE'
 #!/bin/sh
+# --named: a session with a name, whose hint is the name in quotes, and a prompt
+# with text in it, which uses the first Ctrl+C to clear itself (so three).
+need=2
 id=${2:-11111111-2222-3333-4444-555555555555}
+if [ "$1" = --named ]; then need=3; id='"fake-name"'; fi
 if [ "$1" = --resume ]; then echo "FAKE-CLAUDE RESUMED $id"; else echo "FAKE-CLAUDE STARTED $id"; fi
 n=0
-trap 'n=$((n+1)); if [ $n -ge 2 ]; then echo; echo "Resume this session with:"; echo "claude --resume $id"; exit 0; else echo "(Press Ctrl-C again to exit)"; fi' INT
+trap 'n=$((n+1)); if [ $n -ge $need ]; then echo; echo "Resume this session with:"; echo "claude --resume $id"; exit 0; else echo "(Press Ctrl-C again to exit)"; fi' INT
 while :; do sleep 0.2; done
 FAKE
 chmod +x "$FAKE/claude"
@@ -67,4 +71,19 @@ case $OUT in *"#1: restarted $SID"*) ;; *) fail "not restarted" ;; esac
 sleep 1.5
 "$IFT" read 1 --lines 6
 "$IFT" read 1 --lines 6 | grep -q "FAKE-CLAUDE RESUMED $SID" || fail "the card did not resume"
+
+echo "--- a named session, and a prompt that eats the first Ctrl+C"
+"$IFT" send 1 --key ctrl-c
+sleep 0.6
+"$IFT" send 1 --key ctrl-c
+sleep 2
+"$IFT" send 1 "$FAKE/claude --named" --enter
+sleep 1.5
+OUT=$(IFT="$IFT" "$ROOT/tools/restart-claude.sh" --wait 15 --cmd "$FAKE/claude --resume {id}") || true
+echo "$OUT"
+case $OUT in *'#1: restarted "fake-name"'*) ;; *) fail "the named session was not restarted" ;; esac
+sleep 1.5
+"$IFT" read 1 --lines 5
+"$IFT" read 1 --lines 5 | grep -q 'claude --resume "fake-name"' || fail "the card did not get the quoted name"
+"$IFT" read 1 --lines 3 | grep -q "FAKE-CLAUDE RESUMED fake-name" || fail "the named session did not resume"
 echo "PASS"
