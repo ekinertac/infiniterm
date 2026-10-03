@@ -57,6 +57,10 @@ const SUN_PATH_MAX: usize = 104;
 /// fork, not a network round trip.
 const HELLO_DEADLINE: Duration = Duration::from_secs(5);
 
+/// The same wait over ssh: a connection, a login and a remote daemon start
+/// before `Hello`, so a network round trip or three is in it.
+const REMOTE_HELLO_DEADLINE: Duration = Duration::from_secs(20);
+
 /// Socket read granularity while polling for `Hello`. Short enough that
 /// `HELLO_DEADLINE` is honoured to within a fraction of a second.
 const HELLO_POLL: Duration = Duration::from_millis(100);
@@ -197,7 +201,7 @@ impl DaemonBackend {
                 iftd.display()
             )
         })?;
-        let (pid, cols, rows, reader) = read_hello(&mut stream)?;
+        let (pid, cols, rows, reader) = read_hello(&mut stream, HELLO_DEADLINE)?;
         Ok(self.register(session_id, stream, reader, Some(pid), (cols, rows)))
     }
 
@@ -208,7 +212,7 @@ impl DaemonBackend {
     pub fn adopt(&self, session_id: &str) -> Option<PaneId> {
         let socket = self.sessions_dir.join(format!("{session_id}.sock"));
         let mut stream = UnixStream::connect(&socket).ok()?;
-        let (pid, cols, rows, reader) = read_hello(&mut stream).ok()?;
+        let (pid, cols, rows, reader) = read_hello(&mut stream, HELLO_DEADLINE).ok()?;
         Some(self.register(
             session_id.to_string(),
             stream,
@@ -216,6 +220,62 @@ impl DaemonBackend {
             Some(pid),
             (cols, rows),
         ))
+    }
+
+    /// A new shell on another machine: `ift proxy session --spawn` over ssh
+    /// starts the daemon there and this attaches to it (#118). The pane has no
+    /// local pid, so the inspect poller never looks up a process on THIS
+    /// machine that happens to share the remote's pid.
+    pub fn spawn_remote(
+        &self,
+        host: &super::remote::RemoteHost,
+        cwd: &str,
+        cmd: Option<&str>,
+        env: Vec<(String, String)>,
+    ) -> anyhow::Result<PaneId> {
+        let session_id = new_session_id();
+        let spec = super::remote::SpawnSpec {
+            cwd: Some(cwd.to_string()),
+            cmd: cmd.map(str::to_string),
+            env,
+            buffer_mib: Some(self.buffer_mib),
+        };
+        self.attach_remote(host, session_id, Some(&spec))
+    }
+
+    /// Takes over a session the server still holds. `None` when it is gone
+    /// or the connection fails.
+    pub fn adopt_remote(
+        &self,
+        host: &super::remote::RemoteHost,
+        session_id: &str,
+    ) -> Option<PaneId> {
+        self.attach_remote(host, session_id.to_string(), None).ok()
+    }
+
+    fn attach_remote(
+        &self,
+        host: &super::remote::RemoteHost,
+        session_id: String,
+        spawn: Option<&super::remote::SpawnSpec>,
+    ) -> anyhow::Result<PaneId> {
+        let (mut stream, stderr) = super::remote::connect(host, &session_id, spawn)
+            .map_err(|e| anyhow::anyhow!("could not run {}: {e}", host.ssh))?;
+        match read_hello(&mut stream, REMOTE_HELLO_DEADLINE) {
+            Ok((_remote_pid, cols, rows, reader)) => {
+                Ok(self.register(session_id, stream, reader, None, (cols, rows)))
+            }
+            Err(e) => {
+                // Give ssh a moment to say why before reporting it.
+                std::thread::sleep(Duration::from_millis(150));
+                let why = stderr.text();
+                if why.is_empty() {
+                    Err(e)
+                } else {
+                    Err(anyhow::anyhow!("{}: {why}", host.target))
+                }
+            }
+        }
     }
 
     /// Common tail of `spawn_now` and `adopt`: the socket is connected and
@@ -484,11 +544,14 @@ impl DaemonBackend {
 /// `Replay`/`ReplayEnd` bytes read in the same syscall as `Hello`. Losing
 /// those would be exactly the kind of desync `FrameReader::feed` exists to
 /// prevent, so the reader is threaded through rather than discarded here.
-fn read_hello(stream: &mut UnixStream) -> anyhow::Result<(u32, u16, u16, FrameReader)> {
+fn read_hello(
+    stream: &mut UnixStream,
+    wait: Duration,
+) -> anyhow::Result<(u32, u16, u16, FrameReader)> {
     stream.set_read_timeout(Some(HELLO_POLL))?;
     let mut reader = FrameReader::default();
     let mut buf = [0u8; 8192];
-    let deadline = Instant::now() + HELLO_DEADLINE;
+    let deadline = Instant::now() + wait;
     loop {
         match reader.next() {
             Ok(Some(Frame::Hello { pid, cols, rows })) => {
@@ -504,7 +567,7 @@ fn read_hello(stream: &mut UnixStream) -> anyhow::Result<(u32, u16, u16, FrameRe
             Err(e) => anyhow::bail!("iftd's greeting: {e}"),
         }
         if Instant::now() > deadline {
-            anyhow::bail!("no Hello from iftd within {HELLO_DEADLINE:?}");
+            anyhow::bail!("no Hello from iftd within {wait:?}");
         }
         match stream.read(&mut buf) {
             Ok(0) => anyhow::bail!("iftd closed the connection before Hello"),
@@ -602,7 +665,7 @@ fn send_kill(socket: &Path) {
     let Ok(mut s) = UnixStream::connect(socket) else {
         return;
     };
-    if read_hello(&mut s).is_err() {
+    if read_hello(&mut s, HELLO_DEADLINE).is_err() {
         return;
     }
     // After the greeting: `read_hello` sets its own short poll.
