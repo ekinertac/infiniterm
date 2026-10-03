@@ -49,10 +49,34 @@ pub fn app_support_dir() -> PathBuf {
 pub fn data_dir(override_: Option<&std::ffi::OsStr>) -> PathBuf {
     match override_ {
         Some(dir) => PathBuf::from(dir),
-        None => home_dir()
-            .join("Library")
+        None => default_data_dir(
+            &home_dir(),
+            std::env::var_os("XDG_DATA_HOME").as_deref(),
+            cfg!(target_os = "linux"),
+        ),
+    }
+}
+
+/// Where the data lives with no override: Application Support on a Mac, and
+/// on Linux (a server running `iftd`, #118) `$XDG_DATA_HOME` or
+/// `~/.local/share`, where a Linux user looks. A relative `XDG_DATA_HOME` is
+/// ignored, as the XDG spec says. A pure function so both answers are tested
+/// on either OS.
+pub fn default_data_dir(
+    home: &std::path::Path,
+    xdg_data_home: Option<&std::ffi::OsStr>,
+    linux: bool,
+) -> PathBuf {
+    if linux {
+        xdg_data_home
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .unwrap_or_else(|| home.join(".local").join("share"))
+            .join(BUNDLE_ID)
+    } else {
+        home.join("Library")
             .join("Application Support")
-            .join(BUNDLE_ID),
+            .join(BUNDLE_ID)
     }
 }
 
@@ -144,13 +168,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layout_path_is_under_application_support() {
+    fn layout_path_is_under_the_data_dir() {
         let path = layout_path();
         assert!(
             path.ends_with("dev.ekinertac.infiniterm/workspace.json"),
             "{path:?}"
         );
-        assert!(path.to_string_lossy().contains("Application Support"));
+        assert!(path.starts_with(app_support_dir()));
+    }
+
+    // #118: a Mac keeps its data in Application Support, Linux where XDG says.
+    #[test]
+    fn the_default_data_dir_follows_the_os() {
+        let home = std::path::Path::new("/home/u");
+        assert_eq!(
+            default_data_dir(home, None, false),
+            home.join("Library/Application Support/dev.ekinertac.infiniterm")
+        );
+        assert_eq!(
+            default_data_dir(home, None, true),
+            home.join(".local/share/dev.ekinertac.infiniterm")
+        );
+        let xdg = std::ffi::OsString::from("/data");
+        assert_eq!(
+            default_data_dir(home, Some(&xdg), true),
+            std::path::Path::new("/data/dev.ekinertac.infiniterm")
+        );
+        let relative = std::ffi::OsString::from("data");
+        assert_eq!(
+            default_data_dir(home, Some(&relative), true),
+            home.join(".local/share/dev.ekinertac.infiniterm"),
+            "a relative XDG_DATA_HOME is ignored"
+        );
+        assert_eq!(
+            default_data_dir(home, Some(&xdg), false),
+            home.join("Library/Application Support/dev.ekinertac.infiniterm"),
+            "a Mac ignores it"
+        );
     }
 
     // The override moves the save file and the drafts (and the socket, see
@@ -161,7 +215,7 @@ mod tests {
         assert_eq!(data_dir(Some(dir.as_os_str())), dir);
         assert!(data_dir(None)
             .to_string_lossy()
-            .contains("Application Support"));
+            .contains("dev.ekinertac.infiniterm"));
         assert!(layout_path().starts_with(app_support_dir()));
         assert!(drafts_dir().starts_with(app_support_dir()));
     }
