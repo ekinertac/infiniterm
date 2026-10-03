@@ -20,6 +20,7 @@ use std::sync::mpsc::Receiver;
 
 pub mod daemon;
 pub mod local_pty;
+pub mod remote;
 pub mod session_protocol;
 pub mod tmux;
 pub mod tmux_protocol;
