@@ -569,6 +569,9 @@ pub struct Model {
     pub palette: PaletteState,
     pub prompt: crate::prompt::Prompt<Pending>,
     pub shortcuts_open: bool,
+    /// Set when this instance runs its cards on a host (`ift connect`, #118):
+    /// what the window shows, and the reason browser cards are refused.
+    pub remote: Option<crate::remote_identity::RemoteIdentity>,
     pub omni: omni_cmd::OmniState,
     pub find: find_cmd::FindState,
     /// Where browser cards have been. Loaded once at startup and written
@@ -674,6 +677,7 @@ impl Model {
             palette: PaletteState::default(),
             prompt: crate::prompt::Prompt::default(),
             shortcuts_open: false,
+            remote: None,
             omni: omni_cmd::OmniState::default(),
             find: find_cmd::FindState::default(),
             history: crate::omni::history::History::default(),
@@ -793,6 +797,17 @@ impl Model {
         } else {
             self.cards.len()
         }
+    }
+
+    /// A browser card in a remote instance: its page would load on THIS Mac,
+    /// not through the host, which is not what the window says it is. Off
+    /// until browsing through the server is built. True when it was refused.
+    pub(super) fn browser_refused(&mut self) -> bool {
+        if self.remote.is_none() {
+            return false;
+        }
+        self.notify("browser cards are off in a remote instance");
+        true
     }
 
     pub fn here(&self) -> Vec<&Card> {

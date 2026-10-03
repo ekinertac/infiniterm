@@ -261,6 +261,7 @@ impl Model {
             OpenPlan::Diff { cwd, path, root } => {
                 (CardKind::Diff, cwd, path, Some(root), None, None)
             }
+            OpenPlan::Browser { .. } if self.browser_refused() => return None,
             OpenPlan::Browser { cwd, url } => (CardKind::Browser, cwd, None, None, None, Some(url)),
             OpenPlan::Transcript { cwd, path } => {
                 (CardKind::Transcript, cwd, Some(path), None, None, None)

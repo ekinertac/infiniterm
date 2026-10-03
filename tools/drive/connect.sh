@@ -51,4 +51,20 @@ export INFINITERM_DATA_DIR=$BASE
 OUT=$("$BIN/ift" connect "$HOST" --ift "$BIN/ift")
 echo "$OUT"
 case $OUT in *"already connected"*) ;; *) fail "opened a second window for the same host" ;; esac
+# SHOTS=<dir> also looks at it: the remote window, and the Dock, which here
+# autohides on the right and is shown by putting the pointer at that edge for a
+# moment (so this part moves the mouse; leave it off while somebody is working).
+if [ -n "${SHOTS:-}" ]; then
+    mkdir -p "$SHOTS"
+    PID=$(pgrep -f "$BIN/infiniterm\$" | head -1)
+    screencapture -x -o -l "$("$ROOT/tools/winid" --pid "$PID" | head -1 | cut -f1)" "$SHOTS/remote-window.png"
+    ORIG=$(cliclick p | grep -oE '[0-9]+,[0-9]+' | head -1)
+    BOUNDS=$(osascript -e 'tell application "Finder" to get bounds of window of desktop')
+    W=$(echo "$BOUNDS" | awk -F', *' '{print $3}'); H=$(echo "$BOUNDS" | awk -F', *' '{print $4}')
+    cliclick "m:$((W - 1)),$((H / 2))"
+    sleep 2
+    screencapture -x "$SHOTS/dock.png"
+    cliclick "m:$ORIG"
+    echo "shots in $SHOTS"
+fi
 echo "PASS"
