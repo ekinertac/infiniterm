@@ -127,6 +127,29 @@ pub fn splice(
     Ok(())
 }
 
+/// The folder a spawned session starts in: `~` and `~/x` mean this machine's
+/// home, and one that does not exist here (a Mac path sent by an instance that
+/// has not heard of this server) is the home, not an error that leaves a card
+/// with no shell. The app asks for `~` from a remote instance; this is also the
+/// safety net for a card saved before that.
+pub fn resolve_cwd(requested: Option<&str>, home: &Path) -> PathBuf {
+    let Some(r) = requested.map(str::trim).filter(|r| !r.is_empty()) else {
+        return home.to_path_buf();
+    };
+    let expanded = if r == "~" {
+        home.to_path_buf()
+    } else if let Some(rest) = r.strip_prefix("~/") {
+        home.join(rest)
+    } else {
+        PathBuf::from(r)
+    };
+    if expanded.is_dir() {
+        expanded
+    } else {
+        home.to_path_buf()
+    }
+}
+
 fn find_iftd() -> Option<PathBuf> {
     let beside = std::env::current_exe()
         .ok()
@@ -151,7 +174,7 @@ fn spawn_daemon(socket: &Path, s: &SpawnArgs) -> Result<(), String> {
     let mut c = std::process::Command::new(&iftd);
     c.arg("--socket").arg(socket);
     c.arg("--cwd")
-        .arg(s.cwd.clone().unwrap_or_else(|| paths::home_dir().to_string_lossy().into()));
+        .arg(resolve_cwd(s.cwd.as_deref(), &paths::home_dir()));
     if let Some(b) = &s.buffer {
         c.arg("--buffer").arg(b);
     }
@@ -210,6 +233,21 @@ mod tests {
 
     fn a(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_session_starts_in_a_folder_that_exists_here() {
+        let home = std::env::temp_dir().join(format!("ift-home-{}", std::process::id()));
+        std::fs::create_dir_all(home.join("work")).unwrap();
+        assert_eq!(resolve_cwd(None, &home), home);
+        assert_eq!(resolve_cwd(Some(""), &home), home);
+        assert_eq!(resolve_cwd(Some("~"), &home), home);
+        assert_eq!(resolve_cwd(Some("~/work"), &home), home.join("work"));
+        assert_eq!(resolve_cwd(Some(home.join("work").to_str().unwrap()), &home), home.join("work"));
+        // A folder that is not on this machine (a Mac path, say): the home.
+        assert_eq!(resolve_cwd(Some("/no/such/folder/on/this/machine"), &home), home);
+        assert_eq!(resolve_cwd(Some("~/nope"), &home), home);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
