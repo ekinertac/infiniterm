@@ -406,7 +406,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         soft_group_id: non_empty(c.get("softGroupId")),
         split_from: non_empty(c.get("splitFrom")),
         kind,
-        path: if file_kind || kind_str == Some("transcript") {
+        path: if file_kind || matches!(kind_str, Some("transcript" | "page")) {
             path
         } else {
             None
@@ -1383,6 +1383,27 @@ mod tests {
         let saved = round_trip(&[tr, blank], &[]).unwrap();
         assert_eq!(saved.cards[0].kind, CardKind::Transcript);
         assert_eq!(saved.cards[0].path.as_deref(), Some("/s/abc.jsonl"));
+        assert_eq!(saved.cards[1].kind, CardKind::Terminal);
+    }
+
+    #[test]
+    fn a_page_card_keeps_its_file_and_one_without_a_path_comes_back_as_a_terminal() {
+        let page = SavedCard {
+            kind: CardKind::Page,
+            path: Some("/d/welcome/Start here.md".into()),
+            ..card()
+        };
+        let blank = SavedCard {
+            id: "c2".into(),
+            kind: CardKind::Page,
+            ..card()
+        };
+        let saved = round_trip(&[page, blank], &[]).unwrap();
+        assert_eq!(saved.cards[0].kind, CardKind::Page);
+        assert_eq!(
+            saved.cards[0].path.as_deref(),
+            Some("/d/welcome/Start here.md")
+        );
         assert_eq!(saved.cards[1].kind, CardKind::Terminal);
     }
 
