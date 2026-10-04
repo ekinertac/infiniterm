@@ -84,6 +84,17 @@ pub struct SessionRow {
 /// daemon that died mid-write, or one that failed at startup and wrote
 /// `{"error": "..."}` instead of the usual fields, see `fail_startup` in
 /// `infiniterm-session`) is skipped rather than aborting the whole listing.
+/// Whether a process with this pid exists. `kill(pid, 0)` sends nothing; a
+/// process that exists but is not ours answers EPERM, which still means alive.
+fn pid_alive(pid: u32) -> bool {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
+    }
+    // SAFETY: signal 0 only checks that the pid can be signalled.
+    let rc = unsafe { libc::kill(pid as i32, 0) };
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
 pub fn list_sessions(dir: &Path) -> Vec<SessionRow> {
     let mut rows = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -118,6 +129,15 @@ pub fn list_sessions(dir: &Path) -> Vec<SessionRow> {
         ) else {
             continue;
         };
+        // A daemon killed by a signal leaves its meta AND its socket file
+        // behind, so the files alone still say it is running (found on the
+        // first real server: a killed session was counted by the app's own
+        // live-session list). The shell the meta names is the daemon's child
+        // and ends with it, so a pid that is gone is a session that is gone.
+        // Connecting to the socket to ask would evict the app's own client.
+        if !pid_alive(pid as u32) {
+            continue;
+        }
         rows.push(SessionRow {
             id: id.to_string(),
             pid: pid as u32,
@@ -622,19 +642,49 @@ mod tests {
         dir
     }
 
+    /// A meta file's text for a session whose shell has this pid.
+    fn meta(pid: u32, cwd: &str, cmd: &str) -> String {
+        format!(
+            r#"{{"pid":{pid},"cwd":"{cwd}","cmd":"{cmd}","started":"2026-09-17T10:00:00Z"}}"#
+        )
+    }
+
+    // A daemon killed by a signal leaves meta AND socket behind; the shell it
+    // named is gone, so the listing must not call it a session. This is also
+    // what the app's live list on a remote host is built from.
+    #[test]
+    fn a_session_whose_shell_is_gone_is_not_listed_even_with_its_socket() {
+        let dir = tempdir();
+        std::fs::write(dir.join("up.meta"), meta(std::process::id(), "/tmp", "zsh")).unwrap();
+        std::fs::write(dir.join("up.sock"), b"").unwrap();
+        // Above any pid the system hands out, so nothing can be running as it.
+        std::fs::write(dir.join("gone.meta"), meta(4_000_000, "/tmp", "zsh")).unwrap();
+        std::fs::write(dir.join("gone.sock"), b"").unwrap();
+        let ids: Vec<String> = list_sessions(&dir).into_iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec!["up".to_string()]);
+    }
+
+    #[test]
+    fn a_pid_check_knows_this_process_and_a_gone_one() {
+        assert!(pid_alive(std::process::id()));
+        assert!(!pid_alive(0));
+        assert!(!pid_alive(4_000_000));
+        assert!(!pid_alive(u32::MAX));
+    }
+
     // It must work with no app running: that is the entire reason it exists.
     #[test]
     fn sessions_are_listed_from_the_meta_files_alone() {
         let dir = tempdir();
         std::fs::write(
             dir.join("x.meta"),
-            r#"{"pid":42,"cwd":"/tmp","cmd":"zsh","started":"2026-09-17T10:00:00Z"}"#,
+            &meta(std::process::id(), "/tmp", "zsh"),
         )
         .unwrap();
         std::fs::write(dir.join("x.sock"), b"").unwrap();
         let rows = list_sessions(&dir);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].pid, 42);
+        assert_eq!(rows[0].pid, std::process::id());
         assert_eq!(rows[0].cwd, "/tmp");
         assert_eq!(rows[0].cmd, "zsh");
         assert_eq!(rows[0].started, "2026-09-17T10:00:00Z");
@@ -648,10 +698,10 @@ mod tests {
     #[test]
     fn a_meta_with_no_socket_is_not_a_session() {
         let dir = tempdir();
-        let row = r#"{"pid":42,"cwd":"/tmp","cmd":"zsh","started":"2026-09-17T10:00:00Z"}"#;
-        std::fs::write(dir.join("alive.meta"), row).unwrap();
+        let row = meta(std::process::id(), "/tmp", "zsh");
+        std::fs::write(dir.join("alive.meta"), &row).unwrap();
         std::fs::write(dir.join("alive.sock"), b"").unwrap();
-        std::fs::write(dir.join("dead.meta"), row).unwrap();
+        std::fs::write(dir.join("dead.meta"), &row).unwrap();
 
         let ids: Vec<String> = list_sessions(&dir).into_iter().map(|r| r.id).collect();
         assert_eq!(ids, vec!["alive".to_string()]);
@@ -684,7 +734,7 @@ mod tests {
         std::fs::write(dir.join("bad.meta"), b"not json").unwrap();
         std::fs::write(
             dir.join("good.meta"),
-            r#"{"pid":7,"cwd":"/home/x","cmd":"fish","started":"2026-09-17T11:00:00Z"}"#,
+            &meta(std::process::id(), "/home/x", "fish"),
         )
         .unwrap();
         // A listed session needs its socket: see `a_meta_with_no_socket_is_not_a_session`.
@@ -697,12 +747,10 @@ mod tests {
     #[test]
     fn rows_come_back_sorted_by_id() {
         let dir = tempdir();
-        for (id, pid) in [("b", 2), ("a", 1), ("c", 3)] {
+        for id in ["b", "a", "c"] {
             std::fs::write(
                 dir.join(format!("{id}.meta")),
-                format!(
-                    r#"{{"pid":{pid},"cwd":"/tmp","cmd":"zsh","started":"2026-09-17T10:00:00Z"}}"#
-                ),
+                meta(std::process::id(), "/tmp", "zsh"),
             )
             .unwrap();
             std::fs::write(dir.join(format!("{id}.sock")), b"").unwrap();
@@ -747,7 +795,7 @@ mod tests {
         let dir = tempdir();
         std::fs::write(
             dir.join("real.meta"),
-            r#"{"pid":1,"cwd":"/tmp","cmd":"zsh","started":"2026-09-17T10:00:00Z"}"#,
+            &meta(std::process::id(), "/tmp", "zsh"),
         )
         .unwrap();
         std::fs::write(dir.join("real.sock"), b"").unwrap();
