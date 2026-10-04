@@ -69,7 +69,7 @@ if [ -n "${SHOTS:-}" ]; then
     # instance by keystroke, but only when it is the frontmost app, since
     # System Events types into whatever is in front.
     export INFINITERM_DATA_DIR=$DIR
-    "$BIN/ift" run remote.color
+    "$BIN/ift" run window.color
     sleep 1.5
     screencapture -x -o -l "$("$ROOT/tools/winid" --pid "$PID" | head -1 | cut -f1)" "$SHOTS/remote-picker.png"
     FRONT=$(osascript -e 'tell application "System Events" to get unix id of first process whose frontmost is true')

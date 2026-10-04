@@ -470,7 +470,7 @@ impl Model {
                 Some(crate::prompt::ALT) => self.close_selected_confirmed(ids, reclaim, true),
                 Some(_) => self.save_then_close(ids, reclaim),
             },
-            Pending::RemoteColor => self.remote_color_answer(text),
+            Pending::WindowColor => self.window_color_answer(text),
             Pending::About => {
                 if text.is_some() {
                     self.effects.push(Effect::CheckForUpdate);
@@ -1110,7 +1110,7 @@ impl Model {
             }
             Source::Snippets => self.paste_snippet(id),
             Source::MoveTo => self.move_selection_to(id),
-            Source::RemoteColor => self.remote_color_run(id),
+            Source::WindowColor => self.window_color_run(id),
             Source::SlotKind => match id {
                 "terminal" => {
                     self.fill_phantom(CardKind::Terminal, None);

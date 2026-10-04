@@ -299,6 +299,15 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.windowColor",
+        &[
+            "A colour for the title bar and the Dock icon: a name (red, orange, amber, yellow,",
+            "lime, green, emerald, teal, cyan, sky, blue, indigo, violet, purple, pink, rose,",
+            "gray) or a hex code like 3b82f6. Empty for none. The palette's \"Window: change the",
+            "title bar and Dock colour\" sets it. A window opened by ift connect wears its host's.",
+        ],
+    ),
+    (
         "ui.cardOpacity",
         &[
             "How opaque a card's background is, 0.1 to 1. Text stays solid, so it never gets",

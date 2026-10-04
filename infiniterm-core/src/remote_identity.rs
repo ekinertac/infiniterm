@@ -94,6 +94,11 @@ pub const NAMED: &[(&str, &str)] = &[
     ("gray", "6b7280"),
 ];
 
+/// A colour as a person writes it in a setting: a name, or a hex code.
+pub fn parse_color(s: &str) -> Option<Rgb> {
+    named(s).or_else(|| parse_hex(s))
+}
+
 /// The colour a name stands for.
 pub fn named(name: &str) -> Option<Rgb> {
     NAMED
@@ -193,6 +198,14 @@ mod tests {
         assert_eq!(named("chartreuse"), None);
         assert_eq!(name_of((0x3b, 0x82, 0xf6)), Some("blue"));
         assert_eq!(name_of((1, 2, 3)), None);
+    }
+
+    #[test]
+    fn a_setting_may_name_a_colour_or_give_its_hex() {
+        assert_eq!(parse_color("blue"), parse_hex("3b82f6"));
+        assert_eq!(parse_color("#FF8800"), Some((255, 136, 0)));
+        assert_eq!(parse_color("  "), None, "empty is no colour");
+        assert_eq!(parse_color("chartreuse"), None);
     }
 
     #[test]
