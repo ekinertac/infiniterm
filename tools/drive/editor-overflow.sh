@@ -1,13 +1,13 @@
 #!/bin/sh
 # #197: a long line scrolled right must be cut at the text area's edge, not
-# drawn over the file tree. Opens a file with one 600-character line, shows
+# drawn over the file tree. Opens a file with one 600-character line of plain text (a .log has no syntax colours and does not wrap), shows
 # the tree (palette), puts the caret at the end of the line (End) and looks.
 . "$(dirname "$0")/lib.sh"
 FRESH=1
 drive_start
 mkdir -p /tmp/infiniterm-drive
-awk 'BEGIN { printf "// "; for (i = 0; i < 60; i++) printf "word%02d-----", i; printf "\n" }' > /tmp/infiniterm-drive/long.rs
-"$ROOT/target/bundle/infiniterm.app/Contents/MacOS/ift" /tmp/infiniterm-drive/long.rs >/dev/null
+awk 'BEGIN { for (i = 0; i < 60; i++) printf "word%02d-----", i; printf "\n" }' > /tmp/infiniterm-drive/long.log
+"$ROOT/target/bundle/infiniterm.app/Contents/MacOS/ift" /tmp/infiniterm-drive/long.log >/dev/null
                                 shot 01-opened 1.0
 # The tree first: a locked editor swallows the palette's keys. Then a click
 # into the text locks the card and puts the caret in it.
