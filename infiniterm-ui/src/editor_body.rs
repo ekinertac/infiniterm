@@ -2130,45 +2130,11 @@ impl CardBody for EditorBody {
                 let (m, d) = self.gutter_for();
                 (m.to_vec(), d.to_vec())
             };
-            let mut span_i = 0;
-            // Runs for the line being drawn, built once per line and sliced
-            // per visual row.
-            let mut line_runs: Option<(usize, Vec<TextRun>)> = None;
+            // The line numbers and git marks, outside the text's clip below, so
+            // scrolled text never runs under them.
             for (row_i, vrow) in vrows.iter().enumerate() {
                 let line_no = vrow.line;
                 let y = origin.y + line_h * row_i as f32;
-                let line_text = self.buffer.line(line_no);
-                let line_start = self.buffer.line_start(line_no);
-                let line_len = line_text.chars().count();
-                // This row's char range in the buffer.
-                let row_start = line_start + vrow.a;
-                let row_end = line_start + vrow.b;
-                let row_len = vrow.b - vrow.a;
-                // The active line wash, gutter, selection, matches, then the text.
-                if self.highlight_line
-                    && line_no == cursor_line
-                    && selection.is_none()
-                    && self.buffer.cursor_count() == 1
-                {
-                    window.paint_quad(fill(
-                        Bounds::new(point(origin.x + gutter_w, y), size(area.size.width, line_h)),
-                        crate::chrome::with_alpha(gpui::rgb(0x808080).into(), ACTIVE_LINE_ALPHA),
-                    ));
-                }
-                // A folded block: a chip after the header's text says lines are
-                // hidden under it.
-                if legible
-                    && self.buffer.has_folds()
-                    && vrow.a + row_len == line_len
-                    && self.buffer.is_fold_header(line_no)
-                {
-                    let chip_x = text_x + cell_w * (row_len as f32 + 1.);
-                    let chip = Bounds::new(
-                        point(chip_x, y + line_h * 0.2),
-                        size(cell_w * FOLD_CHIP_CELLS, line_h * 0.6),
-                    );
-                    window.paint_quad(fill(chip, crate::chrome::with_alpha(fg, FOLD_CHIP_ALPHA)));
-                }
                 if legible && vrow.a == 0 {
                     let num = (line_no + 1).to_string();
                     let l = crate::text::shape(window, &num, font_size, &base, gutter_fg);
@@ -2208,263 +2174,325 @@ impl CardBody for EditorBody {
                         ));
                     }
                 }
-                // A range of buffer chars as a quad on this row.
-                let range_quad = |a: usize, b: usize, color: Hsla, window: &mut Window| {
-                    let a = a.max(row_start).min(row_end) - row_start;
-                    let b = b.max(row_start).min(row_end + 1) - row_start;
-                    if b > a {
+            }
+            // The text, selection and carets are cut at the gutter's right edge:
+            // scrolled right, a line starts left of the text area.
+            let text_mask = Bounds::new(
+                point(origin.x + gutter_w, area.origin.y),
+                size(area.size.width - s(PAD_X) - gutter_w, area.size.height),
+            );
+            window.with_content_mask(Some(gpui::ContentMask { bounds: text_mask }), |window| {
+                let mut span_i = 0;
+                // Runs for the line being drawn, built once per line and sliced
+                // per visual row.
+                let mut line_runs: Option<(usize, Vec<TextRun>)> = None;
+                for (row_i, vrow) in vrows.iter().enumerate() {
+                    let line_no = vrow.line;
+                    let y = origin.y + line_h * row_i as f32;
+                    let line_text = self.buffer.line(line_no);
+                    let line_start = self.buffer.line_start(line_no);
+                    let line_len = line_text.chars().count();
+                    // This row's char range in the buffer.
+                    let row_start = line_start + vrow.a;
+                    let row_end = line_start + vrow.b;
+                    let row_len = vrow.b - vrow.a;
+                    // The active line wash, gutter, selection, matches, then the text.
+                    if self.highlight_line
+                        && line_no == cursor_line
+                        && selection.is_none()
+                        && self.buffer.cursor_count() == 1
+                    {
                         window.paint_quad(fill(
                             Bounds::new(
-                                point(text_x + cell_w * a as f32, y),
-                                size(cell_w * (b - a) as f32, line_h),
+                                point(origin.x + gutter_w, y),
+                                size(area.size.width, line_h),
                             ),
-                            color,
+                            crate::chrome::with_alpha(
+                                gpui::rgb(0x808080).into(),
+                                ACTIVE_LINE_ALPHA,
+                            ),
                         ));
                     }
-                };
-                for (a, b) in &matches {
-                    if *b > row_start && *a <= row_end {
-                        let strong = current_match == Some((*a, *b));
-                        range_quad(
-                            *a,
-                            *b,
-                            crate::chrome::with_alpha(
-                                sel_bg,
-                                if strong { 1. } else { MATCH_DIM_ALPHA },
-                            ),
-                            window,
+                    // A folded block: a chip after the header's text says lines are
+                    // hidden under it.
+                    if legible
+                        && self.buffer.has_folds()
+                        && vrow.a + row_len == line_len
+                        && self.buffer.is_fold_header(line_no)
+                    {
+                        let chip_x = text_x + cell_w * (row_len as f32 + 1.);
+                        let chip = Bounds::new(
+                            point(chip_x, y + line_h * 0.2),
+                            size(cell_w * FOLD_CHIP_CELLS, line_h * 0.6),
                         );
+                        window
+                            .paint_quad(fill(chip, crate::chrome::with_alpha(fg, FOLD_CHIP_ALPHA)));
                     }
-                }
-                for sel in &all_ranges {
-                    if sel.end > row_start && sel.start <= row_end {
-                        range_quad(sel.start, sel.end, sel_bg, window);
+                    // A range of buffer chars as a quad on this row.
+                    let range_quad = |a: usize, b: usize, color: Hsla, window: &mut Window| {
+                        let a = a.max(row_start).min(row_end) - row_start;
+                        let b = b.max(row_start).min(row_end + 1) - row_start;
+                        if b > a {
+                            window.paint_quad(fill(
+                                Bounds::new(
+                                    point(text_x + cell_w * a as f32, y),
+                                    size(cell_w * (b - a) as f32, line_h),
+                                ),
+                                color,
+                            ));
+                        }
+                    };
+                    for (a, b) in &matches {
+                        if *b > row_start && *a <= row_end {
+                            let strong = current_match == Some((*a, *b));
+                            range_quad(
+                                *a,
+                                *b,
+                                crate::chrome::with_alpha(
+                                    sel_bg,
+                                    if strong { 1. } else { MATCH_DIM_ALPHA },
+                                ),
+                                window,
+                            );
+                        }
                     }
+                    for sel in &all_ranges {
+                        if sel.end > row_start && sel.start <= row_end {
+                            range_quad(sel.start, sel.end, sel_bg, window);
+                        }
+                    }
+                    if let Some((a, b)) = bracket {
+                        for i in [a, b] {
+                            if i >= row_start && i < row_end {
+                                window.paint_quad(
+                                    outline(
+                                        Bounds::new(
+                                            point(text_x + cell_w * (i - row_start) as f32, y),
+                                            size(cell_w, line_h),
+                                        ),
+                                        crate::chrome::with_alpha(fg, BRACKET_ALPHA),
+                                        gpui::BorderStyle::Solid,
+                                    )
+                                    .border_widths(px(crate::chrome::HAIRLINE_PX as f32)),
+                                );
+                            }
+                        }
+                    }
+                    if line_text[..].trim().is_empty() || row_len == 0 {
+                        continue;
+                    }
+                    if !legible {
+                        // Texture in place of glyphs, as the terminal does.
+                        let bar_h = (line_h * crate::chrome::TEXTURE_BAR_HEIGHT_RATIO)
+                            .max(px(crate::chrome::HAIRLINE_PX as f32));
+                        let by = y + (line_h - bar_h) / 2.;
+                        let mut start: Option<usize> = None;
+                        let chars: Vec<char> =
+                            line_text.chars().skip(vrow.a).take(row_len).collect();
+                        for (i, ch) in chars.iter().enumerate() {
+                            match (ch.is_whitespace(), start) {
+                                (false, None) => start = Some(i),
+                                (true, Some(s)) => {
+                                    window.paint_quad(fill(
+                                        Bounds::new(
+                                            point(text_x + cell_w * s as f32, by),
+                                            size(cell_w * (i - s) as f32, bar_h),
+                                        ),
+                                        crate::chrome::with_alpha(
+                                            fg,
+                                            crate::chrome::TEXTURE_BAR_ALPHA,
+                                        ),
+                                    ));
+                                    start = None;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if let Some(s) = start {
+                            window.paint_quad(fill(
+                                Bounds::new(
+                                    point(text_x + cell_w * s as f32, by),
+                                    size(cell_w * (chars.len() - s) as f32, bar_h),
+                                ),
+                                crate::chrome::with_alpha(fg, crate::chrome::TEXTURE_BAR_ALPHA),
+                            ));
+                        }
+                        continue;
+                    }
+                    // Runs from the spans that fall inside this line.
+                    if line_runs.as_ref().map(|(l, _)| *l) != Some(line_no) {
+                        // From the rope. This used to come from a byte scan of the
+                        // whole text that stopped at the last line it had collected,
+                        // and fell back to 0 for anything past it: a line scrolled
+                        // into view beyond that point was highlighted with
+                        // whole-buffer span offsets measured from the file's start,
+                        // which made runs longer than the line, which made gpui
+                        // slice past the end of the string and ABORT the app.
+                        let byte_start = self.buffer.line_byte_start(line_no);
+                        let byte_end = byte_start + line_text.len();
+                        while span_i < spans.len() && spans[span_i].end <= byte_start {
+                            span_i += 1;
+                        }
+                        let mut runs: Vec<TextRun> = vec![];
+                        let mut pos = 0; // byte offset within the line
+                        let mut j = span_i;
+                        let push =
+                            |runs: &mut Vec<TextRun>, len: usize, color: Hsla, italic: bool| {
+                                if len == 0 {
+                                    return;
+                                }
+                                let mut f = base.clone();
+                                if italic {
+                                    f.style = FontStyle::Italic;
+                                }
+                                runs.push(TextRun {
+                                    len,
+                                    font: f,
+                                    color,
+                                    background_color: None,
+                                    underline: None,
+                                    strikethrough: None,
+                                });
+                            };
+                        while j < spans.len() && spans[j].start < byte_end {
+                            let sp = &spans[j];
+                            let a = sp.start.max(byte_start) - byte_start;
+                            let b = sp.end.min(byte_end) - byte_start;
+                            if a > pos {
+                                push(&mut runs, a - pos, fg, false);
+                                pos = a;
+                            }
+                            if b > pos {
+                                let (color, italic) = match self.rule_for(sp.capture) {
+                                    Some(r) => (hex(&r.color), r.italic),
+                                    None => (fg, false),
+                                };
+                                push(&mut runs, b - pos, color, italic);
+                                pos = b;
+                            }
+                            j += 1;
+                        }
+                        if pos < line_text.len() {
+                            push(&mut runs, line_text.len() - pos, fg, false);
+                        }
+                        // gpui indexes the string BY these lengths and panics if they
+                        // do not add up, which aborts the process rather than drawing
+                        // a line wrong. Nothing that only paints should be able to do
+                        // that, so the invariant is enforced here rather than hoped
+                        // for: see `fit_runs`.
+                        fit_runs(&mut runs, &line_text);
+                        // Selected text takes the selection colour, split at the edges.
+                        if let Some(sel) = &selection {
+                            if sel.end > line_start && sel.start < line_start + line_len {
+                                let a = sel.start.max(line_start) - line_start;
+                                let b = sel.end.min(line_start + line_len) - line_start;
+                                let (ba, bb) =
+                                    (char_to_byte(&line_text, a), char_to_byte(&line_text, b));
+                                runs = recolor(runs, ba, bb, sel_fg);
+                            }
+                        }
+                        line_runs = Some((line_no, runs));
+                    }
+                    let runs = &line_runs.as_ref().unwrap().1;
+                    let (ba, bb) = (
+                        char_to_byte(&line_text, vrow.a),
+                        char_to_byte(&line_text, vrow.b),
+                    );
+                    let shown = &line_text[ba..bb];
+                    let row_runs = slice_runs(runs, ba, bb);
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    use std::hash::{Hash, Hasher};
+                    shown.hash(&mut hasher);
+                    f32::from(font_size).to_bits().hash(&mut hasher);
+                    for r in &row_runs {
+                        (
+                            r.len,
+                            r.color.h.to_bits(),
+                            r.color.s.to_bits(),
+                            r.color.l.to_bits(),
+                            r.font.style == FontStyle::Italic,
+                        )
+                            .hash(&mut hasher);
+                    }
+                    let key = hasher.finish();
+                    let cache_key = (line_no, vrow.a);
+                    let shaped = match self.shaped.get(&cache_key) {
+                        Some((k, line)) if *k == key => line.clone(),
+                        _ => {
+                            let line = window.text_system().shape_line(
+                                SharedString::from(shown.to_string()),
+                                font_size,
+                                &row_runs,
+                                None,
+                            );
+                            self.shaped.insert(cache_key, (key, line.clone()));
+                            line
+                        }
+                    };
+                    let _ = shaped.paint(point(text_x, y), line_h, window, cx);
                 }
-                if let Some((a, b)) = bracket {
-                    for i in [a, b] {
-                        if i >= row_start && i < row_end {
+                // The cursor: a block 0.6 em wide in the cursor colour, on when
+                // focused and the blink says so; hollow when the card is not
+                // focused. One per cursor (Batch 2, 2026-09-25); `painted_caret`,
+                // the IME candidate window's anchor, stays the PRIMARY's alone —
+                // an input method has one caret to sit beside, not several.
+                self.painted_caret = None;
+                if self.focus != Focus::Tree {
+                    let primary = self.buffer.cursor();
+                    for (pos, _) in self.buffer.all_selections() {
+                        let line = self.buffer.line_of(pos);
+                        let col = self.buffer.col_of(pos);
+                        let Some(row_i) = vrows.iter().position(|r| {
+                            r.line == line
+                                && col >= r.a
+                                && (col < r.b
+                                    || (col == r.b
+                                        && r.b == self.buffer.line(r.line).chars().count()))
+                        }) else {
+                            continue;
+                        };
+                        let vcol = col - vrows[row_i].a;
+                        let y = origin.y + line_h * row_i as f32;
+                        let rect = Bounds::new(
+                            point(text_x + cell_w * vcol as f32, y),
+                            size(
+                                px((self.metrics.font_px * CURSOR_BLOCK_WIDTH_RATIO * scale)
+                                    as f32)
+                                .max(px(crate::chrome::HAIRLINE_PX as f32)),
+                                line_h,
+                            ),
+                        );
+                        if pos == primary {
+                            // The cell the caret is in, for the input method's
+                            // candidate window and the marked text drawn over it
+                            // (`caret_bounds`).
+                            self.painted_caret = Some(Bounds::new(
+                                point(text_x + cell_w * vcol as f32, y),
+                                size(cell_w, line_h),
+                            ));
+                        }
+                        if focused && self.focus == Focus::Buffer {
+                            if self.painted_phase {
+                                window.paint_quad(fill(
+                                    rect,
+                                    crate::chrome::with_alpha(cursor_color, CURSOR_ALPHA),
+                                ));
+                            }
+                        } else {
                             window.paint_quad(
                                 outline(
-                                    Bounds::new(
-                                        point(text_x + cell_w * (i - row_start) as f32, y),
-                                        size(cell_w, line_h),
-                                    ),
-                                    crate::chrome::with_alpha(fg, BRACKET_ALPHA),
+                                    rect,
+                                    crate::chrome::with_alpha(cursor_color, CURSOR_ALPHA),
                                     gpui::BorderStyle::Solid,
                                 )
-                                .border_widths(px(crate::chrome::HAIRLINE_PX as f32)),
+                                .border_widths(px(
+                                    (scale as f32).max(crate::chrome::HAIRLINE_PX as f32)
+                                )),
                             );
                         }
                     }
                 }
-                if line_text[..].trim().is_empty() || row_len == 0 {
-                    continue;
-                }
-                if !legible {
-                    // Texture in place of glyphs, as the terminal does.
-                    let bar_h = (line_h * crate::chrome::TEXTURE_BAR_HEIGHT_RATIO)
-                        .max(px(crate::chrome::HAIRLINE_PX as f32));
-                    let by = y + (line_h - bar_h) / 2.;
-                    let mut start: Option<usize> = None;
-                    let chars: Vec<char> = line_text.chars().skip(vrow.a).take(row_len).collect();
-                    for (i, ch) in chars.iter().enumerate() {
-                        match (ch.is_whitespace(), start) {
-                            (false, None) => start = Some(i),
-                            (true, Some(s)) => {
-                                window.paint_quad(fill(
-                                    Bounds::new(
-                                        point(text_x + cell_w * s as f32, by),
-                                        size(cell_w * (i - s) as f32, bar_h),
-                                    ),
-                                    crate::chrome::with_alpha(fg, crate::chrome::TEXTURE_BAR_ALPHA),
-                                ));
-                                start = None;
-                            }
-                            _ => {}
-                        }
-                    }
-                    if let Some(s) = start {
-                        window.paint_quad(fill(
-                            Bounds::new(
-                                point(text_x + cell_w * s as f32, by),
-                                size(cell_w * (chars.len() - s) as f32, bar_h),
-                            ),
-                            crate::chrome::with_alpha(fg, crate::chrome::TEXTURE_BAR_ALPHA),
-                        ));
-                    }
-                    continue;
-                }
-                // Runs from the spans that fall inside this line.
-                if line_runs.as_ref().map(|(l, _)| *l) != Some(line_no) {
-                    // From the rope. This used to come from a byte scan of the
-                    // whole text that stopped at the last line it had collected,
-                    // and fell back to 0 for anything past it: a line scrolled
-                    // into view beyond that point was highlighted with
-                    // whole-buffer span offsets measured from the file's start,
-                    // which made runs longer than the line, which made gpui
-                    // slice past the end of the string and ABORT the app.
-                    let byte_start = self.buffer.line_byte_start(line_no);
-                    let byte_end = byte_start + line_text.len();
-                    while span_i < spans.len() && spans[span_i].end <= byte_start {
-                        span_i += 1;
-                    }
-                    let mut runs: Vec<TextRun> = vec![];
-                    let mut pos = 0; // byte offset within the line
-                    let mut j = span_i;
-                    let push = |runs: &mut Vec<TextRun>, len: usize, color: Hsla, italic: bool| {
-                        if len == 0 {
-                            return;
-                        }
-                        let mut f = base.clone();
-                        if italic {
-                            f.style = FontStyle::Italic;
-                        }
-                        runs.push(TextRun {
-                            len,
-                            font: f,
-                            color,
-                            background_color: None,
-                            underline: None,
-                            strikethrough: None,
-                        });
-                    };
-                    while j < spans.len() && spans[j].start < byte_end {
-                        let sp = &spans[j];
-                        let a = sp.start.max(byte_start) - byte_start;
-                        let b = sp.end.min(byte_end) - byte_start;
-                        if a > pos {
-                            push(&mut runs, a - pos, fg, false);
-                            pos = a;
-                        }
-                        if b > pos {
-                            let (color, italic) = match self.rule_for(sp.capture) {
-                                Some(r) => (hex(&r.color), r.italic),
-                                None => (fg, false),
-                            };
-                            push(&mut runs, b - pos, color, italic);
-                            pos = b;
-                        }
-                        j += 1;
-                    }
-                    if pos < line_text.len() {
-                        push(&mut runs, line_text.len() - pos, fg, false);
-                    }
-                    // gpui indexes the string BY these lengths and panics if they
-                    // do not add up, which aborts the process rather than drawing
-                    // a line wrong. Nothing that only paints should be able to do
-                    // that, so the invariant is enforced here rather than hoped
-                    // for: see `fit_runs`.
-                    fit_runs(&mut runs, &line_text);
-                    // Selected text takes the selection colour, split at the edges.
-                    if let Some(sel) = &selection {
-                        if sel.end > line_start && sel.start < line_start + line_len {
-                            let a = sel.start.max(line_start) - line_start;
-                            let b = sel.end.min(line_start + line_len) - line_start;
-                            let (ba, bb) =
-                                (char_to_byte(&line_text, a), char_to_byte(&line_text, b));
-                            runs = recolor(runs, ba, bb, sel_fg);
-                        }
-                    }
-                    line_runs = Some((line_no, runs));
-                }
-                let runs = &line_runs.as_ref().unwrap().1;
-                let (ba, bb) = (
-                    char_to_byte(&line_text, vrow.a),
-                    char_to_byte(&line_text, vrow.b),
-                );
-                let shown = &line_text[ba..bb];
-                let row_runs = slice_runs(runs, ba, bb);
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                use std::hash::{Hash, Hasher};
-                shown.hash(&mut hasher);
-                f32::from(font_size).to_bits().hash(&mut hasher);
-                for r in &row_runs {
-                    (
-                        r.len,
-                        r.color.h.to_bits(),
-                        r.color.s.to_bits(),
-                        r.color.l.to_bits(),
-                        r.font.style == FontStyle::Italic,
-                    )
-                        .hash(&mut hasher);
-                }
-                let key = hasher.finish();
-                let cache_key = (line_no, vrow.a);
-                let shaped = match self.shaped.get(&cache_key) {
-                    Some((k, line)) if *k == key => line.clone(),
-                    _ => {
-                        let line = window.text_system().shape_line(
-                            SharedString::from(shown.to_string()),
-                            font_size,
-                            &row_runs,
-                            None,
-                        );
-                        self.shaped.insert(cache_key, (key, line.clone()));
-                        line
-                    }
-                };
-                let _ = shaped.paint(point(text_x, y), line_h, window, cx);
-            }
-            // The cursor: a block 0.6 em wide in the cursor colour, on when
-            // focused and the blink says so; hollow when the card is not
-            // focused. One per cursor (Batch 2, 2026-09-25); `painted_caret`,
-            // the IME candidate window's anchor, stays the PRIMARY's alone —
-            // an input method has one caret to sit beside, not several.
-            self.painted_caret = None;
-            if self.focus != Focus::Tree {
-                let primary = self.buffer.cursor();
-                for (pos, _) in self.buffer.all_selections() {
-                    let line = self.buffer.line_of(pos);
-                    let col = self.buffer.col_of(pos);
-                    let Some(row_i) = vrows.iter().position(|r| {
-                        r.line == line
-                            && col >= r.a
-                            && (col < r.b
-                                || (col == r.b && r.b == self.buffer.line(r.line).chars().count()))
-                    }) else {
-                        continue;
-                    };
-                    let vcol = col - vrows[row_i].a;
-                    let y = origin.y + line_h * row_i as f32;
-                    let rect = Bounds::new(
-                        point(text_x + cell_w * vcol as f32, y),
-                        size(
-                            px((self.metrics.font_px * CURSOR_BLOCK_WIDTH_RATIO * scale) as f32)
-                                .max(px(crate::chrome::HAIRLINE_PX as f32)),
-                            line_h,
-                        ),
-                    );
-                    if pos == primary {
-                        // The cell the caret is in, for the input method's
-                        // candidate window and the marked text drawn over it
-                        // (`caret_bounds`).
-                        self.painted_caret = Some(Bounds::new(
-                            point(text_x + cell_w * vcol as f32, y),
-                            size(cell_w, line_h),
-                        ));
-                    }
-                    if focused && self.focus == Focus::Buffer {
-                        if self.painted_phase {
-                            window.paint_quad(fill(
-                                rect,
-                                crate::chrome::with_alpha(cursor_color, CURSOR_ALPHA),
-                            ));
-                        }
-                    } else {
-                        window.paint_quad(
-                            outline(
-                                rect,
-                                crate::chrome::with_alpha(cursor_color, CURSOR_ALPHA),
-                                gpui::BorderStyle::Solid,
-                            )
-                            .border_widths(px(
-                                (scale as f32).max(crate::chrome::HAIRLINE_PX as f32)
-                            )),
-                        );
-                    }
-                }
-            }
+            });
             // Keep the shaping cache to the visible lines.
             self.shaped.retain(|(l, _), _| *l >= first && *l < last);
         });

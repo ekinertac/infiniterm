@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-05
 
+- Scrolled text in the editor no longer runs under the line numbers and git marks: the text is cut at the edge of the gutter, and the numbers stay readable.
 - A long line in the editor no longer draws over the file tree when the view scrolls right. The text is cut at the edge of the text area.
 - The theme picker no longer dims the canvas, so you see each theme's real colours on your cards while you move through the list.
 
