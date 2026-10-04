@@ -95,6 +95,11 @@ impl Panes {
             // `iftd` on THIS Mac: the daemons are on the server.
             _ if remote::from_env().is_some() => {
                 let host = remote::from_env().expect("checked by the guard");
+                // Hooks and `ift` on the server reach this instance through it.
+                remote::forward(
+                    host.clone(),
+                    crate::paths::socket_path().to_string_lossy().into_owned(),
+                );
                 let (backend, rx) = daemon::DaemonBackend::new_remote(host, buffer_mib);
                 (Panes::Daemon(backend), rx, None)
             }
