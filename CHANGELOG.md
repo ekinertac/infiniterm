@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-05
+
+- The theme picker no longer dims the canvas, so you see each theme's real colours on your cards while you move through the list.
+
 ### 2026-10-04
 
 - In the editor, typing a quote, backtick or opening bracket over selected text wraps it instead of replacing it: select `foo`, type `(`, get `(foo)`. The text stays selected, so a second press wraps again.
