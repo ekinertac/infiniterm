@@ -75,6 +75,13 @@ impl Source {
         )
     }
 
+    /// Whether the palette dims the canvas behind it. The theme picker does
+    /// not: it previews each theme on the cards as you move, and a dim sheet
+    /// over them hid the very colours being chosen.
+    pub fn dims_canvas(self) -> bool {
+        self != Source::Themes
+    }
+
     /// Prompt text in the empty input.
     pub fn placeholder(self) -> &'static str {
         match self {
@@ -399,5 +406,26 @@ impl Model {
             USAGE_LIMIT,
         );
         self.dirty_layout = true;
+    }
+}
+
+#[cfg(test)]
+mod dims_tests {
+    use super::Source;
+
+    #[test]
+    fn only_the_theme_picker_leaves_the_canvas_undimmed() {
+        assert!(!Source::Themes.dims_canvas());
+        for s in [
+            Source::Commands,
+            Source::Placement,
+            Source::SlotKind,
+            Source::Sizes,
+            Source::Snippets,
+            Source::MoveTo,
+            Source::WindowColor,
+        ] {
+            assert!(s.dims_canvas(), "{s:?}");
+        }
     }
 }

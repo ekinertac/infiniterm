@@ -943,7 +943,13 @@ impl AppView {
             .flex()
             .justify_center()
             .pt(px(OVERLAY_TOP_PAD_PX * ui))
-            .bg(chrome.overlay_backdrop)
+            // No sheet over the canvas while themes are browsed: the theme is
+            // previewed on the cards behind it.
+            .bg(if source.dims_canvas() {
+                chrome.overlay_backdrop
+            } else {
+                crate::chrome::with_alpha(chrome.overlay_backdrop, 0.)
+            })
             .child(
                 div()
                     .w(px(PALETTE_WIDTH_PX * ui))
