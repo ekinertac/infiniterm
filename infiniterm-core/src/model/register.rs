@@ -466,10 +466,10 @@ mod tests {
         assert_eq!(h.m.selection.focused_id, None);
     }
 
-    // A first launch (no save file) seeds the terminal AND the "Start here"
-    // card beside it, with the terminal focused so typing works at once.
+    // A first launch (no save file) seeds the "Start here" card alone,
+    // focused; the newcomer makes the first terminal from it.
     #[test]
-    fn a_first_launch_opens_the_welcome_card_beside_the_terminal() {
+    fn a_first_launch_opens_only_the_welcome_card() {
         let mut m = Model::new();
         m.view_size = Size { w: 1600., h: 1000. };
         m.home = "/Users/me".into();
@@ -478,14 +478,37 @@ mod tests {
         assert!(m.first_run);
         let mut seeded = false;
         m.seed_first_card(&mut seeded);
-        assert_eq!(m.cards.len(), 2);
+        assert_eq!(m.cards.len(), 1);
         let welcome = crate::welcome::welcome_path()
             .to_string_lossy()
             .into_owned();
-        let card = m.cards.iter().find(|c| c.kind == CardKind::Page).unwrap();
+        let card = m.focused().unwrap();
+        assert_eq!(card.kind, CardKind::Page);
         assert_eq!(card.path.as_deref(), Some(welcome.as_str()));
-        assert_eq!(m.focused().unwrap().kind, CardKind::Terminal);
         assert!(m.layout_undo.is_empty(), "the seed is not an undo step");
+    }
+
+    // What the welcome card promises: Cmd+T opens the first terminal
+    // beside it, and Cmd+Alt+Left comes back to it.
+    #[test]
+    fn the_first_terminal_opens_right_of_the_welcome_card() {
+        let mut r = CommandRegistry::new(|_| {});
+        register_commands(&mut r);
+        let mut m = Model::new();
+        m.view_size = Size { w: 1600., h: 1000. };
+        m.home = "/Users/me".into();
+        m.start_dir = "/Users/me".into();
+        m.load_layout(None);
+        let mut seeded = false;
+        m.seed_first_card(&mut seeded);
+        let welcome = m.focused().unwrap().clone();
+        run_with_effects(&mut m, &r, "card.new.terminal");
+        let term = m.focused().unwrap().clone();
+        assert_eq!(term.kind, CardKind::Terminal);
+        assert!(term.rect.x > welcome.rect.x, "beside it, to the right");
+        assert_eq!(term.rect.y, welcome.rect.y);
+        run_with_effects(&mut m, &r, "focus.move.left");
+        assert_eq!(m.focused().unwrap().id, welcome.id);
     }
 
     // An existing canvas that happens to be empty gets the one terminal.

@@ -197,22 +197,25 @@ impl Model {
             return;
         }
         *seeded = true;
-        let start = self.start_dir.clone();
-        let ws = self.active_workspace.clone();
-        let id = self.add_card(
-            &start,
-            NewCard {
-                workspace_id: ws,
-                ..Default::default()
-            },
-        );
-        // A first launch also opens the "Start here" card beside it: the
-        // canvas is the thing nobody knows how to drive yet. The terminal
-        // keeps the focus, so typing works at once.
+        // A first launch opens the "Start here" card ALONE: the newcomer
+        // makes the first terminal with Cmd+T and comes back with
+        // Cmd+Alt+Left, which teaches the canvas by using it (Ekin,
+        // 2026-10-04). A terminal beside it took the focus and the eye, and
+        // the card went unread.
         if self.first_run {
-            self.open_welcome(Some(&id));
+            self.open_welcome(None);
+        } else {
+            let start = self.start_dir.clone();
+            let ws = self.active_workspace.clone();
+            let id = self.add_card(
+                &start,
+                NewCard {
+                    workspace_id: ws,
+                    ..Default::default()
+                },
+            );
+            self.set_focus(Some(&id));
         }
-        self.set_focus(Some(&id));
         // The seed is the canvas's floor, not something to undo.
         self.layout_undo.clear();
     }
