@@ -51,7 +51,7 @@ Zoomed far out, text is drawn as bars, one per word, so a full card still reads 
 
 ### How a fit frames the cards
 
-Every fit (`Cmd 1`, `Cmd 2`, `Cmd 3`, the double-clicks) leaves `"ui.fitPadding"` pixels around what it frames, 48 by default; `0` lets the cards touch the window's edges. A fit never zooms past 100%, so a small card stays its own size in the middle of the window; `"ui.fitMagnify": true` lifts that, and a fit then zooms in until the card fills the window.
+Every fit (`Cmd 1`, `Cmd 2`, `Cmd 3`, the double-clicks) leaves `"ui.fitPadding"` pixels around what it frames, 48 by default; `0` lets the cards touch the window's edges. A fit never zooms past 100%, so a small card stays its own size in the middle of the window; `"ui.fitMagnify": true` lifts that, and a fit then zooms in until the card fills the window. `Cmd 1` on a card that was split frames the whole slot, both halves together; `"ui.fitSplitSlot": false` makes it fit that card alone, so it fills the window.
 
 Interface size is separate from zoom: `Cmd Shift =` and `Cmd Shift -` make the app's own chrome (labels, title bar, status bar, palette, dialogs) bigger or smaller, never terminal text.
 
