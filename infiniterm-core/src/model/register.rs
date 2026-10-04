@@ -486,6 +486,18 @@ mod tests {
         assert_eq!(card.kind, CardKind::Page);
         assert_eq!(card.path.as_deref(), Some(welcome.as_str()));
         assert!(m.layout_undo.is_empty(), "the seed is not an undo step");
+        // Centred in the window (screen point = (world - origin) * scale),
+        // at once rather than by a glide.
+        let r = card.rect;
+        let v = m.viewport;
+        let centre_x = (r.x + r.w / 2. - v.x) * v.scale;
+        let centre_y = (r.y + r.h / 2. - v.y) * v.scale;
+        assert!((centre_x - 800.).abs() < 1., "x centre {centre_x}");
+        assert!((centre_y - 500.).abs() < 1., "y centre {centre_y}");
+        assert!(!m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::AnimatePan { .. } | Effect::AnimateFit(_))));
     }
 
     // What the welcome card promises: Cmd+T opens the first terminal
