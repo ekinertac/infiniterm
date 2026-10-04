@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-04
 
+- The find bar (Cmd+F) opens inside the card being searched, at its top right under the card's label, instead of in the window's corner. In a small or half-hidden card it narrows and stays inside the window.
 - The About window has no buttons now: Enter, Escape or a click outside closes it. Check for Updates is in the app menu. In every other dialog, a button with no key of its own no longer shows an empty badge after the highlight moves to it.
 - Cmd+Ctrl+Enter also grows an empty slot. Move the arrows onto a free slot (it is the size of the card you came from), press Cmd+Ctrl+Enter, and the slot grows into the free space up to a full card, the way a card does. The card you make from it has that size.
 - `ui.fitSplitSlot` (default on): Cmd+1 on a card that was split frames the whole slot, both halves together, as it always did. Set it to false and Cmd+1 fits the card itself and fills the window with it, split or not.
