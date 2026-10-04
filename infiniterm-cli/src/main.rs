@@ -23,6 +23,7 @@ mod attach;
 mod claude_hooks;
 mod completion;
 mod connect;
+mod install;
 mod licence_cmd;
 mod proxy;
 mod socket;
@@ -63,13 +64,18 @@ ift — drive infiniterm from a shell
                              its id or by the card's number (#7 on its
                              label, the same after a reboot; the id is not);
                              Ctrl-\\ (0x1c) detaches, leaving it running
-  ift connect <[user@]host> [--name N] [--color RRGGBB] [--check]
+  ift --version              the version of this ift
+  ift connect <[user@]host> [--name N] [--color RRGGBB] [--check] [--install]
                              open a second infiniterm for a host: its own
                              window, Dock icon and canvas, with terminal cards
                              that run on that host over ssh (key login; ift
                              and iftd installed there). Connecting again
                              brings the same cards back. --check only tests
-                             the host. Settings start as a copy of yours.
+                             the host. --install first puts ift and iftd on
+                             a Linux host (this version's package, sent over
+                             ssh; --from <file> uses a file, --platform
+                             linux-x86_64|linux-aarch64 skips asking the
+                             host). Settings start as a copy of yours.
   ift send <card> [text] [--enter] [--key NAME]...
                              type into a card's shell, without moving the
                              focus; the card is its number (#7) or its id;
@@ -168,6 +174,11 @@ fn main() -> ExitCode {
         Some("install") => install_self(),
         Some("licence") => licence_cmd::run(&args[1..]),
         Some("connect") => connect::run(&args[1..]),
+        // Not `ift version`: any word that is not a verb is a file to open.
+        Some("--version") | Some("-V") => {
+            println!("ift {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
         // Plumbing for the remote instances, called over ssh by the app, so it
         // is in neither USAGE nor the completion (like dev-run).
         Some("proxy") => proxy::run(&args[1..]),

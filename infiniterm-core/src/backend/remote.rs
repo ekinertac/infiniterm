@@ -117,6 +117,23 @@ pub fn run_on(host: &RemoteHost, command: &str) -> std::io::Result<std::process:
         .output()
 }
 
+/// `run_on` with a file as the command's input: the way a package reaches
+/// `tar` on the host, with no copy tool and no temporary file there.
+pub fn run_on_stdin(
+    host: &RemoteHost,
+    command: &str,
+    input: std::fs::File,
+) -> std::io::Result<std::process::Output> {
+    let mut args = ssh_args(host, "x", None);
+    args.pop();
+    args.push(command.to_string());
+    Command::new(&host.ssh)
+        .args(args)
+        .stdin(Stdio::from(input))
+        .stderr(Stdio::piped())
+        .output()
+}
+
 /// Which sessions the server still runs: `ssh host ift sessions`. One short
 /// ssh at launch tells which saved cards can be adopted and which are gone.
 pub fn list_sessions(host: &RemoteHost) -> std::io::Result<Vec<String>> {

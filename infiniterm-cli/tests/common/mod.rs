@@ -2,6 +2,9 @@
 //! stand-in `ssh` (#118): the profile directory the binaries are built into, a
 //! scratch dir that kills any `iftd` under it, and the stand-in itself.
 
+// Each test file uses some of these and not others.
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 
 pub fn profile_dir() -> PathBuf {
