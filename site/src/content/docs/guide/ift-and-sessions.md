@@ -35,6 +35,7 @@ ift ls                 # cards: id, group, directory, state, remote, number
 ift commands           # every command: id, label, key
 ift usage 30           # which commands and gestures you used in 30 days, and which you never did
 ift omni rust          # what the address bar would show for "rust"
+ift --version          # the version of this ift
 ```
 
 On a terminal these print a padded table. Into a pipe they print tab-separated rows without a header, so `ift ls | cut -f1` works.
@@ -82,6 +83,21 @@ ift attach 7           # this terminal becomes card #7's shell
 `ift attach` takes the card's number (the `#7` on its label), which survives a reboot; the session id does not. It works whether the app is running or not, so you can reach a card over ssh from your phone.
 
 A session has one client at a time. Attaching takes it from the app: the card shows a banner and ignores keys until you detach with `Ctrl \`, then the app takes it back within a second.
+
+## Servers
+
+```sh
+ift connect me@server             # a second infiniterm for that server
+ift connect me@server --check     # only test the host
+ift connect me@server --install   # first put ift and iftd on a Linux host
+ift connect me@server --name prod --color 3b82f6
+```
+
+`ift connect` opens a second infiniterm with its own window, Dock icon and canvas. Its terminal cards run on the server over ssh, in the server's home folder. The shells live in `iftd` on the server, so closing the window leaves them running, and connecting again brings the same cards back. Each server has its own colour (a tinted title bar, a chip with its name, a badge on the Dock icon), its own settings (a copy of yours the first time) and no browser cards.
+
+It needs key login (ssh runs without a password prompt) and `ift` and `iftd` on the server. `--install` puts them there on Linux, x86_64 or aarch64: this Mac downloads the package for its own version from the GitHub release, checks its checksum and sends it through ssh, so the server needs no internet. Root gets `/usr/local/bin`, any other user `~/.local/bin`. `--from <package>` installs from a file instead. A server that is a Mac uses the app already installed there. Without `--install`, `ift connect` says what is missing, and it tells you when the server's `ift` is a different version from yours.
+
+Not yet: agent hooks over the connection, so a Claude card on a server does not report its state, and editor or diff cards on the server's files.
 
 ## tmux
 
