@@ -21,6 +21,13 @@
 //! - The folder name comes from the host name; anything outside letters,
 //!   digits and `._@-` becomes `_`, and a name that would start with a dot is
 //!   prefixed, so a host can never name a path outside `remotes/`.
+//! - The folder is SHORT on purpose: the instance's socket is `<folder>/
+//!   infiniterm.sock` and a unix socket path holds 103 bytes, while the usual
+//!   data directory is already 70. So it is `~/.infiniterm/remotes/<host>`
+//!   (under `INFINITERM_DATA_DIR/remotes` for a scratch run), a long host name
+//!   is cut and given a hash, and a path that still does not fit is refused
+//!   here, with the length, instead of leaving an instance `ift` cannot reach.
+//!   The first real connect (a 106-byte path) found this.
 //! - `open -n` needs the .app: found from this binary's own real path, which
 //!   is `<app>/Contents/MacOS/ift` whether it was run through the
 //!   `~/.local/bin` symlink or not.
@@ -112,6 +119,44 @@ pub fn slug(host: &str) -> String {
     }
 }
 
+/// Longest folder name kept as it is; longer ones are cut and hashed.
+const MAX_FOLDER_NAME: usize = 40;
+/// A socket path longer than this is refused: macOS holds 103 bytes and a NUL,
+/// and a little room is left.
+const MAX_SOCKET_PATH: usize = 100;
+
+/// The folder name for a host: its `slug`, and for a long host the first 31
+/// characters, a dash and 8 hex digits of a hash of the whole name, so two long
+/// hosts that start alike keep separate folders.
+pub fn folder_name(host: &str) -> String {
+    let s = slug(host);
+    if s.len() <= MAX_FOLDER_NAME {
+        return s;
+    }
+    let mut h: u32 = 0x811c9dc5;
+    for b in host.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    // The slug is ASCII, so cutting at a byte count cannot split a character.
+    format!("{}-{h:08x}", &s[..31])
+}
+
+/// Where remote instances keep their folders: under the scratch data directory
+/// when `INFINITERM_DATA_DIR` is set (a test or a scratch run), else in a short
+/// hidden folder in the home directory.
+pub fn remotes_root(data_override: Option<&Path>, home: &Path) -> PathBuf {
+    match data_override {
+        Some(dir) => dir.join("remotes"),
+        None => home.join(".infiniterm").join("remotes"),
+    }
+}
+
+/// Whether `<dir>/infiniterm.sock` fits in a socket address.
+pub fn socket_fits(dir: &Path) -> bool {
+    dir.join("infiniterm.sock").as_os_str().len() <= MAX_SOCKET_PATH
+}
+
 /// Copies the local `settings.json` and `keybindings.json` into `to` the FIRST
 /// time (when `to` does not exist), so a host starts from your settings and
 /// then keeps its own. Returns whether it seeded.
@@ -187,7 +232,17 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let data = paths::app_support_dir().join("remotes").join(slug(&p.host));
+    let override_dir = std::env::var_os("INFINITERM_DATA_DIR").map(PathBuf::from);
+    let data = remotes_root(override_dir.as_deref(), &paths::home_dir()).join(folder_name(&p.host));
+    if !socket_fits(&data) {
+        eprintln!(
+            "ift: the folder for {} is too long for a unix socket ({} bytes, at most {MAX_SOCKET_PATH}): {}",
+            p.host,
+            data.join("infiniterm.sock").as_os_str().len(),
+            data.display()
+        );
+        return ExitCode::from(1);
+    }
     let config = data.join("config");
     if let Err(e) = std::fs::create_dir_all(&data) {
         eprintln!("ift: {}: {e}", data.display());
@@ -280,6 +335,41 @@ mod tests {
         assert_eq!(slug("../etc"), "h.._etc");
         assert_eq!(slug("..") , "h..");
         assert_eq!(slug("my host:22"), "my_host_22");
+    }
+
+    #[test]
+    fn a_long_host_gets_a_short_stable_folder_name_of_its_own() {
+        assert_eq!(folder_name("ops@box"), "ops@box");
+        let a = "build-server-for-the-customer-portal.eu-west.example.com";
+        let b = "build-server-for-the-customer-portal.us-east.example.com";
+        let (fa, fb) = (folder_name(a), folder_name(b));
+        assert!(fa.len() <= MAX_FOLDER_NAME && fb.len() <= MAX_FOLDER_NAME, "{fa} {fb}");
+        assert_eq!(fa, folder_name(a), "the same every time");
+        assert_ne!(fa, fb, "hosts that start alike keep separate folders");
+        assert!(fa.starts_with("build-server-for-the-customer-p-"));
+    }
+
+    #[test]
+    fn remote_folders_live_somewhere_short_unless_a_scratch_dir_says_otherwise() {
+        let home = Path::new("/Users/someone");
+        assert_eq!(remotes_root(None, home), home.join(".infiniterm/remotes"));
+        assert_eq!(
+            remotes_root(Some(Path::new("/tmp/scratch")), home),
+            Path::new("/tmp/scratch/remotes")
+        );
+    }
+
+    // The case that broke the first real connect: the data directory's own
+    // 70 bytes plus a host name pushed the socket path to 106.
+    #[test]
+    fn the_socket_path_must_fit_a_unix_socket() {
+        let old = Path::new("/Users/ekinertac/Library/Application Support/dev.ekinertac.infiniterm/remotes/humbl-uptime");
+        assert!(!socket_fits(old), "the path that failed for real");
+        let now = remotes_root(None, Path::new("/Users/ekinertac")).join(folder_name("humbl-uptime"));
+        assert!(socket_fits(&now), "{}", now.display());
+        let worst = remotes_root(None, Path::new("/Users/ekinertac"))
+            .join(folder_name(&"h".repeat(200)));
+        assert!(socket_fits(&worst), "a long host still fits: {}", worst.display());
     }
 
     #[test]
