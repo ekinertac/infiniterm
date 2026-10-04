@@ -1473,6 +1473,22 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // from its corner into whatever is free beside and below it, up to
     // the default size. A quarter next to a half becomes the other half.
     r.register("card.size.reset", "Card: fill the free space", |m| {
+        // An empty slot the arrows landed on grows the same way, so the card
+        // made from it is as big as the room allows (Ekin, 2026-10-04: a slot
+        // beside a card is that card's size, and this is the way to change it).
+        if m.selection.focused_id.is_none() && m.selection.phantom_extra.is_empty() {
+            if let (Some(p), Some(ws)) = (m.selection.phantom.clone(), m.active_workspace.clone()) {
+                let mut taken: Vec<Rect> = m.here().iter().map(|c| c.rect).collect();
+                taken.extend(m.other_frames(None, &ws));
+                let next = fill_from_corner(p.rect, m.default_size(), &taken, GUTTER);
+                if next == p.rect {
+                    m.notify("no room to grow");
+                } else {
+                    m.show_phantom(next, p.group_id, false);
+                }
+                return;
+            }
+        }
         m.with_active_card(|m, id| {
             let Some(card) = m.card(&id).cloned() else {
                 return;

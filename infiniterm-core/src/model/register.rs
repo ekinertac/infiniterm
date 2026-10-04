@@ -1895,6 +1895,31 @@ mod tests {
         assert_eq!(h.m.slot_bounds(&rects, &groups), Some(half));
     }
 
+    // Cmd+Ctrl+Enter on an empty slot (the phantom) grows it into the free
+    // room, so a slot beside a quarter can become a card of any size up to the
+    // default. A slot with nothing to grow into says so.
+    #[test]
+    fn fill_the_free_space_grows_the_phantom() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        let default = h.m.default_size();
+        let quarter = h.m.card(&id).unwrap().rect;
+        let small = crate::grid::Rect {
+            w: default.w / 2.,
+            h: default.h / 2.,
+            ..quarter
+        };
+        h.m.card_mut(&id).unwrap().rect = small;
+        h.run("focus.move.right");
+        let phantom = h.m.selection.phantom.clone().expect("a slot");
+        assert_eq!((phantom.rect.w, phantom.rect.h), (small.w, small.h));
+        h.run("card.size.reset");
+        let grown = h.m.selection.phantom.clone().expect("still a slot").rect;
+        assert!(grown.w > small.w || grown.h > small.h, "{grown:?}");
+        assert!(grown.w <= default.w && grown.h <= default.h);
+        assert!(h.m.focused().is_none(), "no card was made or focused");
+    }
+
     fn edit_from(h: &mut Harness, card: Option<&str>, path: &str) -> crate::cli::CliReply {
         h.m.run_ift(
             &crate::cli::CliRequest {
