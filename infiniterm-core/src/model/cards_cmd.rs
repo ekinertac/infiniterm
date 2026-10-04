@@ -471,11 +471,9 @@ impl Model {
                 Some(_) => self.save_then_close(ids, reclaim),
             },
             Pending::WindowColor => self.window_color_answer(text),
-            Pending::About => {
-                if text.is_some() {
-                    self.effects.push(Effect::CheckForUpdate);
-                }
-            }
+            // Closing it is the whole answer; the update check is the app
+            // menu's (`app.update.check`).
+            Pending::About => {}
             Pending::NavigateBrowser(id) => {
                 if let (Some(url), Some(card)) =
                     (Model::normalise_url(text.as_deref()), self.card_mut(&id))

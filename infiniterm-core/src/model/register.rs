@@ -1192,24 +1192,16 @@ mod tests {
         assert_eq!(h.m.cards.len(), before + 2);
     }
 
-    // #90: `app.about` opens the About window; its action asks for an update
-    // check and Close asks for nothing.
+    // #90: `app.about` opens the About window. It has no buttons, so
+    // closing it asks for nothing, not even an update check.
     #[test]
-    fn about_opens_and_its_action_checks_for_updates() {
+    fn about_opens_and_closing_it_checks_nothing() {
         let mut h = Harness::new();
         h.run("app.about");
         assert!(h.m.prompt.is_open() && h.m.prompt.about);
-        let (pending, text) = h.m.prompt.settle(Some("")).unwrap();
+        let (pending, text) = h.m.prompt.press_choice().unwrap();
         h.m.answer(pending, text, |_| true);
-        assert!(h
-            .m
-            .effects
-            .iter()
-            .any(|e| matches!(e, Effect::CheckForUpdate)));
-        h.m.effects.clear();
-        h.run("app.about");
-        let (pending, text) = h.m.prompt.settle(None).unwrap();
-        h.m.answer(pending, text, |_| true);
+        assert!(!h.m.prompt.is_open());
         assert!(!h
             .m
             .effects
