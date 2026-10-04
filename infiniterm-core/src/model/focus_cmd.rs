@@ -32,7 +32,7 @@ pub enum BareKey {
 impl Model {
     /// The empty slot the arrows landed on, as a card you can make. Nothing
     /// is focused while it is up, so Enter means "make the card".
-    fn show_phantom(&mut self, rect: Rect, group_id: Option<String>, keep_extra: bool) {
+    pub(super) fn show_phantom(&mut self, rect: Rect, group_id: Option<String>, keep_extra: bool) {
         self.selection.maximized = false;
         self.selection.focused_id = None;
         if !keep_extra {
