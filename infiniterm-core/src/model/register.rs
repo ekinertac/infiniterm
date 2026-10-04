@@ -1102,6 +1102,23 @@ mod tests {
         assert!(h.m.card(&id).is_none(), "confirmed: closed");
     }
 
+    // A remote instance starts its cards in the server's home, not in the
+    // Mac folder its seeded settings name, and keeps doing so when the
+    // settings are applied again.
+    #[test]
+    fn a_remote_instance_starts_cards_in_the_servers_home() {
+        let mut h = Harness::new();
+        h.m.remote = crate::remote_identity::RemoteIdentity::from_vars(Some("ops@box"), None, None);
+        h.m.apply_settings_text(r#"{"startingDir": "/Users/me/Code"}"#);
+        assert_eq!(h.m.start_dir, "~");
+        h.m.remote = None;
+        h.m.apply_settings_text(r#"{"startingDir": "/Users/me/Code"}"#);
+        assert_eq!(
+            h.m.start_dir, "/Users/me/Code",
+            "a local instance is unchanged"
+        );
+    }
+
     // #118: a remote instance has no browser cards, however one is asked for.
     #[test]
     fn a_remote_instance_refuses_browser_cards() {

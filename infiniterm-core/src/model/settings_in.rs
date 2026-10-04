@@ -33,6 +33,12 @@ impl Model {
         if let Some(dir) = Some(self.config.starting_dir.clone()).filter(|d| !d.is_empty()) {
             self.start_dir = dir;
         }
+        // A remote instance's cards start in the server's home, whatever
+        // folder the local settings it was seeded from name: that one is a
+        // Mac path the server has not got (`ift proxy` expands the `~`).
+        if self.remote.is_some() {
+            self.start_dir = "~".into();
+        }
         if let Some(theme) = self.config.theme.clone() {
             self.effects.push(Effect::LoadTheme(theme));
         }

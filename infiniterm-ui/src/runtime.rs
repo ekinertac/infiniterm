@@ -867,6 +867,8 @@ pub fn startup(app: &mut AppView) {
     app.model.remote = infiniterm_core::remote_identity::RemoteIdentity::from_env();
     if let Some(r) = &app.model.remote {
         crate::instance_icon::set_badge(r.color);
+        // The settings were applied before this, with the Mac's folder.
+        app.model.start_dir = "~".into();
     }
     app.live_sessions = app.backend.pty.live_sessions();
     app.model.can_park = app.backend.pty.can_park();
