@@ -33,6 +33,7 @@ pub mod omni_cmd;
 pub mod palette_state;
 pub mod persist;
 pub mod register;
+pub mod remote_cmd;
 pub mod settings_in;
 pub mod tabs_cmd;
 pub mod workspaces_cmd;
@@ -302,6 +303,12 @@ pub enum Effect {
     /// Cmd+Shift+C: visual mode on this terminal card; the grid is the
     /// body's, so the ui turns it on (`Grid::visual_enter`).
     Visual(String),
+    /// A remote instance's colour changed (`remote.color`): the ui redraws the
+    /// Dock icon and, for `Save` or `Forget`, writes or removes `remote.json`.
+    RemoteColor {
+        color: crate::remote_identity::Rgb,
+        persist: RemotePersist,
+    },
     /// `ift read`: the ui answers request `request_id` with the card's text,
     /// since only the terminal body holds its grid (#127).
     ReadCard {
@@ -459,8 +466,20 @@ pub enum Pending {
     },
     /// The About window (`app.about`): yes is "Check for Updates".
     About,
+    /// The custom hex colour of a remote instance (`remote.color`).
+    RemoteColor,
     /// `editor.goToLine`: the number typed lands in `card.line` for the body.
     GoToLine(String),
+}
+
+/// What a colour change asks the ui to do with `remote.json`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemotePersist {
+    /// A preview while the picker is open: nothing is written.
+    No,
+    Save,
+    /// Back to the colour hashed from the host name.
+    Forget,
 }
 
 /// How long a notice stays up after the last one.
@@ -597,6 +616,9 @@ pub struct Model {
     pub snippets: Vec<crate::snippets::Snippet>,
     pub theme_current: Option<String>,
     pub theme_before_preview: Option<String>,
+    /// The colour a remote instance had when its colour picker opened, which a
+    /// dismissed picker puts back (`remote_cmd.rs`).
+    pub remote_color_before_preview: Option<crate::remote_identity::Rgb>,
     /// Where the FIRST card starts; every card after inherits from the one it
     /// was opened next to. The home directory, or `startingDir`.
     pub start_dir: String,
@@ -694,6 +716,7 @@ impl Model {
             snippets: vec![],
             theme_current: None,
             theme_before_preview: None,
+            remote_color_before_preview: None,
             start_dir: "/".into(),
             home: String::new(),
             dev_build: cfg!(debug_assertions),

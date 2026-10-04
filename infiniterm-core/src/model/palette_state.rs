@@ -26,6 +26,8 @@ pub enum Source {
     Snippets,
     /// `card.moveToWorkspace`: the other workspaces, then a new one.
     MoveTo,
+    /// `remote.color` (#157): named colours previewed live, then a hex code.
+    RemoteColor,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
@@ -46,6 +48,7 @@ impl Source {
             Source::Sizes => "sizes",
             Source::Snippets => "snippets",
             Source::MoveTo => "moveTo",
+            Source::RemoteColor => "remoteColor",
         }
     }
 
@@ -63,7 +66,12 @@ impl Source {
     pub fn keeps_its_order(self) -> bool {
         matches!(
             self,
-            Source::Placement | Source::SlotKind | Source::Sizes | Source::MoveTo | Source::Themes
+            Source::Placement
+                | Source::SlotKind
+                | Source::Sizes
+                | Source::MoveTo
+                | Source::Themes
+                | Source::RemoteColor
         )
     }
 
@@ -77,6 +85,7 @@ impl Source {
             Source::Sizes => "Resize the card to…",
             Source::Snippets => "Paste a snippet…",
             Source::MoveTo => "Move to workspace…",
+            Source::RemoteColor => "Colour for this host…",
         }
     }
 }
@@ -253,6 +262,7 @@ impl Model {
                     })
                     .collect()
             }
+            Source::RemoteColor => self.remote_color_items(),
             Source::Placement => {
                 let chord = |id: &str| {
                     self.keymap
@@ -361,6 +371,10 @@ impl Model {
 
     /// Called as the highlighted item changes, and with `None` on dismissal.
     pub fn palette_preview(&mut self, source: Source, id: Option<&str>) {
+        if source == Source::RemoteColor {
+            self.remote_color_preview(id);
+            return;
+        }
         if source == Source::Themes {
             let target = id
                 .map(String::from)

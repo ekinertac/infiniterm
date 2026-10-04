@@ -65,6 +65,26 @@ if [ -n "${SHOTS:-}" ]; then
     sleep 2
     screencapture -x "$SHOTS/dock.png"
     cliclick "m:$ORIG"
+    # The colour picker: `ift run` opens it, then a name and Enter go to the
+    # instance by keystroke, but only when it is the frontmost app, since
+    # System Events types into whatever is in front.
+    export INFINITERM_DATA_DIR=$DIR
+    "$BIN/ift" run remote.color
+    sleep 1.5
+    screencapture -x -o -l "$("$ROOT/tools/winid" --pid "$PID" | head -1 | cut -f1)" "$SHOTS/remote-picker.png"
+    FRONT=$(osascript -e 'tell application "System Events" to get unix id of first process whose frontmost is true')
+    if [ "$FRONT" = "$PID" ]; then
+        osascript -e 'tell application "System Events" to keystroke "blue"'
+        sleep 0.6
+        screencapture -x -o -l "$("$ROOT/tools/winid" --pid "$PID" | head -1 | cut -f1)" "$SHOTS/remote-picker-blue.png"
+        osascript -e 'tell application "System Events" to key code 36'
+        sleep 1.5
+        screencapture -x -o -l "$("$ROOT/tools/winid" --pid "$PID" | head -1 | cut -f1)" "$SHOTS/remote-blue.png"
+        grep -q 3b82f6 "$DIR/remote.json" || fail "the chosen colour was not saved to remote.json"
+        echo "chose blue: saved $(cat "$DIR/remote.json")"
+    else
+        echo "skipped the keystrokes: the instance is not in front (it is pid $FRONT)"
+    fi
     echo "shots in $SHOTS"
 fi
 echo "PASS"
