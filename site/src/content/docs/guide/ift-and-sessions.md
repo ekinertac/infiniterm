@@ -97,7 +97,9 @@ ift connect me@server --name prod --color 3b82f6
 
 It needs key login (ssh runs without a password prompt) and `ift` and `iftd` on the server. `--install` puts them there on Linux, x86_64 or aarch64: this Mac downloads the package for its own version from the GitHub release, checks its checksum and sends it through ssh, so the server needs no internet. Root gets `/usr/local/bin`, any other user `~/.local/bin`. `--from <package>` installs from a file instead. A server that is a Mac uses the app already installed there. Without `--install`, `ift connect` says what is missing, and it tells you when the server's `ift` is a different version from yours.
 
-Not yet: agent hooks over the connection, so a Claude card on a server does not report its state, and editor or diff cards on the server's files.
+Agent states and `ift` work inside a server's cards too. One extra ssh connection carries them: a Claude or Codex session on the server shows working, waiting and done on its card, and `ift ls`, `ift send` and the rest reach the window from a server shell. Run `ift install-claude-hooks` (or `install-codex-hooks`) on the server once so the agent there calls the hook.
+
+Not supported: editor and diff cards on the server's files, and Windows servers.
 
 ## tmux
 
