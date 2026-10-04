@@ -678,7 +678,7 @@ mod tests {
         let dir = tempdir();
         std::fs::write(
             dir.join("x.meta"),
-            &meta(std::process::id(), "/tmp", "zsh"),
+            meta(std::process::id(), "/tmp", "zsh"),
         )
         .unwrap();
         std::fs::write(dir.join("x.sock"), b"").unwrap();
@@ -734,7 +734,7 @@ mod tests {
         std::fs::write(dir.join("bad.meta"), b"not json").unwrap();
         std::fs::write(
             dir.join("good.meta"),
-            &meta(std::process::id(), "/home/x", "fish"),
+            meta(std::process::id(), "/home/x", "fish"),
         )
         .unwrap();
         // A listed session needs its socket: see `a_meta_with_no_socket_is_not_a_session`.
@@ -795,7 +795,7 @@ mod tests {
         let dir = tempdir();
         std::fs::write(
             dir.join("real.meta"),
-            &meta(std::process::id(), "/tmp", "zsh"),
+            meta(std::process::id(), "/tmp", "zsh"),
         )
         .unwrap();
         std::fs::write(dir.join("real.sock"), b"").unwrap();
