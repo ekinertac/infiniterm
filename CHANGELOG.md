@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-04
 
+- `ui.fitSplitSlot` (default on): Cmd+1 on a card that was split frames the whole slot, both halves together, as it always did. Set it to false and Cmd+1 fits the card itself and fills the window with it, split or not.
 - The app icon is sharp in the Cmd+Tab switcher. It was enlarged from a small bitmap, with stair steps on the edge, and the green dot of a window colour made it worse.
 - macOS can now show its privacy prompts (Photos, Contacts, Calendars, Reminders, Camera, Microphone, Location, Bluetooth, Desktop, Documents and Downloads folders, other apps, and more) for a program running in a card. Nothing is asked at install or launch: the dialog appears the first time a program touches that resource, and it says the request is from a program in an infiniterm card.
 - With a title bar colour set, the workspace tabs follow it: the selected tab's fill leans toward the colour and the other tab names are brighter, so they stay readable on any colour.

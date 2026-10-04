@@ -152,6 +152,10 @@ impl Model {
     /// canvas is no longer part of a slot, and framing the pair would zoom
     /// out to nothing.
     pub fn slot_bounds(&self, cards: &[Rect], soft_groups: &[Option<String>]) -> Option<Rect> {
+        // `ui.fitSplitSlot` off: the card itself, whether it was split or not.
+        if !self.config.ui.fit_split_slot {
+            return bounding_rect(cards);
+        }
         let mut rects: Vec<Rect> = cards.to_vec();
         for group in soft_groups.iter().flatten() {
             for card in &self.cards {

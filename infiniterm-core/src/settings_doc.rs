@@ -334,6 +334,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.fitSplitSlot",
+        &[
+            "Cmd+1 on a card that was split frames the whole slot, both halves together.",
+            "Off: it fits the card itself and fills the window with it.",
+        ],
+    ),
+    (
         "ui.unfocusedDim",
         &[
             "How much the whole canvas is dimmed while another app is in front, 0 to 1.",

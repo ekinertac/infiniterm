@@ -267,6 +267,10 @@ pub struct Ui {
     pub fit_padding: f64,
     /// Whether a fit may zoom past 100% to fill the window.
     pub fit_magnify: bool,
+    /// Whether Cmd+1 on a card that was split frames the whole slot (the
+    /// card and the pieces it was split from), as it always did. Off: it fits
+    /// the card itself, split or not.
+    pub fit_split_slot: bool,
     /// Chrome font sizes in SCREEN pixels, before the UI-scale multiplier.
     /// Three values because they are read at three distances: a card label
     /// has to survive 10% zoom, a group name sits above a block, the status
@@ -379,6 +383,7 @@ pub fn default_config() -> Config {
             show_grid: true,
             fit_padding: FIT_PADDING,
             fit_magnify: false,
+            fit_split_slot: true,
             card_label_size: 15.,
             card_label_position: LabelCorner::TopRight,
             hide_label_when_maximised: false,
@@ -651,6 +656,7 @@ pub fn merge_config(raw: &Value) -> Config {
             show_grid: bool_(u.get("showGrid"), d.ui.show_grid),
             fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
             fit_magnify: bool_(u.get("fitMagnify"), d.ui.fit_magnify),
+            fit_split_slot: bool_(u.get("fitSplitSlot"), d.ui.fit_split_slot),
             card_label_size: num(u.get("cardLabelSize"), d.ui.card_label_size, 6., 64.),
             card_label_position: label_corner(u.get("cardLabelPosition"), d.ui.card_label_position),
             hide_label_when_maximised: bool_(
