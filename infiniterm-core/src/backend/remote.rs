@@ -20,6 +20,10 @@
 //!   host can be shown, since stdout is the protocol and carries no prose.
 //! - Closing the near socket ends the relay and so ssh; the daemon on the
 //!   server keeps the shell running. That is a detach.
+//! - Hooks and `ift` on the server reach this instance through ONE more ssh
+//!   (`forward`): a reverse unix-socket forward from `REMOTE_SOCKET` on the
+//!   server to this instance's own socket. `infiniterm-hook` and `ift` already
+//!   look in `<tmp>/infiniterm.sock`, so the server needs no change.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -247,6 +251,66 @@ pub fn ssh_args(host: &RemoteHost, id: &str, spawn: Option<&SpawnSpec>) -> Vec<S
     args
 }
 
+/// Where the server's hooks and `ift` look for the app: their default, which
+/// is `/tmp/infiniterm.sock` on Linux. Two Macs connected to one server share
+/// it and the later connection wins; a per-Mac path would need the cards'
+/// environment to carry it.
+pub const REMOTE_SOCKET: &str = "/tmp/infiniterm.sock";
+
+/// How long the forward waits before it is started again after it ends.
+const FORWARD_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Arguments for the ssh that carries the reverse forward. The remote command
+/// is `cat`, not `-N`: ssh ends when `cat` sees its stdin close, and that
+/// stdin is a pipe from THIS process, so a forward never outlives the app.
+/// The server's own sshd decides whether an old socket file may be replaced
+/// (`StreamLocalBindUnlink`, off by default), so `forward` removes the file
+/// itself first: a forward that ended leaves it behind and blocks the next.
+pub fn forward_args(host: &RemoteHost, local_socket: &str) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=3",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-R",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    args.push(format!("{REMOTE_SOCKET}:{local_socket}"));
+    args.extend(host.ssh_args.iter().cloned());
+    args.push(host.target.clone());
+    args.push("cat >/dev/null".into());
+    args
+}
+
+/// Keeps the reverse forward up for as long as the app runs: a thread that
+/// starts the ssh, waits for it to end and starts it again. A host that is
+/// down costs one failed ssh every few seconds, nothing else.
+pub fn forward(host: RemoteHost, local_socket: String) {
+    std::thread::spawn(move || loop {
+        let _ = run_on(&host, &format!("rm -f {}", shell_quote(REMOTE_SOCKET)));
+        let child = Command::new(&host.ssh)
+            .args(forward_args(&host, &local_socket))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        if let Ok(mut child) = child {
+            // `wait` closes the child's stdin first, which would end `cat`
+            // and the forward with it: hold the pipe until ssh is gone.
+            let _stdin = child.stdin.take();
+            let _ = child.wait();
+        }
+        std::thread::sleep(FORWARD_RETRY);
+    });
+}
+
 /// The last lines ssh said, shared with the thread that reads them.
 #[derive(Clone, Default)]
 pub struct SshStderr(Arc<Mutex<String>>);
@@ -348,6 +412,17 @@ mod tests {
             remote_command("/opt/ift", "abc", None),
             "/opt/ift proxy session abc"
         );
+    }
+
+    #[test]
+    fn the_forward_maps_the_servers_socket_to_ours_and_ends_with_its_stdin() {
+        let mut host = RemoteHost::new("root@h");
+        host.ssh_args = vec!["-p".into(), "2222".into()];
+        let args = forward_args(&host, "/data/infiniterm.sock");
+        let at = args.iter().position(|a| a == "-R").unwrap();
+        assert_eq!(args[at + 1], "/tmp/infiniterm.sock:/data/infiniterm.sock");
+        assert!(args.contains(&"ExitOnForwardFailure=yes".to_string()));
+        assert_eq!(&args[args.len() - 4..], ["-p", "2222", "root@h", "cat >/dev/null"]);
     }
 
     #[test]
