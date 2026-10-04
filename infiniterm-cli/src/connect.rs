@@ -49,6 +49,12 @@ pub struct Parsed {
     pub ssh_args: Option<String>,
     pub ift: Option<String>,
     pub check_only: bool,
+    /// Put `ift` and `iftd` on the host first (`install.rs`).
+    pub install: bool,
+    /// Install from this package file instead of the release.
+    pub from: Option<String>,
+    /// `linux-x86_64` or `linux-aarch64`, instead of asking the host.
+    pub platform: Option<String>,
 }
 
 /// A host ssh would take as a destination and not as an option.
@@ -71,6 +77,9 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         };
         match a.as_str() {
             "--check" => p.check_only = true,
+            "--install" => p.install = true,
+            "--from" => p.from = Some(value("--from")?),
+            "--platform" => p.platform = Some(value("--platform")?),
             "--name" => p.name = Some(value("--name")?),
             "--color" => {
                 let c = value("--color")?;
@@ -96,6 +105,9 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
     }
     if !valid_host(&p.host) {
         return Err(format!("not a host: {}", p.host));
+    }
+    if (p.from.is_some() || p.platform.is_some()) && !p.install {
+        return Err("--from and --platform belong to --install".into());
     }
     Ok(p)
 }
@@ -201,6 +213,22 @@ pub fn launch_env(p: &Parsed, data: &Path, config: &Path) -> Vec<(String, String
     env
 }
 
+/// The version the host's `ift` says (`ift 0.5.3`), when it says one; an older
+/// `ift` has no `--version` and gives none.
+fn host_version(host: &RemoteHost) -> Option<String> {
+    let out = remote::run_on(
+        host,
+        &format!("{} --version", infiniterm_core::drop::shell_quote(&host.ift)),
+    )
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let said = String::from_utf8_lossy(&out.stdout);
+    let mut words = said.split_whitespace();
+    (words.next()? == "ift").then(|| words.next().map(str::to_string))?
+}
+
 /// `<app>.app` from this binary's real path (`.../infiniterm.app/Contents/MacOS/ift`).
 fn app_bundle() -> Option<PathBuf> {
     let exe = std::fs::canonicalize(std::env::current_exe().ok()?).ok()?;
@@ -209,23 +237,52 @@ fn app_bundle() -> Option<PathBuf> {
 }
 
 pub fn run(args: &[String]) -> ExitCode {
-    let p = match parse(args) {
+    let mut p = match parse(args) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("ift: {e}");
             return ExitCode::from(2);
         }
     };
-    let host: RemoteHost = remote::from_vars(
+    let mut host: RemoteHost = remote::from_vars(
         Some(&p.host),
         p.ssh_args.as_deref(),
         p.ift.as_deref(),
         std::env::var("INFINITERM_REMOTE_SSH").ok().as_deref(),
     )
     .expect("a parsed host is never empty");
+    if p.install {
+        let from = p.from.as_deref().map(Path::new);
+        match crate::install::install(&host, p.platform.as_deref(), from, env!("CARGO_PKG_VERSION"))
+        {
+            Ok(ift) => {
+                println!("{}: installed ({ift})", p.host);
+                host.ift = ift.clone();
+                p.ift = Some(ift);
+            }
+            Err(e) => {
+                eprintln!("ift: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    }
     if let Err(e) = remote::check(&host) {
         eprintln!("ift: {e}");
+        if !p.install && e.contains("is not installed on the server") {
+            eprintln!("ift: `ift connect {} --install` puts them there", p.host);
+        }
         return ExitCode::from(1);
+    }
+    // A different version is worth a line, not a refusal: iftd's protocol
+    // stays backwards compatible, so an older server still works.
+    if let Some(theirs) = host_version(&host) {
+        let ours = env!("CARGO_PKG_VERSION");
+        if theirs != ours {
+            eprintln!(
+                "ift: {} has ift {theirs} and this app is {ours}; `ift connect {} --install` updates it",
+                p.host, p.host
+            );
+        }
     }
     if p.check_only {
         println!("{}: ready (ift and iftd are installed)", p.host);
