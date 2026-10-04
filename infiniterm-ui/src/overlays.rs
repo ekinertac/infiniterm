@@ -663,8 +663,10 @@ impl AppView {
         // a chip on the right names the host, so it is never taken for the
         // local canvas (#118).
         let remote = self.model.remote.clone();
-        let bar = match &remote {
-            Some(r) => crate::chrome::tint(chrome.bar_bg, r.color, REMOTE_BAR_TINT),
+        // Any window can wear a colour (`window.color`): a remote one its
+        // host's, the local one its choice, and none is the normal bar.
+        let bar = match self.model.window_color() {
+            Some(c) => crate::chrome::tint(chrome.bar_bg, c, REMOTE_BAR_TINT),
             None => chrome.bar_bg,
         };
         let chip = remote.map(|r| {

@@ -1,12 +1,13 @@
-//! The Dock icon of a remote instance (#118): the app's own icon with a
+//! The Dock icon of a coloured window (#118, #160): the app's own icon with a
 //! round badge in the host's colour, so two infiniterm tiles in the Dock are
 //! told apart without reading a label.
 //!
 //! `NSApplication.applicationIconImage` is per process, and `ift connect`
-//! starts the instance with `open -n`, so the local instance keeps its icon.
+//! starts the instance with `open -n`, so a remote instance's tile is its own.
+//! The local instance is badged only when it has a colour (`ui.windowColor`).
 //! A new NSImage the size of the app's icon, the icon drawn into it, the badge
 //! over its bottom-right corner (a white ring keeps it readable on any colour).
-//! The colour can change while the app runs (`remote.color`, previewed on every
+//! The colour can change while the app runs (`window.color`, previewed on every
 //! move of the highlight), so the ORIGINAL icon is kept on the first call and
 //! every badge is drawn from it: drawing over the last result would stack
 //! badges.
@@ -34,6 +35,21 @@ const BADGE_SHARE: f64 = 0.42;
 const BADGE_INSET: f64 = 0.03;
 /// The white ring's width as a share of the icon's width.
 const RING_SHARE: f64 = 0.04;
+
+/// The plain icon again (the colour was removed): the app's own icon, kept on
+/// the first `set_badge`, or the default when none was ever badged.
+pub fn clear_badge() {
+    unsafe {
+        let app: Id = msg_send![class!(NSApplication), sharedApplication];
+        match ORIGINAL.load(Ordering::SeqCst) {
+            // Nothing was badged, so the icon is still the app's own.
+            0 => {}
+            kept => {
+                let _: () = msg_send![app, setApplicationIconImage: kept as Id];
+            }
+        }
+    }
+}
 
 pub fn set_badge(color: Rgb) {
     unsafe {

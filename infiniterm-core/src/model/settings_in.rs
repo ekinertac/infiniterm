@@ -33,6 +33,18 @@ impl Model {
         if let Some(dir) = Some(self.config.starting_dir.clone()).filter(|d| !d.is_empty()) {
             self.start_dir = dir;
         }
+        // The local instance's colour is a setting, so editing the file changes
+        // the title bar and the Dock icon too; a remote window keeps its host's.
+        if self.remote.is_none() {
+            let color = crate::remote_identity::parse_color(&self.config.ui.window_color);
+            if color != self.local_color {
+                self.local_color = color;
+                self.effects.push(Effect::WindowColor {
+                    color,
+                    save: super::WindowColorSave::No,
+                });
+            }
+        }
         // A remote instance's cards start in the server's home, whatever
         // folder the local settings it was seeded from name: that one is a
         // Mac path the server has not got (`ift proxy` expands the `~`).

@@ -20,6 +20,7 @@
 //! and `register_commands` fills it.
 pub mod canvas_cmd;
 pub mod cards_cmd;
+pub mod color_cmd;
 pub mod context;
 pub mod cover;
 pub mod dev_cmd;
@@ -33,7 +34,6 @@ pub mod omni_cmd;
 pub mod palette_state;
 pub mod persist;
 pub mod register;
-pub mod remote_cmd;
 pub mod settings_in;
 pub mod tabs_cmd;
 pub mod workspaces_cmd;
@@ -303,11 +303,13 @@ pub enum Effect {
     /// Cmd+Shift+C: visual mode on this terminal card; the grid is the
     /// body's, so the ui turns it on (`Grid::visual_enter`).
     Visual(String),
-    /// A remote instance's colour changed (`remote.color`): the ui redraws the
-    /// Dock icon and, for `Save` or `Forget`, writes or removes `remote.json`.
-    RemoteColor {
-        color: crate::remote_identity::Rgb,
-        persist: RemotePersist,
+    /// The window's colour changed (`window.color`): the ui redraws the Dock
+    /// icon (no colour is the plain icon) and, in a remote instance, for
+    /// `Save` or `Forget`, writes or removes `remote.json`. A local choice is
+    /// saved by the model as the setting `ui.windowColor`.
+    WindowColor {
+        color: Option<crate::remote_identity::Rgb>,
+        save: WindowColorSave,
     },
     /// `ift read`: the ui answers request `request_id` with the card's text,
     /// since only the terminal body holds its grid (#127).
@@ -466,19 +468,19 @@ pub enum Pending {
     },
     /// The About window (`app.about`): yes is "Check for Updates".
     About,
-    /// The custom hex colour of a remote instance (`remote.color`).
-    RemoteColor,
+    /// The custom hex colour of a window (`window.color`).
+    WindowColor,
     /// `editor.goToLine`: the number typed lands in `card.line` for the body.
     GoToLine(String),
 }
 
-/// What a colour change asks the ui to do with `remote.json`.
+/// What a colour change asks to be saved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RemotePersist {
+pub enum WindowColorSave {
     /// A preview while the picker is open: nothing is written.
     No,
     Save,
-    /// Back to the colour hashed from the host name.
+    /// Back to the default: the host's hashed colour, or none.
     Forget,
 }
 
@@ -616,9 +618,12 @@ pub struct Model {
     pub snippets: Vec<crate::snippets::Snippet>,
     pub theme_current: Option<String>,
     pub theme_before_preview: Option<String>,
-    /// The colour a remote instance had when its colour picker opened, which a
-    /// dismissed picker puts back (`remote_cmd.rs`).
-    pub remote_color_before_preview: Option<crate::remote_identity::Rgb>,
+    /// The colour the window had when its colour picker opened (`Some(None)`:
+    /// none), which a dismissed picker puts back (`color_cmd.rs`).
+    pub window_color_before_preview: Option<Option<crate::remote_identity::Rgb>>,
+    /// The local instance's colour, from `ui.windowColor` (`None`: the normal
+    /// title bar). A remote instance wears its host's instead.
+    pub local_color: Option<crate::remote_identity::Rgb>,
     /// Where the FIRST card starts; every card after inherits from the one it
     /// was opened next to. The home directory, or `startingDir`.
     pub start_dir: String,
@@ -716,7 +721,8 @@ impl Model {
             snippets: vec![],
             theme_current: None,
             theme_before_preview: None,
-            remote_color_before_preview: None,
+            window_color_before_preview: None,
+            local_color: None,
             start_dir: "/".into(),
             home: String::new(),
             dev_build: cfg!(debug_assertions),

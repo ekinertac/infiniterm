@@ -256,6 +256,9 @@ pub struct Ui {
     /// Ctrl+Tab and the status bar's card count look at the current
     /// workspace only (#101).
     pub workspace_isolation: bool,
+    /// A colour for the title bar and the Dock icon: a name from the picker or
+    /// a hex code, empty for none (#160). A remote instance wears its host's.
+    pub window_color: String,
     /// Alpha of a card's background fill, text untouched (#98).
     pub card_opacity: f64,
     /// Whether the canvas draws its grid (#96).
@@ -371,6 +374,7 @@ pub fn default_config() -> Config {
             background_image: String::new(),
             background_image_fit: BackgroundFit::Cover,
             workspace_isolation: false,
+            window_color: String::new(),
             card_opacity: 1.,
             show_grid: true,
             fit_padding: FIT_PADDING,
@@ -637,6 +641,12 @@ pub fn merge_config(raw: &Value) -> Config {
                 _ => BackgroundFit::Cover,
             },
             workspace_isolation: bool_(u.get("workspaceIsolation"), d.ui.workspace_isolation),
+            window_color: u
+                .get("windowColor")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
             card_opacity: num(u.get("cardOpacity"), d.ui.card_opacity, 0.1, 1.),
             show_grid: bool_(u.get("showGrid"), d.ui.show_grid),
             fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
@@ -1041,6 +1051,20 @@ mod tests {
             m(json!({"ui.workspaceIsolation": true}))
                 .ui
                 .workspace_isolation
+        );
+    }
+
+    #[test]
+    fn the_window_colour_is_none_unless_set() {
+        assert_eq!(m(json!({})).ui.window_color, "");
+        assert_eq!(
+            m(json!({"ui.windowColor": " blue "})).ui.window_color,
+            "blue"
+        );
+        assert_eq!(
+            m(json!({"ui.windowColor": 5})).ui.window_color,
+            "",
+            "not a string"
         );
     }
 

@@ -9,7 +9,7 @@ pub fn register_commands(r: &mut CommandRegistry<Model>) {
     super::focus_cmd::register(r);
     super::canvas_cmd::register(r);
     super::workspaces_cmd::register(r);
-    super::remote_cmd::register(r);
+    super::color_cmd::register(r);
     super::groups_cmd::register(r);
     super::dev_cmd::register(r);
     super::tabs_cmd::register(r);
@@ -1101,6 +1101,43 @@ mod tests {
         let (pending, text) = h.m.prompt.settle(Some("")).unwrap();
         h.m.answer(pending, text, |_| true);
         assert!(h.m.card(&id).is_none(), "confirmed: closed");
+    }
+
+    // #160: the local colour is the setting `ui.windowColor`, applied when the
+    // settings are, and a remote window ignores it.
+    #[test]
+    fn the_window_colour_setting_tints_the_local_window_and_not_a_remote_one() {
+        let mut h = Harness::new();
+        h.m.effects.clear();
+        h.m.apply_settings_text(r#"{"ui.windowColor": "teal"}"#);
+        assert_eq!(h.m.window_color(), crate::remote_identity::named("teal"));
+        assert!(
+            h.m.effects
+                .iter()
+                .any(|e| matches!(e, Effect::WindowColor { color: Some(_), .. })),
+            "the Dock follows the file"
+        );
+        h.m.effects.clear();
+        h.m.apply_settings_text(r#"{"ui.windowColor": "teal"}"#);
+        assert!(
+            !h.m.effects
+                .iter()
+                .any(|e| matches!(e, Effect::WindowColor { .. })),
+            "nothing changed, nothing to redraw"
+        );
+        h.m.apply_settings_text("{}");
+        assert_eq!(h.m.window_color(), None, "removed from the file: no colour");
+        h.m.remote = crate::remote_identity::RemoteIdentity::from_vars(
+            Some("ops@box"),
+            None,
+            Some("ff8800"),
+        );
+        h.m.apply_settings_text(r#"{"ui.windowColor": "teal"}"#);
+        assert_eq!(
+            h.m.window_color(),
+            Some((0xff, 0x88, 0x00)),
+            "a remote window wears its host's"
+        );
     }
 
     // A remote instance starts its cards in the server's home, not in the
