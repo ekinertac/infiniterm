@@ -75,7 +75,7 @@ ift — drive infiniterm from a shell
                              a Linux host (this version's package, sent over
                              ssh; --from <file> uses a file, --platform
                              linux-x86_64|linux-aarch64 skips asking the
-                             host). Settings start as a copy of yours.
+                             host). Settings start with the defaults.
   ift send <card> [text] [--enter] [--key NAME]...
                              type into a card's shell, without moving the
                              focus; the card is its number (#7) or its id;

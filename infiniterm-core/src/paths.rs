@@ -23,9 +23,26 @@ pub fn home_dir() -> PathBuf {
 }
 
 /// `~/.config/infiniterm`, or `INFINITERM_CONFIG_DIR`: the Tauri app watches
-/// the real one, so a test that edits settings must edit a copy.
+/// the real one, so a test that edits settings must edit a copy. An instance
+/// with its own data directory (`INFINITERM_DATA_DIR`: a scratch run, a remote
+/// host) starts CLEAN: its settings live in `<data>/config` unless
+/// `INFINITERM_CONFIG_DIR` says otherwise (Ekin, 2026-10-05: a new instance
+/// must not read the personal files). `make run` names the real one on purpose.
 pub fn config_dir() -> PathBuf {
-    config_dir_from(std::env::var_os("INFINITERM_CONFIG_DIR").as_deref())
+    config_dir_for(
+        std::env::var_os("INFINITERM_CONFIG_DIR").as_deref(),
+        std::env::var_os("INFINITERM_DATA_DIR").as_deref(),
+    )
+}
+
+/// `config_dir` over explicit values: the config override wins, then a data
+/// override's own `config` folder, then `~/.config/infiniterm`.
+pub fn config_dir_for(config: Option<&std::ffi::OsStr>, data: Option<&std::ffi::OsStr>) -> PathBuf {
+    match (config, data) {
+        (Some(dir), _) => PathBuf::from(dir),
+        (None, Some(data)) => PathBuf::from(data).join("config"),
+        (None, None) => config_dir_from(None),
+    }
 }
 
 pub fn config_dir_from(override_: Option<&std::ffi::OsStr>) -> PathBuf {
@@ -225,6 +242,15 @@ mod tests {
         let dir = std::path::Path::new("/tmp/infiniterm-cfg");
         assert_eq!(config_dir_from(Some(dir.as_os_str())), dir);
         assert!(config_dir_from(None).ends_with(".config/infiniterm"));
+    }
+
+    #[test]
+    fn an_instance_with_its_own_data_dir_starts_with_its_own_config() {
+        use std::ffi::OsStr;
+        let (cfg, data) = (OsStr::new("/c"), OsStr::new("/d"));
+        assert_eq!(config_dir_for(Some(cfg), Some(data)), PathBuf::from("/c"));
+        assert_eq!(config_dir_for(None, Some(data)), PathBuf::from("/d/config"));
+        assert!(config_dir_for(None, None).ends_with(".config/infiniterm"));
     }
 
     // The config is hand-edited and this is not; they must never collide.

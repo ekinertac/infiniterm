@@ -6,9 +6,10 @@
 # "Verifying without being at the Mac"). `make run DATA=...` moves it.
 
 DATA ?= /tmp/infiniterm-dev
-# Where the scratch app reads settings.json and keybindings.json. Empty keeps
-# the real ~/.config/infiniterm; run-clean points it at an empty directory.
-CONFIG_DIR ?=
+# Where the scratch app reads settings.json and keybindings.json. An instance
+# with its own data dir starts clean by default; `make run` is the exception and
+# reads your real settings; run-clean points it at an empty directory.
+CONFIG_DIR ?= $(HOME)/.config/infiniterm
 CLEAN_CONFIG = /tmp/infiniterm-dev-config
 PROFILE ?= debug
 APP = target/bundle/infiniterm.app

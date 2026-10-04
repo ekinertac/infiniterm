@@ -38,8 +38,10 @@ echo "--- ift connect"
 "$BIN/ift" connect "$HOST" --ift "$BIN/ift"
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do [ -S "$DIR/infiniterm.sock" ] && break; sleep 1; done
 [ -S "$DIR/infiniterm.sock" ] || fail "the instance never opened its socket under remotes/"
-[ -f "$DIR/config/settings.json" ] || fail "its settings were not seeded"
-grep -q cardLabelSize "$DIR/config/settings.json" || fail "the seed is not a copy of the local settings"
+[ -d "$DIR/config" ] || fail "it has no config folder of its own"
+if [ -f "$DIR/config/settings.json" ] && grep -q cardLabelSize "$DIR/config/settings.json"; then
+    fail "the local settings were copied into the host's config"
+fi
 sleep 3
 export INFINITERM_DATA_DIR=$DIR
 "$BIN/ift" send 1 'echo CONNECTED_$((6*7))' --enter
