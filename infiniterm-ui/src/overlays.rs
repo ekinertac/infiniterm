@@ -1121,7 +1121,8 @@ impl AppView {
                 })
                 .text_color(if primary { chrome.sel_fg } else { chrome.text })
                 .child(label)
-                .child(key_cap(key, chrome))
+                // No key, no cap: an empty badge read as a lost shortcut.
+                .children((!key.is_empty()).then(|| key_cap(key, chrome)))
         };
         let mut body = div()
             .flex()
@@ -1176,7 +1177,11 @@ impl AppView {
                     }),
                 ));
             }
-            body = body.child(row);
+            // About has no buttons (Ekin, 2026-10-04): Enter, Escape or a
+            // click outside closes it, and the app menu checks for updates.
+            if !p.about {
+                body = body.child(row);
+            }
         } else {
             body = body
                 .child(
