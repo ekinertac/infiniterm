@@ -11,7 +11,7 @@ A terminal card runs your login shell in the card's directory. Every key without
 
 ## Find
 
-`Cmd F` searches the card you are on, the whole scrollback included. Every match is highlighted, the bar shows a count, and it starts on the newest match, so `Enter` steps up the output. `Cmd G` and `Cmd Shift G` step while the bar is open. `Cmd E` searches for the selected text.
+`Cmd F` searches the card you are on, the whole scrollback included. The bar opens inside that card, at its top right under the label. Every match is highlighted, the bar shows a count, and it starts on the newest match, so `Enter` steps up the output. `Cmd G` and `Cmd Shift G` step while the bar is open. `Cmd E` searches for the selected text.
 
 Lowercase searches ignore case; a capital letter makes the search match case. `Escape` closes the bar and leaves the current match selected where it is, so `Cmd C` copies it.
 

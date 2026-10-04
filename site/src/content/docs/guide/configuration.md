@@ -56,7 +56,7 @@ All 500-odd schemes from iTerm2-Color-Schemes ship with the app; Violite is the 
 
 `ui.windowOpacity` (0.1 to 1) lets the desktop show through the canvas, title bar and status bar, and `ui.windowBlur` blurs it. `ui.backgroundImage` puts a picture behind the canvas: `"dusk"`, `"aurora"` or `"ember"` come with the app, or give a path to your own; `ui.backgroundImageFit` is `"cover"` (crop to fill) or `"contain"`. A picture is opaque, so it hides the desktop. `ui.cardOpacity` lets the canvas and the picture show through card backgrounds while the text stays solid; browser cards stay opaque. `"ui.showGrid": false` leaves the canvas plain.
 
-"Window: change the title bar and Dock colour" in the palette tints the title bar and badges the Dock icon. Pick a named colour (each one shows as you move through the list, `Escape` puts it back) or "Custom hex colour…" for a code like `3b82f6`. The choice is saved as `ui.windowColor`, a name or a hex code, empty for none. In an `ift connect` window the same command sets that server's colour instead, and "Default: from the host name" goes back to the automatic one.
+"Window: change the title bar and Dock colour" in the palette tints the title bar and the workspace tabs, and badges the Dock icon. Pick a named colour (each one shows as you move through the list, `Escape` puts it back) or "Custom hex colour…" for a code like `3b82f6`. The choice is saved as `ui.windowColor`, a name or a hex code, empty for none. In an `ift connect` window the same command sets that server's colour instead, and "Default: from the host name" goes back to the automatic one.
 
 ## Snippets
 
@@ -68,6 +68,7 @@ Snippets are plain files in `~/.config/infiniterm/snippets/`, one per snippet. T
 
 - Your shells, one per card, started as your login shell with `INFINITERM_CARD_ID` in the environment. Nothing is typed into them that you did not type.
 - `~/.config/infiniterm/` for settings, keybindings and snippets, and `~/Library/Application Support/dev.ekinertac.infiniterm/` for the canvas, drafts, themes, the window frame, `agent.log`, the browser profile and address-bar history. Deleting `workspace.json` there resets the canvas and leaves your settings alone.
+- macOS privacy prompts, only when a program in a card asks for something they guard: Photos, Contacts, the camera, the microphone, your location, the Desktop, Documents and Downloads folders, other apps. macOS asks once and says the request comes from a program in an infiniterm card. Nothing is asked at install or launch.
 - `ps`, `lsof` and `git` as subprocesses, to label cards and for the diff and blame cards.
 - The network only from browser cards, the update check, address-bar suggestions from Google, which are off unless you turn on `browser.suggestions`, one request to api.lemonsqueezy.com when you run `ift licence <email> <key>`, ssh to the hosts you name in `ift connect`, and a download from GitHub for `ift connect --install`.
 

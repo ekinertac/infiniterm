@@ -19,6 +19,8 @@ A file that does not exist yet opens empty, and the first save creates it; closi
 
 An editor you arrived at with the arrows is a card like any other and takes no keys, so nothing typed at the canvas can land in a file. Click into the text or press `Enter` to lock the keyboard to it: the ring turns the warning colour and the status bar says so. While locked, `Cmd T` / `Cmd W` open and close tabs, `Cmd 1` to `Cmd 9` jump between them, and `Cmd S` saves. Double `Escape` lets go.
 
+Typing a quote, a backtick or an opening bracket over selected text wraps it: select `foo`, type `(`, get `(foo)`. The text stays selected, so a second press wraps it again.
+
 ## Multiple cursors
 
 - `Cmd` + click adds a cursor or removes one.
