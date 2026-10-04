@@ -580,6 +580,18 @@ impl AppView {
         let ui = self.model.ui_scale as f32;
         let chrome = &self.chrome;
         let active = self.model.active_workspace.clone();
+        // Any window can wear a colour (`window.color`): a remote one its
+        // host's, the local one its choice, and none is the normal bar. The
+        // tabs follow it (#173): the chosen tab's fill leans the same way and
+        // the other names are drawn brighter, since the muted grey was made
+        // for the plain bar and fades on a tint.
+        let wear = self.model.window_color();
+        let crate::chrome::TabColors {
+            bar,
+            idle_text,
+            idle_faint,
+            chosen_fill,
+        } = crate::chrome::tab_colors(chrome, wear, REMOTE_BAR_TINT);
         let mut tabs = div().flex().items_center().gap_1();
         for ws in &self.model.workspaces {
             let cards = self.model.cards_on(Some(&ws.id));
@@ -606,9 +618,9 @@ impl AppView {
                 .text_color(if is_active {
                     chrome.text_bright
                 } else {
-                    chrome.text_muted
+                    idle_text
                 })
-                .when(is_active, |d| d.bg(chrome.control_bg))
+                .when(is_active, |d| d.bg(chosen_fill))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _: &MouseDownEvent, _, cx| {
@@ -629,9 +641,7 @@ impl AppView {
                         crate::chrome::with_alpha(chrome.agent_working, TAB_WORKING_DOT_ALPHA)
                     }
                     AgentState::Done => chrome.agent_done,
-                    AgentState::None => {
-                        crate::chrome::with_alpha(chrome.text_faint, TAB_IDLE_DOT_ALPHA)
-                    }
+                    AgentState::None => crate::chrome::with_alpha(idle_faint, TAB_IDLE_DOT_ALPHA),
                 };
                 tab = tab.child(
                     div()
@@ -649,7 +659,7 @@ impl AppView {
                 .px_2()
                 .py_1()
                 .text_size(px(TAB_LABEL_FONT_PX * ui))
-                .text_color(chrome.text_faint)
+                .text_color(idle_faint)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _: &MouseDownEvent, _, cx| {
@@ -663,12 +673,6 @@ impl AppView {
         // a chip on the right names the host, so it is never taken for the
         // local canvas (#118).
         let remote = self.model.remote.clone();
-        // Any window can wear a colour (`window.color`): a remote one its
-        // host's, the local one its choice, and none is the normal bar.
-        let bar = match self.model.window_color() {
-            Some(c) => crate::chrome::tint(chrome.bar_bg, c, REMOTE_BAR_TINT),
-            None => chrome.bar_bg,
-        };
         let chip = remote.map(|r| {
             let color = gpui::rgb(
                 ((r.color.0 as u32) << 16) | ((r.color.1 as u32) << 8) | r.color.2 as u32,
