@@ -4,6 +4,7 @@ The list Ekin asks about. Dates are when something landed. The rule for this fil
 
 ## Done
 
+- 0.5.3 (2026-10-04) and after: remote instances stages A and B (`ift connect`, `--install`, hooks over the connection), Linux packages on releases, the window colour command, `ui.fitSplitSlot`, Cmd+Ctrl+Enter on a phantom slot, the find bar inside its card, About without buttons, a sharp Cmd+Tab icon, the full set of macOS privacy usage keys. Parked: editor and diff cards on remote files (stage C).
 - v1, 2026-09-14: terminal, editor, diff, transcript cards on the canvas; groups, workspaces, selection, phantom slots, agent state from hooks, palette, themes, `ift`.
 - The Rust port replaced the Tauri app, 2026-09-16. CEF browser cards were the reason. The Tauri repo is archived at `ekinertac/infiniterm-tauri`.
 - Omnibox (Cmd+L), 2026-09-16: address or search, tab-to-search, our own frecency history. Back, forward, reload, copy address, find in page, reopen a closed card.
