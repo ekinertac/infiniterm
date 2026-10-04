@@ -349,6 +349,30 @@ pub const FIND_BAR_WIDTH_PX: f32 = 320.;
 /// Clear of the title bar, on the right, where every browser puts it.
 pub const FIND_BAR_TOP_PX: f32 = 12.;
 pub const FIND_BAR_RIGHT_PX: f32 = 16.;
+/// The narrowest the bar gets inside a small card.
+const FIND_BAR_MIN_WIDTH_PX: f32 = 160.;
+
+/// Where the find bar goes: inside the card being searched, at its top right
+/// below the label chip when the chip is there, kept inside the window. All
+/// in screen pixels, `card` as (x, y, w, h) and `view` as (w, h). Returns
+/// (left, top, width). A card the zoom has made smaller than the bar gets a
+/// narrower bar, and one that is partly off screen gets the bar at the edge
+/// of what is visible, so it is never lost.
+pub fn find_bar_place(
+    card: (f32, f32, f32, f32),
+    view: (f32, f32),
+    width: f32,
+    margin: f32,
+    top_inset: f32,
+) -> (f32, f32, f32) {
+    let (x, y, w, _) = card;
+    let width = width
+        .min(w - margin * 2.)
+        .max(FIND_BAR_MIN_WIDTH_PX.min(width));
+    let left = (x + w - margin - width).clamp(0., (view.0 - width).max(0.));
+    let top = (y + margin + top_inset).clamp(0., (view.1 - margin).max(0.));
+    (left, top, width)
+}
 
 impl AppView {
     /// The find bar's keys. Enter steps forward, Shift+Enter back, Escape
@@ -403,11 +427,51 @@ impl AppView {
         } else {
             format!("{active}/{matches}")
         };
+        // Inside the card being searched, since that is what the search reads;
+        // the window's corner only when the card is gone.
+        let m = &self.model;
+        let bar_w = FIND_BAR_WIDTH_PX * ui;
+        let at = m
+            .find
+            .card_id
+            .as_deref()
+            .and_then(|id| m.card(id))
+            .map(|c| {
+                let b = crate::paint::screen_rect(c.rect, m.viewport);
+                let corner = m.config.ui.card_label_position;
+                // The label chip's height as `paint_labels` draws it, so the bar
+                // sits under a chip at the top right instead of covering it.
+                let chip = if !corner.left() && !corner.bottom() {
+                    m.config.ui.card_label_size as f32
+                        * infiniterm_core::chrome::corner_label_scale(m.viewport.scale) as f32
+                        * ui
+                        * 1.5
+                } else {
+                    0.
+                };
+                find_bar_place(
+                    (
+                        f32::from(b.origin.x),
+                        f32::from(b.origin.y),
+                        f32::from(b.size.width),
+                        f32::from(b.size.height),
+                    ),
+                    (m.view_size.w as f32, m.view_size.h as f32),
+                    bar_w,
+                    FIND_BAR_RIGHT_PX * ui,
+                    chip,
+                )
+            });
+        let (left, top, width) = at.unwrap_or((
+            (m.view_size.w as f32 - bar_w - FIND_BAR_RIGHT_PX * ui).max(0.),
+            FIND_BAR_TOP_PX * ui,
+            bar_w,
+        ));
         div()
             .absolute()
-            .top(px(FIND_BAR_TOP_PX * ui))
-            .right(px(FIND_BAR_RIGHT_PX * ui))
-            .w(px(FIND_BAR_WIDTH_PX * ui))
+            .top(px(top))
+            .left(px(left))
+            .w(px(width))
             .flex()
             .items_center()
             .gap_2()
@@ -462,5 +526,39 @@ impl AppView {
                     )
                     .child("✕"),
             )
+    }
+}
+
+#[cfg(test)]
+mod find_bar_tests {
+    use super::*;
+
+    const VIEW: (f32, f32) = (1600., 1000.);
+
+    #[test]
+    fn the_bar_sits_at_the_cards_top_right_under_the_label() {
+        let (left, top, width) = find_bar_place((100., 200., 800., 600.), VIEW, 320., 16., 30.);
+        assert_eq!(
+            (left, top, width),
+            (100. + 800. - 16. - 320., 200. + 16. + 30., 320.)
+        );
+    }
+
+    #[test]
+    fn a_small_card_gets_a_narrower_bar_and_never_below_the_minimum() {
+        let (_, _, width) = find_bar_place((0., 0., 300., 200.), VIEW, 320., 16., 0.);
+        assert_eq!(width, 268.);
+        let (_, _, width) = find_bar_place((0., 0., 100., 100.), VIEW, 320., 16., 0.);
+        assert_eq!(width, FIND_BAR_MIN_WIDTH_PX);
+    }
+
+    #[test]
+    fn a_card_partly_off_screen_keeps_the_bar_in_the_window() {
+        // Right edge past the window: the bar stops at the window's edge.
+        let (left, _, width) = find_bar_place((900., 100., 1200., 600.), VIEW, 320., 16., 0.);
+        assert_eq!(left + width, VIEW.0);
+        // Top edge above the window: the bar stays at the top.
+        let (_, top, _) = find_bar_place((100., -500., 800., 600.), VIEW, 320., 16., 0.);
+        assert_eq!(top, 0.);
     }
 }
