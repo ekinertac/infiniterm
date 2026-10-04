@@ -554,16 +554,23 @@ mod tests {
 
         // Drain without acking: the stream must stop by itself, somewhere just
         // past the mark (one read of slack, since the check precedes the read).
+        // The idle count starts at the first byte: a shell that is slow to
+        // start (a busy CI runner, #171) is not a pane that has stopped.
         let mut got = 0usize;
         let mut idle = 0;
-        while idle < 5 {
+        let started = std::time::Instant::now();
+        while idle < 5 && (got > 0 || started.elapsed() < Duration::from_secs(20)) {
             match rx.recv_timeout(Duration::from_millis(200)) {
                 Ok((p, PaneEvent::Output(b))) if p == pane => {
                     got += b.len();
                     idle = 0;
                 }
                 Ok(_) => {}
-                Err(_) => idle += 1,
+                Err(_) => {
+                    if got > 0 {
+                        idle += 1;
+                    }
+                }
             }
         }
         assert!(got > HIGH_WATER, "never reached the mark: {got}");
