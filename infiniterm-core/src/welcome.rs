@@ -1,4 +1,4 @@
-//! The "Start here" card a first launch opens beside the first terminal:
+//! The "Start here" card, the only card a first launch opens:
 //! a Markdown file rendered from the app's own keymap and gesture list, so
 //! the keys it teaches are the keys the app has, and which coding agents
 //! report their state yet, with the one command for each that does not.
@@ -52,17 +52,43 @@ const KEYS: &[(&str, &str)] = &[
     ("app.shortcuts", "every key and gesture, searchable"),
 ];
 
+/// A command's first chord as the card shows it, or `None` when unbound.
+fn key(keymap: &Keymap, id: &str) -> Option<String> {
+    keymap
+        .iter()
+        .find(|(_, bound)| bound == id)
+        .map(|(chord, _)| format!("`{}`", format_chord(chord)))
+}
+
 pub fn render(keymap: &Keymap, agents: &[Agent]) -> String {
     let mut out = String::from(
         "# Start here\n\n\
-         Every terminal is a card on one canvas. Cards stay where you put them, and a new one takes the next free slot of a grid that starts at the top left.\n\n\
-         Cmd is the app's key. Everything else (Ctrl, Alt, bare keys) goes to the terminal, so vim, tmux and your shell work as usual.\n\n\
+         Welcome to infiniterm. It puts your terminals, editors and browsers on one canvas. Zoom out to see every card, zoom in to work in one. A card's border turns yellow when the agent in it is waiting for you.\n\n",
+    );
+    // The first steps, in the keys this keymap has. A newcomer starts on
+    // this card alone (`Model::seed_first_card`), so the first thing to
+    // learn is how to make a terminal and how to come back here.
+    if let Some(new) = key(keymap, "card.new.terminal") {
+        out.push_str(&format!(
+            "Press {new} for your first terminal. It opens beside this card."
+        ));
+        if let Some(back) = key(keymap, "focus.move.left") {
+            out.push_str(&format!(" {back} brings you back here."));
+        }
+        if let Some(all) = key(keymap, "canvas.zoom.fitAll") {
+            out.push_str(&format!(" {all} shows every card at once."));
+        }
+        out.push_str("\n\n");
+    }
+    out.push_str(
+        "Cards stay where you put them. Nothing moves on its own.\n\n\
+         `Cmd` belongs to infiniterm. Every other key goes to the terminal, so vim, tmux and your shell work as usual.\n\n\
          Click into a file in an editor card to type in it: the keyboard is the file's until you press Escape twice. This card is a page: the wheel or the arrows scroll it, and it never takes the keyboard.\n\n\
          ## Keys to start with\n\n",
     );
     for (id, does) in KEYS {
-        if let Some((chord, _)) = keymap.iter().find(|(_, bound)| bound == id) {
-            out.push_str(&format!("- `{}`: {does}\n", format_chord(chord)));
+        if let Some(chord) = key(keymap, id) {
+            out.push_str(&format!("- {chord}: {does}\n"));
         }
     }
     out.push_str(
@@ -161,6 +187,23 @@ pub fn agents_on_this_mac(
 mod tests {
     use super::*;
     use crate::keymap::default_keymap;
+
+    // The opening names the live chords for the first steps: a terminal,
+    // the way back here, every card at once.
+    #[test]
+    fn the_opening_teaches_the_first_steps_in_live_keys() {
+        let km = default_keymap();
+        let text = render(&km, &[]);
+        let first = text.find("## Keys to start with").unwrap();
+        let opening = &text[..first];
+        for id in ["card.new.terminal", "focus.move.left", "canvas.zoom.fitAll"] {
+            let chord = key(&km, id).unwrap();
+            assert!(opening.contains(&chord), "{id} ({chord}) missing");
+        }
+        // Unbound, the sentence goes rather than naming a dead key.
+        let bare: Keymap = vec![];
+        assert!(!render(&bare, &[]).contains("first terminal"));
+    }
 
     fn agent(name: &'static str, present: bool, wired: bool) -> Agent {
         Agent {

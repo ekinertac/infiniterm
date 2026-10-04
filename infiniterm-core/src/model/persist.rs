@@ -197,22 +197,43 @@ impl Model {
             return;
         }
         *seeded = true;
-        let start = self.start_dir.clone();
-        let ws = self.active_workspace.clone();
-        let id = self.add_card(
-            &start,
-            NewCard {
-                workspace_id: ws,
-                ..Default::default()
-            },
-        );
-        // A first launch also opens the "Start here" card beside it: the
-        // canvas is the thing nobody knows how to drive yet. The terminal
-        // keeps the focus, so typing works at once.
+        // A first launch opens the "Start here" card ALONE, centred: the newcomer
+        // makes the first terminal with Cmd+T and comes back with
+        // Cmd+Alt+Left, which teaches the canvas by using it (Ekin,
+        // 2026-10-04). A terminal beside it took the focus and the eye, and
+        // the card went unread.
         if self.first_run {
-            self.open_welcome(Some(&id));
+            // Centred and framed from the first frame: set, not animated, so
+            // a first launch does not open with the canvas sliding. The pan
+            // `open_in_card` asked for is dropped, or it would glide off the
+            // centre. Framing on, so Cmd+T and the arrows frame the next card
+            // the same way.
+            if let Some(rect) = self
+                .open_welcome(None)
+                .and_then(|id| self.card(&id))
+                .map(|c| c.rect)
+            {
+                self.effects.retain(|e| {
+                    !matches!(
+                        e,
+                        super::Effect::AnimatePan { .. } | super::Effect::AnimateFit(_)
+                    )
+                });
+                self.viewport = self.fit_viewport(rect);
+                self.framing = true;
+            }
+        } else {
+            let start = self.start_dir.clone();
+            let ws = self.active_workspace.clone();
+            let id = self.add_card(
+                &start,
+                NewCard {
+                    workspace_id: ws,
+                    ..Default::default()
+                },
+            );
+            self.set_focus(Some(&id));
         }
-        self.set_focus(Some(&id));
         // The seed is the canvas's floor, not something to undo.
         self.layout_undo.clear();
     }
