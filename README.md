@@ -42,7 +42,7 @@ Native Rust: gpui draws the canvas, `alacritty_terminal` parses the shells, Chro
 
 Big items only, in rough order. No dates.
 
-- **0.6.0:** `ift connect` for servers: terminals, colours, `--install` for Linux hosts, agent hooks over the connection.
+- **Done in 0.5.3:** `ift connect` for servers: terminals, colours, `--install` for Linux hosts, agent hooks over the connection.
 - **Remote files:** editor and diff cards on a server's files, so `ift file` and `EDITOR=ift` work in a remote window.
 - **Windows:** a build exists on a branch and has never been run. It uses ConPTY, so no daemon yet and shells do not outlive the window.
 - **Windows servers** for `ift connect`, once there is a session daemon there.
