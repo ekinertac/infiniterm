@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-05
 
+- A new instance starts with clean settings. `ift connect user@host` no longer copies your settings and keybindings into the host's folder: a host starts with the defaults and keeps its own from then on (hosts you already connected keep the copy they got; delete `~/.infiniterm/remotes/<host>/config` to reset one). An app started with its own `INFINITERM_DATA_DIR` keeps its settings in `<data>/config` instead of reading `~/.config/infiniterm`.
 - The theme picker no longer dims the canvas, so you see each theme's real colours on your cards while you move through the list.
 
 ### 2026-10-04

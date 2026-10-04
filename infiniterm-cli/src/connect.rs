@@ -8,8 +8,8 @@
 //!
 //! What this does: checks that the host can serve (`remote::check`: ssh with
 //! no prompt, `ift` and `iftd` installed), makes `<data>/remotes/<host>` and a
-//! `config` folder in it seeded ONCE from the local settings and keybindings,
-//! and starts the app with `open -n` and the environment that puts it in
+//! `config` folder in it, EMPTY: a host starts with default settings, never a
+//! copy of the personal ones (Ekin, 2026-10-05), and starts the app with `open -n` and the environment that puts it in
 //! remote mode. If that host's instance is already running it says so instead.
 //!
 //! Called by `main.rs`. Related: `proxy.rs` (the server half), `tools/drive/
@@ -169,20 +169,15 @@ pub fn socket_fits(dir: &Path) -> bool {
     dir.join("infiniterm.sock").as_os_str().len() <= MAX_SOCKET_PATH
 }
 
-/// Copies the local `settings.json` and `keybindings.json` into `to` the FIRST
-/// time (when `to` does not exist), so a host starts from your settings and
-/// then keeps its own. Returns whether it seeded.
-pub fn seed_config(from: &Path, to: &Path) -> std::io::Result<bool> {
+/// Makes the host's own config folder, empty, the first time. A host starts
+/// with the default settings and keeps whatever it is given afterwards; the
+/// local settings are never copied (they name this Mac's shell, folders and
+/// commands). Returns whether the folder was made.
+pub fn ensure_config(to: &Path) -> std::io::Result<bool> {
     if to.exists() {
         return Ok(false);
     }
     std::fs::create_dir_all(to)?;
-    for name in ["settings.json", "keybindings.json"] {
-        let src = from.join(name);
-        if src.is_file() {
-            std::fs::copy(&src, to.join(name))?;
-        }
-    }
     Ok(true)
 }
 
@@ -325,8 +320,8 @@ pub fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     }
-    match seed_config(&paths::config_dir(), &config) {
-        Ok(true) => println!("settings for {} start from your current ones", p.host),
+    match ensure_config(&config) {
+        Ok(true) => println!("settings for {} start with the defaults", p.host),
         Ok(false) => {}
         Err(e) => {
             eprintln!("ift: could not make {}: {e}", config.display());
@@ -445,21 +440,14 @@ mod tests {
     }
 
     #[test]
-    fn settings_are_copied_once_and_then_left_alone() {
+    fn a_host_starts_with_an_empty_config_and_keeps_what_it_is_given() {
         let root = std::env::temp_dir().join(format!("ift-conn-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let from = root.join("local");
         let to = root.join("remote").join("config");
-        std::fs::create_dir_all(&from).unwrap();
-        std::fs::write(from.join("settings.json"), "{\"theme\":\"x\"}").unwrap();
-        std::fs::write(from.join("settings.default.json"), "generated").unwrap();
-        assert!(seed_config(&from, &to).unwrap(), "the first time seeds");
-        assert_eq!(std::fs::read_to_string(to.join("settings.json")).unwrap(), "{\"theme\":\"x\"}");
-        assert!(!to.join("settings.default.json").exists(), "generated files are not copied");
-        assert!(!to.join("keybindings.json").exists(), "a missing file is skipped");
+        assert!(ensure_config(&to).unwrap(), "the first time makes it");
+        assert_eq!(std::fs::read_dir(&to).unwrap().count(), 0, "nothing is copied in");
         std::fs::write(to.join("settings.json"), "{\"theme\":\"mine\"}").unwrap();
-        std::fs::write(from.join("settings.json"), "{\"theme\":\"changed\"}").unwrap();
-        assert!(!seed_config(&from, &to).unwrap(), "the second time does nothing");
+        assert!(!ensure_config(&to).unwrap(), "the second time does nothing");
         assert_eq!(std::fs::read_to_string(to.join("settings.json")).unwrap(), "{\"theme\":\"mine\"}");
         let _ = std::fs::remove_dir_all(&root);
     }
