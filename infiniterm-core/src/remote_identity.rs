@@ -7,6 +7,11 @@
 //! to a hue, so a host looks the same every time and two hosts look different,
 //! and `--color` overrides it.
 //!
+//! The colour can be changed from the palette (`remote_cmd.rs`) and is then
+//! saved as `remote.json` in the instance's folder; that file wins over the
+//! environment's colour and over the hash, and `ift connect --color` writes
+//! the same file, so the latest choice is the one that stays.
+//!
 //! Called by `infiniterm-ui/src/runtime.rs` (startup), `overlays.rs` (the title
 //! bar), `instance_icon.rs` (the Dock icon) and the model, which refuses
 //! browser cards while one is set. Related: `infiniterm-cli/src/connect.rs`.
@@ -32,11 +37,16 @@ const LIGHTNESS: f64 = 0.55;
 impl RemoteIdentity {
     pub fn from_env() -> Option<RemoteIdentity> {
         let var = |k: &str| std::env::var(k).ok();
-        RemoteIdentity::from_vars(
+        let mut id = RemoteIdentity::from_vars(
             var("INFINITERM_REMOTE").as_deref(),
             var("INFINITERM_REMOTE_NAME").as_deref(),
             var("INFINITERM_REMOTE_COLOR").as_deref(),
-        )
+        )?;
+        // A colour chosen in the app, or by the last `ift connect --color`.
+        if let Some(saved) = load_color(&crate::paths::app_support_dir()) {
+            id.color = saved;
+        }
+        Some(id)
     }
 
     /// `from_env` over explicit values. No target is no remote; no name is the
@@ -58,6 +68,74 @@ impl RemoteIdentity {
                 .and_then(parse_hex)
                 .unwrap_or_else(|| color_for(target)),
         })
+    }
+}
+
+/// The named colours the picker offers: name, hex. A spread of hues at one
+/// strength (Tailwind's 500s), so any of them reads on a dark title bar and as
+/// a Dock badge.
+pub const NAMED: &[(&str, &str)] = &[
+    ("red", "ef4444"),
+    ("orange", "f97316"),
+    ("amber", "f59e0b"),
+    ("yellow", "eab308"),
+    ("lime", "84cc16"),
+    ("green", "22c55e"),
+    ("emerald", "10b981"),
+    ("teal", "14b8a6"),
+    ("cyan", "06b6d4"),
+    ("sky", "0ea5e9"),
+    ("blue", "3b82f6"),
+    ("indigo", "6366f1"),
+    ("violet", "8b5cf6"),
+    ("purple", "a855f7"),
+    ("pink", "ec4899"),
+    ("rose", "f43f5e"),
+    ("gray", "6b7280"),
+];
+
+/// The colour a name stands for.
+pub fn named(name: &str) -> Option<Rgb> {
+    NAMED
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name.trim()))
+        .and_then(|(_, hex)| parse_hex(hex))
+}
+
+/// The name of a colour, when it is one of the named ones.
+pub fn name_of(c: Rgb) -> Option<&'static str> {
+    NAMED
+        .iter()
+        .find(|(_, hex)| parse_hex(hex) == Some(c))
+        .map(|(n, _)| *n)
+}
+
+/// `rrggbb`, lower case, no hash.
+pub fn to_hex(c: Rgb) -> String {
+    format!("{:02x}{:02x}{:02x}", c.0, c.1, c.2)
+}
+
+const SAVED: &str = "remote.json";
+
+/// The colour saved in an instance's folder, if any.
+pub fn load_color(dir: &std::path::Path) -> Option<Rgb> {
+    let text = std::fs::read_to_string(dir.join(SAVED)).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    parse_hex(v.get("color")?.as_str()?)
+}
+
+/// Saves the colour (`Some`) or forgets it (`None`: back to the hashed one).
+pub fn save_color(dir: &std::path::Path, color: Option<Rgb>) -> std::io::Result<()> {
+    let path = dir.join(SAVED);
+    match color {
+        Some(c) => {
+            std::fs::create_dir_all(dir)?;
+            std::fs::write(path, format!("{{\"color\": \"{}\"}}\n", to_hex(c)))
+        }
+        None => match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        },
     }
 }
 
@@ -100,6 +178,40 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_named_colour_is_a_real_hex_with_a_unique_name() {
+        for (name, hex) in NAMED {
+            assert!(parse_hex(hex).is_some(), "{name}: {hex}");
+        }
+        let mut names: Vec<_> = NAMED.iter().map(|(n, _)| *n).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), NAMED.len());
+        assert_eq!(named("Blue"), Some((0x3b, 0x82, 0xf6)));
+        assert_eq!(named(" teal "), parse_hex("14b8a6"));
+        assert_eq!(named("chartreuse"), None);
+        assert_eq!(name_of((0x3b, 0x82, 0xf6)), Some("blue"));
+        assert_eq!(name_of((1, 2, 3)), None);
+    }
+
+    #[test]
+    fn a_colour_round_trips_through_hex_and_through_its_file() {
+        assert_eq!(to_hex((0x3b, 0x82, 0xf6)), "3b82f6");
+        assert_eq!(to_hex((0, 0, 0)), "000000");
+        assert_eq!(parse_hex(&to_hex((9, 200, 77))), Some((9, 200, 77)));
+        let dir = std::env::temp_dir().join(format!("ift-rc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(load_color(&dir), None, "no folder, no colour");
+        save_color(&dir, Some((255, 136, 0))).unwrap();
+        assert_eq!(load_color(&dir), Some((255, 136, 0)));
+        save_color(&dir, None).unwrap();
+        assert_eq!(load_color(&dir), None, "forgotten");
+        save_color(&dir, None).unwrap();
+        std::fs::write(dir.join("remote.json"), "not json").unwrap();
+        assert_eq!(load_color(&dir), None, "a damaged file is no colour");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_hex_colour_is_six_digits_with_or_without_a_hash() {

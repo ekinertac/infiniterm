@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-04
 
+- In an `ift connect` window, "Remote: change the title bar and Dock colour" (Cmd+Shift+P) picks a colour in two steps: a list of named colours, previewed in the title bar and the Dock icon as you move through it (Escape puts it back), or "Custom hex colour…", which asks for a code like `3b82f6`. The choice is saved for that host. "Default: from the host name" goes back to the automatic one, and `ift connect user@host --color RRGGBB` sets it too.
+- A card in a remote window now starts in the server's home folder, not a Mac folder that does not exist there, and `ift sessions` no longer lists a session whose shell is gone.
 - `ift connect user@host` opens a second infiniterm for a server: its own window, Dock icon and canvas, with terminal cards that run on that host over ssh. The shells live in `iftd` on the server, so closing the window leaves them running and connecting again brings the same cards back. Each host gets its own colour (a tinted title bar, a chip with its name, a badge on the Dock icon; `--color` sets it), its own settings (a copy of yours the first time) and no browser cards. `ift connect user@host --check` only tests the host. It needs key login and `ift` and `iftd` installed on the server: static Linux builds (x86_64 and aarch64) are attached to each release from the next one.
 
 ### 2026-10-03

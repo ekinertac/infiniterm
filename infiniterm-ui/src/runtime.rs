@@ -326,6 +326,23 @@ impl AppView {
                 Effect::DraftDelete(id) => {
                     let _ = infiniterm_core::files::draft_delete(&id);
                 }
+                Effect::RemoteColor { color, persist } => {
+                    // The title bar reads the model; the Dock tile is ours.
+                    crate::instance_icon::set_badge(color);
+                    let dir = infiniterm_core::paths::app_support_dir();
+                    let saved = match persist {
+                        infiniterm_core::model::RemotePersist::No => Ok(()),
+                        infiniterm_core::model::RemotePersist::Save => {
+                            infiniterm_core::remote_identity::save_color(&dir, Some(color))
+                        }
+                        infiniterm_core::model::RemotePersist::Forget => {
+                            infiniterm_core::remote_identity::save_color(&dir, None)
+                        }
+                    };
+                    if let Err(e) = saved {
+                        self.model.notify(format!("could not save the colour: {e}"));
+                    }
+                }
                 Effect::ReadCard {
                     request_id,
                     card_id,

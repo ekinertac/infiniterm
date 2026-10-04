@@ -4,9 +4,12 @@
 //!
 //! `NSApplication.applicationIconImage` is per process, and `ift connect`
 //! starts the instance with `open -n`, so the local instance keeps its icon.
-//! Drawn once at startup: a new NSImage the size of the current icon, the icon
-//! drawn into it, the badge over its bottom-right corner (a white ring keeps
-//! it readable on any colour).
+//! A new NSImage the size of the app's icon, the icon drawn into it, the badge
+//! over its bottom-right corner (a white ring keeps it readable on any colour).
+//! The colour can change while the app runs (`remote.color`, previewed on every
+//! move of the highlight), so the ORIGINAL icon is kept on the first call and
+//! every badge is drawn from it: drawing over the last result would stack
+//! badges.
 //!
 //! Called by `runtime.rs::startup`. Related: `infiniterm-core/src/
 //! remote_identity.rs` (the colour), `fullscreen.rs` (the same objc idiom).
@@ -19,8 +22,12 @@ use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 use infiniterm_core::remote_identity::Rgb;
 use objc::runtime::Object;
 use objc::{class, msg_send, sel, sel_impl};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 type Id = *mut Object;
+
+/// The app's own icon, retained on the first `set_badge` (0 until then).
+static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 
 /// The badge's diameter as a share of the icon's width, and its inset from the corner.
 const BADGE_SHARE: f64 = 0.42;
@@ -31,10 +38,18 @@ const RING_SHARE: f64 = 0.04;
 pub fn set_badge(color: Rgb) {
     unsafe {
         let app: Id = msg_send![class!(NSApplication), sharedApplication];
-        let icon: Id = msg_send![app, applicationIconImage];
-        if icon.is_null() {
-            return;
-        }
+        let icon: Id = match ORIGINAL.load(Ordering::SeqCst) {
+            0 => {
+                let current: Id = msg_send![app, applicationIconImage];
+                if current.is_null() {
+                    return;
+                }
+                let _: Id = msg_send![current, retain];
+                ORIGINAL.store(current as usize, Ordering::SeqCst);
+                current
+            }
+            kept => kept as Id,
+        };
         let size: CGSize = msg_send![icon, size];
         let image: Id = msg_send![class!(NSImage), alloc];
         let image: Id = msg_send![image, initWithSize: size];

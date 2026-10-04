@@ -251,7 +251,22 @@ pub fn run(args: &[String]) -> ExitCode {
     // Already open? The instance owns this folder's socket.
     if std::os::unix::net::UnixStream::connect(data.join("infiniterm.sock")).is_ok() {
         println!("{}: already connected (its window is open)", p.host);
+        if p.color.is_some() {
+            println!("its colour changes from its palette: Remote: change the title bar and Dock colour");
+        }
         return ExitCode::SUCCESS;
+    }
+    // --color is a choice like the picker's, and the latest choice stays: the
+    // instance reads this file at startup and the palette writes it.
+    if let Some(c) = p
+        .color
+        .as_deref()
+        .and_then(infiniterm_core::remote_identity::parse_hex)
+    {
+        if let Err(e) = infiniterm_core::remote_identity::save_color(&data, Some(c)) {
+            eprintln!("ift: could not save the colour: {e}");
+            return ExitCode::from(1);
+        }
     }
     match seed_config(&paths::config_dir(), &config) {
         Ok(true) => println!("settings for {} start from your current ones", p.host),
