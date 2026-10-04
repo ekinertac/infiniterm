@@ -30,7 +30,7 @@ Other ways to place one:
 
 Drag a card by its top edge or its label. The card stays put while an outline follows the pointer, and the grid's slots for a card of that size show around it: halves for a half, quarters for a quarter. Near a slot the outline snaps to it; anywhere else it goes where you put it. It wears the focus colour where the card fits and the warning colour where it does not. Drop on free space to move, drop on another card to swap the two, `Escape` to cancel. Any other edge resizes.
 
-`Cmd Ctrl Enter` grows a card into the gap it sits in, up to the default size, from whichever corner fills that gap.
+`Cmd Ctrl Enter` grows a card into the gap it sits in, up to the default size, from whichever corner fills that gap. It grows an empty slot the same way: arrow onto a free slot (it has the size of the card you came from), press `Cmd Ctrl Enter`, and the card you make there has the new size.
 
 `Cmd Z` and `Cmd Shift Z` undo and redo on the canvas: a move, swap, resize or a closed card. Undo never closes a card you opened. Inside an editor they are the buffer's.
 

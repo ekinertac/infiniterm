@@ -84,7 +84,7 @@ It asks Lemon Squeezy once whether the key is an infiniterm licence bought with 
 
 ## Updates
 
-The app checks for a new build at launch and every six hours. A newer build is downloaded, its signature and notarization are checked, and it is installed the next time the app restarts. The status bar says "update N ready" until then. "Check for Updates…" in the app menu checks now. "About infiniterm" in the app menu (or "App: about infiniterm" in the palette) shows the version and build you are running.
+The app checks for a new build at launch and every six hours. A newer build is downloaded, its signature and notarization are checked, and it is installed the next time the app restarts. The status bar says "update N ready" until then. "Check for Updates…" in the app menu checks now. "About infiniterm" in the app menu (or "App: about infiniterm" in the palette) shows the version and build you are running; `Enter`, `Escape` or a click outside closes it.
 
 The check is a plain GET of `latest.json` with nothing about you in it.
 
