@@ -452,8 +452,20 @@ impl Buffer {
 
     /// A key with a character. Brackets and quotes come in pairs and the
     /// cursor lands between them; typing the closing half over one that is
-    /// already there steps past it (CodeMirror's `closeBrackets`).
+    /// already there steps past it (CodeMirror's `closeBrackets`). Over a
+    /// selection, an opening half wraps it.
     pub fn type_char(&mut self, c: char, now: f64) {
+        // An opening bracket or a quote over a selection wraps it instead of
+        // replacing it, and the inner text stays selected, so a second press
+        // wraps again (Sublime and VS Code both do this).
+        if let (Some(r), Some(close)) = (self.selection(), closing_of(c)) {
+            let inner = self.slice(r.clone());
+            let new = format!("{c}{inner}{close}");
+            let after = r.start + 1 + inner.chars().count();
+            self.apply(r.start, inner, new, after, false, now);
+            self.select_range(r.start + 1..after);
+            return;
+        }
         let next = (self.cursor < self.len_chars()).then(|| self.text.char(self.cursor));
         if self.selection().is_none() {
             if let Some(close) = closing_of(c) {
@@ -1719,6 +1731,44 @@ mod tests {
         b.set_cursor(1);
         b.indent_line(0.);
         assert_eq!(b.text(), "  x");
+    }
+
+    #[test]
+    fn a_quote_or_bracket_over_a_selection_wraps_it_and_keeps_it_selected() {
+        for (typed, wrapped) in [
+            ('\'', "a 'foo' b"),
+            ('"', "a \"foo\" b"),
+            ('(', "a (foo) b"),
+            ('[', "a [foo] b"),
+            ('{', "a {foo} b"),
+            ('`', "a `foo` b"),
+        ] {
+            let mut b = Buffer::new("a foo b");
+            b.select_range(2..5);
+            b.type_char(typed, 0.);
+            assert_eq!(b.text(), wrapped, "{typed}");
+            assert_eq!(b.selected_text().as_deref(), Some("foo"), "{typed}");
+        }
+        // A second press wraps again, around the same word.
+        let mut b = Buffer::new("foo");
+        b.select_all();
+        b.type_char('(', 0.);
+        b.type_char('[', 1.);
+        assert_eq!(b.text(), "([foo])");
+        // One undo takes the wrap back.
+        b.undo();
+        assert_eq!(b.text(), "(foo)");
+        // A closing half is not a wrap: it replaces, as before.
+        let mut b = Buffer::new("a foo b");
+        b.select_range(2..5);
+        b.type_char(')', 0.);
+        assert_eq!(b.text(), "a ) b");
+        // A backwards selection (anchor after the caret) wraps the same.
+        let mut b = Buffer::new("a foo b");
+        b.set_cursor(5);
+        b.select_to(2);
+        b.type_char('"', 0.);
+        assert_eq!(b.text(), "a \"foo\" b");
     }
 
     #[test]
