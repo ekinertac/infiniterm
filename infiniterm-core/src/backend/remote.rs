@@ -422,7 +422,10 @@ mod tests {
         let at = args.iter().position(|a| a == "-R").unwrap();
         assert_eq!(args[at + 1], "/tmp/infiniterm.sock:/data/infiniterm.sock");
         assert!(args.contains(&"ExitOnForwardFailure=yes".to_string()));
-        assert_eq!(&args[args.len() - 4..], ["-p", "2222", "root@h", "cat >/dev/null"]);
+        assert_eq!(
+            &args[args.len() - 4..],
+            ["-p", "2222", "root@h", "cat >/dev/null"]
+        );
     }
 
     #[test]
