@@ -33,9 +33,21 @@ Nothing flashes, nothing steals focus, nothing sends a notification. You switch 
 - Terminal, editor, diff, transcript and browser cards on the same canvas, in groups and workspaces.
 - Keyboard-first: `Cmd` is the app's, everything else goes to the shell untouched. Every action is a command in the palette.
 - Shells outlive the window: each card's shell runs under its own small daemon, so quitting the app keeps your work running.
-- `ift`, the command line side: `ift file.rs` edits a file over the terminal you are in, `ift diff` opens your changes, `ift attach 7` reaches card #7's shell from any terminal.
+- `ift`, the command line side: `ift file.rs` edits a file over the terminal you are in, `ift diff` opens your changes, `ift attach 7` reaches card #7's shell from any terminal, and `ift send 7 "ls" --enter` and `ift read 7` type into a card and read what it shows, so a script can drive your cards.
+- Servers: `ift connect user@host` opens a second window whose terminal cards run on that server over ssh. The shells keep running when you close the window and come back when you connect again. Each host has its own canvas, settings and colour (a tinted title bar and a badge on its Dock icon). Terminal cards only so far; `--install` puts the server half on a Linux host.
 
 Native Rust: gpui draws the canvas, `alacritty_terminal` parses the shells, Chromium (CEF) runs the browser cards. No Electron, no account, no telemetry; the one request the app makes on its own is the update check. Early, and in active development.
+
+## Roadmap
+
+Big items only, in rough order. No dates.
+
+- **0.6.0:** `ift connect` for servers: terminals, colours, `--install` for Linux hosts, agent hooks over the connection.
+- **Remote files:** editor and diff cards on a server's files, so `ift file` and `EDITOR=ift` work in a remote window.
+- **Windows:** a build exists on a branch and has never been run. It uses ConPTY, so no daemon yet and shells do not outlive the window.
+- **Windows servers** for `ift connect`, once there is a session daemon there.
+- **Editor palette:** go to file and pick a syntax from inside an editor card.
+- **A phone app.** Nothing designed yet.
 
 ## Building from source
 
