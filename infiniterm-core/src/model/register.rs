@@ -1876,6 +1876,25 @@ mod tests {
         assert_eq!(h.m.fit_viewport(small).scale, 1.);
     }
 
+    // `ui.fitSplitSlot`: Cmd+1 on a split half frames both halves by default;
+    // off, it fits the half itself.
+    #[test]
+    fn fit_split_slot_off_fits_the_half_alone() {
+        let mut h = Harness::new();
+        h.run("card.split.right");
+        let half = h.m.focused().unwrap().rect;
+        let slot = {
+            let rects: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+            crate::viewport::bounding_rect(&rects).unwrap()
+        };
+        let selected = h.m.selected();
+        let rects: Vec<_> = selected.iter().map(|c| c.rect).collect();
+        let groups: Vec<_> = selected.iter().map(|c| c.soft_group_id.clone()).collect();
+        assert_eq!(h.m.slot_bounds(&rects, &groups), Some(slot));
+        h.m.apply_settings_text(r#"{"ui.fitSplitSlot": false}"#);
+        assert_eq!(h.m.slot_bounds(&rects, &groups), Some(half));
+    }
+
     fn edit_from(h: &mut Harness, card: Option<&str>, path: &str) -> crate::cli::CliReply {
         h.m.run_ift(
             &crate::cli::CliRequest {
