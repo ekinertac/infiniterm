@@ -291,6 +291,34 @@ pub fn tint(base: Hsla, rgb: (u8, u8, u8), amount: f32) -> Hsla {
     .into()
 }
 
+/// The title bar's colours when the window wears a colour (`window.color`,
+/// #173): the bar leans toward it, the chosen tab's fill leans the same way,
+/// and the other tab names are drawn brighter, since the muted grey was made
+/// for the plain bar and fades on a tint.
+pub struct TabColors {
+    pub bar: Hsla,
+    pub idle_text: Hsla,
+    pub idle_faint: Hsla,
+    pub chosen_fill: Hsla,
+}
+
+pub fn tab_colors(chrome: &Chrome, wear: Option<(u8, u8, u8)>, amount: f32) -> TabColors {
+    match wear {
+        Some(c) => TabColors {
+            bar: tint(chrome.bar_bg, c, amount),
+            idle_text: chrome.text,
+            idle_faint: chrome.text_muted,
+            chosen_fill: tint(chrome.control_bg, c, amount),
+        },
+        None => TabColors {
+            bar: chrome.bar_bg,
+            idle_text: chrome.text_muted,
+            idle_faint: chrome.text_faint,
+            chosen_fill: chrome.control_bg,
+        },
+    }
+}
+
 pub fn with_alpha(c: Hsla, a: f32) -> Hsla {
     Hsla { a, ..c }
 }
@@ -440,5 +468,23 @@ mod tests {
         assert!(!over_glyph_budget(shown(0.98), window), "98% reads");
         assert!(!over_glyph_budget(shown(0.85), window), "85% reads");
         assert!(over_glyph_budget(shown(0.70), window), "70% is bars");
+    }
+}
+
+#[cfg(test)]
+mod tab_color_tests {
+    use super::*;
+
+    #[test]
+    fn a_window_colour_tints_the_chosen_tab_and_brightens_the_others() {
+        let chrome = Chrome::default_chrome();
+        let plain = tab_colors(&chrome, None, 0.32);
+        assert_eq!(plain.chosen_fill, chrome.control_bg);
+        assert_eq!(plain.idle_text, chrome.text_muted);
+        let green = tab_colors(&chrome, Some((0x22, 0xaa, 0x44)), 0.32);
+        assert_ne!(green.chosen_fill, chrome.control_bg);
+        assert_ne!(green.bar, chrome.bar_bg);
+        assert_eq!(green.idle_text, chrome.text);
+        assert_eq!(green.idle_faint, chrome.text_muted);
     }
 }
