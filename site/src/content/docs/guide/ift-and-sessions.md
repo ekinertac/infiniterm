@@ -35,11 +35,34 @@ ift ls                 # cards: id, group, directory, state, remote, number
 ift commands           # every command: id, label, key
 ift usage 30           # which commands and gestures you used in 30 days, and which you never did
 ift omni rust          # what the address bar would show for "rust"
+ift --version          # the version of this ift
 ```
 
 On a terminal these print a padded table. Into a pipe they print tab-separated rows without a header, so `ift ls | cut -f1` works.
 
+`ift ls --agents` lists only the cards that run an agent, one tab-separated line each: card number, agent, session id, state, directory. The session id is the one `claude --resume` takes.
+
 Exit codes: 0 ok, 1 infiniterm is not running, 2 bad usage.
+
+## Driving another card
+
+These take a card by its number (`7` or `#7`, the one on its label, which stays the same after a reboot) or by its id.
+
+```sh
+ift send 7 "npm test" --enter     # type into card 7's shell and press Enter
+ift send 7 --key ctrl-c           # just a key
+ift read 7                        # what card 7's terminal shows now
+ift read 7 --lines 20             # only the last 20 lines
+ift read 7 --all                  # the scrollback too
+ift close 7                       # close it, like Cmd+W
+ift run canvas.tidy               # run any command from `ift commands`
+```
+
+`ift send` types into the card without moving the focus or the view. The text goes first, then the keys in the order you give them. `--enter` presses Enter; `--key` takes `enter`, `esc`, `tab`, `backspace`, `ctrl-c`, `ctrl-d`, `ctrl-l`, `ctrl-z`, `up`, `down`, `left` or `right`, and can be given more than once.
+
+`ift read` prints the live screen, also when the window is hidden. `ift close` follows the same rules as `Cmd W`, so a closed terminal is parked first; a protected card (`Cmd Shift L`) refuses and says how to unprotect it. `ift run` runs a command on the card in focus, as the palette would, and refuses an id it does not know.
+
+Together they let a script watch one card and answer in it. [tools/restart-claude.sh](https://github.com/ekinertac/infiniterm/blob/master/tools/restart-claude.sh) is one: it finds every Claude card with `ift ls --agents`, sends `/exit`, reads the resume command Claude prints, and types `claude --resume` back into the same card. It is an example, not a feature: it clears a prompt line you had not sent, and it does not keep a `CLAUDE_CONFIG_DIR` other than the default.
 
 ## Sessions that outlive the window
 
@@ -60,6 +83,21 @@ ift attach 7           # this terminal becomes card #7's shell
 `ift attach` takes the card's number (the `#7` on its label), which survives a reboot; the session id does not. It works whether the app is running or not, so you can reach a card over ssh from your phone.
 
 A session has one client at a time. Attaching takes it from the app: the card shows a banner and ignores keys until you detach with `Ctrl \`, then the app takes it back within a second.
+
+## Servers
+
+```sh
+ift connect me@server             # a second infiniterm for that server
+ift connect me@server --check     # only test the host
+ift connect me@server --install   # first put ift and iftd on a Linux host
+ift connect me@server --name prod --color 3b82f6
+```
+
+`ift connect` opens a second infiniterm with its own window, Dock icon and canvas. Its terminal cards run on the server over ssh, in the server's home folder. The shells live in `iftd` on the server, so closing the window leaves them running, and connecting again brings the same cards back. Each server has its own colour (a tinted title bar, a chip with its name, a badge on the Dock icon), its own settings (a copy of yours the first time) and no browser cards.
+
+It needs key login (ssh runs without a password prompt) and `ift` and `iftd` on the server. `--install` puts them there on Linux, x86_64 or aarch64: this Mac downloads the package for its own version from the GitHub release, checks its checksum and sends it through ssh, so the server needs no internet. Root gets `/usr/local/bin`, any other user `~/.local/bin`. `--from <package>` installs from a file instead. A server that is a Mac uses the app already installed there. Without `--install`, `ift connect` says what is missing, and it tells you when the server's `ift` is a different version from yours.
+
+Not yet: agent hooks over the connection, so a Claude card on a server does not report its state, and editor or diff cards on the server's files.
 
 ## tmux
 
