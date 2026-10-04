@@ -5,7 +5,7 @@
 //! `NSApplication.applicationIconImage` is per process, and `ift connect`
 //! starts the instance with `open -n`, so a remote instance's tile is its own.
 //! The local instance is badged only when it has a colour (`ui.windowColor`).
-//! A new NSImage the size of the app's icon, the icon drawn into it, the badge
+//! A new NSImage of a fixed large size (ICON_PT), the icon drawn into it, the badge
 //! over its bottom-right corner (a white ring keeps it readable on any colour).
 //! The colour can change while the app runs (`window.color`, previewed on every
 //! move of the highlight), so the ORIGINAL icon is kept on the first call and
@@ -33,8 +33,42 @@ static ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 /// The badge's diameter as a share of the icon's width, and its inset from the corner.
 const BADGE_SHARE: f64 = 0.42;
 const BADGE_INSET: f64 = 0.03;
+/// The badged image is drawn at this size in points, not at `[icon size]`:
+/// `applicationIconImage` reports a small size (about 32 pt), so an image
+/// made to match it is one ~64 px bitmap from the icns's smallest
+/// representation, and the Cmd+Tab switcher, which shows the icon near 144 px
+/// on a 4K display, stretched it into stair-step pixels. At 512 pt,
+/// `drawInRect` picks the icns's 512@2x representation (1024 px on Retina);
+/// the Dock scales that down and stays sharp.
+const ICON_PT: f64 = 512.0;
 /// The white ring's width as a share of the icon's width.
 const RING_SHARE: f64 = 0.04;
+
+/// The app's icon at the size the Cmd+Tab switcher can enlarge cleanly, for
+/// every instance, coloured or not. `NSRunningApplication.icon` of this
+/// process reports 32 x 32 pt although the image holds representations up to
+/// 2048 px, and the switcher picks a representation for that declared size and
+/// scales it up: a pixelated icon next to every other app's (checked with
+/// `NSRunningApplication.icon`; Finder and the Dock were sharp). A copy told
+/// to be `ICON_PT` points wide is chosen at its large representation instead.
+/// Kept as `ORIGINAL`, so a badge is drawn from it and removing the colour puts
+/// it back.
+pub fn init() {
+    unsafe {
+        if ORIGINAL.load(Ordering::SeqCst) != 0 {
+            return;
+        }
+        let app: Id = msg_send![class!(NSApplication), sharedApplication];
+        let current: Id = msg_send![app, applicationIconImage];
+        if current.is_null() {
+            return;
+        }
+        let copy: Id = msg_send![current, copy];
+        let _: () = msg_send![copy, setSize: CGSize::new(ICON_PT, ICON_PT)];
+        ORIGINAL.store(copy as usize, Ordering::SeqCst);
+        let _: () = msg_send![app, setApplicationIconImage: copy];
+    }
+}
 
 /// The plain icon again (the colour was removed): the app's own icon, kept on
 /// the first `set_badge`, or the default when none was ever badged.
@@ -66,7 +100,7 @@ pub fn set_badge(color: Rgb) {
             }
             kept => kept as Id,
         };
-        let size: CGSize = msg_send![icon, size];
+        let size = CGSize::new(ICON_PT, ICON_PT);
         let image: Id = msg_send![class!(NSImage), alloc];
         let image: Id = msg_send![image, initWithSize: size];
         let _: () = msg_send![image, lockFocus];

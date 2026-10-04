@@ -890,6 +890,7 @@ pub fn startup(app: &mut AppView) {
     // a Dock icon badged with it. Before any card, since the model refuses
     // browser cards once this is set.
     app.model.remote = infiniterm_core::remote_identity::RemoteIdentity::from_env();
+    crate::instance_icon::init();
     if let Some(r) = &app.model.remote {
         crate::instance_icon::set_badge(r.color);
         // The settings were applied before this, with the Mac's folder.
