@@ -29,6 +29,14 @@ pub fn file_write(path: &str, contents: &str) -> Result<(), String> {
     write_atomically(Path::new(path), contents).map_err(|e| format!("{path}: {e}"))
 }
 
+/// Where a write to `path` must land: the file a symlink points at, else
+/// `path` as given. Every writer that renames a temp file into place calls
+/// this first, or the rename replaces a link with a plain file (#219: a
+/// `settings.json` kept in a dotfiles repo).
+pub fn resolve_link(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Writes through a symlink: a rename onto the link would replace the link
 /// itself with a regular file, so a `settings.json` symlinked from a
 /// dotfiles repo stopped being a link at the first save (#219). The temp file
@@ -36,7 +44,7 @@ pub fn file_write(path: &str, contents: &str) -> Result<(), String> {
 /// stays atomic. A path that does not exist yet is made; a link to nothing is
 /// replaced by a file, there being nothing to write through to.
 pub fn write_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let target = resolve_link(path);
     let path = target.as_path();
     let dir = path.parent().unwrap_or(Path::new("."));
     let name = path
@@ -187,6 +195,21 @@ mod tests {
                     .ends_with("infiniterm-tmp")),
             "no temp file left behind"
         );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn resolve_link_follows_a_link_and_leaves_other_paths_alone() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("infiniterm-resolve-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let real = root.join("real.json");
+        std::fs::write(&real, "x").unwrap();
+        let link = root.join("link.json");
+        symlink(&real, &link).unwrap();
+        assert_eq!(resolve_link(&link), std::fs::canonicalize(&real).unwrap());
+        let missing = root.join("nope.json");
+        assert_eq!(resolve_link(&missing), missing);
         std::fs::remove_dir_all(&root).ok();
     }
 

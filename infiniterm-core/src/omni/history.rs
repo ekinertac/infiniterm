@@ -135,6 +135,8 @@ impl History {
     }
 
     pub fn save(&self, path: &Path) {
+        // Through a link, not over it (#219).
+        let path = &crate::files::resolve_link(path);
         let array: Vec<Value> = self
             .entries
             .iter()
@@ -158,6 +160,25 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A history.json kept in a dotfiles repo stays a link (#219).
+    #[test]
+    fn saving_through_a_symlink_keeps_the_link() {
+        use std::os::unix::fs::symlink;
+        let root =
+            std::env::temp_dir().join(format!("infiniterm-hist-link-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let real = root.join("real.json");
+        let link = root.join("history.json");
+        std::fs::write(&real, "[]").unwrap();
+        symlink(&real, &link).unwrap();
+        let mut h = History::default();
+        h.record("https://a.example", 100.);
+        h.save(&link);
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(History::load(&real).list().len(), 1);
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn a_revisit_bumps_the_count_and_the_time() {

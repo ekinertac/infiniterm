@@ -113,6 +113,8 @@ pub fn read(path: &Path) -> Option<Licence> {
 pub fn write(path: &Path, licence: &Licence) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    // Through a link, not over it (#219).
+    let path = &crate::files::resolve_link(path);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -166,6 +168,33 @@ mod tests {
                 "customer_email": "ada@example.com"
             }
         })
+    }
+
+    // A licence.json kept in a dotfiles repo stays a link, and its target
+    // stays private (#219).
+    #[test]
+    fn writing_through_a_symlink_keeps_the_link_and_the_mode() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let root = std::env::temp_dir().join(format!("infiniterm-lic-link-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let real = root.join("real.json");
+        let link = root.join("licence.json");
+        std::fs::write(&real, "old").unwrap();
+        symlink(&real, &link).unwrap();
+        let l = Licence {
+            email: "a@example.com".into(),
+            key: "K".into(),
+            name: "A".into(),
+            checked_at: "2026-10-03T00:00:00Z".into(),
+        };
+        write(&link, &l).unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(read(&real), Some(l));
+        assert_eq!(
+            std::fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
