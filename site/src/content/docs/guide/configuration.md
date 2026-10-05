@@ -12,9 +12,9 @@ keybindings.json           yours, only what you rebound
 keybindings.default.json   every binding, commented
 ```
 
-The `.default` files are rewritten at every launch, so editing them does nothing. Read them to see what exists, copy a line into your file and change it there. An upgrade never touches your files; new settings appear in the defaults.
+The `.default` files are rewritten at every launch, so editing them does nothing. Read them to see what exists, copy a line into your file and change it there. An upgrade never touches your files; new settings appear in the defaults. Your files can be symlinks into a dotfiles repo: a save writes the file the link points at and keeps the link.
 
-`Cmd ,` opens settings and `Cmd Shift ,` keybindings, each as a pair of editor cards. Changes apply on save, no restart.
+`Cmd ,` opens settings and `Cmd Shift ,` keybindings, each as a pair of editor cards. Changes apply on save, no restart, also when you save from another editor. In `settings.json` the setting names complete as you type (see [JSON with a schema](../editor/#json-with-a-schema)).
 
 ## Settings
 
@@ -54,7 +54,7 @@ All 500-odd schemes from iTerm2-Color-Schemes ship with the app; Violite is the 
 
 ## The window and the canvas
 
-`ui.windowOpacity` (0.1 to 1) lets the desktop show through the canvas, title bar and status bar, and `ui.windowBlur` blurs it. `ui.backgroundImage` puts a picture behind the canvas: `"dusk"`, `"aurora"` or `"ember"` come with the app, or give a path to your own; `ui.backgroundImageFit` is `"cover"` (crop to fill) or `"contain"`. A picture is opaque, so it hides the desktop. Give a list instead, `["dusk", "~/Pictures/lake.jpg"]`, and the pictures take turns in that order: each stays `ui.backgroundImageInterval` seconds (300 by default), with a crossfade of `ui.backgroundImageFade` seconds (2 by default, `0` for a cut). An entry that does not exist is skipped. Only two pictures are in memory at a time, so a long list costs no more than a short one. A change to the picture settings takes effect when you restart the app. `ui.cardOpacity` lets the canvas and the picture show through card backgrounds while the text stays solid; browser cards stay opaque. `"ui.showGrid": false` leaves the canvas plain.
+`ui.windowOpacity` (0.1 to 1) lets the desktop show through the canvas, title bar and status bar, and `ui.windowBlur` blurs it. `ui.backgroundImage` puts a picture behind the canvas: `"dusk"`, `"aurora"` or `"ember"` come with the app, or give a path to your own; `ui.backgroundImageFit` is `"cover"` (crop to fill) or `"contain"`. A picture is opaque, so it hides the desktop. Give a list instead, `["dusk", "~/Pictures/lake.jpg"]`, and the pictures take turns in that order: each stays `ui.backgroundImageInterval` seconds (300 by default), with a crossfade of `ui.backgroundImageFade` seconds (2 by default, `0` for a cut). An entry that does not exist is skipped. Only two pictures are in memory at a time, so a long list costs no more than a short one. `ui.cardOpacity` lets the canvas and the picture show through card backgrounds while the text stays solid; browser cards stay opaque. `"ui.showGrid": false` leaves the canvas plain.
 
 "Window: change the title bar and Dock colour" in the palette tints the title bar and the workspace tabs, and badges the Dock icon. Pick a named colour (each one shows as you move through the list, `Escape` puts it back) or "Custom hex colour…" for a code like `3b82f6`. The choice is saved as `ui.windowColor`, a name or a hex code, empty for none. In an `ift connect` window the same command sets that server's colour instead, and "Default: from the host name" goes back to the automatic one.
 

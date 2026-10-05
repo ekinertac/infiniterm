@@ -3,7 +3,7 @@ title: Editor cards
 description: Editing files on the canvas, ift as your EDITOR, multiple cursors, tabs, and saving.
 ---
 
-An editor card is a file on the canvas: syntax highlighting for 17 languages through tree-sitter, find and replace, go to line (`Ctrl G`), comment toggle, and a file tree beside it (`Cmd K`). There is no LSP and no completion, on purpose.
+An editor card is a file on the canvas: syntax highlighting for 17 languages through tree-sitter, find and replace, go to line (`Ctrl G`), comment toggle, and a file tree beside it (`Cmd K`). There is no LSP, on purpose; the one completion is for JSON files with a schema (below). A scrollbar at the right edge shows when the file is longer than the card.
 
 ## Opening files
 
@@ -20,6 +20,12 @@ A file that does not exist yet opens empty, and the first save creates it; closi
 An editor you arrived at with the arrows is a card like any other and takes no keys, so nothing typed at the canvas can land in a file. Click into the text or press `Enter` to lock the keyboard to it: the ring turns the warning colour and the status bar says so. While locked, `Cmd T` / `Cmd W` open and close tabs, `Cmd 1` to `Cmd 9` jump between them, and `Cmd S` saves. Double `Escape` lets go.
 
 Typing a quote, a backtick or an opening bracket over selected text wraps it: select `foo`, type `(`, get `(foo)`. The text stays selected, so a second press wraps it again.
+
+## JSON with a schema
+
+A `.json` or `.jsonc` file with a `"$schema"` key near the top completes from that schema: a path beside the file, or an `https` address, downloaded once and kept. Type a quote for its keys, or a quote after a colon for the allowed values, `true` / `false` and the default. The list opens when you type, not when you move the caret.
+
+Your own `settings.json` needs no `$schema`: type `"ui.` and every `ui.*` setting is listed with its default, and the selected one with its description. Letters without a dot match anywhere in the name, so `fitpad` finds `ui.fitPadding`. Up and Down move, `Tab` or `Enter` inserts, `Escape` closes.
 
 ## Multiple cursors
 

@@ -10,10 +10,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### Editor and Page cards
 
-- Page cards (the Start here card included) and editor cards show a scrollbar at their right edge when there is more than fits, so it is clear that they scroll.
-- Saving a file that is a symlink keeps the link and writes the file it points at. Before, the first save of `settings.json` linked from a dotfiles repo, or the first setting changed from the palette, replaced the link with a regular file.
 - The editor completes from a JSON Schema. A `.json` or `.jsonc` file with a `"$schema"` key near the top (a path beside the file, or an `https` address, which is downloaded once and kept in the data folder) offers its keys and values: type a quote for keys, or a quote after a colon for the choices, `true`/`false` and the default. In your `settings.json` the schema is built in, so values complete there too: `"ui.fullscreen": "` lists `cover` and `native`. The list opens when you type, not when you move the caret.
 - Setting names complete in `settings.json`: type `"ui.` and a list of the `ui.*` settings opens, each with its default value, and the selected one with its description. Up and Down move, Tab or Enter inserts the key, Escape closes. Letters without a dot match anywhere in the name (`fitpad` finds `ui.fitPadding`). Only in your own `settings.json`.
+- Page cards (the Start here card included) and editor cards show a scrollbar at their right edge when there is more than fits, so it is clear that they scroll.
+- Saving a file that is a symlink keeps the link and writes the file it points at. Before, the first save of `settings.json` linked from a dotfiles repo, or the first setting changed from the palette, replaced the link with a regular file.
 - Scrolled text in the editor no longer runs under the line numbers and git marks: the text is cut at the edge of the gutter, and the numbers stay readable.
 - A long line in the editor no longer draws over the file tree when the view scrolls right. The text is cut at the edge of the text area.
 - In the editor, typing a quote, backtick or opening bracket over selected text wraps it instead of replacing it: select `foo`, type `(`, get `(foo)`. The text stays selected, so a second press wraps again.
@@ -40,7 +40,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### Servers
 
-- A new instance starts with clean settings. `ift connect user@host` no longer copies your settings and keybindings into the host's folder: a host starts with the defaults and keeps its own from then on (hosts you already connected keep the copy they got; delete `~/.infiniterm/remotes/<host>/config` to reset one). An app started with its own `INFINITERM_DATA_DIR` keeps its settings in `<data>/config` instead of reading `~/.config/infiniterm`.
+- A new `ift connect` host starts with the default settings instead of a copy of yours, and keeps its own from then on. Hosts you already connected keep the copy they got; delete `~/.infiniterm/remotes/<host>/config` to reset one. An app started with its own `INFINITERM_DATA_DIR` keeps its settings in `<data>/config` instead of reading `~/.config/infiniterm`.
 
 ## 0.5.3 (build 610), 2026-10-04
 
