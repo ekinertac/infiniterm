@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-05
 
+- A program in a card can now trigger macOS privacy prompts (Photos, Contacts, Calendars, Camera, Microphone, Location, Bluetooth, Automation). The signed app lacked the matching entitlements, so macOS refused these requests without asking.
 - A new instance starts with clean settings. `ift connect user@host` no longer copies your settings and keybindings into the host's folder: a host starts with the defaults and keeps its own from then on (hosts you already connected keep the copy they got; delete `~/.infiniterm/remotes/<host>/config` to reset one). An app started with its own `INFINITERM_DATA_DIR` keeps its settings in `<data>/config` instead of reading `~/.config/infiniterm`.
 - A first launch opens only the "Start here" card, with a new opening: what the canvas is, then `Cmd T` for your first terminal and `Cmd Alt Left` to come back. It used to open a terminal beside it, which took the focus before the card was read.
 - Scrolled text in the editor no longer runs under the line numbers and git marks: the text is cut at the edge of the gutter, and the numbers stay readable.
