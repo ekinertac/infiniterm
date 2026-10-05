@@ -102,6 +102,7 @@ impl AppView {
             frame_rate: Default::default(),
             themes_dir: PathBuf::new(),
             backgrounds_dir: AppView::bundled_backgrounds(),
+            background: Default::default(),
             scale_factor,
             cef_running: false,
             reduce_motion: false,
@@ -565,6 +566,7 @@ impl AppView {
             || self.pan.is_some()
             || self.gesture.is_some()
             || !self.glides.is_empty()
+            || self.background.needs_frame(crate::now_ms())
             || {
                 let now = crate::now_ms();
                 // Content frames (output, blink) are gated when far: at
