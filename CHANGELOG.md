@@ -6,7 +6,9 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-06
+## 0.5.5 (build 687), 2026-10-06
+
+### Files
 
 - Every file the app writes keeps a symlink: the canvas file (`workspace.json`), the browser history and the licence now write through a link too, and `ift install-claude-hooks`, `install-codex-hooks`, `install-opencode-hooks` and `install-pi-hooks` write to the file a linked `~/.claude/settings.json` (or the Codex, OpenCode and Pi file) points at, instead of replacing the link. Settings, keybindings and the editor's save already did.
 

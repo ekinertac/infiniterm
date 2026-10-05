@@ -18,7 +18,7 @@ resolver = "2"
 exclude = ["spikes/card-texture"]
 
 [workspace.package]
-version = "0.5.4"
+version = "0.5.5"
 edition = "2021"
 publish = false
 

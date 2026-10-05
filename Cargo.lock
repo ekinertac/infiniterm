@@ -3091,7 +3091,7 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-browser"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "cef",
  "infiniterm-core",
@@ -3100,7 +3100,7 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-cli"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "infiniterm-core",
  "libc",
@@ -3109,7 +3109,7 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-core"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3124,7 +3124,7 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-editor"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "ropey",
  "similar",
@@ -3150,11 +3150,11 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-hook"
-version = "0.5.4"
+version = "0.5.5"
 
 [[package]]
 name = "infiniterm-session"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "infiniterm-core",
  "libc",
@@ -3164,7 +3164,7 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-term"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "alacritty_terminal",
  "infiniterm-core",
@@ -3172,7 +3172,7 @@ dependencies = [
 
 [[package]]
 name = "infiniterm-ui"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "block",
  "cef",
