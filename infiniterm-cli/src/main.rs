@@ -592,9 +592,10 @@ fn wire_hook_file(
 
     // Write-then-rename, so an interrupted write cannot leave a truncated
     // settings.json — which would take the user's permissions and env with it.
-    let tmp = path.with_extension("json.ift-tmp");
+    // Through a symlink, not over it: ~/.claude/settings.json is often a link
+    // into a dotfiles repo (#219).
     let body = serde_json::to_string_pretty(&settings).unwrap_or_default() + "\n";
-    if let Err(e) = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, path)) {
+    if let Err(e) = infiniterm_core::files::write_atomically(path, &body) {
         eprintln!("ift: could not write {}: {e}", path.display());
         return ExitCode::from(2);
     }
@@ -655,8 +656,8 @@ fn write_adapter(
             return ExitCode::from(2);
         }
     }
-    let tmp = path.with_extension("ift-tmp");
-    if let Err(e) = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, path)) {
+    // Through a symlink, not over it (#219).
+    if let Err(e) = infiniterm_core::files::write_atomically(path, body) {
         eprintln!("ift: could not write {}: {e}", path.display());
         return ExitCode::from(2);
     }
@@ -714,8 +715,8 @@ fn install_pi(dir: Option<&str>, dry_run: bool) -> ExitCode {
             return ExitCode::from(2);
         }
     }
-    let tmp = path.with_extension("ts.ift-tmp");
-    if let Err(e) = std::fs::write(&tmp, &body).and_then(|()| std::fs::rename(&tmp, &path)) {
+    // Through a symlink, not over it (#219).
+    if let Err(e) = infiniterm_core::files::write_atomically(&path, &body) {
         eprintln!("ift: could not write {}: {e}", path.display());
         return ExitCode::from(2);
     }
