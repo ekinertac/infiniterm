@@ -54,7 +54,7 @@ ift install-opencode-hooks    # OpenCode: writes a plugin to ~/.config/opencode/
 
 Codex asks you to approve new hooks once: run `/hooks` inside Codex after installing. `ift install-pi-hooks DIR` takes a different agent directory, for a wrapper that runs Pi against its own. All four accept `--dry-run`, which prints what would change and changes nothing.
 
-They are safe to run again, after an update or from a dotfiles script: they add nothing the second time. `install-claude-hooks` merges eight hook entries into your `settings.json` and leaves everything else in it alone (permissions, env, other hooks), and it refuses to touch a file that does not parse. Each prints the file it changed.
+They are safe to run again, after an update or from a dotfiles script: they add nothing the second time. `install-claude-hooks` merges eight hook entries into your `settings.json` and leaves everything else in it alone (permissions, env, other hooks), and it refuses to touch a file that does not parse. If `settings.json` (or the Codex, OpenCode or Pi file) is a symlink into a dotfiles repo, the installer writes the file it points at and keeps the link. Each prints the file it changed.
 
 An agent session that was already running keeps the settings it started with, so start a new session to see its card change colour. To check it works, give the agent a prompt: the card's border goes violet. If it does not, `agent.log` in `~/Library/Application Support/dev.ekinertac.infiniterm/` shows whether any hook event arrived.
 
