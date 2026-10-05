@@ -72,10 +72,9 @@ pub fn config_write(file: ConfigFile, contents: &str) -> Result<(), String> {
     let path = config_path(file);
     std::fs::create_dir_all(config_dir()).map_err(|e| e.to_string())?;
     // Write-then-rename, so an interrupted write cannot leave a truncated
-    // config that fails to parse on the next launch.
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, contents).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    // config that fails to parse on the next launch, and through a symlink
+    // (a settings.json kept in a dotfiles repo) rather than over it.
+    crate::files::write_atomically(&path, contents).map_err(|e| e.to_string())
 }
 
 /// Moves the pre-directory `~/.config/infiniterm.json` in, returning where
