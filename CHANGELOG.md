@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-06
+
+- `cards.gap` sets the space between cards in pixels (0 to 200, 25 by default). New cards, splits, growing a card, Canvas: tidy and group frames all use it. Cards already on the canvas stay where they are until they are moved or tidied.
+
 ## 0.5.5 (build 687), 2026-10-06
 
 ### Files

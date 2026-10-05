@@ -11,7 +11,7 @@
 //! creation order, which on a rearranged canvas is no order at all.
 use super::Card;
 use super::{Effect, Model};
-use crate::cards::{CardRect, GUTTER};
+use crate::cards::CardRect;
 use crate::grid::Rect;
 use crate::navigate::nearest_to;
 use crate::saved_layout::CardKind;
@@ -186,7 +186,7 @@ impl Model {
                     .map(|c| c.id.clone())
             });
         let grown = if reclaim {
-            crate::split::reclaim(card.rect, &siblings, GUTTER, partner.as_deref())
+            crate::split::reclaim(card.rect, &siblings, self.gap(), partner.as_deref())
                 .unwrap_or_default()
         } else {
             Vec::new()

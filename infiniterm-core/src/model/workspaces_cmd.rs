@@ -61,7 +61,7 @@ impl Model {
                 x: crate::grid::HALF_CELL,
                 y: crate::grid::HALF_CELL,
             };
-            let rect = crate::layout::block_slot(&placed, size, origin, crate::cards::GUTTER);
+            let rect = crate::layout::block_slot(&placed, size, origin, self.gap());
             placed.push(rect);
             for mover in std::iter::once(id.clone()).chain(self.covers.get(&id).cloned()) {
                 if let Some(c) = self.card_mut(&mover) {

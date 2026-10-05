@@ -180,6 +180,9 @@ pub struct Cards {
     /// Whether a card carved out of another (a split) keeps its
     /// directory. A plain new card always starts at `starting_dir`.
     pub inherit_directory: bool,
+    /// The space between cards, in pixels (`cards.gap`). Every placement,
+    /// split, tidy and growth works from it; 25 is the grid.
+    pub gap: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -358,6 +361,7 @@ pub fn default_config() -> Config {
             height: 0.,
             shape: "16:9".into(),
             inherit_directory: true,
+            gap: crate::cards::GUTTER,
         },
         canvas: Canvas {
             zoom_sensitivity: 1.,
@@ -599,6 +603,9 @@ pub fn merge_config(raw: &Value) -> Config {
                 _ => d.cards.shape.clone(),
             },
             inherit_directory: bool_(c.get("inheritDirectory"), d.cards.inherit_directory),
+            // 0 packs cards edge to edge; above 200 a gap is a gulf and the
+            // placement maths has no use for it.
+            gap: num(c.get("gap"), d.cards.gap, 0., 200.),
         },
         canvas: Canvas {
             zoom_sensitivity: num(v.get("zoomSensitivity"), d.canvas.zoom_sensitivity, 0.1, 5.),

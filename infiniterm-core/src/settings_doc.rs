@@ -165,6 +165,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["Height in 25px grid cells, or 0 to size from the window. 80 is 2000px."],
     ),
     (
+        "cards.gap",
+        &[
+            "The space between cards, in pixels (0 to 200, 25 by default). New cards, splits,",
+            "growing a card, Canvas: tidy and group frames all use it. Cards already on the",
+            "canvas stay where they are; a different gap shows as cards are added or tidied.",
+        ],
+    ),
+    (
         "cards.shape",
         &[
             "The shape of a card sized from the window: a ratio like \"16:9\" or \"4:3\",",
