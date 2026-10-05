@@ -6,33 +6,42 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-06
+## 0.5.4 (build 681), 2026-10-06
+
+### Editor and Page cards
 
 - Page cards (the Start here card included) and editor cards show a scrollbar at their right edge when there is more than fits, so it is clear that they scroll.
 - Saving a file that is a symlink keeps the link and writes the file it points at. Before, the first save of `settings.json` linked from a dotfiles repo, or the first setting changed from the palette, replaced the link with a regular file.
-
-### 2026-10-05
-
-- A change to `settings.json` or `keybindings.json` made in another editor shows at once. Before, an idle window kept drawing the old settings until the mouse moved.
 - The editor completes from a JSON Schema. A `.json` or `.jsonc` file with a `"$schema"` key near the top (a path beside the file, or an `https` address, which is downloaded once and kept in the data folder) offers its keys and values: type a quote for keys, or a quote after a colon for the choices, `true`/`false` and the default. In your `settings.json` the schema is built in, so values complete there too: `"ui.fullscreen": "` lists `cover` and `native`. The list opens when you type, not when you move the caret.
 - Setting names complete in `settings.json`: type `"ui.` and a list of the `ui.*` settings opens, each with its default value, and the selected one with its description. Up and Down move, Tab or Enter inserts the key, Escape closes. Letters without a dot match anywhere in the name (`fitpad` finds `ui.fitPadding`). Only in your own `settings.json`.
-- `ui.backgroundImage` takes a list of pictures as well as one: `["dusk", "~/Pictures/lake.jpg"]`. They rotate in order with a crossfade, set by `ui.backgroundImageInterval` (seconds a picture stays, 300 by default) and `ui.backgroundImageFade` (seconds of crossfade, 2 by default, 0 cuts). Only the picture on screen and the next one are kept in memory.
-- A program in a card can use what macOS guards: Photos, Contacts, Calendars, Reminders, the camera, the microphone, speech recognition, location, Bluetooth, other apps, the Desktop, Documents and Downloads folders, Accessibility, Screen Recording, Input Monitoring and the local network. macOS shows its usual dialog the first time a program asks, and the grant is listed under infiniterm in System Settings > Privacy & Security. Nothing is asked at install or launch. Before, macOS refused most of these without asking. Full Disk Access is never asked for: add infiniterm by hand if a script needs it.
-- A new instance starts with clean settings. `ift connect user@host` no longer copies your settings and keybindings into the host's folder: a host starts with the defaults and keeps its own from then on (hosts you already connected keep the copy they got; delete `~/.infiniterm/remotes/<host>/config` to reset one). An app started with its own `INFINITERM_DATA_DIR` keeps its settings in `<data>/config` instead of reading `~/.config/infiniterm`.
-- A first launch opens only the "Start here" card, with a new opening: what the canvas is, then `Cmd T` for your first terminal and `Cmd Alt Left` to come back. It used to open a terminal beside it, which took the focus before the card was read.
 - Scrolled text in the editor no longer runs under the line numbers and git marks: the text is cut at the edge of the gutter, and the numbers stay readable.
 - A long line in the editor no longer draws over the file tree when the view scrolls right. The text is cut at the edge of the text area.
-- The theme picker no longer dims the canvas, so you see each theme's real colours on your cards while you move through the list.
-
-### 2026-10-04
-
 - In the editor, typing a quote, backtick or opening bracket over selected text wraps it instead of replacing it: select `foo`, type `(`, get `(foo)`. The text stays selected, so a second press wraps again.
+
+### Settings and look
+
+- A change to `settings.json` or `keybindings.json` made in another editor shows at once. Before, an idle window kept drawing the old settings until the mouse moved.
+- `ui.backgroundImage` takes a list of pictures as well as one: `["dusk", "~/Pictures/lake.jpg"]`. They rotate in order with a crossfade, set by `ui.backgroundImageInterval` (seconds a picture stays, 300 by default) and `ui.backgroundImageFade` (seconds of crossfade, 2 by default, 0 cuts). Only the picture on screen and the next one are kept in memory.
+- The theme picker no longer dims the canvas, so you see each theme's real colours on your cards while you move through the list.
+- `ui.fitSplitSlot` (default on): Cmd+1 on a card that was split frames the whole slot, both halves together, as it always did. Set it to false and Cmd+1 fits the card itself and fills the window with it, split or not.
+- With a title bar colour set, the workspace tabs follow it: the selected tab's fill leans toward the colour and the other tab names are brighter, so they stay readable on any colour.
+
+### macOS
+
+- A program in a card can use what macOS guards: Photos, Contacts, Calendars, Reminders, the camera, the microphone, speech recognition, location, Bluetooth, other apps, the Desktop, Documents and Downloads folders, Accessibility, Screen Recording, Input Monitoring and the local network. macOS shows its usual dialog the first time a program asks, and the grant is listed under infiniterm in System Settings > Privacy & Security. Nothing is asked at install or launch. Before, macOS refused most of these without asking. Full Disk Access is never asked for: add infiniterm by hand if a script needs it.
+- The app icon is sharp in the Cmd+Tab switcher. It was enlarged from a small bitmap, with stair steps on the edge, and the green dot of a window colour made it worse.
+
+### Canvas and dialogs
+
+- A first launch opens only the "Start here" card, with a new opening: what the canvas is, then `Cmd T` for your first terminal and `Cmd Alt Left` to come back. It used to open a terminal beside it, which took the focus before the card was read.
 - The find bar (Cmd+F) opens inside the card being searched, at its top right under the card's label, instead of in the window's corner. In a small or half-hidden card it narrows and stays inside the window.
 - The About window has no buttons now: Enter, Escape or a click outside closes it. Check for Updates is in the app menu. In every other dialog, a button with no key of its own no longer shows an empty badge after the highlight moves to it.
 - Cmd+Ctrl+Enter also grows an empty slot. Move the arrows onto a free slot (it is the size of the card you came from), press Cmd+Ctrl+Enter, and the slot grows into the free space up to a full card, the way a card does. The card you make from it has that size.
-- `ui.fitSplitSlot` (default on): Cmd+1 on a card that was split frames the whole slot, both halves together, as it always did. Set it to false and Cmd+1 fits the card itself and fills the window with it, split or not.
-- The app icon is sharp in the Cmd+Tab switcher. It was enlarged from a small bitmap, with stair steps on the edge, and the green dot of a window colour made it worse.
-- With a title bar colour set, the workspace tabs follow it: the selected tab's fill leans toward the colour and the other tab names are brighter, so they stay readable on any colour.
+
+### Servers
+
+- A new instance starts with clean settings. `ift connect user@host` no longer copies your settings and keybindings into the host's folder: a host starts with the defaults and keeps its own from then on (hosts you already connected keep the copy they got; delete `~/.infiniterm/remotes/<host>/config` to reset one). An app started with its own `INFINITERM_DATA_DIR` keeps its settings in `<data>/config` instead of reading `~/.config/infiniterm`.
+
 ## 0.5.3 (build 610), 2026-10-04
 
 ### Servers
