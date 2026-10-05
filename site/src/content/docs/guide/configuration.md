@@ -68,7 +68,7 @@ Snippets are plain files in `~/.config/infiniterm/snippets/`, one per snippet. T
 
 - Your shells, one per card, started as your login shell with `INFINITERM_CARD_ID` in the environment. Nothing is typed into them that you did not type.
 - `~/.config/infiniterm/` for settings, keybindings and snippets, and `~/Library/Application Support/dev.ekinertac.infiniterm/` for the canvas, drafts, themes, the window frame, `agent.log`, the browser profile and address-bar history. Deleting `workspace.json` there resets the canvas and leaves your settings alone.
-- macOS privacy prompts, only when a program in a card asks for something they guard: Photos, Contacts, the camera, the microphone, your location, the Desktop, Documents and Downloads folders, other apps. macOS asks once and says the request comes from a program in an infiniterm card. Nothing is asked at install or launch.
+- macOS privacy prompts, only when a program in a card asks for something macOS guards (Photos, the camera, your Documents folder and others). Nothing is asked at install or launch. See [privacy prompts](../terminal/#privacy-prompts).
 - `ps`, `lsof` and `git` as subprocesses, to label cards and for the diff and blame cards.
 - The network only from browser cards, the update check, address-bar suggestions from Google, which are off unless you turn on `browser.suggestions`, one request to api.lemonsqueezy.com when you run `ift licence <email> <key>`, ssh to the hosts you name in `ift connect`, and a download from GitHub for `ift connect --install`.
 
