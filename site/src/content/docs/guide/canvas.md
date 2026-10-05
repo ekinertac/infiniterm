@@ -18,7 +18,7 @@ Every card sits on one canvas you pan and zoom. Cards never move on their own: a
 
 `Cmd T` puts a new card in the first free slot of a square block grown from the top-left corner of your cards. Four cards make a 2x2, nine a 3x3. It does not depend on which card you were on, so you can predict where it lands. Holes in your grid of cards are filled first, top row first, before the grid grows.
 
-A new card is 16:9 and sized to fill the window at 100%. `cards.shape`, `cards.width` and `cards.height` change that.
+A new card is 16:9 and sized to fill the window at 100%. `cards.shape`, `cards.width` and `cards.height` change that. `cards.gap` is the space between cards, 25 pixels by default (0 to 200). New cards, splits, a grown card, Canvas: tidy and group frames use it; cards already on the canvas keep their places until you move them or tidy. Dragging still snaps to the 25-pixel grid.
 
 Other ways to place one:
 
