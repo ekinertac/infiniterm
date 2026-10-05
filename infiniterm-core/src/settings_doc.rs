@@ -282,8 +282,22 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         "ui.backgroundImage",
         &[
             "A picture behind the canvas: the name of one that comes with the app (\"dusk\",",
-            "\"aurora\", \"ember\") or a path to your own, \"~\" allowed. Empty for none. It is",
-            "drawn opaque, so ui.windowOpacity does not show the desktop through it.",
+            "\"aurora\", \"ember\") or a path to your own, \"~\" allowed. Empty for none. A list",
+            "of them rotates: [\"dusk\", \"~/Pictures/lake.jpg\"]. It is drawn opaque, so",
+            "ui.windowOpacity does not show the desktop through it. Only the picture on screen",
+            "and the next one are kept in memory, a 4K one is about 65 MB, so a long list costs",
+            "no more than a short one.",
+        ],
+    ),
+    (
+        "ui.backgroundImageInterval",
+        &["Seconds each picture of a ui.backgroundImage list stays before the next fades in. 5 to 86400."],
+    ),
+    (
+        "ui.backgroundImageFade",
+        &[
+            "Seconds the crossfade between two pictures takes; 0 changes at once. A fade is an",
+            "animation, so it is a cut while ui.animations is off or the system reduces motion.",
         ],
     ),
     (

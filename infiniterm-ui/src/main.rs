@@ -12,6 +12,7 @@
 //! anything about cards; it draws what the model says and hands back what
 //! the person did.
 mod animator;
+mod background_show;
 mod body;
 mod browser_body;
 mod browsers;
@@ -278,6 +279,8 @@ pub struct AppView {
     pub themes_dir: std::path::PathBuf,
     /// The pictures `ui.backgroundImage` can name: the bundle's, else the checkout's.
     pub backgrounds_dir: Option<std::path::PathBuf>,
+    /// The picture list and its rotation (`ui.backgroundImage`).
+    pub background: background_show::Show,
     pub scale_factor: f32,
     /// CEF initialised in this process: browser cards can open surfaces.
     pub cef_running: bool,

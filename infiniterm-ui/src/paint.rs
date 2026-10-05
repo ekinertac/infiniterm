@@ -267,58 +267,17 @@ impl AppView {
         }
     }
 
-    /// `ui.backgroundImage`, over the canvas fill and under the grid and
-    /// the cards, clipped to the canvas. gpui decodes it once and keeps it;
-    /// until it lands the plain fill shows. A picture that will not load
-    /// draws nothing.
-    fn paint_background(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
-        let ui = &self.model.config.ui;
-        let Some(path) = infiniterm_core::background::resolve(
-            &ui.background_image,
-            self.backgrounds_dir.as_deref(),
-            &infiniterm_core::paths::home_dir(),
-        ) else {
-            return;
-        };
-        let fit = ui.background_image_fit;
-        let source = gpui::Resource::Path(path.as_path().into());
-        let Some(Ok(image)) = window.use_asset::<gpui::ImageAssetLoader>(&source, cx) else {
-            return;
-        };
-        let natural = image.size(0);
-        let scale = window.scale_factor() as f64;
-        let (aw, ah) = (
-            f32::from(bounds.size.width) as f64,
-            f32::from(bounds.size.height) as f64,
-        );
-        // The picture's own pixels are device pixels; the area is logical.
-        let natural = (
-            natural.width.0 as f64 / scale,
-            natural.height.0 as f64 / scale,
-        );
-        let Some((x, y, w, h)) = infiniterm_core::background::place(natural, (aw, ah), fit) else {
-            return;
-        };
-        let rect = Bounds::new(
-            point(
-                bounds.origin.x + px(x as f32),
-                bounds.origin.y + px(y as f32),
-            ),
-            size(px(w as f32), px(h as f32)),
-        );
-        window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-            let _ = window.paint_image(rect, gpui::Corners::default(), image, 0, false);
-        });
-    }
-
     fn paint_world(&mut self, bounds: Bounds<Pixels>, now: f64, window: &mut Window, cx: &mut App) {
         self.label_hits.clear();
         let origin = bounds.origin;
         let vp = self.model.viewport;
         let view = self.model.view_size;
         let chrome = self.chrome.clone();
-        window.paint_quad(fill(bounds, self.window_fill(chrome.canvas_bg)));
-        self.paint_background(bounds, window, cx);
+        // With a `ui.backgroundImage` the fill is the first layer under this
+        // element (`background_show.rs`), so the pictures can sit over it.
+        if !self.background.active() {
+            window.paint_quad(fill(bounds, self.window_fill(chrome.canvas_bg)));
+        }
         let opacity = crate::chrome::CardOpacity(self.model.config.ui.card_opacity as f32);
         if cx.try_global::<crate::chrome::CardOpacity>() != Some(&opacity) {
             cx.set_global(opacity);

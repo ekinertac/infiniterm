@@ -421,6 +421,21 @@ impl Render for AppView {
                 self.window_titled = true;
             }
         }
+        // A fade is an animation: the system's reduced-motion switch and
+        // `ui.animations` turn it into a cut.
+        let animate = self.model.config.ui.animations && !self.reduce_motion;
+        self.background.update(
+            &self.model.config.ui,
+            self.backgrounds_dir.as_deref(),
+            animate,
+            crate::now_ms(),
+            window,
+            cx,
+        );
+        let background = self.background.layers(
+            self.model.config.ui.background_image_fit,
+            self.window_fill(self.chrome.canvas_bg),
+        );
         let chrome = self.chrome.clone();
         let entity = cx.entity();
         let focus = self.focus.clone();
@@ -535,6 +550,7 @@ impl Render for AppView {
                             cx.notify();
                         }),
                     )
+                    .children(background)
                     .child(
                         canvas(
                             |_, _, _| (),

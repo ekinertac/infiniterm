@@ -250,9 +250,14 @@ pub struct Ui {
     pub window_opacity: f64,
     /// Blur what is behind a see-through window; nothing at opacity 1.
     pub window_blur: bool,
-    /// A bundled picture's name or a path; empty for none (#97).
-    pub background_image: String,
+    /// Bundled picture names or paths, in the order they rotate; empty for
+    /// none (#97, a list since #210). One string in the file is a list of one.
+    pub background_image: Vec<String>,
     pub background_image_fit: BackgroundFit,
+    /// Seconds a picture stays before the next one fades in.
+    pub background_image_interval: f64,
+    /// Seconds the crossfade takes; 0 changes pictures at once.
+    pub background_image_fade: f64,
     /// Ctrl+Tab and the status bar's card count look at the current
     /// workspace only (#101).
     pub workspace_isolation: bool,
@@ -375,8 +380,10 @@ pub fn default_config() -> Config {
             unfocused_dim: 0.4,
             window_opacity: 1.,
             window_blur: false,
-            background_image: String::new(),
+            background_image: Vec::new(),
             background_image_fit: BackgroundFit::Cover,
+            background_image_interval: 300.,
+            background_image_fade: 2.,
             workspace_isolation: false,
             window_color: String::new(),
             card_opacity: 1.,
@@ -413,6 +420,21 @@ fn num(value: Option<&Value>, fallback: f64, min: f64, max: f64) -> f64 {
     match value.and_then(Value::as_f64) {
         Some(n) if n.is_finite() => n.clamp(min, max),
         _ => fallback,
+    }
+}
+
+/// A setting that is one string or a list of them (`ui.backgroundImage`):
+/// the trimmed, non-empty strings, in order. Anything else is an empty list.
+fn string_or_list(value: Option<&Value>) -> Vec<String> {
+    let one = |v: &Value| v.as_str().map(|s| s.trim().to_string());
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(one)
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Some(v) => one(v).filter(|s| !s.is_empty()).into_iter().collect(),
+        None => Vec::new(),
     }
 }
 
@@ -635,12 +657,19 @@ pub fn merge_config(raw: &Value) -> Config {
             unfocused_dim: num(u.get("unfocusedDim"), d.ui.unfocused_dim, 0., 1.),
             window_opacity: num(u.get("windowOpacity"), d.ui.window_opacity, 0.1, 1.),
             window_blur: bool_(u.get("windowBlur"), d.ui.window_blur),
-            background_image: u
-                .get("backgroundImage")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .trim()
-                .to_string(),
+            background_image: string_or_list(u.get("backgroundImage")),
+            background_image_interval: num(
+                u.get("backgroundImageInterval"),
+                d.ui.background_image_interval,
+                5.,
+                86_400.,
+            ),
+            background_image_fade: num(
+                u.get("backgroundImageFade"),
+                d.ui.background_image_fade,
+                0.,
+                30.,
+            ),
             background_image_fit: match u.get("backgroundImageFit").and_then(Value::as_str) {
                 Some(s) if s.eq_ignore_ascii_case("contain") => BackgroundFit::Contain,
                 _ => BackgroundFit::Cover,
@@ -1037,10 +1066,10 @@ mod tests {
     #[test]
     fn the_background_image_settings_default_to_none_and_cover() {
         let ui = m(json!({})).ui;
-        assert_eq!(ui.background_image, "");
+        assert!(ui.background_image.is_empty());
         assert_eq!(ui.background_image_fit, BackgroundFit::Cover);
         let ui = m(json!({"ui.backgroundImage": " dusk ", "ui.backgroundImageFit": "Contain"})).ui;
-        assert_eq!(ui.background_image, "dusk");
+        assert_eq!(ui.background_image, ["dusk"]);
         assert_eq!(ui.background_image_fit, BackgroundFit::Contain);
         assert_eq!(
             m(json!({"ui.backgroundImageFit": "stretch"}))
@@ -1048,6 +1077,31 @@ mod tests {
                 .background_image_fit,
             BackgroundFit::Cover
         );
+    }
+
+    #[test]
+    fn the_background_image_is_a_string_or_a_list_with_a_timer_and_a_fade() {
+        let ui = m(json!({"ui.backgroundImage": ["dusk", " ", "~/a.png", 7, "ember "]})).ui;
+        assert_eq!(ui.background_image, ["dusk", "~/a.png", "ember"]);
+        assert_eq!(ui.background_image_interval, 300.);
+        assert_eq!(ui.background_image_fade, 2.);
+        let ui = m(json!({
+            "ui.backgroundImageInterval": 1,
+            "ui.backgroundImageFade": 99
+        }))
+        .ui;
+        assert_eq!(ui.background_image_interval, 5.);
+        assert_eq!(ui.background_image_fade, 30.);
+        assert_eq!(
+            m(json!({"ui.backgroundImageFade": 0}))
+                .ui
+                .background_image_fade,
+            0.
+        );
+        assert!(m(json!({"ui.backgroundImage": 3}))
+            .ui
+            .background_image
+            .is_empty());
     }
 
     #[test]
