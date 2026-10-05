@@ -60,3 +60,13 @@ These go in `settings.json`; every setting is on the [settings reference](../../
 ## Links and paths
 
 Hold `Cmd` over a link or a path that exists and it underlines; `Cmd` + click opens it beside the card, a file in an editor card and a URL in a browser card. Dropping a file from the Finder onto a terminal pastes its shell-escaped path.
+
+## Privacy prompts
+
+A program in a card can use what macOS guards: Photos, Contacts, Calendars, Reminders, the camera, the microphone, speech recognition, your location, Bluetooth, other apps (Automation), the Desktop, Documents and Downloads folders, Accessibility, Screen Recording, Input Monitoring and the local network. The first time a program asks, macOS shows its usual dialog. Nothing is asked when you install or launch infiniterm, and infiniterm itself uses none of them.
+
+The grant is listed under infiniterm in System Settings > Privacy & Security, because macOS sees the app, not the program in the card. Each one is asked once; change it there later.
+
+Full Disk Access is never asked for. If a script needs it, for example to read `~/Library/Mail`, add infiniterm by hand in System Settings > Privacy & Security > Full Disk Access.
+
+HomeKit and Siri are not available to programs in a card.

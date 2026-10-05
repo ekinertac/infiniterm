@@ -8,7 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-05
 
-- A program in a card can now trigger macOS privacy prompts (Photos, Contacts, Calendars, Camera, Microphone, Location, Bluetooth, Automation). The signed app lacked the matching entitlements, so macOS refused these requests without asking.
+- A program in a card can use what macOS guards: Photos, Contacts, Calendars, Reminders, the camera, the microphone, speech recognition, location, Bluetooth, other apps, the Desktop, Documents and Downloads folders, Accessibility, Screen Recording, Input Monitoring and the local network. macOS shows its usual dialog the first time a program asks, and the grant is listed under infiniterm in System Settings > Privacy & Security. Nothing is asked at install or launch. Before, macOS refused most of these without asking. Full Disk Access is never asked for: add infiniterm by hand if a script needs it.
 - A new instance starts with clean settings. `ift connect user@host` no longer copies your settings and keybindings into the host's folder: a host starts with the defaults and keeps its own from then on (hosts you already connected keep the copy they got; delete `~/.infiniterm/remotes/<host>/config` to reset one). An app started with its own `INFINITERM_DATA_DIR` keeps its settings in `<data>/config` instead of reading `~/.config/infiniterm`.
 - A first launch opens only the "Start here" card, with a new opening: what the canvas is, then `Cmd T` for your first terminal and `Cmd Alt Left` to come back. It used to open a terminal beside it, which took the focus before the card was read.
 - Scrolled text in the editor no longer runs under the line numbers and git marks: the text is cut at the edge of the gutter, and the numbers stay readable.
@@ -23,7 +23,6 @@ How this file is kept: work that has shipped to `master` but not to a release go
 - Cmd+Ctrl+Enter also grows an empty slot. Move the arrows onto a free slot (it is the size of the card you came from), press Cmd+Ctrl+Enter, and the slot grows into the free space up to a full card, the way a card does. The card you make from it has that size.
 - `ui.fitSplitSlot` (default on): Cmd+1 on a card that was split frames the whole slot, both halves together, as it always did. Set it to false and Cmd+1 fits the card itself and fills the window with it, split or not.
 - The app icon is sharp in the Cmd+Tab switcher. It was enlarged from a small bitmap, with stair steps on the edge, and the green dot of a window colour made it worse.
-- macOS can now show its privacy prompts (Photos, Contacts, Calendars, Reminders, Camera, Microphone, Location, Bluetooth, Desktop, Documents and Downloads folders, other apps, and more) for a program running in a card. Nothing is asked at install or launch: the dialog appears the first time a program touches that resource, and it says the request is from a program in an infiniterm card.
 - With a title bar colour set, the workspace tabs follow it: the selected tab's fill leans toward the colour and the other tab names are brighter, so they stay readable on any colour.
 ## 0.5.3 (build 610), 2026-10-04
 
