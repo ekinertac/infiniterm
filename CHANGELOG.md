@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-06
 
+- A Page card, the Start here card included, shows a thin scrollbar at its right edge when it is longer than the card, so it is clear that it scrolls.
 - Saving a file that is a symlink keeps the link and writes the file it points at. Before, the first save of `settings.json` linked from a dotfiles repo, or the first setting changed from the palette, replaced the link with a regular file.
 
 ### 2026-10-05

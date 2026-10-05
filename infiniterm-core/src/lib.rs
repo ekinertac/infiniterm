@@ -90,6 +90,7 @@ pub mod prompt;
 pub mod saved_layout;
 pub mod schema;
 pub mod schema_store;
+pub mod scrollbar;
 pub mod settings_doc;
 pub mod shell_history;
 pub mod shortcuts;
