@@ -655,6 +655,10 @@ impl AppView {
                 }
                 _ => self.model.apply_keymap_text(&change.contents),
             }
+            // An edit made outside the app arrives while the window idles:
+            // without this the new settings were applied and never drawn
+            // until something else asked for a frame (#216).
+            self.redraw = true;
         }
         self.drain_updates();
         while let Ok(req) = self.backend.cli_requests.try_recv() {
