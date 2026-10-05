@@ -37,6 +37,7 @@ mod overlays;
 mod page_body;
 mod paint;
 mod runtime;
+mod scrollbar;
 mod switcher_view;
 mod tab_strip;
 mod terminal_body;

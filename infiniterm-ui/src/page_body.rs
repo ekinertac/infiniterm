@@ -29,13 +29,6 @@ const PAD_Y: f64 = 10.;
 /// Prose reads better looser than a terminal's rows.
 const LINE: f64 = 1.45;
 const DISK_POLL_MS: f64 = 2000.;
-/// The scrollbar, in SCREEN pixels like every affordance: it keeps its width
-/// at any zoom, and the card's text is what scales. Faint on purpose: it says
-/// the card scrolls, nothing more.
-const BAR_W_PX: f32 = 3.;
-const BAR_INSET_PX: f32 = 5.;
-const BAR_MIN_PX: f64 = 24.;
-const BAR_ALPHA: f32 = 0.55;
 /// Lines the arrows move; Page Up/Down and Space move a screen less this.
 const ARROW_LINES: usize = 3;
 const PAGE_OVERLAP_LINES: usize = 2;
@@ -201,38 +194,6 @@ impl PageBody {
     }
 }
 
-impl PageBody {
-    /// A thin thumb at the right edge when the page is longer than the card,
-    /// painted before the inactive dim so it dims with the card.
-    fn paint_scrollbar(&self, bounds: Bounds<Pixels>, window: &mut Window) {
-        let inset = px(BAR_INSET_PX);
-        let track = f32::from(bounds.size.height - inset * 2.) as f64;
-        let Some((start, len)) = infiniterm_core::scrollbar::thumb(
-            self.lines.len(),
-            self.visible(),
-            self.scroll,
-            track,
-            BAR_MIN_PX,
-        ) else {
-            return;
-        };
-        let thumb = Bounds::new(
-            point(
-                bounds.origin.x + bounds.size.width - inset - px(BAR_W_PX),
-                bounds.origin.y + inset + px(start as f32),
-            ),
-            size(px(BAR_W_PX), px(len as f32)),
-        );
-        window.paint_quad(
-            fill(
-                thumb,
-                crate::chrome::with_alpha(self.colors.faint, self.colors.faint.a * BAR_ALPHA),
-            )
-            .corner_radii(px(BAR_W_PX / 2.)),
-        );
-    }
-}
-
 impl CardBody for PageBody {
     fn paint(
         &mut self,
@@ -329,7 +290,14 @@ impl CardBody for PageBody {
             }
             y += line_h;
         }
-        self.paint_scrollbar(bounds, window);
+        crate::scrollbar::paint(
+            window,
+            bounds,
+            self.lines.len(),
+            self.visible(),
+            self.scroll,
+            self.colors.faint,
+        );
         if !focused && self.inactive_dim > 0. {
             window.paint_quad(fill(
                 bounds,
