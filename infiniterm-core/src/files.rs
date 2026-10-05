@@ -29,7 +29,15 @@ pub fn file_write(path: &str, contents: &str) -> Result<(), String> {
     write_atomically(Path::new(path), contents).map_err(|e| format!("{path}: {e}"))
 }
 
+/// Writes through a symlink: a rename onto the link would replace the link
+/// itself with a regular file, so a `settings.json` symlinked from a
+/// dotfiles repo stopped being a link at the first save (#219). The temp file
+/// goes beside the TARGET, which is also the same filesystem, so the rename
+/// stays atomic. A path that does not exist yet is made; a link to nothing is
+/// replaced by a file, there being nothing to write through to.
 pub fn write_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let path = target.as_path();
     let dir = path.parent().unwrap_or(Path::new("."));
     let name = path
         .file_name()
@@ -142,6 +150,45 @@ pub fn dir_list(path: &str) -> Result<Vec<DirEntry>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_save_keeps_a_symlink_and_writes_the_file_it_points_at() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("infiniterm-link-{}", std::process::id()));
+        let (dots, config) = (root.join("dotfiles"), root.join("config"));
+        std::fs::create_dir_all(&dots).unwrap();
+        std::fs::create_dir_all(&config).unwrap();
+        let real = dots.join("settings.json");
+        let link = config.join("settings.json");
+        std::fs::write(&real, "old").unwrap();
+        symlink(&real, &link).unwrap();
+        write_atomically(&link, "new").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "new");
+        // a link that points at nothing has no target to write through, so
+        // it is replaced by the file, as before
+        let dangling = config.join("keys.json");
+        symlink(dots.join("missing.json"), &dangling).unwrap();
+        write_atomically(&dangling, "k").unwrap();
+        assert!(!std::fs::symlink_metadata(&dangling).unwrap().is_symlink());
+        assert_eq!(std::fs::read_to_string(&dangling).unwrap(), "k");
+        // a new file is simply made
+        let fresh = config.join("fresh.json");
+        write_atomically(&fresh, "f").unwrap();
+        assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "f");
+        assert!(
+            std::fs::read_dir(&config)
+                .unwrap()
+                .chain(std::fs::read_dir(&dots).unwrap())
+                .all(|e| !e
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with("infiniterm-tmp")),
+            "no temp file left behind"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn round_trips_and_replaces_whole() {
