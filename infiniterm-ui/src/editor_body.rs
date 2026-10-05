@@ -2723,6 +2723,17 @@ impl CardBody for EditorBody {
             }
         });
         if legible {
+            // Lines, not rows: a wrapped line takes several rows, so the thumb
+            // is a little long on prose (shortcut; exact needs the whole
+            // file's wrap, which is only computed for the visible rows).
+            crate::scrollbar::paint(
+                window,
+                area,
+                self.buffer.line_count(),
+                self.rows_visible,
+                self.scroll_line,
+                hex(&self.colors.gutter),
+            );
             self.paint_status(bounds, scale, window, cx);
         }
     }

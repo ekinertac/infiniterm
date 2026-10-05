@@ -290,6 +290,14 @@ impl CardBody for PageBody {
             }
             y += line_h;
         }
+        crate::scrollbar::paint(
+            window,
+            bounds,
+            self.lines.len(),
+            self.visible(),
+            self.scroll,
+            self.colors.faint,
+        );
         if !focused && self.inactive_dim > 0. {
             window.paint_quad(fill(
                 bounds,
