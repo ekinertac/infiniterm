@@ -414,7 +414,7 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     ),
 ];
 
-fn doc(key: &str) -> &'static [&'static str] {
+pub(crate) fn doc(key: &str) -> &'static [&'static str] {
     SETTINGS_DOC
         .iter()
         .find(|(k, _)| *k == key)
@@ -459,7 +459,7 @@ const HEADER: &[&str] = &[
 /// One JSON value, printed the way JSON.stringify prints it: `14`, not
 /// `14.0`. The config holds f64 everywhere and a file people copy from must
 /// not suggest a decimal where the reference writes a whole number.
-fn scalar(value: &Value) -> String {
+pub(crate) fn scalar(value: &Value) -> String {
     match value.as_f64() {
         Some(n) => n.to_string(),
         None => value.to_string(),

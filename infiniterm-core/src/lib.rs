@@ -57,6 +57,7 @@ pub mod browser_keys;
 pub mod card_label;
 pub mod cli;
 pub mod commands;
+pub mod complete;
 pub mod config;
 pub mod config_files;
 pub mod drop;
