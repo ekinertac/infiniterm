@@ -30,7 +30,7 @@ use gpui::{
     fill, outline, point, px, size, App, Bounds, ClipboardItem, Corners, FontStyle, Hsla,
     ImageAssetLoader, Keystroke, Pixels, Resource, SharedString, TextRun, Window,
 };
-use infiniterm_core::complete::{completer_for, Completer, Offer};
+use infiniterm_core::complete::{provider_for, Offer, Provider};
 use infiniterm_core::editor_theme::{EditorColors, SyntaxRule};
 use infiniterm_core::files::{
     dir_list, draft_delete, draft_read, draft_write, file_mtime, file_read, file_write,
@@ -93,6 +93,9 @@ const GUTTER_MARK_DELETED: &str = "#f85149";
 const GUTTER_MARK_DELETED_H_PX: f64 = 3.;
 /// The completion popup shows this many rows and scrolls past them.
 const COMPLETION_ROWS: usize = 8;
+/// The completion popup is not offered in a text longer than this: the
+/// provider is given the whole text on every key.
+const COMPLETION_MAX_CHARS: usize = 512 * 1024;
 /// Its width in cells: wide enough for a long key and its default, never
 /// wider than this.
 const COMPLETION_MAX_COLS: usize = 72;
@@ -224,7 +227,7 @@ pub struct EditorBody {
     /// The file's completion provider (`complete::completer_for`) and the
     /// popup it feeds. `completion_closed_at` is the buffer version at which
     /// Escape or an accept closed it: it stays closed until the text changes.
-    completer: Option<Completer>,
+    completer: Option<Box<dyn Provider>>,
     completion: Option<CompletionPopup>,
     completion_closed_at: Option<u64>,
     /// The column a visual up/down keeps aiming at, with the caret it was
@@ -395,7 +398,7 @@ impl EditorBody {
         self.path = Some(path.to_string());
         self.cwd = parent_of(path);
         self.language = Language::for_path(path);
-        self.completer = completer_for(path);
+        self.completer = provider_for(path);
         self.completion = None;
         self.warned_stale = false;
         self.scroll_line = 0;
@@ -477,7 +480,7 @@ impl EditorBody {
             self.path = Some(path.to_string());
             self.cwd = parent_of(path);
             self.language = Language::for_path(path);
-            self.completer = completer_for(path);
+            self.completer = provider_for(path);
             self.completion = None;
             // A save-as can change the grammar without changing the text.
             self.loads += 1;
@@ -1049,9 +1052,7 @@ impl EditorBody {
         let has_doc = !selected.doc.is_empty();
         let height = line_h * (rows + usize::from(has_doc)) as f32;
         // Left edge at the start of the text being replaced.
-        let col = self.buffer.col_of(self.buffer.cursor());
-        let typed = col.saturating_sub(popup.offer.from);
-        let mut x = caret.origin.x - cell_w * typed as f32;
+        let mut x = caret.origin.x - cell_w * popup.offer.typed as f32;
         let right = area.origin.x + area.size.width;
         if x + width > right {
             x = right - width;
@@ -1375,7 +1376,7 @@ impl EditorBody {
     /// Only for one plain caret in the text; the selected row stays on the
     /// same item while the list narrows around it.
     fn update_completion(&mut self) {
-        let Some(complete) = self.completer else {
+        let Some(provider) = self.completer.as_ref() else {
             self.completion = None;
             return;
         };
@@ -1383,18 +1384,14 @@ impl EditorBody {
             || self.buffer.selection().is_some()
             || self.focus != Focus::Buffer
             || self.completion_closed_at == Some(self.buffer.version)
+            || self.buffer.len_chars() > COMPLETION_MAX_CHARS
         {
             self.completion = None;
             return;
         }
-        let cursor = self.buffer.cursor();
-        let col = self.buffer.col_of(cursor);
-        let before: String = self
-            .buffer
-            .line(self.buffer.line_of(cursor))
-            .chars()
-            .take(col)
-            .collect();
+        // shortcut: the whole text is copied for every key. Fine for a
+        // config file; the cap above is where that stops being true.
+        let offer = provider.complete(&self.buffer.text(), self.buffer.cursor());
         let kept = self
             .completion
             .as_ref()
@@ -1402,7 +1399,7 @@ impl EditorBody {
             .and_then(|p| p.offer.items.get(p.selected))
             .map(|c| c.label.clone());
         let moved = kept.is_some();
-        self.completion = complete(&before).map(|offer| {
+        self.completion = offer.map(|offer| {
             let selected = kept
                 .and_then(|label| offer.items.iter().position(|c| c.label == label))
                 .unwrap_or(0);
@@ -1454,8 +1451,8 @@ impl EditorBody {
             return;
         };
         let cursor = self.buffer.cursor();
-        let from = self.buffer.line_start(self.buffer.line_of(cursor)) + popup.offer.from;
-        self.buffer.replace_range(from..cursor, &item.label, now);
+        let from = cursor.saturating_sub(popup.offer.typed);
+        self.buffer.replace_range(from..cursor, &item.insert, now);
         self.completion_closed_at = Some(self.buffer.version);
     }
 
@@ -1465,6 +1462,7 @@ impl EditorBody {
             self.now_dirty(now);
             return;
         }
+        let version_before = self.buffer.version;
         let m = &k.modifiers;
         let shift = m.shift;
         let key = k.key.as_str();
@@ -1741,7 +1739,11 @@ impl EditorBody {
             }
         }
         self.buffer.reveal_cursors();
-        self.update_completion();
+        // The popup opens on typing, not on arriving at a spot; once open,
+        // every key (an arrow too) re-asks, so it narrows or closes.
+        if self.buffer.version != version_before || self.completion.is_some() {
+            self.update_completion();
+        }
         self.ensure_cursor_visible();
         self.now_dirty(now);
         if self.search.is_some() {
@@ -3234,10 +3236,15 @@ mod tests {
         Keystroke::parse(name).unwrap()
     }
 
+    fn settings_provider() -> Option<Box<dyn Provider>> {
+        let dir = infiniterm_core::paths::config_dir();
+        provider_for(&dir.join("settings.json").to_string_lossy())
+    }
+
     #[test]
     fn the_settings_popup_narrows_moves_accepts_and_stays_closed_after_escape() {
         let mut b = body();
-        b.completer = Some(infiniterm_core::complete::settings_keys);
+        b.completer = settings_provider();
         b.buffer = Buffer::new("{\n  \"ui.");
         b.buffer.move_doc_end(false);
         b.update_completion();
@@ -3276,8 +3283,8 @@ mod tests {
     #[test]
     fn the_best_match_is_the_top_row_until_the_user_moves_it() {
         let mut b = body();
-        b.completer = Some(infiniterm_core::complete::settings_keys);
-        b.buffer = Buffer::new("\"fitp");
+        b.completer = settings_provider();
+        b.buffer = Buffer::new("{\"fitp");
         b.buffer.move_doc_end(false);
         b.update_completion();
         let top = b.completion.as_ref().unwrap().offer.items[0].label.clone();
@@ -3292,8 +3299,8 @@ mod tests {
     #[test]
     fn escape_closes_the_popup_until_the_next_edit_and_other_keys_pass_through() {
         let mut b = body();
-        b.completer = Some(infiniterm_core::complete::settings_keys);
-        b.buffer = Buffer::new("\"ui.");
+        b.completer = settings_provider();
+        b.buffer = Buffer::new("{\"ui.");
         b.buffer.move_doc_end(false);
         b.update_completion();
         assert!(b.completion.is_some());
