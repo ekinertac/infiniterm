@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-05
 
+- A change to `settings.json` or `keybindings.json` made in another editor shows at once. Before, an idle window kept drawing the old settings until the mouse moved.
 - The editor completes from a JSON Schema. A `.json` or `.jsonc` file with a `"$schema"` key near the top (a path beside the file, or an `https` address, which is downloaded once and kept in the data folder) offers its keys and values: type a quote for keys, or a quote after a colon for the choices, `true`/`false` and the default. In your `settings.json` the schema is built in, so values complete there too: `"ui.fullscreen": "` lists `cover` and `native`. The list opens when you type, not when you move the caret.
 - Setting names complete in `settings.json`: type `"ui.` and a list of the `ui.*` settings opens, each with its default value, and the selected one with its description. Up and Down move, Tab or Enter inserts the key, Escape closes. Letters without a dot match anywhere in the name (`fitpad` finds `ui.fitPadding`). Only in your own `settings.json`.
 - `ui.backgroundImage` takes a list of pictures as well as one: `["dusk", "~/Pictures/lake.jpg"]`. They rotate in order with a crossfade, set by `ui.backgroundImageInterval` (seconds a picture stays, 300 by default) and `ui.backgroundImageFade` (seconds of crossfade, 2 by default, 0 cuts). Only the picture on screen and the next one are kept in memory.
