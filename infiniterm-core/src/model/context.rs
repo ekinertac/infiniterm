@@ -7,9 +7,8 @@
 //! you were to where you landed. `open_in_card` is the one path for `ift
 //! <path>`, the placement menu and Cmd+click, so the three cannot drift.
 use super::{Card, Effect, Model, NewCard};
-use crate::cards::GUTTER;
 use crate::grid::{snap_rect, Point, Rect, Size, HALF_CELL};
-use crate::groups::{group_bounds, group_slot_size, GROUP_PAD};
+use crate::groups::{group_bounds, group_slot_size};
 use crate::ift::OpenPlan;
 use crate::layout::{best_cols, first_free_slot};
 use crate::navigate::{ensure_visible, REVEAL_PADDING};
@@ -169,7 +168,7 @@ impl Model {
         let widened = bounding_rect(&rects)?;
         let one = self.default_size();
         // Still one slot? Then the pieces belong together.
-        if widened.w <= one.w + GUTTER && widened.h <= one.h + GUTTER {
+        if widened.w <= one.w + self.gap() && widened.h <= one.h + self.gap() {
             return Some(widened);
         }
         bounding_rect(cards)
@@ -199,7 +198,7 @@ impl Model {
             .filter(|c| c.group_id.as_deref() == Some(group_id))
             .map(|c| c.rect)
             .collect();
-        if let Some(bounds) = group_bounds(&rects, GROUP_PAD) {
+        if let Some(bounds) = group_bounds(&rects, self.group_pad()) {
             self.apply_viewport(self.fit_viewport(bounds));
         }
     }
@@ -236,7 +235,7 @@ impl Model {
         let Some(start) = loose.iter().position(|r| *r == card.rect) else {
             return;
         };
-        let rects: Vec<Rect> = crate::layout::cluster_of(&loose, start, GUTTER)
+        let rects: Vec<Rect> = crate::layout::cluster_of(&loose, start, self.gap())
             .into_iter()
             .map(|i| loose[i])
             .collect();
@@ -315,12 +314,12 @@ impl Model {
             .collect();
         let Some(card) = movers.first() else { return };
         let size = self.default_size();
-        let reserve = group_slot_size(size, GUTTER, GROUP_PAD);
+        let reserve = group_slot_size(size, self.gap(), self.group_pad());
         let bounds =
             bounding_rect(&movers.iter().map(|c| c.rect).collect::<Vec<_>>()).expect("movers");
         let block = Size {
-            w: reserve.w.max(bounds.w + GROUP_PAD * 2.),
-            h: reserve.h.max(bounds.h + GROUP_PAD * 2.),
+            w: reserve.w.max(bounds.w + self.group_pad() * 2.),
+            h: reserve.h.max(bounds.h + self.group_pad() * 2.),
         };
         let mut taken: Vec<Rect> = self
             .cards
@@ -338,7 +337,7 @@ impl Model {
         let cluster_right = taken.iter().map(|r| r.x + r.w).fold(HALF_CELL, f64::max);
         // A wider gap than between two cards, so the groups read as a region
         // of their own rather than as more cards.
-        let group_gap = GUTTER * 4.;
+        let group_gap = self.gap() * 4.;
         let spot = first_free_slot(
             &taken,
             block,
@@ -346,12 +345,12 @@ impl Model {
                 x: cluster_right + group_gap,
                 y: HALF_CELL,
             },
-            GUTTER,
+            self.gap(),
             best_cols(
                 crate::cards::TYPICAL_CARDS,
                 block.w,
                 block.h,
-                GUTTER,
+                self.gap(),
                 self.view_size.w,
                 self.view_size.h,
             ),
@@ -360,7 +359,10 @@ impl Model {
         );
         // Inset by the frame padding, so the block is the FRAME's footprint.
         // Every mover shifts by the same delta, keeping the selection's shape.
-        let (dx, dy) = (spot.x + GROUP_PAD - bounds.x, spot.y + GROUP_PAD - bounds.y);
+        let (dx, dy) = (
+            spot.x + self.group_pad() - bounds.x,
+            spot.y + self.group_pad() - bounds.y,
+        );
         for id in moving {
             if let Some(c) = self.card_mut(id) {
                 c.rect = snap_rect(Rect {

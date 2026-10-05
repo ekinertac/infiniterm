@@ -179,7 +179,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             .iter()
             .map(|c| {
                 let (key, p) = match (&c.group_id, &c.soft_group_id) {
-                    (Some(g), _) => (format!("g:{g}"), crate::groups::GROUP_PAD),
+                    (Some(g), _) => (format!("g:{g}"), m.group_pad()),
                     (None, Some(s)) => (format!("s:{s}"), 0.),
                     _ => (format!("c:{}", c.id), 0.),
                 };
@@ -201,7 +201,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             },
             m.default_size(),
         );
-        let placed = crate::layout::tidy_units(&rects, &unit, &pad, crate::cards::GUTTER, grid);
+        let placed = crate::layout::tidy_units(&rects, &unit, &pad, m.gap(), grid);
         m.remember_layout();
         let ids: Vec<String> = here.iter().map(|c| c.id.clone()).collect();
         m.mark_swap(&ids);

@@ -7,7 +7,7 @@
 //! reaches the app, and only while one of these modes is up.
 use super::palette_state::Source;
 use super::{Effect, Model, NewCard, Phantom, Switcher};
-use crate::cards::{CardRect, PlacedCard, GUTTER};
+use crate::cards::{CardRect, PlacedCard};
 use crate::grid::{Point, Rect, Size, HALF_CELL};
 use crate::groups::{canvas_units, step_ring, CanvasUnit, UnitKind, UNGROUPED};
 use crate::layout::rects_overlap;
@@ -111,7 +111,7 @@ impl Model {
                 .collect();
             let mut occupied = rects.clone();
             occupied.extend(self.other_frames(g.as_deref(), &ws));
-            for s in free_slots_around(&members, size, GUTTER, &occupied) {
+            for s in free_slots_around(&members, size, self.gap(), &occupied) {
                 // Keep the first proposal for any ground already offered.
                 if !slots.iter().any(|k| rects_overlap(k.rect, s.rect)) {
                     slots.push(s);
@@ -257,7 +257,7 @@ impl Model {
             w: p.rect.w,
             h: p.rect.h,
         };
-        let back_rect = empty_slot_beside(p.rect, dir, GUTTER, &[], size);
+        let back_rect = empty_slot_beside(p.rect, dir, self.gap(), &[], size);
         if let Some(i) = self
             .selection
             .phantom_extra
@@ -270,7 +270,7 @@ impl Model {
         }
         let mut occupied = self.occupied_here();
         occupied.extend(self.selection.phantom_extra.iter().map(|q| q.rect));
-        let Some(hole) = empty_slot_beside(p.rect, dir, GUTTER, &occupied, size) else {
+        let Some(hole) = empty_slot_beside(p.rect, dir, self.gap(), &occupied, size) else {
             return;
         };
         self.selection.phantom_extra.push(p.clone());
@@ -329,7 +329,9 @@ impl Model {
 
         // From a phantom: the same rules, with the phantom standing in for a card.
         if let Some(p) = self.selection.phantom.clone() {
-            if let Some(hole) = empty_slot_beside(p.rect, dir, GUTTER, &occupied, beside(p.rect)) {
+            if let Some(hole) =
+                empty_slot_beside(p.rect, dir, self.gap(), &occupied, beside(p.rect))
+            {
                 self.show_phantom(hole, p.group_id, false);
                 return;
             }
@@ -359,7 +361,7 @@ impl Model {
         };
         if let Some(card) = self.card(&focused).cloned() {
             if let Some(hole) =
-                empty_slot_beside(card.rect, dir, GUTTER, &occupied, beside(card.rect))
+                empty_slot_beside(card.rect, dir, self.gap(), &occupied, beside(card.rect))
             {
                 self.show_phantom(hole, card.group_id, false);
                 return;
@@ -501,7 +503,7 @@ impl Model {
                 })
             })
             .collect();
-        canvas_units(&placed, &frames)
+        canvas_units(&placed, &frames, self.group_pad())
     }
 
     /// The unit the active card belongs to: its group, or the loose set.

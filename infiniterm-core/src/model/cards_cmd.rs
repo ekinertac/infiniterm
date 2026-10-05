@@ -9,7 +9,6 @@ use super::{
     TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
 };
 use crate::card_label::{card_label, tilde_path, Labelled};
-use crate::cards::GUTTER;
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
 use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
 use crate::ift::{diff_plan, open_plan, transcript_plan, PathKind};
@@ -45,7 +44,7 @@ impl Model {
             let Some(card) = m.card(&id).cloned() else {
                 return;
             };
-            let next = sized(card.rect, m.default_size(), w, h, GUTTER);
+            let next = sized(card.rect, m.default_size(), w, h, m.gap());
             if next == card.rect {
                 return;
             }
@@ -183,7 +182,7 @@ impl Model {
             let Some(card) = m.card(&id).cloned() else {
                 return;
             };
-            let Some(split) = split_rect(card.rect, side, GUTTER) else {
+            let Some(split) = split_rect(card.rect, side, m.gap()) else {
                 m.notify("too small to split");
                 return;
             };
@@ -785,7 +784,7 @@ impl Model {
                 x: HALF_CELL,
                 y: HALF_CELL,
             },
-            GUTTER,
+            self.gap(),
         )
     }
 
@@ -799,7 +798,7 @@ impl Model {
                 x: HALF_CELL,
                 y: HALF_CELL,
             },
-            GUTTER,
+            self.gap(),
             GHOST_SLOT_REACH,
         )
     }
@@ -962,7 +961,7 @@ impl Model {
                 &placed,
                 &id,
                 dir,
-                GUTTER,
+                m.gap(),
                 &m.other_frames(card.group_id.as_deref(), &ws),
             ) else {
                 return;
@@ -1478,7 +1477,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             if let (Some(p), Some(ws)) = (m.selection.phantom.clone(), m.active_workspace.clone()) {
                 let mut taken: Vec<Rect> = m.here().iter().map(|c| c.rect).collect();
                 taken.extend(m.other_frames(None, &ws));
-                let next = fill_from_corner(p.rect, m.default_size(), &taken, GUTTER);
+                let next = fill_from_corner(p.rect, m.default_size(), &taken, m.gap());
                 if next == p.rect {
                     m.notify("no room to grow");
                 } else {
@@ -1498,7 +1497,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
                 .map(|c| c.rect)
                 .collect();
             taken.extend(m.other_frames(Some(&id), &card.workspace_id));
-            let next = fill_from_corner(card.rect, m.default_size(), &taken, GUTTER);
+            let next = fill_from_corner(card.rect, m.default_size(), &taken, m.gap());
             if next == card.rect {
                 m.notify("no room to grow");
                 return;

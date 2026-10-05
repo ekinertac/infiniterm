@@ -1947,6 +1947,70 @@ mod tests {
         assert!(h.m.focused().is_none(), "no card was made or focused");
     }
 
+    // `cards.gap` (#232) is the space every placement leaves: a split, a new
+    // card, a tidy and a group frame all take it, where the constant used to
+    // be 25. The nearest two cards are exactly one gap apart and none is closer.
+    fn nearest_gap(h: &Harness) -> (f64, f64) {
+        let rects: Vec<crate::grid::Rect> = h.m.here().iter().map(|c| c.rect).collect();
+        let mut nearest = f64::MAX;
+        for (i, a) in rects.iter().enumerate() {
+            for b in &rects[i + 1..] {
+                let dx = (b.x - (a.x + a.w)).max(a.x - (b.x + b.w));
+                let dy = (b.y - (a.y + a.h)).max(a.y - (b.y + b.h));
+                // beside each other (they overlap on the other axis), else a corner
+                let d = if dy < 0. {
+                    dx
+                } else if dx < 0. {
+                    dy
+                } else {
+                    f64::MAX
+                };
+                nearest = nearest.min(d);
+            }
+        }
+        let overlapping = rects.iter().enumerate().any(|(i, a)| {
+            rects[i + 1..]
+                .iter()
+                .any(|b| crate::layout::rects_overlap(*a, *b))
+        });
+        (nearest, if overlapping { 1. } else { 0. })
+    }
+
+    #[test]
+    fn the_gap_setting_spaces_splits_new_cards_and_group_frames() {
+        for gap in [0., 10., 60.] {
+            let mut h = Harness::new();
+            h.m.apply_settings_text(&format!("{{\"cards.gap\": {gap}}}"));
+            assert_eq!(h.m.gap(), gap);
+            assert_eq!(h.m.group_pad(), gap / 2.);
+            h.run("card.split.right");
+            h.run("card.new.terminal");
+            h.run("card.new.terminal");
+            h.run("card.new.terminal");
+            let (nearest, overlapping) = nearest_gap(&h);
+            assert_eq!(overlapping, 0., "gap {gap}: cards overlap");
+            assert_eq!(
+                nearest, gap,
+                "gap {gap}: the nearest cards are one gap apart"
+            );
+            // Canvas: tidy puts them back in the block, still a gap apart.
+            h.run("canvas.tidy");
+            let (nearest, overlapping) = nearest_gap(&h);
+            assert_eq!(overlapping, 0., "gap {gap}: tidy overlaps");
+            assert_eq!(nearest, gap, "gap {gap}: tidy keeps one gap");
+        }
+    }
+
+    #[test]
+    fn the_gap_defaults_to_the_grid_and_is_clamped() {
+        let mut h = Harness::new();
+        assert_eq!(h.m.gap(), crate::cards::GUTTER);
+        h.m.apply_settings_text(r#"{"cards.gap": 900}"#);
+        assert_eq!(h.m.gap(), 200.);
+        h.m.apply_settings_text(r#"{"cards.gap": -5}"#);
+        assert_eq!(h.m.gap(), 0.);
+    }
+
     fn edit_from(h: &mut Harness, card: Option<&str>, path: &str) -> crate::cli::CliReply {
         h.m.run_ift(
             &crate::cli::CliRequest {

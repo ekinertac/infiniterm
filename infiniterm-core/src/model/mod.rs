@@ -40,10 +40,10 @@ pub mod workspaces_cmd;
 
 use crate::agent_state::AgentState;
 use crate::backend::PaneId;
-use crate::cards::{default_size, GUTTER};
+use crate::cards::default_size;
 use crate::config::{default_config, Config};
 use crate::grid::{Point, Rect, Size, HALF_CELL};
-use crate::groups::{group_bounds, GROUP_PAD, UNGROUPED};
+use crate::groups::{group_bounds, UNGROUPED};
 use crate::keymap::{default_keymap, Keymap};
 use crate::layout::block_slot;
 use crate::palette_usage::Usage;
@@ -890,8 +890,8 @@ impl Model {
         taken.extend_from_slice(avoid);
         match origin {
             // A card joining a group starts from its siblings.
-            Some(origin) => block_slot(&taken, size, origin, GUTTER),
-            None => crate::layout::fill_slot(&taken, size, anchor, GUTTER),
+            Some(origin) => block_slot(&taken, size, origin, self.gap()),
+            None => crate::layout::fill_slot(&taken, size, anchor, self.gap()),
         }
     }
 
@@ -1194,6 +1194,17 @@ impl Model {
     }
 
     /// A group's frame, derived from its members on `workspace_id`.
+    /// The space between cards (`cards.gap`).
+    pub fn gap(&self) -> f64 {
+        self.config.cards.gap
+    }
+
+    /// A group's frame sits half a gap outside its cards, so two frames fit
+    /// in one gap and groups line up on the grid like cards.
+    pub fn group_pad(&self) -> f64 {
+        self.gap() / 2.
+    }
+
     pub fn group_frame(&self, group_id: &str, workspace_id: &str) -> Option<Rect> {
         let rects: Vec<Rect> = self
             .cards
@@ -1201,7 +1212,7 @@ impl Model {
             .filter(|c| c.group_id.as_deref() == Some(group_id) && c.workspace_id == workspace_id)
             .map(|c| c.rect)
             .collect();
-        group_bounds(&rects, GROUP_PAD)
+        group_bounds(&rects, self.group_pad())
     }
 
     /// Every group's frame except one, on one canvas: what placement treats
