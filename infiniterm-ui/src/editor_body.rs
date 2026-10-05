@@ -30,6 +30,7 @@ use gpui::{
     fill, outline, point, px, size, App, Bounds, ClipboardItem, Corners, FontStyle, Hsla,
     ImageAssetLoader, Keystroke, Pixels, Resource, SharedString, TextRun, Window,
 };
+use infiniterm_core::complete::{completer_for, Completer, Offer};
 use infiniterm_core::editor_theme::{EditorColors, SyntaxRule};
 use infiniterm_core::files::{
     dir_list, draft_delete, draft_read, draft_write, file_mtime, file_read, file_write,
@@ -90,6 +91,14 @@ const GUTTER_MARK_MODIFIED: &str = "#e3b341";
 const GUTTER_MARK_DELETED: &str = "#f85149";
 /// The deleted-lines marker's height: a notch, not a full row.
 const GUTTER_MARK_DELETED_H_PX: f64 = 3.;
+/// The completion popup shows this many rows and scrolls past them.
+const COMPLETION_ROWS: usize = 8;
+/// Its width in cells: wide enough for a long key and its default, never
+/// wider than this.
+const COMPLETION_MAX_COLS: usize = 72;
+const COMPLETION_MIN_COLS: usize = 56;
+/// The selected row's wash, as an alpha of the selection colour.
+const COMPLETION_SELECTED_ALPHA: f32 = 0.45;
 /// The folded-block chip after a header: this many cells wide, at this
 /// alpha of the text colour.
 const FOLD_CHIP_CELLS: f32 = 3.;
@@ -173,6 +182,16 @@ pub enum EditorEvent {
     OpenTab(String),
 }
 
+/// The completion popup: what the provider offered and the row picked.
+#[derive(Clone)]
+struct CompletionPopup {
+    offer: Offer,
+    selected: usize,
+    /// Up or Down moved the row: only then does it stay on its item while
+    /// the list narrows; otherwise the best match is always the top row.
+    moved: bool,
+}
+
 pub struct EditorBody {
     pub card_id: String,
     pub buffer: Buffer,
@@ -202,6 +221,12 @@ pub struct EditorBody {
     gutter: (u64, u64, Vec<GutterMark>, Vec<usize>),
     /// Where the caret was before it last leapt: Ctrl+- and Ctrl+Shift+-.
     jumps: Jumps,
+    /// The file's completion provider (`complete::completer_for`) and the
+    /// popup it feeds. `completion_closed_at` is the buffer version at which
+    /// Escape or an accept closed it: it stays closed until the text changes.
+    completer: Option<Completer>,
+    completion: Option<CompletionPopup>,
+    completion_closed_at: Option<u64>,
     /// The column a visual up/down keeps aiming at, with the caret it was
     /// set for: a caret moved by anything else forgets it.
     visual_goal: Option<(usize, usize)>,
@@ -291,6 +316,9 @@ impl EditorBody {
             last_git_check: 0.,
             gutter: (u64::MAX, 0, vec![], vec![]),
             jumps: Jumps::default(),
+            completer: None,
+            completion: None,
+            completion_closed_at: None,
             visual_goal: None,
             search: None,
             query: Field::default(),
@@ -367,6 +395,8 @@ impl EditorBody {
         self.path = Some(path.to_string());
         self.cwd = parent_of(path);
         self.language = Language::for_path(path);
+        self.completer = completer_for(path);
+        self.completion = None;
         self.warned_stale = false;
         self.scroll_line = 0;
         self.scroll_x = 0.;
@@ -447,6 +477,8 @@ impl EditorBody {
             self.path = Some(path.to_string());
             self.cwd = parent_of(path);
             self.language = Language::for_path(path);
+            self.completer = completer_for(path);
+            self.completion = None;
             // A save-as can change the grammar without changing the text.
             self.loads += 1;
         }
@@ -984,6 +1016,101 @@ impl EditorBody {
         (!text.is_empty()).then_some(text)
     }
 
+    /// The completion popup under the caret (above it when there is no
+    /// room), with the selected item's description in a last row.
+    fn paint_completion(
+        &self,
+        area: Bounds<Pixels>,
+        scale: f64,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let (Some(popup), Some(caret)) = (self.completion.as_ref(), self.painted_caret) else {
+            return;
+        };
+        let font_size = px((self.metrics.font_px * scale) as f32);
+        let line_h = px((self.line_h() * scale) as f32);
+        let cell_w = px((self.metrics.cell_w * scale) as f32);
+        let base = self.metrics.font();
+        let fg = hex(&self.colors.foreground);
+        let dim = hex(&self.colors.gutter);
+        let items = &popup.offer.items;
+        let rows = items.len().min(COMPLETION_ROWS);
+        let first = (popup.selected + 1).saturating_sub(rows);
+        let want = items
+            .iter()
+            .map(|c| c.label.chars().count() + 2 + c.detail.chars().count().min(24))
+            .max()
+            .unwrap_or(0)
+            + 2;
+        let cols = want.clamp(COMPLETION_MIN_COLS, COMPLETION_MAX_COLS);
+        let width = cell_w * cols as f32;
+        let selected = &items[popup.selected.min(items.len() - 1)];
+        let has_doc = !selected.doc.is_empty();
+        let height = line_h * (rows + usize::from(has_doc)) as f32;
+        // Left edge at the start of the text being replaced.
+        let col = self.buffer.col_of(self.buffer.cursor());
+        let typed = col.saturating_sub(popup.offer.from);
+        let mut x = caret.origin.x - cell_w * typed as f32;
+        let right = area.origin.x + area.size.width;
+        if x + width > right {
+            x = right - width;
+        }
+        x = x.max(area.origin.x);
+        let mut y = caret.origin.y + line_h;
+        if y + height > area.origin.y + area.size.height {
+            y = (caret.origin.y - height).max(area.origin.y);
+        }
+        let panel = Bounds::new(point(x, y), size(width, height));
+        window.paint_quad(fill(panel, hex(&self.colors.background)));
+        window.paint_quad(
+            outline(
+                panel,
+                crate::chrome::with_alpha(dim, 0.6),
+                gpui::BorderStyle::Solid,
+            )
+            .border_widths(px(crate::chrome::HAIRLINE_PX as f32)),
+        );
+        let pad = cell_w;
+        let text_cols = cols.saturating_sub(2);
+        for (i, item) in items.iter().enumerate().skip(first).take(rows) {
+            let row_y = y + line_h * (i - first) as f32;
+            if i == popup.selected {
+                window.paint_quad(fill(
+                    Bounds::new(point(x, row_y), size(width, line_h)),
+                    crate::chrome::with_alpha(
+                        hex(&self.colors.selection),
+                        COMPLETION_SELECTED_ALPHA,
+                    ),
+                ));
+            }
+            let label = crate::text::shape(window, &item.label, font_size, &base, fg);
+            let _ = label.paint(point(x + pad, row_y), line_h, window, cx);
+            let room = text_cols.saturating_sub(item.label.chars().count() + 2);
+            let detail: String = item.detail.chars().take(room.min(24)).collect();
+            if !detail.is_empty() {
+                let d = crate::text::shape(window, &detail, font_size, &base, dim);
+                let at = x + pad + cell_w * (item.label.chars().count() + 2) as f32;
+                let _ = d.paint(point(at, row_y), line_h, window, cx);
+            }
+        }
+        if has_doc {
+            let row_y = y + line_h * rows as f32;
+            let text = if selected.doc.chars().count() > text_cols {
+                let cut: String = selected
+                    .doc
+                    .chars()
+                    .take(text_cols.saturating_sub(1))
+                    .collect();
+                format!("{}…", cut.trim_end())
+            } else {
+                selected.doc.clone()
+            };
+            let d = crate::text::shape(window, &text, font_size, &base, dim);
+            let _ = d.paint(point(x + pad, row_y), line_h, window, cx);
+        }
+    }
+
     fn paint_status(&self, bounds: Bounds<Pixels>, scale: f64, window: &mut Window, cx: &mut App) {
         let s = |v: f64| px((v * scale) as f32);
         let (o, area) = self.text_area(self.world);
@@ -1244,7 +1371,100 @@ impl EditorBody {
 
     // ----- keys -----
 
+    /// Recomputes the completion popup from the text before the caret.
+    /// Only for one plain caret in the text; the selected row stays on the
+    /// same item while the list narrows around it.
+    fn update_completion(&mut self) {
+        let Some(complete) = self.completer else {
+            self.completion = None;
+            return;
+        };
+        if self.buffer.cursor_count() != 1
+            || self.buffer.selection().is_some()
+            || self.focus != Focus::Buffer
+            || self.completion_closed_at == Some(self.buffer.version)
+        {
+            self.completion = None;
+            return;
+        }
+        let cursor = self.buffer.cursor();
+        let col = self.buffer.col_of(cursor);
+        let before: String = self
+            .buffer
+            .line(self.buffer.line_of(cursor))
+            .chars()
+            .take(col)
+            .collect();
+        let kept = self
+            .completion
+            .as_ref()
+            .filter(|p| p.moved)
+            .and_then(|p| p.offer.items.get(p.selected))
+            .map(|c| c.label.clone());
+        let moved = kept.is_some();
+        self.completion = complete(&before).map(|offer| {
+            let selected = kept
+                .and_then(|label| offer.items.iter().position(|c| c.label == label))
+                .unwrap_or(0);
+            CompletionPopup {
+                offer,
+                selected,
+                moved,
+            }
+        });
+    }
+
+    /// A key for the open popup: Up and Down move, Tab and Enter accept,
+    /// Escape closes. True when the popup took it; nothing is taken with a
+    /// modifier held or with no popup open.
+    fn complete_key(&mut self, k: &Keystroke, now: f64) -> bool {
+        let m = &k.modifiers;
+        let Some(popup) = self.completion.as_mut() else {
+            return false;
+        };
+        if m.platform || m.control || m.alt || m.shift {
+            return false;
+        }
+        let n = popup.offer.items.len();
+        match k.key.as_str() {
+            "down" => {
+                popup.selected = (popup.selected + 1) % n;
+                popup.moved = true;
+            }
+            "up" => {
+                popup.selected = (popup.selected + n - 1) % n;
+                popup.moved = true;
+            }
+            "tab" | "enter" => self.accept_completion(now),
+            "escape" => {
+                self.completion = None;
+                self.completion_closed_at = Some(self.buffer.version);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Replaces what was typed of the key with the selected item.
+    fn accept_completion(&mut self, now: f64) {
+        let Some(popup) = self.completion.take() else {
+            return;
+        };
+        let Some(item) = popup.offer.items.get(popup.selected) else {
+            return;
+        };
+        let cursor = self.buffer.cursor();
+        let from = self.buffer.line_start(self.buffer.line_of(cursor)) + popup.offer.from;
+        self.buffer.replace_range(from..cursor, &item.label, now);
+        self.completion_closed_at = Some(self.buffer.version);
+    }
+
     fn key_buffer(&mut self, k: &Keystroke, now: f64, cx: &mut App) {
+        // An open completion popup takes Up, Down, Tab, Enter and Escape.
+        if self.complete_key(k, now) {
+            self.now_dirty(now);
+            return;
+        }
         let m = &k.modifiers;
         let shift = m.shift;
         let key = k.key.as_str();
@@ -1521,6 +1741,7 @@ impl EditorBody {
             }
         }
         self.buffer.reveal_cursors();
+        self.update_completion();
         self.ensure_cursor_visible();
         self.now_dirty(now);
         if self.search.is_some() {
@@ -2495,6 +2716,9 @@ impl CardBody for EditorBody {
             });
             // Keep the shaping cache to the visible lines.
             self.shaped.retain(|(l, _), _| *l >= first && *l < last);
+            if legible {
+                self.paint_completion(area, scale, window, cx);
+            }
         });
         if legible {
             self.paint_status(bounds, scale, window, cx);
@@ -2576,6 +2800,7 @@ impl CardBody for EditorBody {
         }
         self.focus = Focus::Buffer;
         self.tree_focused = false;
+        self.completion = None;
         let idx = self.index_at(local, world);
         // A click in the line-number gutter folds or opens that line's block.
         if local.x - t_origin.x - PAD_X < self.gutter_w() {
@@ -3003,6 +3228,92 @@ mod tests {
         b.scroll_line = 100;
         b.set_rows_visible(30);
         assert_eq!(b.scroll_line, 100, "only once");
+    }
+
+    fn key(name: &str) -> Keystroke {
+        Keystroke::parse(name).unwrap()
+    }
+
+    #[test]
+    fn the_settings_popup_narrows_moves_accepts_and_stays_closed_after_escape() {
+        let mut b = body();
+        b.completer = Some(infiniterm_core::complete::settings_keys);
+        b.buffer = Buffer::new("{\n  \"ui.");
+        b.buffer.move_doc_end(false);
+        b.update_completion();
+        let n = b
+            .completion
+            .as_ref()
+            .expect("opens after ui.")
+            .offer
+            .items
+            .len();
+        assert!(n > 3);
+        // Down moves the row, wrapping at the end; the list narrows as you type.
+        assert!(b.complete_key(&key("down"), 0.));
+        assert_eq!(b.completion.as_ref().unwrap().selected, 1);
+        assert!(b.complete_key(&key("up"), 0.));
+        assert!(b.complete_key(&key("up"), 0.));
+        assert_eq!(b.completion.as_ref().unwrap().selected, n - 1);
+        // Moved by hand, the row stays on its item while the list narrows.
+        b.buffer.type_char('f', 1.);
+        b.update_completion();
+        assert!(b.completion.as_ref().unwrap().moved);
+        b.buffer.type_char('i', 2.);
+        b.buffer.type_char('t', 3.);
+        b.buffer.type_char('P', 4.);
+        b.update_completion();
+        assert_eq!(b.completion.as_ref().unwrap().offer.items.len(), 1);
+        // Tab inserts the whole key in place of what was typed, quote kept.
+        assert!(b.complete_key(&key("tab"), 5.));
+        assert_eq!(b.buffer.text(), "{\n  \"ui.fitPadding");
+        assert!(b.completion.is_none());
+        // It stays closed until the text changes.
+        b.update_completion();
+        assert!(b.completion.is_none());
+    }
+
+    #[test]
+    fn the_best_match_is_the_top_row_until_the_user_moves_it() {
+        let mut b = body();
+        b.completer = Some(infiniterm_core::complete::settings_keys);
+        b.buffer = Buffer::new("\"fitp");
+        b.buffer.move_doc_end(false);
+        b.update_completion();
+        let top = b.completion.as_ref().unwrap().offer.items[0].label.clone();
+        assert_eq!(top, "ui.fitPadding");
+        assert_eq!(b.completion.as_ref().unwrap().selected, 0);
+        b.buffer.type_char('a', 1.);
+        b.update_completion();
+        let p = b.completion.as_ref().unwrap();
+        assert_eq!((p.selected, p.moved), (0, false));
+    }
+
+    #[test]
+    fn escape_closes_the_popup_until_the_next_edit_and_other_keys_pass_through() {
+        let mut b = body();
+        b.completer = Some(infiniterm_core::complete::settings_keys);
+        b.buffer = Buffer::new("\"ui.");
+        b.buffer.move_doc_end(false);
+        b.update_completion();
+        assert!(b.completion.is_some());
+        // A letter, or a key with a modifier, is not the popup's.
+        assert!(!b.complete_key(&key("a"), 0.));
+        assert!(!b.complete_key(&key("cmd-down"), 0.));
+        assert!(b.complete_key(&key("escape"), 0.));
+        assert!(b.completion.is_none());
+        b.update_completion();
+        assert!(b.completion.is_none(), "closed on purpose");
+        b.buffer.type_char('f', 1.);
+        b.update_completion();
+        assert!(b.completion.is_some(), "an edit opens it again");
+        // No popup, no keys taken.
+        b.completion = None;
+        assert!(!b.complete_key(&key("enter"), 2.));
+        // A file with no provider never opens one.
+        b.completer = None;
+        b.update_completion();
+        assert!(b.completion.is_none());
     }
 
     #[test]
