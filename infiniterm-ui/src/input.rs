@@ -751,13 +751,18 @@ impl AppView {
                         *last = if was { None } else { Some(now) };
                         was
                     };
-                    // The same double-Escape for a locked editor card as
-                    // for a browser: whichever body the card has.
+                    // A browser needs two Escapes (a page uses a single one
+                    // itself). A locked editor unlocks on an Escape that has
+                    // nothing else to do: while a popup, the find panel,
+                    // extra cursors or a selection is there, Escape closes
+                    // that and the card stays locked, so the next one leaves
+                    // (#265, Ekin: "you close find with Esc, you close
+                    // autocomplete with Esc").
                     let double = match self.browser_for(&id) {
                         Some(b) => step(&mut b.last_escape_ms),
                         None => self
                             .editor_tabs_for(&id)
-                            .is_some_and(|t| step(&mut t.last_escape_ms)),
+                            .is_some_and(|t| !t.escape_has_work()),
                     };
                     if double {
                         if let Some(body) = self.browser_for(&id) {

@@ -49,6 +49,12 @@ pub struct EditorTabs {
 }
 
 impl EditorTabs {
+    /// Escape still has something to close in the active tab (a popup, the
+    /// find panel, extra cursors, a selection); see `EditorBody::escape_has_work`.
+    pub fn escape_has_work(&self) -> bool {
+        self.active_body_ref().is_some_and(|b| b.escape_has_work())
+    }
+
     /// The resize cursor while the tree's divider is under the pointer or held.
     pub fn divider_cursor(&self) -> Option<gpui::CursorStyle> {
         self.active_body_ref().and_then(|b| b.divider_cursor())

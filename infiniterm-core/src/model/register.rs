@@ -78,7 +78,14 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
     // editor card locks the same way with its own tab commands behind the
     // same chords (`editor_keys::lock_override`); what neither table
     // knows falls through to the body, where the editor's own keys live.
-    if locked && !is_workspace_switch(chord) && !is_locked_carveout(chord, kind) {
+    // The way out is whatever the keymap binds to `browser.leave`: Cmd+Escape
+    // by default, and a rebind (the user's keybindings.json) must work on a
+    // locked card too, or the chord would go to the page or the text.
+    let leaves = m
+        .keymap
+        .iter()
+        .any(|(c, id)| c == chord && id == "browser.leave");
+    if locked && !is_workspace_switch(chord) && !is_locked_carveout(chord, kind) && !leaves {
         let id = if kind == Some(crate::saved_layout::CardKind::Editor) {
             crate::editor_keys::lock_override(chord)
         } else {
@@ -112,8 +119,10 @@ fn is_workspace_switch(chord: &str) -> bool {
 }
 
 /// The other carve-outs a locked card does not claim: the way out of a
-/// locked page (`browser.leave`, bound to `cmd+escape` in the default
-/// keymap; a no-op on an editor, which unlocks by double-Escape only) and,
+/// locked page or editor (`browser.leave`, bound to `cmd+escape` in the
+/// default keymap and followed through the keymap if rebound, see
+/// `resolve_chord`; an editor also unlocks on an Escape with nothing else to
+/// close) and,
 /// for a BROWSER only, the omnibox (`cmd+l`, an app overlay, not the page
 /// — the design doc: "the omnibox already does this"). A locked editor
 /// does not carve `cmd+l` out: 2026-09-24, Ekin wants an editor's own
@@ -3234,6 +3243,50 @@ mod tests {
                 "{chord} must fall through to the body, not be swallowed"
             );
         }
+    }
+
+    // The way out of a locked editor is a command in the keymap (#265):
+    // Cmd+Escape by default, and a rebind in keybindings.json works while the
+    // card is locked, or the chord would go to the text.
+    #[test]
+    fn the_way_out_of_a_locked_editor_is_a_rebindable_command() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        h.m.card_mut(&id).unwrap().locked = true;
+        // the default chord
+        let effects = {
+            assert!(handle_chord(&mut h.m, &h.r, "cmd+escape"));
+            h.m.take_effects()
+        };
+        assert!(!h.m.card(&id).unwrap().locked);
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor { card_id, action: EditorAction::Unlock } if *card_id == id
+        )));
+        // another chord, once bound to it: claimed while locked
+        h.m.card_mut(&id).unwrap().locked = true;
+        h.m.apply_keymap_text(r#"{"cmd+escape": null, "cmd+shift+e": "browser.leave"}"#);
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+shift+e").as_deref(),
+            Some("browser.leave")
+        );
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+escape"),
+            None,
+            "unbound: the text has it"
+        );
+        let _ = h.m.take_effects();
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+shift+e"));
+        assert!(!h.m.card(&id).unwrap().locked);
+        // an editor that is not locked: nothing to do, nothing happens
+        let _ = h.m.take_effects();
+        h.run("browser.leave");
+        assert!(h
+            .m
+            .take_effects()
+            .iter()
+            .all(|e| !matches!(e, Effect::Editor { .. })));
     }
 
     // Two chords stay the app's even on a locked card: the omnibox (an app

@@ -1304,11 +1304,26 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     );
     // A focused browser card gives every key to the page; this is the one
     // chord that comes back out, to the nearest other card.
-    r.register("browser.leave", "Browser: leave the page", |m| {
+    r.register("browser.leave", "Card: leave the page or the editor", |m| {
         m.with_active_card(|m, id| {
             let Some(card) = m.card(&id).cloned() else {
                 return;
             };
+            // A locked editor: the lock is dropped and focus stays on the
+            // card. Escape does it too when it has nothing else to close
+            // (`input.rs`); this is the chord you can rebind (#265).
+            if card.kind == CardKind::Editor {
+                if card.locked {
+                    if let Some(c) = m.card_mut(&id) {
+                        c.locked = false;
+                    }
+                    m.effects.push(Effect::Editor {
+                        card_id: id,
+                        action: EditorAction::Unlock,
+                    });
+                }
+                return;
+            }
             if card.kind != CardKind::Browser {
                 return;
             }

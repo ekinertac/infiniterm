@@ -880,6 +880,18 @@ impl EditorBody {
         self.dirty = true;
     }
 
+    /// Whether a single Escape still has something to close or drop: the
+    /// completion popup, the find panel, extra cursors, a selection. While it
+    /// does, Escape does that and the card stays locked; when it does not,
+    /// Escape unlocks the card (`input.rs`), like closing a popup with Esc
+    /// and leaving with the next one in any editor (#265).
+    pub fn escape_has_work(&self) -> bool {
+        self.completion.is_some()
+            || self.search.is_some()
+            || self.buffer.cursor_count() > 1
+            || self.buffer.selection().is_some()
+    }
+
     /// Whether a point in the text area (below any strip) is on the tree
     /// rather than the text, for the lock: clicking the tree must not lock.
     pub fn is_on_tree(&self, local: Point) -> bool {
@@ -3232,6 +3244,39 @@ mod tests {
             bold_weight: gpui::FontWeight::BOLD,
         };
         EditorBody::new("c1", None, "/".into(), &metrics, Size { w: 400., h: 300. })
+    }
+
+    // A locked editor unlocks on an Escape that has nothing else to do (#265):
+    // while a popup, the find panel, extra cursors or a selection is there,
+    // Escape closes or drops that first, as in every editor.
+    #[test]
+    fn escape_has_work_until_the_popup_the_find_panel_and_the_selection_are_gone() {
+        let mut b = body();
+        b.buffer = Buffer::new("hello world");
+        assert!(!b.escape_has_work(), "a plain caret: Escape leaves");
+        b.buffer.select_all();
+        assert!(b.escape_has_work(), "a selection is dropped first");
+        b.buffer.set_cursor(0);
+        assert!(!b.escape_has_work());
+        b.buffer.add_cursor_at(6);
+        assert!(b.escape_has_work(), "several cursors collapse first");
+        b.buffer.collapse_to_primary();
+        assert!(!b.escape_has_work());
+        b.open_search(false);
+        assert!(b.escape_has_work(), "the find panel closes first");
+        b.close_search();
+        assert!(!b.escape_has_work());
+        // the completion popup
+        b.completer = settings_provider();
+        b.buffer = Buffer::new("{\n  \"ui.fit");
+        b.buffer.move_doc_end(false);
+        b.update_completion();
+        assert!(
+            b.completion.is_some() && b.escape_has_work(),
+            "the popup closes first"
+        );
+        assert!(b.complete_key(&key("escape"), 0.));
+        assert!(!b.escape_has_work());
     }
 
     // The tree's divider can be dragged (#258): a press on the line holds it,
