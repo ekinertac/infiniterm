@@ -3330,6 +3330,40 @@ mod tests {
         assert!(h.m.key_context().multi_selection);
     }
 
+    // The examples in a new keybindings.json are commented lines that must
+    // work when switched on: they parse with no error and every command in
+    // them exists, so they cannot rot as commands are renamed.
+    #[test]
+    fn the_keybinding_examples_in_a_new_file_parse_and_name_real_commands() {
+        let h = Harness::new();
+        let lines: Vec<&str> = settings_in::EMPTY_KEYBINDINGS
+            .lines()
+            .filter_map(|l| l.strip_prefix("//   "))
+            .collect();
+        assert!(lines.len() >= 8, "the examples are there: {lines:?}");
+        let file = format!("{{\n{}\n}}", lines.join("\n"));
+        let parsed = crate::keymap::parse_keymap(&crate::jsonc::parse_jsonc(&file).unwrap());
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let ids: Vec<String> = parsed
+            .bindings
+            .iter()
+            .filter_map(|(_, id)| id.clone())
+            .chain(parsed.conditional.iter().filter_map(|c| c.command.clone()))
+            .collect();
+        assert!(ids.len() >= 8);
+        for id in ids {
+            assert!(h.r.get(&id).is_some(), "{id} is not a command");
+        }
+        // and the new file itself, as written, has no bindings and no errors
+        let mut m = Model::new();
+        m.apply_keymap_text(settings_in::EMPTY_KEYBINDINGS);
+        assert!(m.conditional_keys.is_empty());
+        assert!(m
+            .take_effects()
+            .iter()
+            .all(|e| !matches!(e, Effect::Warn(_))));
+    }
+
     // The way out of a locked editor is a command in the keymap (#265):
     // Cmd+Escape by default, and a rebind in keybindings.json works while the
     // card is locked, or the chord would go to the text.
