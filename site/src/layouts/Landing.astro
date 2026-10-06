@@ -304,8 +304,9 @@ const SOURCE_URL = 'https://github.com/ekinertac/infiniterm';
     box-shadow: 0 0 0 1px var(--card-edge);
   }
   .film iframe { display: block; width: 100%; height: 100%; border: 0; }
-  /* The poster is the button: the stage's dark with the canvas's dot grid,
-     and one play control in the middle. */
+  /* The poster is the button: the film's opening frame ("15 tabs.",
+     public/film-poster.png, captured from film.html at 1920x1080; recapture
+     it when the film changes), darkened so the play control stands out. */
   .film .play {
     position: absolute;
     inset: 0;
@@ -318,8 +319,9 @@ const SOURCE_URL = 'https://github.com/ekinertac/infiniterm';
     color: #cdd6f4;
     font: 600 1.15rem var(--sans);
     background-color: #0e0f13;
-    background-image: radial-gradient(#26263a 1.2px, transparent 1.4px);
-    background-size: 24px 24px;
+    background-image: linear-gradient(rgb(14 15 19 / 0.45), rgb(14 15 19 / 0.45)), url('/film-poster.png');
+    background-size: cover;
+    background-position: center;
   }
   .film .play .len { color: #6c7086; font-weight: 500; margin-left: 6px; }
   .film .play-icon {
