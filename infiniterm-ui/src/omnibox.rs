@@ -149,10 +149,12 @@ impl AppView {
                 } else {
                     chrome.text_bright
                 })
-                // No caret against the placeholder: the box is empty, and a
-                // caret there suggests those words are text you typed.
+                // The caret leads the placeholder, so an empty box reads as
+                // an input (field.rs `empty_with_placeholder`).
                 .when(placeholder, |d| {
-                    d.child("search or enter address".to_string())
+                    d.child(crate::field::Field::empty_with_placeholder(
+                        "search or enter address",
+                    ))
                 })
                 .when(!placeholder, |d| {
                     d.child(
@@ -496,7 +498,9 @@ impl AppView {
                     } else {
                         chrome.text_bright
                     })
-                    .when(query.is_empty(), |d| d.child("find in page".to_string()))
+                    .when(query.is_empty(), |d| {
+                        d.child(crate::field::Field::empty_with_placeholder("find in page"))
+                    })
                     .when(!query.is_empty(), |d| {
                         d.child(self.find_field.inline_composing(
                             chrome.sel_bg,

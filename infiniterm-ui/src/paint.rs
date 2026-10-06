@@ -182,7 +182,11 @@ impl AppView {
         self.apply_hover_cursor(window);
         // Over a frame band the cursor says what a press would do: arrows
         // on an edge or corner, a hand on the band that moves the card.
-        if let Some((_, edge)) = &self.hover_edge {
+        if let Some((_, edge)) = self
+            .hover_edge
+            .as_ref()
+            .filter(|_| !self.model.modal_open())
+        {
             use infiniterm_core::resize::Edge;
             let style = match edge {
                 None => gpui::CursorStyle::OpenHand,

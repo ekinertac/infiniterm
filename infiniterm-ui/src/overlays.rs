@@ -497,6 +497,20 @@ impl Render for AppView {
                     cx.notify();
                 }
             }))
+            // The pointer over the title bar or the status bar is not over a
+            // card edge or a page: the canvas's hover state (the card edge's
+            // resize cursor, a browser page's cursor) is dropped there, or
+            // it would keep answering for a pointer that left (#256).
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
+                let top = this.titlebar_h();
+                let y = f32::from(e.position.y) as f64;
+                let outside = y < top as f64 || y > top as f64 + this.model.view_size.h;
+                if outside && (this.hover_edge.is_some() || this.hover_body.is_some()) {
+                    this.hover_edge = None;
+                    this.hover_body = None;
+                    cx.notify();
+                }
+            }))
             .child(title_bar)
             .child(
                 div()
@@ -1047,7 +1061,9 @@ impl AppView {
                                         chrome.text_bright
                                     })
                                     .when(query.is_empty(), |d| {
-                                        d.child(source.placeholder().to_string())
+                                        d.child(crate::field::Field::empty_with_placeholder(
+                                            source.placeholder(),
+                                        ))
                                     })
                                     .when(!query.is_empty(), |d| {
                                         d.child(self.query_field.inline_composing(
@@ -1482,7 +1498,9 @@ impl AppView {
                                     chrome.text_bright
                                 })
                                 .when(query.is_empty(), |d| {
-                                    d.child("Filter shortcuts".to_string())
+                                    d.child(crate::field::Field::empty_with_placeholder(
+                                        "Filter shortcuts",
+                                    ))
                                 })
                                 .when(!query.is_empty(), |d| {
                                     d.child(self.shortcuts_field.inline_composing(
