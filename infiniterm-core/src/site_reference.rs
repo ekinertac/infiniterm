@@ -168,7 +168,7 @@ fn keys_page(commands: &[(String, String)]) -> String {
     }
     out.push('\n');
 
-    out.push_str("## Inside a locked card\n\nA browser or editor card locks the keyboard once you click into it or press Enter on it; double Escape lets go. While locked, these chords mean what they mean in Chrome or a text editor instead of what the canvas binds them to. <kbd>Cmd</kbd> <kbd>L</kbd>, <kbd>Cmd</kbd> <kbd>Esc</kbd>, Ctrl plus a digit and Ctrl+Tab stay the app's.\n\n");
+    out.push_str("## Inside a locked card\n\nA browser or editor card locks the keyboard once you click into it or press Enter on it. In an editor, Escape lets go once it has nothing else to close; in a browser card, Escape twice. <kbd>Cmd</kbd> <kbd>Esc</kbd> lets go of either. While locked, these chords mean what they mean in Chrome or a text editor instead of what the canvas binds them to. <kbd>Cmd</kbd> <kbd>L</kbd>, <kbd>Cmd</kbd> <kbd>Esc</kbd>, Ctrl plus a digit and Ctrl+Tab stay the app's.\n\n");
     locked_table(&mut out, "Locked browser card", commands, |c| {
         browser_keys::lock_override(c).or_else(|| browser_keys::browser_override(c))
     });
