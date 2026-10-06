@@ -34,7 +34,7 @@ export default defineConfig({
           ].join('\n'),
           customSets: [
             { label: 'Guide', paths: ['guide/**'], description: 'install, the canvas, card states, terminal and editor cards, ift and sessions, configuration' },
-            { label: 'Reference', paths: ['reference/**'], description: 'every key, command and setting, generated from the app' },
+            { label: 'Reference', paths: ['reference/**'], description: 'every key, command and setting, generated from the app, and every feature in one list' },
           ],
           optionalLinks: [
             { label: 'Source', url: 'https://github.com/ekinertac/infiniterm', description: 'the code, CLAUDE.md (how it is built and why), CHANGELOG.md' },
@@ -52,7 +52,6 @@ export default defineConfig({
         { icon: 'github', label: 'GitHub', href: 'https://github.com/ekinertac/infiniterm' },
       ],
       sidebar: [
-        'features',
         {
           label: 'Guide',
           items: [
@@ -67,7 +66,7 @@ export default defineConfig({
         },
         {
           label: 'Reference',
-          items: ['reference/keys', 'reference/commands', 'reference/settings'],
+          items: ['reference/keys', 'reference/commands', 'reference/settings', 'reference/features'],
         },
       ],
     }),
