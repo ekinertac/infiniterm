@@ -23,7 +23,7 @@ use infiniterm_core::editor_theme::{editor_colors, syntax_rules, Chrome as Edito
 use infiniterm_core::grid::Size;
 use infiniterm_core::model::EditorAction;
 use infiniterm_core::saved_layout::CardKind;
-use infiniterm_core::sidebar::{sidebar_extent, sidebar_width};
+use infiniterm_core::sidebar::{clamp_sidebar, sidebar_extent, sidebar_width};
 use infiniterm_editor::language::Language;
 
 /// The generated config files are rewritten on every launch, so an edit
@@ -196,6 +196,21 @@ impl AppView {
                             if let Some(h) = c.tabs.get_mut(c.active_tab) {
                                 *h = path;
                             }
+                            self.model.dirty_layout = true;
+                        }
+                    }
+                    // The tree's divider dragged: the width the card keeps,
+                    // clamped so the text keeps its minimum (#258).
+                    EditorEvent::Sidebar(w) => {
+                        if let Some(c) = self.model.card_mut(&card.id) {
+                            let extent = sidebar_extent(
+                                infiniterm_core::grid::Size {
+                                    w: c.rect.w,
+                                    h: c.rect.h,
+                                },
+                                c.sidebar_top,
+                            );
+                            c.sidebar = Some(clamp_sidebar(w, extent));
                             self.model.dirty_layout = true;
                         }
                     }
@@ -447,6 +462,21 @@ impl AppView {
                     EditorEvent::None => {}
                     EditorEvent::Notice(text) => self.model.notify(text),
                     EditorEvent::OpenTab(_) => {}
+                    // The tree's divider dragged: the width the card keeps,
+                    // clamped so the text keeps its minimum (#258).
+                    EditorEvent::Sidebar(w) => {
+                        if let Some(c) = self.model.card_mut(&card.id) {
+                            let extent = sidebar_extent(
+                                infiniterm_core::grid::Size {
+                                    w: c.rect.w,
+                                    h: c.rect.h,
+                                },
+                                c.sidebar_top,
+                            );
+                            c.sidebar = Some(clamp_sidebar(w, extent));
+                            self.model.dirty_layout = true;
+                        }
+                    }
                     EditorEvent::PathChanged { path, cwd } => {
                         if let Some(c) = self.model.card_mut(&card.id) {
                             c.path = Some(path);
