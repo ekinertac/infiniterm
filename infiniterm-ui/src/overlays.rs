@@ -609,7 +609,7 @@ impl AppView {
             chosen_fill,
         } = crate::chrome::tab_colors(chrome, wear, REMOTE_BAR_TINT);
         let mut tabs = div().flex().items_center().gap_1();
-        for ws in &self.model.workspaces {
+        for (index, ws) in self.model.workspaces.iter().enumerate() {
             let cards = self.model.cards_on(Some(&ws.id));
             let is_active = active.as_deref() == Some(&ws.id);
             // One dot per card, in the cards' reading order on the canvas, so
@@ -637,6 +637,27 @@ impl AppView {
                     idle_text
                 })
                 .when(is_active, |d| d.bg(chosen_fill))
+                // Drag a tab onto another to take its place (#242).
+                .on_drag(
+                    crate::tab_drag::DraggedTab {
+                        id: ws.id.clone(),
+                        name: ws.name.clone(),
+                        font_px: TAB_LABEL_FONT_PX * ui,
+                        bg: chosen_fill,
+                        fg: chrome.text_bright,
+                    },
+                    |dragged, _, _, cx| cx.new(|_| crate::tab_drag::TabGhost(dragged.clone())),
+                )
+                .drag_over::<crate::tab_drag::DraggedTab>(move |style, _, _, _| {
+                    style.bg(chosen_fill)
+                })
+                .on_drop(
+                    cx.listener(move |this, dragged: &crate::tab_drag::DraggedTab, _, cx| {
+                        this.model.move_workspace(&dragged.id, index);
+                        this.perform_effects();
+                        cx.notify();
+                    }),
+                )
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _: &MouseDownEvent, _, cx| {

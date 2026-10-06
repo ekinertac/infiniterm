@@ -1521,6 +1521,42 @@ mod tests {
         assert_eq!(rects(&h), before);
     }
 
+    // The tab row's order (#242): a drag does it with the mouse, these keep it
+    // from being mouse-only. The workspace that moved stays the active one.
+    #[test]
+    fn workspace_tabs_reorder_and_the_moved_one_stays_active() {
+        let mut h = Harness::new();
+        h.run("workspace.new");
+        h.run("workspace.new");
+        let ids: Vec<String> = h.m.workspaces.iter().map(|w| w.id.clone()).collect();
+        let order =
+            |h: &Harness| -> Vec<String> { h.m.workspaces.iter().map(|w| w.id.clone()).collect() };
+        let last = ids[2].clone();
+        assert_eq!(h.m.active_workspace.as_deref(), Some(last.as_str()));
+        h.run("workspace.reorder.left");
+        assert_eq!(
+            order(&h),
+            vec![ids[0].clone(), last.clone(), ids[1].clone()]
+        );
+        h.run("workspace.reorder.left");
+        h.run("workspace.reorder.left");
+        assert_eq!(
+            order(&h),
+            vec![last.clone(), ids[0].clone(), ids[1].clone()],
+            "stops at the left end"
+        );
+        assert_eq!(h.m.active_workspace.as_deref(), Some(last.as_str()));
+        h.run("workspace.reorder.right");
+        assert_eq!(order(&h)[1], last);
+        // what a drop does: the tab takes the index of the tab it lands on
+        h.m.move_workspace(&last, 2);
+        assert_eq!(
+            order(&h),
+            vec![ids[0].clone(), ids[1].clone(), last.clone()]
+        );
+        assert!(h.m.dirty_layout, "the order is saved");
+    }
+
     // A swap trades whole rects; focus stays on the card that moved.
     #[test]
     fn a_swap_trades_rects_and_animates_both() {

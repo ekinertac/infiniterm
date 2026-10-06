@@ -10,6 +10,26 @@ use crate::workspaces::{after_closing, step_workspace};
 pub const NEW_WORKSPACE_ROW: &str = "new";
 
 impl Model {
+    /// Puts workspace `id` at tab position `to` (`workspaces::reordered`),
+    /// the order the tabs, `workspace.show.N` and Ctrl+digit read. The saved
+    /// layout writes the order, so it stays.
+    pub fn move_workspace(&mut self, id: &str, to: usize) {
+        let order: Vec<String> = self.workspaces.iter().map(|w| w.id.clone()).collect();
+        let Some(next) = crate::workspaces::reordered(&order, id, to) else {
+            return;
+        };
+        let mut old = std::mem::take(&mut self.workspaces);
+        self.workspaces = next
+            .iter()
+            .filter_map(|n| {
+                old.iter()
+                    .position(|w| &w.id == n)
+                    .map(|i| old.swap_remove(i))
+            })
+            .collect();
+        self.dirty_layout = true;
+    }
+
     /// The selection (else the focused card) to workspace `to`, or a new
     /// one: each card keeps its size and takes the destination's first free
     /// block slot (Cmd+T's rule, `layout::block_slot`), in the order you
@@ -166,6 +186,21 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
                 }
             },
         );
+    }
+    // The tab row's order, from the keyboard as well as by dragging a tab.
+    for (name, label, step) in [
+        ("left", "Workspace: move this tab left", -1_isize),
+        ("right", "Workspace: move this tab right", 1),
+    ] {
+        r.register(&format!("workspace.reorder.{name}"), label, move |m| {
+            let Some(id) = m.active_workspace.clone() else {
+                return;
+            };
+            let Some(at) = m.workspaces.iter().position(|w| w.id == id) else {
+                return;
+            };
+            m.move_workspace(&id, (at as isize + step).max(0) as usize);
+        });
     }
     // Numbered, not prompted: a workspace is made far more often than named.
     // Opens with one terminal, like the app itself.
