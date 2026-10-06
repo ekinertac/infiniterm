@@ -1557,6 +1557,99 @@ mod tests {
         assert!(h.m.dirty_layout, "the order is saved");
     }
 
+    // A settings.json that stops parsing keeps the settings in force and says
+    // so; it used to reset every setting to its default (#246).
+    #[test]
+    fn a_broken_settings_file_keeps_the_last_good_settings() {
+        let mut h = Harness::new();
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.cardOpacity": 0.9}"#);
+        assert_eq!(h.m.config.terminal.font_size, 21.);
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.cardOpacity": 0.9,, "x": 1}"#);
+        assert!(h.m.settings_error.is_some());
+        assert_eq!(
+            h.m.config.terminal.font_size, 21.,
+            "the last good settings stay"
+        );
+        assert_eq!(h.m.config.ui.card_opacity, 0.9);
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 18}"#);
+        assert!(h.m.settings_error.is_none());
+        assert_eq!(h.m.config.terminal.font_size, 18.);
+    }
+
+    // The file is checked before it is applied, and a file with an error is not
+    // accepted: the settings in force stay and the notice says what is wrong.
+    #[test]
+    fn a_settings_file_with_an_error_is_not_accepted() {
+        let mut h = Harness::new();
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21}"#);
+        let warned = |h: &mut Harness| {
+            h.m.take_effects()
+                .iter()
+                .filter_map(|e| match e {
+                    Effect::Warn(w) => Some(w.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let _ = warned(&mut h);
+        // a setting of the wrong kind
+        h.m.apply_settings_text(r#"{"terminal.fontSize": "big", "ui.showGrid": false}"#);
+        let w = warned(&mut h);
+        assert!(
+            w.iter()
+                .any(|m| m.contains("terminal.fontSize") && m.contains("a number")),
+            "{w:?}"
+        );
+        assert_eq!(
+            h.m.config.terminal.font_size, 21.,
+            "nothing of it was applied"
+        );
+        assert!(h.m.config.ui.show_grid, "not even the part that was fine");
+        // a file that is not an object
+        h.m.apply_settings_text("[1, 2]");
+        assert!(!warned(&mut h).is_empty());
+        assert_eq!(h.m.config.terminal.font_size, 21.);
+        // what must NOT be refused: the nested shape, a list for the background,
+        // an unknown name, a number out of range, a trailing comma, comments
+        h.m.apply_settings_text(
+            "{ // mine\n \"terminal\": {\"fontSize\": 19,},\n \"ui.backgroundImage\": [\"dusk\", \"ember\"],\n \"nope.nothing\": 1,\n \"ui.cardOpacity\": 7,\n}",
+        );
+        assert!(warned(&mut h).is_empty());
+        assert!(h.m.settings_error.is_none());
+        assert_eq!(h.m.config.terminal.font_size, 19.);
+        assert_eq!(h.m.config.ui.background_image.len(), 2);
+    }
+
+    #[test]
+    fn a_keybindings_file_with_an_error_keeps_the_bindings_you_had() {
+        let mut h = Harness::new();
+        h.m.apply_keymap_text(r#"{"cmd+shift+y": "app.palette"}"#);
+        let had = h.m.keymap.clone();
+        let _ = h.m.take_effects();
+        h.m.apply_keymap_text(r#"{"cmd+shift+y": "app.palette",,}"#);
+        assert_eq!(h.m.keymap, had, "the bindings in force stay");
+        assert!(h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::Warn(w) if w.contains("not applied"))));
+    }
+
+    // Saving a setting into a file whose last entry already ends in a comma
+    // must leave a file that still parses.
+    #[test]
+    fn saving_a_setting_into_a_file_with_a_trailing_comma_still_parses() {
+        let text = "{\n  \"terminal.fontSize\": 16,\n  \"ui.cardOpacity\": 0.9,\n}\n";
+        let patched =
+            Model::patched_settings(Some(text), "ui.windowColor", &serde_json::json!("lime"))
+                .expect("a change");
+        let mut h = Harness::new();
+        h.m.apply_settings_text(&patched);
+        assert!(h.m.settings_error.is_none(), "{patched}");
+        assert_eq!(h.m.config.ui.window_color, "lime");
+        assert_eq!(h.m.config.terminal.font_size, 16.);
+    }
+
     // A swap trades whole rects; focus stays on the card that moved.
     #[test]
     fn a_swap_trades_rects_and_animates_both() {
