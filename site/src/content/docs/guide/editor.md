@@ -23,9 +23,9 @@ Typing a quote, a backtick or an opening bracket over selected text wraps it: se
 
 ## JSON with a schema
 
-A `.json` or `.jsonc` file with a `"$schema"` key near the top completes from that schema: a path beside the file, or an `https` address, downloaded once and kept. Type a quote for its keys, or a quote after a colon for the allowed values, `true` / `false` and the default. The list opens when you type, not when you move the caret.
+A `.json` or `.jsonc` file with a `"$schema"` key near the top completes from that schema: a path beside the file, or an `https` address, downloaded once and kept. Type a quote for its keys, or a quote after a colon for the allowed values, `true` / `false` and the default. The list opens while you type a word, not after a space, a comma or a new line, and not when you move the caret.
 
-Your own `settings.json` needs no `$schema`: type `"ui.` and every `ui.*` setting is listed with its default, and the selected one with its description. Letters without a dot match anywhere in the name, so `fitpad` finds `ui.fitPadding`. Up and Down move, `Tab` or `Enter` inserts, `Escape` closes.
+Your own `settings.json` needs no `$schema`: type `"ui.` and every `ui.*` setting is listed with its default, and the selected one with its description. Letters without a dot match anywhere in the name, so `fitpad` finds `ui.fitPadding`. `Tab` takes the highlighted row. `Enter` takes it only after you moved to it with Up or Down; otherwise `Enter` makes a new line as usual. `Escape` closes the list.
 
 ## Multiple cursors
 
