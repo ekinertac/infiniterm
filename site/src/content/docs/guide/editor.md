@@ -11,6 +11,8 @@ An editor card is a file on the canvas: syntax highlighting for 17 languages thr
 - `ift -n some/file.rs` opens it as a card of its own and returns at once. `ift file.rs:20` opens with line 20 in the middle of the view.
 - `ift ~/Code/project` opens a card with the file tree rooted there.
 - "Editor: open a file" in the palette opens the macOS file panel: a file opens in an editor card, a folder opens with its tree.
+
+Drag the line between the tree and the text to make the tree wider or narrower; the card keeps that width. "Card: sidebar wider" and "narrower" in the palette do the same from the keyboard.
 - `Cmd N` opens an empty editor, and `Cmd` + click on a path in a terminal opens the file beside it.
 
 A file that does not exist yet opens empty, and the first save creates it; closing without saving leaves nothing on disk.
