@@ -880,6 +880,15 @@ impl EditorBody {
         self.dirty = true;
     }
 
+    /// What a keybinding's `when` can ask of this editor (#269).
+    pub fn context_flags(&self) -> infiniterm_core::model::UiContext {
+        infiniterm_core::model::UiContext {
+            suggest_widget_visible: self.completion.is_some(),
+            find_widget_visible: self.search.is_some(),
+            editor_has_selection: self.buffer.selection().is_some(),
+        }
+    }
+
     /// Whether a single Escape still has something to close or drop: the
     /// completion popup, the find panel, extra cursors, a selection. While it
     /// does, Escape does that and the card stays locked; when it does not,

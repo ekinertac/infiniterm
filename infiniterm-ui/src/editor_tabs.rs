@@ -55,6 +55,13 @@ impl EditorTabs {
         self.active_body_ref().is_some_and(|b| b.escape_has_work())
     }
 
+    /// The editor's part of a keybinding's context (`EditorBody::context_flags`).
+    pub fn context_flags(&self) -> infiniterm_core::model::UiContext {
+        self.active_body_ref()
+            .map(|b| b.context_flags())
+            .unwrap_or_default()
+    }
+
     /// The resize cursor while the tree's divider is under the pointer or held.
     pub fn divider_cursor(&self) -> Option<gpui::CursorStyle> {
         self.active_body_ref().and_then(|b| b.divider_cursor())

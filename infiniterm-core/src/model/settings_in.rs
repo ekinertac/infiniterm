@@ -15,7 +15,7 @@ use crate::settings_doc::default_settings_text;
 /// The first thing a new `settings.json` says, since an empty file explains nothing.
 pub const EMPTY_SETTINGS: &str = "// Your settings. Anything here overrides settings.default.json beside it,\n// which lists everything that can be set, with comments.\n//\n// Comments and trailing commas are allowed.\n{\n}\n";
 
-pub const EMPTY_KEYBINDINGS: &str = "// Your keybindings. Anything here overrides keybindings.default.json beside it.\n// Set a chord to null to unbind it and give the key back to the terminal.\n//\n// Comments and trailing commas are allowed.\n{\n}\n";
+pub const EMPTY_KEYBINDINGS: &str = "// Your keybindings. Anything here overrides keybindings.default.json beside it.\n// Set a chord to null to unbind it and give the key back to the terminal.\n// A binding can carry a \"when\" (see keybindings.default.json for the shape and the keys).\n//\n// Comments and trailing commas are allowed.\n{\n}\n";
 
 impl Model {
     pub fn apply_settings_text(&mut self, text: &str) {
@@ -65,6 +65,64 @@ impl Model {
         }
     }
 
+    /// What a binding's `when` can ask about, as of this moment (#269).
+    pub fn key_context(&self) -> crate::when::Context {
+        use crate::saved_layout::CardKind;
+        let card = self.focused();
+        let kind = match card.map(|c| c.kind) {
+            None => "none",
+            Some(CardKind::Terminal) => "terminal",
+            Some(CardKind::Editor) => "editor",
+            Some(CardKind::Browser) => "browser",
+            Some(CardKind::Diff) => "diff",
+            Some(CardKind::Transcript) => "transcript",
+            Some(CardKind::Page) => "page",
+        };
+        let overlay = if self.palette_open() {
+            "palette"
+        } else if self.prompt.is_open() {
+            "prompt"
+        } else if self.omni.open {
+            "omnibox"
+        } else if self.shortcuts_open {
+            "shortcuts"
+        } else if self.find.open {
+            "find"
+        } else if self.switcher.is_some() {
+            "switcher"
+        } else {
+            "none"
+        };
+        crate::when::Context {
+            card_kind: kind,
+            card_locked: card.is_some_and(|c| {
+                c.locked && matches!(c.kind, CardKind::Editor | CardKind::Browser)
+            }),
+            overlay,
+            phantom_focus: card.is_none() && self.selection.phantom.is_some(),
+            multi_selection: !self.selection.extra.is_empty(),
+            suggest_widget_visible: self.ui_context.suggest_widget_visible,
+            find_widget_visible: self.find.open || self.ui_context.find_widget_visible,
+            editor_has_selection: self.ui_context.editor_has_selection,
+        }
+    }
+
+    /// The binding a user's `when` gives `chord` right now: `Some(Some(id))` to
+    /// run it, `Some(None)` when it unbinds the chord in this context, `None`
+    /// when no conditional binding applies and the keymap decides. The last
+    /// matching one in the file wins.
+    pub fn conditional_for(&self, chord: &str) -> Option<Option<String>> {
+        if self.conditional_keys.is_empty() {
+            return None;
+        }
+        let ctx = self.key_context();
+        self.conditional_keys
+            .iter()
+            .rev()
+            .find(|b| b.chord == chord && b.when.as_ref().is_some_and(|w| w.eval(&ctx)))
+            .map(|b| b.command.clone())
+    }
+
     pub fn apply_keymap_text(&mut self, text: &str) {
         match parse_jsonc(text) {
             Ok(raw) => {
@@ -74,6 +132,7 @@ impl Model {
                         .push(Effect::Warn(format!("keybindings.json: {error}")));
                 }
                 self.keymap = merge_keymap(&default_keymap(), &parsed.bindings);
+                self.conditional_keys = parsed.conditional;
             }
             // Not accepted: the bindings you had stay (#246), like settings.json.
             Err(e) => {

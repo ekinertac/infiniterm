@@ -25,6 +25,7 @@
 //! Every binding carries the reason beside it. Do not restate chords in
 //! other files: name the command, not the key. `shortcuts.rs` renders this
 //! for the panel; the ui crate dispatches with `chord_for`.
+use crate::when::{Context, When};
 use serde_json::Value;
 
 /// A chord and the command it runs, in the order the generated file lists them.
@@ -550,15 +551,105 @@ pub fn is_allowed_chord(chord: &str) -> bool {
         && parts[1].chars().all(|c| c.is_ascii_digit())
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ParsedKeymap {
     /// `None` is how a binding is REMOVED: a file of overrides needs a way
     /// to give a chord back to the terminal, not only to point it elsewhere.
     pub bindings: Vec<(String, Option<String>)>,
+    /// Bindings with a `when` (#269), in file order: the LAST one whose
+    /// clause holds wins, over the default and the plain bindings alike.
+    pub conditional: Vec<CondBinding>,
     pub errors: Vec<String>,
 }
 
-/// Reads a keybindings file into overrides.
+/// A binding that applies only while its `when` holds. `command: None` unbinds
+/// the chord in that context (the key goes on to the card as if unbound).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CondBinding {
+    pub chord: String,
+    pub command: Option<String>,
+    pub when: Option<When>,
+}
+
+/// A chord that is more than a bare modifier name: something to match a key
+/// against. Spelled as `chord_for` spells it, lower case, `+` between parts.
+fn is_well_formed(chord: &str) -> bool {
+    !chord.is_empty() && chord.split('+').all(|p| !p.is_empty())
+}
+
+/// One binding of a chord, from a string, `null` or `{"command", "when"}`.
+fn parse_one(chord: &str, value: &Value, out: &mut ParsedKeymap) {
+    let (command, when) = match value {
+        Value::Null => (None, None),
+        Value::String(s) => (Some(s.clone()), None),
+        Value::Object(o) => {
+            let command = match o.get("command") {
+                Some(Value::String(s)) => Some(s.clone()),
+                Some(Value::Null) => None,
+                _ => {
+                    out.errors.push(format!(
+                        "\"{chord}\": an object needs \"command\": a command id, or null to unbind"
+                    ));
+                    return;
+                }
+            };
+            let when = match o.get("when") {
+                None => None,
+                Some(Value::String(src)) => match When::parse(src) {
+                    Ok(w) => Some(w),
+                    Err(e) => {
+                        out.errors.push(format!("\"{chord}\": when: {e}"));
+                        return;
+                    }
+                },
+                Some(_) => {
+                    out.errors
+                        .push(format!("\"{chord}\": \"when\" must be a string"));
+                    return;
+                }
+            };
+            (command, when)
+        }
+        _ => {
+            out.errors.push(format!(
+                "\"{chord}\": value must be a command id, null to unbind, or {{\"command\", \"when\"}}"
+            ));
+            return;
+        }
+    };
+    let lower = chord.to_lowercase();
+    match when {
+        None => {
+            if !is_allowed_chord(chord) {
+                out.errors.push(format!(
+                    "\"{chord}\": must include cmd, or be ctrl plus a digit \u{2014} other chords belong to the focused terminal; a \"when\" that is false in a terminal allows them"
+                ));
+                return;
+            }
+            out.bindings.push((lower, command));
+        }
+        Some(w) => {
+            // A key a terminal needs may be bound only where no terminal is
+            // focused: the clause must be false for a focused terminal, so a
+            // binding can never take its input.
+            if !is_allowed_chord(chord)
+                && (!is_well_formed(&lower) || w.eval(&Context::terminal_focused()))
+            {
+                out.errors.push(format!(
+                    "\"{chord}\": a key without cmd needs a \"when\" that is false in a focused terminal (editorTextFocus, browserFocus, phantomFocus ...): other keys belong to the terminal"
+                ));
+                return;
+            }
+            out.conditional.push(CondBinding {
+                chord: lower,
+                command,
+                when: Some(w),
+            });
+        }
+    }
+}
+
+/// Reads a keybindings file into overrides and `when` bindings.
 pub fn parse_keymap(json: &Value) -> ParsedKeymap {
     let mut out = ParsedKeymap::default();
     let Some(map) = json.as_object() else {
@@ -566,24 +657,12 @@ pub fn parse_keymap(json: &Value) -> ParsedKeymap {
             .push("keybindings.json must be a JSON object of \"chord\": \"command.id\"".into());
         return out;
     };
-    for (chord, id) in map {
-        let id = match id {
-            Value::Null => None,
-            Value::String(s) => Some(s.clone()),
-            _ => {
-                out.errors.push(format!(
-                    "\"{chord}\": value must be a command id, or null to unbind"
-                ));
-                continue;
-            }
-        };
-        if !is_allowed_chord(chord) {
-            out.errors.push(format!(
-                "\"{chord}\": must include cmd, or be ctrl plus a digit \u{2014} other chords belong to the focused terminal"
-            ));
-            continue;
+    for (chord, value) in map {
+        match value {
+            // Several bindings on one chord, each with its own when.
+            Value::Array(items) => items.iter().for_each(|v| parse_one(chord, v, &mut out)),
+            v => parse_one(chord, v, &mut out),
         }
-        out.bindings.push((chord.to_lowercase(), id));
     }
     out
 }
@@ -614,6 +693,24 @@ const KEYMAP_HEADER: &[&str] = &[
     "Every chord must include cmd. A focused terminal consumes ctrl, alt and bare",
     "keys and has to keep consuming them, or TUI applications break.",
     "",
+    "A binding can carry a \"when\", so it applies only in some situations. Give the",
+    "chord an object, or a list of them (the last one that holds wins):",
+    "",
+    "    { \"cmd+shift+e\": { \"command\": \"browser.leave\", \"when\": \"editorTextFocus\" } }",
+    "    { \"cmd+t\": { \"command\": null, \"when\": \"editorTextFocus\" } }",
+    "",
+    "A \"command\" of null unbinds the chord in that situation. A key WITHOUT cmd is",
+    "allowed only with a \"when\" that is false in a focused terminal, so it can never",
+    "take a terminal's input:",
+    "",
+    "    { \"f2\": { \"command\": \"editor.goToLine\", \"when\": \"editorTextFocus && !suggestWidgetVisible\" } }",
+    "",
+    "A \"when\" joins keys with && and ||, negates with !, compares with == and !=",
+    "(strings in quotes) and groups with parentheses. The keys:",
+    "",
+    // The names come from `when::KEYS`, rendered below.
+    "@WHEN_KEYS@",
+    "",
     "Comments and trailing commas are allowed in both files.",
 ];
 
@@ -624,8 +721,16 @@ pub fn render_keybindings_default(
     bindings: &Keymap,
     label_for: impl Fn(&str) -> Option<String>,
 ) -> String {
+    let when_keys: Vec<String> = crate::when::KEYS
+        .iter()
+        .map(|(name, what)| format!("    {name}: {what}"))
+        .collect();
     let header: Vec<String> = KEYMAP_HEADER
         .iter()
+        .flat_map(|line| match *line {
+            "@WHEN_KEYS@" => when_keys.clone(),
+            other => vec![other.to_string()],
+        })
         .map(|line| {
             if line.is_empty() {
                 "//".to_string()
@@ -1043,5 +1148,113 @@ mod tests {
             );
             assert_eq!(chord_for(&e), *chord);
         }
+    }
+
+    // #269: a binding may carry a `when`; the flat shape still works.
+    fn parsed(json: &str) -> ParsedKeymap {
+        parse_keymap(&crate::jsonc::parse_jsonc(json).unwrap())
+    }
+
+    #[test]
+    fn a_binding_takes_a_command_and_a_when_as_an_object_or_a_list() {
+        let p = parsed(
+            r#"{
+              "cmd+k": "app.palette",
+              "cmd+j": {"command": "card.new.terminal"},
+              "cmd+i": {"command": "app.shortcuts", "when": "editorTextFocus"},
+              "cmd+u": [
+                {"command": "a.one", "when": "editorTextFocus"},
+                {"command": null, "when": "browserFocus"},
+                "b.two"
+              ]
+            }"#,
+        );
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        assert_eq!(
+            p.bindings,
+            vec![
+                ("cmd+k".into(), Some("app.palette".into())),
+                ("cmd+j".into(), Some("card.new.terminal".into())),
+                ("cmd+u".into(), Some("b.two".into())),
+            ]
+        );
+        let conds: Vec<_> = p
+            .conditional
+            .iter()
+            .map(|c| {
+                (
+                    c.chord.as_str(),
+                    c.command.as_deref(),
+                    c.when.as_ref().unwrap().source(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            conds,
+            vec![
+                ("cmd+i", Some("app.shortcuts"), "editorTextFocus"),
+                ("cmd+u", Some("a.one"), "editorTextFocus"),
+                ("cmd+u", None, "browserFocus"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_key_without_cmd_needs_a_when_that_is_false_in_a_terminal() {
+        // allowed where no terminal is focused
+        let ok = parsed(
+            r#"{"escape": {"command": "browser.leave", "when": "editorTextFocus && !suggestWidgetVisible"}}"#,
+        );
+        assert!(ok.errors.is_empty(), "{:?}", ok.errors);
+        assert_eq!(ok.conditional.len(), 1);
+        for (json, why) in [
+            (r#"{"escape": "browser.leave"}"#, "no when at all"),
+            (
+                r#"{"escape": {"command": "x", "when": "true"}}"#,
+                "true in a terminal",
+            ),
+            (
+                r#"{"f2": {"command": "x", "when": "!browserFocus"}}"#,
+                "true in a terminal",
+            ),
+            (
+                r#"{"a": {"command": "x", "when": "terminalFocus"}}"#,
+                "the terminal itself",
+            ),
+            (
+                r#"{"a": {"command": "x", "when": "cardKind != 'browser'"}}"#,
+                "a terminal is not a browser",
+            ),
+        ] {
+            let p = parsed(json);
+            assert!(
+                p.conditional.is_empty() && p.bindings.is_empty(),
+                "{why}: {json}"
+            );
+            assert_eq!(p.errors.len(), 1, "{why}: {:?}", p.errors);
+        }
+        // cmd chords never needed the check
+        let cmd = parsed(r#"{"cmd+e": {"command": "x", "when": "true"}}"#);
+        assert!(cmd.errors.is_empty() && cmd.conditional.len() == 1);
+    }
+
+    #[test]
+    fn a_bad_when_or_object_is_an_error_naming_the_chord_and_the_binding_is_dropped() {
+        let p = parsed(
+            r#"{
+              "cmd+a": {"command": "x", "when": "editorTextFocuss"},
+              "cmd+b": {"when": "editorFocus"},
+              "cmd+c": {"command": "x", "when": 3},
+              "cmd+d": 7,
+              "cmd+e": {"command": "ok", "when": "editorFocus"}
+            }"#,
+        );
+        assert_eq!(p.errors.len(), 4, "{:?}", p.errors);
+        assert!(p.errors[0].starts_with("\"cmd+a\": when: unknown context key"));
+        assert!(p.errors[1].contains("needs \"command\""));
+        assert!(p.errors[2].contains("must be a string"));
+        assert!(p.errors[3].starts_with("\"cmd+d\""));
+        assert_eq!(p.conditional.len(), 1, "the good one still lands");
+        assert_eq!(p.conditional[0].chord, "cmd+e");
     }
 }

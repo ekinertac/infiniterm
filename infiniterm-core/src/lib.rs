@@ -40,6 +40,7 @@ pub mod welcome;
 
 pub mod groups;
 
+pub mod when;
 pub mod workspaces;
 
 pub mod momentum;

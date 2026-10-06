@@ -695,12 +695,27 @@ impl AppView {
     /// first was not marked handled; gpui drops the second only when the
     /// two parse identically, which Cmd+= on a non-US layout does not, so
     /// the caller must stop propagation on a handled chord.
+    /// Writes the focused editor's popup, find panel and selection into the
+    /// model, where a keybinding's `when` can see them.
+    fn sync_ui_context(&mut self) {
+        let flags = self
+            .model
+            .selection
+            .focused_id
+            .clone()
+            .and_then(|id| self.editor_tabs_for(&id).map(|t| t.context_flags()))
+            .unwrap_or_default();
+        self.model.ui_context = flags;
+    }
+
     pub fn key_down(&mut self, e: &KeyDownEvent, cx: &mut gpui::App) -> bool {
         let k: &Keystroke = &e.keystroke;
         let m = &k.modifiers;
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
             eprintln!("[key] {k:?} dead={}", crate::keycode::last_dead());
         }
+        // What a `when` in keybindings.json can ask that only a body knows.
+        self.sync_ui_context();
         // A dead key (Option+E on a US layout, waiting for its vowel) is
         // nobody's to take: taking it tells macOS it was handled and the
         // composition never happens. gpui reports it as the standalone
@@ -736,7 +751,30 @@ impl AppView {
         // bar open and unresponsive. `find.open` is checked on its own
         // because it deliberately does not join `overlay_open()` (see
         // `overlays.rs::render_find_bar`).
+        // A user's `when` binding on a key without cmd (#269): it runs before
+        // the built-in Escape and bare-key rules below, so it can replace
+        // them; `command: null` in a context switches the built-in Escape off
+        // there. The file's reader only accepts such a binding when its `when`
+        // is false for a focused terminal, so no terminal input is taken.
+        let mut escape_unbound = false;
+        if !m.platform && !m.control && !self.model.overlay_open() {
+            let chord = bare_chord(k);
+            match self.model.conditional_for(&chord) {
+                Some(Some(id)) => {
+                    infiniterm_core::model::register::run_with_effects(
+                        &mut self.model,
+                        &self.registry,
+                        &id,
+                    );
+                    self.perform_effects();
+                    return true;
+                }
+                Some(None) => escape_unbound = chord == "escape",
+                None => {}
+            }
+        }
         if k.key == "escape"
+            && !escape_unbound
             && !m.platform
             && !m.control
             && !m.alt
@@ -1133,4 +1171,18 @@ impl AppView {
         }
         self.perform_effects();
     }
+}
+
+/// The chord a key without cmd or ctrl spells, as `keymap::chord_for` spells
+/// one: modifiers in its order (alt, shift), then the key's name.
+fn bare_chord(k: &Keystroke) -> String {
+    let mut parts: Vec<&str> = vec![];
+    if k.modifiers.alt {
+        parts.push("alt");
+    }
+    if k.modifiers.shift {
+        parts.push("shift");
+    }
+    parts.push(k.key.as_str());
+    parts.join("+")
 }
