@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-06
 
+- With several cards selected, Cmd+Alt+Shift+Arrow moves the whole selection one block over, as one piece: into free space, or trading places with the cards that are there. It stops with "no room to move the selection that way" when a card would be split or the block would land in another group's frame, and Cmd+Z undoes it in one step.
 - `ui.cardRadius` rounds the corners of cards and group frames, in pixels at 100% zoom (0 to 40; 0, the default, keeps them square). The border, the focus ring, the label chip in the card's corner, the tab strip and the browser page follow it. The window's own corners stay macOS's.
 - `cards.gap` sets the space between cards in pixels (0 to 200, 25 by default). New cards, splits, growing a card, Canvas: tidy and group frames all use it. Cards already on the canvas stay where they are until they are moved or tidied.
 

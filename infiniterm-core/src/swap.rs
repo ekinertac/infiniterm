@@ -67,6 +67,78 @@ pub fn swap_with_neighbour(
     })
 }
 
+/// The selection moved as one block a block-width (or height) in `dir`,
+/// swapping with whatever cards sit there (#238). The block is the selected
+/// cards' bounding box; the slot it moves into is that box shifted by its own
+/// size plus a gutter. A card in the slot goes the other way, into the box
+/// the block left, so two blocks trade places and an empty slot is a plain
+/// move. Returns the new rect of every card that changes, or `None` when the
+/// move would split a card that straddles the slot, run into a card or a
+/// foreign group frame outside it, or when nothing is selected.
+pub fn move_block(
+    cards: &[PlacedCard],
+    selected: &[String],
+    dir: Direction,
+    gutter: f64,
+    occupied: &[Rect],
+) -> Option<Vec<CardRect>> {
+    let chosen: Vec<&PlacedCard> = cards.iter().filter(|c| selected.contains(&c.id)).collect();
+    let bounds =
+        crate::viewport::bounding_rect(&chosen.iter().map(|c| c.rect).collect::<Vec<_>>())?;
+    let (dx, dy) = match dir {
+        Direction::Left => (-(bounds.w + gutter), 0.),
+        Direction::Right => (bounds.w + gutter, 0.),
+        Direction::Up => (0., -(bounds.h + gutter)),
+        Direction::Down => (0., bounds.h + gutter),
+    };
+    let slot = Rect {
+        x: bounds.x + dx,
+        y: bounds.y + dy,
+        ..bounds
+    };
+    // A pixel of tolerance: rects come off a float grid.
+    let inside = |r: Rect| {
+        r.x >= slot.x - 1.
+            && r.y >= slot.y - 1.
+            && r.x + r.w <= slot.x + slot.w + 1.
+            && r.y + r.h <= slot.y + slot.h + 1.
+    };
+    let mut displaced = vec![];
+    for c in cards.iter().filter(|c| !selected.contains(&c.id)) {
+        if crate::layout::rects_overlap(c.rect, slot) {
+            if !inside(c.rect) {
+                return None;
+            }
+            displaced.push(c);
+        }
+    }
+    let shifted = |c: &PlacedCard, sign: f64| CardRect {
+        id: c.id.clone(),
+        rect: Rect {
+            x: c.rect.x + dx * sign,
+            y: c.rect.y + dy * sign,
+            ..c.rect
+        },
+    };
+    let moves: Vec<CardRect> = chosen
+        .iter()
+        .map(|c| shifted(c, 1.))
+        .chain(displaced.iter().map(|c| shifted(c, -1.)))
+        .collect();
+    // Nothing may land on a card that stays or on a foreign group's frame.
+    let stay: Vec<Rect> = cards
+        .iter()
+        .filter(|c| !moves.iter().any(|m| m.id == c.id))
+        .map(|c| c.rect)
+        .chain(occupied.iter().copied())
+        .collect();
+    let clash = moves.iter().any(|m| {
+        stay.iter()
+            .any(|r| crate::layout::rects_overlap(m.rect, *r))
+    });
+    (!clash).then_some(moves)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,5 +343,99 @@ mod tests {
         let c = [card("here", 0., 0.), card("corner", 200., 200.)];
         assert!(target(go(&c, "here", Direction::Right, 0.)).is_none());
         assert!(target(go(&c, "here", Direction::Down, 0.)).is_none());
+    }
+
+    #[cfg(test)]
+    mod move_block_tests {
+        use super::*;
+        use crate::test_support::{card, r};
+
+        fn at(moves: &[CardRect], id: &str) -> Rect {
+            moves.iter().find(|m| m.id == id).unwrap().rect
+        }
+        fn ids(v: &[&str]) -> Vec<String> {
+            v.iter().map(|s| s.to_string()).collect()
+        }
+
+        // Two stacked cards move right into free space, rigid.
+        #[test]
+        fn a_block_moves_into_free_space() {
+            let cards = [card("a", 0., 0.), card("b", 0., 1000.)];
+            let moves = move_block(&cards, &ids(&["a", "b"]), Direction::Right, 25., &[]).unwrap();
+            assert_eq!(moves.len(), 2);
+            let (a, b) = (cards[0].rect, cards[1].rect);
+            let w = a.w + 25.;
+            assert_eq!((at(&moves, "a").x, at(&moves, "a").y), (a.x + w, a.y));
+            assert_eq!((at(&moves, "b").x, at(&moves, "b").y), (b.x + w, b.y));
+        }
+
+        // A block of two beside another block of two: they trade places.
+        #[test]
+        fn two_blocks_trade_places() {
+            let (a, b) = (card("a", 0., 0.), card("b", 0., 1000.));
+            let w = a.rect.w + 25.;
+            let (c, d) = (card("c", w, 0.), card("d", w, 1000.));
+            let cards = [a.clone(), b.clone(), c.clone(), d.clone()];
+            let moves = move_block(&cards, &ids(&["a", "b"]), Direction::Right, 25., &[]).unwrap();
+            assert_eq!(moves.len(), 4);
+            assert_eq!(at(&moves, "a"), c.rect);
+            assert_eq!(at(&moves, "b"), d.rect);
+            assert_eq!(at(&moves, "c"), a.rect);
+            assert_eq!(at(&moves, "d"), b.rect);
+        }
+
+        // A card that straddles the slot would be split by the move.
+        #[test]
+        fn a_card_straddling_the_slot_blocks_the_move() {
+            let a = card("a", 0., 0.);
+            let straddle = r(a.rect.w + 25. + 50., 0., a.rect.w, a.rect.h);
+            let cards = [
+                a.clone(),
+                PlacedCard {
+                    id: "s".into(),
+                    rect: straddle,
+                    group_id: None,
+                },
+            ];
+            assert_eq!(
+                move_block(&cards, &ids(&["a"]), Direction::Right, 25., &[]),
+                None
+            );
+        }
+
+        // A card beyond the slot, or a foreign frame in the way, blocks it too.
+        #[test]
+        fn a_frame_in_the_slot_blocks_the_move() {
+            let a = card("a", 0., 0.);
+            let frame = r(a.rect.w + 25., 0., 50., 50.);
+            assert_eq!(
+                move_block(&[a], &ids(&["a"]), Direction::Right, 25., &[frame]),
+                None
+            );
+        }
+
+        #[test]
+        fn up_and_left_walk_the_other_way_and_nothing_selected_is_none() {
+            let a = card("a", 5000., 5000.);
+            let moves = move_block(
+                std::slice::from_ref(&a),
+                &ids(&["a"]),
+                Direction::Up,
+                25.,
+                &[],
+            )
+            .unwrap();
+            assert_eq!(at(&moves, "a").y, a.rect.y - (a.rect.h + 25.));
+            let moves = move_block(
+                std::slice::from_ref(&a),
+                &ids(&["a"]),
+                Direction::Left,
+                25.,
+                &[],
+            )
+            .unwrap();
+            assert_eq!(at(&moves, "a").x, a.rect.x - (a.rect.w + 25.));
+            assert_eq!(move_block(&[a], &[], Direction::Left, 25., &[]), None);
+        }
     }
 }

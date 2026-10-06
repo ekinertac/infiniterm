@@ -1481,6 +1481,46 @@ mod tests {
         assert!(h.m.selection.extra.is_empty());
     }
 
+    // Several cards selected: Cmd+Alt+Shift+Arrow moves the selection as one
+    // block, a block over, trading places with the cards there (#238).
+    #[test]
+    fn a_selection_moves_as_one_block_and_swaps_with_what_is_there() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let c = h.focused().id.clone();
+        let rects = |h: &Harness| -> Vec<crate::grid::Rect> {
+            [&a, &b, &c]
+                .iter()
+                .map(|id| h.m.card(id).unwrap().rect)
+                .collect()
+        };
+        let before = rects(&h);
+        // a and b selected, b focused
+        h.m.focus_extended(&b, vec![a.clone()]);
+        assert_eq!(h.m.selected_ids().len(), 2);
+        let effects = h.run("card.swap.right");
+        let after = rects(&h);
+        assert_ne!(after, before, "the selection moved");
+        // the pair moved together: the gap between a and b is unchanged
+        assert_eq!(after[1].x - after[0].x, before[1].x - before[0].x);
+        assert_eq!(after[1].y - after[0].y, before[1].y - before[0].y);
+        assert!(effects.iter().any(|e| matches!(e, Effect::MarkSwap(_))));
+        // nothing overlaps, focus stayed, the selection is still two cards
+        for (i, x) in after.iter().enumerate() {
+            for y in &after[i + 1..] {
+                assert!(!crate::layout::rects_overlap(*x, *y), "{x:?} over {y:?}");
+            }
+        }
+        assert_eq!(h.focused().id, b);
+        assert_eq!(h.m.selected_ids().len(), 2);
+        // and it undoes in one step
+        h.run("layout.undo");
+        assert_eq!(rects(&h), before);
+    }
+
     // A swap trades whole rects; focus stays on the card that moved.
     #[test]
     fn a_swap_trades_rects_and_animates_both() {

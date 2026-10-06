@@ -949,6 +949,11 @@ impl Model {
     /// stays on the card that moved, so pressing the same key twice walks
     /// one card past two neighbours.
     pub fn swap(&mut self, dir: Direction) {
+        // Several cards selected: the whole selection moves as one block.
+        if self.selected_ids().len() > 1 {
+            self.move_selection(dir);
+            return;
+        }
         self.with_active_card(|m, id| {
             let Some(card) = m.card(&id).cloned() else {
                 return;
@@ -983,6 +988,45 @@ impl Model {
             m.dirty_layout = true;
             m.reveal_focused(); // the card may have swapped off screen
         });
+    }
+
+    /// The selection as one block, a block-width over (`swap::move_block`):
+    /// into free space, or trading places with the cards there. A move that
+    /// would split a card, or land in another group's frame, says so and
+    /// changes nothing. Focus stays on the card that had it.
+    fn move_selection(&mut self, dir: Direction) {
+        let selected = self.selected_ids();
+        let here = self.here();
+        let placed = self.placed(&here);
+        let ws = self.active_workspace.clone().unwrap_or_default();
+        // A frame is foreign when none of the moving cards belong to its group.
+        let own: Vec<String> = placed
+            .iter()
+            .filter(|c| selected.contains(&c.id))
+            .filter_map(|c| c.group_id.clone())
+            .collect();
+        let occupied: Vec<crate::grid::Rect> = self
+            .groups
+            .iter()
+            .filter(|g| !own.contains(&g.id))
+            .filter_map(|g| self.group_frame(&g.id, &ws))
+            .collect();
+        let Some(moves) = crate::swap::move_block(&placed, &selected, dir, self.gap(), &occupied)
+        else {
+            self.notify("no room to move the selection that way");
+            return;
+        };
+        self.remember_layout();
+        // Armed BEFORE the rects change, so the move animates.
+        let ids: Vec<String> = moves.iter().map(|m| m.id.clone()).collect();
+        self.mark_swap(&ids);
+        for m in moves {
+            if let Some(c) = self.card_mut(&m.id) {
+                c.rect = m.rect;
+            }
+        }
+        self.dirty_layout = true;
+        self.reveal_focused();
     }
 
     fn sidebar_by(&mut self, delta: f64) {
