@@ -38,7 +38,39 @@ Comments and trailing commas are allowed. Every setting is on the [settings refe
 }
 ```
 
-A binding set to `null` is removed, which gives the key back to the terminal. Every chord must hold `cmd`, with two exceptions: `ctrl` plus a digit, and `ctrl+tab`. A terminal needs Ctrl, Alt and bare keys for itself, but Ctrl plus a digit mostly means nothing to a shell. (On an xterm-compatible terminal `Ctrl 3` sends Escape; if you live in vim, rebind it.)
+A binding set to `null` is removed, which gives the key back to the terminal. A chord must hold `cmd`, with two exceptions: `ctrl` plus a digit, and `ctrl+tab`. A terminal needs Ctrl, Alt and bare keys for itself, but Ctrl plus a digit mostly means nothing to a shell. (On an xterm-compatible terminal `Ctrl 3` sends Escape; if you live in vim, rebind it.) A third exception is a chord with a `when` that is false in a terminal, described next.
+
+### Bindings that apply only sometimes
+
+Give a chord an object with a `when` and the binding applies only while that holds:
+
+```jsonc
+{
+  "cmd+shift+e": { "command": "browser.leave", "when": "editorTextFocus" },
+  "cmd+t": { "command": null, "when": "editorTextFocus" }
+}
+```
+
+The first line binds `Cmd Shift E` to `browser.leave` only in a locked editor. The second unbinds `Cmd T` there and nowhere else (`"command": null` removes the binding in that situation). To give one chord different commands in different places, use a list of objects. The last one whose `when` holds wins. The plain shape above still works.
+
+A `when` joins conditions with `&&` and `||`, negates with `!`, compares with `==` and `!=`, and groups with parentheses. Text goes in single or double quotes, and `true` and `false` are allowed. For example `cardKind == 'editor' && !editorHasSelection`.
+
+| Key | True when |
+| --- | --- |
+| `cardKind` | the focused card's kind: `terminal`, `editor`, `browser`, `diff`, `transcript`, `page` or `none` |
+| `terminalFocus` | a terminal card is focused |
+| `editorFocus` | an editor card is focused, arrowed to or locked |
+| `editorTextFocus` | an editor card is focused and locked |
+| `browserFocus` | a browser card is focused |
+| `cardLocked` | the focused editor or browser card holds the keyboard |
+| `overlay` | what is open over the canvas: `none`, `palette`, `prompt`, `omnibox`, `shortcuts`, `find` or `switcher` |
+| `phantomFocus` | an empty slot is focused |
+| `multiSelection` | more than one card is selected |
+| `suggestWidgetVisible` | the editor's completion list is open |
+| `findWidgetVisible` | the find bar is open |
+| `editorHasSelection` | the editor has text selected |
+
+A key without `cmd`, such as `Escape`, `F2` or a letter, can be bound this way, but only with a `when` that is false in a focused terminal: `editorTextFocus`, `browserFocus` or `phantomFocus` do, `cardLocked` does not. That way a binding can never take a terminal's input. Otherwise the file reports an error and that binding is ignored. A mistake inside a `when`, such as an unknown key or a bracket left open, is reported the same way. The shortcuts panel and `ift commands` list only plain bindings so far, not the ones with a `when`.
 
 Chords follow the physical key, not the character your layout prints on it, so `cmd+=` is the key right of `-` on every keyboard. `Cmd H`, `Cmd M` and `Cmd Q` belong to the menu and cannot be rebound. Every command id is on the [commands reference](../../reference/commands/). In the app, the shortcuts panel (`Cmd /`) shows each command's id beside its label and finds commands by it: Up and Down highlight one, and `Cmd C` copies its id, ready to paste into `keybindings.json`.
 
