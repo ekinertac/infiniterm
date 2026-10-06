@@ -209,9 +209,10 @@ impl CardBody for PageBody {
             w: f32::from(bounds.size.width) as f64 / scale,
             h: f32::from(bounds.size.height) as f64 / scale,
         };
-        window.paint_quad(fill(
+        window.paint_quad(crate::chrome::card_body_quad(
+            cx,
             bounds,
-            crate::chrome::card_fill(cx, self.colors.background),
+            self.colors.background,
         ));
         let font_size = px((self.metrics.font_px * scale) as f32);
         if font_size < crate::chrome::legible_font_px(window.scale_factor()) {
@@ -299,7 +300,8 @@ impl CardBody for PageBody {
             self.colors.faint,
         );
         if !focused && self.inactive_dim > 0. {
-            window.paint_quad(fill(
+            window.paint_quad(crate::chrome::card_wash(
+                cx,
                 bounds,
                 crate::chrome::with_alpha(self.colors.background, self.inactive_dim as f32),
             ));

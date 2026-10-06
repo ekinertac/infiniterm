@@ -330,6 +330,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.cardRadius",
+        &[
+            "Round the corners of cards and group frames, in pixels at 100% zoom (0 to 40).",
+            "0, the default, keeps them square. The radius scales with the zoom like the card.",
+        ],
+    ),
+    (
         "ui.cardOpacity",
         &[
             "How opaque a card's background is, 0.1 to 1. Text stays solid, so it never gets",

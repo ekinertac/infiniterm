@@ -267,6 +267,11 @@ impl AppView {
         }
     }
 
+    /// `ui.cardRadius` in screen pixels at this zoom.
+    fn card_radius(&self, scale: f64) -> Pixels {
+        px((self.model.config.ui.card_radius * scale) as f32)
+    }
+
     fn paint_world(&mut self, bounds: Bounds<Pixels>, now: f64, window: &mut Window, cx: &mut App) {
         self.label_hits.clear();
         let origin = bounds.origin;
@@ -349,6 +354,14 @@ impl AppView {
         };
         let inv = inverse_scale(vp.scale, self.model.ui_scale) as f32;
         let border_w = px((card_border_world_px(vp.scale) * vp.scale) as f32);
+        // Rounded cards (`ui.cardRadius`, 0 = square): every outline of a
+        // card takes it, and the bodies read it from the global.
+        let radius = self.card_radius(vp.scale);
+        if cx.try_global::<crate::chrome::CardRadius>()
+            != Some(&crate::chrome::CardRadius(f32::from(radius)))
+        {
+            cx.set_global(crate::chrome::CardRadius(f32::from(radius)));
+        }
 
         // Groups render BEFORE cards so they paint behind them.
         for group in self.model.groups.clone() {
@@ -375,7 +388,11 @@ impl AppView {
                 chrome.group_border
             };
             let b = at(rect);
-            window.paint_quad(outline(b, color, BorderStyle::Solid).border_widths(border_w));
+            window.paint_quad(
+                outline(b, color, BorderStyle::Solid)
+                    .border_widths(border_w)
+                    .corner_radii(radius + px(self.model.group_pad() as f32 * vp.scale as f32)),
+            );
             // The name tab above the frame's top-left corner.
             let label_px = px(self.model.config.ui.group_label_size as f32 * inv * vp.scale as f32);
             let line = crate::text::shape(
@@ -551,7 +568,11 @@ impl AppView {
             } else {
                 px(state_border_screen_px(vp.scale) as f32)
             };
-            window.paint_quad(outline(b, state_color, BorderStyle::Solid).border_widths(state_w));
+            window.paint_quad(
+                outline(b, state_color, BorderStyle::Solid)
+                    .border_widths(state_w)
+                    .corner_radii(radius),
+            );
             // The frame band under the pointer lights up: the whole band
             // for a move, the one edge or the two edges of a corner for a
             // resize, in the focus ring's colour at a hint's strength.
@@ -613,7 +634,8 @@ impl AppView {
                         crate::chrome::with_alpha(ring_color, alpha),
                         BorderStyle::Solid,
                     )
-                    .border_widths(ring),
+                    .border_widths(ring)
+                    .corner_radii(radius + off),
                 );
             }
             self.paint_labels(card, b, vp.scale, window, cx);
@@ -661,8 +683,14 @@ impl AppView {
                 .rect_free_for(id, infiniterm_core::grid::snap_rect(*r));
             let color = if free { chrome.focus_ring } else { chrome.warn };
             let b = at(*r);
-            window.paint_quad(outline(b, color, BorderStyle::Solid).border_widths(border_w));
-            window.paint_quad(fill(b, crate::chrome::with_alpha(color, GHOST_FILL_ALPHA)));
+            window.paint_quad(
+                outline(b, color, BorderStyle::Solid)
+                    .border_widths(border_w)
+                    .corner_radii(radius),
+            );
+            window.paint_quad(
+                fill(b, crate::chrome::with_alpha(color, GHOST_FILL_ALPHA)).corner_radii(radius),
+            );
         }
 
         // The selection rectangle being dragged: the selection's blue, a
@@ -733,7 +761,11 @@ impl AppView {
         } else {
             chrome.phantom
         };
-        window.paint_quad(outline(b, color, BorderStyle::Solid).border_widths(border_w));
+        window.paint_quad(
+            outline(b, color, BorderStyle::Solid)
+                .border_widths(border_w)
+                .corner_radii(self.card_radius(scale)),
+        );
         let text = match key {
             Some(k) if current => format!("{k}  or Enter"),
             Some(k) => k.to_string(),
@@ -852,6 +884,33 @@ impl AppView {
                 edge
             }
         };
+        // With rounded cards the chip that sits in the card's corner is
+        // rounded to the border's inner edge there, or its square corner
+        // covers the card's. Only that one corner of that one chip.
+        let inner = (self.card_radius(scale) - border).max(px(0.));
+        let corner_radii = |left: bool| gpui::Corners {
+            top_left: if left && !corner.bottom() {
+                inner
+            } else {
+                px(0.)
+            },
+            top_right: if !left && !corner.bottom() {
+                inner
+            } else {
+                px(0.)
+            },
+            bottom_left: if left && corner.bottom() {
+                inner
+            } else {
+                px(0.)
+            },
+            bottom_right: if !left && corner.bottom() {
+                inner
+            } else {
+                px(0.)
+            },
+        };
+        let mut in_corner = true;
         if !label.is_empty() && !hide {
             // The head ellipsises from the left, the tail never does: the last
             // segment is what tells cards apart, and half the directories
@@ -898,7 +957,12 @@ impl AppView {
                     h: f32::from(lb.size.height) as f64,
                 },
             ));
-            window.paint_quad(fill(lb, label_bg));
+            let radii = if std::mem::take(&mut in_corner) {
+                corner_radii(corner.left())
+            } else {
+                gpui::Corners::default()
+            };
+            window.paint_quad(fill(lb, label_bg).corner_radii(radii));
             crate::text::paint_in(window, cx, &line, lb, label_px / 2.);
         }
         // What kind of card, as its own badge in the chrome's muted colour:
@@ -925,7 +989,12 @@ impl AppView {
                 crate::text::shape(window, &badge, label_px, &chrome.ui_font, chrome.text_muted);
             let w = line.width + label_px;
             let bb = Bounds::new(point(place(w), top), size(w, h));
-            window.paint_quad(fill(bb, chrome.badge_bg));
+            let radii = if std::mem::take(&mut in_corner) {
+                corner_radii(corner.left())
+            } else {
+                gpui::Corners::default()
+            };
+            window.paint_quad(fill(bb, chrome.badge_bg).corner_radii(radii));
             crate::text::paint_in(window, cx, &line, bb, label_px / 2.);
         }
         // Red: the one thing on a card that changes what a keystroke does.
@@ -940,7 +1009,8 @@ impl AppView {
                 b.origin.x + border
             };
             let rb = Bounds::new(point(x, top), size(w, h));
-            window.paint_quad(fill(rb, chrome.remote_bg));
+            window
+                .paint_quad(fill(rb, chrome.remote_bg).corner_radii(corner_radii(!corner.left())));
             crate::text::paint_in(window, cx, &line, rb, label_px / 2.);
         }
     }

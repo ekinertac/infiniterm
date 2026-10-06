@@ -496,7 +496,7 @@ impl CardBody for DiffBody {
         };
         self.world = world;
         let bg = hex(&self.colors.background);
-        window.paint_quad(fill(bounds, crate::chrome::card_fill(cx, bg)));
+        window.paint_quad(crate::chrome::card_body_quad(cx, bounds, bg));
         let s = |v: f64| px((v * scale) as f32);
         let font_size = px((self.metrics.font_px * scale) as f32);
         let line_h = px((self.line_h() * scale) as f32);
@@ -704,7 +704,8 @@ impl CardBody for DiffBody {
         let _ = cell_w;
         self.shaped.retain(|k, _| *k >= first && *k < last);
         if !focused && self.inactive_dim > 0. {
-            window.paint_quad(fill(
+            window.paint_quad(crate::chrome::card_wash(
+                cx,
                 bounds,
                 crate::chrome::with_alpha(bg, self.inactive_dim as f32),
             ));
