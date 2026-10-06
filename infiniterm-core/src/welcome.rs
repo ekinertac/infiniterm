@@ -83,7 +83,7 @@ pub fn render(keymap: &Keymap, agents: &[Agent]) -> String {
     out.push_str(
         "Cards stay where you put them. Nothing moves on its own.\n\n\
          `Cmd` belongs to infiniterm. Every other key goes to the terminal, so vim, tmux and your shell work as usual.\n\n\
-         Click into a file in an editor card to type in it: the keyboard is the file's until you press Escape twice. This card is a page: the wheel or the arrows scroll it, and it never takes the keyboard.\n\n\
+         Click into a file in an editor card to type in it: the keyboard is the file's until you press Escape. This card is a page: the wheel or the arrows scroll it, and it never takes the keyboard.\n\n\
          ## Keys to start with\n\n",
     );
     for (id, does) in KEYS {
