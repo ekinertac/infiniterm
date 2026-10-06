@@ -10,6 +10,14 @@
 // Google, which a "no telemetry" product page should not.
 import '@fontsource-variable/schibsted-grotesk';
 import '@fontsource-variable/jetbrains-mono';
+// The agents with hooks, as the hero shows them. Logos are each project's
+// own mark (Simple Icons for Claude, OpenAI and OpenCode; Pi's from pi.dev),
+// unchanged, under a plain "Works with" so the row reads as compatibility,
+// not endorsement. An agent goes here only when its adapter is merged.
+import claudeLogo from '../assets/agents/claude.svg?raw';
+import openaiLogo from '../assets/agents/openai.svg?raw';
+import opencodeLogo from '../assets/agents/opencode.svg?raw';
+import piLogo from '../assets/agents/pi.svg?raw';
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 // One app, every feature, free for personal use; working with it needs a
@@ -23,6 +31,48 @@ const INSTALL = 'curl -fsSL https://infiniterm.app/install.sh | sh';
 const BREW = 'brew install --cask ekinertac/tap/infiniterm';
 const DOWNLOAD_URL = 'https://github.com/ekinertac/infiniterm/releases/latest';
 const SOURCE_URL = 'https://github.com/ekinertac/infiniterm';
+
+const agents = [
+  { name: 'Claude Code', svg: claudeLogo, color: '#d97757' },
+  { name: 'Codex', svg: openaiLogo },
+  { name: 'OpenCode', svg: opencodeLogo },
+  { name: 'Pi', svg: piLogo },
+];
+
+// The six features under the screenshot: what a user does with the app,
+// each with one line of proof in mono. features.md has the full list.
+const features = [
+  {
+    title: 'See which agent needs you',
+    body: 'Claude Code, Codex, OpenCode and Pi report through hooks, any zsh command through the shell. The border says working, waiting on you, failed or done.',
+    proof: 'ift install-claude-hooks',
+  },
+  {
+    title: 'A canvas, not tabs',
+    body: 'Zoom out to see every card, zoom in to work in one. A new card takes the next free slot, and nothing moves on its own.',
+    proof: 'Cmd 2  fits every card',
+  },
+  {
+    title: 'Shells that outlive the app',
+    body: 'Each shell runs in its own small daemon. Quit or update the app and the programs keep running; reopen it and the screen comes back as it was.',
+    proof: 'ssh -t mac ift attach 7',
+  },
+  {
+    title: 'Driven from any shell',
+    body: 'ift opens files over the card you are in, lists cards, types into another card and reads what it shows.',
+    proof: 'ift send 7 "npm test" --enter',
+  },
+  {
+    title: 'Servers in their own window',
+    body: 'A second window whose cards run on a Linux server or another Mac over ssh. Close it and the shells stay on the server.',
+    proof: 'ift connect me@server',
+  },
+  {
+    title: 'The rest of the work beside it',
+    body: 'Editor, diff, transcript and browser cards on the same canvas: the files, the changes against HEAD, a session\'s turns, and Chromium.',
+    proof: 'ift diff',
+  },
+];
 
 // The hero canvas, in reading order. `state` is what the card settles on;
 // `lines` are bar widths in characters, since these cards are "far away".
@@ -110,6 +160,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     <header class="top">
       <a class="mark" href={base}><img src={`${base}icon.png`} alt="" width="32" height="32" />infiniterm</a>
       <nav>
+        <a href={`${base}features/`}>Features</a>
         <a href={`${base}guide/install/`}>Docs</a>
         <a href="#pricing">Pricing</a>
         <a href={DOWNLOAD_URL}>Download</a>
@@ -128,6 +179,19 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
             infiniterm puts every terminal on one zoomable canvas. Each card keeps its place, and its border says what the
             agent inside is doing: working, waiting on you, failed, or done.
           </p>
+          <div class="agents">
+            <span class="agents-label">Works with</span>
+            <ul>
+              {
+                agents.map((a) => (
+                  <li>
+                    <span class="logo" style={a.color ? `color:${a.color}` : undefined} set:html={a.svg} aria-hidden="true" />
+                    {a.name}
+                  </li>
+                ))
+              }
+            </ul>
+          </div>
           <div class="methods" role="tablist" aria-label="Install with">
             <button type="button" role="tab" aria-selected="true" aria-controls="m-script" id="t-script">Script</button>
             <button type="button" role="tab" aria-selected="false" aria-controls="m-brew" id="t-brew" tabindex="-1">Homebrew</button>
@@ -187,6 +251,22 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
         </figure>
       </section>
 
+      <section class="features">
+        <h2>Six things it does.</h2>
+        <div class="feature-grid">
+          {
+            features.map((f) => (
+              <article>
+                <h3>{f.title}</h3>
+                <p>{f.body}</p>
+                <code>{f.proof}</code>
+              </article>
+            ))
+          }
+        </div>
+        <p class="more"><a href={`${base}features/`}>Every feature →</a></p>
+      </section>
+
       <section class="states">
         <h2>Four colours, because there are four questions.</h2>
         <p class="section-lede">
@@ -233,17 +313,6 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
             ))
           }
         </div>
-      </section>
-
-      <section class="kinds">
-        <h2>The rest of the work sits on the same canvas.</h2>
-        <dl>
-          <div><dt>Editor cards</dt><dd>Syntax highlighting for 17 languages, a file tree, find and replace. No LSP, on purpose.</dd></div>
-          <div><dt>Diff cards</dt><dd><code>ift diff</code> shows your changes against HEAD, with a blame gutter on <kbd>Cmd</kbd> <kbd>B</kbd>.</dd></div>
-          <div><dt>Transcript cards</dt><dd>A Claude Code or Pi session as turns, tool calls folded, following along while it runs.</dd></div>
-          <div><dt>Browser cards</dt><dd>Chromium with the Claude in Chrome extension, so an agent can drive a browser that lives next to it.</dd></div>
-          <div><dt>Shells that outlive the window</dt><dd>Each card's shell runs under its own small daemon. Quit the app and they keep running; reopen it and they are back.</dd></div>
-        </dl>
       </section>
 
       <section class="keys split">
@@ -302,6 +371,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
     </main>
 
     <footer>
+      <a href={`${base}features/`}>Features</a>
       <a href={`${base}guide/install/`}>Docs</a>
       <a href={`${base}reference/keys/`}>Keys</a>
       <a href={SOURCE_URL}>Source</a>
@@ -694,10 +764,37 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
   .dots .d-failed { background: var(--failed); }
   .dots .d-done { background: var(--done); }
 
-  .kinds dl { margin: 40px 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px 56px; }
-  .kinds dt { font-weight: 700; font-size: 1.2rem; }
-  .kinds dd { margin: 6px 0 0; color: var(--ink-soft); }
-  .kinds code { font: 0.9em var(--mono); }
+  .agents { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: -12px 0 28px; }
+  .agents-label { font-size: 0.95rem; color: var(--ink-soft); }
+  .agents ul { list-style: none; margin: 0; padding: 0; display: flex; gap: 8px 18px; flex-wrap: wrap; }
+  .agents li { display: flex; align-items: center; gap: 7px; font-size: 0.98rem; font-weight: 600; }
+  .agents .logo { display: inline-flex; width: 20px; height: 20px; color: var(--ink); }
+  .agents .logo svg { width: 100%; height: 100%; fill: currentColor; }
+  .agents .logo svg title { display: none; }
+
+  .feature-grid { margin: 40px 0 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+  .feature-grid article {
+    background: color-mix(in srgb, var(--ink) 4%, var(--canvas));
+    border: 1px solid var(--dot);
+    border-radius: 10px;
+    padding: 24px 24px 20px;
+    display: flex;
+    flex-direction: column;
+  }
+  .feature-grid h3 { margin: 0; font-size: 1.2rem; letter-spacing: -0.01em; }
+  .feature-grid p { margin: 10px 0 18px; color: var(--ink-soft); flex: 1; }
+  .feature-grid code {
+    font: 0.85rem var(--mono);
+    background: var(--card);
+    color: var(--card-text);
+    border-radius: 6px;
+    padding: 8px 10px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .features .more { margin: 28px 0 0; font-weight: 600; }
+  @media (max-width: 900px) { .feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 560px) { .feature-grid { grid-template-columns: 1fr; } }
 
   .keys ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 18px; font-size: 1.05rem; }
   .keys li { display: grid; grid-template-columns: 190px 1fr; gap: 16px; align-items: baseline; }

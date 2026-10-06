@@ -52,6 +52,7 @@ export default defineConfig({
         { icon: 'github', label: 'GitHub', href: 'https://github.com/ekinertac/infiniterm' },
       ],
       sidebar: [
+        'features',
         {
           label: 'Guide',
           items: [
