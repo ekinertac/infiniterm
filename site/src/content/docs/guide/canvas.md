@@ -28,7 +28,7 @@ Other ways to place one:
 
 ## Moving and resizing
 
-Drag a card by its top edge or its label. The card stays put while an outline follows the pointer, and the grid's slots for a card of that size show around it: halves for a half, quarters for a quarter. Near a slot the outline snaps to it; anywhere else it goes where you put it. It wears the focus colour where the card fits and the warning colour where it does not. Drop on free space to move, drop on another card to swap the two, `Escape` to cancel. Any other edge resizes.
+Drag a card by its top edge or its label. The card stays put while an outline follows the pointer, and the grid's slots for a card of that size show around it: halves for a half, quarters for a quarter. Near a slot the outline snaps to it; anywhere else it goes where you put it. It wears the focus colour where the card fits and the warning colour where it does not. Drop on free space to move, drop on another card to swap the two, `Escape` to cancel. Any other edge resizes. From the keyboard, `Cmd Alt Shift` + arrow swaps the card with its neighbour.
 
 `Cmd Ctrl Enter` grows a card into the gap it sits in, up to the default size, from whichever corner fills that gap. It grows an empty slot the same way: arrow onto a free slot (it has the size of the card you came from), press `Cmd Ctrl Enter`, and the card you make there has the new size.
 
@@ -69,6 +69,7 @@ Several cards can be selected at once, and close, split, fit and group then act 
 - `Shift` + click on a card's body, label or frame also adds it or takes it out.
 - `Cmd Shift` + arrow extends the selection to the neighbour.
 - Dragging any selected card by its frame or label moves the whole selection.
+- `Cmd Alt Shift` + arrow moves the whole selection one block that way, as one piece: into free space, or trading places with the cards there. It refuses, with a notice, when that would split a card or land in another group. `Cmd Z` undoes it in one step.
 
 While a dialog, the palette, the address bar or the shortcuts panel is open, it keeps every Cmd and Ctrl shortcut to itself, so text shortcuts work in its field and nothing moves the canvas behind it.
 
