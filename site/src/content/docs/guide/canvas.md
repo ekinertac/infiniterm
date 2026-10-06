@@ -71,7 +71,7 @@ Several cards can be selected at once, and close, split, fit and group then act 
 - Dragging any selected card by its frame or label moves the whole selection.
 - `Cmd Alt Shift` + arrow moves the whole selection one block that way, as one piece: into free space, or trading places with the cards there. It refuses, with a notice, when that would split a card or land in another group. `Cmd Z` undoes it in one step.
 
-While a dialog, the palette, the address bar or the shortcuts panel is open, it keeps every Cmd and Ctrl shortcut to itself, so text shortcuts work in its field and nothing moves the canvas behind it.
+While a dialog, the palette, the address bar or the shortcuts panel is open, it keeps every Cmd and Ctrl shortcut to itself, so text shortcuts work in its field and nothing moves the canvas behind it. Their rows and buttons also take a click, and a click outside closes any of them, as `Escape` does.
 
 ## Groups and workspaces
 
