@@ -53,6 +53,11 @@ pub fn handle_chord(m: &mut Model, r: &CommandRegistry<Model>, chord: &str) -> b
 /// label a chord with the command it ACTUALLY ran: on a locked card the
 /// keymap says "Card: new terminal" for Cmd+T while this says the tab.
 pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
+    // A user's `when` binding for this chord, in force right now, comes first
+    // (#269): it runs, or, with `command: null`, unbinds the chord here.
+    if let Some(bound) = m.conditional_for(chord) {
+        return bound;
+    }
     let card = m.focused();
     let kind = card.map(|c| c.kind);
     // An editor keeps its find, comment, undo and select-to-boundary
@@ -3243,6 +3248,86 @@ mod tests {
                 "{chord} must fall through to the body, not be swallowed"
             );
         }
+    }
+
+    // #269: a binding with a `when` wins only where its clause holds, the last
+    // matching one in the file wins, `command: null` unbinds a chord in a
+    // context, and a key without cmd works where the file's reader allowed it.
+    #[test]
+    fn a_when_binding_wins_where_its_clause_holds_and_the_last_match_wins() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone(); // a terminal
+        h.m.apply_keymap_text(
+            r#"{"cmd+shift+y": [
+                {"command": "app.shortcuts", "when": "editorFocus"},
+                {"command": "card.new.terminal", "when": "terminalFocus"},
+                {"command": "app.palette", "when": "terminalFocus"}
+            ]}"#,
+        );
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+shift+y").as_deref(),
+            Some("app.palette"),
+            "the last match"
+        );
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+shift+y").as_deref(),
+            Some("app.shortcuts")
+        );
+        h.m.card_mut(&id).unwrap().kind = CardKind::Browser;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+shift+y"),
+            None,
+            "no clause holds, no default"
+        );
+        // a null command unbinds the DEFAULT chord in that context only
+        h.m.card_mut(&id).unwrap().kind = CardKind::Terminal;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+t").as_deref(),
+            Some("card.new.terminal")
+        );
+        h.m.apply_keymap_text(r#"{"cmd+t": {"command": null, "when": "terminalFocus"}}"#);
+        assert_eq!(resolve_chord(&h.m, "cmd+t"), None, "unbound in a terminal");
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+t").as_deref(),
+            Some("card.new.terminal"),
+            "still bound elsewhere"
+        );
+        // a broken file leaves the bindings that were in force
+        h.m.apply_keymap_text(r#"{"cmd+t": ,}"#);
+        assert_eq!(h.m.conditional_keys.len(), 1);
+    }
+
+    #[test]
+    fn a_key_without_cmd_binds_only_where_the_when_holds_and_the_context_reads_the_model() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.apply_keymap_text(
+            r#"{"f2": {"command": "app.palette", "when": "editorTextFocus && !suggestWidgetVisible"}}"#,
+        );
+        assert!(h.m.conditional_keys.len() == 1);
+        // a terminal: never
+        assert_eq!(h.m.conditional_for("f2"), None);
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        assert_eq!(h.m.conditional_for("f2"), None, "an editor you are not in");
+        h.m.card_mut(&id).unwrap().locked = true;
+        assert_eq!(h.m.conditional_for("f2"), Some(Some("app.palette".into())));
+        // the body's own state, written by the ui
+        h.m.ui_context.suggest_widget_visible = true;
+        assert_eq!(h.m.conditional_for("f2"), None, "a popup is open");
+        h.m.ui_context = Default::default();
+        // overlays are named, and the context says what is focused
+        let ctx = h.m.key_context();
+        assert_eq!(
+            (ctx.card_kind, ctx.card_locked, ctx.overlay),
+            ("editor", true, "none")
+        );
+        h.run("app.palette");
+        assert_eq!(h.m.key_context().overlay, "palette");
+        h.m.close_palette(true);
+        h.m.selection.extra = vec!["x".into()];
+        assert!(h.m.key_context().multi_selection);
     }
 
     // The way out of a locked editor is a command in the keymap (#265):

@@ -383,6 +383,14 @@ pub enum Effect {
     LogDims,
 }
 
+/// The parts of a `when`'s context only a card body can answer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UiContext {
+    pub suggest_widget_visible: bool,
+    pub find_widget_visible: bool,
+    pub editor_has_selection: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditorAction {
     Save,
@@ -614,6 +622,12 @@ pub struct Model {
     pub dirty_layout: bool,
     pub config: Config,
     pub keymap: Keymap,
+    /// Bindings with a `when` from keybindings.json (#269); the last one whose
+    /// clause holds wins over `keymap` (`conditional_for`).
+    pub conditional_keys: Vec<crate::keymap::CondBinding>,
+    /// What only the ui knows about the keyboard's context, written by it each
+    /// frame (the completion popup, the editor's find panel and selection).
+    pub ui_context: UiContext,
     pub settings_error: Option<String>,
     pub theme_names: Vec<String>,
     /// the snippets folder's files, read by the ui when the picker opens
@@ -719,6 +733,8 @@ impl Model {
             dirty_layout: false,
             config: default_config(),
             keymap: default_keymap(),
+            conditional_keys: vec![],
+            ui_context: UiContext::default(),
             settings_error: None,
             theme_names: vec![],
             snippets: vec![],
