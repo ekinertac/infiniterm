@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-06
 
+- The editor's file tree can be resized with the mouse: drag the line between the tree and the text. The pointer turns into a resize cursor over it and the line gets thicker, and a press on it no longer locks the card. The keyboard commands for the width are still there.
 - The pointer becomes a hand over clickable rows and buttons (palette, address bar, shortcuts panel, dialogs, context menu, workspace tabs). The cursor was being reset to the arrow every frame, which hid it.
 - An empty input box (the command palette, the address bar, the find bar, the shortcuts filter) shows a text cursor before its placeholder, so it reads as something to type into.
 - Rows and buttons you can click now show it: the pointer becomes a hand and the row under it lights up in the command palette, the address bar's list, the shortcuts panel, the dialogs' buttons, the browser's context menu and the workspace tabs.

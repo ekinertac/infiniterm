@@ -49,6 +49,11 @@ pub struct EditorTabs {
 }
 
 impl EditorTabs {
+    /// The resize cursor while the tree's divider is under the pointer or held.
+    pub fn divider_cursor(&self) -> Option<gpui::CursorStyle> {
+        self.active_body_ref().and_then(|b| b.divider_cursor())
+    }
+
     pub fn new(card_id: &str, metrics: &Metrics, world: Size, style: StripStyle) -> EditorTabs {
         EditorTabs {
             card_id: card_id.to_string(),

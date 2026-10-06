@@ -73,6 +73,10 @@ const DRAFT_MS: f64 = 500.;
 
 /// Digits reserved in the gutter before it grows past three: line numbers
 /// up to 999 fit without a mid-file resize.
+/// Half the width of the tree divider's grab zone, in world px each side of the line.
+const DIVIDER_GRAB: f64 = 4.;
+/// The divider's width in screen px while it is hovered or held.
+const DIVIDER_ACTIVE_PX: f32 = 3.;
 const MIN_GUTTER_DIGITS: usize = 3;
 /// Breathing room between the gutter's line numbers and the text that
 /// follows; also the margin a line number is right-aligned by.
@@ -183,6 +187,9 @@ pub enum EditorEvent {
     /// Enter on a file in the tree: a tab for it, or a switch to the tab
     /// that already shows it. `editor_tabs.rs` turns it into `Card.tabs`.
     OpenTab(String),
+    /// The tree's divider was dragged to this many world px from the card's
+    /// edge: `editors.rs` clamps it into `Card.sidebar` (#258).
+    Sidebar(f64),
 }
 
 /// The completion popup: what the provider offered and the row picked.
@@ -262,6 +269,10 @@ pub struct EditorBody {
     /// The tree's width in world px; `sidebar.rs` decides from the card.
     pub sidebar_w: f64,
     pub sidebar_top: bool,
+    /// The pointer is on the tree's divider, or it is being dragged: the line
+    /// thickens and the cursor says it moves.
+    divider_hover: bool,
+    divider_drag: bool,
     selecting: bool,
     /// The file on disk had Windows line endings, for the status bar.
     crlf: bool,
@@ -353,6 +364,8 @@ impl EditorBody {
             tree_focused: false,
             sidebar_w: 0.,
             sidebar_top: false,
+            divider_hover: false,
+            divider_drag: false,
             selecting: false,
             crlf: false,
             status_sel: None,
@@ -870,12 +883,34 @@ impl EditorBody {
     /// Whether a point in the text area (below any strip) is on the tree
     /// rather than the text, for the lock: clicking the tree must not lock.
     pub fn is_on_tree(&self, local: Point) -> bool {
-        self.tree.is_some()
-            && if self.sidebar_top {
-                local.y < self.sidebar_w
-            } else {
-                local.x < self.sidebar_w
-            }
+        // The divider's grab zone counts: grabbing it must not lock the card.
+        self.tree.is_some() && self.across(local) < self.sidebar_w + DIVIDER_GRAB
+    }
+
+    /// The coordinate across the divider: x for a tree beside the text, y for
+    /// one above it.
+    fn across(&self, local: Point) -> f64 {
+        if self.sidebar_top {
+            local.y
+        } else {
+            local.x
+        }
+    }
+
+    /// Whether a point is on the line between the tree and the text.
+    pub fn on_divider(&self, local: Point) -> bool {
+        self.tree.is_some() && (self.across(local) - self.sidebar_w).abs() <= DIVIDER_GRAB
+    }
+
+    /// The cursor for the divider while it is under the pointer or held.
+    pub fn divider_cursor(&self) -> Option<gpui::CursorStyle> {
+        let held = self.divider_hover || self.divider_drag;
+        let style = if self.sidebar_top {
+            gpui::CursorStyle::ResizeUpDown
+        } else {
+            gpui::CursorStyle::ResizeLeftRight
+        };
+        held.then_some(style)
     }
 
     fn blink_on(&self, now: f64) -> bool {
@@ -2089,8 +2124,14 @@ impl EditorBody {
             let _ = line.paint(point(area.origin.x + pad, y), line_h, window, cx);
             y += line_h;
         }
-        // A hairline between the tree and the text.
-        let hairline = px(crate::chrome::HAIRLINE_PX as f32);
+        // A hairline between the tree and the text, thicker and stronger while
+        // the pointer is on it or it is held, so it reads as something to grab.
+        let active = self.divider_hover || self.divider_drag;
+        let hairline = if active {
+            px(DIVIDER_ACTIVE_PX)
+        } else {
+            px(crate::chrome::HAIRLINE_PX as f32)
+        };
         let edge = if self.sidebar_top {
             Bounds::new(
                 point(area.origin.x, area.origin.y + area.size.height - hairline),
@@ -2104,7 +2145,14 @@ impl EditorBody {
         };
         window.paint_quad(fill(
             edge,
-            crate::chrome::with_alpha(hex(&self.colors.gutter), crate::chrome::HAIRLINE_ALPHA),
+            crate::chrome::with_alpha(
+                hex(&self.colors.gutter),
+                if active {
+                    0.9
+                } else {
+                    crate::chrome::HAIRLINE_ALPHA
+                },
+            ),
         ));
         if let Some(t) = self.tree.as_mut() {
             t.scroll = scroll;
@@ -2783,6 +2831,13 @@ impl CardBody for EditorBody {
         if button != gpui::MouseButton::Left {
             return BodyAction::None;
         }
+        // The tree's divider: a press holds it, the moves resize the tree.
+        if self.on_divider(local) {
+            self.divider_drag = true;
+            self.divider_hover = true;
+            self.dirty = true;
+            return BodyAction::None;
+        }
         let world = self.world;
         // The status bar: its text selects like any text, a double-click
         // takes one field whole (the path, "Ln 3, Col 9"), Cmd+C copies it.
@@ -2894,9 +2949,30 @@ impl CardBody for EditorBody {
     ) {
         self.selecting = false;
         self.selecting_status = false;
+        if self.divider_drag {
+            self.divider_drag = false;
+            self.dirty = true;
+        }
+    }
+
+    fn mouse_leave(&mut self) {
+        if self.divider_hover && !self.divider_drag {
+            self.divider_hover = false;
+            self.dirty = true;
+        }
     }
 
     fn mouse_move(&mut self, local: Point, _modifiers: &gpui::Modifiers) {
+        if self.divider_drag {
+            self.events.push(EditorEvent::Sidebar(self.across(local)));
+            self.dirty = true;
+            return;
+        }
+        let over = self.on_divider(local);
+        if over != self.divider_hover {
+            self.divider_hover = over;
+            self.dirty = true;
+        }
         if self.selecting_status {
             let (o, _) = self.text_area(self.world);
             let col = ((local.x - o.x - PAD_X) / self.metrics.cell_w)
@@ -2935,7 +3011,7 @@ impl CardBody for EditorBody {
     }
 
     fn captures_drag(&self) -> bool {
-        self.selecting || self.selecting_status
+        self.selecting || self.selecting_status || self.divider_drag
     }
 
     fn resized(&mut self, world: Size) {
@@ -3156,6 +3232,53 @@ mod tests {
             bold_weight: gpui::FontWeight::BOLD,
         };
         EditorBody::new("c1", None, "/".into(), &metrics, Size { w: 400., h: 300. })
+    }
+
+    // The tree's divider can be dragged (#258): a press on the line holds it,
+    // the moves ask for the width through `EditorEvent::Sidebar`, the release
+    // lets go, and hovering it says so (the resize cursor, a thicker line). A
+    // press on it is not a click into the text, so it must not lock the card.
+    #[test]
+    fn the_tree_divider_is_grabbed_dragged_and_released() {
+        let mut b = body();
+        b.show_tree("/");
+        b.sidebar_w = 200.;
+        b.sidebar_top = false;
+        let mods = gpui::Modifiers::default();
+        let at = |x: f64| Point { x, y: 50. };
+        assert!(b.on_divider(at(200.)) && b.on_divider(at(203.)) && b.on_divider(at(197.)));
+        assert!(!b.on_divider(at(100.)) && !b.on_divider(at(300.)));
+        assert!(
+            b.is_on_tree(at(203.)),
+            "the grab zone does not lock the card"
+        );
+        assert!(!b.is_on_tree(at(300.)));
+        // hover
+        b.mouse_move(at(201.), &mods);
+        assert_eq!(b.divider_cursor(), Some(gpui::CursorStyle::ResizeLeftRight));
+        b.mouse_leave();
+        assert_eq!(b.divider_cursor(), None);
+        // a press holds it; moves ask for the width, wherever they go
+        b.mouse_down(at(200.), gpui::MouseButton::Left, &mods, 1);
+        assert!(b.captures_drag());
+        b.mouse_move(at(260.), &mods);
+        b.mouse_move(at(180.), &mods);
+        let events = b.take_events();
+        assert_eq!(
+            events,
+            vec![EditorEvent::Sidebar(260.), EditorEvent::Sidebar(180.)]
+        );
+        b.mouse_leave();
+        assert!(
+            b.divider_cursor().is_some(),
+            "held, it keeps its cursor off the card"
+        );
+        b.mouse_up(at(180.), gpui::MouseButton::Left, &mods);
+        assert!(!b.captures_drag());
+        // a tree above the text drags vertically
+        b.sidebar_top = true;
+        assert_eq!(b.divider_cursor(), Some(gpui::CursorStyle::ResizeUpDown));
+        assert!(b.on_divider(Point { x: 10., y: 199. }));
     }
 
     // Cmd+Alt+Left from the text goes into a tree on the left, Right comes

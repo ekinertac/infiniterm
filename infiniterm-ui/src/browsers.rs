@@ -512,11 +512,18 @@ impl AppView {
         if self.model.modal_open() {
             return;
         }
-        let style = self
-            .hover_body
-            .clone()
-            .and_then(|id| self.browser_for(&id))
-            .map(|b| b.cursor_style());
+        let hover = self.hover_body.clone();
+        let style = hover
+            .as_ref()
+            .and_then(|id| self.browser_for(id))
+            .map(|b| b.cursor_style())
+            .or_else(|| {
+                // An editor's tree divider: the resize cursor (#258).
+                hover
+                    .as_ref()
+                    .and_then(|id| self.editor_tabs_for(id))
+                    .and_then(|t| t.divider_cursor())
+            });
         if let Some(style) = style {
             window.set_window_cursor_style(style);
         }
