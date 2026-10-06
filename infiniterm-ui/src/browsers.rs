@@ -501,14 +501,25 @@ impl AppView {
     /// arrow: nothing else in the app sets a cursor style, so this is
     /// decided fresh every frame rather than left to whatever gpui reset
     /// to on its own.
+    ///
+    /// gpui gives a WINDOW-level cursor precedence over every element's own
+    /// (`cursor_pointer` on a row), so asking for the arrow every frame, as
+    /// this once did, made every pointer in the palette, the dialogs and the
+    /// tabs a no-op (#256). It now asks only when the pointer is over a
+    /// browser page and no overlay is up; everywhere else the elements
+    /// decide, and gpui's default is the arrow.
     pub fn apply_hover_cursor(&mut self, window: &mut gpui::Window) {
+        if self.model.modal_open() {
+            return;
+        }
         let style = self
             .hover_body
             .clone()
             .and_then(|id| self.browser_for(&id))
-            .map(|b| b.cursor_style())
-            .unwrap_or(gpui::CursorStyle::Arrow);
-        window.set_window_cursor_style(style);
+            .map(|b| b.cursor_style());
+        if let Some(style) = style {
+            window.set_window_cursor_style(style);
+        }
     }
 
     /// Chromium reports a find's progress several times per search; the

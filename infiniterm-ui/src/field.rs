@@ -67,6 +67,18 @@ impl Field {
     /// of a word looks the same in all of them. The caller draws the
     /// placeholder itself when the text is empty, because a caret against
     /// placeholder words suggests they were typed.
+    /// An empty field: the caret bar first, then the placeholder after it, the
+    /// way a Mac field shows one. Without the caret an empty box read as a
+    /// label, not as something to type into (Ekin, 2026-10-06).
+    pub fn empty_with_placeholder(placeholder: &str) -> gpui::Div {
+        use gpui::{div, ParentElement, Styled};
+        div()
+            .flex()
+            .flex_row()
+            .child(div().w(gpui::px(CARET_W_PX)).bg(gpui::white()))
+            .child(placeholder.to_string())
+    }
+
     pub fn inline(&self, sel_bg: gpui::Hsla, sel_fg: gpui::Hsla) -> gpui::Div {
         self.inline_composing(sel_bg, sel_fg, None)
     }

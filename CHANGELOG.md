@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-06
 
+- The pointer becomes a hand over clickable rows and buttons (palette, address bar, shortcuts panel, dialogs, context menu, workspace tabs). The cursor was being reset to the arrow every frame, which hid it.
+- An empty input box (the command palette, the address bar, the find bar, the shortcuts filter) shows a text cursor before its placeholder, so it reads as something to type into.
 - Rows and buttons you can click now show it: the pointer becomes a hand and the row under it lights up in the command palette, the address bar's list, the shortcuts panel, the dialogs' buttons, the browser's context menu and the workspace tabs.
 - A click outside the command palette or the shortcuts panel closes it, as Escape does (a previewed theme goes back).
 - Fixed: choosing Browser for an empty slot opened the address bar, but pressing Enter in it opened the kind picker again behind it instead of going to the address. A key typed in any open overlay no longer reaches the empty slot behind it.
