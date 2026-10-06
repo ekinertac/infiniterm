@@ -1405,6 +1405,32 @@ mod tests {
         assert!(h.m.selection.phantom.is_none());
     }
 
+    // #253: with the address bar open from the phantom's kind picker the phantom
+    // is still waiting, and the bare Enter that submits the address reached the
+    // phantom first and opened the picker again. No overlay lets a bare key
+    // through to the canvas behind it.
+    #[test]
+    fn a_bare_key_does_not_reach_the_phantom_while_an_overlay_is_open() {
+        let mut h = Harness::new();
+        h.run("focus.move.right");
+        assert!(h.m.selection.phantom.is_some());
+        h.m.handle_bare_key(focus_cmd::BareKey::Enter);
+        h.m.close_palette(true);
+        h.m.palette_run(Source::SlotKind, "browser");
+        assert!(h.m.omni.open && h.m.selection.phantom.is_some());
+        assert!(!h.m.handle_bare_key(focus_cmd::BareKey::Enter));
+        assert!(!h.m.handle_bare_key(focus_cmd::BareKey::Char('a')));
+        assert!(!h.m.palette_open(), "no second picker");
+        h.m.shortcuts_open = true;
+        h.m.close_omnibox();
+        assert!(!h.m.handle_bare_key(focus_cmd::BareKey::Enter));
+        assert!(!h.m.palette_open());
+        h.m.shortcuts_open = false;
+        // and with nothing open the phantom still takes Enter
+        assert!(h.m.handle_bare_key(focus_cmd::BareKey::Enter));
+        assert!(h.m.palette_open());
+    }
+
     // "Browser" in the phantom's kind picker used to open the old text
     // prompt; it opens the omnibox now, and Enter has to land the result in
     // the SAME phantom rect the picker was opened from, not beside whatever

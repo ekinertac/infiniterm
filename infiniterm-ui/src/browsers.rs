@@ -406,6 +406,8 @@ impl AppView {
                     .id(gpui::SharedString::from(format!("ctxmenu-{label}")))
                     .px_3()
                     .py_1()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(crate::chrome::hover_fill(chrome.row_selected)))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseDownEvent, _, cx| {

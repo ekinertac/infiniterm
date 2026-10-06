@@ -220,6 +220,10 @@ impl AppView {
                         // border, since gpui does not clip by default.
                         .overflow_hidden()
                         .when(selected, |d| d.bg(chrome.row_selected))
+                        .cursor_pointer()
+                        .when(!selected, |d| {
+                            d.hover(|s| s.bg(crate::chrome::hover_fill(chrome.row_selected)))
+                        })
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _: &MouseDownEvent, _, cx| {
@@ -514,6 +518,7 @@ impl AppView {
             .child(
                 div()
                     .id("find-close")
+                    .cursor_pointer()
                     .text_color(chrome.text_faint)
                     .on_mouse_down(
                         MouseButton::Left,
