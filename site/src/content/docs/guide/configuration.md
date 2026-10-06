@@ -14,7 +14,7 @@ keybindings.default.json   every binding, commented
 
 The `.default` files are rewritten at every launch, so editing them does nothing. Read them to see what exists, copy a line into your file and change it there. An upgrade never touches your files; new settings appear in the defaults. Your files can be symlinks into a dotfiles repo: a save writes the file the link points at and keeps the link.
 
-`Cmd ,` opens settings and `Cmd Shift ,` keybindings, each as a pair of editor cards. Changes apply on save, no restart, also when you save from another editor. In `settings.json` the setting names complete as you type (see [JSON with a schema](../editor/#json-with-a-schema)).
+`Cmd ,` opens settings and `Cmd Shift ,` keybindings, each as a pair of editor cards. Changes apply on save, no restart, also when you save from another editor. A file that does not parse, or has the wrong kind of value (text where a number goes), is not applied: your previous settings stay, and the status bar says `settings.json not applied` with the reason until you save a valid file. `keybindings.json` works the same way. Unknown names, numbers out of range and trailing commas are accepted. In `settings.json` the setting names complete as you type (see [JSON with a schema](../editor/#json-with-a-schema)).
 
 ## Settings
 
