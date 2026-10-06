@@ -349,7 +349,22 @@ const SOURCE_URL = 'https://github.com/ekinertac/infiniterm';
 
   main > section:not(.hero):not(.film):not(.shot) { padding-block: 72px; }
   .shot { padding-bottom: 48px; }
-  .shot figure { margin: 0; }
+  .shot figure { margin: 0; position: relative; isolation: isolate; }
+  /* A soft light behind the window in the four state colours, blurred wide
+     so it reads as a glow, not as a drop shadow under the image. */
+  .shot figure::before {
+    content: '';
+    position: absolute;
+    inset: -10% -7% -6%;
+    z-index: -1;
+    background:
+      radial-gradient(40% 50% at 20% 30%, color-mix(in srgb, var(--working) 75%, transparent), transparent 70%),
+      radial-gradient(40% 50% at 80% 25%, color-mix(in srgb, var(--waiting) 55%, transparent), transparent 70%),
+      radial-gradient(40% 50% at 75% 80%, color-mix(in srgb, var(--failed) 50%, transparent), transparent 70%),
+      radial-gradient(40% 50% at 30% 80%, color-mix(in srgb, var(--done) 55%, transparent), transparent 70%);
+    filter: blur(100px);
+    opacity: 1;
+  }
   .shot img { display: block; width: 100%; height: auto; border-radius: 12px; }
   .shot figcaption { margin-top: 14px; font-size: 0.95rem; color: var(--ink-soft); max-width: 70ch; }
   .section-lede { color: var(--ink-soft); margin: 20px 0 40px; }
