@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-06
+
+- A locked editor unlocks with a single Escape when Escape has nothing else to do. A completion popup, the find panel, extra cursors and a selection each take the Escape first (and the card stays locked), so closing the popup or the find panel with Esc and leaving with the next Esc works as in any editor. A browser card still takes a double Escape. Cmd+Escape (`browser.leave`, "Card: leave the page or the editor") also unlocks an editor now, and it is a keybinding like any other: bind `browser.leave` to another chord in `keybindings.json` and that chord is the way out while the card is locked.
+
 ## 0.5.7 (build 731), 2026-10-06
 
 ### Editor

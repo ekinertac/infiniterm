@@ -245,11 +245,14 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "card.transcript",
         "\"info\" in iTerm2 and most Mac apps",
     ),
-    // Out of a browser card's page, which owns every other key while focused.
+    // Out of a browser card's page or a locked editor, which own every other
+    // key while locked. An editor also unlocks on a bare Escape that has
+    // nothing else to close (a popup, the find panel, a selection); bind this
+    // command to another chord to change the way out.
     (
         "cmd+escape",
         "browser.leave",
-        "the page owns every other key while focused",
+        "the page or the editor owns every other key while locked",
     ),
     // The sidebar above the content or beside it, Gmail's reading-pane
     // toggle; Cmd+\ is what the split editors use to flip an arrangement.

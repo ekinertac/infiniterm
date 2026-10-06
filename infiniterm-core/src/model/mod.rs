@@ -390,6 +390,9 @@ pub enum EditorAction {
     GoToLine,
     ToggleBlame,
     ToggleExplorer,
+    /// Leave the text: the lock is dropped and the card is an ordinary card
+    /// on the canvas again (`browser.leave`, #265).
+    Unlock,
     /// A palette-only text transform (Batch 1, 2026-09-24): no chord of its
     /// own, reachable only through the command palette, `cards_cmd.rs`'s
     /// `editor.transform.*` entries.

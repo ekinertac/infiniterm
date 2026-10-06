@@ -557,6 +557,17 @@ impl AppView {
                 }
             }
             EditorAction::ToggleBlame => {} // the diff card, Phase 7
+            // The lock is the body's: the card's flag is written back from it
+            // every frame, so dropping it on the card alone would be undone.
+            EditorAction::Unlock => {
+                if let Some(t) = self.editor_tabs_for(card_id) {
+                    t.locked = false;
+                    t.mark_dirty();
+                }
+                if let Some(c) = self.model.card_mut(card_id) {
+                    c.locked = false;
+                }
+            }
         }
     }
 
