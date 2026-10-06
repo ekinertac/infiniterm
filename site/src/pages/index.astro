@@ -8,8 +8,15 @@
 // legible size. The film is typereel's HTML (public/film.html, ?play mode).
 // Fonts are self-hosted through fontsource so the page asks nothing of
 // Google, which a "no telemetry" product page should not.
-import '@fontsource-variable/schibsted-grotesk';
-import '@fontsource-variable/jetbrains-mono';
+import Landing from '../layouts/Landing.astro';
+// The agents with hooks, as the hero shows them. Logos are each project's
+// own mark (Simple Icons for Claude, OpenAI and OpenCode; Pi's from pi.dev),
+// unchanged, under a plain "Works with" so the row reads as compatibility,
+// not endorsement. An agent goes here only when its adapter is merged.
+import claudeLogo from '../assets/agents/claude.svg?raw';
+import openaiLogo from '../assets/agents/openai.svg?raw';
+import opencodeLogo from '../assets/agents/opencode.svg?raw';
+import piLogo from '../assets/agents/pi.svg?raw';
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 // One app, every feature, free for personal use; working with it needs a
@@ -22,7 +29,48 @@ const PRICE = '$29';
 const INSTALL = 'curl -fsSL https://infiniterm.app/install.sh | sh';
 const BREW = 'brew install --cask ekinertac/tap/infiniterm';
 const DOWNLOAD_URL = 'https://github.com/ekinertac/infiniterm/releases/latest';
-const SOURCE_URL = 'https://github.com/ekinertac/infiniterm';
+
+const agents = [
+  { name: 'Claude Code', svg: claudeLogo, color: '#d97757' },
+  { name: 'Codex', svg: openaiLogo },
+  { name: 'OpenCode', svg: opencodeLogo },
+  { name: 'Pi', svg: piLogo },
+];
+
+// The six features under the screenshot: what a user does with the app,
+// each with one line of proof in mono. features.md has the full list.
+const features = [
+  {
+    title: 'See which agent needs you',
+    body: 'Claude Code, Codex, OpenCode and Pi report through hooks, any zsh command through the shell. The border says working, waiting on you, failed or done.',
+    proof: 'ift install-claude-hooks',
+  },
+  {
+    title: 'A canvas, not tabs',
+    body: 'Zoom out to see every card, zoom in to work in one. A new card takes the next free slot, and nothing moves on its own.',
+    proof: 'Cmd 2  fits every card',
+  },
+  {
+    title: 'Shells that outlive the app',
+    body: 'Each shell runs in its own small daemon. Quit or update the app and the programs keep running; reopen it and the screen comes back as it was.',
+    proof: 'ssh -t mac ift attach 7',
+  },
+  {
+    title: 'Driven from any shell',
+    body: 'ift opens files over the card you are in, lists cards, types into another card and reads what it shows.',
+    proof: 'ift send 7 "npm test" --enter',
+  },
+  {
+    title: 'Servers in their own window',
+    body: 'A second window whose cards run on a Linux server or another Mac over ssh. Close it and the shells stay on the server.',
+    proof: 'ift connect me@server',
+  },
+  {
+    title: 'The rest of the work beside it',
+    body: 'Editor, diff, transcript and browser cards on the same canvas: the files, the changes against HEAD, a session\'s turns, and Chromium.',
+    proof: 'ift diff',
+  },
+];
 
 // The hero canvas, in reading order. `state` is what the card settles on;
 // `lines` are bar widths in characters, since these cards are "far away".
@@ -88,37 +136,7 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
 ];
 ---
 
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>infiniterm</title>
-    <meta name="description" content="Terminal cards on an infinite canvas for macOS. Each card's border shows whether the agent in it is working, waiting on you, failed or done." />
-    <link rel="icon" href={`${base}favicon.ico`} sizes="any" />
-    <link rel="icon" href={`${base}favicon.png`} type="image/png" />
-    <link rel="apple-touch-icon" href={`${base}apple-touch-icon.png`} />
-    <meta property="og:title" content="infiniterm" />
-    <meta property="og:description" content="Terminal cards on an infinite canvas for macOS. Each card's border shows whether the agent in it is working, waiting on you, failed or done." />
-    <meta property="og:url" content="https://infiniterm.app/" />
-    <meta property="og:image" content="https://infiniterm.app/og.png" />
-    <meta property="og:image:width" content="1280" />
-    <meta property="og:image:height" content="640" />
-    <meta name="twitter:card" content="summary_large_image" />
-  </head>
-  <body>
-    <header class="top">
-      <a class="mark" href={base}><img src={`${base}icon.png`} alt="" width="32" height="32" />infiniterm</a>
-      <nav>
-        <a href={`${base}guide/install/`}>Docs</a>
-        <a href="#pricing">Pricing</a>
-        <a href={DOWNLOAD_URL}>Download</a>
-        <a class="gh" href={SOURCE_URL} aria-label="Source on GitHub" title="Source on GitHub">
-          <svg viewBox="0 0 16 16" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        </a>
-      </nav>
-    </header>
-
+<Landing title="infiniterm" description="Terminal cards on an infinite canvas for macOS. Each card's border shows whether the agent in it is working, waiting on you, failed or done." path="">
     <main>
       <section class="hero">
         <div class="hero-copy">
@@ -128,6 +146,19 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
             infiniterm puts every terminal on one zoomable canvas. Each card keeps its place, and its border says what the
             agent inside is doing: working, waiting on you, failed, or done.
           </p>
+          <div class="agents">
+            <span class="agents-label">Works with</span>
+            <ul>
+              {
+                agents.map((a) => (
+                  <li>
+                    <span class="logo" style={a.color ? `color:${a.color}` : undefined} set:html={a.svg} aria-hidden="true" />
+                    {a.name}
+                  </li>
+                ))
+              }
+            </ul>
+          </div>
           <div class="methods" role="tablist" aria-label="Install with">
             <button type="button" role="tab" aria-selected="true" aria-controls="m-script" id="t-script">Script</button>
             <button type="button" role="tab" aria-selected="false" aria-controls="m-brew" id="t-brew" tabindex="-1">Homebrew</button>
@@ -187,6 +218,22 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
         </figure>
       </section>
 
+      <section class="features">
+        <h2>Six things it does.</h2>
+        <div class="feature-grid">
+          {
+            features.map((f) => (
+              <article>
+                <h3>{f.title}</h3>
+                <p>{f.body}</p>
+                <code>{f.proof}</code>
+              </article>
+            ))
+          }
+        </div>
+        <p class="more"><a href={`${base}features/`}>Every feature →</a></p>
+      </section>
+
       <section class="states">
         <h2>Four colours, because there are four questions.</h2>
         <p class="section-lede">
@@ -233,17 +280,6 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
             ))
           }
         </div>
-      </section>
-
-      <section class="kinds">
-        <h2>The rest of the work sits on the same canvas.</h2>
-        <dl>
-          <div><dt>Editor cards</dt><dd>Syntax highlighting for 17 languages, a file tree, find and replace. No LSP, on purpose.</dd></div>
-          <div><dt>Diff cards</dt><dd><code>ift diff</code> shows your changes against HEAD, with a blame gutter on <kbd>Cmd</kbd> <kbd>B</kbd>.</dd></div>
-          <div><dt>Transcript cards</dt><dd>A Claude Code or Pi session as turns, tool calls folded, following along while it runs.</dd></div>
-          <div><dt>Browser cards</dt><dd>Chromium with the Claude in Chrome extension, so an agent can drive a browser that lives next to it.</dd></div>
-          <div><dt>Shells that outlive the window</dt><dd>Each card's shell runs under its own small daemon. Quit the app and they keep running; reopen it and they are back.</dd></div>
-        </dl>
       </section>
 
       <section class="keys split">
@@ -301,12 +337,6 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
       </section>
     </main>
 
-    <footer>
-      <a href={`${base}guide/install/`}>Docs</a>
-      <a href={`${base}reference/keys/`}>Keys</a>
-      <a href={SOURCE_URL}>Source</a>
-    </footer>
-
     <script>
       // The film waits for a click: nothing on the page moves on its own
       // besides the hero's one lighting-up moment. The iframe is only given
@@ -353,409 +383,4 @@ const workspaces: { name: string; active?: boolean; dots: State[] }[] = [
         });
       }
     </script>
-  </body>
-</html>
-
-<style is:global>
-  :root {
-    /* The canvas: a cool pale grey with a dot grid, the app's canvas lit up. */
-    --canvas: #e7e6ee;
-    --dot: #c9c7d6;
-    --ink: #17161f;
-    --ink-soft: #4a4858;
-    /* A terminal card in Violite, the app's default theme. */
-    --card: #241c36;
-    --card-edge: #3d2f5c;
-    --card-text: #eef4f6;
-    --card-dim: #8a7cab;
-    /* The four states, the app's own values (chrome.rs). */
-    --working: #9d7cd8;
-    --waiting: #ffc400;
-    --failed: #e5484d;
-    --done: #4fb477;
-
-    --sans: 'Schibsted Grotesk Variable', system-ui, sans-serif;
-    --mono: 'JetBrains Mono Variable', ui-monospace, monospace;
-    color-scheme: light;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme='light']) {
-      --canvas: #121119;
-      --dot: #2a2837;
-      --ink: #ecebf5;
-      --ink-soft: #a6a4b8;
-      --card: #241c36;
-      --card-edge: #3d2f5c;
-      color-scheme: dark;
-    }
-  }
-  :root[data-theme='dark'] {
-    --canvas: #121119;
-    --dot: #2a2837;
-    --ink: #ecebf5;
-    --ink-soft: #a6a4b8;
-    --card-edge: #3d2f5c;
-    color-scheme: dark;
-  }
-
-  * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
-  body {
-    margin: 0;
-    background-color: var(--canvas);
-    background-image: radial-gradient(var(--dot) 1.2px, transparent 1.4px);
-    background-size: 24px 24px;
-    color: var(--ink);
-    font-family: var(--sans);
-    font-size: 1.125rem;
-    line-height: 1.55;
-    overflow-x: clip;
-  }
-  html { overflow-x: clip; }
-  a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; }
-  a:hover { text-decoration-thickness: 2px; }
-  :focus-visible { outline: 3px solid var(--working); outline-offset: 3px; border-radius: 4px; }
-  kbd {
-    font: 600 0.8em var(--mono);
-    padding: 0.1em 0.45em;
-    border: 1px solid var(--ink-soft);
-    border-bottom-width: 2px;
-    border-radius: 5px;
-    white-space: nowrap;
-  }
-
-  .top, main > section, footer {
-    width: min(1180px, 100% - 32px);
-    margin-inline: auto;
-  }
-  .top {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-block: 20px;
-  }
-  .mark { display: flex; gap: 10px; align-items: center; font-weight: 700; font-size: 1.15rem; text-decoration: none; }
-  .mark img { border-radius: 6px; }
-  .top nav { display: flex; gap: 24px; font-weight: 500; }
-  .top nav a { text-decoration: none; }
-  .top nav a:hover { text-decoration: underline; }
-  .top nav { align-items: center; }
-  .top nav .gh { display: flex; color: var(--ink); }
-  .top nav .gh:hover { color: var(--working); }
-
-  h1, h2 { font-weight: 800; letter-spacing: -0.03em; line-height: 1.02; margin: 0; }
-  h1 { font-size: clamp(2.6rem, 5.6vw, 4.8rem); max-width: 14ch; }
-  h2 { font-size: clamp(1.9rem, 3.8vw, 3rem); max-width: 20ch; }
-  p { max-width: 62ch; }
-
-  /* Hero: copy on the left, a stretch of canvas running off the right edge. */
-  .hero {
-    display: grid;
-    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-    gap: 40px;
-    align-items: center;
-    padding-block: 40px 96px;
-  }
-  .lede { font-size: 1.25rem; color: var(--ink-soft); margin: 28px 0 32px; }
-  /* The app icon, big: its four borders are the four states the page is about. */
-  .app-icon { display: block; width: 128px; height: 128px; margin: 0 0 20px -14px; }
-  @media (max-width: 560px) { .app-icon { width: 80px; height: 80px; margin-bottom: 20px; } }
-  .methods { display: flex; gap: 4px; margin-bottom: 8px; }
-  .methods button {
-    font: 600 0.9rem var(--sans);
-    color: var(--ink-soft);
-    background: none;
-    border: 0;
-    border-radius: 7px;
-    padding: 7px 12px;
-    cursor: pointer;
-  }
-  .methods button[aria-selected='true'] { color: var(--ink); background: color-mix(in srgb, var(--ink) 10%, transparent); }
-  .install[hidden] { display: none; }
-  .install.dmg { align-items: center; justify-content: space-between; padding-left: 16px; font-size: 0.95rem; }
-  .install.dmg a {
-    align-self: stretch;
-    display: flex;
-    align-items: center;
-    padding: 0 20px;
-    font-weight: 600;
-    text-decoration: none;
-    background: var(--working);
-    color: #17161f;
-  }
-  .install {
-    display: flex;
-    align-items: stretch;
-    /* The same height for all three tabs, so switching them does not shift the page. */
-    min-height: 50px;
-    max-width: 640px;
-    background: var(--card);
-    color: var(--card-text);
-    border-radius: 10px;
-    border: 1px solid var(--card-edge);
-    overflow: hidden;
-  }
-  .install code {
-    flex: 1;
-    min-width: 0;
-    font: 0.86rem/1.4 var(--mono);
-    padding: 15px 16px;
-    overflow-x: auto;
-    white-space: nowrap;
-  }
-  .install code::before { content: '$ '; color: var(--card-dim); }
-  .install button {
-    font: 600 0.9rem var(--sans);
-    background: var(--working);
-    color: #17161f;
-    border: 0;
-    padding: 0 20px;
-    cursor: pointer;
-    min-width: 92px;
-  }
-  .install button:hover { background: #b39ae3; }
-  .btn {
-    display: inline-block;
-    font: 600 1rem var(--sans);
-    text-decoration: none;
-    padding: 14px 22px;
-    border-radius: 9px;
-    border: 1.5px solid var(--ink);
-    color: var(--ink);
-  }
-  .btn:hover { text-decoration: none; background: color-mix(in srgb, var(--ink) 8%, transparent); }
-  .btn.primary { background: var(--working); border-color: var(--working); color: #17161f; }
-  .btn.primary:hover { background: #b39ae3; }
-  .btn.disabled { opacity: 0.55; cursor: default; }
-  .btn.disabled:hover { background: var(--working); }
-  .fine { font-size: 0.95rem; color: var(--ink-soft); margin-top: 14px; }
-
-  /* Wider than its column on purpose: it runs off the window's right edge,
-     because the canvas does not end. The near card is the one you zoomed to:
-     twice the size and readable, where the far ones are bars. */
-  .hero-canvas {
-    display: grid;
-    grid-template-columns: repeat(6, 168px);
-    grid-auto-rows: 104px;
-    grid-auto-flow: dense;
-    gap: 14px;
-    width: max-content;
-  }
-  .hero-canvas .near { grid-column: span 2; grid-row: span 2; padding: 30px 18px 16px; }
-  .hero-canvas .near pre { font-size: 14px; line-height: 1.55; }
-  .hero-canvas .near .label { font-size: 12px; top: 9px; left: 14px; }
-  .card {
-    background: var(--card);
-    color: var(--card-text);
-    border-radius: 7px;
-    border: 1px solid var(--card-edge);
-    position: relative;
-    overflow: hidden;
-  }
-  .hero-canvas .card { padding: 22px 12px 10px; }
-  .card .label {
-    position: absolute;
-    top: 6px;
-    left: 10px;
-    font: 500 10px var(--mono);
-    color: var(--card-dim);
-  }
-  .bars { display: grid; gap: 6px; }
-  .bars i { display: block; height: 4px; max-width: 100%; border-radius: 2px; background: #56447a; }
-  .card pre {
-    margin: 0;
-    font: 11px/1.45 var(--mono);
-    white-space: pre;
-    overflow: hidden;
-  }
-
-  /* A card's state is its border, as in the app: 3px in the state's hue. */
-  .s-working.card, .s-working .card { box-shadow: 0 0 0 3px var(--working); }
-  .s-waiting.card, .s-waiting .card { box-shadow: 0 0 0 3px var(--waiting); }
-  .s-failed.card, .s-failed .card { box-shadow: 0 0 0 3px var(--failed); }
-  .s-done.card, .s-done .card { box-shadow: 0 0 0 3px var(--done); }
-  .hero-canvas .near { box-shadow: 0 0 0 3px var(--waiting), 0 0 0 7px rgba(255, 196, 0, 0.18); }
-
-  /* The page's one moment: the hero's cards light up in reading order, the
-     way a workspace tab's dots do. Skipped under reduced motion. */
-  @media (prefers-reduced-motion: no-preference) {
-    .hero-canvas .card:not(.s-none) {
-      animation: light 500ms ease-out both;
-      animation-delay: calc(400ms + var(--i) * 140ms);
-    }
-    @keyframes light {
-      from { box-shadow: 0 0 0 0 transparent; }
-    }
-  }
-
-  .film { padding-bottom: 120px; }
-  .film .stage {
-    position: relative;
-    aspect-ratio: 16 / 9;
-    border-radius: 12px;
-    overflow: hidden;
-    background: #0e0f13;
-    box-shadow: 0 0 0 1px var(--card-edge);
-  }
-  .film iframe { display: block; width: 100%; height: 100%; border: 0; }
-  /* The poster is the button: the stage's dark with the canvas's dot grid,
-     and one play control in the middle. */
-  .film .play {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-content: center;
-    justify-items: center;
-    gap: 18px;
-    border: 0;
-    cursor: pointer;
-    color: #cdd6f4;
-    font: 600 1.15rem var(--sans);
-    background-color: #0e0f13;
-    background-image: radial-gradient(#26263a 1.2px, transparent 1.4px);
-    background-size: 24px 24px;
-  }
-  .film .play .len { color: #6c7086; font-weight: 500; margin-left: 6px; }
-  .film .play-icon {
-    width: 84px;
-    height: 84px;
-    border-radius: 50%;
-    background: var(--working);
-    position: relative;
-    transition: transform 150ms ease-out;
-  }
-  .film .play-icon::after {
-    content: '';
-    position: absolute;
-    left: 34px;
-    top: 26px;
-    border-style: solid;
-    border-width: 16px 0 16px 26px;
-    border-color: transparent transparent transparent #17161f;
-  }
-  .film .play:hover .play-icon { transform: scale(1.06); }
-  .film .play:focus-visible { outline-offset: -6px; }
-  @media (prefers-reduced-motion: reduce) {
-    .film .play-icon { transition: none; }
-  }
-
-  main > section:not(.hero):not(.film):not(.shot) { padding-block: 72px; }
-  .shot { padding-bottom: 48px; }
-  .shot figure { margin: 0; }
-  .shot img { display: block; width: 100%; height: auto; border-radius: 12px; }
-  .shot figcaption { margin-top: 14px; font-size: 0.95rem; color: var(--ink-soft); max-width: 70ch; }
-  .section-lede { color: var(--ink-soft); margin: 20px 0 40px; }
-
-  .state-row {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 28px;
-  }
-  .state { margin: 0; }
-  .state .card { padding: 16px 14px; height: 150px; }
-  .state figcaption { margin-top: 18px; display: grid; gap: 4px; font-size: 1rem; }
-  .state figcaption span { color: var(--ink-soft); }
-  .state figcaption strong { font-size: 1.15rem; }
-
-  .split {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 64px;
-    align-items: center;
-  }
-  .split p { color: var(--ink-soft); margin-top: 20px; }
-
-  /* The title bar's workspace tabs, drawn big. */
-  .tabs {
-    display: flex;
-    gap: 4px;
-    padding: 8px;
-    background: var(--card);
-    border: 1px solid var(--card-edge);
-    border-radius: 10px;
-    overflow: hidden;
-  }
-  .tab {
-    flex: 1;
-    min-width: 0;
-    display: grid;
-    gap: 10px;
-    justify-items: start;
-    padding: 18px 18px 20px;
-    border-radius: 6px;
-    color: var(--card-dim);
-    font: 500 1.05rem var(--mono);
-  }
-  .tab.active { background: #49376d; color: var(--card-text); }
-  .dots { display: flex; gap: 7px; flex-wrap: wrap; }
-  .dots i { width: 12px; height: 12px; border-radius: 50%; background: #56447a; }
-  .dots .d-working { background: var(--working); }
-  .dots .d-waiting { background: var(--waiting); }
-  .dots .d-failed { background: var(--failed); }
-  .dots .d-done { background: var(--done); }
-
-  .kinds dl { margin: 40px 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px 56px; }
-  .kinds dt { font-weight: 700; font-size: 1.2rem; }
-  .kinds dd { margin: 6px 0 0; color: var(--ink-soft); }
-  .kinds code { font: 0.9em var(--mono); }
-
-  .keys ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 18px; font-size: 1.05rem; }
-  .keys li { display: grid; grid-template-columns: 190px 1fr; gap: 16px; align-items: baseline; }
-  .keys kbd { font-size: 0.95rem; }
-
-  .nots .big { font-size: clamp(1.4rem, 2.6vw, 2rem); font-weight: 700; letter-spacing: -0.02em; margin: 24px 0 12px; }
-  .nots p:last-child { color: var(--ink-soft); }
-
-  .end { border-top: 1px solid var(--dot); }
-  .plans {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 28px;
-    margin: 40px 0 28px;
-    max-width: 900px;
-  }
-  .plan {
-    background: var(--card);
-    color: var(--card-text);
-    border: 1px solid var(--card-edge);
-    border-radius: 10px;
-    padding: 28px;
-    display: grid;
-    align-content: start;
-    gap: 14px;
-  }
-  .plan.pro-plan { box-shadow: 0 0 0 3px var(--working); }
-  .plan h3 { margin: 0; font-size: 1.6rem; letter-spacing: -0.02em; }
-  .plan .price { margin: 0; color: var(--card-dim); }
-  .plan ul { margin: 0 0 8px; padding-left: 1.1em; display: grid; gap: 8px; }
-  .plan .btn { justify-self: start; border-color: var(--card-text); color: var(--card-text); }
-  .plan .btn.primary { color: #17161f; border-color: var(--working); }
-
-  footer {
-    display: flex;
-    gap: 24px;
-    padding-block: 32px 48px;
-    font-size: 0.95rem;
-    color: var(--ink-soft);
-  }
-
-  @media (max-width: 900px) {
-    .hero { grid-template-columns: minmax(0, 1fr); padding-bottom: 64px; }
-    .hero-canvas { grid-template-columns: repeat(6, 150px); grid-auto-rows: 92px; }
-    .state-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .kinds dl { grid-template-columns: 1fr; }
-    .split { grid-template-columns: 1fr; gap: 36px; }
-  }
-  @media (max-width: 560px) {
-    body { font-size: 1.05rem; }
-    .hero-canvas { grid-template-columns: repeat(6, 118px); grid-auto-rows: 76px; gap: 10px; }
-    .hero-canvas .near { padding: 26px 12px 10px; }
-    .hero-canvas .near pre { font-size: 11px; }
-    .hero-canvas .card { padding: 18px 8px 8px; }
-    .card pre { font-size: 9px; }
-    .state-row { grid-template-columns: 1fr; }
-    .keys li { grid-template-columns: 1fr; gap: 4px; }
-    .plans { grid-template-columns: 1fr; }
-    .install code { font-size: 0.75rem; }
-  }
-</style>
+</Landing>
