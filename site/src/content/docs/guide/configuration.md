@@ -50,7 +50,7 @@ All 500-odd schemes from iTerm2-Color-Schemes ship with the app; Violite is the 
 ~/Library/Application Support/dev.ekinertac.infiniterm/themes/
 ```
 
-"Switch theme" in the palette lists the theme you have first, marked active, then every other one A to Z. Each one is applied as you move through the list, with the canvas left undimmed so the cards show its real colours, and the list keeps its order while you do. `Escape` puts back the one you started on; `Enter` keeps the new one. The theme colours the app's chrome, the editor's syntax and the card labels too.
+"Switch theme" in the palette lists the theme you have first, marked active, then every other one A to Z. Each one is applied as you move through the list, with the canvas left undimmed so the cards show its real colours, and the list keeps its order while you do. `Escape`, or a click outside the list, puts back the one you started on; `Enter` keeps the new one. The theme colours the app's chrome, the editor's syntax and the card labels too.
 
 ## The window and the canvas
 
