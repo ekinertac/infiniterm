@@ -269,6 +269,8 @@ pub struct Ui {
     pub window_color: String,
     /// Alpha of a card's background fill, text untouched (#98).
     pub card_opacity: f64,
+    /// Rounded card corners, in pixels at 100% zoom; 0 keeps them square (#235).
+    pub card_radius: f64,
     /// Whether the canvas draws its grid (#96).
     pub show_grid: bool,
     /// Screen pixels left around a card or cluster when it is fitted (#87).
@@ -391,6 +393,7 @@ pub fn default_config() -> Config {
             workspace_isolation: false,
             window_color: String::new(),
             card_opacity: 1.,
+            card_radius: 0.,
             show_grid: true,
             fit_padding: FIT_PADDING,
             fit_magnify: false,
@@ -689,6 +692,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 .trim()
                 .to_string(),
             card_opacity: num(u.get("cardOpacity"), d.ui.card_opacity, 0.1, 1.),
+            card_radius: num(u.get("cardRadius"), d.ui.card_radius, 0., 40.),
             show_grid: bool_(u.get("showGrid"), d.ui.show_grid),
             fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
             fit_magnify: bool_(u.get("fitMagnify"), d.ui.fit_magnify),
@@ -1133,6 +1137,15 @@ mod tests {
             "",
             "not a string"
         );
+    }
+
+    #[test]
+    fn card_radius_defaults_to_square_and_clamps() {
+        assert_eq!(m(json!({})).ui.card_radius, 0.);
+        assert_eq!(m(json!({"ui.cardRadius": 12})).ui.card_radius, 12.);
+        assert_eq!(m(json!({"ui.cardRadius": 500})).ui.card_radius, 40.);
+        assert_eq!(m(json!({"ui.cardRadius": -3})).ui.card_radius, 0.);
+        assert_eq!(m(json!({"ui.cardRadius": "big"})).ui.card_radius, 0.);
     }
 
     #[test]

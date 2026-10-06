@@ -2260,7 +2260,7 @@ impl CardBody for EditorBody {
             h: f32::from(bounds.size.height) as f64 / scale,
         };
         let bg = hex(&self.colors.background);
-        window.paint_quad(fill(bounds, crate::chrome::card_fill(cx, bg)));
+        window.paint_quad(crate::chrome::card_body_quad(cx, bounds, bg));
         let font_size = px((self.metrics.font_px * scale) as f32);
         let line_h = px((self.line_h() * scale) as f32);
         let cell_w = px((self.metrics.cell_w * scale) as f32);

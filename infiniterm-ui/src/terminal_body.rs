@@ -576,11 +576,12 @@ impl TerminalBody {
 impl TerminalBody {
     /// The reference's `.scrim`: the card's ground over the text at the
     /// dim amount, so an unfocused card reads as further away.
-    fn paint_scrim(&self, bounds: Bounds<Pixels>, focused: bool, window: &mut Window) {
+    fn paint_scrim(&self, bounds: Bounds<Pixels>, focused: bool, window: &mut Window, cx: &App) {
         if focused || self.inactive_dim <= 0. {
             return;
         }
-        window.paint_quad(fill(
+        window.paint_quad(crate::chrome::card_wash(
+            cx,
             bounds,
             crate::chrome::with_alpha(rgb(self.palette.background), self.inactive_dim as f32),
         ));
@@ -778,9 +779,10 @@ impl CardBody for TerminalBody {
         let t = std::time::Instant::now();
         self.refresh_links(&frame, &rebuilt);
         timing_add(1, t);
-        window.paint_quad(fill(
+        window.paint_quad(crate::chrome::card_body_quad(
+            cx,
             bounds,
-            crate::chrome::card_fill(cx, rgb(self.palette.background)),
+            rgb(self.palette.background),
         ));
         let font_size = px((self.font_px * scale) as f32);
         let line_h = px((self.font_px * self.line_height * scale) as f32);
@@ -881,7 +883,7 @@ impl CardBody for TerminalBody {
                 }
             }
             self.frame = frame;
-            self.paint_scrim(bounds, focused, window);
+            self.paint_scrim(bounds, focused, window, cx);
             return;
         }
         let hover = self.hover;
@@ -969,7 +971,7 @@ impl CardBody for TerminalBody {
         if visual {
             self.paint_visual_tag(bounds, scale, window, cx);
         }
-        self.paint_scrim(bounds, focused, window);
+        self.paint_scrim(bounds, focused, window, cx);
     }
 
     fn resized(&mut self, _world: Size) {

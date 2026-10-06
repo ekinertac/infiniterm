@@ -264,6 +264,33 @@ pub fn hex(s: &str) -> Option<Hsla> {
 pub struct CardOpacity(pub f32);
 impl gpui::Global for CardOpacity {}
 
+/// The card corner radius in SCREEN pixels this frame (`ui.cardRadius` times
+/// the zoom), set once in `paint_world` like `CardOpacity` so a body's
+/// `paint` can reach it without a new parameter on `CardBody` (#235).
+#[derive(Clone, Copy, PartialEq)]
+pub struct CardRadius(pub f32);
+impl gpui::Global for CardRadius {}
+
+/// The radius a card body rounds its own quads with; 0 when none is set.
+pub fn card_radius(cx: &gpui::App) -> gpui::Pixels {
+    gpui::px(cx.try_global::<CardRadius>().map_or(0., |r| r.0))
+}
+
+/// A card body's whole-body fill: the card fill, rounded to the card.
+pub fn card_body_quad(
+    cx: &gpui::App,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    c: Hsla,
+) -> gpui::PaintQuad {
+    gpui::fill(bounds, card_fill(cx, c)).corner_radii(card_radius(cx))
+}
+
+/// A wash over a whole body (the inactive dim), rounded like the body so its
+/// corners do not poke out past the card's.
+pub fn card_wash(cx: &gpui::App, bounds: gpui::Bounds<gpui::Pixels>, c: Hsla) -> gpui::PaintQuad {
+    gpui::fill(bounds, c).corner_radii(card_radius(cx))
+}
+
 /// A card's background fill at the card opacity. Only the fill across the
 /// whole body goes through this: text, selections and cells a program
 /// coloured keep their own alpha.

@@ -535,10 +535,18 @@ impl CardBody for BrowserBody {
                 (bounds.size.height - strip_h).max(px(1.)),
             ),
         );
-        window.paint_quad(fill(bounds, self.card_bg));
+        let radius = crate::chrome::card_radius(cx);
+        window.paint_quad(fill(bounds, self.card_bg).corner_radii(radius));
         match self.active_tab().and_then(|t| t.texture.clone()) {
             Some(img) => {
-                let _ = window.paint_image(page_bounds, Default::default(), img.clone(), 0, false);
+                // The page is the card's bottom edge (the strip covers the top).
+                let page_corners = gpui::Corners {
+                    top_left: px(0.),
+                    top_right: px(0.),
+                    bottom_left: radius,
+                    bottom_right: radius,
+                };
+                let _ = window.paint_image(page_bounds, page_corners, img.clone(), 0, false);
                 // Only a DIFFERENT image is ever evicted: the same texture
                 // is repainted, unchanged, every frame nothing new has
                 // arrived, and dropping what this very call just referenced
@@ -579,7 +587,8 @@ impl CardBody for BrowserBody {
             }
         }
         if !focused && self.inactive_dim > 0. {
-            window.paint_quad(fill(
+            window.paint_quad(crate::chrome::card_wash(
+                cx,
                 bounds,
                 crate::chrome::with_alpha(self.card_bg, self.inactive_dim as f32),
             ));

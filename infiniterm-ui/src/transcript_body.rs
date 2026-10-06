@@ -284,9 +284,10 @@ impl CardBody for TranscriptBody {
         };
         self.world = world;
         let s = |v: f64| px((v * scale) as f32);
-        window.paint_quad(fill(
+        window.paint_quad(crate::chrome::card_body_quad(
+            cx,
             bounds,
-            crate::chrome::card_fill(cx, self.colors.background),
+            self.colors.background,
         ));
         let font_size = px((self.metrics.font_px * scale) as f32);
         if font_size < crate::chrome::legible_font_px(window.scale_factor()) {
@@ -405,7 +406,8 @@ impl CardBody for TranscriptBody {
             y += line_h;
         }
         if !focused && self.inactive_dim > 0. {
-            window.paint_quad(fill(
+            window.paint_quad(crate::chrome::card_wash(
+                cx,
                 bounds,
                 crate::chrome::with_alpha(self.colors.background, self.inactive_dim as f32),
             ));

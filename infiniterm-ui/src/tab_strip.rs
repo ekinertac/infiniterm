@@ -107,7 +107,14 @@ pub fn paint_strip(
     let unit = style.font_px * ui_scale as f64 * scale;
     let strip_h = px((TAB_STRIP_HEIGHT_RATIO * unit) as f32);
     let strip = Bounds::new(bounds.origin, size(bounds.size.width, strip_h));
-    window.paint_quad(fill(strip, style.bg));
+    // The strip is the card's top edge: with rounded cards its top corners follow.
+    let r = crate::chrome::card_radius(cx);
+    window.paint_quad(fill(strip, style.bg).corner_radii(gpui::Corners {
+        top_left: r,
+        top_right: r,
+        bottom_left: px(0.),
+        bottom_right: px(0.),
+    }));
     let border = px((TAB_STRIP_BORDER_PX * ui_scale as f64 * scale) as f32);
     let tab_w = px((TAB_STRIP_TAB_WIDTH_RATIO * unit) as f32);
     let strip_font = px(unit as f32);
