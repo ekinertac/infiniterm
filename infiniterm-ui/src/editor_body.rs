@@ -1391,7 +1391,22 @@ impl EditorBody {
         }
         // shortcut: the whole text is copied for every key. Fine for a
         // config file; the cap above is where that stops being true.
-        let offer = provider.complete(&self.buffer.text(), self.buffer.cursor());
+        let text = self.buffer.text();
+        let cursor = self.buffer.cursor();
+        let offer = provider.complete(&text, cursor);
+        // A popup is for a word being typed, or a quote that opens a key. After
+        // a newline, a space or a comma it offered every key again, so every
+        // Enter or space opened one, and the next Enter took a completion
+        // instead of making a line (Ekin could not write in settings.json).
+        let after_word = cursor > 0
+            && text[..text
+                .char_indices()
+                .nth(cursor)
+                .map_or(text.len(), |(i, _)| i)]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '"' | '-'));
+        let offer = offer.filter(|_| after_word);
         let kept = self
             .completion
             .as_ref()
@@ -1411,7 +1426,8 @@ impl EditorBody {
         });
     }
 
-    /// A key for the open popup: Up and Down move, Tab and Enter accept,
+    /// A key for the open popup: Up and Down move, Tab accepts, Enter accepts
+    /// a row Up or Down chose (else it closes the popup and stays a newline),
     /// Escape closes. True when the popup took it; nothing is taken with a
     /// modifier held or with no popup open.
     fn complete_key(&mut self, k: &Keystroke, now: f64) -> bool {
@@ -1432,7 +1448,14 @@ impl EditorBody {
                 popup.selected = (popup.selected + n - 1) % n;
                 popup.moved = true;
             }
-            "tab" | "enter" => self.accept_completion(now),
+            "tab" => self.accept_completion(now),
+            // Enter takes the row only after Up or Down chose it; otherwise it
+            // is the newline it always was, and the popup closes (#247).
+            "enter" if popup.moved => self.accept_completion(now),
+            "enter" => {
+                self.completion = None;
+                return false;
+            }
             "escape" => {
                 self.completion = None;
                 self.completion_closed_at = Some(self.buffer.version);
@@ -3289,6 +3312,44 @@ mod tests {
         // It stays closed until the text changes.
         b.update_completion();
         assert!(b.completion.is_none());
+    }
+
+    // Ekin could not write in settings.json (#247): every Enter opened a popup
+    // and the next Enter took a completion. A popup is for a word being typed;
+    // a newline, a space or a comma opens none, and Enter takes a row only
+    // after Up or Down chose it.
+    #[test]
+    fn a_newline_opens_no_popup_and_enter_is_a_newline_unless_a_row_was_chosen() {
+        let mut b = body();
+        b.completer = settings_provider();
+        b.buffer = Buffer::new("{\n  \"ui.fit");
+        b.buffer.move_doc_end(false);
+        b.update_completion();
+        assert!(b.completion.is_some(), "typing a key opens it");
+        // Enter, untouched row: not taken, the popup closes, the key falls through
+        assert!(!b.complete_key(&key("enter"), 0.));
+        assert!(b.completion.is_none());
+        // after a newline, a comma or a space there is nothing to complete
+        for tail in ["\n  ", ",\n", " "] {
+            let mut b = body();
+            b.completer = settings_provider();
+            b.buffer = Buffer::new(&format!("{{\n  \"ui.fitPadding\": 1{tail}"));
+            b.buffer.move_doc_end(false);
+            b.update_completion();
+            assert!(b.completion.is_none(), "no popup after {tail:?}");
+        }
+        // a row chosen with Down is taken by Enter
+        let mut b = body();
+        b.completer = settings_provider();
+        b.buffer = Buffer::new("{\n  \"ui.fit");
+        b.buffer.move_doc_end(false);
+        b.update_completion();
+        assert!(b.complete_key(&key("down"), 0.));
+        assert!(b.complete_key(&key("enter"), 1.));
+        assert!(b.completion.is_none());
+        assert!(
+            b.buffer.text().contains("\"ui.fit") && b.buffer.text().len() > "{\n  \"ui.fit".len()
+        );
     }
 
     #[test]

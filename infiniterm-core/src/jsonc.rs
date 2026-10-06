@@ -273,16 +273,29 @@ fn value_end_at(b: &[u8], start: usize) -> usize {
 }
 
 /// Adds a key just before an object's closing brace, matching its indentation.
+/// The comma that separates it from the last entry goes right after that
+/// entry's value (before any comment on its line, or it would be part of the
+/// comment), and not at all when the entry already ends in one: JSONC allows
+/// a trailing comma and people leave them, and adding a second one wrote
+/// `0.9,,` and a file that no longer parsed (#246).
 fn insert_key(text: &str, mask: &str, object: Span, key: &str, encoded: &str) -> String {
-    let has_entries = !mask[object.start + 1..object.end].trim().is_empty();
+    let inner = &mask[object.start + 1..object.end];
+    let has_entries = !inner.trim().is_empty();
     // The indentation of the closing brace, plus one step for the new line.
     let line_start = text[..object.end].rfind('\n').map_or(0, |n| n + 1);
     let close_line = &text[line_start..object.end];
     let close_indent = &close_line[..close_line.len() - close_line.trim_start().len()];
-    let comma = if has_entries { "," } else { "" };
-    let before = text[..object.end].trim_end();
+    let mut head = text[..object.end].to_string();
+    if has_entries {
+        // Where the last real token ends; the mask has the comments blanked.
+        let last = object.start + 1 + inner.trim_end().len();
+        if mask.as_bytes()[last - 1] != b',' {
+            head.insert(last, ',');
+        }
+    }
+    let before = head.trim_end();
     format!(
-        "{before}{comma}\n{close_indent}  {}: {encoded}\n{close_indent}{}",
+        "{before}\n{close_indent}  {}: {encoded}\n{close_indent}{}",
         Value::String(key.into()),
         &text[object.end..]
     )
@@ -498,5 +511,38 @@ mod tests {
     #[test]
     fn leaves_a_file_it_cannot_make_sense_of_alone() {
         assert_eq!(patch_json_text("not json at all", "a", &json!(1)), None);
+    }
+
+    // A trailing comma is legal JSONC and people leave one: the new key must not
+    // add a second (#246: `"ui.cardOpacity": 0.9,,` broke the whole file).
+    #[test]
+    fn inserting_after_a_trailing_comma_adds_no_second_one() {
+        let text = "{\n  \"a\": 1,\n  \"b\": 0.9,\n}\n";
+        let out = patch_json_text(text, "ui.windowColor", &json!("lime")).unwrap();
+        assert!(!out.contains(",,"), "{out}");
+        assert_eq!(p(&out), json!({"a": 1, "b": 0.9, "ui.windowColor": "lime"}));
+    }
+
+    // The comma belongs before a comment on the last line, not inside it.
+    #[test]
+    fn the_comma_goes_before_a_comment_on_the_last_line() {
+        let text = "{\n  \"a\": 1 // keep this\n}\n";
+        let out = patch_json_text(text, "b", &json!(2)).unwrap();
+        assert!(out.contains("// keep this"), "{out}");
+        assert_eq!(p(&out), json!({"a": 1, "b": 2}));
+        let text = "{\n  \"a\": 1, // keep this\n}\n";
+        let out = patch_json_text(text, "b", &json!(2)).unwrap();
+        assert_eq!(p(&out), json!({"a": 1, "b": 2}));
+        assert!(!out.contains(",,"), "{out}");
+    }
+
+    #[test]
+    fn inserting_into_an_empty_or_plain_object_still_works() {
+        assert_eq!(
+            p(&patch_json_text("{\n}\n", "a", &json!(1)).unwrap()),
+            json!({"a": 1})
+        );
+        let out = patch_json_text("{\n  \"a\": 1\n}\n", "b", &json!(2)).unwrap();
+        assert_eq!(p(&out), json!({"a": 1, "b": 2}));
     }
 }

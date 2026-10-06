@@ -814,6 +814,14 @@ impl AppView {
                         self.browser_lock_indicator()
                             .map(|label| div().text_color(chrome.warn).child(label)),
                     )
+                    // A settings.json that was not accepted stays said until a
+                    // valid one lands: the notice fades, and the app keeps
+                    // running on the old settings, so nothing else would tell.
+                    .children(m.settings_error.as_ref().map(|e| {
+                        div()
+                            .text_color(chrome.warn)
+                            .child(format!("settings.json not applied: {e}"))
+                    }))
                     // A closed card whose agent waits for you, and the key
                     // that brings it back (lifecycle.rs, parked).
                     .children(m.waiting_parked().map(|c| {
