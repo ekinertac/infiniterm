@@ -637,6 +637,10 @@ impl AppView {
                     idle_text
                 })
                 .when(is_active, |d| d.bg(chosen_fill))
+                .cursor_pointer()
+                .when(!is_active, |d| {
+                    d.hover(|s| s.bg(crate::chrome::hover_fill(chosen_fill)))
+                })
                 // Drag a tab onto another to take its place (#242).
                 .on_drag(
                     crate::tab_drag::DraggedTab {
@@ -693,6 +697,8 @@ impl AppView {
         tabs = tabs.child(
             div()
                 .id("tab-new")
+                .cursor_pointer()
+                .hover(|s| s.bg(crate::chrome::hover_fill(chosen_fill)))
                 .px_2()
                 .py_1()
                 .text_size(px(TAB_LABEL_FONT_PX * ui))
@@ -931,6 +937,10 @@ impl AppView {
                 .px_3()
                 .py_1()
                 .when(selected, |d| d.bg(chrome.row_selected))
+                .cursor_pointer()
+                .when(!selected, |d| {
+                    d.hover(|s| s.bg(crate::chrome::hover_fill(chrome.row_selected)))
+                })
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _: &MouseDownEvent, _, cx| {
@@ -995,6 +1005,15 @@ impl AppView {
             } else {
                 crate::chrome::with_alpha(chrome.overlay_backdrop, 0.)
             })
+            // A click outside the sheet closes it, as Escape does (and puts a
+            // previewed theme back); a click on the sheet stays on the sheet.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.model.close_palette(false);
+                    cx.notify();
+                }),
+            )
             .child(
                 div()
                     .w(px(PALETTE_WIDTH_PX * ui))
@@ -1013,6 +1032,9 @@ impl AppView {
                             .font_family("Menlo")
                             .text_size(px(OVERLAY_BODY_FONT_PX * ui))
                             .text_color(chrome.text)
+                            .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation()
+                            })
                             .child(
                                 div()
                                     .px_3()
@@ -1220,7 +1242,7 @@ impl AppView {
                 if lit {
                     b = b.border_2().border_color(chrome.focus_ring);
                 }
-                row = row.child(b.on_mouse_down(
+                row = row.child(b.cursor_pointer().hover(|s| s.opacity(0.85)).on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _: &MouseDownEvent, _, cx| {
                         this.prompt_press(kind);
@@ -1355,6 +1377,10 @@ impl AppView {
                         .px_4()
                         .py(px(SHORTCUTS_ROW_PAD_PX * ui))
                         .when(this_row == highlighted, |d| d.bg(chrome.row_selected))
+                        .cursor_pointer()
+                        .when(this_row != highlighted, |d| {
+                            d.hover(|s| s.bg(crate::chrome::hover_fill(chrome.row_selected)))
+                        })
                         // A click highlights the row, for Cmd+C (#76).
                         .on_mouse_down(
                             MouseButton::Left,
@@ -1418,6 +1444,16 @@ impl AppView {
             .justify_center()
             .pt(px(OVERLAY_TOP_PAD_PX * ui))
             .bg(chrome.overlay_backdrop)
+            // A click outside the sheet closes the panel, as Escape does.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.model.shortcuts_open = false;
+                    this.shortcuts_field = crate::field::Field::default();
+                    this.shortcuts_index = 0;
+                    cx.notify();
+                }),
+            )
             .child(
                 div().w(px(SHORTCUTS_WIDTH_PX * ui)).h(px(0.)).child(
                     div()
@@ -1430,6 +1466,9 @@ impl AppView {
                         .shadow_lg()
                         .font_family("Menlo")
                         .text_size(px(OVERLAY_BODY_FONT_PX * ui))
+                        .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation()
+                        })
                         .child(
                             div()
                                 .px_4()

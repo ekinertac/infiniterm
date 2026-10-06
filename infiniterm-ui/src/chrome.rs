@@ -276,6 +276,12 @@ pub fn card_radius(cx: &gpui::App) -> gpui::Pixels {
     gpui::px(cx.try_global::<CardRadius>().map_or(0., |r| r.0))
 }
 
+/// The fill under the pointer on a clickable row: the selected row's colour,
+/// fainter, so the row you would pick by clicking is visible before you click.
+pub fn hover_fill(selected: Hsla) -> Hsla {
+    with_alpha(selected, selected.a * 0.6)
+}
+
 /// A card body's whole-body fill: the card fill, rounded to the card.
 pub fn card_body_quad(
     cx: &gpui::App,
