@@ -15,7 +15,37 @@ use crate::settings_doc::default_settings_text;
 /// The first thing a new `settings.json` says, since an empty file explains nothing.
 pub const EMPTY_SETTINGS: &str = "// Your settings. Anything here overrides settings.default.json beside it,\n// which lists everything that can be set, with comments.\n//\n// Comments and trailing commas are allowed.\n{\n}\n";
 
-pub const EMPTY_KEYBINDINGS: &str = "// Your keybindings. Anything here overrides keybindings.default.json beside it.\n// Set a chord to null to unbind it and give the key back to the terminal.\n// A binding can carry a \"when\" (see keybindings.default.json for the shape and the keys).\n//\n// Comments and trailing commas are allowed.\n{\n}\n";
+/// What a new `keybindings.json` says: the file's job, then commented examples
+/// to switch on by deleting the `//` (every example line starts with
+/// `//   "`; a test parses them and checks each command exists, so they cannot
+/// rot). The `when` examples are the part nobody finds on their own (#269).
+pub const EMPTY_KEYBINDINGS: &str = concat!(
+    "// Your keybindings. Anything here overrides keybindings.default.json beside it.\n",
+    "// Set a chord to null to unbind it and give the key back to the terminal.\n",
+    "// A binding can carry a \"when\" (see keybindings.default.json for the shape and the keys).\n",
+    "//\n",
+    "// Comments and trailing commas are allowed.\n",
+    "//\n",
+    "// Examples. Delete the // in front of a line to use it:\n",
+    "//\n",
+    "// Another chord to leave a locked editor (Cmd+Escape is the default):\n",
+    "//   \"cmd+shift+e\": \"browser.leave\",\n",
+    "// A single Escape leaves a locked editor when it has nothing else to close;\n",
+    "// to turn that off:\n",
+    "//   \"escape\": {\"command\": null, \"when\": \"editorTextFocus\"},\n",
+    "// Go to a line with F2 in a locked editor, but not while its popup is open:\n",
+    "//   \"f2\": {\"command\": \"editor.goToLine\", \"when\": \"editorTextFocus && !suggestWidgetVisible\"},\n",
+    "// Move workspace tabs from the keyboard:\n",
+    "//   \"cmd+ctrl+shift+[\": \"workspace.reorder.left\",\n",
+    "//   \"cmd+ctrl+shift+]\": \"workspace.reorder.right\",\n",
+    "// Step through the themes:\n",
+    "//   \"cmd+ctrl+[\": \"theme.prev\",\n",
+    "//   \"cmd+ctrl+]\": \"theme.next\",\n",
+    "// Open a file, and start Claude Code in the card's directory:\n",
+    "//   \"cmd+o\": \"card.open.file\",\n",
+    "//   \"cmd+alt+c\": \"card.new.claude\",\n",
+    "{\n}\n"
+);
 
 impl Model {
     pub fn apply_settings_text(&mut self, text: &str) {
