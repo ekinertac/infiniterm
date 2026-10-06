@@ -39,6 +39,7 @@ mod paint;
 mod runtime;
 mod scrollbar;
 mod switcher_view;
+mod tab_drag;
 mod tab_strip;
 mod terminal_body;
 mod terminals;
