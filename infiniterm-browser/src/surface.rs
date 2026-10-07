@@ -604,8 +604,15 @@ impl Surface {
                 Button::Middle => MouseButtonType::MIDDLE,
                 Button::Right => MouseButtonType::RIGHT,
             };
+            let mut event = Self::mouse(x, y, mods);
+            // Chromium reads which button is down from the flags as well as
+            // from the event's button: without this a middle press on a link
+            // was a plain click.
+            if !up && button == Button::Middle {
+                event.modifiers |= sys::cef_event_flags_t::EVENTFLAG_MIDDLE_MOUSE_BUTTON.0;
+            }
             host.send_mouse_click_event(
-                Some(&Self::mouse(x, y, mods)),
+                Some(&event),
                 b,
                 up as i32,
                 clicks.max(1) as i32,

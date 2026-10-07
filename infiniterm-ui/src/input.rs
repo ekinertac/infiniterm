@@ -561,11 +561,10 @@ impl AppView {
         self.pan = None;
         if middle_click {
             if let Hit::CardBody { id, local } = self.hit(p) {
-                if self
-                    .model
-                    .card(&id)
-                    .is_some_and(|c| c.kind == infiniterm_core::saved_layout::CardKind::Browser)
-                {
+                if self.model.card(&id).is_some_and(|c| {
+                    use infiniterm_core::saved_layout::CardKind;
+                    matches!(c.kind, CardKind::Browser | CardKind::Editor)
+                }) {
                     self.click_page(&id, local, e);
                 }
             }

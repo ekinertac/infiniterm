@@ -395,6 +395,10 @@ impl CardBody for EditorTabs {
             if button == gpui::MouseButton::Left {
                 return BodyAction::BrowserTab(hit);
             }
+            // Middle-click closes a tab, as in every browser.
+            if let (gpui::MouseButton::Middle, crate::body::TabClick::Switch(i)) = (button, hit) {
+                return BodyAction::BrowserTab(crate::body::TabClick::Close(i));
+            }
             return BodyAction::None;
         }
         let below = self.below_strip(local);
