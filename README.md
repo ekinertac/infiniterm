@@ -32,6 +32,8 @@ Nothing flashes, nothing steals focus, nothing sends a notification. You switch 
 
 - Terminal, editor, diff, transcript and browser cards on the same canvas, in groups and workspaces.
 - Keyboard-first: `Cmd` is the app's, everything else goes to the shell untouched. Every action is a command in the palette.
+- A native right-click menu on terminals, cards, the canvas, tabs, editors, the file tree and browser pages, with each shortcut at the right edge. Hold `Shift` to open it over a program that uses the mouse.
+- Keybindings take a `when`, as in VS Code: `{"cmd+shift+e": {"command": "browser.leave", "when": "editorTextFocus"}}` binds a chord only while an editor is locked.
 - Shells outlive the window: each card's shell runs under its own small daemon, so quitting the app keeps your work running.
 - `ift`, the command line side: `ift file.rs` edits a file over the terminal you are in, `ift diff` opens your changes, `ift attach 7` reaches card #7's shell from any terminal, and `ift send 7 "ls" --enter` and `ift read 7` type into a card and read what it shows, so a script can drive your cards.
 - Servers: `ift connect user@host` opens a second window whose terminal cards run on that server over ssh. The shells keep running when you close the window and come back when you connect again. Each host has its own canvas, settings and colour (a tinted title bar and a badge on its Dock icon). Terminal cards only so far; `--install` puts the server half on a Linux host.
@@ -43,6 +45,7 @@ Native Rust: gpui draws the canvas, `alacritty_terminal` parses the shells, Chro
 Big items only, in rough order. No dates.
 
 - **Done in 0.5.3:** `ift connect` for servers: terminals, colours, `--install` for Linux hosts, agent hooks over the connection.
+- **Light mode:** the chrome follows a light theme. Today a light theme gives light cards on a dark chrome.
 - **Remote files:** editor and diff cards on a server's files, so `ift file` and `EDITOR=ift` work in a remote window.
 - **Windows:** a build exists on a branch and has never been run. It uses ConPTY, so no daemon yet and shells do not outlive the window.
 - **Windows servers** for `ift connect`, once there is a session daemon there.
