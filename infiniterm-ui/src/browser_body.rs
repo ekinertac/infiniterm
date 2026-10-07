@@ -177,6 +177,15 @@ pub struct BrowserBody {
 }
 
 impl BrowserBody {
+    /// The tab under a point of the card (a right-click's), `None` off the
+    /// tabs, on the "+" and below the strip.
+    pub fn tab_at(&self, local: Point) -> Option<usize> {
+        match strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
+            Some(crate::body::TabClick::Switch(i) | crate::body::TabClick::Close(i)) => Some(i),
+            _ => None,
+        }
+    }
+
     pub fn new(
         card_id: &str,
         url: &str,

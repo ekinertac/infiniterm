@@ -4,11 +4,11 @@
 //! in the module whose prefix it carries, and `card.clear` is `Terminal:`.
 use super::palette_state::Source;
 use super::palette_state::{CARD_ROW, SIZES, WORKSPACE_ROW};
-use super::TerminalAction;
 use super::{
     BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
     TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
 };
+use super::{TerminalAction, TreeAct};
 use crate::card_label::{card_label, tilde_path, Labelled};
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
 use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
@@ -1303,6 +1303,41 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             })
         },
     );
+    // The file tree's menu (#281). They act on the row the menu was opened on,
+    // else the tree's cursor row; only an editor card has a tree.
+    for (id, label, act) in [
+        (
+            "editor.tree.open",
+            "Editor: open the tree's file",
+            TreeAct::Open,
+        ),
+        (
+            "editor.tree.reveal",
+            "Editor: reveal the tree's file in Finder",
+            TreeAct::RevealInFinder,
+        ),
+        (
+            "editor.tree.copyPath",
+            "Editor: copy the tree file's path",
+            TreeAct::CopyPath,
+        ),
+        (
+            "editor.tree.copyRelativePath",
+            "Editor: copy the tree file's relative path",
+            TreeAct::CopyRelativePath,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.with_active_card(|m, card_id| {
+                if m.card(&card_id).is_some_and(|c| c.kind == CardKind::Editor) {
+                    m.effects.push(Effect::Editor {
+                        card_id,
+                        action: EditorAction::Tree(act),
+                    });
+                }
+            })
+        });
+    }
     // The terminal's own Cmd+C and Cmd+V are the body's keys; these are the same
     // acts as commands so a menu can name them (#278). Only a terminal card.
     for (id, label, action) in [

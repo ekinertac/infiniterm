@@ -557,6 +557,38 @@ impl AppView {
                 }
             }
             EditorAction::ToggleBlame => {} // the diff card, Phase 7
+            // The file tree's menu: the row it was opened on, else the cursor's.
+            EditorAction::Tree(act) => {
+                use infiniterm_core::model::TreeAct;
+                let Some(body) = self.editor_for(card_id) else {
+                    return;
+                };
+                let entry = body.menu_entry();
+                let root = body.tree_root().map(String::from);
+                if act == TreeAct::Open {
+                    body.tree_open_entry();
+                    return;
+                }
+                let Some(entry) = entry else { return };
+                match act {
+                    TreeAct::RevealInFinder => {
+                        let _ = std::process::Command::new("open")
+                            .args(["-R", &entry.path])
+                            .spawn();
+                    }
+                    TreeAct::CopyPath => self.clipboard_out = Some(entry.path),
+                    TreeAct::CopyRelativePath => {
+                        let relative = root
+                            .as_deref()
+                            .and_then(|r| entry.path.strip_prefix(r))
+                            .map(|p| p.trim_start_matches('/').to_string())
+                            .filter(|p| !p.is_empty())
+                            .unwrap_or_else(|| entry.path.clone());
+                        self.clipboard_out = Some(relative);
+                    }
+                    TreeAct::Open => {}
+                }
+            }
             // The lock is the body's: the card's flag is written back from it
             // every frame, so dropping it on the card alone would be undone.
             EditorAction::Unlock => {

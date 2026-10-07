@@ -103,6 +103,7 @@ impl AppView {
             themes_dir: PathBuf::new(),
             backgrounds_dir: AppView::bundled_backgrounds(),
             paste_request: None,
+            page_menu_open: false,
             background: Default::default(),
             scale_factor,
             cef_running: false,

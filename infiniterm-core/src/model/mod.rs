@@ -409,8 +409,20 @@ pub enum TerminalAction {
     SearchSelection,
 }
 
+/// What the file tree's context menu does to the row it was opened on (#281).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TreeAct {
+    /// A file opens in a tab; a folder opens or closes.
+    Open,
+    RevealInFinder,
+    CopyPath,
+    CopyRelativePath,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditorAction {
+    /// A file tree row's menu action; the ui knows which row.
+    Tree(TreeAct),
     Save,
     Find,
     GoToLine,

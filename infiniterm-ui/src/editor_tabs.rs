@@ -55,6 +55,28 @@ impl EditorTabs {
         self.active_body_ref().is_some_and(|b| b.escape_has_work())
     }
 
+    /// The tab under a point of the card (a right-click's), `None` off the
+    /// tabs, on the "+" and below the strip.
+    pub fn tab_at(&self, local: Point) -> Option<usize> {
+        match strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
+            Some(crate::body::TabClick::Switch(i) | crate::body::TabClick::Close(i)) => Some(i),
+            _ => None,
+        }
+    }
+
+    /// The tree row at a point of the card body, in the active tab.
+    pub fn tree_row_at(&self, local: Point) -> Option<usize> {
+        let below = self.below_strip(local);
+        self.active_body_ref().and_then(|b| b.tree_row_at(below))
+    }
+
+    /// Lights (or clears) the tree row a menu is open on.
+    pub fn set_menu_row(&mut self, row: Option<usize>) {
+        if let Some(b) = self.active_body() {
+            b.set_menu_row(row);
+        }
+    }
+
     /// The editor's part of a keybinding's context (`EditorBody::context_flags`).
     pub fn context_flags(&self) -> infiniterm_core::model::UiContext {
         self.active_body_ref()
