@@ -244,7 +244,7 @@ mod tests {
         let s = shortcut_sections(
             &km,
             &[
-                ("theme.pick", "Theme: switch"),
+                ("theme.pick", "Theme: switch…"),
                 ("card.close", "Card: close"),
             ],
         );

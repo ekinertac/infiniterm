@@ -218,7 +218,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.set_focus(Some(&id));
         m.reveal_focused();
     });
-    r.register("workspace.rename", "Workspace: rename", |m| {
+    r.register("workspace.rename", "Workspace: rename…", |m| {
         let Some(ws) = m.active_ws().cloned() else {
             return;
         };

@@ -456,6 +456,62 @@ mod tests {
         assert!(missing.is_empty(), "{missing:?}");
     }
 
+    // #277: a command that needs a second action from you (a name, a file, a
+    // choice) says so with an ellipsis, as every Mac menu does, in the palette
+    // and in the context menu alike. Found by running every command on a
+    // terminal, an editor and a browser card and seeing what is left open.
+    #[test]
+    fn a_command_that_asks_for_more_ends_its_label_with_an_ellipsis() {
+        // Information to read, not an answer to give, and a save that asks only
+        // for a file that has no name yet.
+        const NO_ELLIPSIS: &[&str] = &["app.about", "app.shortcuts", "card.save"];
+        // Ask only with state the probe does not build (a group, a snippet
+        // folder), so they are named here.
+        const ALSO_ASK: &[&str] = &[
+            "group.rename",
+            "card.moveToWorkspace",
+            "window.color",
+            "card.size",
+            "snippet.paste",
+        ];
+        let probe = Harness::new();
+        let labels: Vec<(String, String)> = probe
+            .r
+            .all()
+            .iter()
+            .map(|c| (c.id.clone(), c.label.clone()))
+            .collect();
+        let mut missing = vec![];
+        for (id, label) in &labels {
+            let mut asks = ALSO_ASK.contains(&id.as_str());
+            for kind in [CardKind::Terminal, CardKind::Editor, CardKind::Browser] {
+                let mut h = Harness::new();
+                let card = h.focused().id.clone();
+                h.m.card_mut(&card).unwrap().kind = kind;
+                h.m.card_mut(&card).unwrap().locked = kind != CardKind::Terminal;
+                h.m.take_effects();
+                run_with_effects(&mut h.m, &h.r, id);
+                let effects = h.m.take_effects();
+                asks |= h.m.modal_open()
+                    || h.m.find.open
+                    || effects.iter().any(|e| matches!(e, Effect::PickFile { .. }));
+            }
+            if asks && !NO_ELLIPSIS.contains(&id.as_str()) && !label.ends_with('\u{2026}') {
+                missing.push(format!("{id} -> {label}"));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "these ask for more and need an ellipsis: {missing:#?}"
+        );
+        // and the other way: an ellipsis is a promise
+        for (id, label) in &labels {
+            if label.ends_with('\u{2026}') {
+                assert!(!NO_ELLIPSIS.contains(&id.as_str()), "{id}");
+            }
+        }
+    }
+
     #[test]
     fn every_label_carries_its_domain_prefix() {
         let h = Harness::new();

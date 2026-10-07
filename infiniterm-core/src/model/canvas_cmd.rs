@@ -218,7 +218,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         }
     });
     // Toggle: the key that opened it is the obvious one to press to dismiss it.
-    r.register("app.palette", "Run a command", |m| {
+    r.register("app.palette", "Run a command…", |m| {
         if m.palette_open() {
             m.close_palette(false);
         } else {
@@ -274,7 +274,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     );
     // The theme picker: the reason the palette exists. The theme in force is
     // captured HERE, before any preview runs, so cancel can put it back.
-    r.register("theme.pick", "Theme: switch", |m| {
+    r.register("theme.pick", "Theme: switch…", |m| {
         m.theme_before_preview = m.theme_current.clone();
         m.effects.push(Effect::RefreshThemes);
         m.open_palette(Source::Themes);

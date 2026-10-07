@@ -295,7 +295,7 @@ pub enum Effect {
     /// Cmd+E on a terminal: the ui reads its selection and calls
     /// `Model::find_with`.
     FindSelection(String),
-    /// "Editor: open a file": the ui shows the macOS open panel (#64) and
+    /// "Editor: open a file…": the ui shows the macOS open panel (#64) and
     /// hands the pick to `Model::open_picked`, beside `from`.
     PickFile {
         from: Option<String>,

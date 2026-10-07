@@ -12,7 +12,7 @@ impl Model {
 
 pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     use super::context::{step_id, which};
-    r.register("group.new", "Group: the selection", |m| {
+    r.register("group.new", "Group: the selection…", |m| {
         let ids = m.selected_ids();
         let Some(first) = ids.first().and_then(|id| m.card(id)).cloned() else {
             return;
@@ -26,7 +26,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.remove_group(&g);
         }
     });
-    r.register("group.rename", "Group: rename", |m| {
+    r.register("group.rename", "Group: rename…", |m| {
         let Some(g) = m.group_of_active() else { return };
         let name = m.group(&g).map(|g| g.name.clone()).unwrap_or_default();
         m.prompt.ask("group name", &name, Pending::RenameGroup(g));
