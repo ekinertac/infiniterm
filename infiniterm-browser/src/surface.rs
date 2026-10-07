@@ -335,6 +335,38 @@ fn has_flag(flags: u32, bit: u32) -> bool {
     flags & bit != 0
 }
 
+wrap_request_handler! {
+    struct RequestBuilder {
+        handler: Handler,
+    }
+
+    impl RequestHandler {
+        // A middle-click or Cmd+click on a link reaches the browser process
+        // here, not through `on_before_popup`: with no answer Chromium
+        // follows the link in the tab it came from. The address is queued
+        // for the ui as a popup is, and the navigation refused.
+        fn on_open_urlfrom_tab(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            target_url: Option<&CefString>,
+            target_disposition: WindowOpenDisposition,
+            _user_gesture: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            if target_disposition == sys::cef_window_open_disposition_t::CEF_WOD_CURRENT_TAB.into() {
+                return 0;
+            }
+            if let Some(url) = target_url {
+                let url = url.to_string();
+                if !url.is_empty() {
+                    self.handler.shared.borrow_mut().popups.push(url);
+                }
+            }
+            1
+        }
+    }
+}
+
 wrap_client! {
     struct ClientBuilder {
         render_handler: RenderHandler,
@@ -343,9 +375,13 @@ wrap_client! {
         load_handler: LoadHandler,
         find_handler: FindHandler,
         context_menu_handler: ContextMenuHandler,
+        request_handler: RequestHandler,
     }
 
     impl Client {
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(self.request_handler.clone())
+        }
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(self.render_handler.clone())
         }
@@ -399,7 +435,8 @@ impl Surface {
             DisplayBuilder::new(handler.clone()),
             LoadBuilder::new(handler.clone()),
             FindBuilder::new(handler.clone()),
-            ContextMenuBuilder::new(handler),
+            ContextMenuBuilder::new(handler.clone()),
+            RequestBuilder::new(handler),
         );
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
@@ -610,6 +647,9 @@ impl Surface {
             // was a plain click.
             if !up && button == Button::Middle {
                 event.modifiers |= sys::cef_event_flags_t::EVENTFLAG_MIDDLE_MOUSE_BUTTON.0;
+            }
+            if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                eprintln!("[mouse] {button:?} up={up} flags={:#x} at {},{}", event.modifiers, event.x, event.y);
             }
             host.send_mouse_click_event(
                 Some(&event),

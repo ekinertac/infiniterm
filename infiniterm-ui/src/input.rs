@@ -560,6 +560,9 @@ impl AppView {
                 .is_some_and(|s| (p.x - s.x).hypot(p.y - s.y) < crate::DRAG_SLOP);
         self.pan = None;
         if middle_click {
+            if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                eprintln!("[mouse] middle click without travel");
+            }
             if let Hit::CardBody { id, local } = self.hit(p) {
                 if self.model.card(&id).is_some_and(|c| {
                     use infiniterm_core::saved_layout::CardKind;
