@@ -75,7 +75,7 @@ impl AppView {
                         // A tab of the strip: switch to it, then its menu.
                         if let Some(tab) = self.editor_tabs_for(&id).and_then(|t| t.tab_at(local)) {
                             self.model.browser_tab_jump(&id, tab);
-                            self.show_menu(Area::TabStrip, None, cx);
+                            self.show_menu(Area::TabStrip, None, None, cx);
                             return;
                         }
                         // On a tree row: the file's menu, with the row lit
@@ -115,15 +115,14 @@ impl AppView {
             Hit::GroupTab(_) => return,
             Hit::Nothing => Area::Canvas,
         };
-        self.show_menu(area, lit, cx);
+        self.show_menu(area, lit, None, cx);
     }
 
-    /// The menu for a workspace tab, switching to it first so its commands act
-    /// on it.
+    /// The menu for a workspace tab. The tab is not switched to on the click:
+    /// only a command chosen from the menu takes you there, so its commands
+    /// act on it.
     pub fn open_tab_menu(&mut self, workspace_id: &str, cx: &mut Context<Self>) {
-        self.model.show_workspace(workspace_id);
-        self.perform_effects();
-        self.show_menu(Area::Tab, None, cx);
+        self.show_menu(Area::Tab, None, Some(workspace_id.to_string()), cx);
     }
 
     fn clear_lit_row(&mut self, card: Option<String>) {
@@ -141,7 +140,13 @@ impl AppView {
     }
 
     /// `lit`: an editor card whose tree row is lit for this menu; cleared when it closes.
-    fn show_menu(&mut self, area: Area, lit: Option<String>, cx: &mut Context<Self>) {
+    fn show_menu(
+        &mut self,
+        area: Area,
+        lit: Option<String>,
+        workspace: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         self.sync_ui_context();
         let ctx = self.model.key_context();
         let rows = {
@@ -181,7 +186,17 @@ impl AppView {
             let _ = view.update(cx, |this, cx| {
                 // The command first: it acts on the lit row.
                 if let Some(id) = chosen.and_then(|tag| ids.get(tag as usize).cloned()) {
+                    let before = this.model.active_workspace.clone();
+                    if let Some(ws) = &workspace {
+                        this.model.show_workspace(ws);
+                        this.perform_effects();
+                    }
                     this.run_command(&id);
+                    // Moving a tab is no reason to leave the one you are in.
+                    if let (true, Some(prev)) = (id.starts_with("workspace.reorder"), before) {
+                        this.model.show_workspace(&prev);
+                        this.perform_effects();
+                    }
                 }
                 this.clear_lit_row(lit);
                 cx.notify();

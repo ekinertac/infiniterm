@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-07
 
+- Right-clicking a workspace tab no longer switches to it; only a command you choose from its menu does, and Move Left / Move Right keep you in the workspace you were in.
+
 - Double-clicking a link in a terminal selects the whole address; it used to stop at the colon of `https://`.
 
 - The context menu covers more places. A right-click on a file or folder in an editor's tree lights the row and opens a menu for it: Open, Reveal in Finder, Copy Path and Copy Relative Path. A right-click on a tab of an editor or a browser card switches to it and opens a tab menu (New Tab, Close Tab, Reopen Closed Tab, and for a browser Reload, Copy Address and Open in System Browser). The browser page's right-click menu is native now too, with the same items as before.
