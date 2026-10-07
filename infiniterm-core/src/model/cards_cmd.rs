@@ -1216,7 +1216,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // The macOS open panel, not a typed path: typing paths was tiring and
     // the panel has search, recents and the sidebar (#64). `ift <path>`
     // still opens a typed one.
-    r.register("card.open.file", "Editor: open a file", |m| {
+    r.register("card.open.file", "Editor: open a file…", |m| {
         let from = m.selection.focused_id.clone();
         m.effects.push(Effect::PickFile { from });
     });
@@ -1254,18 +1254,18 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     });
     // Cmd+L. Not a prompt: the omnibox ranks history, open cards and what
     // you typed.
-    r.register("card.omnibox", "Browser: address bar", Model::open_omnibox);
+    r.register("card.omnibox", "Browser: address bar…", Model::open_omnibox);
     // The placement menu's "browser": a NEW card beside the active one,
     // never editing it even when the active card is itself a browser
     // (`open_omnibox`'s own rule, and wrong here), so this is its own
     // entry point rather than `card.omnibox` with different arguments.
-    r.register("card.new.browser", "Browser: open a URL", |m| {
+    r.register("card.new.browser", "Browser: open a URL…", |m| {
         if m.browser_refused() {
             return;
         }
         m.open_omnibox_for_new_card(false);
     });
-    r.register("browser.navigate", "Browser: go to a URL", |m| {
+    r.register("browser.navigate", "Browser: go to a URL…", |m| {
         m.with_active_card(|m, id| {
             let Some(card) = m.card(&id).cloned() else {
                 return;
@@ -1365,8 +1365,8 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             .retain(|s| !matches!(s, UndoStep::Closed(c) if c.id == id));
         m.reopen_card(card);
     });
-    r.register("browser.find", "Browser: find in page", Model::open_find);
-    r.register("card.find", "Card: find in this card", Model::find_in_card);
+    r.register("browser.find", "Browser: find in page…", Model::open_find);
+    r.register("card.find", "Card: find in this card…", Model::find_in_card);
     r.register("terminal.font.bigger", "Terminal: bigger font", |m| {
         m.step_terminal_font(1.)
     });
@@ -1428,7 +1428,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("editor.find", "Editor: find", |m| {
         m.editor_action(EditorAction::Find)
     });
-    r.register("editor.goToLine", "Editor: go to a line", |m| {
+    r.register("editor.goToLine", "Editor: go to a line…", |m| {
         m.with_active_card(|m, id| {
             if m.card(&id).is_some_and(|c| c.kind == CardKind::Editor) {
                 m.prompt.ask("go to line", "", Pending::GoToLine(id));
@@ -1692,7 +1692,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.set_mask(&id, on);
         }
     });
-    r.register("card.place", "Card: new… (choose where)", |m| {
+    r.register("card.place", "Card: new (choose where)…", |m| {
         if m.palette.source == Some(Source::Placement) {
             m.close_palette(false);
         } else {
@@ -1744,7 +1744,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     );
     // The card is captured in the pending value, so a rename still lands on
     // the right one if focus moves while the prompt is open.
-    r.register("card.rename", "Card: rename", |m| {
+    r.register("card.rename", "Card: rename…", |m| {
         let Some(card) = m.focused().cloned() else {
             return;
         };

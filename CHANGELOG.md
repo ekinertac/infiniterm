@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-07
+
+- A command that needs a second action from you ends its label with an ellipsis, in the command palette as everywhere on a Mac: Run a command…, Card: rename…, Workspace: rename…, Group: rename…, Editor: open a file…, Editor: go to a line…, Browser: open a URL…, go to a URL…, address bar…, find in page…, Card: find in this card…, Card: new (choose where)…, Theme: switch… and Group: the selection…. A test finds the commands that leave something open and fails when one has no ellipsis.
+
 ## 0.5.8 (build 743), 2026-10-07
 
 ### Keybindings

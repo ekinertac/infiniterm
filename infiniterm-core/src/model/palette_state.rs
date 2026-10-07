@@ -85,7 +85,7 @@ impl Source {
     /// Prompt text in the empty input.
     pub fn placeholder(self) -> &'static str {
         match self {
-            Source::Commands => "Run a command",
+            Source::Commands => "Run a command…",
             Source::Themes => "Switch theme",
             Source::Placement => "New terminal…",
             Source::SlotKind => "New card in this slot…",
@@ -296,7 +296,7 @@ impl Model {
                     ("file", "Editor: on a file you name", None),
                     ("untitled", "Editor: empty", chord("card.new.editor")),
                     ("diff", "Diff: this card against git HEAD", None),
-                    ("browser", "Browser: open a URL", None),
+                    ("browser", "Browser: open a URL…", None),
                     ("claude", "Terminal: Claude Code in this directory", None),
                     ("pi", "Terminal: Pi in this directory", None),
                 ]
@@ -313,7 +313,7 @@ impl Model {
             Source::SlotKind => [
                 ("terminal", "Terminal"),
                 ("editor", "Editor: empty"),
-                ("browser", "Browser: open a URL"),
+                ("browser", "Browser: open a URL…"),
             ]
             .into_iter()
             .map(|(id, label)| PaletteItem {
