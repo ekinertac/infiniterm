@@ -490,6 +490,16 @@ impl TerminalBody {
         }
     }
 
+    /// The first and last column of the link under a cell. Link texts hold
+    /// one character per cell, so a char count is a column.
+    fn link_span(&self, col: usize, row: usize) -> Option<(usize, usize)> {
+        let (f, _) = self.link_at(col, row)?;
+        let text = self.link_texts.get(row)?;
+        let from = text[..f.start].chars().count();
+        let to = text[..f.end].chars().count();
+        (to > from).then_some((from, to - 1))
+    }
+
     /// The link under a cell, if the row has one there.
     fn link_at(&self, col: usize, row: usize) -> Option<&(Found, Option<PathKind>)> {
         let text = self.link_texts.get(row)?;
@@ -1152,7 +1162,15 @@ impl CardBody for TerminalBody {
                     2 => SelectKind::Words,
                     _ => SelectKind::Lines,
                 };
-                self.grid.start_selection(col, row, kind);
+                // A double-click on a link takes the whole address: the
+                // word rule stops at the colon of `https://`.
+                match self.link_span(col, row).filter(|_| clicks == 2) {
+                    Some((from, to)) => {
+                        self.grid.start_selection(from, row, SelectKind::Cells);
+                        self.grid.update_selection(to, row, true);
+                    }
+                    None => self.grid.start_selection(col, row, kind),
+                }
             }
             self.selecting = true;
             self.drag_local = local;
@@ -1675,6 +1693,28 @@ mod tests {
         assert!(!under_hover(Some((9, 3)), 3, 5, 4));
         assert!(!under_hover(Some((5, 2)), 3, 5, 4));
         assert!(!under_hover(Some((4, 3)), 3, 5, 4));
+    }
+
+    // The word rule stops at the colon of `https://`, so a double-click on
+    // an address selected only `//host/path`.
+    #[test]
+    fn a_double_click_on_a_link_selects_the_whole_address() {
+        let mut b = body();
+        let line = "see https://github.com/a/b now";
+        b.feed(format!("{line}\r\n").as_bytes());
+        b.link_texts = vec![line.to_string()];
+        b.links = vec![find_links(line).into_iter().map(|f| (f, None)).collect()];
+        let at = |col: f64| Point {
+            x: PAD + col * 8.4 + 1.,
+            y: PAD + 1.,
+        };
+        let plain = gpui::Modifiers::default();
+        b.mouse_down(at(12.), gpui::MouseButton::Left, &plain, 2);
+        b.mouse_up(at(12.), gpui::MouseButton::Left, &plain);
+        assert_eq!(
+            b.grid.selection_text().as_deref(),
+            Some("https://github.com/a/b")
+        );
     }
 
     // `terminal.copyOnSelect`: a finished drag hands its text to the

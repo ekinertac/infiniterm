@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-07
 
+- Double-clicking a link in a terminal selects the whole address; it used to stop at the colon of `https://`.
+
 - The context menu covers more places. A right-click on a file or folder in an editor's tree lights the row and opens a menu for it: Open, Reveal in Finder, Copy Path and Copy Relative Path. A right-click on a tab of an editor or a browser card switches to it and opens a tab menu (New Tab, Close Tab, Reopen Closed Tab, and for a browser Reload, Copy Address and Open in System Browser). The browser page's right-click menu is native now too, with the same items as before.
 
 - Right-click opens a native macOS menu, the same system menu other Mac apps show, with each command's shortcut at the right edge and unavailable rows greyed. On a terminal: Copy, Paste, Find, Search the Web for Selection, Split, New, Clear Buffer, Show Transcript, Rename, Protect, Mask, Size, Move to Workspace and Close. On a card's frame or label, on bare canvas, on a workspace tab and on an editor there is a menu of its own (the editor's has the Transform submenu). A terminal program that uses the mouse (vim, tmux, htop) still gets the plain right-click; hold Shift to open the menu over it. A browser card keeps its own menu for now.
