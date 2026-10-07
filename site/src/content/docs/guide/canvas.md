@@ -91,6 +91,20 @@ Every card has a label in its corner: the name you gave it (`Cmd Shift R`), else
 
 The label sits top right by default. `"ui.cardLabelPosition"` moves it to `"top left"`, `"bottom left"` or `"bottom right"` (the words in either order); a card in an ssh session shows its ssh badge at the other end of the same edge.
 
+## The right-click menu
+
+Right-click opens the native macOS menu, with each command's shortcut at the right edge and the rows that cannot run now greyed. What it holds depends on where you click:
+
+- **A terminal**: Copy, Paste, Find…, Search the Web for Selection, Split Right and Down, New (Terminal, Editor, Browser…, Claude Code), Clear Buffer, Show Transcript, Rename…, Protect, Mask, Size, Move to Workspace… and Close.
+- **A card's frame or label**: Rename…, Group…, Protect, Clear State Colour, Size, Move to Workspace…, the splits, New and Close.
+- **Bare canvas**: New, Fit All Cards, Actual Size, Tidy into a Block, Command Palette…, Settings and Keyboard Shortcuts.
+- **A workspace tab**: Rename…, New Workspace, Move Left, Move Right and Close Workspace.
+- **An editor**: Save, Find…, Go to Line…, Transform (every text transform), Show File Tree, Blame, Rename…, Size and Close.
+
+A terminal program that uses the mouse, such as vim, tmux or htop, still gets the plain right-click. Hold `Shift` to open the menu over it. A browser card keeps its own small menu.
+
+A label that ends in an ellipsis, in the menu and in the command palette, asks you for something more before it acts: a name, a file, an address. One without it acts at once.
+
 ## Closing and protecting
 
 A card closes when its shell exits, so `exit` or Ctrl+D does what `Cmd W` does. `Cmd Shift T` reopens the last card you closed, where it was, as in a browser.
