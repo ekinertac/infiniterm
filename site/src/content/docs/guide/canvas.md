@@ -100,8 +100,11 @@ Right-click opens the native macOS menu, with each command's shortcut at the rig
 - **Bare canvas**: New, Fit All Cards, Actual Size, Tidy into a Block, Command Palette…, Settings and Keyboard Shortcuts.
 - **A workspace tab**: Rename…, New Workspace, Move Left, Move Right and Close Workspace.
 - **An editor**: Save, Find…, Go to Line…, Transform (every text transform), Show File Tree, Blame, Rename…, Size and Close.
+- **A file or folder in an editor's tree**: the row lights up while the menu is open. Open, Reveal in Finder, Copy Path and Copy Relative Path.
+- **A tab of an editor or browser card**: switches to that tab, then New Tab, Close Tab and Reopen Closed Tab. A browser tab also has Reload, Copy Address and Open in System Browser.
+- **A browser page**: Back, Forward, Reload, Cut, Copy and Paste where they apply, and on a link Copy Link Address, Open Link in New Tab and Open Link in New Card.
 
-A terminal program that uses the mouse, such as vim, tmux or htop, still gets the plain right-click. Hold `Shift` to open the menu over it. A browser card keeps its own small menu.
+A terminal program that uses the mouse, such as vim, tmux or htop, still gets the plain right-click. Hold `Shift` to open the menu over it.
 
 A label that ends in an ellipsis, in the menu and in the command palette, asks you for something more before it acts: a name, a file, an address. One without it acts at once.
 
