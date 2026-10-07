@@ -28,6 +28,10 @@ pub enum Area {
     Tab,
     /// An editor card's text.
     Editor,
+    /// A row of an editor's file tree.
+    Tree,
+    /// A tab of an editor's or a browser's tab strip.
+    TabStrip,
 }
 
 /// One entry of a menu table.
@@ -213,6 +217,76 @@ const EDITOR: &[Def] = &[
     titled("card.close", "Close"),
 ];
 
+const TREE: &[Def] = &[
+    titled("editor.tree.open", "Open"),
+    Def::Separator,
+    titled("editor.tree.reveal", "Reveal in Finder"),
+    titled("editor.tree.copyPath", "Copy Path"),
+    titled("editor.tree.copyRelativePath", "Copy Relative Path"),
+];
+
+const TAB_STRIP: &[Def] = &[
+    full(
+        "editor.tab.new",
+        Some("New Tab"),
+        "editorFocus",
+        "",
+        "cmd+t",
+    ),
+    full(
+        "browser.tab.new",
+        Some("New Tab"),
+        "browserFocus",
+        "",
+        "cmd+t",
+    ),
+    Def::Separator,
+    full(
+        "editor.tab.close",
+        Some("Close Tab"),
+        "editorFocus",
+        "",
+        "cmd+w",
+    ),
+    full(
+        "browser.tab.close",
+        Some("Close Tab"),
+        "browserFocus",
+        "",
+        "cmd+w",
+    ),
+    full(
+        "editor.tab.reopenClosed",
+        Some("Reopen Closed Tab"),
+        "editorFocus",
+        "",
+        "cmd+shift+t",
+    ),
+    full(
+        "browser.tab.reopenClosed",
+        Some("Reopen Closed Tab"),
+        "browserFocus",
+        "",
+        "cmd+shift+t",
+    ),
+    Def::Separator,
+    full("browser.reload", Some("Reload"), "browserFocus", "", ""),
+    full(
+        "browser.copyUrl",
+        Some("Copy Address"),
+        "browserFocus",
+        "",
+        "",
+    ),
+    full(
+        "browser.external",
+        Some("Open in System Browser"),
+        "browserFocus",
+        "",
+        "",
+    ),
+];
+
 pub fn table(area: Area) -> &'static [Def] {
     match area {
         Area::Terminal => TERMINAL,
@@ -220,6 +294,8 @@ pub fn table(area: Area) -> &'static [Def] {
         Area::Canvas => CANVAS,
         Area::Tab => TAB,
         Area::Editor => EDITOR,
+        Area::Tree => TREE,
+        Area::TabStrip => TAB_STRIP,
     }
 }
 
@@ -393,6 +469,8 @@ mod tests {
             Area::Canvas,
             Area::Tab,
             Area::Editor,
+            Area::Tree,
+            Area::TabStrip,
         ] {
             for c in clauses(area) {
                 assert!(When::parse(c).is_ok(), "{area:?}: {c}");
@@ -441,8 +519,15 @@ mod tests {
             Area::Canvas,
             Area::Tab,
             Area::Editor,
+            Area::Tree,
+            Area::TabStrip,
         ] {
-            let rows = built(area, &ctx());
+            // an editor card focused: the tab strip's rows are per card kind
+            let editor = Context {
+                card_kind: "editor",
+                ..ctx()
+            };
+            let rows = built(area, &editor);
             assert!(!rows.is_empty(), "{area:?}");
             assert_ne!(rows.first(), Some(&Row::Separator));
             assert_ne!(rows.last(), Some(&Row::Separator));

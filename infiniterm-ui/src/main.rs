@@ -212,6 +212,8 @@ pub struct AppView {
     /// the card each frame: simplest thing that works for a menu open for a
     /// couple of clicks, at the cost of not tracking a pan mid-menu.
     pub context_menu: Option<crate::browsers::CardContextMenu>,
+    /// The page's native menu is open (`browsers.rs::show_page_menu`).
+    pub page_menu_open: bool,
     /// The prompt's field, opened with the suggestion selected; the palette's query.
     pub prompt_field: field::Field,
     pub query_field: field::Field,
@@ -517,6 +519,9 @@ fn main() {
                         // The macOS open panel, asked for by "Open a file"
                         // (#64). Its answer arrives later, on its own task.
                         this.answer_reads(now_ms(), cx);
+                        if this.context_menu.is_some() {
+                            this.show_page_menu(cx);
+                        }
                         if let Some(card) = this.paste_request.take() {
                             if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
                                 this.paste_text(&card, &text);

@@ -518,13 +518,18 @@ mod tests {
     #[test]
     fn the_context_menus_name_real_commands_and_build_from_the_registry() {
         use crate::context_menu::{self, Area, Row, Source};
-        let h = Harness::new();
+        let mut h = Harness::new();
+        // an editor focused: the tab strip's rows are per card kind
+        let card = h.focused().id.clone();
+        h.m.card_mut(&card).unwrap().kind = CardKind::Editor;
         for area in [
             Area::Terminal,
             Area::Frame,
             Area::Canvas,
             Area::Tab,
             Area::Editor,
+            Area::Tree,
+            Area::TabStrip,
         ] {
             for id in context_menu::command_ids(area) {
                 assert!(

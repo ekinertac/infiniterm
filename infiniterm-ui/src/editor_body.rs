@@ -273,6 +273,9 @@ pub struct EditorBody {
     /// thickens and the cursor says it moves.
     divider_hover: bool,
     divider_drag: bool,
+    /// The tree row a right-click menu was opened on: lit while the menu is up
+    /// and the row its commands act on (#281).
+    menu_row: Option<usize>,
     selecting: bool,
     /// The file on disk had Windows line endings, for the status bar.
     crlf: bool,
@@ -366,6 +369,7 @@ impl EditorBody {
             sidebar_top: false,
             divider_hover: false,
             divider_drag: false,
+            menu_row: None,
             selecting: false,
             crlf: false,
             status_sel: None,
@@ -922,6 +926,59 @@ impl EditorBody {
     /// Whether a point is on the line between the tree and the text.
     pub fn on_divider(&self, local: Point) -> bool {
         self.tree.is_some() && (self.across(local) - self.sidebar_w).abs() <= DIVIDER_GRAB
+    }
+
+    /// The tree row under a point of the body (below any strip), or `None` off
+    /// the tree, on its divider or past its last row.
+    pub fn tree_row_at(&self, local: Point) -> Option<usize> {
+        let tree = self.tree.as_ref()?;
+        if self.across(local) >= self.sidebar_w - DIVIDER_GRAB {
+            return None;
+        }
+        let row = ((local.y - PAD_Y) / self.line_h()).floor();
+        if row < 0. {
+            return None;
+        }
+        let index = row as usize + tree.scroll;
+        (index < tree.rows().len()).then_some(index)
+    }
+
+    /// Lights a tree row (the one a menu is open on) or clears it.
+    pub fn set_menu_row(&mut self, row: Option<usize>) {
+        if self.menu_row != row {
+            self.menu_row = row;
+            self.dirty = true;
+        }
+    }
+
+    /// The entry a tree menu command acts on: the row the menu was opened on,
+    /// else the tree's cursor row.
+    pub fn menu_entry(&self) -> Option<infiniterm_editor::explorer::Entry> {
+        let tree = self.tree.as_ref()?;
+        tree.rows()
+            .get(self.menu_row.unwrap_or(tree.cursor))
+            .map(|r| r.entry.clone())
+    }
+
+    /// The tree's root folder, for a relative path.
+    pub fn tree_root(&self) -> Option<&str> {
+        self.tree.as_ref().map(|t| t.root.as_str())
+    }
+
+    /// The menu's Open: a file in a tab, a folder opened or closed.
+    pub fn tree_open_entry(&mut self) {
+        let Some(entry) = self.menu_entry() else {
+            return;
+        };
+        if entry.is_dir {
+            let index = self.menu_row.or(self.tree.as_ref().map(|t| t.cursor));
+            if let (Some(i), Some(tree)) = (index, self.tree.as_mut()) {
+                tree.toggle(i, &mut list_dir);
+                self.dirty = true;
+            }
+        } else {
+            self.open_from_tree(entry.path, crate::now_ms());
+        }
     }
 
     /// The cursor for the divider while it is under the pointer or held.
@@ -2102,6 +2159,19 @@ impl EditorBody {
         for (i, row) in rows.iter().enumerate().skip(scroll).take(visible) {
             let is_cursor = i == tree.cursor;
             let row_b = Bounds::new(point(area.origin.x, y), size(area.size.width, line_h));
+            // The row a right-click menu is open on: a stronger wash and a
+            // hairline, so it is clear which file the menu is about.
+            if self.menu_row == Some(i) {
+                window.paint_quad(fill(row_b, crate::chrome::with_alpha(sel_bg, 0.75)));
+                window.paint_quad(
+                    gpui::outline(
+                        row_b,
+                        crate::chrome::with_alpha(fg, 0.55),
+                        gpui::BorderStyle::Solid,
+                    )
+                    .border_widths(px(crate::chrome::HAIRLINE_PX as f32)),
+                );
+            }
             let mut color = fg;
             if is_cursor && self.tree_focused && focused {
                 window.paint_quad(fill(row_b, sel_bg));

@@ -10,11 +10,8 @@
 //! is the whole of how one becomes a surface. CEF itself is started once
 //! in `main.rs`; `cef_running` says whether it is.
 use crate::browser_body::BrowserBody;
-use crate::overlays::OVERLAY_BODY_FONT_PX;
 use crate::tab_strip::StripStyle;
 use crate::{now_ms, AppView};
-use gpui::prelude::*;
-use gpui::{div, px, MouseButton, MouseDownEvent};
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::ift::url_plan;
 use infiniterm_core::model::{BrowserAction, FindRequest};
@@ -368,90 +365,77 @@ impl AppView {
         }
     }
 
-    /// The slim menu itself: a floating sheet at the click point over a
-    /// transparent full-canvas backdrop, so a click anywhere else dismisses
-    /// it the way the omnibox's backdrop does. Empty when nothing is open.
-    pub fn render_context_menu(&self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+    /// The page's right-click menu, native like the others (#281): Chromium
+    /// said what is under the pointer (`context_menu`), this builds the rows
+    /// from it and opens them from a task, as every native menu must
+    /// (`native_menu.rs`). The choice goes through `context_menu_choose`; a
+    /// dismissed menu just forgets the request.
+    pub fn show_page_menu(&mut self, cx: &mut gpui::Context<Self>) {
+        use crate::native_menu::{pop_up, Row};
+        if self.page_menu_open {
+            return;
+        }
         let Some(menu) = &self.context_menu else {
-            return div();
+            return;
         };
-        let chrome = &self.chrome;
-        let ui = self.model.ui_scale as f32;
-        let mut items: Vec<(&'static str, ContextMenuAction)> = vec![
-            ("Back", ContextMenuAction::Back),
-            ("Forward", ContextMenuAction::Forward),
-            ("Reload", ContextMenuAction::Reload),
+        let mut actions: Vec<ContextMenuAction> = vec![];
+        let mut item = |title: &str, action: ContextMenuAction, chord: &str| -> Row {
+            actions.push(action);
+            Row::Item {
+                tag: actions.len() as i64 - 1,
+                title: title.into(),
+                enabled: true,
+                chord: (!chord.is_empty()).then(|| chord.to_string()),
+            }
+        };
+        let mut rows = vec![
+            item("Back", ContextMenuAction::Back, ""),
+            item("Forward", ContextMenuAction::Forward, ""),
+            item("Reload", ContextMenuAction::Reload, ""),
         ];
+        if menu.editable || menu.has_selection {
+            rows.push(Row::Separator);
+        }
         if menu.editable {
-            items.push(("Cut", ContextMenuAction::Cut));
+            rows.push(item("Cut", ContextMenuAction::Cut, "cmd+x"));
         }
         if menu.editable || menu.has_selection {
-            items.push(("Copy", ContextMenuAction::Copy));
+            rows.push(item("Copy", ContextMenuAction::Copy, "cmd+c"));
         }
         if menu.editable {
-            items.push(("Paste", ContextMenuAction::Paste));
+            rows.push(item("Paste", ContextMenuAction::Paste, "cmd+v"));
         }
         if menu.link_url.is_some() {
-            items.push(("Copy link address", ContextMenuAction::CopyLinkAddress));
-            items.push(("Open link in new tab", ContextMenuAction::OpenLinkInNewTab));
-            items.push((
-                "Open link in new card",
+            rows.push(Row::Separator);
+            rows.push(item(
+                "Copy Link Address",
+                ContextMenuAction::CopyLinkAddress,
+                "",
+            ));
+            rows.push(item(
+                "Open Link in New Tab",
+                ContextMenuAction::OpenLinkInNewTab,
+                "",
+            ));
+            rows.push(item(
+                "Open Link in New Card",
                 ContextMenuAction::OpenLinkInNewCard,
+                "",
             ));
         }
-        let mut sheet = div().flex().flex_col().py_1();
-        for (label, action) in items {
-            sheet = sheet.child(
-                div()
-                    .id(gpui::SharedString::from(format!("ctxmenu-{label}")))
-                    .px_3()
-                    .py_1()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(crate::chrome::hover_fill(chrome.row_selected)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                            this.context_menu_choose(action, cx);
-                            cx.notify();
-                        }),
-                    )
-                    .child(label),
-            );
-        }
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                    this.context_menu = None;
-                    cx.notify();
-                }),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(menu.x as f32))
-                    .top(px(menu.y as f32))
-                    .flex()
-                    .flex_col()
-                    .bg(chrome.overlay_bg)
-                    .border_1()
-                    .border_color(chrome.overlay_border)
-                    .rounded_md()
-                    .shadow_lg()
-                    .font_family("Menlo")
-                    .text_size(px(OVERLAY_BODY_FONT_PX * ui))
-                    .text_color(chrome.text)
-                    // The sheet swallows the click that would otherwise
-                    // reach the backdrop and close it.
-                    .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation()
-                    })
-                    .child(sheet),
-            )
+        self.page_menu_open = true;
+        cx.spawn(async move |view, cx| {
+            let chosen = pop_up(&rows);
+            let _ = view.update(cx, |this, cx| {
+                this.page_menu_open = false;
+                match chosen.and_then(|tag| actions.get(tag as usize).copied()) {
+                    Some(action) => this.context_menu_choose(action, cx),
+                    None => this.context_menu = None,
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }
 
