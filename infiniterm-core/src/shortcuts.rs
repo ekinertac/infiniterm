@@ -79,6 +79,55 @@ pub fn format_chord(chord: &str) -> String {
     chord_keys(chord).join(CHORD_SEPARATOR)
 }
 
+/// AppKit's `NSEventModifierFlag` bits, for a native menu's key equivalents.
+pub const MAC_SHIFT: u64 = 1 << 17;
+pub const MAC_CTRL: u64 = 1 << 18;
+pub const MAC_ALT: u64 = 1 << 19;
+pub const MAC_CMD: u64 = 1 << 20;
+
+/// A chord as a Mac menu item's key equivalent: the key's character and the
+/// modifier mask, so a native menu draws the same shortcut hint every Mac app
+/// does (a command glyph and the letter). `None` for a key a menu cannot
+/// show. The chord is as `keymap::chord_for` spells it: modifiers in a fixed
+/// order, then the key.
+pub fn mac_key_equivalent(chord: &str) -> Option<(String, u64)> {
+    let lower = chord.to_lowercase();
+    let mut parts: Vec<&str> = lower.split('+').collect();
+    // A chord ending in the `+` key itself splits into an empty last part.
+    let key = match parts.pop()? {
+        "" if !parts.is_empty() => {
+            parts.pop_if(|p| p.is_empty());
+            "+"
+        }
+        k => k,
+    };
+    let mut mask = 0;
+    for m in parts {
+        mask |= match m {
+            "cmd" => MAC_CMD,
+            "ctrl" => MAC_CTRL,
+            "alt" => MAC_ALT,
+            "shift" => MAC_SHIFT,
+            _ => return None,
+        };
+    }
+    // AppKit's private-use characters for the function keys.
+    let named = match key {
+        "arrowup" => "\u{f700}",
+        "arrowdown" => "\u{f701}",
+        "arrowleft" => "\u{f702}",
+        "arrowright" => "\u{f703}",
+        "enter" => "\r",
+        "escape" => "\u{1b}",
+        "tab" => "\t",
+        "space" => " ",
+        "backspace" => "\u{8}",
+        k if k.chars().count() == 1 => k,
+        _ => return None,
+    };
+    Some((named.to_string(), mask))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Shortcut {
     pub id: String,
@@ -475,5 +524,45 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["canvas"]
         );
+    }
+
+    #[test]
+    fn a_chord_becomes_a_menu_key_equivalent() {
+        assert_eq!(mac_key_equivalent("cmd+k"), Some(("k".into(), MAC_CMD)));
+        assert_eq!(
+            mac_key_equivalent("cmd+shift+p"),
+            Some(("p".into(), MAC_CMD | MAC_SHIFT))
+        );
+        assert_eq!(
+            mac_key_equivalent("cmd+alt+shift+arrowleft"),
+            Some(("\u{f702}".into(), MAC_CMD | MAC_ALT | MAC_SHIFT))
+        );
+        assert_eq!(mac_key_equivalent("ctrl+1"), Some(("1".into(), MAC_CTRL)));
+        assert_eq!(
+            mac_key_equivalent("cmd+escape"),
+            Some(("\u{1b}".into(), MAC_CMD))
+        );
+        assert_eq!(mac_key_equivalent("cmd+\\"), Some(("\\".into(), MAC_CMD)));
+        assert_eq!(mac_key_equivalent("cmd+="), Some(("=".into(), MAC_CMD)));
+        assert_eq!(
+            mac_key_equivalent("cmd+enter"),
+            Some(("\r".into(), MAC_CMD))
+        );
+        // what a menu cannot draw
+        assert_eq!(mac_key_equivalent("cmd+foo"), None);
+        assert_eq!(mac_key_equivalent("hyper+k"), None);
+        assert_eq!(mac_key_equivalent(""), None);
+    }
+
+    // Every default chord either maps or is knowingly unmapped: a table that
+    // quietly drops hints would leave the native menu half bare.
+    #[test]
+    fn every_default_chord_has_a_menu_key_equivalent() {
+        for (chord, id, _) in crate::keymap::DEFAULT_KEYMAP {
+            assert!(
+                mac_key_equivalent(chord).is_some(),
+                "{chord} ({id}) has no key equivalent"
+            );
+        }
     }
 }

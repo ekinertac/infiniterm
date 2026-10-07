@@ -203,6 +203,17 @@ impl Model {
     /// was pressed on, or makes a card beside the active one: in that
     /// order, the same precedence `open_omnibox`/`open_omnibox_for_new_card`
     /// set up when this omnibox opened.
+    /// The terminal menu's "Search the Web for Selection": the text as a search
+    /// in a browser card beside the active card.
+    pub fn open_web_search(&mut self, query: &str) {
+        let query = query.trim();
+        if query.is_empty() {
+            return;
+        }
+        let url = search_url(&self.config.browser.search_engine, query);
+        self.omni_go(url, None, false);
+    }
+
     fn omni_go(&mut self, url: String, target: Option<String>, phantom: bool) {
         if let Some(card) = target.and_then(|id| self.card_mut(&id)) {
             card.url = Some(url);

@@ -134,6 +134,7 @@ impl Model {
             suggest_widget_visible: self.ui_context.suggest_widget_visible,
             find_widget_visible: self.find.open || self.ui_context.find_widget_visible,
             editor_has_selection: self.ui_context.editor_has_selection,
+            terminal_has_selection: self.ui_context.terminal_has_selection,
         }
     }
 

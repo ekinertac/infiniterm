@@ -512,6 +512,89 @@ mod tests {
         }
     }
 
+    // #278: a context menu names only registered commands, builds from the live
+    // registry and keymap, and an item for a command that asks for more keeps
+    // the label's ellipsis.
+    #[test]
+    fn the_context_menus_name_real_commands_and_build_from_the_registry() {
+        use crate::context_menu::{self, Area, Row, Source};
+        let h = Harness::new();
+        for area in [
+            Area::Terminal,
+            Area::Frame,
+            Area::Canvas,
+            Area::Tab,
+            Area::Editor,
+        ] {
+            for id in context_menu::command_ids(area) {
+                assert!(
+                    h.r.get(id).is_some(),
+                    "{area:?} names {id}, which is not a command"
+                );
+            }
+            let ctx = h.m.key_context();
+            let rows = context_menu::rows(
+                area,
+                &Source {
+                    context: &ctx,
+                    label: &|id| h.r.get(id).map(|c| c.label.clone()),
+                    chord: &|id| {
+                        h.m.keymap
+                            .iter()
+                            .find(|(_, c)| c == id)
+                            .map(|(k, _)| k.clone())
+                    },
+                },
+            );
+            fn items(rows: &[Row], out: &mut Vec<(String, String)>) {
+                for r in rows {
+                    match r {
+                        Row::Item { command, title, .. } => {
+                            out.push((command.clone(), title.clone()))
+                        }
+                        Row::Submenu { rows, .. } => items(rows, out),
+                        Row::Separator => {}
+                    }
+                }
+            }
+            let mut all = vec![];
+            items(&rows, &mut all);
+            assert!(!all.is_empty(), "{area:?}");
+            for (command, title) in all {
+                let label = h.r.get(&command).unwrap().label.clone();
+                // a table title may replace the label's, but never drops the promise
+                if label.ends_with('\u{2026}') {
+                    assert!(title.ends_with('\u{2026}'), "{command}: {label} -> {title}");
+                }
+            }
+        }
+    }
+
+    // The terminal menu's Copy, Paste and Search act on a terminal card only.
+    #[test]
+    fn the_terminal_menu_commands_reach_the_ui_only_for_a_terminal() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        for command in [
+            "terminal.copy",
+            "terminal.paste",
+            "terminal.searchSelection",
+        ] {
+            let effects = h.run(command);
+            assert!(
+                effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::Terminal { card_id, .. } if *card_id == id)),
+                "{command}"
+            );
+        }
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        let effects = h.run("terminal.copy");
+        assert!(effects
+            .iter()
+            .all(|e| !matches!(e, Effect::Terminal { .. })));
+    }
+
     #[test]
     fn every_label_carries_its_domain_prefix() {
         let h = Harness::new();

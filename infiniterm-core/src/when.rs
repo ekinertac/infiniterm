@@ -39,6 +39,8 @@ pub struct Context {
     pub find_widget_visible: bool,
     /// The editor has a selection.
     pub editor_has_selection: bool,
+    /// The focused terminal has text selected.
+    pub terminal_has_selection: bool,
 }
 
 impl Context {
@@ -55,6 +57,7 @@ impl Context {
             suggest_widget_visible: false,
             find_widget_visible: false,
             editor_has_selection: false,
+            terminal_has_selection: false,
         }
     }
 }
@@ -98,6 +101,10 @@ pub const KEYS: &[(&str, &str)] = &[
         "a find bar or the editor's find panel is open",
     ),
     ("editorHasSelection", "the editor has text selected"),
+    (
+        "terminalHasSelection",
+        "the focused terminal has text selected",
+    ),
 ];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -178,6 +185,7 @@ fn lookup(key: &str, c: &Context) -> Value {
         "suggestWidgetVisible" => Value::Bool(c.suggest_widget_visible),
         "findWidgetVisible" => Value::Bool(c.find_widget_visible),
         "editorHasSelection" => Value::Bool(c.editor_has_selection),
+        "terminalHasSelection" => Value::Bool(c.terminal_has_selection),
         _ => Value::Bool(false), // unreachable: parse refuses an unknown key
     }
 }

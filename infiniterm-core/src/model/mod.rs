@@ -347,6 +347,12 @@ pub enum Effect {
         card_id: String,
         action: EditorAction,
     },
+    /// An action on a terminal's selection or the clipboard, which only the
+    /// ui can reach (the right-click menu's Copy, Paste and Search).
+    Terminal {
+        card_id: String,
+        action: TerminalAction,
+    },
     /// An action the page owns, for the same reason.
     Browser {
         card_id: String,
@@ -389,6 +395,18 @@ pub struct UiContext {
     pub suggest_widget_visible: bool,
     pub find_widget_visible: bool,
     pub editor_has_selection: bool,
+    pub terminal_has_selection: bool,
+}
+
+/// What a terminal card's context menu asks of the ui.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalAction {
+    /// The selection to the clipboard.
+    Copy,
+    /// The clipboard into the program, bracketed when it asked.
+    Paste,
+    /// The selection as a web search in a browser card.
+    SearchSelection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

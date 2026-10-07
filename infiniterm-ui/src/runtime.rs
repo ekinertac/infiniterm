@@ -102,6 +102,7 @@ impl AppView {
             frame_rate: Default::default(),
             themes_dir: PathBuf::new(),
             backgrounds_dir: AppView::bundled_backgrounds(),
+            paste_request: None,
             background: Default::default(),
             scale_factor,
             cef_running: false,
@@ -257,7 +258,7 @@ impl AppView {
     /// A snippet into a card the way Cmd+V goes: the terminal's paste path
     /// (bracketed when the program asked), any other body's `insert_text`.
     /// A masked or displaced card has no live body and gets nothing.
-    fn paste_text(&mut self, card_id: &str, text: &str) {
+    pub(crate) fn paste_text(&mut self, card_id: &str, text: &str) {
         let Some(body) = self.live_body(card_id) else {
             return;
         };
@@ -398,6 +399,30 @@ impl AppView {
                 Effect::RefreshThemes => self.refresh_themes(),
                 Effect::RefreshSnippets => self.refresh_snippets(),
                 Effect::PasteText { card_id, text } => self.paste_text(&card_id, &text),
+                // The right-click menu's terminal acts (#278). The clipboard is
+                // read in the poll task, where there is an app context.
+                Effect::Terminal { card_id, action } => {
+                    use infiniterm_core::model::TerminalAction;
+                    match action {
+                        TerminalAction::Copy => {
+                            if let Some(text) = self
+                                .terminal_body(&card_id)
+                                .and_then(|b| b.grid.selection_text())
+                            {
+                                self.clipboard_out = Some(text);
+                            }
+                        }
+                        TerminalAction::Paste => self.paste_request = Some(card_id),
+                        TerminalAction::SearchSelection => {
+                            if let Some(text) = self
+                                .terminal_body(&card_id)
+                                .and_then(|b| b.grid.selection_text())
+                            {
+                                self.model.open_web_search(&text);
+                            }
+                        }
+                    }
+                }
                 Effect::Editor { card_id, action } => self.editor_effect(&card_id, action),
                 Effect::Browser { card_id, action } => self.browser_effect(&card_id, action),
                 // A terminal's scrollback is ours to search; a page is

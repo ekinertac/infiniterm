@@ -4,6 +4,7 @@
 //! in the module whose prefix it carries, and `card.clear` is `Terminal:`.
 use super::palette_state::Source;
 use super::palette_state::{CARD_ROW, SIZES, WORKSPACE_ROW};
+use super::TerminalAction;
 use super::{
     BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
     TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
@@ -1302,6 +1303,31 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             })
         },
     );
+    // The terminal's own Cmd+C and Cmd+V are the body's keys; these are the same
+    // acts as commands so a menu can name them (#278). Only a terminal card.
+    for (id, label, action) in [
+        (
+            "terminal.copy",
+            "Terminal: copy the selection",
+            TerminalAction::Copy,
+        ),
+        ("terminal.paste", "Terminal: paste", TerminalAction::Paste),
+        (
+            "terminal.searchSelection",
+            "Terminal: search the web for the selection",
+            TerminalAction::SearchSelection,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.with_active_card(|m, card_id| {
+                if m.card(&card_id)
+                    .is_some_and(|c| c.kind == CardKind::Terminal)
+                {
+                    m.effects.push(Effect::Terminal { card_id, action });
+                }
+            })
+        });
+    }
     // A focused browser card gives every key to the page; this is the one
     // chord that comes back out, to the nearest other card.
     r.register("browser.leave", "Card: leave the page or the editor", |m| {
