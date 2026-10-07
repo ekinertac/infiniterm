@@ -45,6 +45,7 @@ impl Model {
             query: browser
                 .as_ref()
                 .and_then(|c| c.url.clone())
+                .filter(|u| u != "about:blank")
                 .unwrap_or_default(),
             target: browser.map(|c| c.id),
             ..OmniState::default()

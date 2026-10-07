@@ -29,6 +29,9 @@ pub struct CardContextMenu {
     pub link_url: Option<String>,
     pub editable: bool,
     pub has_selection: bool,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    pub page_url: String,
 }
 
 /// What a slim menu item does. Copy-able so a render closure can capture it
@@ -44,6 +47,8 @@ pub enum ContextMenuAction {
     CopyLinkAddress,
     OpenLinkInNewCard,
     OpenLinkInNewTab,
+    OpenInSystemBrowser,
+    OpenLinkInSystemBrowser,
 }
 
 /// What the body has to do to hold the tabs the card says it has.
@@ -263,6 +268,9 @@ impl AppView {
                 link_url: request.link_url,
                 editable: request.editable,
                 has_selection: request.has_selection,
+                can_go_back: request.can_go_back,
+                can_go_forward: request.can_go_forward,
+                page_url: request.page_url,
             });
         }
         for (id, urls) in retabs {
@@ -336,6 +344,20 @@ impl AppView {
                 }
                 return;
             }
+            ContextMenuAction::OpenInSystemBrowser | ContextMenuAction::OpenLinkInSystemBrowser => {
+                let url = if action == ContextMenuAction::OpenLinkInSystemBrowser {
+                    menu.link_url
+                } else {
+                    Some(menu.page_url).filter(|u| !u.is_empty())
+                };
+                if let Some(url) = url {
+                    if let Err(e) = infiniterm_core::links_fs::open_url(&url) {
+                        self.model.notify(format!("could not open {url}"));
+                        eprintln!("[infiniterm] {e}");
+                    }
+                }
+                return;
+            }
             _ => {}
         }
         let Some(surface) = self
@@ -359,7 +381,9 @@ impl AppView {
             }
             ContextMenuAction::CopyLinkAddress
             | ContextMenuAction::OpenLinkInNewCard
-            | ContextMenuAction::OpenLinkInNewTab => {
+            | ContextMenuAction::OpenLinkInNewTab
+            | ContextMenuAction::OpenInSystemBrowser
+            | ContextMenuAction::OpenLinkInSystemBrowser => {
                 unreachable!("handled above, before the surface borrow")
             }
         }
@@ -388,30 +412,36 @@ impl AppView {
                 chord: (!chord.is_empty()).then(|| chord.to_string()),
             }
         };
-        let mut rows = vec![
-            item("Back", ContextMenuAction::Back, ""),
-            item("Forward", ContextMenuAction::Forward, ""),
-            item("Reload", ContextMenuAction::Reload, ""),
-        ];
-        if menu.editable || menu.has_selection {
-            rows.push(Row::Separator);
+        // What Chrome shows: Back, Forward and Reload belong to the page, so
+        // not on a link, a selection or a field, and Back and Forward only
+        // when there is somewhere to go.
+        let mut rows: Vec<Row> = vec![];
+        let on_page = menu.link_url.is_none() && !menu.editable && !menu.has_selection;
+        if on_page {
+            if menu.can_go_back {
+                rows.push(item("Back", ContextMenuAction::Back, ""));
+            }
+            if menu.can_go_forward {
+                rows.push(item("Forward", ContextMenuAction::Forward, ""));
+            }
+            rows.push(item("Reload", ContextMenuAction::Reload, ""));
         }
-        if menu.editable {
-            rows.push(item("Cut", ContextMenuAction::Cut, "cmd+x"));
-        }
         if menu.editable || menu.has_selection {
+            if !rows.is_empty() {
+                rows.push(Row::Separator);
+            }
+            if menu.editable {
+                rows.push(item("Cut", ContextMenuAction::Cut, "cmd+x"));
+            }
             rows.push(item("Copy", ContextMenuAction::Copy, "cmd+c"));
-        }
-        if menu.editable {
-            rows.push(item("Paste", ContextMenuAction::Paste, "cmd+v"));
+            if menu.editable {
+                rows.push(item("Paste", ContextMenuAction::Paste, "cmd+v"));
+            }
         }
         if menu.link_url.is_some() {
-            rows.push(Row::Separator);
-            rows.push(item(
-                "Copy Link Address",
-                ContextMenuAction::CopyLinkAddress,
-                "",
-            ));
+            if !rows.is_empty() {
+                rows.push(Row::Separator);
+            }
             rows.push(item(
                 "Open Link in New Tab",
                 ContextMenuAction::OpenLinkInNewTab,
@@ -420,6 +450,28 @@ impl AppView {
             rows.push(item(
                 "Open Link in New Card",
                 ContextMenuAction::OpenLinkInNewCard,
+                "",
+            ));
+            rows.push(item(
+                "Copy Link Address",
+                ContextMenuAction::CopyLinkAddress,
+                "",
+            ));
+        }
+        // The footer of every browser menu.
+        if !rows.is_empty() {
+            rows.push(Row::Separator);
+        }
+        if menu.link_url.is_some() {
+            rows.push(item(
+                "Open Link in System Browser",
+                ContextMenuAction::OpenLinkInSystemBrowser,
+                "",
+            ));
+        } else {
+            rows.push(item(
+                "Open Page in System Browser",
+                ContextMenuAction::OpenInSystemBrowser,
                 "",
             ));
         }
@@ -457,6 +509,37 @@ impl AppView {
             BrowserAction::Back => surface.back(),
             BrowserAction::Forward => surface.forward(),
             BrowserAction::Reload => surface.reload(),
+        }
+    }
+
+    /// The mouse's back and forward buttons, over a browser page. Back on a
+    /// tab with no history of its own (one a link opened) closes it, as in
+    /// Chrome, when the card has another tab to land on.
+    pub fn mouse_navigate(&mut self, e: &gpui::MouseDownEvent, forward: bool) {
+        if self.model.modal_open() {
+            return;
+        }
+        let p = self.to_content(e.position);
+        let crate::input::Hit::CardBody { id, .. } = self.hit(p) else {
+            return;
+        };
+        let Some(card) = self.model.card(&id) else {
+            return;
+        };
+        if card.kind != CardKind::Browser {
+            return;
+        }
+        let several_tabs = card.tabs.len() > 1;
+        let Some(surface) = self.browser_for(&id).and_then(|b| b.active_surface()) else {
+            return;
+        };
+        if forward {
+            surface.forward();
+        } else if surface.can_go_back() {
+            surface.back();
+        } else if several_tabs {
+            self.model.browser_tab_close(&id);
+            self.perform_effects();
         }
     }
 

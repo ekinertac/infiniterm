@@ -42,6 +42,12 @@ pub struct ContextMenuRequest {
     pub link_url: Option<String>,
     pub editable: bool,
     pub has_selection: bool,
+    /// The page's history, so the menu offers Back and Forward only when
+    /// there is somewhere to go.
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    /// The page's own address, for "open in the system browser".
+    pub page_url: String,
 }
 
 #[derive(Default)]
@@ -292,7 +298,7 @@ wrap_context_menu_handler! {
         // is no native window to anchor one to) is never asked for.
         fn run_context_menu(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             _frame: Option<&mut cef::Frame>,
             params: Option<&mut ContextMenuParams>,
             _model: Option<&mut MenuModel>,
@@ -310,6 +316,9 @@ wrap_context_menu_handler! {
                         flags,
                         sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0,
                     ),
+                    can_go_back: browser.as_ref().is_some_and(|b| b.can_go_back() == 1),
+                    can_go_forward: browser.as_ref().is_some_and(|b| b.can_go_forward() == 1),
+                    page_url: CefStringUtf16::from(&params.page_url()).to_string(),
                 });
             }
             if let Some(callback) = callback {
@@ -427,6 +436,12 @@ impl Surface {
         self.browser.go_forward();
     }
 
+    /// Whether the page has history behind it: a tab a link opened has none,
+    /// and Back there means "close this tab".
+    pub fn can_go_back(&self) -> bool {
+        self.browser.can_go_back() == 1
+    }
+
     pub fn reload(&self) {
         self.browser.reload();
     }
@@ -539,10 +554,17 @@ impl Surface {
     }
 
     fn mouse(x: f32, y: f32, mods: Mods) -> MouseEvent {
+        // Cmd is for the mouse only: a key sent with it would reach the page
+        // as a shortcut the app already took.
+        let command = if mods.command {
+            sys::cef_event_flags_t::EVENTFLAG_COMMAND_DOWN.0
+        } else {
+            0
+        };
         MouseEvent {
             x: x as i32,
             y: y as i32,
-            modifiers: Self::flags(mods),
+            modifiers: Self::flags(mods) | command,
         }
     }
 
@@ -685,6 +707,8 @@ pub struct Mods {
     pub shift: bool,
     pub control: bool,
     pub alt: bool,
+    /// Cmd: with it Chromium opens a clicked link in a new tab.
+    pub command: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

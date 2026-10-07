@@ -525,6 +525,22 @@ impl Render for AppView {
                         MouseButton::Middle,
                         cx.listener(|this, e: &MouseDownEvent, _, _| this.mouse_down(e)),
                     )
+                    // The mouse's back and forward buttons go through the
+                    // page under the pointer, like a browser's.
+                    .on_mouse_down(
+                        MouseButton::Navigate(gpui::NavigationDirection::Back),
+                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                            this.mouse_navigate(e, false);
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Navigate(gpui::NavigationDirection::Forward),
+                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                            this.mouse_navigate(e, true);
+                            cx.notify();
+                        }),
+                    )
                     // A browser card's own right-click menu (CEF asks for it
                     // once the down and up both arrive); every other body
                     // ignores the button, same as it always has.

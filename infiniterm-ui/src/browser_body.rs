@@ -454,6 +454,7 @@ impl BrowserBody {
             shift: m.shift,
             control: m.control,
             alt: m.alt,
+            command: m.platform,
         }
     }
 }
