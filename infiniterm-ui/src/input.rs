@@ -697,14 +697,16 @@ impl AppView {
     /// the caller must stop propagation on a handled chord.
     /// Writes the focused editor's popup, find panel and selection into the
     /// model, where a keybinding's `when` can see them.
-    fn sync_ui_context(&mut self) {
-        let flags = self
-            .model
-            .selection
-            .focused_id
-            .clone()
-            .and_then(|id| self.editor_tabs_for(&id).map(|t| t.context_flags()))
+    pub(crate) fn sync_ui_context(&mut self) {
+        let id = self.model.selection.focused_id.clone();
+        let mut flags = id
+            .as_ref()
+            .and_then(|id| self.editor_tabs_for(id).map(|t| t.context_flags()))
             .unwrap_or_default();
+        flags.terminal_has_selection = id
+            .as_ref()
+            .and_then(|id| self.terminal_body(id).map(|b| b.grid.has_selection()))
+            .unwrap_or(false);
         self.model.ui_context = flags;
     }
 

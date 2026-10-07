@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-07
 
+- Right-click opens a native macOS menu, the same system menu other Mac apps show, with each command's shortcut at the right edge and unavailable rows greyed. On a terminal: Copy, Paste, Find, Search the Web for Selection, Split, New, Clear Buffer, Show Transcript, Rename, Protect, Mask, Size, Move to Workspace and Close. On a card's frame or label, on bare canvas, on a workspace tab and on an editor there is a menu of its own (the editor's has the Transform submenu). A terminal program that uses the mouse (vim, tmux, htop) still gets the plain right-click; hold Shift to open the menu over it. A browser card keeps its own menu for now.
+
 - A command that needs a second action from you ends its label with an ellipsis, in the command palette as everywhere on a Mac: Run a command…, Card: rename…, Workspace: rename…, Group: rename…, Editor: open a file…, Editor: go to a line…, Browser: open a URL…, go to a URL…, address bar…, find in page…, Card: find in this card…, Card: new (choose where)…, Theme: switch… and Group: the selection…. A test finds the commands that leave something open and fails when one has no ellipsis.
 
 ## 0.5.8 (build 743), 2026-10-07

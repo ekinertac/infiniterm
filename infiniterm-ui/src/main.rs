@@ -31,7 +31,9 @@ mod input;
 mod instance_icon;
 mod keycast;
 mod keycode;
+mod menus;
 mod middle_drag;
+mod native_menu;
 mod omnibox;
 mod overlays;
 mod page_body;
@@ -221,6 +223,9 @@ pub struct AppView {
     /// "Open a file" asked for the open panel (`Effect::PickFile`); the idle
     /// timer, which has the app, shows it (#64). The card it opens beside.
     pub pick_request: Option<Option<String>>,
+    /// A terminal's Paste from the right-click menu: the card to paste into,
+    /// read from the clipboard in the poll task.
+    pub paste_request: Option<String>,
     /// `ift read` requests the poll timer answers once the output is parsed.
     pub read_requests: Vec<crate::terminals::ReadRequest>,
     pub shortcuts_scroll: gpui::ScrollHandle,
@@ -512,6 +517,11 @@ fn main() {
                         // The macOS open panel, asked for by "Open a file"
                         // (#64). Its answer arrives later, on its own task.
                         this.answer_reads(now_ms(), cx);
+                        if let Some(card) = this.paste_request.take() {
+                            if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                                this.paste_text(&card, &text);
+                            }
+                        }
                         if let Some(from) = this.pick_request.take() {
                             let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
                                 files: true,

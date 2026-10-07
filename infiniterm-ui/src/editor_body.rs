@@ -886,6 +886,7 @@ impl EditorBody {
             suggest_widget_visible: self.completion.is_some(),
             find_widget_visible: self.search.is_some(),
             editor_has_selection: self.buffer.selection().is_some(),
+            ..Default::default()
         }
     }
 

@@ -537,6 +537,7 @@ impl Render for AppView {
                         cx.listener(|this, e: &MouseDownEvent, window, cx| {
                             window.focus(&this.focus);
                             this.mouse_down(e);
+                            this.open_context_menu(e, cx);
                             cx.notify();
                         }),
                     )
@@ -636,6 +637,7 @@ impl AppView {
                 .map(|i| cards[i].agent)
                 .collect();
             let id = ws.id.clone();
+            let menu_id = ws.id.clone();
             let mut tab = div()
                 .id(gpui::SharedString::from(format!("tab-{}", ws.id)))
                 .flex()
@@ -674,6 +676,12 @@ impl AppView {
                         this.model.move_workspace(&dragged.id, index);
                         this.perform_effects();
                         cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                        this.open_tab_menu(&menu_id, cx);
                     }),
                 )
                 .on_mouse_down(
