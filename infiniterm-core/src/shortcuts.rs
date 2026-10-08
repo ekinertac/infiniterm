@@ -241,6 +241,11 @@ pub const GESTURES: &[(&str, &str, &str)] = &[
         "mouse.fitCard.doubleclick",
     ),
     (
+        "double-click a card drawn as bars",
+        "Fit the card",
+        "mouse.fitCard.barsdoubleclick",
+    ),
+    (
         "double-click empty canvas",
         "Fit everything",
         "mouse.fitAll.doubleclick",

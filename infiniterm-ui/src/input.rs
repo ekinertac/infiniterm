@@ -306,6 +306,18 @@ impl AppView {
                         // card slide under the pointer as it went.
                         self.reveal_on_release = Some(p);
                     }
+                    // As bars there is no word to select: the double-click
+                    // zooms in on the card, not into the program.
+                    if infiniterm_core::pan_mode::double_click_fits(
+                        e.click_count,
+                        self.live_body(&id).is_some_and(|b| b.draws_bars()),
+                    ) {
+                        self.note_use("mouse.fitCard.barsdoubleclick");
+                        self.model.set_focus(Some(&id));
+                        self.run_command("canvas.zoom.fitCard");
+                        self.perform_effects();
+                        return;
+                    }
                     let (action, captures) = match self.live_body(&id) {
                         Some(body) => (
                             body.mouse_down(local, e.button, &e.modifiers, e.click_count),

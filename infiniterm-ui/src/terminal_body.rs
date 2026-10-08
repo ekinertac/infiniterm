@@ -139,6 +139,8 @@ pub struct TerminalBody {
     /// Too many cells on screen for glyphs to be affordable this frame;
     /// set by `paint_world` from the frame's budget.
     crowded: bool,
+    /// The last paint drew bars, not glyphs (`draws_bars`).
+    bars: bool,
     /// A selection drag has left the card by the top (negative) or bottom
     /// (positive) edge: the grid scrolls this many lines a frame, growing
     /// with the distance, and the selection follows to the edge row. Set
@@ -287,6 +289,7 @@ impl TerminalBody {
             cwd,
             error: None,
             crowded: false,
+            bars: false,
             autoscroll: 0.,
             drag_local: Point { x: 0., y: 0. },
             displaced: false,
@@ -807,6 +810,7 @@ impl CardBody for TerminalBody {
         // The corner label names the card instead.
         let legible =
             font_size >= crate::chrome::legible_font_px(window.scale_factor()) && !self.crowded;
+        self.bars = !legible;
         // The cursor under the text: solid when focused and on, hollow when
         // the card is not focused, nothing while scrolled into history.
         // The visual cursor is drawn anywhere in the history, and solid.
@@ -1076,6 +1080,10 @@ impl CardBody for TerminalBody {
             self.crowded = crowded;
             self.mark_dirty();
         }
+    }
+
+    fn draws_bars(&self) -> bool {
+        self.bars || self.crowded
     }
 
     fn caret_bounds(&self) -> Option<Bounds<Pixels>> {
@@ -1871,6 +1879,19 @@ mod tests {
         b.mouse_down(at(5., 1.), gpui::MouseButton::Left, &plain, 2);
         b.mouse_up(at(5., 1.), gpui::MouseButton::Left, &plain);
         assert_eq!(b.grid.selection_text().as_deref(), Some("six"));
+    }
+
+    // A crowded frame draws every card as bars, and a double-click there fits
+    // the card (`pan_mode::double_click_fits`); a readable card says no.
+    #[test]
+    fn a_crowded_terminal_reports_that_it_draws_bars() {
+        use crate::body::CardBody;
+        let mut b = body();
+        assert!(!b.draws_bars());
+        b.set_crowded(true);
+        assert!(b.draws_bars());
+        b.set_crowded(false);
+        assert!(!b.draws_bars());
     }
 
     #[test]
