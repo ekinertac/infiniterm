@@ -6,16 +6,22 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-09
+## 0.5.11 (build 801), 2026-10-09
+
+### Canvas
+
+- New: reading mode for terminal cards. Press Cmd+1 on a card that is already fitted: the canvas zooms to 150% (`ui.readZoom`) with the card's bottom edge at the bottom of the window, so you read the prompt and the newest lines at a larger size. Cmd+Up and Cmd+Down pan along the card, only while this mode is on and never past the card's edges. Typing and Enter work as usual and bring the view back to the bottom. Cmd+1 again or Cmd+2 leaves; so does panning or zooming by hand. The status bar says "reading" while it is on. `Canvas: read the focused card` is the command.
+- New: `Card: slide left / right / up / down to the next card or slot` (Cmd+Ctrl+Alt+Arrow). After a resize leaves a gap, the card moves along its row or column until it is one gutter from the next card in line, or to the next grid slot when nothing is in the way. It never overlaps a card, and Cmd+Z puts it back.
+- Double-clicking a terminal card that is drawn as bars (zoomed out too far to read, or too many cards on screen) fits that card, like Cmd+1, instead of selecting a word nobody can see. A readable card keeps its double-click.
+
+### Interface
 
 - New settings `ui.fontFamily`, `ui.fontSize`, `ui.fontWeight` and `ui.fontWeightBold` (Tarık Kavaz): the font of the interface itself, meaning the workspace tabs, card labels, status bar, palette and dialogs. The default is now the macOS system font instead of the terminal's monospace one. Terminal, editor and document text keep their own settings. A change applies at once.
 - New: `Help: open the changelog` in the command palette opens this changelog as a card beside the focused one, newest release first. It is the text of the build you run, so an update brings its own.
-- New: reading mode for terminal cards. Press Cmd+1 on a card that is already fitted: the canvas zooms to 150% (`ui.readZoom`) with the card's bottom edge at the bottom of the window, so you read the prompt and the newest lines at a larger size. Cmd+Up and Cmd+Down pan along the card, only while this mode is on and never past the card's edges. Typing and Enter work as usual and bring the view back to the bottom. Cmd+1 again or Cmd+2 leaves; so does panning or zooming by hand. The status bar says "reading" while it is on. `Canvas: read the focused card` is the command.
 
-### 2026-10-08
+### Agents
 
-- New: `Card: slide left / right / up / down to the next card or slot` (Cmd+Ctrl+Alt+Arrow). After a resize leaves a gap, the card moves along its row or column until it is one gutter from the next card in line, or to the next grid slot when nothing is in the way. It never overlaps a card, and Cmd+Z puts it back.
-- Double-clicking a terminal card that is drawn as bars (zoomed out too far to read, or too many cards on screen) fits that card, like Cmd+1, instead of selecting a word nobody can see. A readable card keeps its double-click.
+- Cursor reports its state like the other agents (Tarık Kavaz): `ift install-cursor-hooks` wires infiniterm into `~/.cursor/hooks.json`, and a card running Cursor's agent shows working, waiting, failed and done, and resumes with `cursor agent --resume`. It has not been tried on a long live session yet.
 
 ## 0.5.10 (build 775), 2026-10-08
 
