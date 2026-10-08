@@ -34,6 +34,7 @@ export const featureGroups: FeatureGroup[] = [
       { text: 'Drag a card by its edge or label; it snaps to the grid\'s slots, and a drop on another card swaps the two.', href: 'guide/canvas/#moving-and-resizing' },
       { text: 'Split a card to the right or below, grow it into a gap, or pick a size from a menu.' },
       { text: 'Reading mode: `Cmd 1` on a fitted terminal card zooms to 150% at its bottom, and `Cmd Up` / `Cmd Down` pan inside it.', href: 'guide/canvas/#reading-mode' },
+      { text: '`Cmd Ctrl Alt` + arrow slides a card into the next gap; `Cmd Alt Shift` + arrow moves a whole selection one block.', href: 'guide/canvas/#moving-and-resizing' },
       { text: 'Select several cards with a drag or `Cmd` + click, then move, close, fit or group them together.' },
       { text: '`Cmd Alt` + arrow moves to the neighbour; `Ctrl Tab` walks the cards you used, most recent first.' },
       { text: 'Right-click opens the native Mac menu on a terminal, a card, the canvas, a tab, an editor and a browser page, with each shortcut at the right edge.', href: 'guide/canvas/#the-right-click-menu' },
@@ -96,6 +97,7 @@ export const featureGroups: FeatureGroup[] = [
     items: [
       { text: '522 themes, previewed live as you move through the list.', href: 'guide/configuration/#themes' },
       { text: 'Settings as flat dotted keys, with every default documented beside your file. Changes apply on save.', href: 'guide/configuration/#settings' },
+      { text: '`settings.json` is checked before it applies: a mistake keeps your old settings and the status bar says why.', href: 'guide/configuration/' },
       { text: 'Every binding can be changed; chords follow the physical key on any keyboard layout.', href: 'guide/configuration/#keybindings' },
       { text: 'A binding can carry a `when`, as in VS Code, so it applies only in a locked editor, a browser card or an empty slot.', href: 'guide/configuration/#bindings-that-apply-only-sometimes' },
       { text: 'A see-through window, background pictures that rotate, see-through cards, rounded corners, the gap between cards.', href: 'guide/configuration/#the-window-and-the-canvas' },
