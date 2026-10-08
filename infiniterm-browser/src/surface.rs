@@ -42,6 +42,12 @@ pub struct ContextMenuRequest {
     pub link_url: Option<String>,
     pub editable: bool,
     pub has_selection: bool,
+    /// The page's history, so the menu offers Back and Forward only when
+    /// there is somewhere to go.
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    /// The page's own address, for "open in the system browser".
+    pub page_url: String,
 }
 
 #[derive(Default)]
@@ -292,7 +298,7 @@ wrap_context_menu_handler! {
         // is no native window to anchor one to) is never asked for.
         fn run_context_menu(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             _frame: Option<&mut cef::Frame>,
             params: Option<&mut ContextMenuParams>,
             _model: Option<&mut MenuModel>,
@@ -310,6 +316,9 @@ wrap_context_menu_handler! {
                         flags,
                         sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0,
                     ),
+                    can_go_back: browser.as_ref().is_some_and(|b| b.can_go_back() == 1),
+                    can_go_forward: browser.as_ref().is_some_and(|b| b.can_go_forward() == 1),
+                    page_url: CefStringUtf16::from(&params.page_url()).to_string(),
                 });
             }
             if let Some(callback) = callback {
@@ -326,6 +335,38 @@ fn has_flag(flags: u32, bit: u32) -> bool {
     flags & bit != 0
 }
 
+wrap_request_handler! {
+    struct RequestBuilder {
+        handler: Handler,
+    }
+
+    impl RequestHandler {
+        // A middle-click or Cmd+click on a link reaches the browser process
+        // here, not through `on_before_popup`: with no answer Chromium
+        // follows the link in the tab it came from. The address is queued
+        // for the ui as a popup is, and the navigation refused.
+        fn on_open_urlfrom_tab(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            target_url: Option<&CefString>,
+            target_disposition: WindowOpenDisposition,
+            _user_gesture: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            if target_disposition == sys::cef_window_open_disposition_t::CEF_WOD_CURRENT_TAB.into() {
+                return 0;
+            }
+            if let Some(url) = target_url {
+                let url = url.to_string();
+                if !url.is_empty() {
+                    self.handler.shared.borrow_mut().popups.push(url);
+                }
+            }
+            1
+        }
+    }
+}
+
 wrap_client! {
     struct ClientBuilder {
         render_handler: RenderHandler,
@@ -334,9 +375,13 @@ wrap_client! {
         load_handler: LoadHandler,
         find_handler: FindHandler,
         context_menu_handler: ContextMenuHandler,
+        request_handler: RequestHandler,
     }
 
     impl Client {
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(self.request_handler.clone())
+        }
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(self.render_handler.clone())
         }
@@ -390,7 +435,8 @@ impl Surface {
             DisplayBuilder::new(handler.clone()),
             LoadBuilder::new(handler.clone()),
             FindBuilder::new(handler.clone()),
-            ContextMenuBuilder::new(handler),
+            ContextMenuBuilder::new(handler.clone()),
+            RequestBuilder::new(handler),
         );
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
@@ -425,6 +471,12 @@ impl Surface {
 
     pub fn forward(&self) {
         self.browser.go_forward();
+    }
+
+    /// Whether the page has history behind it: a tab a link opened has none,
+    /// and Back there means "close this tab".
+    pub fn can_go_back(&self) -> bool {
+        self.browser.can_go_back() == 1
     }
 
     pub fn reload(&self) {
@@ -539,10 +591,17 @@ impl Surface {
     }
 
     fn mouse(x: f32, y: f32, mods: Mods) -> MouseEvent {
+        // Cmd is for the mouse only: a key sent with it would reach the page
+        // as a shortcut the app already took.
+        let command = if mods.command {
+            sys::cef_event_flags_t::EVENTFLAG_COMMAND_DOWN.0
+        } else {
+            0
+        };
         MouseEvent {
             x: x as i32,
             y: y as i32,
-            modifiers: Self::flags(mods),
+            modifiers: Self::flags(mods) | command,
         }
     }
 
@@ -582,8 +641,18 @@ impl Surface {
                 Button::Middle => MouseButtonType::MIDDLE,
                 Button::Right => MouseButtonType::RIGHT,
             };
+            let mut event = Self::mouse(x, y, mods);
+            // Chromium reads which button is down from the flags as well as
+            // from the event's button: without this a middle press on a link
+            // was a plain click.
+            if !up && button == Button::Middle {
+                event.modifiers |= sys::cef_event_flags_t::EVENTFLAG_MIDDLE_MOUSE_BUTTON.0;
+            }
+            if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                eprintln!("[mouse] {button:?} up={up} flags={:#x} at {},{}", event.modifiers, event.x, event.y);
+            }
             host.send_mouse_click_event(
-                Some(&Self::mouse(x, y, mods)),
+                Some(&event),
                 b,
                 up as i32,
                 clicks.max(1) as i32,
@@ -685,6 +754,8 @@ pub struct Mods {
     pub shift: bool,
     pub control: bool,
     pub alt: bool,
+    /// Cmd: with it Chromium opens a clicked link in a new tab.
+    pub command: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -185,6 +185,8 @@ pub struct AppView {
     /// The left button went down on empty canvas and has not come up: a
     /// right click now fits everything (`pan_mode::chord_fits_all`).
     pub left_on_canvas: bool,
+    /// Where the middle button went down, to tell a click from a pan.
+    pub middle_press: Option<Point>,
     /// The last frame was over its glyph budget (`paint_world`): cards drew
     /// bars, and content frames are rationed (`AppView::far`).
     pub crowded: bool,

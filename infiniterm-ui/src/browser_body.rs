@@ -454,6 +454,7 @@ impl BrowserBody {
             shift: m.shift,
             control: m.control,
             alt: m.alt,
+            command: m.platform,
         }
     }
 }
@@ -677,6 +678,10 @@ impl CardBody for BrowserBody {
         if local.y < strip_h {
             return match strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
                 Some(hit) if button == gpui::MouseButton::Left => BodyAction::BrowserTab(hit),
+                // Middle-click closes a tab, as in every browser.
+                Some(crate::body::TabClick::Switch(i)) if button == gpui::MouseButton::Middle => {
+                    BodyAction::BrowserTab(crate::body::TabClick::Close(i))
+                }
                 _ => BodyAction::None,
             };
         }

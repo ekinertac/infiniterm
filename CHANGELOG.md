@@ -8,6 +8,9 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-07
 
+- Browser cards: middle-click and Cmd+click on a link open it in a new tab; Cmd+T opens the address bar on the new blank tab; the mouse's back and forward buttons move through the page's history, and Back on a tab a link opened closes it.
+- The browser page menu shows Back and Forward only when there is somewhere to go, and only on the page itself, not on a link, a selection or a field. Every browser menu ends with "Open Page in System Browser" (on a link, "Open Link in System Browser").
+
 - Right-clicking a workspace tab no longer switches to it; only a command you choose from its menu does, and Move Left / Move Right keep you in the workspace you were in.
 
 - Double-clicking a link in a terminal selects the whole address; it used to stop at the colon of `https://`.

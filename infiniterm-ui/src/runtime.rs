@@ -60,6 +60,7 @@ impl AppView {
             show_character_palette: false,
             pan: None,
             left_on_canvas: false,
+            middle_press: None,
             marquee: None,
             crowded: false,
             gesture: None,

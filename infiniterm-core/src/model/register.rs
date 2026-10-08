@@ -3600,6 +3600,53 @@ mod tests {
         assert!(!is_workspace_switch("ctrl+shift+5"));
     }
 
+    // Cmd+T on a browser card opens a blank tab, and a blank page with no way
+    // to type was a dead end: the address bar opens on it, empty, and Enter
+    // navigates that tab.
+    #[test]
+    fn a_new_browser_tab_opens_the_address_bar_empty() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].url = Some("https://a.example/one".into());
+        h.m.set_focus(Some(&id));
+        h.run("browser.tab.new");
+        assert!(h.m.omni.open);
+        assert_eq!(h.m.omni.query, "");
+        assert_eq!(h.m.omni.target.as_deref(), Some(id.as_str()));
+        h.m.omni_type("b.example");
+        h.m.omni_enter();
+        let card = h.m.card(&id).unwrap();
+        assert_eq!(card.tabs.len(), 2);
+        assert_eq!(card.url.as_deref(), Some("https://b.example"));
+    }
+
+    #[test]
+    fn the_zoom_chords_zoom_a_browser_page_locked_or_not() {
+        for locked in [false, true] {
+            let mut h = Harness::new();
+            let id = h.m.cards[0].id.clone();
+            h.m.cards[0].kind = CardKind::Browser;
+            h.m.cards[0].locked = locked;
+            h.m.set_focus(Some(&id));
+            for (chord, up) in [("cmd+=", true), ("cmd+-", false)] {
+                assert_eq!(
+                    resolve_chord(&h.m, chord).as_deref(),
+                    Some(if up {
+                        "browser.zoom.in"
+                    } else {
+                        "browser.zoom.out"
+                    })
+                );
+            }
+            h.run("browser.zoom.in");
+            assert!(
+                h.m.card(&id).unwrap().zoom.unwrap() > 1.0,
+                "locked={locked}"
+            );
+        }
+    }
+
     // Cmd+L on a browser card edits THAT card's address; anywhere else it
     // makes a card. The prefill is the whole reason the field is not empty.
     #[test]

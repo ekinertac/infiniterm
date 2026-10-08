@@ -155,6 +155,7 @@ impl AppView {
                 Pan::Pending(p)
             });
             if button == 1 {
+                self.middle_press = Some(p);
                 self.begin_pan(p);
             }
             return;
@@ -508,6 +509,17 @@ impl AppView {
         }
     }
 
+    /// A whole click, press and release, delivered to a page.
+    fn click_page(&mut self, id: &str, local: Point, e: &MouseUpEvent) {
+        let Some(body) = self.live_body(id) else {
+            return;
+        };
+        let action = body.mouse_down(local, e.button, &e.modifiers, 1);
+        body.mouse_up(local, e.button, &e.modifiers);
+        self.body_action(id, action);
+        self.perform_effects();
+    }
+
     pub fn mouse_up(&mut self, e: &MouseUpEvent) {
         if e.button == MouseButton::Left {
             self.left_on_canvas = false;
@@ -539,7 +551,28 @@ impl AppView {
         // Cmd+click open a link. Cmd must still be down: releasing it first
         // means a plain click, which would start a text selection.
         let was_click = matches!(self.pan, Some(Pan::Pending(_))) && e.modifiers.platform;
+        // A middle press that never travelled is a click too, and on a page it
+        // is how a link opens in a new tab; the pan took the press first.
+        let middle_click = e.button == MouseButton::Middle
+            && self
+                .middle_press
+                .take()
+                .is_some_and(|s| (p.x - s.x).hypot(p.y - s.y) < crate::DRAG_SLOP);
         self.pan = None;
+        if middle_click {
+            if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                eprintln!("[mouse] middle click without travel");
+            }
+            if let Hit::CardBody { id, local } = self.hit(p) {
+                if self.model.card(&id).is_some_and(|c| {
+                    use infiniterm_core::saved_layout::CardKind;
+                    matches!(c.kind, CardKind::Browser | CardKind::Editor)
+                }) {
+                    self.click_page(&id, local, e);
+                }
+            }
+            return;
+        }
         if was_click {
             // Cmd+click adds a card to the selection or takes it out
             // (`toggle_selected`); on the card you are alone in, it is the
@@ -559,6 +592,16 @@ impl AppView {
                     None => crate::body::BodyAction::None,
                 };
                 self.body_action(&id, action);
+                // A page opens a link on the release, not the press.
+                if self
+                    .model
+                    .card(&id)
+                    .is_some_and(|c| c.kind == infiniterm_core::saved_layout::CardKind::Browser)
+                {
+                    if let Some(body) = self.live_body(&id) {
+                        body.mouse_up(local, e.button, &e.modifiers);
+                    }
+                }
                 self.perform_effects();
             }
             return;

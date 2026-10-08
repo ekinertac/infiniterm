@@ -212,8 +212,12 @@ fn with_focused_browser(m: &mut Model, f: impl FnOnce(&mut Model, String)) {
 }
 
 pub fn register(r: &mut CommandRegistry<Model>) {
-    r.register("browser.tab.new", "Browser: new tab", |m| {
-        with_focused_browser(m, |m, id| m.browser_tab_open(&id, None));
+    r.register("browser.tab.new", "Browser: new tab…", |m| {
+        // A blank tab is no use to look at: the address bar opens on it.
+        with_focused_browser(m, |m, id| {
+            m.browser_tab_open(&id, None);
+            m.open_omnibox();
+        });
     });
     r.register("browser.tab.close", "Browser: close tab", |m| {
         with_focused_browser(m, |m, id| m.browser_tab_close(&id));
