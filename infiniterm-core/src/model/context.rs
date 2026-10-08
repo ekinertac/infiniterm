@@ -133,7 +133,7 @@ impl Model {
     /// of maximise rather than changing something you cannot see.
     pub fn apply_viewport(&mut self, next: Viewport) {
         self.selection.maximized = false;
-        self.framing = false;
+        self.stop_framing();
         self.effects.push(Effect::AnimateFit(next));
     }
 
@@ -189,6 +189,7 @@ impl Model {
     pub fn frame_card(&mut self, rect: Rect) {
         self.apply_viewport(self.fit_viewport(rect));
         self.framing = true;
+        self.framed_card = self.selection.focused_id.clone();
     }
 
     pub fn fit_group(&mut self, group_id: &str) {

@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-09
+
+- New: reading mode for terminal cards. Press Cmd+1 on a card that is already fitted: the canvas zooms to 150% (`ui.readZoom`) with the card's bottom edge at the bottom of the window, so you read the prompt and the newest lines at a larger size. Cmd+Up and Cmd+Down pan along the card, only while this mode is on and never past the card's edges. Typing and Enter work as usual and bring the view back to the bottom. Cmd+1 again or Cmd+2 leaves; so does panning or zooming by hand. The status bar says "reading" while it is on. `Canvas: read the focused card` is the command.
+
 ### 2026-10-08
 
 - New: `Card: slide left / right / up / down to the next card or slot` (Cmd+Ctrl+Alt+Arrow). After a resize leaves a gap, the card moves along its row or column until it is one gutter from the next card in line, or to the next grid slot when nothing is in the way. It never overlaps a card, and Cmd+Z puts it back.
