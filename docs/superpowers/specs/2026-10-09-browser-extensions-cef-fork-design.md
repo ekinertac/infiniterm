@@ -69,21 +69,23 @@ Not in scope: Widevine, passkeys, Safe Browsing, Translate, Sync, Payment Reques
 
 **Extension management.** `ift install-extension` stays. A new `ift extensions` lists installed ones and their ids. Updating an extension changes its version and, if needed, its id, so the stale service worker problem goes away (see Open questions).
 
-**DevTools.** See next section.
+**DevTools.** See the next section. It needs no patch.
 
 **Handlers the app still needs (no fork).** Downloads, file chooser, JS dialogs, permission prompts, HTTP auth, certificate errors, fullscreen. Each is a missing handler in `surface.rs`. They are separate tasks and are listed on the roadmap, not designed here.
 
 ## DevTools
 
-Today a card has none. Options:
+Today a card has none. Both paths below were tried on 2026-10-09 with a throwaway spike (not merged).
 
-1. **`ShowDevTools` with our own windowless client.** CEF opens DevTools as its own browser tied to the page and accepts a `CefClient` and window info for it, so we can render it into a texture like a normal surface. No port is opened. Inspect-element at a point is built in. Not verified: that a windowless DevTools browser renders correctly under Alloy style.
-2. **`remote_debugging_port` and a normal card** pointed at `http://127.0.0.1:<port>/devtools/inspector.html?ws=...`. Works with what we have. Costs an open localhost port for the whole session.
-3. **Raw protocol** (`ExecuteDevToolsMethod`, message observer), which `moat.rs` already uses. Not a UI. Useful for a console or network count in the footer.
+1. **`ShowDevTools` with a windowless client: does not work.** CEF logs "Windowless rendering is not supported for this DevTools window" (`chrome_browser_delegate.cc`) and opens a real native window, "DevTools - example.com/", outside the canvas. DevTools windows always use the Chrome style path, so a patch would not be small.
+2. **Remote debugging port and an ordinary card: works.** With `remote_debugging_port` set and the switch `--remote-allow-origins=http://127.0.0.1:<port>`, a browser card opened on `http://127.0.0.1:<port>/devtools/devtools_app.html?ws=127.0.0.1:<port>/devtools/page/<id>` shows the full DevTools (Elements, Console, Network and the rest), connected to the page. Without the allow-origins switch Chromium rejects the WebSocket and the log names the flag.
+3. **Raw protocol** (`ExecuteDevToolsMethod`, message observer): not a UI. Useful for a console or network count in the footer. `moat.rs` already uses it.
 
-We take option 1. Option 2 is the fallback if option 1 does not render. DevTools opens as a card beside the page's card (the command is `browser.devtools`, palette and a footer button), tied to that page. Closing the page closes it. Cmd+Alt+I is the default key, subject to the keymap's rules.
+We take option 2. The page's target id comes from `GET /json` on the port, matched by url; the `devtoolsFrontendUrl` in that list points to a hosted frontend on the internet, so we build the local URL ourselves. DevTools opens as a card beside the page's card (command `browser.devtools`, palette and a footer button), tied to that page. Closing the page closes it.
 
-A short spike comes first: open DevTools windowless on the current framework and see if it paints.
+The same list also shows the extensions' service workers and background pages, so the same card inspects an extension. That makes this the main way to debug the extension patches below.
+
+Security: an open debugging port lets any local program drive every page, with the cookies they hold. The port binds to loopback and the allow-origins switch names only our frontend's own origin, so a web page cannot attach. A local program still can. Recommendation: a setting `browser.devtools`, default off, read at launch, with a pick of a random free port per launch. The command explains how to turn it on when it is off. Open question below.
 
 ## Build and distribution
 
@@ -105,7 +107,7 @@ A short spike comes first: open DevTools windowless on the current framework and
 
 0. Baseline: build the unmodified source, check the toolchain, measure time, make a client distribution, run the app on it.
 1. P5 codecs. Check H.264 and AAC play. Smallest change, biggest user effect.
-2. DevTools spike, then DevTools card.
+2. DevTools card (path 2 above, already proven by the spike).
 3. P1 and P2. Check with `spikes/ext-probe` that `tabs.query` returns our tabs and `windows.create` opens no native window.
 4. P3 and the footer bar. Dark Reader's icon, badge and popup work.
 5. P4 and the rest, if needed.
@@ -117,6 +119,7 @@ Each phase ends with a check on screen with the driver, on a scratch instance.
 - A window id per card, or per workspace? The spec says per card. A workspace-wide window would make "active tab" cross-card and is harder to explain.
 - Does a locked and focused browser card decide the "last focused window", or the card with the app's focus? The spec says the focused card, locked or not.
 - Extension updates: change the id (installing under a new directory) or force the worker to reload. The probe showed the cache; the fix is not yet chosen.
+- DevTools port: default off with a setting and a restart, or on at every launch? Off is safer; on is easier to use. A CEF port cannot be opened after launch.
 - Whether to keep the prebuilt framework as a fallback path in the bundle script, for people who build the app from source without our CEF.
 
 ## Tests
