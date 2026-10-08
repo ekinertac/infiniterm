@@ -198,7 +198,8 @@ impl AppView {
                     .when(row_index > 0, |d| {
                         d.border_t_1().border_color(chrome.bar_border).mt_1()
                     })
-                    .text_size(px(PALETTE_SECTION_FONT_PX * ui))
+                    .font_weight(chrome.typography.bold.weight)
+                    .text_size(px(chrome.typography.size(PALETTE_SECTION_FONT_PX) * ui))
                     .text_color(chrome.text_faint)
                     .child(section.heading.clone()),
             );
@@ -278,7 +279,7 @@ impl AppView {
             .py_1()
             .border_t_1()
             .border_color(chrome.control_border)
-            .text_size(px(PALETTE_SECTION_FONT_PX * ui))
+            .text_size(px(chrome.typography.size(PALETTE_SECTION_FONT_PX) * ui))
             .text_color(chrome.text_faint)
             .child(key_cap_box("enter", chrome, ui))
             .child(div().child("open"));
@@ -326,8 +327,9 @@ impl AppView {
                             .border_color(chrome.overlay_border)
                             .rounded_md()
                             .shadow_lg()
-                            .font_family("Menlo")
-                            .text_size(px(OVERLAY_BODY_FONT_PX * ui))
+                            .font_family(chrome.typography.family.clone())
+                            .font_weight(chrome.typography.regular.weight)
+                            .text_size(px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui))
                             .text_color(chrome.text)
                             // The sheet swallows the click that would
                             // otherwise reach the backdrop and close it.
@@ -488,8 +490,9 @@ impl AppView {
             .border_color(chrome.overlay_border)
             .rounded_md()
             .shadow_lg()
-            .font_family("Menlo")
-            .text_size(px(OVERLAY_BODY_FONT_PX * ui))
+            .font_family(chrome.typography.family.clone())
+            .font_weight(chrome.typography.regular.weight)
+            .text_size(px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui))
             .child(
                 div()
                     .flex_1()
@@ -511,7 +514,7 @@ impl AppView {
             )
             .child(
                 div()
-                    .text_size(px(PALETTE_SECTION_FONT_PX * ui))
+                    .text_size(px(chrome.typography.size(PALETTE_SECTION_FONT_PX) * ui))
                     .text_color(if matches == 0 && !query.is_empty() {
                         chrome.warn
                     } else {

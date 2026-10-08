@@ -269,6 +269,28 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["The app's own chrome: labels, the status bar, dimming."],
     ),
     (
+        "ui.fontFamily",
+        &[
+            "Font family for the app's own chrome. .SystemUIFont, the default, is the",
+            "platform's native app UI font. A comma-separated list uses the first real name.",
+        ],
+    ),
+    (
+        "ui.fontSize",
+        &[
+            "Base chrome size in screen pixels, before the Cmd+Shift+= multiplier.",
+            "Workspace tabs, card tab strips, palettes and dialogs derive their sizes from it.",
+        ],
+    ),
+    (
+        "ui.fontWeight",
+        &["Normal chrome weight: \"normal\", \"bold\", or a number from 100 to 900."],
+    ),
+    (
+        "ui.fontWeightBold",
+        &["Emphasised chrome weight: \"normal\", \"bold\", or a number from 100 to 900."],
+    ),
+    (
         "ui.inactiveDim",
         &[
             "How much an unfocused card's text is dimmed, 0 to 1. Painted as a scrim over",

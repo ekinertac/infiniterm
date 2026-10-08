@@ -248,20 +248,6 @@ pub fn term_font(family: &str) -> gpui::Font {
     f
 }
 
-/// `"normal"`, `"bold"`, or a number 100 to 900, as CSS spells weights.
-pub fn weight_of(s: &str) -> FontWeight {
-    match s.trim() {
-        "bold" => FontWeight::BOLD,
-        "normal" | "" => FontWeight::NORMAL,
-        n => n
-            .parse::<f32>()
-            .ok()
-            .filter(|w| (100. ..=900.).contains(w))
-            .map(FontWeight)
-            .unwrap_or(FontWeight::NORMAL),
-    }
-}
-
 impl TerminalBody {
     pub fn new(
         metrics: &Metrics,
@@ -1892,15 +1878,5 @@ mod tests {
         assert!(b.draws_bars());
         b.set_crowded(false);
         assert!(!b.draws_bars());
-    }
-
-    #[test]
-    fn weights_are_spelled_as_css_spells_them() {
-        assert_eq!(weight_of("normal"), FontWeight::NORMAL);
-        assert_eq!(weight_of("bold"), FontWeight::BOLD);
-        assert_eq!(weight_of("800"), FontWeight(800.));
-        assert_eq!(weight_of(" 600 "), FontWeight(600.));
-        assert_eq!(weight_of("heavy"), FontWeight::NORMAL);
-        assert_eq!(weight_of("1000"), FontWeight::NORMAL);
     }
 }

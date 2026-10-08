@@ -245,6 +245,13 @@ impl Config {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ui {
+    /// The app chrome's typeface. `.SystemUIFont` is gpui's platform-native
+    /// UI font alias, which is Apple's app font on macOS.
+    pub font_family: String,
+    /// General chrome size in screen pixels before the UI-scale multiplier.
+    pub font_size: f64,
+    pub font_weight: String,
+    pub font_weight_bold: String,
     /// How much of an inactive card's text is dimmed away, 0 to 1.
     pub inactive_dim: f64,
     /// How much the whole canvas is dimmed while another app is in front.
@@ -384,6 +391,10 @@ pub fn default_config() -> Config {
             engines: vec![],
         },
         ui: Ui {
+            font_family: ".SystemUIFont".into(),
+            font_size: 13.,
+            font_weight: "normal".into(),
+            font_weight_bold: "bold".into(),
             inactive_dim: 0.45,
             unfocused_dim: 0.4,
             window_opacity: 1.,
@@ -666,6 +677,10 @@ pub fn merge_config(raw: &Value) -> Config {
                 .unwrap_or_default(),
         },
         ui: Ui {
+            font_family: str_(u.get("fontFamily"), &d.ui.font_family),
+            font_size: num(u.get("fontSize"), d.ui.font_size, 6., 64.),
+            font_weight: str_(u.get("fontWeight"), &d.ui.font_weight),
+            font_weight_bold: str_(u.get("fontWeightBold"), &d.ui.font_weight_bold),
             inactive_dim: num(u.get("inactiveDim"), d.ui.inactive_dim, 0., 1.),
             unfocused_dim: num(u.get("unfocusedDim"), d.ui.unfocused_dim, 0., 1.),
             window_opacity: num(u.get("windowOpacity"), d.ui.window_opacity, 0.1, 1.),
@@ -981,6 +996,45 @@ mod tests {
         assert_eq!(c.ui.card_label_size, 22.);
         assert_eq!(c.ui.group_label_size, 64.);
         assert_eq!(c.ui.status_bar_size, 6.);
+    }
+
+    #[test]
+    fn ui_typography_defaults_to_the_system_font_and_clamps_its_base_size() {
+        let u = m(json!({})).ui;
+        assert_eq!(u.font_family, ".SystemUIFont");
+        assert_eq!(u.font_size, 13.);
+        assert_eq!(u.font_weight, "normal");
+        assert_eq!(u.font_weight_bold, "bold");
+
+        let c = m(json!({
+            "ui.fontFamily": "JetBrainsMono Nerd Font",
+            "ui.fontSize": 999,
+            "ui.fontWeight": "450",
+            "ui.fontWeightBold": "750"
+        }));
+        assert_eq!(c.ui.font_family, "JetBrainsMono Nerd Font");
+        assert_eq!(c.ui.font_size, 64.);
+        assert_eq!(c.ui.font_weight, "450");
+        assert_eq!(c.ui.font_weight_bold, "750");
+        assert_eq!(m(json!({"ui.fontSize": 0})).ui.font_size, 6.);
+        assert_eq!(
+            m(json!({"ui.fontFamily": "  "})).ui.font_family,
+            ".SystemUIFont"
+        );
+    }
+
+    #[test]
+    fn ui_and_terminal_typography_are_independent() {
+        let c = m(json!({
+            "ui.fontFamily": "SF Pro",
+            "ui.fontSize": 16,
+            "terminal.fontFamily": "JetBrainsMono Nerd Font",
+            "terminal.fontSize": 20
+        }));
+        assert_eq!(c.ui.font_family, "SF Pro");
+        assert_eq!(c.ui.font_size, 16.);
+        assert_eq!(c.terminal.font_family, "JetBrainsMono Nerd Font");
+        assert_eq!(c.terminal.font_size, 20.);
     }
 
     #[test]

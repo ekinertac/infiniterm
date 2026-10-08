@@ -26,8 +26,7 @@
 use crate::body::{BodyAction, CardBody};
 use crate::tab_strip::{paint_strip, strip_hit, strip_world_h, StripStyle};
 use gpui::{
-    fill, font, point, px, size, App, Bounds, CursorStyle, Hsla, Keystroke, Pixels, RenderImage,
-    Window,
+    fill, point, px, size, App, Bounds, CursorStyle, Hsla, Keystroke, Pixels, RenderImage, Window,
 };
 use image::{Frame as ImageFrame, RgbaImage};
 use infiniterm_browser::{Button, Mods, Surface};
@@ -42,8 +41,6 @@ const DEVICE_SCALE_STEPS_PER_UNIT: f64 = 2.;
 /// CEF is never asked to render past this device scale: a sanity ceiling
 /// on how many pixels a zoomed-in browser card can demand.
 const DEVICE_SCALE_MAX: f64 = 3.;
-/// The "loading"/"unavailable" placeholder text's font size.
-const STATUS_FONT_PX: f64 = 13.;
 /// The placeholder text's inset from the card's corner.
 const STATUS_TEXT_PAD_PX: f64 = 12.;
 /// The placeholder text's line height, looser than its font size.
@@ -155,9 +152,8 @@ pub struct BrowserBody {
     pub text: Hsla,
     /// The strip's colours and font, `tab_strip.rs`'s shared shape: the
     /// editor's tab strip is the same struct, so the two look and size
-    /// alike (`terminal.fontSize`, not a strip-only constant).
+    /// alike under the UI typography settings.
     pub style: StripStyle,
-    pub font_family: String,
     dirty: bool,
     pub popups: Vec<String>,
     /// A right-click since the last drain, for `browsers.rs` to turn into
@@ -221,7 +217,6 @@ impl BrowserBody {
             card_bg: gpui::rgb(0x0e101a).into(),
             text: gpui::rgb(0xb9c4d2).into(),
             style,
-            font_family: "Menlo".into(),
             dirty: true,
             popups: vec![],
             context_menu: None,
@@ -571,7 +566,7 @@ impl CardBody for BrowserBody {
                 }
             }
             None => {
-                let font_size = px((STATUS_FONT_PX * scale) as f32);
+                let font_size = px((self.style.font_px * scale) as f32);
                 if font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32) {
                     let text = self
                         .active_tab()
@@ -581,7 +576,7 @@ impl CardBody for BrowserBody {
                         window,
                         &text,
                         font_size,
-                        &font(self.font_family.clone()),
+                        &self.style.regular,
                         self.text,
                     );
                     let _ = line.paint(
@@ -605,8 +600,7 @@ impl CardBody for BrowserBody {
         }
         // The strip, painted LAST so it sits over the page rather than
         // under it: shared with the editor's strip, so the two look and
-        // size alike (the font is `terminal.fontSize`, times `ui_scale`,
-        // times the zoom, not a strip-only constant).
+        // size alike (`ui.fontSize`, times `ui_scale`, times the zoom).
         let labels: Vec<String> = self.tabs.iter().map(|t| tab_label(t).to_string()).collect();
         paint_strip(
             bounds,
@@ -843,7 +837,12 @@ fn test_strip_style() -> StripStyle {
         active_bg: gpui::black(),
         text_bright: gpui::white(),
         text_muted: gpui::white(),
-        font_family: "Menlo".into(),
+        regular: gpui::font("Menlo"),
+        bold: {
+            let mut font = gpui::font("Menlo");
+            font.weight = gpui::FontWeight::BOLD;
+            font
+        },
         font_px: 14.,
     }
 }

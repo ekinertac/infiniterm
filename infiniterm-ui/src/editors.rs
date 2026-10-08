@@ -17,7 +17,7 @@ use crate::tab_strip::StripStyle;
 use crate::page_body::{PageBody, PageColors};
 use crate::transcript_body::{TranscriptBody, TranscriptColors};
 use crate::AppView;
-use gpui::Window;
+use gpui::{px, TextRun, Window};
 use infiniterm_core::config::Wrap;
 use infiniterm_core::editor_theme::{editor_colors, syntax_rules, Chrome as EditorChrome};
 use infiniterm_core::grid::Size;
@@ -77,9 +77,24 @@ impl AppView {
             active_bg: self.chrome.row_selected,
             text_bright: self.chrome.text_bright,
             text_muted: self.chrome.text_muted,
-            font_family: crate::terminals::family_of(&cfg.terminal.font_family),
-            font_px: cfg.terminal.font_size,
+            regular: self.chrome.typography.regular.clone(),
+            bold: self.chrome.typography.bold.clone(),
+            font_px: self.chrome.typography.font_size,
         };
+        let status_probe = window.text_system().shape_line(
+            "M".into(),
+            px(style.font_px as f32),
+            &[TextRun {
+                len: 1,
+                font: style.regular.clone(),
+                color: gpui::black(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }],
+            None,
+        );
+        let status_cell_w = f32::from(status_probe.width) as f64;
         let ui_scale = self.model.ui_scale as f32;
         let now = crate::now_ms();
         let cards: Vec<_> = self
@@ -146,6 +161,15 @@ impl AppView {
             }
             if body.metrics != metrics {
                 body.metrics = metrics.clone();
+                body.mark_dirty();
+            }
+            if body.status_font != style.regular
+                || body.status_font_px != style.font_px
+                || body.status_cell_w != status_cell_w
+            {
+                body.status_font = style.regular.clone();
+                body.status_font_px = style.font_px;
+                body.status_cell_w = status_cell_w;
                 body.mark_dirty();
             }
             if body.colors != colors || body.rules != rules {

@@ -281,6 +281,21 @@ mod tests {
     }
 
     #[test]
+    fn ui_typography_settings_are_completed_with_defaults_and_docs() {
+        let o = settings("{\n  \"ui.font").unwrap();
+        for key in [
+            "ui.fontFamily",
+            "ui.fontSize",
+            "ui.fontWeight",
+            "ui.fontWeightBold",
+        ] {
+            let item = o.items.iter().find(|item| item.label == key).unwrap();
+            assert!(!item.detail.is_empty(), "{key} has no default");
+            assert!(!item.doc.is_empty(), "{key} has no documentation");
+        }
+    }
+
+    #[test]
     fn letters_without_a_dot_match_anywhere_in_the_key() {
         assert_eq!(labels(&settings("{ \"fitpad").unwrap())[0], "ui.fitPadding");
     }

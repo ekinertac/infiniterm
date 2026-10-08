@@ -8,13 +8,18 @@
 //! selects it (the tab's own mouse-down), so dragging the tab you are not on
 //! also switches to it.
 
-use gpui::{div, px, Context, Hsla, IntoElement, ParentElement, Render, Styled, Window};
+use gpui::{
+    div, px, Context, FontWeight, Hsla, IntoElement, ParentElement, Render, SharedString, Styled,
+    Window,
+};
 
 /// The workspace being dragged.
 #[derive(Clone)]
 pub struct DraggedTab {
     pub id: String,
     pub name: String,
+    pub font_family: SharedString,
+    pub font_weight: FontWeight,
     pub font_px: f32,
     pub bg: Hsla,
     pub fg: Hsla,
@@ -32,6 +37,8 @@ impl Render for TabGhost {
             .rounded_sm()
             .bg(d.bg)
             .text_color(d.fg)
+            .font_family(d.font_family.clone())
+            .font_weight(d.font_weight)
             .text_size(px(d.font_px))
             .child(d.name.clone())
     }

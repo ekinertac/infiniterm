@@ -27,7 +27,7 @@ use crate::body::{BodyAction, CardBody};
 use crate::field::{Edit, Field};
 use crate::terminal_body::Metrics;
 use gpui::{
-    fill, outline, point, px, size, App, Bounds, ClipboardItem, Corners, FontStyle, Hsla,
+    fill, outline, point, px, size, App, Bounds, ClipboardItem, Corners, Font, FontStyle, Hsla,
     ImageAssetLoader, Keystroke, Pixels, Resource, SharedString, TextRun, Window,
 };
 use infiniterm_core::complete::{provider_for, Offer, Provider};
@@ -253,6 +253,11 @@ pub struct EditorBody {
     pub colors: EditorColors,
     pub rules: Vec<SyntaxRule>,
     pub metrics: Metrics,
+    /// App chrome typography for the editor's own status bar. Buffer text,
+    /// search and completion remain on terminal typography.
+    pub status_font: Font,
+    pub status_font_px: f64,
+    pub status_cell_w: f64,
     pub blink: bool,
     blink_epoch: f64,
     painted_phase: bool,
@@ -356,6 +361,9 @@ impl EditorBody {
             },
             rules: vec![],
             metrics: metrics.clone(),
+            status_font: metrics.font(),
+            status_font_px: metrics.font_px,
+            status_cell_w: metrics.cell_w,
             blink: true,
             blink_epoch: 0.,
             painted_phase: true,
@@ -1044,7 +1052,7 @@ impl EditorBody {
     }
 
     fn status_h(&self) -> f64 {
-        self.line_h() * STATUS_HEIGHT_LINES
+        self.status_font_px * self.metrics.line_height * STATUS_HEIGHT_LINES
     }
 
     /// The facts the status bar reports (`infiniterm_editor::status`).
@@ -1101,9 +1109,7 @@ impl EditorBody {
 
     fn status_cols(&self, world: Size) -> usize {
         let (_, size) = self.text_area(world);
-        ((size.w - PAD_X * 2.) / self.metrics.cell_w)
-            .floor()
-            .max(0.) as usize
+        ((size.w - PAD_X * 2.) / self.status_cell_w).floor().max(0.) as usize
     }
 
     /// The column of the bar under `local`, or `None` when it is not on the bar.
@@ -1117,7 +1123,7 @@ impl EditorBody {
             return None;
         }
         Some(
-            ((local.x - o.x - PAD_X) / self.metrics.cell_w)
+            ((local.x - o.x - PAD_X) / self.status_cell_w)
                 .floor()
                 .max(0.) as usize,
         )
@@ -1226,7 +1232,7 @@ impl EditorBody {
         }
     }
 
-    fn paint_status(&self, bounds: Bounds<Pixels>, scale: f64, window: &mut Window, cx: &mut App) {
+    fn paint_status(&self, bounds: Bounds<Pixels>, scale: f64, window: &mut Window, _cx: &mut App) {
         let s = |v: f64| px((v * scale) as f32);
         let (o, area) = self.text_area(self.world);
         let bar = Bounds::new(
@@ -1246,8 +1252,9 @@ impl EditorBody {
         ));
         let line = self.status_line(self.status_cols(self.world));
         let text: String = line.iter().collect();
-        let font_size = px((self.metrics.font_px * scale) as f32);
-        let line_h = px((self.line_h() * scale) as f32);
+        let font_size = px((self.status_font_px * scale) as f32);
+        let line_h = px((self.status_font_px * self.metrics.line_height * scale) as f32);
+        let cell_w = s(self.status_cell_w);
         let x0 = bar.origin.x + s(PAD_X);
         let y0 = bar.origin.y + (bar.size.height - line_h) / 2.;
         if let Some((a, b)) = self.status_sel {
@@ -1255,8 +1262,8 @@ impl EditorBody {
             if b > a {
                 window.paint_quad(fill(
                     Bounds::new(
-                        point(x0 + s(self.metrics.cell_w * a as f64), y0),
-                        size(s(self.metrics.cell_w * (b - a) as f64), line_h),
+                        point(x0 + cell_w * a as f32, y0),
+                        size(cell_w * (b - a) as f32, line_h),
                     ),
                     hex(&self.colors.selection),
                 ));
@@ -1264,19 +1271,46 @@ impl EditorBody {
         }
         let run = TextRun {
             len: text.len(),
-            font: self.metrics.font(),
+            font: self.status_font.clone(),
             color: hex(&self.colors.gutter),
             background_color: None,
             underline: None,
             strikethrough: None,
         };
-        // Painted cell by cell from one shape, like the terminal, so the
-        // selection's columns line up with the glyphs.
+        let slots = fixed_cell_slots(&text);
         let shaped =
             window
                 .text_system()
                 .shape_line(SharedString::from(text), font_size, &[run], None);
-        let _ = shaped.paint(point(x0, y0), line_h, window, cx);
+        // A system UI font is proportional, while this bar deliberately
+        // lays out in selectable cells. Shape once, then anchor each
+        // character in its own cell as the terminal painter does.
+        let mut first_x: Vec<Option<Pixels>> = vec![None; line.len()];
+        let padding_top = (line_h - shaped.ascent - shaped.descent) / 2.;
+        let baseline = y0 + padding_top + shaped.ascent;
+        for run in &shaped.runs {
+            for glyph in &run.glyphs {
+                let Some(&slot) = slots.get(glyph.index) else {
+                    continue;
+                };
+                let anchor = *first_x[slot].get_or_insert(glyph.position.x);
+                let at = point(
+                    x0 + cell_w * slot as f32 + (glyph.position.x - anchor),
+                    baseline + glyph.position.y,
+                );
+                let _ = if glyph.is_emoji {
+                    window.paint_emoji(at, run.font_id, glyph.id, font_size)
+                } else {
+                    window.paint_glyph(
+                        at,
+                        run.font_id,
+                        glyph.id,
+                        font_size,
+                        hex(&self.colors.gutter),
+                    )
+                };
+            }
+        }
     }
 
     fn cols_visible(&self, world: Size) -> usize {
@@ -3067,7 +3101,7 @@ impl CardBody for EditorBody {
         }
         if self.selecting_status {
             let (o, _) = self.text_area(self.world);
-            let col = ((local.x - o.x - PAD_X) / self.metrics.cell_w)
+            let col = ((local.x - o.x - PAD_X) / self.status_cell_w)
                 .floor()
                 .max(0.) as usize;
             if let Some((a, _)) = self.status_sel {
@@ -3121,6 +3155,14 @@ fn char_to_byte(text: &str, ch: usize) -> usize {
         .nth(ch)
         .map(|(i, _)| i)
         .unwrap_or(text.len())
+}
+
+fn fixed_cell_slots(text: &str) -> Vec<usize> {
+    let mut slots = vec![0; text.len()];
+    for (slot, (start, ch)) in text.char_indices().enumerate() {
+        slots[start..start + ch.len_utf8()].fill(slot);
+    }
+    slots
 }
 
 /// Makes `runs` describe exactly `text`: the lengths must sum to its byte
@@ -3250,6 +3292,11 @@ mod tests {
         assert_eq!(field(22), "Ln 3, Col 9");
         assert_eq!(field(36), "UTF-8");
         assert_eq!(field_around(&line, 15), (15, 15), "a gap selects nothing");
+    }
+
+    #[test]
+    fn fixed_cell_slots_map_every_byte_to_its_character() {
+        assert_eq!(fixed_cell_slots("aé中"), [0, 1, 1, 2, 2, 2]);
     }
 
     fn run(len: usize) -> TextRun {

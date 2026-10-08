@@ -24,6 +24,7 @@ mod editor_body;
 mod editor_tabs;
 mod editors;
 mod field;
+mod fonts;
 mod fullscreen;
 mod icon_font;
 mod ime;
@@ -71,14 +72,40 @@ impl AppView {
     /// The title bar's height under the interface multiplier. The traffic
     /// lights stay where macOS put them; the bar grows around them.
     pub fn titlebar_h(&self) -> f32 {
-        TITLEBAR_H * self.model.ui_scale as f32
+        titlebar_base_h(self.model.config.ui.font_size as f32) * self.model.ui_scale as f32
     }
 
     pub fn statusbar_h(&self) -> f32 {
-        STATUSBAR_H * self.model.ui_scale as f32
+        statusbar_base_h(self.model.config.ui.status_bar_size as f32) * self.model.ui_scale as f32
     }
 }
 pub const STATUSBAR_H: f32 = 22.;
+
+fn titlebar_base_h(font_size: f32) -> f32 {
+    TITLEBAR_H.max(font_size * 2.4)
+}
+
+fn statusbar_base_h(font_size: f32) -> f32 {
+    STATUSBAR_H.max(font_size * 2.)
+}
+
+#[cfg(test)]
+mod chrome_height_tests {
+    use super::{statusbar_base_h, titlebar_base_h, STATUSBAR_H, TITLEBAR_H};
+
+    #[test]
+    fn default_type_sizes_preserve_existing_bar_heights() {
+        assert_eq!(titlebar_base_h(13.), TITLEBAR_H);
+        assert_eq!(statusbar_base_h(11.), STATUSBAR_H);
+    }
+
+    #[test]
+    fn large_type_grows_bars_instead_of_clipping() {
+        assert!(titlebar_base_h(32.) > TITLEBAR_H);
+        assert!(statusbar_base_h(32.) > STATUSBAR_H);
+    }
+}
+
 /// Movement below this is a click with a shaky hand, not a drag.
 pub const DRAG_SLOP: f64 = 4.;
 /// The edge band of a card that moves or resizes it, in screen pixels.
