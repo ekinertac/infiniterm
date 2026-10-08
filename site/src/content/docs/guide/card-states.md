@@ -16,7 +16,7 @@ A shell doing nothing has no colour. Four hues rather than shades of one, becaus
 
 ## Agents
 
-Claude Code, Pi, Codex and OpenCode report through hooks (`ift install-claude-hooks`, `install-pi-hooks`, `install-codex-hooks`, `install-opencode-hooks`; see [Install](../install/#agent-hooks)). The card goes violet when a turn starts, yellow when the agent asks for permission or asks you something, and green when the turn ends.
+Claude Code, Pi, Codex, OpenCode and Cursor report through hooks (`ift install-claude-hooks`, `install-pi-hooks`, `install-codex-hooks`, `install-opencode-hooks`, `install-cursor-hooks`; see [Install](../install/#agent-hooks)). The card goes violet when a turn starts, yellow when the agent asks for permission or asks you something, and green when the turn ends.
 
 What each agent reports differs a little:
 
@@ -26,8 +26,9 @@ What each agent reports differs a little:
 | Pi | yes | its prompts | no | yes |
 | Codex | yes | approval prompts only | no | yes |
 | OpenCode | yes | permission prompts and questions | yes | yes |
+| Cursor | yes | no | yes | yes |
 
-Pi and Codex send nothing when a turn fails, so a failed turn there does not turn the card red; Codex's questions do not show as waiting either. OpenCode keeps its sessions in a database, so it has no transcript card (`Cmd I`).
+Pi and Codex send nothing when a turn fails, so a failed turn there does not turn the card red; Codex's questions do not show as waiting either. Cursor has no hook while an approval dialog is open, so the card stays violet until you allow or deny the command. OpenCode keeps its sessions in a database, so it has no transcript card (`Cmd I`).
 
 Green is news, so it does not stay: once you have looked at a done card for a moment (about a second and a half) or typed into it, it goes grey. "Card: clear the state colour" in the palette greys any card's ring and dot by hand once you have seen what it had to say.
 

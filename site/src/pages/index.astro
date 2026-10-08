@@ -17,6 +17,7 @@ import claudeLogo from '../assets/agents/claude.svg?raw';
 import openaiLogo from '../assets/agents/openai.svg?raw';
 import opencodeLogo from '../assets/agents/opencode.svg?raw';
 import piLogo from '../assets/agents/pi.svg?raw';
+import cursorLogo from '../assets/agents/cursor.svg?raw';
 
 const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
 // One app, every feature, free for personal use; working with it needs a
@@ -35,6 +36,7 @@ const agents = [
   { name: 'Codex', svg: openaiLogo },
   { name: 'OpenCode', svg: opencodeLogo },
   { name: 'Pi', svg: piLogo },
+  { name: 'Cursor', svg: cursorLogo },
 ];
 
 // The six features under the screenshot: what a user does with the app,
@@ -42,7 +44,7 @@ const agents = [
 const features = [
   {
     title: 'See which agent needs you',
-    body: 'Claude Code, Codex, OpenCode and Pi report through hooks, any zsh command through the shell. The border says working, waiting on you, failed or done.',
+    body: 'Claude Code, Codex, OpenCode, Pi and Cursor report through hooks, any zsh command through the shell. The border says working, waiting on you, failed or done.',
     proof: 'ift install-claude-hooks',
   },
   {
