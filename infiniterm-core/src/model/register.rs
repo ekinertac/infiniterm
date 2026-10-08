@@ -961,6 +961,56 @@ mod tests {
     // The way back up: a quarter kept after Cmd+Ctrl+W grows to the
     // default size from its corner when the space is free, and stays put
     // with a word when a card is in the way.
+    // A resize keeps the top-left corner, so a smaller card sits far from its
+    // neighbour; sliding closes the gap from the keyboard, undoably.
+    #[test]
+    fn a_card_slides_into_the_gap_a_resize_left() {
+        let mut h = Harness::new();
+        let left = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let right = h.focused().id.clone();
+        assert_ne!(left, right);
+        // Shrink the right card to a half and slide it back toward the left one.
+        h.run("card.size.reset");
+        let before = h.m.card(&right).unwrap().rect;
+        let anchor = h.m.card(&left).unwrap().rect;
+        // Pull the card away to make a gap, as a resize of the left one would.
+        h.m.card_mut(&right).unwrap().rect.x += 400.;
+        h.m.set_focus(Some(&right));
+        h.run("card.slide.left");
+        let slid = h.m.card(&right).unwrap().rect;
+        let (l, r) = if slid.x > anchor.x {
+            (anchor, slid)
+        } else {
+            (slid, anchor)
+        };
+        assert!(
+            (r.x - (l.x + l.w) - h.m.gap()).abs() < 1.,
+            "one gutter apart: {anchor:?} {slid:?} (was {before:?})"
+        );
+        // Snug now: a second slide says so and moves nothing.
+        let at = h.m.card(&right).unwrap().rect;
+        h.run("card.slide.left");
+        assert_eq!(h.m.card(&right).unwrap().rect, at);
+        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("nowhere")));
+        // Cmd+Z puts it back where the gap was.
+        h.run("layout.undo");
+        assert!(h.m.card(&right).unwrap().rect.x > at.x);
+    }
+
+    #[test]
+    fn the_slide_chords_are_bound_and_the_commands_exist() {
+        let h = Harness::new();
+        for dir in ["left", "right", "up", "down"] {
+            let id = format!("card.slide.{dir}");
+            assert!(h.r.get(&id).is_some(), "{id} is registered");
+            assert!(
+                h.m.keymap.iter().any(|(_, bound)| *bound == id),
+                "{id} has a default chord"
+            );
+        }
+    }
+
     #[test]
     fn full_size_restores_the_default_when_the_space_is_free() {
         let mut h = Harness::new();

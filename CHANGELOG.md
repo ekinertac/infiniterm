@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-08
+
+- New: `Card: slide left / right / up / down to the next card or slot` (Cmd+Ctrl+Alt+Arrow). After a resize leaves a gap, the card moves along its row or column until it is one gutter from the next card in line, or to the next grid slot when nothing is in the way. It never overlaps a card, and Cmd+Z puts it back.
+
 ## 0.5.10 (build 775), 2026-10-08
 
 ### Window
