@@ -79,12 +79,24 @@ pub fn seed(data: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+// A non-null handler selects CEF's external pump instead of the native UI pump.
+// GPUI's existing 4 ms task supplies the message-loop work.
+wrap_browser_process_handler! {
+    struct ExternalPumpBuilder;
+    impl BrowserProcessHandler {}
+}
+
 wrap_app! {
     pub struct AppBuilder {
         extensions: Vec<String>,
+        external_pump: BrowserProcessHandler,
     }
 
     impl App {
+        fn browser_process_handler(&self) -> Option<BrowserProcessHandler> {
+            Some(self.external_pump.clone())
+        }
+
         fn on_before_command_line_processing(&self, _process_type: Option<&CefStringUtf16>, command_line: Option<&mut CommandLine>) {
             let Some(cmd) = command_line else { return };
             cmd.append_switch(Some(&"no-startup-window".into()));
@@ -131,7 +143,7 @@ pub fn early() -> Result<Process, Unavailable> {
         .into_iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
-    let mut app = AppBuilder::new(extensions);
+    let mut app = AppBuilder::new(extensions, ExternalPumpBuilder::new());
     let ret = execute_process(
         Some(args.as_main_args()),
         Some(&mut app),
@@ -175,4 +187,24 @@ pub fn pump() {
 
 pub fn stop() {
     shutdown();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cef_app_exposes_a_stable_external_pump_handler() {
+        let app = AppBuilder::new(vec![], ExternalPumpBuilder::new());
+        let first = app
+            .browser_process_handler()
+            .expect("external pump requires a browser process handler");
+        let second = app
+            .browser_process_handler()
+            .expect("handler remains available");
+        assert_eq!(
+            ImplBrowserProcessHandler::get_raw(&first),
+            ImplBrowserProcessHandler::get_raw(&second),
+        );
+    }
 }

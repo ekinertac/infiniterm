@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-08
+
+- Fixed: dragging a window corner resizes the app on macOS 27 when the browser is enabled.
+
 ## 0.5.9 (build 767), 2026-10-08
 
 ### Right-click menus
