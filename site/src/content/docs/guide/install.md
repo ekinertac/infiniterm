@@ -96,5 +96,6 @@ The check is a plain GET of `latest.json` with nothing about you in it.
 - A first launch opens a "Start here" page and nothing else: `Cmd T` makes the first terminal beside it, and `Cmd Alt ←` comes back to it. "Help: open the welcome card" opens it again later.
 - `Cmd /` lists every shortcut, searchable.
 - "Help: open the docs" in the palette opens these pages inside the app, as a card with the page list beside it.
+- "Help: open the changelog" in the palette shows what changed in each release, newest first, as a page card beside the one you are on. After an update, that is where to see what is new.
 - `Cmd` + scroll zooms, `Cmd` + drag pans. Bare scroll and drag belong to the card under the pointer.
 - `Cmd 2` fits every card in the window, `Cmd 1` fits the focused one.

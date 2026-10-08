@@ -38,6 +38,8 @@ Comments and trailing commas are allowed. Every setting is on the [settings refe
 }
 ```
 
+A new `keybindings.json` starts with commented examples; delete the `//` to switch one on. They are another chord to leave a locked editor, turning off the single-Escape unlock, `F2` for go-to-line with a `when`, moving workspace tabs and stepping through themes from the keyboard, `Cmd O` to open a file and `Cmd Alt C` to start Claude Code.
+
 A binding set to `null` is removed, which gives the key back to the terminal. A chord must hold `cmd`, with two exceptions: `ctrl` plus a digit, and `ctrl+tab`. A terminal needs Ctrl, Alt and bare keys for itself, but Ctrl plus a digit mostly means nothing to a shell. (On an xterm-compatible terminal `Ctrl 3` sends Escape; if you live in vim, rebind it.) A third exception is a chord with a `when` that is false in a terminal, described next.
 
 ### Bindings that apply only sometimes

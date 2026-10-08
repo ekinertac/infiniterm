@@ -13,6 +13,7 @@ pub fn register_commands(r: &mut CommandRegistry<Model>) {
     super::groups_cmd::register(r);
     super::dev_cmd::register(r);
     super::tabs_cmd::register(r);
+    super::reading_cmd::register(r);
 }
 
 /// What the command trace says about each command: the card it acted on.
@@ -57,6 +58,15 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
     // (#269): it runs, or, with `command: null`, unbinds the chord here.
     if let Some(bound) = m.conditional_for(chord) {
         return bound;
+    }
+    // In reading mode Cmd+Up and Cmd+Down pan the view along the card; at every
+    // other time they are the program's (#313).
+    if m.reading.is_some() {
+        match chord {
+            "cmd+arrowup" => return Some("canvas.read.up".into()),
+            "cmd+arrowdown" => return Some("canvas.read.down".into()),
+            _ => {}
+        }
     }
     let card = m.focused();
     let kind = card.map(|c| c.kind);
@@ -723,6 +733,22 @@ mod tests {
         assert_eq!(h.m.cards.len(), 2, "a second run focuses the open one");
     }
 
+    #[test]
+    fn help_changelog_opens_the_card_once_beside_the_focused_one() {
+        let mut h = Harness::new();
+        let first = h.focused().rect;
+        h.run("help.changelog");
+        assert_eq!(h.m.cards.len(), 2);
+        assert_eq!(h.focused().kind, CardKind::Page);
+        let path = crate::changelog::changelog_path()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(h.focused().path.as_deref(), Some(path.as_str()));
+        assert!(h.focused().rect.x > first.x, "beside, not over");
+        h.run("help.changelog");
+        assert_eq!(h.m.cards.len(), 2, "a second run focuses the open one");
+    }
+
     // New cards take the first free slot AFTER the active card: beside it.
     #[test]
     fn a_new_card_opens_beside_the_active_one() {
@@ -1009,6 +1035,91 @@ mod tests {
                 "{id} has a default chord"
             );
         }
+    }
+
+    // Reading mode (#313): Cmd+1 on a fitted terminal card zooms to the card's
+    // bottom, Cmd+Up and Cmd+Down pan along it and only while it is on, typing
+    // returns to the bottom, Cmd+1 or Cmd+2 leaves.
+    #[test]
+    fn cmd1_on_a_fitted_terminal_card_enters_reading_mode() {
+        let mut h = Harness::new();
+        h.m.view_size = crate::grid::Size { w: 3840., h: 2000. };
+        let id = h.focused().id.clone();
+        h.m.set_focus(Some(&id));
+        // Cmd+Up is the program's until the mode is on.
+        assert_eq!(resolve_chord(&h.m, "cmd+arrowup"), None);
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.framing && h.m.reading.is_none());
+        let effects = h.run("canvas.zoom.fitCard");
+        let scale = h.m.config.ui.read_zoom;
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::AnimateFit(v) if v.scale == scale)),
+            "zoomed to ui.readZoom: {effects:?}"
+        );
+        assert!(h.m.reading.is_some());
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+arrowup").as_deref(),
+            Some("canvas.read.up")
+        );
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+arrowdown").as_deref(),
+            Some("canvas.read.down")
+        );
+
+        // Panning up moves toward the card's top, never past it.
+        let bottom = h.m.reading.as_ref().unwrap().y;
+        h.run("canvas.read.up");
+        let up = h.m.reading.as_ref().unwrap().y;
+        assert!(up < bottom);
+        for _ in 0..500 {
+            h.run("canvas.read.up");
+        }
+        let top = h.m.reading.as_ref().unwrap().y;
+        assert_eq!(top, h.m.reading.as_ref().unwrap().frame.lo);
+        // Typing goes back to the bottom and keeps the mode.
+        h.m.note_input();
+        assert_eq!(h.m.reading.as_ref().unwrap().y, bottom);
+        h.run("canvas.read.down");
+        assert_eq!(
+            h.m.reading.as_ref().unwrap().y,
+            bottom,
+            "already at the bottom"
+        );
+
+        // Cmd+1 leaves, back to the plain fit; Cmd+1 again is reading again.
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.reading.is_none() && h.m.framing);
+        assert_eq!(resolve_chord(&h.m, "cmd+arrowup"), None);
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.reading.is_some());
+        // Cmd+2 leaves too, and the keys are the program's again.
+        h.run("canvas.zoom.fitAll");
+        assert!(h.m.reading.is_none() && !h.m.framing);
+    }
+
+    #[test]
+    fn reading_mode_is_for_terminal_cards_and_a_hand_pan_leaves_it() {
+        let mut h = Harness::new();
+        h.m.view_size = crate::grid::Size { w: 3840., h: 2000. };
+        let id = h.focused().id.clone();
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.set_focus(Some(&id));
+        h.run("canvas.zoom.fitCard");
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.reading.is_none(), "an editor card never reads");
+        h.m.cards[0].kind = CardKind::Terminal;
+        h.run("canvas.read");
+        assert!(h.m.reading.is_some());
+        h.m.stop_framing(); // what a pan or a wheel zoom does
+        assert!(h.m.reading.is_none());
+        h.run("canvas.read.up");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("not in reading mode")));
     }
 
     #[test]

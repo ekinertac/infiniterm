@@ -272,6 +272,8 @@ pub struct Ui {
     /// Rounded card corners, in pixels at 100% zoom; 0 keeps them square (#235).
     pub card_radius: f64,
     /// Whether the canvas draws its grid (#96).
+    /// Canvas scale reading mode zooms to (#313): 1.5 is 150%.
+    pub read_zoom: f64,
     pub show_grid: bool,
     /// Screen pixels left around a card or cluster when it is fitted (#87).
     pub fit_padding: f64,
@@ -394,6 +396,7 @@ pub fn default_config() -> Config {
             window_color: String::new(),
             card_opacity: 1.,
             card_radius: 0.,
+            read_zoom: 1.5,
             show_grid: true,
             fit_padding: FIT_PADDING,
             fit_magnify: false,
@@ -693,6 +696,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 .to_string(),
             card_opacity: num(u.get("cardOpacity"), d.ui.card_opacity, 0.1, 1.),
             card_radius: num(u.get("cardRadius"), d.ui.card_radius, 0., 40.),
+            read_zoom: num(u.get("readZoom"), d.ui.read_zoom, 1.1, 4.),
             show_grid: bool_(u.get("showGrid"), d.ui.show_grid),
             fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
             fit_magnify: bool_(u.get("fitMagnify"), d.ui.fit_magnify),
@@ -1158,6 +1162,10 @@ mod tests {
 
     #[test]
     fn the_grid_is_on_unless_turned_off() {
+        assert_eq!(m(json!({})).ui.read_zoom, 1.5);
+        assert_eq!(m(json!({"ui.readZoom": 2})).ui.read_zoom, 2.);
+        assert_eq!(m(json!({"ui.readZoom": 9})).ui.read_zoom, 4.);
+        assert_eq!(m(json!({"ui.readZoom": 1})).ui.read_zoom, 1.1);
         assert!(m(json!({})).ui.show_grid);
         assert!(!m(json!({"ui.showGrid": false})).ui.show_grid);
         assert!(m(json!({"ui.showGrid": "no"})).ui.show_grid);

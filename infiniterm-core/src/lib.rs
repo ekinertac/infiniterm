@@ -8,6 +8,7 @@ pub mod viewport;
 pub mod grid;
 
 pub mod background;
+pub mod changelog;
 
 pub mod remote_identity;
 
@@ -89,6 +90,7 @@ pub mod palette;
 pub mod palette_usage;
 pub mod paths;
 pub mod prompt;
+pub mod reading;
 pub mod saved_layout;
 pub mod schema;
 pub mod schema_store;

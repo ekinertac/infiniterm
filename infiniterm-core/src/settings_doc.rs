@@ -345,6 +345,15 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.readZoom",
+        &[
+            "The canvas scale reading mode zooms to: 1.5 is 150%. Press Cmd+1 on a terminal card",
+            "that is already fitted: the view zooms to this scale with the card's bottom at the",
+            "window's bottom, and Cmd+Up and Cmd+Down pan along the card. Cmd+1 or Cmd+2 leaves.",
+            "Typing returns the view to the bottom. 1.1 to 4.",
+        ],
+    ),
+    (
         "ui.showGrid",
         &["Draw the canvas grid. Off leaves the canvas background plain."],
     ),

@@ -342,7 +342,7 @@ impl AppView {
             y: p.y,
             t: now_ms(),
         }];
-        self.model.framing = false;
+        self.model.stop_framing();
     }
 
     pub fn mouse_move(&mut self, e: &MouseMoveEvent) {
@@ -508,7 +508,7 @@ impl AppView {
         // Divide by scale so the content tracks the cursor exactly at any zoom.
         self.model.viewport.x -= (p.x - last.x) / scale;
         self.model.viewport.y -= (p.y - last.y) / scale;
-        self.model.framing = false;
+        self.model.stop_framing();
         self.model.dirty_layout = true;
         self.pan = Some(Pan::Dragging(p));
         let t = now_ms();
@@ -730,7 +730,7 @@ impl AppView {
             let vp = self.model.viewport;
             let next = (vp.scale * factor).clamp(MIN_SCALE, MAX_SCALE);
             self.model.viewport = anchored_viewport(world_pos_of(p, vp), p, next);
-            self.model.framing = false;
+            self.model.stop_framing();
             self.model.dirty_layout = true;
             return;
         }

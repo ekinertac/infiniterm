@@ -33,6 +33,7 @@ pub mod lifecycle;
 pub mod omni_cmd;
 pub mod palette_state;
 pub mod persist;
+pub mod reading_cmd;
 pub mod register;
 pub mod settings_in;
 pub mod tabs_cmd;
@@ -623,6 +624,12 @@ pub struct Model {
     /// Whether the view is FRAMING one card (`canvas.zoom.fitCard`): while
     /// it holds, moving focus re-fits the view instead of nudging.
     pub framing: bool,
+    /// The card `canvas.zoom.fitCard` framed, while framing holds: Cmd+1 on
+    /// it again enters reading mode.
+    pub framed_card: Option<String>,
+    /// Reading mode (`reading_cmd.rs`), set only while the view is on one
+    /// terminal card's bottom at `ui.readZoom`.
+    pub reading: Option<reading_cmd::Reading>,
     /// The scale an in-flight zoom is heading for, set by the animator, so a
     /// held key ramps from the target rather than the passing scale.
     pub pending_scale: Option<f64>,
@@ -745,6 +752,8 @@ impl Model {
             viewport: INITIAL_VIEWPORT,
             view_size: Size { w: 0., h: 0. },
             framing: false,
+            framed_card: None,
+            reading: None,
             pending_scale: None,
             ui_scale: 1.,
             usage: Usage::default(),
@@ -1084,6 +1093,9 @@ impl Model {
             v.typed = true;
         }
         self.promote_focus();
+        // Typing while reading: the view goes back to the bottom, where the
+        // prompt is.
+        self.read_to_bottom();
         // Typing into a done card is reading it.
         if let Some(id) = self
             .focused()
@@ -1351,7 +1363,7 @@ impl Model {
         self.viewport = entering.viewport;
         let remembered = entering.focused.clone();
         self.active_workspace = Some(id.to_string());
-        self.framing = false;
+        self.stop_framing();
         self.effects.push(Effect::CancelAnimation);
         let here = self.focused().is_some_and(|c| c.workspace_id == id);
         if !here {
