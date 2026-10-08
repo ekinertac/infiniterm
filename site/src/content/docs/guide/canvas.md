@@ -79,7 +79,7 @@ Several cards can be selected at once, and close, split, fit and group then act 
 - Dragging any selected card by its frame or label moves the whole selection.
 - `Cmd Alt Shift` + arrow moves the whole selection one block that way, as one piece: into free space, or trading places with the cards there. It refuses, with a notice, when that would split a card or land in another group. `Cmd Z` undoes it in one step.
 
-While a dialog, the palette, the address bar or the shortcuts panel is open, it keeps every Cmd and Ctrl shortcut to itself, so text shortcuts work in its field and nothing moves the canvas behind it. Their rows and buttons also take a click, and a click outside closes any of them, as `Escape` does.
+While a dialog, the palette, the address bar or the shortcuts panel is open, it keeps every Cmd and Ctrl shortcut to itself, so text shortcuts work in its field and nothing moves the canvas behind it. Their rows and buttons also take a click, and a click outside closes any of them, as `Escape` does. Anything you can click in them shows a hand pointer and lights its row.
 
 ## Groups and workspaces
 
@@ -98,6 +98,10 @@ With `"ui.workspaceIsolation": true`, `Ctrl Tab` walks only the current workspac
 Every card has a label in its corner: the name you gave it (`Cmd Shift R`), else the running process, else the directory. It also wears a number, `#7`, the lowest one free. `ift attach 7` reaches that card's shell from any terminal.
 
 The label sits top right by default. `"ui.cardLabelPosition"` moves it to `"top left"`, `"bottom left"` or `"bottom right"` (the words in either order); a card in an ssh session shows its ssh badge at the other end of the same edge.
+
+### Locking a browser card
+
+A page needs the keyboard for itself, so a browser card works like a locked editor. Click into the page, or press `Enter` on a card you arrived at with the arrows, and the keyboard is the page's: the ring turns the warning colour and the status bar says so. Chrome's own chords work then (`Cmd T`, `Cmd W`, `Cmd 1` to `Cmd 9` for tabs). Press `Escape` twice within 400 ms to let go; a single `Escape` goes to the page, which uses it. `Cmd Escape` lets go at once.
 
 ## The right-click menu
 
