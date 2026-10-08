@@ -17,7 +17,7 @@ export const featureGroups: FeatureGroup[] = [
     title: 'Agents and card states',
     items: [
       { text: 'Four border colours: working, waiting on you, failed, done.', href: 'guide/card-states/' },
-      { text: 'Claude Code, Codex, OpenCode and Pi report through hooks, installed with one command each.', href: 'guide/install/' },
+      { text: 'Claude Code, Codex, OpenCode, Pi and Cursor report through hooks, installed with one command each.', href: 'guide/install/' },
       { text: 'Any command in zsh reports too: a build that runs 5 seconds goes violet, then green or red.', href: 'guide/card-states/' },
       { text: 'Each workspace tab wears one dot per card, lit in that card\'s colour.', href: 'guide/canvas/#groups-and-workspaces' },
       { text: 'Done means unseen: a green card goes grey once you have looked at it.' },
@@ -98,6 +98,7 @@ export const featureGroups: FeatureGroup[] = [
       { text: '522 themes, previewed live as you move through the list.', href: 'guide/configuration/#themes' },
       { text: 'Settings as flat dotted keys, with every default documented beside your file. Changes apply on save.', href: 'guide/configuration/#settings' },
       { text: '`settings.json` is checked before it applies: a mistake keeps your old settings and the status bar says why.', href: 'guide/configuration/' },
+      { text: 'The interface uses the macOS system font; `ui.fontFamily`, `ui.fontSize` and the weights change it, apart from the terminal\'s own font.', href: 'guide/configuration/#the-interface-font' },
       { text: 'Every binding can be changed; chords follow the physical key on any keyboard layout.', href: 'guide/configuration/#keybindings' },
       { text: 'A binding can carry a `when`, as in VS Code, so it applies only in a locked editor, a browser card or an empty slot.', href: 'guide/configuration/#bindings-that-apply-only-sometimes' },
       { text: 'A see-through window, background pictures that rotate, see-through cards, rounded corners, the gap between cards.', href: 'guide/configuration/#the-window-and-the-canvas' },
