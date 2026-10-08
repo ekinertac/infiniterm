@@ -6,20 +6,28 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-07
+## 0.5.9 (build 767), 2026-10-08
 
-- Browser cards: middle-click and Cmd+click on a link open it in a new tab; Cmd+T opens the address bar on the new blank tab; the mouse's back and forward buttons move through the page's history, and Back on a tab a link opened closes it.
-- The browser page menu shows Back and Forward only when there is somewhere to go, and only on the page itself, not on a link, a selection or a field. Every browser menu ends with "Open Page in System Browser" (on a link, "Open Link in System Browser").
+### Right-click menus
 
+- Right-click opens a native macOS menu, the same system menu other Mac apps show, with each command's shortcut at the right edge and unavailable rows greyed. On a terminal: Copy, Paste, Find, Search the Web for Selection, Split, New, Clear Buffer, Show Transcript, Rename, Protect, Mask, Size, Move to Workspace and Close. On a card's frame or label, on bare canvas, on a workspace tab and on an editor there is a menu of its own (the editor's has the Transform submenu). A terminal program that uses the mouse (vim, tmux, htop) still gets the plain right-click; hold Shift to open the menu over it.
+- The menu covers more places. A right-click on a file or folder in an editor's tree lights the row and opens a menu for it: Open, Reveal in Finder, Copy Path and Copy Relative Path. A right-click on a tab of an editor or a browser card opens a tab menu (New Tab, Close Tab, Reopen Closed Tab, and for a browser Reload, Copy Address and Open in System Browser).
 - Right-clicking a workspace tab no longer switches to it; only a command you choose from its menu does, and Move Left / Move Right keep you in the workspace you were in.
 
-- Double-clicking a link in a terminal selects the whole address; it used to stop at the colon of `https://`.
+### Browser
 
-- The context menu covers more places. A right-click on a file or folder in an editor's tree lights the row and opens a menu for it: Open, Reveal in Finder, Copy Path and Copy Relative Path. A right-click on a tab of an editor or a browser card switches to it and opens a tab menu (New Tab, Close Tab, Reopen Closed Tab, and for a browser Reload, Copy Address and Open in System Browser). The browser page's right-click menu is native now too, with the same items as before.
+- Middle-click and Cmd+click on a link open it in a new tab. Middle-click on a tab closes it, in browser and editor cards.
+- Cmd+T opens the address bar on the new blank tab, so the tab is never a blank page with nowhere to type.
+- The mouse's back and forward buttons move through the page's history. Back on a tab a link opened closes it.
+- The page's right-click menu is native, shows Back and Forward only when there is somewhere to go, shows them only on the page itself (not on a link, a selection or a field), and ends with "Open Page in System Browser" (on a link, "Open Link in System Browser").
 
-- Right-click opens a native macOS menu, the same system menu other Mac apps show, with each command's shortcut at the right edge and unavailable rows greyed. On a terminal: Copy, Paste, Find, Search the Web for Selection, Split, New, Clear Buffer, Show Transcript, Rename, Protect, Mask, Size, Move to Workspace and Close. On a card's frame or label, on bare canvas, on a workspace tab and on an editor there is a menu of its own (the editor's has the Transform submenu). A terminal program that uses the mouse (vim, tmux, htop) still gets the plain right-click; hold Shift to open the menu over it. A browser card keeps its own menu for now.
+### Commands
 
-- A command that needs a second action from you ends its label with an ellipsis, in the command palette as everywhere on a Mac: Run a command…, Card: rename…, Workspace: rename…, Group: rename…, Editor: open a file…, Editor: go to a line…, Browser: open a URL…, go to a URL…, address bar…, find in page…, Card: find in this card…, Card: new (choose where)…, Theme: switch… and Group: the selection…. A test finds the commands that leave something open and fails when one has no ellipsis.
+- A command that needs a second action from you ends its label with an ellipsis, in the command palette as everywhere on a Mac: Run a command…, Card: rename…, Workspace: rename…, Group: rename…, Editor: open a file…, Editor: go to a line…, Browser: open a URL…, go to a URL…, address bar…, find in page…, Card: find in this card…, Card: new (choose where)…, Browser: new tab…, Theme: switch… and Group: the selection…. A test finds the commands that leave something open and fails when one has no ellipsis.
+
+### Terminal
+
+- Double-clicking a link selects the whole address; it used to stop at the colon of `https://`.
 
 ## 0.5.8 (build 743), 2026-10-07
 
