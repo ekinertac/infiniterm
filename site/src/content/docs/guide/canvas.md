@@ -12,7 +12,7 @@ Every card sits on one canvas you pan and zoom. Cards never move on their own: a
 - **Diff**: `ift diff` opens the changes against git HEAD, the changed files on the left and one file's diff on the right. `Cmd B` adds a blame gutter.
 - **Transcript**: `Cmd I` on a card running Claude Code or Pi opens its session beside it as turns, with tool calls folded under each.
 - **Page**: a Markdown file rendered (headings, lists, code, links), read-only. It never takes the keyboard: the wheel scrolls it, and while it is focused the arrows, Page Up/Down, Space, Home and End do too; every other key stays the canvas's. A scrollbar at the right edge shows when there is more below. Web links open in the browser, links to other `.md` files open as Pages. The "Start here" card a first launch shows is one.
-- **Browser**: Chromium inside the card, with the Claude in Chrome extension loaded, so Claude Code can drive a browser on your canvas. `Cmd L` opens the address bar.
+- **Browser**: Chromium inside the card, with the Claude in Chrome extension loaded, so Claude Code can drive a browser on your canvas. `Cmd L` opens the address bar, and so does `Cmd T` on the new blank tab. Middle-click or `Cmd` + click on a link opens it in a new tab, middle-click on a tab closes it, and the mouse's back and forward buttons walk the history (Back on a tab a link opened closes it).
 
 ## Where a new card goes
 
@@ -98,11 +98,11 @@ Right-click opens the native macOS menu, with each command's shortcut at the rig
 - **A terminal**: Copy, Paste, Find…, Search the Web for Selection, Split Right and Down, New (Terminal, Editor, Browser…, Claude Code), Clear Buffer, Show Transcript, Rename…, Protect, Mask, Size, Move to Workspace… and Close.
 - **A card's frame or label**: Rename…, Group…, Protect, Clear State Colour, Size, Move to Workspace…, the splits, New and Close.
 - **Bare canvas**: New, Fit All Cards, Actual Size, Tidy into a Block, Command Palette…, Settings and Keyboard Shortcuts.
-- **A workspace tab**: Rename…, New Workspace, Move Left, Move Right and Close Workspace.
+- **A workspace tab** (the click does not switch to it): Rename…, New Workspace, Move Left, Move Right and Close Workspace.
 - **An editor**: Save, Find…, Go to Line…, Transform (every text transform), Show File Tree, Blame, Rename…, Size and Close.
 - **A file or folder in an editor's tree**: the row lights up while the menu is open. Open, Reveal in Finder, Copy Path and Copy Relative Path.
 - **A tab of an editor or browser card**: switches to that tab, then New Tab, Close Tab and Reopen Closed Tab. A browser tab also has Reload, Copy Address and Open in System Browser.
-- **A browser page**: Back, Forward, Reload, Cut, Copy and Paste where they apply, and on a link Copy Link Address, Open Link in New Tab and Open Link in New Card.
+- **A browser page**: Back and Forward when there is somewhere to go, Reload, Cut, Copy and Paste where they apply, and Open Page in System Browser. On a link: Copy Link Address, Open Link in New Tab, Open Link in New Card and Open Link in System Browser.
 
 A terminal program that uses the mouse, such as vim, tmux or htop, still gets the plain right-click. Hold `Shift` to open the menu over it.
 

@@ -59,7 +59,7 @@ These go in `settings.json`; every setting is on the [settings reference](../../
 
 ## Links and paths
 
-Hold `Cmd` over a link or a path that exists and it underlines; `Cmd` + click opens it beside the card, a file in an editor card and a URL in a browser card. Dropping a file from the Finder onto a terminal pastes its shell-escaped path.
+Hold `Cmd` over a link or a path that exists and it underlines; `Cmd` + click opens it beside the card, a file in an editor card and a URL in a browser card. A double-click on a link selects the whole address. Dropping a file from the Finder onto a terminal pastes its shell-escaped path.
 
 ## Privacy prompts
 
