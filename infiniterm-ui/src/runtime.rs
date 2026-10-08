@@ -902,6 +902,15 @@ pub fn startup(app: &mut AppView) {
         if let Err(e) = written {
             eprintln!("[infiniterm/warn] could not write {}: {e}", path.display());
         }
+        // The changelog card's file (`help.changelog`), this build's own text.
+        let path = infiniterm_core::changelog::changelog_path();
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&path, infiniterm_core::changelog::text()));
+        if let Err(e) = written {
+            eprintln!("[infiniterm/warn] could not write {}: {e}", path.display());
+        }
         // The in-app docs (`help.docs`), the same pages as infiniterm.app,
         // rewritten every launch so they match this build.
         let dir = infiniterm_core::help_docs::docs_dir();

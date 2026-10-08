@@ -279,6 +279,12 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.set_focus(Some(&id));
         }
     });
+    r.register("help.changelog", "Help: open the changelog", |m| {
+        let from = m.focused().map(|c| c.id.clone());
+        if let Some(id) = m.open_changelog(from.as_deref()) {
+            m.set_focus(Some(&id));
+        }
+    });
     r.register(
         "app.keybindings",
         "App: open keybindings, beside the defaults",

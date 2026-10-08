@@ -8,6 +8,7 @@ pub mod viewport;
 pub mod grid;
 
 pub mod background;
+pub mod changelog;
 
 pub mod remote_identity;
 
