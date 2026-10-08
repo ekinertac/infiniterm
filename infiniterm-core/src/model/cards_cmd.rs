@@ -71,6 +71,43 @@ impl Model {
         })
     }
 
+    /// The active card slid toward `dir` into the gap beside it
+    /// (`slide::slide`): the keyboard's way to close the space a resize left.
+    /// Cards may not overlap, so what is in the way is the end of the slide;
+    /// the card stops being half of a split pair, as a resize does.
+    pub fn slide_active(&mut self, dir: Direction) {
+        self.with_active_card(|m, id| {
+            let Some(card) = m.card(&id).cloned() else {
+                return;
+            };
+            let mut taken: Vec<Rect> = m
+                .here()
+                .iter()
+                .filter(|c| c.id != id)
+                .map(|c| c.rect)
+                .collect();
+            taken.extend(m.other_frames(Some(&id), &card.workspace_id));
+            let origin = Point {
+                x: HALF_CELL,
+                y: HALF_CELL,
+            };
+            let Some(next) =
+                crate::slide::slide(card.rect, dir, &taken, m.default_size(), origin, m.gap())
+            else {
+                m.notify("nowhere to slide");
+                return;
+            };
+            m.remember_layout();
+            m.mark_swap(std::slice::from_ref(&id));
+            if let Some(c) = m.card_mut(&id) {
+                c.rect = next;
+                c.soft_group_id = None;
+            }
+            m.dirty_layout = true;
+            m.reveal_focused();
+        })
+    }
+
     /// The label with the card's number ahead of it: what the corner chip,
     /// the palette and the status bar show, so "#7" is enough to name a
     /// card to somebody else. `label_of` is the bare one, for a name that
@@ -1683,6 +1720,11 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         Direction::Up,
         Direction::Down,
     ] {
+        r.register(
+            &format!("card.slide.{}", dir_name(dir)),
+            &format!("Card: slide {} to the next card or slot", dir_name(dir)),
+            move |m| m.slide_active(dir),
+        );
         r.register(
             &format!("card.swap.{}", dir_name(dir)),
             &format!("Card: swap with the one {}", super::context::where_(dir)),

@@ -112,6 +112,16 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
     ("cmd+alt+shift+arrowright", "card.swap.right", ""),
     ("cmd+alt+shift+arrowup", "card.swap.up", ""),
     ("cmd+alt+shift+arrowdown", "card.swap.down", ""),
+    // Slides the card along a row or column into the gap beside it, to the
+    // next card or grid slot: the way back after a resize left space.
+    (
+        "cmd+ctrl+alt+arrowleft",
+        "card.slide.left",
+        "close the space a resize left, from the keyboard",
+    ),
+    ("cmd+ctrl+alt+arrowright", "card.slide.right", ""),
+    ("cmd+ctrl+alt+arrowup", "card.slide.up", ""),
+    ("cmd+ctrl+alt+arrowdown", "card.slide.down", ""),
     // Same commands on JKL, so switching cards does not need the arrow
     // cluster. Cmd+Alt+I was WebKit's inspector in the reference and is
     // left unbound here too so the two keymaps stay the same file.
