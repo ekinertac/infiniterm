@@ -733,6 +733,22 @@ mod tests {
         assert_eq!(h.m.cards.len(), 2, "a second run focuses the open one");
     }
 
+    #[test]
+    fn help_changelog_opens_the_card_once_beside_the_focused_one() {
+        let mut h = Harness::new();
+        let first = h.focused().rect;
+        h.run("help.changelog");
+        assert_eq!(h.m.cards.len(), 2);
+        assert_eq!(h.focused().kind, CardKind::Page);
+        let path = crate::changelog::changelog_path()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(h.focused().path.as_deref(), Some(path.as_str()));
+        assert!(h.focused().rect.x > first.x, "beside, not over");
+        h.run("help.changelog");
+        assert_eq!(h.m.cards.len(), 2, "a second run focuses the open one");
+    }
+
     // New cards take the first free slot AFTER the active card: beside it.
     #[test]
     fn a_new_card_opens_beside_the_active_one() {
