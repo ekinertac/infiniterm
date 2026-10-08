@@ -9,6 +9,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-10-08
 
 - New: `Card: slide left / right / up / down to the next card or slot` (Cmd+Ctrl+Alt+Arrow). After a resize leaves a gap, the card moves along its row or column until it is one gutter from the next card in line, or to the next grid slot when nothing is in the way. It never overlaps a card, and Cmd+Z puts it back.
+- Double-clicking a terminal card that is drawn as bars (zoomed out too far to read, or too many cards on screen) fits that card, like Cmd+1, instead of selecting a word nobody can see. A readable card keeps its double-click.
 
 ## 0.5.10 (build 775), 2026-10-08
 
