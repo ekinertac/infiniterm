@@ -123,18 +123,17 @@ impl AppView {
         let scale = self.scale_factor;
         let card_bg = self.chrome.card_bg;
         let text = self.chrome.text;
-        let family = crate::terminals::family_of(&self.model.config.terminal.font_family);
         // The same `StripStyle` the editor's strip takes, so the two look
-        // and size alike: `terminal.fontSize` is the strip's font too, not
-        // a strip-only constant.
+        // and size alike under the app's UI typography.
         let style = StripStyle {
             bg: self.chrome.bar_bg,
             border: self.chrome.bar_border,
             active_bg: self.chrome.row_selected,
             text_bright: self.chrome.text_bright,
             text_muted: self.chrome.text_muted,
-            font_family: family.clone(),
-            font_px: self.model.config.terminal.font_size,
+            regular: self.chrome.typography.regular.clone(),
+            bold: self.chrome.typography.bold.clone(),
+            font_px: self.chrome.typography.font_size,
         };
         let inactive_dim = self.model.config.ui.inactive_dim;
         let ui_scale = self.model.ui_scale as f32;
@@ -176,7 +175,6 @@ impl AppView {
             body.card_bg = card_bg;
             body.text = text;
             body.style = style.clone();
-            body.font_family = family.clone();
             body.inactive_dim = inactive_dim;
             body.card_number = card.number;
             body.protected = card.protected;

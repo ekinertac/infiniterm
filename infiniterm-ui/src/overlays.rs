@@ -52,7 +52,8 @@ pub fn key_cap_box(key: &str, chrome: &crate::chrome::Chrome, ui: f32) -> gpui::
         .py(px(KEY_CAP_PAD_Y_PX * ui))
         .rounded_sm()
         .bg(chrome.text_bright)
-        .text_size(px(KEY_CAP_FONT_PX * ui))
+        .font_weight(chrome.typography.bold.weight)
+        .text_size(px(chrome.typography.size(KEY_CAP_FONT_PX) * ui))
         .text_color(chrome.bar_bg)
         .child(key.to_string())
 }
@@ -621,6 +622,7 @@ impl AppView {
         // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
         let ui = self.model.ui_scale as f32;
         let chrome = &self.chrome;
+        let tab_font_px = chrome.typography.size(TAB_LABEL_FONT_PX) * ui;
         let active = self.model.active_workspace.clone();
         // Any window can wear a colour (`window.color`): a remote one its
         // host's, the local one its choice, and none is the normal bar. The
@@ -657,7 +659,12 @@ impl AppView {
                 .px_2()
                 .py_1()
                 .rounded_sm()
-                .text_size(px(TAB_LABEL_FONT_PX * ui))
+                .text_size(px(tab_font_px))
+                .font_weight(if is_active {
+                    chrome.typography.bold.weight
+                } else {
+                    chrome.typography.regular.weight
+                })
                 .text_color(if is_active {
                     chrome.text_bright
                 } else {
@@ -673,7 +680,9 @@ impl AppView {
                     crate::tab_drag::DraggedTab {
                         id: ws.id.clone(),
                         name: ws.name.clone(),
-                        font_px: TAB_LABEL_FONT_PX * ui,
+                        font_family: chrome.typography.family.clone().into(),
+                        font_weight: chrome.typography.bold.weight,
+                        font_px: tab_font_px,
                         bg: chosen_fill,
                         fg: chrome.text_bright,
                     },
@@ -734,7 +743,7 @@ impl AppView {
                 .hover(|s| s.bg(crate::chrome::hover_fill(chosen_fill)))
                 .px_2()
                 .py_1()
-                .text_size(px(TAB_LABEL_FONT_PX * ui))
+                .text_size(px(tab_font_px))
                 .text_color(idle_faint)
                 .on_mouse_down(
                     MouseButton::Left,
@@ -765,7 +774,8 @@ impl AppView {
                 } else {
                     gpui::white()
                 })
-                .text_size(px(TAB_LABEL_FONT_PX * ui))
+                .text_size(px(tab_font_px))
+                .font_weight(chrome.typography.bold.weight)
                 .child(r.name)
         });
         div()
@@ -779,7 +789,8 @@ impl AppView {
             .bg(self.window_fill(bar))
             .border_b_1()
             .border_color(chrome.bar_border)
-            .font_family("Menlo")
+            .font_family(chrome.typography.family.clone())
+            .font_weight(chrome.typography.regular.weight)
             .child(tabs)
             .children(chip)
     }
@@ -842,7 +853,8 @@ impl AppView {
             .bg(self.window_fill(chrome.bar_bg))
             .border_t_1()
             .border_color(chrome.bar_border)
-            .font_family("Menlo")
+            .font_family(chrome.typography.family.clone())
+            .font_weight(chrome.typography.regular.weight)
             .text_size(size)
             .text_color(chrome.text_muted)
             .child(div().child(left))
@@ -949,7 +961,8 @@ impl AppView {
                             .when(*at > 0, |d| {
                                 d.border_t_1().border_color(chrome.bar_border).mt_1()
                             })
-                            .text_size(px(PALETTE_SECTION_FONT_PX * ui))
+                            .font_weight(chrome.typography.bold.weight)
+                            .text_size(px(chrome.typography.size(PALETTE_SECTION_FONT_PX) * ui))
                             .text_color(chrome.text_faint)
                             .child(title.clone()),
                     );
@@ -1065,8 +1078,9 @@ impl AppView {
                             .border_color(chrome.overlay_border)
                             .rounded_md()
                             .shadow_lg()
-                            .font_family("Menlo")
-                            .text_size(px(OVERLAY_BODY_FONT_PX * ui))
+                            .font_family(chrome.typography.family.clone())
+                            .font_weight(chrome.typography.regular.weight)
+                            .text_size(px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui))
                             .text_color(chrome.text)
                             .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
                                 cx.stop_propagation()
@@ -1156,7 +1170,8 @@ impl AppView {
             .child(
                 div()
                     .text_color(chrome.text_bright)
-                    .text_size(px(ABOUT_TITLE_FONT_PX * ui))
+                    .font_weight(chrome.typography.bold.weight)
+                    .text_size(px(chrome.typography.size(ABOUT_TITLE_FONT_PX) * ui))
                     .child("infiniterm"),
             )
             .child(div().text_color(chrome.text_muted).child(version))
@@ -1208,7 +1223,8 @@ impl AppView {
                     DIALOG_KEY_BG_ALPHA,
                 ))
                 .text_color(chrome.text_bright)
-                .text_size(px(KEY_CAP_FONT_PX * ui))
+                .font_weight(chrome.typography.bold.weight)
+                .text_size(px(chrome.typography.size(KEY_CAP_FONT_PX) * ui))
                 .child(label.to_string())
         };
         let button = |label: String, key: &str, primary: bool, chrome: &crate::chrome::Chrome| {
@@ -1245,8 +1261,9 @@ impl AppView {
             .border_color(chrome.overlay_border)
             .rounded_lg()
             .shadow_lg()
-            .font_family("Menlo")
-            .text_size(px(OVERLAY_BODY_FONT_PX * ui));
+            .font_family(chrome.typography.family.clone())
+            .font_weight(chrome.typography.regular.weight)
+            .text_size(px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui));
         if is_confirm || is_alert {
             // The question, then the buttons: Cancel on the left, the verb on
             // the right in the selection colour, as macOS lays them out.
@@ -1298,7 +1315,8 @@ impl AppView {
                 .child(
                     div()
                         .text_color(chrome.text_muted)
-                        .text_size(px(CAPTION_FONT_PX * ui))
+                        .font_weight(chrome.typography.bold.weight)
+                        .text_size(px(chrome.typography.size(CAPTION_FONT_PX) * ui))
                         .child(p.label.clone()),
                 )
                 .child(
@@ -1307,7 +1325,9 @@ impl AppView {
                         .px_2()
                         .py_1()
                         // An empty field is still a line tall.
-                        .min_h(px(OVERLAY_BODY_FONT_PX * ui * FIELD_LINE_HEIGHT))
+                        .min_h(px(chrome.typography.size(OVERLAY_BODY_FONT_PX)
+                            * ui
+                            * FIELD_LINE_HEIGHT))
                         .rounded_sm()
                         .bg(chrome.control_bg)
                         .border_1()
@@ -1323,7 +1343,7 @@ impl AppView {
                         .gap(px(DIALOG_BUTTON_GAP_PX * ui))
                         .items_center()
                         .text_color(chrome.text_faint)
-                        .text_size(px(KEY_CAP_FONT_PX * ui))
+                        .text_size(px(chrome.typography.size(KEY_CAP_FONT_PX) * ui))
                         .child(key_cap("enter", &chrome))
                         .child("confirm")
                         .child(key_cap("esc", &chrome))
@@ -1392,7 +1412,8 @@ impl AppView {
                     .px_4()
                     .pt_3()
                     .pb_1()
-                    .text_size(px(CAPTION_FONT_PX * ui))
+                    .font_weight(chrome.typography.bold.weight)
+                    .text_size(px(chrome.typography.size(CAPTION_FONT_PX) * ui))
                     .text_color(chrome.text_muted)
                     .child(s.title.to_uppercase()),
             );
@@ -1457,7 +1478,8 @@ impl AppView {
                     .px_4()
                     .pt_3()
                     .pb_1()
-                    .text_size(px(CAPTION_FONT_PX * ui))
+                    .font_weight(chrome.typography.bold.weight)
+                    .text_size(px(chrome.typography.size(CAPTION_FONT_PX) * ui))
                     .text_color(chrome.text_muted)
                     .child("GESTURES"),
             );
@@ -1502,8 +1524,9 @@ impl AppView {
                         .border_color(chrome.overlay_border)
                         .rounded_md()
                         .shadow_lg()
-                        .font_family("Menlo")
-                        .text_size(px(OVERLAY_BODY_FONT_PX * ui))
+                        .font_family(chrome.typography.family.clone())
+                        .font_weight(chrome.typography.regular.weight)
+                        .text_size(px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui))
                         .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
                             cx.stop_propagation()
                         })
@@ -1513,7 +1536,8 @@ impl AppView {
                                 .py_3()
                                 .border_b_1()
                                 .border_color(chrome.card_border)
-                                .text_size(px(PANEL_TITLE_FONT_PX * ui))
+                                .font_weight(chrome.typography.bold.weight)
+                                .text_size(px(chrome.typography.size(PANEL_TITLE_FONT_PX) * ui))
                                 .text_color(if query.is_empty() {
                                     chrome.text_faint
                                 } else {

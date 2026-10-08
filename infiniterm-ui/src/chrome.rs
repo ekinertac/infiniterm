@@ -8,7 +8,9 @@
 //! arrives as hex strings from `itermcolors.rs`. Sizes that must hold on
 //! screen at every zoom are in SCREEN pixels here and divided by the scale
 //! at paint time (`chrome.rs` in core has the maths).
-use gpui::{font, rgb, Font, Hsla, Rgba};
+use crate::fonts::UiTypography;
+use gpui::{rgb, Hsla, Rgba};
+use infiniterm_core::config::Ui;
 use infiniterm_core::itermcolors::Theme;
 
 /// A one-device-pixel line: the thinnest gpui draws crisply. Every card
@@ -239,8 +241,7 @@ pub struct Chrome {
     pub phantom: Hsla,
     /// The loaded theme, for the label colours chosen by hashing an id.
     pub theme: Option<Theme>,
-    pub ui_font: Font,
-    pub mono_font: Font,
+    pub typography: UiTypography,
 }
 
 /// `#rrggbb` or `#rgb` to a colour; `None` for anything else.
@@ -409,9 +410,12 @@ impl Chrome {
             },
             phantom: c(0x4a5568),
             theme: None,
-            ui_font: font("Menlo"),
-            mono_font: font("Menlo"),
+            typography: UiTypography::from_config(&infiniterm_core::config::default_config().ui),
         }
+    }
+
+    pub fn apply_ui_typography(&mut self, ui: &Ui) {
+        self.typography = UiTypography::from_config(ui);
     }
 
     /// A theme drives BOTH the terminal and the chrome: card ground, label

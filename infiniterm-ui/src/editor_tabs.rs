@@ -498,7 +498,12 @@ mod tests {
             active_bg: gpui::black(),
             text_bright: gpui::white(),
             text_muted: gpui::white(),
-            font_family: "Menlo".into(),
+            regular: gpui::font("Menlo"),
+            bold: {
+                let mut font = gpui::font("Menlo");
+                font.weight = FontWeight::BOLD;
+                font
+            },
             font_px: 14.,
         };
         EditorTabs::new("c1", &metrics, Size { w: 800., h: 600. }, style)

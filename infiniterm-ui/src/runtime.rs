@@ -677,6 +677,7 @@ impl AppView {
             match change.file {
                 ConfigFile::Settings => {
                     self.model.apply_settings_text(&change.contents);
+                    self.chrome.apply_ui_typography(&self.model.config.ui);
                     self.animator.animations_on =
                         self.model.config.ui.animations && !self.reduce_motion;
                 }
@@ -881,6 +882,7 @@ pub fn startup(app: &mut AppView) {
     app.themes_dir = ensure_themes_dir(AppView::bundled_themes().as_deref());
     app.refresh_themes();
     app.model.apply_settings_text(&settings);
+    app.chrome.apply_ui_typography(&app.model.config.ui);
     app.model.apply_keymap_text(&keys);
     // The "Start here" card's file, rewritten every launch like the defaults
     // so its keys follow the keymap in force and its agent list follows what
