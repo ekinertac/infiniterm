@@ -788,6 +788,9 @@ impl AppView {
     /// status bar needs to say the keyboard currently means something
     /// different than it did a keystroke ago.
     fn browser_lock_indicator(&self) -> Option<&'static str> {
+        if self.model.reading.is_some() {
+            return Some("reading: Cmd+Up/Down pan, Cmd+1 leaves");
+        }
         self.model
             .focused()
             .filter(|c| c.locked)

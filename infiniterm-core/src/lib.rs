@@ -89,6 +89,7 @@ pub mod palette;
 pub mod palette_usage;
 pub mod paths;
 pub mod prompt;
+pub mod reading;
 pub mod saved_layout;
 pub mod schema;
 pub mod schema_store;
