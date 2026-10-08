@@ -13,7 +13,7 @@ curl -fsSL https://infiniterm.app/install.sh | sh
 
 It downloads the latest release, checks its checksum, its signature and its notarization the way the app's own updater does, copies it into `/Applications`, and puts `ift` on your PATH. An app already installed is left alone, since it updates itself. [Read the script](/install.sh) first if you like.
 
-Agent hooks edit the agent's config, so the script asks before wiring them, and only for the agents it finds (Claude Code, Pi, Codex, OpenCode). With nobody at a terminal to answer (an agent running the install, a CI job) it skips them and prints the commands. To decide up front, end the line with `| sh -s -- --hooks claude,pi,codex,opencode` (any of them) or `| sh -s -- --no-hooks`.
+Agent hooks edit the agent's config, so the script asks before wiring them, and only for the agents it finds (Claude Code, Pi, Codex, OpenCode, Cursor). With nobody at a terminal to answer (an agent running the install, a CI job) it skips them and prints the commands. To decide up front, end the line with `| sh -s -- --hooks claude,pi,codex,opencode,cursor` (any of them) or `| sh -s -- --no-hooks`.
 
 ## Homebrew
 
@@ -50,15 +50,16 @@ ift install-claude-hooks      # Claude Code: edits ~/.claude/settings.json
 ift install-pi-hooks          # Pi: installs an extension into ~/.pi/agent
 ift install-codex-hooks       # Codex: edits ~/.codex/hooks.json (or $CODEX_HOME)
 ift install-opencode-hooks    # OpenCode: writes a plugin to ~/.config/opencode/plugins
+ift install-cursor-hooks    # Cursor: ~/.cursor/hooks.json and hooks/infiniterm-cursor-hook.sh
 ```
 
-Codex asks you to approve new hooks once: run `/hooks` inside Codex after installing. `ift install-pi-hooks DIR` takes a different agent directory, for a wrapper that runs Pi against its own. All four accept `--dry-run`, which prints what would change and changes nothing.
+Codex asks you to approve new hooks once: run `/hooks` inside Codex after installing. `ift install-pi-hooks DIR` takes a different agent directory, for a wrapper that runs Pi against its own. All five accept `--dry-run`, which prints what would change and changes nothing.
 
 They are safe to run again, after an update or from a dotfiles script: they add nothing the second time. `install-claude-hooks` merges eight hook entries into your `settings.json` and leaves everything else in it alone (permissions, env, other hooks), and it refuses to touch a file that does not parse. If `settings.json` (or the Codex, OpenCode or Pi file) is a symlink into a dotfiles repo, the installer writes the file it points at and keeps the link. Each prints the file it changed.
 
 An agent session that was already running keeps the settings it started with, so start a new session to see its card change colour. To check it works, give the agent a prompt: the card's border goes violet. If it does not, `agent.log` in `~/Library/Application Support/dev.ekinertac.infiniterm/` shows whether any hook event arrived.
 
-To remove them: delete the entries whose command runs `infiniterm-hook` from `~/.claude/settings.json` and `~/.codex/hooks.json`, and delete `~/.pi/agent/extensions/infiniterm.ts` and `~/.config/opencode/plugins/infiniterm.js`.
+To remove them: delete the entries whose command runs `infiniterm-hook` from `~/.claude/settings.json` and `~/.codex/hooks.json`, delete `~/.pi/agent/extensions/infiniterm.ts` and `~/.config/opencode/plugins/infiniterm.js`, and remove infiniterm's entries from `~/.cursor/hooks.json` plus `~/.cursor/hooks/infiniterm-cursor-hook.sh`.
 
 Other commands need no setup: a zsh started in a card reports each command's start and exit status to the app. See [Card states](../card-states/).
 

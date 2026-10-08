@@ -85,6 +85,7 @@ _ift() {
     'install-codex-hooks:wire infiniterm into ~/.codex/hooks.json'
     'install-opencode-hooks:install the OpenCode plugin'
     'install-pi-hooks:install the Pi extension'
+    'install-cursor-hooks:wire infiniterm into ~/.cursor/hooks.json'
     'install-extension:add an extension the browser cards load'
     'completion:print the zsh completion'
   )
@@ -106,6 +107,7 @@ _ift() {
     install-claude-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
     install-codex-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
     install-opencode-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
+    install-cursor-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
     install-extension) _files -/ ;;
     sessions) _arguments '--full[every column: id, pid, cwd, command, started]' ;;
     completion) _values 'shell' zsh ;;

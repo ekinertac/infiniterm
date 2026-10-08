@@ -26,7 +26,7 @@ Or [download the DMG](https://github.com/ekinertac/infiniterm/releases/latest). 
 
 ## What it is
 
-It started as a way out of iTerm2: fifteen tabs with splits in each, and finding one session among thirty meant opening them one by one. Here every session is a card on one canvas and keeps its place. With coding agents in those cards, you also could not tell which were working, which were waiting on you and which had finished, so each card's border says it: violet working, yellow waiting on you, red failed, green done. Claude Code, Codex, OpenCode and Pi report through hooks; any zsh command reports too.
+It started as a way out of iTerm2: fifteen tabs with splits in each, and finding one session among thirty meant opening them one by one. Here every session is a card on one canvas and keeps its place. With coding agents in those cards, you also could not tell which were working, which were waiting on you and which had finished, so each card's border says it: violet working, yellow waiting on you, red failed, green done. Claude Code, Codex, OpenCode, Pi and Cursor report through hooks; any zsh command reports too.
 
 Nothing flashes, nothing steals focus, nothing sends a notification. You switch when you are ready.
 
@@ -46,7 +46,7 @@ Big items only, in rough order. No dates.
 
 - **Done in 0.5.3:** `ift connect` for servers: terminals, colours, `--install` for Linux hosts, agent hooks over the connection.
 - **Light mode:** the chrome follows a light theme. Today a light theme gives light cards on a dark chrome.
-- **More agents:** Antigravity CLI and Cursor CLI, so their cards show the same four colours as Claude Code, Codex, OpenCode and Pi.
+- **More agents:** Antigravity CLI (Cursor CLI is in; run `ift install-cursor-hooks`).
 - **Remote files:** editor and diff cards on a server's files, so `ift file` and `EDITOR=ift` work in a remote window.
 - **Windows:** a build exists on a branch and has never been run. It uses ConPTY, so no daemon yet and shells do not outlive the window.
 - **Windows servers** for `ift connect`, once there is a session daemon there.

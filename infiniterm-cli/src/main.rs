@@ -21,6 +21,7 @@
 
 mod attach;
 mod claude_hooks;
+mod cursor_hooks;
 mod completion;
 mod connect;
 mod install;
@@ -113,6 +114,8 @@ ift — drive infiniterm from a shell
   ift install-pi-hooks [DIR] install the Pi extension into ~/.pi/agent (or
                              $PI_CODING_AGENT_DIR, or DIR: a wrapper that
                              runs Pi against its own agent dir needs its own)
+  ift install-cursor-hooks   wire infiniterm into ~/.cursor/hooks.json
+                             (Cursor Agent CLI and IDE agent)
   ift install-extension <path|id|store-url>
                              add an extension the browser cards load: an
                              unpacked directory, or an id / Chrome Web
@@ -127,7 +130,7 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 22] = [
+pub const SUBCOMMANDS: [&str; 23] = [
     "diff",
     "ls",
     "sessions",
@@ -148,6 +151,7 @@ pub const SUBCOMMANDS: [&str; 22] = [
     "install-codex-hooks",
     "install-opencode-hooks",
     "install-pi-hooks",
+    "install-cursor-hooks",
     "install-extension",
     "completion",
 ];
@@ -170,6 +174,9 @@ fn main() -> ExitCode {
             args.iter().skip(1).find(|a| !a.starts_with("--")).map(String::as_str),
             args.contains(&"--dry-run".to_string()),
         ),
+        Some("install-cursor-hooks") => {
+            install_cursor(args.contains(&"--dry-run".to_string()))
+        }
         Some("install-extension") => install_extension(args.get(1).map(String::as_str)),
         Some("install") => install_self(),
         Some("licence") => licence_cmd::run(&args[1..]),
@@ -522,6 +529,100 @@ fn install_hooks(dry_run: bool) -> ExitCode {
     wire_hook_file(&path, &claude_hooks::EVENTS, None, dry_run)
 }
 
+const CURSOR_ADAPTER: &str = include_str!("../adapters/cursor-hook.sh");
+
+fn cursor_adapter_source(hook: &str) -> String {
+    CURSOR_ADAPTER.replace("__INFINITERM_HOOK__", hook)
+}
+
+fn cursor_hooks_dir() -> std::path::PathBuf {
+    home().join(".cursor")
+}
+
+fn install_cursor(dry_run: bool) -> ExitCode {
+    let Some(binary) = hook_binary() else {
+        return hook_missing();
+    };
+    let dir = cursor_hooks_dir();
+    let script = dir.join("hooks").join("infiniterm-cursor-hook.sh");
+    let hooks_json = dir.join("hooks.json");
+    let body = cursor_adapter_source(&binary);
+
+    if std::fs::read_to_string(&script).ok().as_deref() != Some(body.as_str()) {
+        if dry_run {
+            println!("would write {}", script.display());
+        } else if let Err(code) = write_cursor_script(&script, &body) {
+            return code;
+        }
+    } else {
+        println!("already installed: {}", script.display());
+    }
+
+    wire_cursor_hooks_file(&hooks_json, dry_run)
+}
+
+fn write_cursor_script(path: &std::path::Path, body: &str) -> Result<(), ExitCode> {
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("ift: could not create {}: {e}", parent.display());
+            return Err(ExitCode::from(2));
+        }
+    }
+    if let Err(e) = infiniterm_core::files::write_atomically(path, body) {
+        eprintln!("ift: could not write {}: {e}", path.display());
+        return Err(ExitCode::from(2));
+    }
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perms = meta.permissions();
+        perms.set_mode(0o755);
+        let _ = std::fs::set_permissions(path, perms);
+    }
+    println!("installed {}", path.display());
+    Ok(())
+}
+
+fn wire_cursor_hooks_file(path: &std::path::Path, dry_run: bool) -> ExitCode {
+    let existing = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".into());
+    let mut settings: serde_json::Value = match serde_json::from_str(&existing) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("ift: {} does not parse as JSON ({e})", path.display());
+            eprintln!("ift: refusing to rewrite it; fix the file and run again");
+            return ExitCode::from(2);
+        }
+    };
+
+    let changed = cursor_hooks::install(&mut settings);
+    if changed.is_empty() {
+        println!("already wired: {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+
+    if dry_run {
+        println!("would update {} for: {}", path.display(), changed.join(", "));
+        return ExitCode::SUCCESS;
+    }
+
+    if let Some(dir) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("ift: could not create {}: {e}", dir.display());
+            return ExitCode::from(2);
+        }
+    }
+
+    let body = serde_json::to_string_pretty(&settings).unwrap_or_default() + "\n";
+    if let Err(e) = infiniterm_core::files::write_atomically(path, &body) {
+        eprintln!("ift: could not write {}: {e}", path.display());
+        return ExitCode::from(2);
+    }
+
+    println!("updated {}", path.display());
+    println!("  events: {}", changed.join(", "));
+    println!("  takes effect in the next cursor agent session");
+    ExitCode::SUCCESS
+}
+
 /// Codex reads hooks from `$CODEX_HOME/hooks.json`, `~/.codex` by default,
 /// in Claude's shape. It asks once before running hooks it did not write
 /// itself, so the install says where to approve them.
@@ -778,6 +879,15 @@ mod tests {
         assert!(src.contains("const HOOK = \"/Applications/x.app/Contents/MacOS/infiniterm-hook\";"));
         assert!(!src.contains("__INFINITERM_HOOK__"));
         assert!(src.contains("pi.on(\"agent_settled\""));
+    }
+
+    #[test]
+    fn the_cursor_adapter_gets_the_hook_path_and_documents_cursor_events() {
+        let src = cursor_adapter_source("/Applications/x.app/Contents/MacOS/infiniterm-hook");
+        assert!(src.contains("HOOK=\"/Applications/x.app/Contents/MacOS/infiniterm-hook\""));
+        assert!(!src.contains("__INFINITERM_HOOK__"));
+        assert!(src.contains("beforeSubmitPrompt"));
+        assert!(src.contains("postToolUseFailure"));
     }
 
     #[test]

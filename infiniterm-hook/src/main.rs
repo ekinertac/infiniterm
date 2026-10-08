@@ -8,7 +8,7 @@
 //! Usage: infiniterm-hook <EventName> [agent]   (the harness pipes its JSON on stdin)
 //!
 //! `agent` names the agent that is not Claude Code (`codex`, `opencode`,
-//! `pi`), so the card knows which resume command its session takes.
+//! `pi`, `cursor`), so the card knows which resume command its session takes.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
