@@ -46,7 +46,7 @@ Big items only, in rough order. No dates.
 
 - **Done in 0.5.3:** `ift connect` for servers: terminals, colours, `--install` for Linux hosts, agent hooks over the connection.
 - **Light mode:** the chrome follows a light theme. Today a light theme gives light cards on a dark chrome.
-- **More agents:** Antigravity CLI (Cursor CLI is in; run `ift install-cursor-hooks`).
+- **More agents:** Antigravity CLI. Cursor is in (`ift install-cursor-hooks`), untested on a live session so far.
 - **Remote files:** editor and diff cards on a server's files, so `ift file` and `EDITOR=ift` work in a remote window.
 - **Windows:** a build exists on a branch and has never been run. It uses ConPTY, so no daemon yet and shells do not outlive the window.
 - **Windows servers** for `ift connect`, once there is a session daemon there.
