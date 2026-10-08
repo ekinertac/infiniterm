@@ -40,7 +40,7 @@ ift --version          # the version of this ift
 
 On a terminal these print a padded table. Into a pipe they print tab-separated rows without a header, so `ift ls | cut -f1` works.
 
-`ift ls --agents` lists only the cards that run an agent, one tab-separated line each: card number, agent, session id, state, directory. The session id is the one `claude --resume` takes.
+`ift ls --agents` lists only the cards that run an agent, one tab-separated line each: card number, agent, session id, state, directory. The session id is the one `claude --resume` takes. For a Cursor card the lost-session resume line is `cursor agent --resume <id>`.
 
 Exit codes: 0 ok, 1 infiniterm is not running, 2 bad usage.
 

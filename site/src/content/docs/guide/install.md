@@ -50,10 +50,10 @@ ift install-claude-hooks      # Claude Code: edits ~/.claude/settings.json
 ift install-pi-hooks          # Pi: installs an extension into ~/.pi/agent
 ift install-codex-hooks       # Codex: edits ~/.codex/hooks.json (or $CODEX_HOME)
 ift install-opencode-hooks    # OpenCode: writes a plugin to ~/.config/opencode/plugins
-ift install-cursor-hooks    # Cursor: ~/.cursor/hooks.json and hooks/infiniterm-cursor-hook.sh
+ift install-cursor-hooks      # Cursor: ~/.cursor/hooks.json and hooks/infiniterm-cursor-hook.sh
 ```
 
-Codex asks you to approve new hooks once: run `/hooks` inside Codex after installing. `ift install-pi-hooks DIR` takes a different agent directory, for a wrapper that runs Pi against its own. All five accept `--dry-run`, which prints what would change and changes nothing.
+Codex asks you to approve new hooks once: run `/hooks` inside Codex after installing. `ift install-pi-hooks DIR` takes a different agent directory, for a wrapper that runs Pi against its own. The Cursor hook is a small script that needs `python3` on the Mac; it covers Cursor's agent CLI and the IDE's agent, and the card shows violet while a turn runs but never yellow, since Cursor has no hook while an approval dialog is open. It has not been tried on a live Cursor session yet, because the CLI needs a subscription: the hook path, the payload names and the resume command come from Cursor's documentation. If a Cursor card shows the wrong colour, please open an issue. All five accept `--dry-run`, which prints what would change and changes nothing.
 
 They are safe to run again, after an update or from a dotfiles script: they add nothing the second time. `install-claude-hooks` merges eight hook entries into your `settings.json` and leaves everything else in it alone (permissions, env, other hooks), and it refuses to touch a file that does not parse. If `settings.json` (or the Codex, OpenCode or Pi file) is a symlink into a dotfiles repo, the installer writes the file it points at and keeps the link. Each prints the file it changed.
 
