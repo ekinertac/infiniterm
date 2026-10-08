@@ -21,7 +21,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### Agents
 
-- Cursor reports its state like the other agents (Tarık Kavaz): `ift install-cursor-hooks` wires infiniterm into `~/.cursor/hooks.json`, and a card running Cursor's agent shows working, waiting, failed and done, and resumes with `cursor agent --resume`. It has not been tried on a long live session yet.
+- Cursor reports its state like the other agents (Tarık Kavaz): `ift install-cursor-hooks` wires infiniterm into `~/.cursor/hooks.json`, and a card running Cursor's agent shows working, failed and done, and a lost session resumes with `cursor agent --resume`. It never turns yellow: Cursor has no hook while an approval dialog is open, so the card stays violet until you allow or deny. It has not been tried on a live session yet.
 
 ## 0.5.10 (build 775), 2026-10-08
 
