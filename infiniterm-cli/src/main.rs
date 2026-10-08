@@ -529,9 +529,6 @@ fn install_hooks(dry_run: bool) -> ExitCode {
     wire_hook_file(&path, &claude_hooks::EVENTS, None, dry_run)
 }
 
-/// Codex reads hooks from `$CODEX_HOME/hooks.json`, `~/.codex` by default,
-/// in Claude's shape. It asks once before running hooks it did not write
-/// itself, so the install says where to approve them.
 const CURSOR_ADAPTER: &str = include_str!("../adapters/cursor-hook.sh");
 
 fn cursor_adapter_source(hook: &str) -> String {
@@ -626,6 +623,9 @@ fn wire_cursor_hooks_file(path: &std::path::Path, dry_run: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Codex reads hooks from `$CODEX_HOME/hooks.json`, `~/.codex` by default,
+/// in Claude's shape. It asks once before running hooks it did not write
+/// itself, so the install says where to approve them.
 fn install_codex(dry_run: bool) -> ExitCode {
     let dir = std::env::var_os("CODEX_HOME")
         .map(std::path::PathBuf::from)
