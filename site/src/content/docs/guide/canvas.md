@@ -30,6 +30,8 @@ Other ways to place one:
 
 Drag a card by its top edge or its label. The card stays put while an outline follows the pointer, and the grid's slots for a card of that size show around it: halves for a half, quarters for a quarter. Near a slot the outline snaps to it; anywhere else it goes where you put it. It wears the focus colour where the card fits and the warning colour where it does not. Drop on free space to move, drop on another card to swap the two, `Escape` to cancel. Any other edge resizes. From the keyboard, `Cmd Alt Shift` + arrow swaps the card with its neighbour.
 
+`Cmd Ctrl Alt` + arrow slides the card that way into the next gap, which closes the space a resize (`Cmd Alt S`) leaves. The card stops one gutter short of the next card in line, or on the next grid slot when nothing is there, and never overlaps. `Cmd Z` undoes it.
+
 `Cmd Ctrl Enter` grows a card into the gap it sits in, up to the default size, from whichever corner fills that gap. It grows an empty slot the same way: arrow onto a free slot (it has the size of the card you came from), press `Cmd Ctrl Enter`, and the card you make there has the new size.
 
 `Cmd Z` and `Cmd Shift Z` undo and redo on the canvas: a move, swap, resize or a closed card. Undo never closes a card you opened. Inside an editor they are the buffer's.
@@ -41,9 +43,15 @@ Canvas: tidy, in the palette, packs the cards back onto the grid in reading orde
 - `Cmd` + scroll, or a pinch on the trackpad, zooms around the pointer. The palette has zoom in and out too. (`Cmd =` and `Cmd -` change the terminal font size; see [Terminal cards](../terminal/).)
 - `Cmd 0` actual size, `Cmd 1` fit the focused card, `Cmd 2` fit everything.
 - `Cmd 3` fits the selected cards when several are selected. With one card it fits the card's group, or else the block of cards around it (every card within a gutter of the next).
-- Double-click a card's frame or label to fit it; double-click empty canvas to fit everything.
+- Double-click a card's frame or label to fit it; double-click empty canvas to fit everything. A terminal card drawn as bars, because you are zoomed out too far to read it or the canvas is crowded, fits on a double-click anywhere on it.
 
 Zoomed far out, text is drawn as bars, one per word, so a full card still reads as full. The line is set by what the screen can draw, not a fixed zoom level.
+
+### Reading mode
+
+`Cmd 1` on a terminal card that is already fitted zooms in to 150% with the card's bottom edge at the bottom of the window, which is where a long agent answer ends. The status bar says "reading". `ui.readZoom` sets the zoom (1.1 to 4).
+
+While the mode is on, `Cmd Up` and `Cmd Down` pan three rows inside the card. Typing and `Enter` still reach the shell and bring the view back to the bottom. `Cmd 1` again or `Cmd 2` leaves the mode, and so does panning or zooming by hand. The palette has it as "Canvas: read the focused card".
 
 ### Maximising a card
 
