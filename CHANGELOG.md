@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-09
 
+- New settings `ui.fontFamily`, `ui.fontSize`, `ui.fontWeight` and `ui.fontWeightBold` (Tarık Kavaz): the font of the interface itself, meaning the workspace tabs, card labels, status bar, palette and dialogs. The default is now the macOS system font instead of the terminal's monospace one. Terminal, editor and document text keep their own settings. A change applies at once.
 - New: `Help: open the changelog` in the command palette opens this changelog as a card beside the focused one, newest release first. It is the text of the build you run, so an update brings its own.
 - New: reading mode for terminal cards. Press Cmd+1 on a card that is already fitted: the canvas zooms to 150% (`ui.readZoom`) with the card's bottom edge at the bottom of the window, so you read the prompt and the newest lines at a larger size. Cmd+Up and Cmd+Down pan along the card, only while this mode is on and never past the card's edges. Typing and Enter work as usual and bring the view back to the bottom. Cmd+1 again or Cmd+2 leaves; so does panning or zooming by hand. The status bar says "reading" while it is on. `Canvas: read the focused card` is the command.
 
