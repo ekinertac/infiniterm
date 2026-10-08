@@ -6,9 +6,11 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-08
+## 0.5.10 (build 775), 2026-10-08
 
-- Fixed: dragging a window corner resizes the app on macOS 27 when the browser is enabled.
+### Window
+
+- Fixed: dragging a window corner resizes the app on macOS 27 when the browser is enabled (thanks to Tarık Kavaz). CEF was left on the native AppKit message pump, which ended the resize at once; it now uses the external pump the app already asked for.
 
 ## 0.5.9 (build 767), 2026-10-08
 
