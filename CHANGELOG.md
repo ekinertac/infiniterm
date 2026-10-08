@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-08
+
+- Double-clicking a terminal card that is drawn as bars (zoomed out too far to read, or too many cards on screen) fits that card, like Cmd+1, instead of selecting a word nobody can see. A readable card keeps its double-click.
+
 ## 0.5.10 (build 775), 2026-10-08
 
 ### Window
