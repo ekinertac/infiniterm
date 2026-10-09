@@ -410,7 +410,7 @@ impl AppView {
                 window,
                 &group.name,
                 label_px,
-                &chrome.typography.bold,
+                &chrome.typography.regular,
                 chrome.group_label_fg,
             );
             let h = label_px * GROUP_LABEL_TAB_HEIGHT_RATIO;
@@ -663,7 +663,7 @@ impl AppView {
                     window,
                     &hint.to_string(),
                     hp,
-                    &chrome.typography.bold,
+                    &chrome.typography.regular,
                     chrome.sel_fg,
                 );
                 let hb = Bounds::new(
@@ -935,7 +935,7 @@ impl AppView {
             let room = b.size.width - border * 2. - label_px;
             let mut text = format!("{head}{tail}");
             let mut line =
-                crate::text::shape(window, &text, label_px, &chrome.typography.bold, label_fg);
+                crate::text::shape(window, &text, label_px, &chrome.typography.regular, label_fg);
             let mut keep = head.chars().count();
             while line.width > room && keep > 0 {
                 keep /= 2;
@@ -949,7 +949,7 @@ impl AppView {
                     .collect();
                 text = format!("\u{2026}{cut}{tail}");
                 line =
-                    crate::text::shape(window, &text, label_px, &chrome.typography.bold, label_fg);
+                    crate::text::shape(window, &text, label_px, &chrome.typography.regular, label_fg);
             }
             // The tail alone can still be wider than the card: a label with
             // no slash in it is ALL tail, and an agent's session name has
@@ -957,12 +957,12 @@ impl AppView {
             if line.width > room {
                 text = crate::text::elide(&text, f32::from(room), |t| {
                     f32::from(
-                        crate::text::shape(window, t, label_px, &chrome.typography.bold, label_fg)
+                        crate::text::shape(window, t, label_px, &chrome.typography.regular, label_fg)
                             .width,
                     )
                 });
                 line =
-                    crate::text::shape(window, &text, label_px, &chrome.typography.bold, label_fg);
+                    crate::text::shape(window, &text, label_px, &chrome.typography.regular, label_fg);
             }
             let w = line.width + label_px;
             let lb = Bounds::new(point(place(w), top), size(w, h));
@@ -1028,7 +1028,7 @@ impl AppView {
                 window,
                 remote,
                 label_px,
-                &chrome.typography.bold,
+                &chrome.typography.regular,
                 chrome.remote_fg,
             );
             // The other end of the label's edge, so the two never overlap.
