@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-09
 
+- Link feedback is the same for every kind of link: holding Cmd over a link in a terminal draws a full-strength double underline over a faint tint and turns the pointer to a hand. A link a program marked itself (OSC 8) has a thin dim underline at rest, so hovering visibly changes it.
 - A link a program marked itself (OSC 8) is underlined at rest, so text that is a link and does not look like one is not just text. Links found by pattern (URLs, paths, `#349`) still show only under Cmd+hover.
 - Terminal hyperlinks (OSC 8) work: text a program marks as a link, such as `ls --hyperlink`, `rg --hyperlink-format`, `gcc` or an agent's markdown link `[#432](https://...)`, opens its address on Cmd+click, with the Cmd+hover underline, whatever the visible text says. Only `http` and `https` addresses open: `file:` and an application's own scheme are ignored, since the text of a link can lie.
 - Issue and pull request numbers in terminal output are links. In a card whose directory is a GitHub checkout, `#349` opens `github.com/<owner>/<repo>/issues/349` on Cmd+click (GitHub redirects to the pull request when it is one), and `owner/repo#349` works in any card. A bare number needs a space, bracket or quote before it and no letter after it, so `#!/bin/sh` and `a#1` are not links; a colour like `#123` is one, which shows only as an underline under Cmd. The repository is read from `.git/config` (a worktree too), `origin` first.
