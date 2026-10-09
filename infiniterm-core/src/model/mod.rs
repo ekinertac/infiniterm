@@ -463,6 +463,9 @@ pub enum BrowserAction {
     Back,
     Forward,
     Reload,
+    /// Open DevTools for this page in a card beside it (the ui owns the
+    /// port and the page's target id).
+    DevTools,
 }
 
 /// Find in page. `next` false is a new search, true steps through the one

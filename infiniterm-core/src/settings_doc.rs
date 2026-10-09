@@ -259,6 +259,16 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "browser.devtools",
+        &[
+            "Let a browser card open DevTools (the palette's Browser: open DevTools).",
+            "ON by default. It opens a debugging port on a random loopback port;",
+            "only our own DevTools page may connect to it, a web page cannot.",
+            "A program on this Mac can still attach to the port: turn it off if",
+            "that matters to you. Read at launch: restart after changing it.",
+        ],
+    ),
+    (
         "browser.engines",
         &[
             "Extra sites Tab can scope a search to, added to the nine built in",
