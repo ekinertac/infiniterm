@@ -85,7 +85,7 @@ We take option 2. The page's target id comes from `GET /json` on the port, match
 
 The same list also shows the extensions' service workers and background pages, so the same card inspects an extension. That makes this the main way to debug the extension patches below.
 
-Security: an open debugging port lets any local program drive every page, with the cookies they hold. The port binds to loopback and the allow-origins switch names only our frontend's own origin, so a web page cannot attach. A local program still can. Recommendation: a setting `browser.devtools`, default off, read at launch, with a pick of a random free port per launch. The command explains how to turn it on when it is off. Open question below.
+Security: an open debugging port lets any local program drive every page, with the cookies they hold. The port binds to loopback, it is a random free port picked at each launch, and the allow-origins switch names only our frontend's own origin, so a web page cannot attach. A local program still can. Decision (Ekin, 2026-10-09): the port is on by default. A setting `browser.devtools` turns it off; it is read at launch, because CEF cannot open or close the port later.
 
 ## Build and distribution
 
@@ -119,7 +119,6 @@ Each phase ends with a check on screen with the driver, on a scratch instance.
 - A window id per card, or per workspace? The spec says per card. A workspace-wide window would make "active tab" cross-card and is harder to explain.
 - Does a locked and focused browser card decide the "last focused window", or the card with the app's focus? The spec says the focused card, locked or not.
 - Extension updates: change the id (installing under a new directory) or force the worker to reload. The probe showed the cache; the fix is not yet chosen.
-- DevTools port: default off with a setting and a restart, or on at every launch? Off is safer; on is easier to use. A CEF port cannot be opened after launch.
 - Whether to keep the prebuilt framework as a fallback path in the bundle script, for people who build the app from source without our CEF.
 
 ## Tests
