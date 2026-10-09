@@ -520,7 +520,11 @@ impl AppView {
         let window_area = f32::from(visible.size.width) * f32::from(visible.size.height);
         let scale = vp.scale as f32;
         let window_cells = (density * window_area * scale * scale) as usize;
-        let crowded = crate::chrome::over_glyph_budget(cells, window_cells);
+        let crowded = crate::chrome::over_glyph_budget(
+            cells,
+            window_cells,
+            self.model.config.ui.glyph_budget,
+        );
         self.crowded = crowded;
         for (id, _) in &on_screen {
             if let Some(b) = self.bodies.get_mut(id) {
