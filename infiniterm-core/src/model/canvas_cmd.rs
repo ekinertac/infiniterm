@@ -149,6 +149,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         // Cmd+1 on the terminal card the view already frames: reading mode
         // (#313). Pressed again, or Cmd+2, it leaves, through the fit below.
         if m.reading.is_none()
+            && m.config.ui.card_zoom > 0.
             && m.framing
             && m.selected().len() == 1
             && m.framed_card.is_some()

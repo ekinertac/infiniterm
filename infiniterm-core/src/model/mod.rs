@@ -1237,6 +1237,13 @@ impl Model {
         .collect()
     }
 
+    /// Whether `id` is one of several selected cards: a right-click on it keeps
+    /// the selection and the menu acts on all of it (#346), as in Finder.
+    pub fn in_multi_selection(&self, id: &str) -> bool {
+        let selected = self.selected_ids();
+        selected.len() > 1 && selected.iter().any(|s| s == id)
+    }
+
     pub fn selected_ids(&self) -> Vec<String> {
         self.selected().into_iter().map(|c| c.id.clone()).collect()
     }

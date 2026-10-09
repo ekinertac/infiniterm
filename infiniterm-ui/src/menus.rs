@@ -134,6 +134,10 @@ impl AppView {
 
     /// The right-clicked card is the one the menu's commands act on.
     fn focus_for_menu(&mut self, id: &str) {
+        // One of several selected cards: the selection stays (#346).
+        if self.model.in_multi_selection(id) {
+            return;
+        }
         if self.model.selection.focused_id.as_deref() != Some(id) {
             self.model.set_focus(Some(id));
         }

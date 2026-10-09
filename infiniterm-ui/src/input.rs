@@ -160,6 +160,15 @@ impl AppView {
             }
             return;
         }
+        // A right-click on one of several selected cards keeps the selection:
+        // the menu opens over it and acts on all of it (#346).
+        if button == 2 {
+            if let Hit::CardBody { id, .. } | Hit::CardEdge { id, .. } = self.hit(p) {
+                if self.model.in_multi_selection(&id) {
+                    return;
+                }
+            }
+        }
         match self.hit(p) {
             Hit::Nothing => {
                 // A double-click on bare canvas fits everything, Cmd+2 for

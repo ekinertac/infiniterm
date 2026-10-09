@@ -1,4 +1,4 @@
-//! Reading mode (#313): zoom to the bottom of a terminal card at `ui.readZoom`
+//! Zoom on a card's bottom, once called reading mode (#313, #340): zoom to the bottom of a terminal card at `ui.cardZoom`
 //! and pan along it with Cmd+Up and Cmd+Down, for reading a regular tall card
 //! at a size the fit leaves too small. Cmd+1 on a card that is already fitted
 //! enters it; Cmd+1 or Cmd+2 (any viewport change: `Model::stop_framing`)
@@ -34,7 +34,7 @@ impl Model {
         self.reading = None;
     }
 
-    /// Zooms to `ui.readZoom` on the focused terminal card, its bottom at the
+    /// Zooms to `ui.cardZoom` on the focused terminal card, its bottom at the
     /// window's bottom.
     pub fn read_card(&mut self) {
         let Some(card) = self.focused().cloned() else {
@@ -44,7 +44,11 @@ impl Model {
             self.notify("reading mode is for terminal cards");
             return;
         }
-        let scale = self.config.ui.read_zoom;
+        let scale = self.config.ui.card_zoom;
+        if scale <= 0. {
+            self.notify("zooming on a card is off: set ui.cardZoom above 0");
+            return;
+        }
         let f = frame(card.rect, self.view_size, scale);
         self.effects.push(Effect::AnimateFit(Viewport {
             x: f.x,
@@ -66,7 +70,7 @@ impl Model {
     /// Moves the view `rows` rows of the card's text; negative is up.
     pub fn read_pan(&mut self, rows: f64) {
         let Some(r) = self.reading.clone() else {
-            self.notify("not in reading mode: Cmd+1 on a fitted card enters it");
+            self.notify("not zoomed on a card: Cmd+1 on a fitted terminal card does that");
             return;
         };
         let row_h = self.config.terminal.font_size * self.config.terminal.line_height;
@@ -95,17 +99,19 @@ impl Model {
 }
 
 pub fn register(r: &mut CommandRegistry<Model>) {
-    r.register("canvas.read", "Canvas: read the focused card", |m| {
-        m.read_card()
-    });
     r.register(
-        "canvas.read.up",
-        "Canvas: reading, pan up (Cmd+Up while reading)",
+        "canvas.zoom.cardBottom",
+        "Canvas: zoom in on the focused card's bottom",
+        |m| m.read_card(),
+    );
+    r.register(
+        "canvas.zoom.cardBottom.up",
+        "Canvas: pan up while zoomed on a card (Cmd+Up)",
         |m| m.read_pan(-PAN_ROWS),
     );
     r.register(
-        "canvas.read.down",
-        "Canvas: reading, pan down (Cmd+Down while reading)",
+        "canvas.zoom.cardBottom.down",
+        "Canvas: pan down while zoomed on a card (Cmd+Down)",
         |m| m.read_pan(PAN_ROWS),
     );
 }
