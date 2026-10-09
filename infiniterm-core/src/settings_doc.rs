@@ -367,6 +367,18 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.glyphBudget",
+        &[
+            "How many terminal cells may be on screen, across every visible card, before the",
+            "canvas draws all of them as bars instead of text. Default 30000, about two full",
+            "cards; a window covered edge to edge in cards reads down to about 82% zoom. A card",
+            "that fills the window can show more: the limit grows with the window.",
+            "Each cell costs about 1.7 microseconds a frame, so 150000 is about a quarter of a",
+            "second of painting while the canvas moves; raise it until zooming gets slow.",
+            "1000 to 5000000.",
+        ],
+    ),
+    (
         "ui.readZoom",
         &[
             "The canvas scale reading mode zooms to: 1.5 is 150%. Press Cmd+1 on a terminal card",

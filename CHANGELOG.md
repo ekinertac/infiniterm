@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-09
+
+- New setting `ui.glyphBudget` (default 30000): how many terminal cells may be on screen before every card turns to bars. Cards turn to bars when a frame would paint too much text, not at a fixed zoom, so a wall of cards can be bars at 50% while one card reads at 30%. Raise it to read more cards at a smaller zoom; each cell costs about 1.7 microseconds a frame.
+
 ## 0.5.11 (build 801), 2026-10-09
 
 ### Canvas

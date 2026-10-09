@@ -242,6 +242,11 @@ impl Config {
     }
 }
 
+/// `ui.glyphBudget`'s default: about two full cards of terminal cells, the
+/// cost of one frame in glyphs (`infiniterm-ui/src/chrome.rs`, where the rule
+/// and its measurements live).
+pub const DEFAULT_GLYPH_BUDGET: usize = 30_000;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ui {
@@ -281,6 +286,9 @@ pub struct Ui {
     /// Whether the canvas draws its grid (#96).
     /// Canvas scale reading mode zooms to (#313): 1.5 is 150%.
     pub read_zoom: f64,
+    /// Terminal cells that may be on screen before every card draws bars
+    /// instead of text (`chrome::over_glyph_budget`).
+    pub glyph_budget: usize,
     pub show_grid: bool,
     /// Screen pixels left around a card or cluster when it is fitted (#87).
     pub fit_padding: f64,
@@ -408,6 +416,7 @@ pub fn default_config() -> Config {
             card_opacity: 1.,
             card_radius: 0.,
             read_zoom: 1.5,
+            glyph_budget: DEFAULT_GLYPH_BUDGET,
             show_grid: true,
             fit_padding: FIT_PADDING,
             fit_magnify: false,
@@ -712,6 +721,12 @@ pub fn merge_config(raw: &Value) -> Config {
             card_opacity: num(u.get("cardOpacity"), d.ui.card_opacity, 0.1, 1.),
             card_radius: num(u.get("cardRadius"), d.ui.card_radius, 0., 40.),
             read_zoom: num(u.get("readZoom"), d.ui.read_zoom, 1.1, 4.),
+            glyph_budget: num(
+                u.get("glyphBudget"),
+                d.ui.glyph_budget as f64,
+                1_000.,
+                5_000_000.,
+            ) as usize,
             show_grid: bool_(u.get("showGrid"), d.ui.show_grid),
             fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
             fit_magnify: bool_(u.get("fitMagnify"), d.ui.fit_magnify),
@@ -1216,6 +1231,12 @@ mod tests {
 
     #[test]
     fn the_grid_is_on_unless_turned_off() {
+        assert_eq!(m(json!({})).ui.glyph_budget, 30_000);
+        assert_eq!(
+            m(json!({"ui.glyphBudget": 150000})).ui.glyph_budget,
+            150_000
+        );
+        assert_eq!(m(json!({"ui.glyphBudget": 5})).ui.glyph_budget, 1_000);
         assert_eq!(m(json!({})).ui.read_zoom, 1.5);
         assert_eq!(m(json!({"ui.readZoom": 2})).ui.read_zoom, 2.);
         assert_eq!(m(json!({"ui.readZoom": 9})).ui.read_zoom, 4.);

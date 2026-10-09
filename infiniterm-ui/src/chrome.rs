@@ -70,7 +70,8 @@ pub const FAR_REFRESH_MS: f64 = 250.;
 /// two full cards: a pair side by side still reads, a wall of them does
 /// not and now costs nothing. Counted from the grids, not from what is in
 /// them, so the flag does not flip as output scrolls.
-pub const GLYPH_BUDGET_CELLS: usize = 30_000;
+#[cfg(test)]
+pub const GLYPH_BUDGET_CELLS: usize = infiniterm_core::config::DEFAULT_GLYPH_BUDGET;
 
 /// The budget also grows with the WINDOW: it is at least this many
 /// windowfuls of text at 100%. A fixed 30,000 was less than one windowful
@@ -82,10 +83,13 @@ pub const GLYPH_BUDGET_WINDOWS: f32 = 1.5;
 
 /// Whether a frame showing `cells` of text across its visible cards must
 /// drop to bars, when the window would hold `window_cells` at 100%. The
-/// rule, so it can be argued with in one place.
-pub fn over_glyph_budget(cells: usize, window_cells: usize) -> bool {
+/// rule, so it can be argued with in one place. `budget` is the floor, the
+/// user's `ui.glyphBudget` (default `GLYPH_BUDGET_CELLS`): raising it trades
+/// frame time for text at a smaller zoom (Ekin, 2026-10-09: twelve 50 by 80
+/// cards at 49% read fine and were bars).
+pub fn over_glyph_budget(cells: usize, window_cells: usize, budget: usize) -> bool {
     let relative = (window_cells as f32 * GLYPH_BUDGET_WINDOWS) as usize;
-    cells > GLYPH_BUDGET_CELLS.max(relative)
+    cells > budget.max(relative)
 }
 /// Lines scrolled per wheel tick, shared by every card body with a text
 /// buffer, so the terminal, editor, diff and transcript all feel the same
@@ -486,13 +490,22 @@ mod tests {
     #[test]
     fn the_glyph_budget_is_about_two_full_cards() {
         let card = 151 * 87;
-        assert!(!over_glyph_budget(card, 0), "one card paints glyphs");
         assert!(
-            !over_glyph_budget(card * 2, 0),
+            !over_glyph_budget(card, 0, GLYPH_BUDGET_CELLS),
+            "one card paints glyphs"
+        );
+        assert!(
+            !over_glyph_budget(card * 2, 0, GLYPH_BUDGET_CELLS),
             "a pair side by side still does"
         );
-        assert!(over_glyph_budget(card * 3, 0), "three is past it");
-        assert!(over_glyph_budget(card * 8, 0), "a 4x2 fit-all is bars");
+        assert!(
+            over_glyph_budget(card * 3, 0, GLYPH_BUDGET_CELLS),
+            "three is past it"
+        );
+        assert!(
+            over_glyph_budget(card * 8, 0, GLYPH_BUDGET_CELLS),
+            "a 4x2 fit-all is bars"
+        );
     }
 
     /// A window that holds 60,000 cells at 100% (the 4K) and is covered
@@ -502,9 +515,29 @@ mod tests {
     fn a_window_full_of_cards_is_text_near_100_percent() {
         let window = 60_000;
         let shown = |zoom: f32| (window as f32 / (zoom * zoom)) as usize;
-        assert!(!over_glyph_budget(shown(0.98), window), "98% reads");
-        assert!(!over_glyph_budget(shown(0.85), window), "85% reads");
-        assert!(over_glyph_budget(shown(0.70), window), "70% is bars");
+        assert!(
+            !over_glyph_budget(shown(0.98), window, GLYPH_BUDGET_CELLS),
+            "98% reads"
+        );
+        assert!(
+            !over_glyph_budget(shown(0.85), window, GLYPH_BUDGET_CELLS),
+            "85% reads"
+        );
+        assert!(
+            over_glyph_budget(shown(0.70), window, GLYPH_BUDGET_CELLS),
+            "70% is bars"
+        );
+    }
+
+    /// `ui.glyphBudget` raises the floor: twelve full cards that are bars by
+    /// default read once the budget covers them.
+    #[test]
+    fn a_larger_budget_keeps_text_on_a_wall_of_cards() {
+        let twelve = 12 * 50 * 80;
+        assert!(over_glyph_budget(twelve, 12_000, GLYPH_BUDGET_CELLS));
+        assert!(!over_glyph_budget(twelve, 12_000, 120_000));
+        // The window-relative rule still applies when it is larger.
+        assert!(!over_glyph_budget(100_000, 100_000, 1_000));
     }
 }
 
