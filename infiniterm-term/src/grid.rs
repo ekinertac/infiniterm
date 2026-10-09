@@ -1246,6 +1246,22 @@ mod tests {
         );
     }
 
+    // Claude Code writes OSC 8 with an id and a BEL terminator, not the ST
+    // form the tests above use; both must read the same.
+    #[test]
+    fn an_osc8_hyperlink_with_an_id_and_a_bel_terminator_is_read() {
+        let mut g = Grid::new(40, 1, 100);
+        g.advance(
+            b"See \x1b]8;id=1v04av0;https://github.com/o/r/issues/337\x07#337\x1b]8;;\x07 and more",
+        );
+        let f = g.frame(&Palette::default_palette());
+        assert_eq!(
+            f.rows[0].hyperlinks,
+            vec![(4, 8, "https://github.com/o/r/issues/337".to_string())]
+        );
+        assert_eq!(&f.rows[0].text[4..8], "#337");
+    }
+
     // ⚠️ is a text symbol plus U+FE0F, 🏃‍♀️ a runner, a joiner, ♀ and
     // U+FE0F. alacritty keeps the zero-width ones ON a cell; they must
     // reach the row beside its text, on the right columns, or the painter
