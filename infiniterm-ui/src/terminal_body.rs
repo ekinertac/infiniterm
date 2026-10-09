@@ -943,7 +943,7 @@ impl CardBody for TerminalBody {
                         let len = row.text[f.start.min(row.text.len())..f.end.min(row.text.len())]
                             .chars()
                             .count();
-                        if !under_hover(hover, r, start, len) {
+                        if !link_underlined(f.marked, hover, r, start, len) {
                             continue;
                         }
                         let ux = origin.x + cell_w * start as f32;
@@ -1511,6 +1511,19 @@ fn under_hover(hover: Option<(usize, usize)>, r: usize, start: usize, len: usize
     hover.is_some_and(|(hc, hr)| hr == r && hc >= start && hc < start + len)
 }
 
+/// Whether a link is underlined now: always when the program marked it
+/// itself (OSC 8: its text need not look like a link), else only under the
+/// Cmd+hover.
+fn link_underlined(
+    marked: bool,
+    hover: Option<(usize, usize)>,
+    r: usize,
+    start: usize,
+    len: usize,
+) -> bool {
+    marked || under_hover(hover, r, start, len)
+}
+
 /// Whether a row can be skipped by the painter. Blank text is not enough:
 /// a space with a background is a painted cell. Pi draws its cursor as an
 /// inverse-video space, and on an empty input line that space is the whole
@@ -1724,6 +1737,16 @@ mod tests {
         assert!(!under_hover(Some((4, 3)), 3, 5, 4));
     }
 
+    // A link the program marked (OSC 8) is underlined at rest; one found by
+    // pattern only under Cmd+hover.
+    #[test]
+    fn a_program_marked_link_is_underlined_without_the_pointer() {
+        assert!(link_underlined(true, None, 3, 5, 4));
+        assert!(!link_underlined(false, None, 3, 5, 4));
+        assert!(link_underlined(false, Some((6, 3)), 3, 5, 4));
+        assert!(!link_underlined(false, Some((9, 3)), 3, 5, 4));
+    }
+
     // OSC 8 end to end through the body: bytes in, the row's span in, a link
     // at those columns that opens the program's address (#335). A `file:` one
     // is not offered.
@@ -1740,6 +1763,7 @@ mod tests {
         let (found, _) = b.link_at(5, 0).expect("a link under CLICK ME").clone();
         assert_eq!(found.target, "https://example.com/osc8");
         assert_eq!(found.text, "CLICK ME");
+        assert!(found.marked, "an OSC 8 link is underlined at rest");
         assert!(b.link_at(0, 0).is_none(), "plain text before it");
         assert!(b.link_at(16, 0).is_none(), "a file: address is not offered");
     }

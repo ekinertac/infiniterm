@@ -42,6 +42,10 @@ pub struct Found {
     pub target: String,
     /// The line from a `:42` or `:42:7` suffix, for opening an editor there.
     pub line: Option<u64>,
+    /// The program marked this itself (OSC 8), so it is underlined at rest:
+    /// text that is a link and does not look like one is only text to a user.
+    /// Links found by pattern show only under Cmd+hover.
+    pub marked: bool,
 }
 
 struct Patterns {
@@ -138,6 +142,7 @@ fn issue_refs(line: &str, repo: Option<&crate::git_repo::Repo>) -> Vec<Found> {
             text: all.as_str().to_string(),
             target: r.issue_url(&c[3]),
             line: None,
+            marked: false,
         });
     }
     if let Some(repo) = repo {
@@ -164,6 +169,7 @@ fn issue_refs(line: &str, repo: Option<&crate::git_repo::Repo>) -> Vec<Found> {
                 text: all.as_str().to_string(),
                 target: repo.issue_url(&c[1]),
                 line: None,
+                marked: false,
             });
         }
     }
@@ -213,6 +219,7 @@ pub fn merge_hyperlinks(
             text: text.to_string(),
             target: uri.clone(),
             line: None,
+            marked: true,
         });
     }
     if linked.is_empty() {
@@ -236,6 +243,7 @@ fn find_links_plain(line: &str) -> Vec<Found> {
             target: text.clone(),
             text,
             line: None,
+            marked: false,
         });
     }
     for m in p.path.find_iter(line) {
@@ -259,6 +267,7 @@ fn find_links_plain(line: &str) -> Vec<Found> {
                 target: format!("https://{text}"),
                 text,
                 line: None,
+                marked: false,
             });
             continue;
         }
@@ -273,6 +282,7 @@ fn find_links_plain(line: &str) -> Vec<Found> {
             target: p.line_suffix.replace(&text, "").into_owned(),
             text,
             line: line_no,
+            marked: false,
         });
     }
     found.sort_by_key(|f| f.start);
@@ -511,6 +521,8 @@ mod tests {
         let found = merge_hyperlinks(find_links(line), line, &spans);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].text, "issue 432");
+        assert!(found[0].marked);
+        assert!(find_links("https://example.com").iter().all(|f| !f.marked));
         assert_eq!(found[0].target, "https://github.com/o/r/issues/432");
         assert_eq!((found[0].start, found[0].end), (4, 13));
         // A span over text that already read as a link replaces it.
