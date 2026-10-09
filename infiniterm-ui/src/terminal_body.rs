@@ -888,84 +888,92 @@ impl CardBody for TerminalBody {
         }
         let hover = self.hover;
         let shown = window.content_mask().bounds;
-        for (r, row) in frame.rows.iter().enumerate() {
-            if row_paints_nothing(row) || !row_on_screen(origin.y, line_h, r, shown) {
-                continue;
-            }
-            let y = origin.y + line_h * r as f32;
-            // Backgrounds first, per run, so a full-width highlight is a quad
-            // and not a shaped-line property.
-            let mut x = origin.x;
-            for run in &row.runs {
-                let w = cell_w * run.text.chars().count() as f32;
-                if let Some(bg) = run.bg {
-                    window.paint_quad(fill(Bounds::new(point(x, y), size(w, line_h)), rgb(bg)));
+        // One layer for every row: gpui orders each primitive against all the
+        // ones before it through a bounds tree, which was 90% of the time of
+        // a glyph (profiled 2026-10-09, 13 busy cards); inside a layer they
+        // share one order and skip the tree. Within an order gpui draws
+        // quads, then underlines, then glyphs, which is the order the rows
+        // are painted in anyway.
+        window.paint_layer(bounds, |window| {
+            for (r, row) in frame.rows.iter().enumerate() {
+                if row_paints_nothing(row) || !row_on_screen(origin.y, line_h, r, shown) {
+                    continue;
                 }
-                x += w;
-            }
-            // The underline is the Cmd+hover affordance and nothing else.
-            // Underlining every confirmed link marked up most of the output
-            // of anything that prints paths, which is most things.
-            if let Some(links) = self.links.get(r) {
-                for (f, _) in links {
-                    let start = row.text[..f.start.min(row.text.len())].chars().count();
-                    let len = row.text[f.start.min(row.text.len())..f.end.min(row.text.len())]
-                        .chars()
-                        .count();
-                    if !under_hover(hover, r, start, len) {
-                        continue;
+                let y = origin.y + line_h * r as f32;
+                // Backgrounds first, per run, so a full-width highlight is a quad
+                // and not a shaped-line property.
+                let mut x = origin.x;
+                for run in &row.runs {
+                    let w = cell_w * run.text.chars().count() as f32;
+                    if let Some(bg) = run.bg {
+                        window.paint_quad(fill(Bounds::new(point(x, y), size(w, line_h)), rgb(bg)));
                     }
-                    let ux = origin.x + cell_w * start as f32;
-                    window.paint_quad(fill(
-                        Bounds::new(
-                            point(ux, y + line_h - px(LINK_UNDERLINE_OFFSET_PX)),
-                            size(cell_w * len as f32, px(crate::chrome::HAIRLINE_PX as f32)),
-                        ),
-                        rgb(self.palette.selection),
-                    ));
+                    x += w;
                 }
-            }
-            // Shape per chunk, cached against the row's content and size.
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            use std::hash::{Hash, Hasher};
-            row.text.hash(&mut hasher);
-            // A U+FE0F arriving on a cell whose character did not change
-            // must still reshape the row.
-            row.zerowidth.hash(&mut hasher);
-            f32::from(font_size).to_bits().hash(&mut hasher);
-            for run in &row.runs {
-                (
-                    run.fg,
-                    run.bg,
-                    run.bold,
-                    run.italic,
-                    run.underline,
-                    run.strikeout,
-                    run.dim,
-                    run.text.len(),
-                )
-                    .hash(&mut hasher);
-            }
-            let key = hasher.finish();
-            if self.shaped.len() <= r {
-                self.shaped.resize_with(r + 1, || (0, ShapedRow::default()));
-            }
-            if self.shaped[r].0 != key {
+                // The underline is the Cmd+hover affordance and nothing else.
+                // Underlining every confirmed link marked up most of the output
+                // of anything that prints paths, which is most things.
+                if let Some(links) = self.links.get(r) {
+                    for (f, _) in links {
+                        let start = row.text[..f.start.min(row.text.len())].chars().count();
+                        let len = row.text[f.start.min(row.text.len())..f.end.min(row.text.len())]
+                            .chars()
+                            .count();
+                        if !under_hover(hover, r, start, len) {
+                            continue;
+                        }
+                        let ux = origin.x + cell_w * start as f32;
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(ux, y + line_h - px(LINK_UNDERLINE_OFFSET_PX)),
+                                size(cell_w * len as f32, px(crate::chrome::HAIRLINE_PX as f32)),
+                            ),
+                            rgb(self.palette.selection),
+                        ));
+                    }
+                }
+                // Shape per chunk, cached against the row's content and size.
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                use std::hash::{Hash, Hasher};
+                row.text.hash(&mut hasher);
+                // A U+FE0F arriving on a cell whose character did not change
+                // must still reshape the row.
+                row.zerowidth.hash(&mut hasher);
+                f32::from(font_size).to_bits().hash(&mut hasher);
+                for run in &row.runs {
+                    (
+                        run.fg,
+                        run.bg,
+                        run.bold,
+                        run.italic,
+                        run.underline,
+                        run.strikeout,
+                        run.dim,
+                        run.text.len(),
+                    )
+                        .hash(&mut hasher);
+                }
+                let key = hasher.finish();
+                if self.shaped.len() <= r {
+                    self.shaped.resize_with(r + 1, || (0, ShapedRow::default()));
+                }
+                if self.shaped[r].0 != key {
+                    let t = std::time::Instant::now();
+                    let shaped = shape_row(row, &base, bold_weight, font_size, window);
+                    self.shaped[r] = (key, shaped);
+                    timing_add(2, t);
+                }
                 let t = std::time::Instant::now();
-                let shaped = shape_row(row, &base, bold_weight, font_size, window);
-                self.shaped[r] = (key, shaped);
-                timing_add(2, t);
+                paint_row(
+                    &self.shaped[r].1,
+                    point(origin.x, y),
+                    cell_w,
+                    line_h,
+                    window,
+                );
+                timing_add(3, t);
             }
-            let t = std::time::Instant::now();
-            paint_row(
-                &self.shaped[r].1,
-                point(origin.x, y),
-                cell_w,
-                line_h,
-                window,
-            );
-            timing_add(3, t);
-        }
+        });
         let visual = frame.visual;
         self.frame = frame;
         if visual {

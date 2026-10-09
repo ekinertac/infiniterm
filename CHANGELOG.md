@@ -9,7 +9,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-10-09
 
 - New: `Browser: open DevTools` in the command palette opens Chromium's DevTools for the page in a card beside it: Elements, Console, Network and the rest. It works through a debugging port that opens on a random loopback port at each launch; only the DevTools page the app opens may connect to it, a web page cannot. The port is on by default. A program running on this Mac can still attach to it, so `browser.devtools` turns the feature off; restart the app after changing it. There is no key for it yet.
-- New setting `ui.glyphBudget` (default 30000): how many terminal cells may be on screen before every card turns to bars. Cards turn to bars when a frame would paint too much text, not at a fixed zoom, so a wall of cards can be bars at 50% while one card reads at 30%. Raise it to read more cards at a smaller zoom; each cell costs about 1.7 microseconds a frame.
+- Terminal text is about five times cheaper to draw. Profiling 13 busy cards showed 90% of a glyph's cost was gpui ordering each one against everything drawn before it; a card's rows now share one order. A frame of those cards went from 17.5 ms to 4 ms, so zooming and panning over many cards of text is smooth. With that, `ui.glyphBudget` (the text-to-bars limit) now defaults to 150000 cells, about eleven full cards, instead of 30000.
+- New setting `ui.glyphBudget` (default 150000): how many terminal cells may be on screen before every card turns to bars. Cards turn to bars when a frame would paint too much text, not at a fixed zoom, so a wall of cards can be bars at 50% while one card reads at 30%. Raise it to read more cards at a smaller zoom; each cell costs at most 50 nanoseconds a frame.
 
 ## 0.5.11 (build 801), 2026-10-09
 
