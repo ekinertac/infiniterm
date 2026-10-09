@@ -627,6 +627,13 @@ impl AppView {
                     .as_ref()
                     .and_then(|id| self.editor_tabs_for(id))
                     .and_then(|t| t.divider_cursor())
+            })
+            .or_else(|| {
+                // Cmd over a link in a terminal: the hand, as over a page's.
+                let id = hover.as_ref()?;
+                self.terminal_body(id)
+                    .is_some_and(|b| b.link_hovered())
+                    .then_some(gpui::CursorStyle::PointingHand)
             });
         if let Some(style) = style {
             window.set_window_cursor_style(style);

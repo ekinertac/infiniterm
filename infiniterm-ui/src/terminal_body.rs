@@ -498,6 +498,12 @@ impl TerminalBody {
         (to > from).then_some((from, to - 1))
     }
 
+    /// Cmd is held with the pointer over a link: what turns the cursor to a hand.
+    pub fn link_hovered(&self) -> bool {
+        self.hover
+            .is_some_and(|(c, r)| self.link_at(c, r).is_some())
+    }
+
     /// The link under a cell, if the row has one there.
     fn link_at(&self, col: usize, row: usize) -> Option<&(Found, Option<PathKind>)> {
         let text = self.link_texts.get(row)?;
@@ -943,16 +949,25 @@ impl CardBody for TerminalBody {
                         let len = row.text[f.start.min(row.text.len())..f.end.min(row.text.len())]
                             .chars()
                             .count();
-                        if !link_underlined(f.marked, hover, r, start, len) {
+                        let hovered = under_hover(hover, r, start, len);
+                        let Some(look) = link_look(f.marked, hovered) else {
                             continue;
-                        }
+                        };
                         let ux = origin.x + cell_w * start as f32;
+                        let ink: gpui::Hsla = rgb(self.palette.selection);
+                        if look.tint > 0. {
+                            window.paint_quad(fill(
+                                Bounds::new(point(ux, y), size(cell_w * len as f32, line_h)),
+                                crate::chrome::with_alpha(ink, look.tint),
+                            ));
+                        }
+                        let thick = px(crate::chrome::HAIRLINE_PX as f32 * look.thickness);
                         window.paint_quad(fill(
                             Bounds::new(
-                                point(ux, y + line_h - px(LINK_UNDERLINE_OFFSET_PX)),
-                                size(cell_w * len as f32, px(crate::chrome::HAIRLINE_PX as f32)),
+                                point(ux, y + line_h - px(LINK_UNDERLINE_OFFSET_PX) - thick / 2.),
+                                size(cell_w * len as f32, thick),
                             ),
-                            rgb(self.palette.selection),
+                            crate::chrome::with_alpha(ink, look.alpha),
                         ));
                     }
                 }
@@ -1511,17 +1526,34 @@ fn under_hover(hover: Option<(usize, usize)>, r: usize, start: usize, len: usize
     hover.is_some_and(|(hc, hr)| hr == r && hc >= start && hc < start + len)
 }
 
-/// Whether a link is underlined now: always when the program marked it
-/// itself (OSC 8: its text need not look like a link), else only under the
-/// Cmd+hover.
-fn link_underlined(
-    marked: bool,
-    hover: Option<(usize, usize)>,
-    r: usize,
-    start: usize,
-    len: usize,
-) -> bool {
-    marked || under_hover(hover, r, start, len)
+/// How a link is drawn now (#335): `thickness` in hairlines, `alpha` of the
+/// underline, `tint` the faint fill behind the text (0 for none).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LinkLook {
+    thickness: f32,
+    alpha: f32,
+    tint: f32,
+}
+
+/// The look of a link, or `None` for no mark. A link the program marked itself
+/// (OSC 8) wears a thin dim underline at rest, because its text need not look
+/// like one; one found by pattern shows nothing until Cmd+hover, which makes
+/// every link, marked or not, a full-strength double underline over a faint
+/// tint, so the feedback is the same and a marked link visibly changes.
+fn link_look(marked: bool, hovered: bool) -> Option<LinkLook> {
+    match (marked, hovered) {
+        (_, true) => Some(LinkLook {
+            thickness: 2.,
+            alpha: 1.,
+            tint: 0.15,
+        }),
+        (true, false) => Some(LinkLook {
+            thickness: 1.,
+            alpha: 0.5,
+            tint: 0.,
+        }),
+        (false, false) => None,
+    }
 }
 
 /// Whether a row can be skipped by the painter. Blank text is not enough:
@@ -1737,14 +1769,18 @@ mod tests {
         assert!(!under_hover(Some((4, 3)), 3, 5, 4));
     }
 
-    // A link the program marked (OSC 8) is underlined at rest; one found by
-    // pattern only under Cmd+hover.
+    // A link the program marked (OSC 8) wears a dim thin underline at rest; one
+    // found by pattern nothing. Under Cmd+hover both get the strong look, so a
+    // marked link visibly changes.
     #[test]
-    fn a_program_marked_link_is_underlined_without_the_pointer() {
-        assert!(link_underlined(true, None, 3, 5, 4));
-        assert!(!link_underlined(false, None, 3, 5, 4));
-        assert!(link_underlined(false, Some((6, 3)), 3, 5, 4));
-        assert!(!link_underlined(false, Some((9, 3)), 3, 5, 4));
+    fn a_marked_link_changes_when_hovered_and_a_pattern_link_appears() {
+        assert_eq!(link_look(false, false), None);
+        let rest = link_look(true, false).unwrap();
+        let hover = link_look(true, true).unwrap();
+        assert!(rest.alpha < hover.alpha && rest.thickness < hover.thickness);
+        assert_eq!(rest.tint, 0.);
+        assert!(hover.tint > 0.);
+        assert_eq!(link_look(false, true), Some(hover));
     }
 
     // OSC 8 end to end through the body: bytes in, the row's span in, a link
