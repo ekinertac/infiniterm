@@ -394,6 +394,25 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.textAsBars",
+        &[
+            "On (the default), a card draws faint bars instead of text when its font is smaller than",
+            "ui.minTextPx or more than ui.glyphBudget cells are on screen. Off draws every glyph at",
+            "every zoom, however many: the canvas is slower while it moves, and the text is exact.",
+            "Turn it off to see whether the bars are still needed on your Mac; ui.showFps shows the cost.",
+        ],
+    ),
+    (
+        "ui.minTextPx",
+        &[
+            "How many device pixels tall a font must be on screen before its text is drawn; below",
+            "that every card draws bars instead. Default 7: with terminal.fontSize 19 that is 37%",
+            "zoom on a 1x screen, so a canvas of 20 cards zoomed out to 34% is bars whatever",
+            "ui.glyphBudget says. 4 draws the text down to about 21% (tiny, but you see its shape).",
+            "A retina screen keeps a floor of 4.5 points unless this is lower. 2 to 20.",
+        ],
+    ),
+    (
         "ui.readZoom",
         &[
             "The canvas scale reading mode zooms to: 1.5 is 150%. Press Cmd+1 on a terminal card",

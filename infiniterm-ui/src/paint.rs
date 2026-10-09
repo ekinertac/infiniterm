@@ -278,6 +278,13 @@ impl AppView {
 
     fn paint_world(&mut self, bounds: Bounds<Pixels>, now: f64, window: &mut Window, cx: &mut App) {
         self.label_hits.clear();
+        // Bars off (`ui.textAsBars`): no glyph is too small to draw.
+        let ui = &self.model.config.ui;
+        crate::chrome::set_legible_device_px(if ui.text_as_bars {
+            ui.min_text_px as f32
+        } else {
+            0.
+        });
         let origin = bounds.origin;
         let vp = self.model.viewport;
         let view = self.model.view_size;
@@ -520,11 +527,12 @@ impl AppView {
         let window_area = f32::from(visible.size.width) * f32::from(visible.size.height);
         let scale = vp.scale as f32;
         let window_cells = (density * window_area * scale * scale) as usize;
-        let crowded = crate::chrome::over_glyph_budget(
-            cells,
-            window_cells,
-            self.model.config.ui.glyph_budget,
-        );
+        let crowded = self.model.config.ui.text_as_bars
+            && crate::chrome::over_glyph_budget(
+                cells,
+                window_cells,
+                self.model.config.ui.glyph_budget,
+            );
         self.crowded = crowded;
         for (id, _) in &on_screen {
             if let Some(b) = self.bodies.get_mut(id) {
