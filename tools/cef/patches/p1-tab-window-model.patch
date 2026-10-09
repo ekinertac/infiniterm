@@ -1,0 +1,504 @@
+diff --git chrome/browser/extensions/api/tabs/tabs_api.cc chrome/browser/extensions/api/tabs/tabs_api.cc
+index 420b290..15a98c7 100644
+--- chrome/browser/extensions/api/tabs/tabs_api.cc
++++ chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -15,6 +15,7 @@
+ #include "base/types/expected_macros.h"
+ #include "base/types/optional_util.h"
+ #include "base/unguessable_token.h"
++#include "cef/libcef/features/features.h"
+ #include "chrome/browser/devtools/devtools_window.h"
+ #include "chrome/browser/extensions/api/tabs/tabs_constants.h"
+ #include "chrome/browser/extensions/api/tabs/windows_util.h"
+@@ -58,6 +59,9 @@
+ #include "extensions/browser/extension_user_activation_service.h"
+ #include "extensions/browser/extension_zoom_request_client.h"
+ #include "extensions/browser/extensions_browser_client.h"
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/chrome/extensions/alloy_extension_tabs.h"
++#endif
+ #include "extensions/buildflags/buildflags.h"
+ #include "extensions/common/extension.h"
+ #include "extensions/common/manifest_constants.h"
+@@ -897,6 +901,18 @@ ExtensionFunction::ResponseAction WindowsGetLastFocusedFunction::Run() {
+         return true;  // Continue iterating.
+       });
+   if (!last_focused_browser) {
++#if BUILDFLAG(ENABLE_CEF)
++    WindowController* alloy_window =
++        cef::GetAlloyLastFocusedWindowController(this);
++    if (alloy_window && windows_util::CanOperateOnWindow(
++                            this, alloy_window, extractor.type_filters())) {
++      return RespondNow(WithArguments(alloy_window->CreateWindowValueForExtension(
++          extension(),
++          extractor.populate_tabs() ? WindowController::kPopulateTabs
++                                    : WindowController::kDontPopulateTabs,
++          source_context_type())));
++    }
++#endif
+     return RespondNow(Error(tabs_constants::kNoLastFocusedWindowError));
+   }
+ 
+@@ -921,6 +937,16 @@ ExtensionFunction::ResponseAction WindowsGetAllFunction::Run() {
+       extractor.populate_tabs() ? WindowController::kPopulateTabs
+                                 : WindowController::kDontPopulateTabs;
+   for (WindowController* controller : *WindowControllerList::GetInstance()) {
++#if BUILDFLAG(ENABLE_CEF)
++    if (cef::IsAlloyWindowController(controller)) {
++      if (windows_util::CanOperateOnWindow(this, controller,
++                                           extractor.type_filters())) {
++        window_list.Append(controller->CreateWindowValueForExtension(
++            extension(), populate_tab_behavior, source_context_type()));
++      }
++      continue;
++    }
++#endif
+     if (!controller->GetBrowserWindowInterface() ||
+         !windows_util::CanOperateOnWindow(this, controller,
+                                           extractor.type_filters())) {
+@@ -1685,6 +1711,11 @@ ExtensionFunction::ResponseAction WindowsRemoveFunction::Run() {
+   if (tab_list && !tab_list->IsThisTabListEditable()) {
+     return RespondNow(Error(ExtensionTabUtil::kTabStripNotEditableError));
+   }
++  if (!window_controller->window()) {
++    // A window without a ui::BaseWindow (CEF Alloy style) belongs to the
++    // client application. An extension cannot close it.
++    return RespondNow(Error("This window cannot be closed by an extension."));
++  }
+   window_controller->window()->Close();
+   return RespondNow(NoArguments());
+ }
+@@ -1748,6 +1779,17 @@ ExtensionFunction::ResponseAction TabsGetSelectedFunction::Run() {
+   BrowserWindowInterface* browser =
+       window_controller->GetBrowserWindowInterface();
+   if (!browser) {
++#if BUILDFLAG(ENABLE_CEF)
++    if (cef::IsAlloyWindowController(window_controller)) {
++      content::WebContents* active = window_controller->GetActiveTab();
++      if (!active) {
++        return RespondNow(Error(tabs_constants::kNoSelectedTabError));
++      }
++      return RespondNow(ArgumentList(
++          tabs::Get::Results::Create(tabs_internal::CreateTabObjectHelper(
++              active, extension(), source_context_type(), nullptr, -1))));
++    }
++#endif
+     return RespondNow(Error(ExtensionTabUtil::kNoCrashBrowserError));
+   }
+   TabListInterface* tab_list = ExtensionTabUtil::GetEditableTabList(*browser);
+@@ -1885,6 +1927,10 @@ base::ListValue TabsQueryFunction::BuildTabList(
+                         .ToValue());
+     }
+   }
++
++#if BUILDFLAG(ENABLE_CEF)
++  AppendAlloyTabs(result, url_patterns, window_type, window_id, tab_index);
++#endif
+   return result;
+ }
+ 
+@@ -2065,6 +2111,117 @@ bool TabsQueryFunction::MatchesTab(::tabs::TabInterface* candidate_tab,
+   return true;
+ }
+ 
++#if BUILDFLAG(ENABLE_CEF)
++void TabsQueryFunction::AppendAlloyTabs(base::ListValue& result,
++                                        const URLPatternSet& url_patterns,
++                                        const std::string& window_type,
++                                        int window_id,
++                                        int tab_index) {
++  // Alloy windows are always normal windows.
++  if (!window_type.empty() &&
++      window_type != tabs::ToString(tabs::WindowType::kNormal)) {
++    return;
++  }
++  if (extension() && extension()->is_platform_app()) {
++    return;
++  }
++
++  WindowController* current = cef::GetAlloyCurrentWindowController(this);
++  const int current_window_id = current ? current->GetWindowId() : -1;
++  WindowController* last_focused =
++      cef::GetAlloyLastFocusedWindowController(this);
++  const int last_focused_window_id =
++      last_focused ? last_focused->GetWindowId() : -1;
++
++  Profile* profile = Profile::FromBrowserContext(browser_context());
++  for (content::WebContents* contents :
++       cef::GetAlloyTabs(profile, include_incognito_information())) {
++    std::optional<cef::AlloyTabInfo> info = cef::GetAlloyTabInfo(contents);
++    if (!info) {
++      continue;
++    }
++    // Note: `window_id` may be -1 or -2, which indicate unknown and current
++    // windows.
++    if (window_id >= 0 && window_id != info->window_id) {
++      continue;
++    }
++    if (window_id == extension_misc::kCurrentWindowId &&
++        info->window_id != current_window_id) {
++      continue;
++    }
++    if (!MatchesBool(query_info_.current_window,
++                     info->window_id == current_window_id) ||
++        !MatchesBool(query_info_.last_focused_window,
++                     info->window_id == last_focused_window_id)) {
++      continue;
++    }
++    if (tab_index > -1 && info->index != tab_index) {
++      continue;
++    }
++    if (!MatchesAlloyTab(contents, info->active, url_patterns)) {
++      continue;
++    }
++    result.Append(
++        ExtensionTabUtil::CreateTabObject(
++            contents,
++            ExtensionTabUtil::GetScrubTabBehavior(
++                extension(), source_context_type(), contents),
++            extension(), /*tab_list=*/nullptr, info->index)
++            .ToValue());
++  }
++}
++
++// Same filters as MatchesTab, for a tab without TabInterface, tab lifecycle
++// helper or audible helper. Such a tab is never pinned, grouped, split, frozen
++// or discarded, and is always auto-discardable.
++bool TabsQueryFunction::MatchesAlloyTab(
++    content::WebContents* web_contents,
++    bool active,
++    const URLPatternSet& target_url_patterns) {
++  if (!MatchesBool(query_info_.highlighted, active) ||
++      !MatchesBool(query_info_.active, active) ||
++      !MatchesBool(query_info_.pinned, false) ||
++      !MatchesBool(query_info_.audible, web_contents->IsCurrentlyAudible()) ||
++      !MatchesBool(query_info_.frozen, false) ||
++      !MatchesBool(query_info_.discarded, false) ||
++      !MatchesBool(query_info_.auto_discardable, true) ||
++      !MatchesBool(query_info_.muted, web_contents->IsAudioMuted())) {
++    return false;
++  }
++  if (query_info_.group_id.has_value() && query_info_.group_id.value() != -1) {
++    return false;
++  }
++  if (query_info_.split_view_id.has_value() &&
++      query_info_.split_view_id.value() != -1) {
++    return false;
++  }
++
++  bool check_title = query_info_.title && !query_info_.title->empty();
++  if (check_title || !target_url_patterns.is_empty()) {
++    // Same privilege rule as MatchesTab.
++    if (!extension_->permissions_data()->HasAPIPermissionForTab(
++            ExtensionTabUtil::GetTabId(web_contents),
++            mojom::APIPermissionID::kTab) &&
++        !extension_->permissions_data()->HasHostPermission(
++            web_contents->GetURL())) {
++      return false;
++    }
++    if (check_title &&
++        !base::MatchPattern(web_contents->GetTitle(),
++                            base::UTF8ToUTF16(*query_info_.title))) {
++      return false;
++    }
++    if (!target_url_patterns.is_empty() &&
++        !target_url_patterns.MatchesURL(web_contents->GetURL())) {
++      return false;
++    }
++  }
++
++  return query_info_.status == tabs::TabStatus::kNone ||
++         query_info_.status == ExtensionTabUtil::GetLoadingStatus(web_contents);
++}
++#endif  // BUILDFLAG(ENABLE_CEF)
++
+ TabsCreateFunction::TabsCreateFunction() = default;
+ TabsCreateFunction::~TabsCreateFunction() = default;
+ 
+diff --git chrome/browser/extensions/api/tabs/tabs_api.h chrome/browser/extensions/api/tabs/tabs_api.h
+index a5c36f8..07febb9 100644
+--- chrome/browser/extensions/api/tabs/tabs_api.h
++++ chrome/browser/extensions/api/tabs/tabs_api.h
+@@ -302,6 +302,17 @@ class TabsQueryFunction : public ExtensionFunction {
+   bool MatchesTab(tabs::TabInterface* candidate_tab,
+                   const URLPatternSet& target_url_patterns);
+ 
++  // CEF: appends the Alloy style browsers that the client registered as tabs.
++  // They have no TabInterface. Defined only when ENABLE_CEF is set.
++  void AppendAlloyTabs(base::ListValue& result,
++                       const URLPatternSet& url_patterns,
++                       const std::string& window_type,
++                       int window_id,
++                       int tab_index);
++  bool MatchesAlloyTab(content::WebContents* candidate,
++                       bool active,
++                       const URLPatternSet& target_url_patterns);
++
+   // The query parameters passed by the extension.
+   api::tabs::Query::Params::QueryInfo query_info_;
+ };
+diff --git chrome/browser/extensions/api/tabs/tabs_event_router.cc chrome/browser/extensions/api/tabs/tabs_event_router.cc
+index e881918..3af192c 100644
+--- chrome/browser/extensions/api/tabs/tabs_event_router.cc
++++ chrome/browser/extensions/api/tabs/tabs_event_router.cc
+@@ -228,6 +228,48 @@ TabsEventRouter::~TabsEventRouter() {
+   performance_manager::PageLiveStateDecorator::RemoveAllPageObserver(this);
+ }
+ 
++#if BUILDFLAG(ENABLE_CEF)
++void TabsEventRouter::DispatchAlloyTabCreated(content::WebContents* contents,
++                                              bool active) {
++  DispatchTabCreatedEvent(contents, active);
++}
++
++void TabsEventRouter::DispatchAlloyTabUpdated(
++    content::WebContents* contents,
++    std::set<std::string> changed_property_names) {
++  DispatchTabUpdatedEvent(contents, std::move(changed_property_names));
++}
++
++void TabsEventRouter::DispatchAlloyTabActivated(
++    content::WebContents* contents) {
++  // The onActivated event takes one argument: {windowId, tabId}.
++  base::DictValue object_args;
++  object_args.Set(tabs_constants::kWindowIdKey,
++                  ExtensionTabUtil::GetWindowIdOfTab(contents));
++  object_args.Set(kTabIdKey, ExtensionTabUtil::GetTabId(contents));
++  base::ListValue args;
++  args.Append(std::move(object_args));
++  DispatchEvent(Profile::FromBrowserContext(contents->GetBrowserContext()),
++                events::TABS_ON_ACTIVATED, api::tabs::OnActivated::kEventName,
++                std::move(args), EventRouter::UserGestureState::kUnknown);
++}
++
++void TabsEventRouter::DispatchAlloyTabRemoved(Profile* profile,
++                                              int tab_id,
++                                              int window_id,
++                                              bool is_window_closing) {
++  base::ListValue args;
++  args.Append(tab_id);
++  base::DictValue object_args;
++  object_args.Set(tabs_constants::kWindowIdKey, window_id);
++  object_args.Set(tabs_constants::kIsWindowClosingKey, is_window_closing);
++  args.Append(std::move(object_args));
++  DispatchEvent(profile, events::TABS_ON_REMOVED,
++                api::tabs::OnRemoved::kEventName, std::move(args),
++                EventRouter::UserGestureState::kUnknown);
++}
++#endif  // BUILDFLAG(ENABLE_CEF)
++
+ bool TabsEventRouter::ShouldTrackBrowser(BrowserWindowInterface& browser) {
+   return profile_->IsSameOrParent(browser.GetProfile()) &&
+          ExtensionTabUtil::BrowserSupportsTabs(&browser);
+diff --git chrome/browser/extensions/api/tabs/tabs_event_router.h chrome/browser/extensions/api/tabs/tabs_event_router.h
+index 879f36c..680e392 100644
+--- chrome/browser/extensions/api/tabs/tabs_event_router.h
++++ chrome/browser/extensions/api/tabs/tabs_event_router.h
+@@ -17,6 +17,7 @@
+ #include "base/scoped_multi_source_observation.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
++#include "cef/libcef/features/features.h"
+ #include "chrome/browser/tab_list/tab_list_interface.h"
+ #include "chrome/browser/tab_list/tab_list_interface_observer.h"
+ #include "components/favicon/core/favicon_driver.h"
+@@ -64,6 +65,21 @@ class TabsEventRouter : public favicon::FaviconDriverObserver,
+   TabsEventRouter& operator=(const TabsEventRouter&) = delete;
+   ~TabsEventRouter() override;
+ 
++#if BUILDFLAG(ENABLE_CEF)
++  // Events for Alloy style browsers that the client registered as tabs. They
++  // have no TabListInterface, so CEF calls these directly (see
++  // cef/libcef/browser/chrome/extensions/alloy_extension_tabs.cc).
++  void DispatchAlloyTabCreated(content::WebContents* contents, bool active);
++  void DispatchAlloyTabUpdated(content::WebContents* contents,
++                               std::set<std::string> changed_property_names);
++  void DispatchAlloyTabActivated(content::WebContents* contents);
++  // `contents` may already be gone, so the ids are passed.
++  void DispatchAlloyTabRemoved(Profile* profile,
++                               int tab_id,
++                               int window_id,
++                               bool is_window_closing);
++#endif
++
+  private:
+   // The platform delegate is basically a platform-specific addendum to this
+   // class, so we allow it to reach into this class's internal state.
+diff --git chrome/browser/extensions/api/tabs/windows_event_router.cc chrome/browser/extensions/api/tabs/windows_event_router.cc
+index 28fe247..47aa5e5 100644
+--- chrome/browser/extensions/api/tabs/windows_event_router.cc
++++ chrome/browser/extensions/api/tabs/windows_event_router.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/functional/bind.h"
+ #include "build/build_config.h"
++#include "cef/libcef/features/features.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/extensions/api/tabs/windows_util.h"
+ #include "chrome/browser/extensions/extension_service.h"
+@@ -29,6 +30,10 @@
+ #include "chrome/browser/browser_process_platform_part.h"
+ #endif
+ 
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/chrome/extensions/alloy_extension_tabs.h"
++#endif
++
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ using content::BrowserContext;
+@@ -39,6 +44,16 @@ namespace windows = extensions::api::windows;
+ 
+ namespace {
+ 
++// True for the windows CEF makes for Alloy style browsers. They have no
++// BrowserWindowInterface but are real windows for the windows API.
++bool IsAlloyWindowController(const WindowController* controller) {
++#if BUILDFLAG(ENABLE_CEF)
++  return cef::IsAlloyWindowController(controller);
++#else
++  return false;
++#endif
++}
++
+ constexpr char kWindowTypesKey[] = "windowTypes";
+ 
+ bool ControllerVisibleToListener(WindowController* window_controller,
+@@ -201,7 +216,8 @@ void WindowsEventRouter::OnWindowControllerAdded(
+     return;
+   }
+   // Ignore any windows without an associated browser (e.g., AppWindows).
+-  if (!window_controller->GetBrowserWindowInterface()) {
++  if (!window_controller->GetBrowserWindowInterface() &&
++      !IsAlloyWindowController(window_controller)) {
+     return;
+   }
+ 
+@@ -225,7 +241,8 @@ void WindowsEventRouter::OnWindowControllerRemoved(
+     return;
+   }
+   // Ignore any windows without an associated browser (e.g., AppWindows).
+-  if (!window_controller->GetBrowserWindowInterface()) {
++  if (!window_controller->GetBrowserWindowInterface() &&
++      !IsAlloyWindowController(window_controller)) {
+     return;
+   }
+ 
+diff --git chrome/browser/extensions/chrome_extension_function_details.cc chrome/browser/extensions/chrome_extension_function_details.cc
+index 9cfacb4..26ca546 100644
+--- chrome/browser/extensions/chrome_extension_function_details.cc
++++ chrome/browser/extensions/chrome_extension_function_details.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/extensions/chrome_extension_function_details.h"
+ 
++#include "cef/libcef/features/features.h"
+ #include "chrome/browser/extensions/browser_extension_window_controller.h"
+ #include "chrome/browser/extensions/window_controller.h"
+ #include "chrome/browser/extensions/window_controller_list.h"
+@@ -25,6 +26,10 @@
+ #include "components/web_modal/web_contents_modal_dialog_manager.h"
+ #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+ 
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/chrome/extensions/alloy_extension_tabs.h"
++#endif
++
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ namespace extensions {
+@@ -50,6 +55,16 @@ WindowController* ChromeExtensionFunctionDetails::GetCurrentWindowController()
+     }
+   }
+ 
++#if BUILDFLAG(ENABLE_CEF)
++  // Alloy style browsers that the client registered as tabs form windows that
++  // have no BrowserWindowInterface. If the profile has any, they are the
++  // current window.
++  if (WindowController* alloy_controller =
++          cef::GetAlloyCurrentWindowController(function_)) {
++    return alloy_controller;
++  }
++#endif
++
+   // Otherwise, try to default to a reasonable browser. If |include_incognito_|
+   // is true, we will also search browsers in the incognito version of this
+   // profile. Note that the profile may already be incognito, in which case
+diff --git chrome/browser/extensions/extension_tab_util.cc chrome/browser/extensions/extension_tab_util.cc
+index 312e80e..8b1d4f2 100644
+--- chrome/browser/extensions/extension_tab_util.cc
++++ chrome/browser/extensions/extension_tab_util.cc
+@@ -88,6 +88,7 @@
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ #if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/chrome/extensions/alloy_extension_tabs.h"
+ #include "cef/libcef/browser/chrome/extensions/chrome_extension_util.h"
+ #endif
+ 
+@@ -370,6 +371,14 @@ api::tabs::Tab ExtensionTabUtil::CreateTabObject(
+   tab_object.highlighted = tab_interface && tab_interface->IsSelected();
+   tab_object.pinned = tab_interface && tab_interface->IsPinned();
+ 
++#if BUILDFLAG(ENABLE_CEF)
++  if (!tab_interface) {
++    // An Alloy style browser has no TabInterface. Take index, windowId and
++    // active from what the client registered, if anything.
++    cef::UpdateAlloyTabObject(contents, &tab_object);
++  }
++#endif
++
+   tab_object.group_id = -1;
+   if (tab_interface) {
+     std::optional<tab_groups::TabGroupId> group = tab_interface->GetGroup();
+diff --git chrome/browser/extensions/window_controller.cc chrome/browser/extensions/window_controller.cc
+index 158210d..ceab1bb 100644
+--- chrome/browser/extensions/window_controller.cc
++++ chrome/browser/extensions/window_controller.cc
+@@ -78,6 +78,10 @@ Browser* WindowController::GetBrowser() const {
+ }
+ #endif
+ 
++bool WindowController::IsActive() const {
++  return window() && window()->IsActive();
++}
++
+ bool WindowController::MatchesFilter(TypeFilter filter) const {
+   TypeFilter type = 1 << std::to_underlying(
+                         api::windows::ParseWindowType(GetWindowTypeText()));
+diff --git chrome/browser/extensions/window_controller.h chrome/browser/extensions/window_controller.h
+index 4378cbd..749bb11 100644
+--- chrome/browser/extensions/window_controller.h
++++ chrome/browser/extensions/window_controller.h
+@@ -101,6 +101,10 @@ class WindowController {
+   virtual Browser* GetBrowser() const;
+ #endif
+ 
++  // Returns true if the window has focus. The default asks `window()`. A
++  // controller without a ui::BaseWindow (CEF Alloy style windows) overrides it.
++  virtual bool IsActive() const;
++
+   // Returns the WebContents associated with the active tab, if any. Returns
+   // null if there is no active tab.
+   virtual content::WebContents* GetActiveTab() const = 0;
+diff --git chrome/browser/extensions/window_controller_list.cc chrome/browser/extensions/window_controller_list.cc
+index 8ae6253..a49be05 100644
+--- chrome/browser/extensions/window_controller_list.cc
++++ chrome/browser/extensions/window_controller_list.cc
+@@ -109,12 +109,14 @@ WindowController* WindowControllerList::CurrentWindowForFunctionWithFilter(
+       continue;
+     }
+ 
+-    if (controller->window()->IsActive()) {
++    if (controller->IsActive()) {
+       // If the window is focused, return it immediately.
+       return controller;
+     }
+ 
+-    if (windows_util::CalledFromChildWindow(function, controller)) {
++    // A controller without a ui::BaseWindow has no child windows.
++    if (controller->window() &&
++        windows_util::CalledFromChildWindow(function, controller)) {
+       parent_window = controller;
+     }
+ 
