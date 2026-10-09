@@ -429,7 +429,7 @@ pub fn default_config() -> Config {
             read_zoom: 1.5,
             glyph_budget: DEFAULT_GLYPH_BUDGET,
             min_text_px: 7.,
-            text_as_bars: true,
+            text_as_bars: false,
             show_grid: true,
             fit_padding: FIT_PADDING,
             fit_magnify: false,
@@ -1254,8 +1254,8 @@ mod tests {
             150_000
         );
         assert_eq!(m(json!({"ui.glyphBudget": 5})).ui.glyph_budget, 1_000);
-        assert!(m(json!({})).ui.text_as_bars);
-        assert!(!m(json!({"ui.textAsBars": false})).ui.text_as_bars);
+        assert!(!m(json!({})).ui.text_as_bars);
+        assert!(m(json!({"ui.textAsBars": true})).ui.text_as_bars);
         assert_eq!(m(json!({})).ui.min_text_px, 7.);
         assert_eq!(m(json!({"ui.minTextPx": 4})).ui.min_text_px, 4.);
         assert_eq!(m(json!({"ui.minTextPx": 1})).ui.min_text_px, 2.);

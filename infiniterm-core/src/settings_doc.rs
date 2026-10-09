@@ -396,10 +396,11 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "ui.textAsBars",
         &[
-            "On (the default), a card draws faint bars instead of text when its font is smaller than",
-            "ui.minTextPx or more than ui.glyphBudget cells are on screen. Off draws every glyph at",
-            "every zoom, however many: the canvas is slower while it moves, and the text is exact.",
-            "Turn it off to see whether the bars are still needed on your Mac; ui.showFps shows the cost.",
+            "Off (the default): every card draws its text at every zoom, however small and however",
+            "many cards are on screen. On: a card draws faint bars instead of text when its font is",
+            "smaller than ui.minTextPx or more than ui.glyphBudget cells are on screen, which keeps",
+            "the canvas fast on a slow Mac. Measured on an M4 Mac mini, 18 cards printing at once while",
+            "zooming: about 45 frames a second with text, and no faster with bars.",
         ],
     ),
     (
