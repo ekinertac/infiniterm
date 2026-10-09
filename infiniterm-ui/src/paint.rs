@@ -934,8 +934,13 @@ impl AppView {
             let (head, tail) = split_label(&label);
             let room = b.size.width - border * 2. - label_px;
             let mut text = format!("{head}{tail}");
-            let mut line =
-                crate::text::shape(window, &text, label_px, &chrome.typography.regular, label_fg);
+            let mut line = crate::text::shape(
+                window,
+                &text,
+                label_px,
+                &chrome.typography.regular,
+                label_fg,
+            );
             let mut keep = head.chars().count();
             while line.width > room && keep > 0 {
                 keep /= 2;
@@ -948,8 +953,13 @@ impl AppView {
                     .rev()
                     .collect();
                 text = format!("\u{2026}{cut}{tail}");
-                line =
-                    crate::text::shape(window, &text, label_px, &chrome.typography.regular, label_fg);
+                line = crate::text::shape(
+                    window,
+                    &text,
+                    label_px,
+                    &chrome.typography.regular,
+                    label_fg,
+                );
             }
             // The tail alone can still be wider than the card: a label with
             // no slash in it is ALL tail, and an agent's session name has
@@ -957,12 +967,23 @@ impl AppView {
             if line.width > room {
                 text = crate::text::elide(&text, f32::from(room), |t| {
                     f32::from(
-                        crate::text::shape(window, t, label_px, &chrome.typography.regular, label_fg)
-                            .width,
+                        crate::text::shape(
+                            window,
+                            t,
+                            label_px,
+                            &chrome.typography.regular,
+                            label_fg,
+                        )
+                        .width,
                     )
                 });
-                line =
-                    crate::text::shape(window, &text, label_px, &chrome.typography.regular, label_fg);
+                line = crate::text::shape(
+                    window,
+                    &text,
+                    label_px,
+                    &chrome.typography.regular,
+                    label_fg,
+                );
             }
             let w = line.width + label_px;
             let lb = Bounds::new(point(place(w), top), size(w, h));

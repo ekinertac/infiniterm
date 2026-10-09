@@ -800,7 +800,7 @@ impl AppView {
     /// different than it did a keystroke ago.
     fn browser_lock_indicator(&self) -> Option<&'static str> {
         if self.model.reading.is_some() {
-            return Some("reading: Cmd+Up/Down pan, Cmd+1 leaves");
+            return Some("zoomed: Cmd+Up/Down pan, Cmd+1 leaves");
         }
         self.model
             .focused()

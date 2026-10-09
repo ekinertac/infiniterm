@@ -414,12 +414,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
-        "ui.readZoom",
+        "ui.cardZoom",
         &[
-            "The canvas scale reading mode zooms to: 1.5 is 150%. Press Cmd+1 on a terminal card",
-            "that is already fitted: the view zooms to this scale with the card's bottom at the",
-            "window's bottom, and Cmd+Up and Cmd+Down pan along the card. Cmd+1 or Cmd+2 leaves.",
-            "Typing returns the view to the bottom. 1.1 to 4.",
+            "The canvas scale Cmd+1 zooms to on a terminal card that is already fitted: 1.5 is 150%,",
+            "with the card's bottom at the window's bottom, so you read the prompt and the newest",
+            "lines larger. Cmd+Up and Cmd+Down pan along the card, Cmd+1 or Cmd+2 leaves, and typing",
+            "returns the view to the bottom. 0 turns it off: a second Cmd+1 does nothing new.",
+            "1.1 to 4. It was called ui.readZoom, which still works.",
         ],
     ),
     (

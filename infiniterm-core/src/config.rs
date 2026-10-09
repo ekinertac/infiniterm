@@ -290,7 +290,7 @@ pub struct Ui {
     pub card_radius: f64,
     /// Whether the canvas draws its grid (#96).
     /// Canvas scale reading mode zooms to (#313): 1.5 is 150%.
-    pub read_zoom: f64,
+    pub card_zoom: f64,
     /// Terminal cells that may be on screen before every card draws bars
     /// instead of text (`chrome::over_glyph_budget`).
     pub glyph_budget: usize,
@@ -426,7 +426,7 @@ pub fn default_config() -> Config {
             window_color: String::new(),
             card_opacity: 1.,
             card_radius: 0.,
-            read_zoom: 1.5,
+            card_zoom: 1.5,
             glyph_budget: DEFAULT_GLYPH_BUDGET,
             min_text_px: 7.,
             text_as_bars: false,
@@ -734,7 +734,21 @@ pub fn merge_config(raw: &Value) -> Config {
                 .to_string(),
             card_opacity: num(u.get("cardOpacity"), d.ui.card_opacity, 0.1, 1.),
             card_radius: num(u.get("cardRadius"), d.ui.card_radius, 0., 40.),
-            read_zoom: num(u.get("readZoom"), d.ui.read_zoom, 1.1, 4.),
+            // `ui.readZoom` was this setting's name in 0.5.11; the new one wins.
+            card_zoom: {
+                let v = num(
+                    u.get("cardZoom").or_else(|| u.get("readZoom")),
+                    d.ui.card_zoom,
+                    0.,
+                    4.,
+                );
+                // 0 turns it off; anything else is a zoom of at least 1.1.
+                if v > 0. {
+                    v.max(1.1)
+                } else {
+                    0.
+                }
+            },
             min_text_px: num(u.get("minTextPx"), d.ui.min_text_px, 2., 20.),
             text_as_bars: bool_(u.get("textAsBars"), d.ui.text_as_bars),
             glyph_budget: num(
@@ -1259,10 +1273,17 @@ mod tests {
         assert_eq!(m(json!({})).ui.min_text_px, 7.);
         assert_eq!(m(json!({"ui.minTextPx": 4})).ui.min_text_px, 4.);
         assert_eq!(m(json!({"ui.minTextPx": 1})).ui.min_text_px, 2.);
-        assert_eq!(m(json!({})).ui.read_zoom, 1.5);
-        assert_eq!(m(json!({"ui.readZoom": 2})).ui.read_zoom, 2.);
-        assert_eq!(m(json!({"ui.readZoom": 9})).ui.read_zoom, 4.);
-        assert_eq!(m(json!({"ui.readZoom": 1})).ui.read_zoom, 1.1);
+        assert_eq!(m(json!({})).ui.card_zoom, 1.5);
+        assert_eq!(m(json!({"ui.cardZoom": 2})).ui.card_zoom, 2.);
+        assert_eq!(m(json!({"ui.cardZoom": 9})).ui.card_zoom, 4.);
+        assert_eq!(m(json!({"ui.cardZoom": 1})).ui.card_zoom, 1.1);
+        assert_eq!(m(json!({"ui.cardZoom": 0})).ui.card_zoom, 0., "0 is off");
+        // The old name still applies, and the new one wins over it.
+        assert_eq!(m(json!({"ui.readZoom": 2})).ui.card_zoom, 2.);
+        assert_eq!(
+            m(json!({"ui.readZoom": 2, "ui.cardZoom": 3})).ui.card_zoom,
+            3.
+        );
         assert!(m(json!({})).ui.show_grid);
         assert!(!m(json!({"ui.showGrid": false})).ui.show_grid);
         assert!(m(json!({"ui.showGrid": "no"})).ui.show_grid);
