@@ -42,8 +42,28 @@ pub const LEGIBLE_FLOOR_PX: f32 = 4.5;
 /// is drawn as bars: enough device pixels to draw a glyph, and big enough
 /// to read. 7 on a 1x screen, as it always was; 4.5 on Retina.
 pub fn legible_font_px(scale_factor: f32) -> gpui::Pixels {
-    let pixels = LEGIBLE_FONT_PX as f32 / scale_factor.max(1.);
-    gpui::px(pixels.max(LEGIBLE_FLOOR_PX))
+    legible_px(
+        f32::from_bits(LEGIBLE_DEVICE_PX.load(std::sync::atomic::Ordering::Relaxed)),
+        scale_factor,
+    )
+}
+
+/// `ui.minTextPx`: the device pixels a glyph needs to be drawn, set once a
+/// frame from the config (`set_legible_device_px`). Process-wide because
+/// nine painters ask and the app has one window; 7 until a frame sets it.
+static LEGIBLE_DEVICE_PX: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(7.0f32.to_bits());
+
+pub fn set_legible_device_px(px: f32) {
+    LEGIBLE_DEVICE_PX.store(px.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The rule behind `legible_font_px`, for `device` pixels a glyph needs: the
+/// logical size they make on this screen, never under the physical floor
+/// (4.5 logical) unless the setting itself asks for less.
+pub fn legible_px(device: f32, scale_factor: f32) -> gpui::Pixels {
+    let pixels = device / scale_factor.max(1.);
+    gpui::px(pixels.max(LEGIBLE_FLOOR_PX.min(device)))
 }
 /// While the frame is over its glyph budget (`AppView::crowded`), a frame
 /// asked for by output or the cursor blink is painted at most this often:
@@ -490,6 +510,29 @@ mod tests {
         // 6.7 px on the Air (48% of a 14 px font) is text there, bars on 1x.
         assert!(gpui::px(6.7) >= legible_font_px(2.));
         assert!(gpui::px(6.7) < legible_font_px(1.));
+    }
+
+    /// `ui.minTextPx` below the physical floor wins over it; at the default it
+    /// changes nothing.
+    #[test]
+    fn a_zero_line_draws_every_glyph() {
+        // `ui.textAsBars` off sets 0 device pixels: nothing is too small.
+        assert_eq!(legible_px(0., 1.), gpui::px(0.));
+        assert_eq!(legible_px(0., 2.), gpui::px(0.));
+        assert!(gpui::px(0.5) >= legible_px(0., 2.));
+    }
+
+    #[test]
+    fn the_min_text_setting_moves_the_line() {
+        assert_eq!(legible_px(7., 1.), gpui::px(7.));
+        assert_eq!(legible_px(7., 2.), gpui::px(LEGIBLE_FLOOR_PX));
+        // 4 device pixels: 4 on a 1x screen, and 4 (not 4.5) on a 2x one.
+        assert_eq!(legible_px(4., 1.), gpui::px(4.));
+        assert_eq!(legible_px(4., 2.), gpui::px(4.));
+        // A larger setting draws bars sooner.
+        assert_eq!(legible_px(10., 1.), gpui::px(10.));
+        assert!(gpui::px(6.5) >= legible_px(4., 1.));
+        assert!(gpui::px(6.5) < legible_px(7., 1.));
     }
 
     /// One full card on Ekin's canvas is about 151 by 87 cells. The default

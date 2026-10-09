@@ -294,6 +294,11 @@ pub struct Ui {
     /// Terminal cells that may be on screen before every card draws bars
     /// instead of text (`chrome::over_glyph_budget`).
     pub glyph_budget: usize,
+    /// Device pixels a glyph needs to be drawn at all; smaller text is bars.
+    pub min_text_px: f64,
+    /// Whether far or crowded cards draw bars instead of text at all. Off
+    /// draws every glyph at any zoom, however many (`chrome::over_glyph_budget`).
+    pub text_as_bars: bool,
     pub show_grid: bool,
     /// Screen pixels left around a card or cluster when it is fitted (#87).
     pub fit_padding: f64,
@@ -423,6 +428,8 @@ pub fn default_config() -> Config {
             card_radius: 0.,
             read_zoom: 1.5,
             glyph_budget: DEFAULT_GLYPH_BUDGET,
+            min_text_px: 7.,
+            text_as_bars: true,
             show_grid: true,
             fit_padding: FIT_PADDING,
             fit_magnify: false,
@@ -728,6 +735,8 @@ pub fn merge_config(raw: &Value) -> Config {
             card_opacity: num(u.get("cardOpacity"), d.ui.card_opacity, 0.1, 1.),
             card_radius: num(u.get("cardRadius"), d.ui.card_radius, 0., 40.),
             read_zoom: num(u.get("readZoom"), d.ui.read_zoom, 1.1, 4.),
+            min_text_px: num(u.get("minTextPx"), d.ui.min_text_px, 2., 20.),
+            text_as_bars: bool_(u.get("textAsBars"), d.ui.text_as_bars),
             glyph_budget: num(
                 u.get("glyphBudget"),
                 d.ui.glyph_budget as f64,
@@ -1245,6 +1254,11 @@ mod tests {
             150_000
         );
         assert_eq!(m(json!({"ui.glyphBudget": 5})).ui.glyph_budget, 1_000);
+        assert!(m(json!({})).ui.text_as_bars);
+        assert!(!m(json!({"ui.textAsBars": false})).ui.text_as_bars);
+        assert_eq!(m(json!({})).ui.min_text_px, 7.);
+        assert_eq!(m(json!({"ui.minTextPx": 4})).ui.min_text_px, 4.);
+        assert_eq!(m(json!({"ui.minTextPx": 1})).ui.min_text_px, 2.);
         assert_eq!(m(json!({})).ui.read_zoom, 1.5);
         assert_eq!(m(json!({"ui.readZoom": 2})).ui.read_zoom, 2.);
         assert_eq!(m(json!({"ui.readZoom": 9})).ui.read_zoom, 4.);
