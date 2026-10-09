@@ -30,7 +30,7 @@ use infiniterm_core::backend::PaneId;
 use infiniterm_core::git_repo::Repo;
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::ift::{open_plan, url_plan, PathKind};
-use infiniterm_core::links::{find_links_in, Found, LinkKind};
+use infiniterm_core::links::{find_links_in, merge_hyperlinks, Found, LinkKind};
 use infiniterm_core::links_fs::path_kinds;
 use infiniterm_term::grid::{CursorKind, Frame, Grid, SelectKind, TermEvent, SPACER};
 use infiniterm_term::keys::{encode, encode_with, paste, Key};
@@ -168,6 +168,9 @@ pub struct TerminalBody {
     /// changes: what a bare `#349` in the output links to (#335).
     repo: Option<(String, Option<Repo>)>,
     link_texts: Vec<String>,
+    /// The OSC 8 spans each row was scanned with, to tell a row whose text
+    /// is the same but whose links are not.
+    link_spans: Vec<Vec<(usize, usize, String)>>,
     hover: Option<(usize, usize)>,
     /// A button held for a drag the program is following.
     dragging: Option<MouseButton>,
@@ -305,6 +308,7 @@ impl TerminalBody {
             links: vec![],
             repo: None,
             link_texts: vec![],
+            link_spans: vec![],
             hover: None,
             dragging: None,
             scale: 1.,
@@ -512,6 +516,7 @@ impl TerminalBody {
     /// cannot hold a link and is not scanned.
     fn refresh_links(&mut self, frame: &Frame, rebuilt: &[usize]) {
         self.link_texts.resize(frame.rows.len(), String::new());
+        self.link_spans.resize(frame.rows.len(), vec![]);
         self.links.resize(frame.rows.len(), vec![]);
         // The directory's repository, looked up again only when it changes.
         if self.repo.as_ref().map(|(c, _)| c.as_str()) != Some(self.cwd.as_str()) {
@@ -524,23 +529,29 @@ impl TerminalBody {
         for &r in rebuilt {
             let row = &frame.rows[r];
             let line = row.text.trim_end();
-            if line == self.link_texts[r] {
+            if line == self.link_texts[r] && row.hyperlinks == self.link_spans[r] {
                 continue;
             }
             self.link_texts[r].clear();
             self.link_texts[r].push_str(line);
-            self.links[r] = if line.contains(['/', '.', '#']) {
-                Self::scan_links(line, &self.cwd, repo.as_ref())
+            self.link_spans[r] = row.hyperlinks.clone();
+            self.links[r] = if line.contains(['/', '.', '#']) || !row.hyperlinks.is_empty() {
+                Self::scan_links(line, &self.cwd, repo.as_ref(), &row.hyperlinks)
             } else {
                 vec![]
             };
         }
     }
 
-    fn scan_links(line: &str, cwd: &str, repo: Option<&Repo>) -> Vec<(Found, Option<PathKind>)> {
+    fn scan_links(
+        line: &str,
+        cwd: &str,
+        repo: Option<&Repo>,
+        spans: &[(usize, usize, String)],
+    ) -> Vec<(Found, Option<PathKind>)> {
         {
             {
-                let found = find_links_in(line, repo);
+                let found = merge_hyperlinks(find_links_in(line, repo), line, spans);
                 let paths: Vec<&str> = found
                     .iter()
                     .filter(|f| f.kind == LinkKind::Path)
@@ -1605,6 +1616,7 @@ mod tests {
             runs: vec![run(Some([200, 200, 200]))],
             text: " ".into(),
             zerowidth: vec![],
+            hyperlinks: vec![],
         };
         assert!(
             !row_paints_nothing(&cursor),
@@ -1614,6 +1626,7 @@ mod tests {
             runs: vec![run(None)],
             text: "      ".into(),
             zerowidth: vec![],
+            hyperlinks: vec![],
         };
         assert!(
             row_paints_nothing(&empty),
@@ -1623,6 +1636,7 @@ mod tests {
             runs: vec![run(None)],
             text: " x ".into(),
             zerowidth: vec![],
+            hyperlinks: vec![],
         };
         assert!(!row_paints_nothing(&text));
     }
@@ -1708,6 +1722,26 @@ mod tests {
         assert!(!under_hover(Some((9, 3)), 3, 5, 4));
         assert!(!under_hover(Some((5, 2)), 3, 5, 4));
         assert!(!under_hover(Some((4, 3)), 3, 5, 4));
+    }
+
+    // OSC 8 end to end through the body: bytes in, the row's span in, a link
+    // at those columns that opens the program's address (#335). A `file:` one
+    // is not offered.
+    #[test]
+    fn an_osc8_hyperlink_in_the_output_is_a_link_at_its_columns() {
+        let mut b = body();
+        b.feed(
+            b"go \x1b]8;;https://example.com/osc8\x1b\\CLICK ME\x1b]8;;\x1b\\ ok \x1b]8;;file:///etc/passwd\x1b\\NOPE\x1b]8;;\x1b\\\r\n",
+        );
+        let frame = b
+            .grid
+            .frame(&infiniterm_term::palette::Palette::default_palette());
+        b.refresh_links(&frame, &[0]);
+        let (found, _) = b.link_at(5, 0).expect("a link under CLICK ME").clone();
+        assert_eq!(found.target, "https://example.com/osc8");
+        assert_eq!(found.text, "CLICK ME");
+        assert!(b.link_at(0, 0).is_none(), "plain text before it");
+        assert!(b.link_at(16, 0).is_none(), "a file: address is not offered");
     }
 
     // The word rule stops at the colon of `https://`, so a double-click on
