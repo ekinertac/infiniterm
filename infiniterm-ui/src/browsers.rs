@@ -13,7 +13,7 @@ use crate::browser_body::BrowserBody;
 use crate::tab_strip::StripStyle;
 use crate::{now_ms, AppView};
 use infiniterm_core::grid::{Point, Size};
-use infiniterm_core::ift::url_plan;
+use infiniterm_core::ift::{url_plan, OpenPlan};
 use infiniterm_core::model::{BrowserAction, FindRequest};
 use infiniterm_core::saved_layout::CardKind;
 use infiniterm_core::viewport::screen_pos_of;
@@ -493,6 +493,10 @@ impl AppView {
     /// Back and forward. The page owns its history, so this is the whole
     /// implementation: the model only says which card and which direction.
     pub fn browser_effect(&mut self, card_id: &str, action: BrowserAction) {
+        if action == BrowserAction::DevTools {
+            self.open_devtools(card_id);
+            return;
+        }
         let Some(body) = self
             .bodies
             .get_mut(card_id)
@@ -507,7 +511,42 @@ impl AppView {
             BrowserAction::Back => surface.back(),
             BrowserAction::Forward => surface.forward(),
             BrowserAction::Reload => surface.reload(),
+            // Handled before the surface is looked up: it needs the port and
+            // opens a card, not a call on the page.
+            BrowserAction::DevTools => {}
         }
+    }
+
+    /// DevTools for a browser card: the debugging port serves Chromium's
+    /// own DevTools page, and an ordinary browser card beside the page's
+    /// shows it (CEF's windowless DevTools does not exist, see
+    /// `infiniterm_core::devtools`). The target id is the one the surface
+    /// read after its last load.
+    fn open_devtools(&mut self, card_id: &str) {
+        let Some(port) = infiniterm_browser::process::devtools_port() else {
+            self.model
+                .notify("DevTools has no port: it is off, or none was free; restart the app");
+            return;
+        };
+        let target = self
+            .bodies
+            .get_mut(card_id)
+            .and_then(|b| b.as_any_mut().downcast_mut::<BrowserBody>())
+            .and_then(|body| body.active_surface())
+            .and_then(|surface| surface.target_id());
+        let Some(target) = target else {
+            self.model
+                .notify("the page is still loading: try again in a moment");
+            return;
+        };
+        let cwd = self
+            .model
+            .card(card_id)
+            .map(|c| c.cwd.clone())
+            .unwrap_or_default();
+        let url = infiniterm_core::devtools::frontend_url(port, &target);
+        self.model
+            .open_in_card(OpenPlan::Browser { cwd, url }, Some(card_id));
     }
 
     /// The mouse's back and forward buttons, over a browser page. Back on a

@@ -19,6 +19,24 @@
 use cef::{args::Args, *};
 use infiniterm_core::extensions::{chrome_extension_dir, copy_dir, installed_extensions};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+/// The loopback port CEF's debugging protocol listens on, chosen once in
+/// `early` when `browser.devtools` is on. The DevTools command reads it to
+/// build the address of the frontend page. Unset: DevTools is off, or no
+/// port was free.
+static DEVTOOLS_PORT: OnceLock<u16> = OnceLock::new();
+
+pub fn devtools_port() -> Option<u16> {
+    DEVTOOLS_PORT.get().copied()
+}
+
+/// `browser.devtools` from the settings file, read before the model exists
+/// (CEF starts first and cannot open a port later).
+fn devtools_wanted() -> bool {
+    use infiniterm_core::config_files::{config_read, ConfigFile};
+    infiniterm_core::devtools::wanted(&config_read(ConfigFile::Settings).unwrap_or_default())
+}
 
 /// The Claude in Chrome extension's store id, which the unpacked copy keeps
 /// because its manifest carries the `key`.
@@ -102,6 +120,12 @@ wrap_app! {
             cmd.append_switch(Some(&"no-startup-window".into()));
             cmd.append_switch(Some(&"noerrdialogs".into()));
             cmd.append_switch(Some(&"use-mock-keychain".into()));
+            // Only our own DevTools page may open a WebSocket to the port: a
+            // web page's request carries its own origin and is refused.
+            if let Some(port) = devtools_port() {
+                let origin = infiniterm_core::devtools::allow_origin(port);
+                cmd.append_switch_with_value(Some(&"remote-allow-origins".into()), Some(&CefString::from(origin.as_str())));
+            }
             if !self.extensions.is_empty() {
                 // Chromium's own format for more than one: the switch takes
                 // a comma-separated list of paths, not repeated switches.
@@ -153,11 +177,17 @@ pub fn early() -> Result<Process, Unavailable> {
         return Err(Unavailable::Helper(ret));
     }
     let profile = data.join("profile");
+    if devtools_wanted() {
+        if let Some(port) = infiniterm_core::devtools::free_port() {
+            let _ = DEVTOOLS_PORT.set(port);
+        }
+    }
     let settings = Settings {
         windowless_rendering_enabled: 1,
         external_message_pump: 1,
         cache_path: profile.to_string_lossy().as_ref().into(),
         log_file: data.join("cef.log").to_string_lossy().as_ref().into(),
+        remote_debugging_port: devtools_port().map_or(0, i32::from),
         ..Default::default()
     };
     Ok(Process {

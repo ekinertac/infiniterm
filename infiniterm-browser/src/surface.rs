@@ -52,6 +52,9 @@ pub struct ContextMenuRequest {
 
 #[derive(Default)]
 pub struct Shared {
+    /// The page's DevTools target id, asked for after each load (see
+    /// `TargetIdBuilder`). None until the first load ends.
+    pub target_id: Option<String>,
     pub frame: Option<Arc<Frame>>,
     /// A frame arrived since the ui last took one.
     pub dirty: bool,
@@ -255,7 +258,15 @@ wrap_load_handler! {
     }
 
     impl LoadHandler {
-        fn on_loading_state_change(&self, _browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, _can_go_back: ::std::os::raw::c_int, _can_go_forward: ::std::os::raw::c_int) {
+        fn on_loading_state_change(&self, browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, _can_go_back: ::std::os::raw::c_int, _can_go_forward: ::std::os::raw::c_int) {
+            // Ask again once a load ends: a page that moved to another site
+            // can come back with another main frame, and the DevTools
+            // command needs the id the page has now.
+            if is_loading == 0 {
+                if let Some(host) = browser.and_then(|b| b.host()) {
+                    host.execute_dev_tools_method(TARGET_QUERY_ID, Some(&"Page.getFrameTree".into()), None);
+                }
+            }
             self.handler.shared.borrow_mut().loading = is_loading == 1;
         }
     }
@@ -367,6 +378,37 @@ wrap_request_handler! {
     }
 }
 
+/// The message id of our one DevTools question, `Page.getFrameTree`: its
+/// answer carries the main frame's id, which is the page's target id on the
+/// debugging port. CEF's own frame identifier is a different value.
+const TARGET_QUERY_ID: i32 = 7001;
+
+wrap_dev_tools_message_observer! {
+    struct TargetIdBuilder {
+        handler: Handler,
+    }
+
+    impl DevToolsMessageObserver {
+        fn on_dev_tools_method_result(
+            &self,
+            _browser: Option<&mut Browser>,
+            message_id: ::std::os::raw::c_int,
+            success: ::std::os::raw::c_int,
+            result: Option<&[u8]>,
+        ) {
+            if message_id != TARGET_QUERY_ID || success != 1 {
+                return;
+            }
+            let Some(text) = result.and_then(|r| std::str::from_utf8(r).ok()) else {
+                return;
+            };
+            if let Some(id) = infiniterm_core::devtools::target_id_from_frame_tree(text) {
+                self.handler.shared.borrow_mut().target_id = Some(id);
+            }
+        }
+    }
+}
+
 wrap_client! {
     struct ClientBuilder {
         render_handler: RenderHandler,
@@ -406,6 +448,8 @@ wrap_client! {
 pub struct Surface {
     browser: cef::Browser,
     pub shared: Rc<RefCell<Shared>>,
+    /// Keeps the target id observer registered for as long as the surface.
+    _target_id_observer: Option<Registration>,
 }
 
 impl Surface {
@@ -421,6 +465,7 @@ impl Surface {
         let handler = Handler {
             shared: shared.clone(),
         };
+        let handler_for_observer = handler.clone();
         let window_info = WindowInfo {
             windowless_rendering_enabled: 1,
             ..Default::default()
@@ -446,17 +491,30 @@ impl Surface {
             None,
             None,
         )?;
+        let mut target_id_observer = None;
         if let Some(host) = browser.host() {
             moat::apply(&host);
+            let mut observer = TargetIdBuilder::new(handler_for_observer);
+            target_id_observer = host.add_dev_tools_message_observer(Some(&mut observer));
         }
         if let Some(frame) = browser.main_frame() {
             frame.load_url(Some(&url.into()));
         }
-        Some(Surface { browser, shared })
+        Some(Surface {
+            browser,
+            shared,
+            _target_id_observer: target_id_observer,
+        })
     }
 
     fn host(&self) -> Option<BrowserHost> {
         self.browser.host()
+    }
+
+    /// The page's id on the debugging port, once a load has ended and CEF
+    /// has answered; the DevTools command builds its address from it.
+    pub fn target_id(&self) -> Option<String> {
+        self.shared.borrow().target_id.clone()
     }
 
     pub fn navigate(&self, url: &str) {

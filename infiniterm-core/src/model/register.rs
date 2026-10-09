@@ -3428,6 +3428,36 @@ mod tests {
         }));
     }
 
+    // DevTools needs the debugging port, which the setting decides at
+    // launch: with the setting off the command says so instead of asking the
+    // ui for a port that was never opened.
+    #[test]
+    fn devtools_goes_to_the_page_s_card_and_says_when_it_is_off() {
+        use crate::model::BrowserAction;
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        let effects = h.run("browser.devtools");
+        assert_eq!(h.m.notice.as_deref(), Some("not a browser card"));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Browser { .. })));
+
+        h.m.cards[0].kind = CardKind::Browser;
+        assert!(h.run("browser.devtools").contains(&Effect::Browser {
+            card_id: id.clone(),
+            action: BrowserAction::DevTools,
+        }));
+
+        h.m.config.browser.devtools = false;
+        let effects = h.run("browser.devtools");
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Browser { .. })));
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .unwrap_or("")
+            .contains("browser.devtools"));
+    }
+
     // Locking a browser card hands Chrome's own tab shortcuts to the page's
     // chrome instead of the app's: Cmd+T stops making a new card and starts
     // a tab on the one that is locked.

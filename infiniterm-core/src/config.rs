@@ -225,6 +225,11 @@ pub struct Browser {
     /// default: it is the only thing in this app that talks to anything but
     /// the page you asked for.
     pub suggestions: bool,
+    /// Opens CEF's debugging port on a random loopback port at launch, which
+    /// the DevTools command needs (read at launch: CEF cannot open or close
+    /// the port later). ON by default (Ekin, 2026-10-09): easier to use, and
+    /// the port takes connections only from our own frontend's origin.
+    pub devtools: bool,
     /// EXTRA tab-to-search sites, added to the nine built in. Empty in the
     /// defaults file, so nobody has to scroll past a list they did not
     /// write; `Config::engines` is what the omnibox actually reads.
@@ -396,6 +401,7 @@ pub fn default_config() -> Config {
             zoom: 1.,
             search_engine: crate::omni::address::SEARCH_TEMPLATE.into(),
             suggestions: false,
+            devtools: true,
             engines: vec![],
         },
         ui: Ui {
@@ -665,6 +671,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 _ => d.browser.search_engine.clone(),
             },
             suggestions: bool_(b.get("suggestions"), d.browser.suggestions),
+            devtools: bool_(b.get("devtools"), d.browser.devtools),
             engines: b
                 .get("engines")
                 .and_then(Value::as_array)
@@ -804,6 +811,7 @@ mod tests {
             crate::omni::address::SEARCH_TEMPLATE
         );
         assert!(!d.browser.suggestions, "the network call is opt in");
+        assert!(d.browser.devtools, "DevTools is on unless switched off");
         // The defaults file shows an empty list; the built-ins are in code.
         assert!(d.browser.engines.is_empty());
         assert_eq!(

@@ -1496,6 +1496,13 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("browser.reload", "Browser: reload the page", |m| {
         m.browser_history(BrowserAction::Reload)
     });
+    r.register("browser.devtools", "Browser: open DevTools", |m| {
+        if !m.config.browser.devtools {
+            m.notify("DevTools is off: set browser.devtools to true and restart");
+            return;
+        }
+        m.browser_history(BrowserAction::DevTools)
+    });
     // The only way a page's address leaves the app without being retyped.
     r.register("browser.copyUrl", "Browser: copy the page's address", |m| {
         m.with_active_card(|m, id| {
