@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-09
 
+- Fixed: a right-click on one of several selected cards keeps the selection, as in Finder, and opens its menu with the selection still there. A right-click on a card outside the selection selects that card alone, as before. The menu's items for several cards come next.
 - Renamed and switchable: the zoom Cmd+1 does on an already fitted terminal card is now "zoom in on the focused card's bottom", not "reading mode". The setting is `ui.cardZoom` (the old `ui.readZoom` still works); 0 turns it off, so a second Cmd+1 does nothing new. The palette commands are `Canvas: zoom in on the focused card's bottom` and the two pan commands, and the status bar says "zoomed".
 - Fixed: the command palette (Cmd+Shift+P) opens from a locked editor or browser card. The lock swallowed the chord.
 - Fixed: card labels, group names and the selection hints are drawn in the regular UI weight again. Since the interface font settings in 0.5.11 they were bold, and `ui.fontWeight` did not change them; they follow `ui.fontWeight` now.

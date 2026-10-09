@@ -1173,6 +1173,24 @@ mod tests {
         }
     }
 
+    // A right-click on one of several selected cards keeps the selection
+    // (#346): the model says so, and one outside it is not in it.
+    #[test]
+    fn a_card_of_a_multi_selection_is_recognised() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let c = h.focused().id.clone();
+        assert!(!h.m.in_multi_selection(&c), "one card is no selection");
+        h.m.set_focus(Some(&a));
+        h.m.extend_to(&b);
+        assert_eq!(h.m.selected_ids().len(), 2);
+        assert!(h.m.in_multi_selection(&a) && h.m.in_multi_selection(&b));
+        assert!(!h.m.in_multi_selection(&c), "a card outside is not in it");
+    }
+
     #[test]
     fn full_size_restores_the_default_when_the_space_is_free() {
         let mut h = Harness::new();
