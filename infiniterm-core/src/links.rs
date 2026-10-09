@@ -182,6 +182,48 @@ pub fn find_links_in(line: &str, repo: Option<&crate::git_repo::Repo>) -> Vec<Fo
     found
 }
 
+/// `found` plus the OSC 8 hyperlinks of the row (`spans`: start column, end
+/// column not included, address), the program's own word for where a link is.
+/// A span wins over anything it overlaps. Only web addresses are offered:
+/// the text of a link is whatever the program printed, and a Cmd+click must
+/// not run `file:` or an application's own scheme. `line` has one character
+/// per column, as the terminal's rows do.
+pub fn merge_hyperlinks(
+    mut found: Vec<Found>,
+    line: &str,
+    spans: &[(usize, usize, String)],
+) -> Vec<Found> {
+    let byte_of = |col: usize| line.char_indices().nth(col).map_or(line.len(), |(i, _)| i);
+    let mut linked = vec![];
+    for (start, end, uri) in spans {
+        let lower = uri.to_ascii_lowercase();
+        let web = lower.starts_with("http://") || lower.starts_with("https://");
+        if !web || uri.len() > 2048 || uri.chars().any(|c| c.is_control() || c == ' ') {
+            continue;
+        }
+        let (s, e) = (byte_of(*start), byte_of(*end));
+        let text = line[s..e.max(s)].trim_end();
+        if text.is_empty() {
+            continue;
+        }
+        linked.push(Found {
+            kind: LinkKind::Url,
+            start: s,
+            end: s + text.len(),
+            text: text.to_string(),
+            target: uri.clone(),
+            line: None,
+        });
+    }
+    if linked.is_empty() {
+        return found;
+    }
+    found.retain(|f| !linked.iter().any(|l| f.start < l.end && l.start < f.end));
+    found.extend(linked);
+    found.sort_by_key(|f| f.start);
+    found
+}
+
 fn find_links_plain(line: &str) -> Vec<Found> {
     let p = patterns();
     let mut found: Vec<Found> = vec![];
@@ -460,5 +502,50 @@ mod tests {
         let found = texts("https://github.com/a/b/issues/7 and #8", Some(&repo()));
         assert_eq!(found[0].0, "https://github.com/a/b/issues/7");
         assert_eq!(found[1].0, "#8");
+    }
+
+    #[test]
+    fn an_osc8_span_becomes_a_link_over_whatever_the_text_says() {
+        let line = "see issue 432 now";
+        let spans = vec![(4, 13, "https://github.com/o/r/issues/432".to_string())];
+        let found = merge_hyperlinks(find_links(line), line, &spans);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].text, "issue 432");
+        assert_eq!(found[0].target, "https://github.com/o/r/issues/432");
+        assert_eq!((found[0].start, found[0].end), (4, 13));
+        // A span over text that already read as a link replaces it.
+        let line = "go to github.com/a/b please";
+        let spans = vec![(6, 20, "https://example.org/x".to_string())];
+        let found = merge_hyperlinks(find_links(line), line, &spans);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, "https://example.org/x");
+    }
+
+    #[test]
+    fn only_web_addresses_are_opened_and_columns_count_characters() {
+        let line = "\u{4e2d}\u{6587} link";
+        for bad in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "vscode://x/y",
+            "https://a b",
+            "https://a\x1bb",
+        ] {
+            let spans = vec![(3, 7, bad.to_string())];
+            assert!(
+                merge_hyperlinks(vec![], line, &spans).is_empty(),
+                "{bad} must not be a link"
+            );
+        }
+        // Two wide characters then a space: the span starts at column 3.
+        let spans = vec![(3, 7, "HTTP://example.com".to_string())];
+        let found = merge_hyperlinks(vec![], line, &spans);
+        assert_eq!(found[0].text, "link");
+        // No spans: the links are returned untouched.
+        let plain = find_links("https://example.com");
+        assert_eq!(
+            merge_hyperlinks(plain.clone(), "https://example.com", &[]),
+            plain
+        );
     }
 }
