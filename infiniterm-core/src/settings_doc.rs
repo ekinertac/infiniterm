@@ -155,14 +155,18 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "cards.width",
         &[
-            "Width in 25px grid cells, or 0 to size new cards from the window: the canvas at",
-            "100% minus a margin, at most 80 cells wide. 69 is 1725px, a full iTerm2 window.",
-            "Existing cards keep the size they have.",
+            "Width in 25px grid squares of canvas (not text columns), or 0 to size new cards from",
+            "the window: the canvas at 100% minus a margin, at most 80 squares wide. 69 is 1725px,",
+            "a full iTerm2 window. At terminal.fontSize 19 a square is about 2.6 text columns,",
+            "so 50 is about 130 columns. Existing cards keep the size they have.",
         ],
     ),
     (
         "cards.height",
-        &["Height in 25px grid cells, or 0 to size from the window. 80 is 2000px."],
+        &[
+            "Height in 25px grid squares of canvas (not text rows), or 0 to size from the window.",
+            "80 is 2000px; at terminal.fontSize 19 and lineHeight 1.2 that is about 87 text rows.",
+        ],
     ),
     (
         "cards.gap",
@@ -369,10 +373,12 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "ui.glyphBudget",
         &[
-            "How many terminal cells may be on screen, across every visible card, before the",
-            "canvas draws all of them as bars instead of text. Default 30000, about two full",
-            "cards; a window covered edge to edge in cards reads down to about 82% zoom. A card",
-            "that fills the window can show more: the limit grows with the window.",
+            "How many terminal cells (text columns times rows, not cards.width squares) may be",
+            "on screen, across every visible card, before the canvas draws all of them as bars",
+            "instead of text. Default 30000, about two full cards. A card of cards.width 50 by",
+            "cards.height 80 holds about 11000 at terminal.fontSize 19, so twelve need about",
+            "130000. A window covered edge to edge in cards reads down to about 82% zoom, and the",
+            "limit grows with the window.",
             "Each cell costs about 1.7 microseconds a frame, so 150000 is about a quarter of a",
             "second of painting while the canvas moves; raise it until zooming gets slow.",
             "1000 to 5000000.",
