@@ -100,7 +100,19 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
         .keymap
         .iter()
         .any(|(c, id)| c == chord && id == "browser.leave");
-    if locked && !is_workspace_switch(chord) && !is_locked_carveout(chord, kind) && !leaves {
+    // The command palette opens from a locked card too (#334): it is how you
+    // reach every command, so a lock must not hide it. Whatever chord the
+    // keymap binds to it, as for `browser.leave`.
+    let opens_palette = m
+        .keymap
+        .iter()
+        .any(|(c, id)| c == chord && id == "app.palette");
+    if locked
+        && !is_workspace_switch(chord)
+        && !is_locked_carveout(chord, kind)
+        && !leaves
+        && !opens_palette
+    {
         let id = if kind == Some(crate::saved_layout::CardKind::Editor) {
             crate::editor_keys::lock_override(chord)
         } else {
@@ -1120,6 +1132,26 @@ mod tests {
             .notice
             .as_deref()
             .is_some_and(|n| n.contains("not in reading mode")));
+    }
+
+    // The palette is the way to every command: a locked editor or browser
+    // card does not swallow its chord (#334).
+    #[test]
+    fn the_palette_opens_from_a_locked_card() {
+        for kind in [CardKind::Editor, CardKind::Browser] {
+            let mut h = Harness::new();
+            let id = h.m.cards[0].id.clone();
+            h.m.cards[0].kind = kind;
+            h.m.cards[0].locked = true;
+            h.m.set_focus(Some(&id));
+            assert_eq!(
+                resolve_chord(&h.m, "cmd+shift+p").as_deref(),
+                Some("app.palette"),
+                "{kind:?}"
+            );
+            // The lock still holds for a chord the app has no business with.
+            assert_eq!(resolve_chord(&h.m, "cmd+shift+alt+ctrl+9"), None);
+        }
     }
 
     #[test]
