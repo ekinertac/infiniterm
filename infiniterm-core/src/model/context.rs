@@ -302,6 +302,35 @@ impl Model {
         Some(id)
     }
 
+    /// A terminal card whose shell starts in `dir`, on the workspace on
+    /// screen, ungrouped, focused and revealed. The path for the Finder
+    /// service and `ift terminal`; unlike `open_in_card` it never looks at the
+    /// focused card, because the caller is not in the app. Only an absolute
+    /// directory: a relative path would mean the app's working directory, and
+    /// a file is `ift <file>`'s business. Returns the new card's id.
+    pub fn open_terminal_at(&mut self, dir: &str) -> Result<String, String> {
+        let path = std::path::Path::new(dir);
+        if !path.is_absolute() {
+            return Err(format!("not an absolute path: {dir}"));
+        }
+        if !path.is_dir() {
+            return Err(format!("not a directory: {dir}"));
+        }
+        let ws = self.active_workspace.clone().unwrap_or_default();
+        self.selection.maximized = false;
+        let id = self.add_card(
+            dir,
+            NewCard {
+                avoid: self.other_frames(None, &ws),
+                workspace_id: Some(ws),
+                ..Default::default()
+            },
+        );
+        self.set_focus(Some(&id));
+        self.reveal_focused();
+        Ok(id)
+    }
+
     /// Moves a card, or a selection as one block, into open canvas with room
     /// around it for its group to grow. The one deliberate exception to
     /// positions being permanent: making room for a group means moving
@@ -374,5 +403,60 @@ impl Model {
             }
         }
         self.dirty_layout = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn two_workspaces() -> (Model, String, String) {
+        let mut m = Model::new();
+        let a = m.add_workspace(Some("a"));
+        let b = m.add_workspace(Some("b"));
+        m.show_workspace(&a);
+        (m, a, b)
+    }
+
+    // The Finder service's folder: a terminal in that directory, on the
+    // workspace on screen and not another, and the one focused.
+    #[test]
+    fn open_terminal_at_makes_a_focused_terminal_in_the_active_workspace() {
+        let (mut m, a, b) = two_workspaces();
+        let dir = std::env::temp_dir().canonicalize().unwrap();
+        let dir = dir.to_string_lossy().into_owned();
+        let id = m.open_terminal_at(&dir).unwrap();
+        let card = m.card(&id).unwrap();
+        assert_eq!(card.kind, CardKind::Terminal);
+        assert_eq!(card.cwd, dir);
+        assert_eq!(card.workspace_id, a);
+        assert_ne!(card.workspace_id, b);
+        assert!(card.group_id.is_none());
+        assert_eq!(m.focused().map(|c| c.id.clone()), Some(id));
+    }
+
+    #[test]
+    fn open_terminal_at_refuses_a_relative_path_and_a_file() {
+        let (mut m, _a, _b) = two_workspaces();
+        assert!(m.open_terminal_at("relative/dir").is_err());
+        assert!(m.open_terminal_at("/no/such/folder/anywhere").is_err());
+        let file = std::env::temp_dir().join(format!("ift-term-{}", std::process::id()));
+        std::fs::write(&file, "x").unwrap();
+        let refused = m.open_terminal_at(&file.to_string_lossy());
+        let _ = std::fs::remove_file(&file);
+        assert!(refused.is_err());
+        assert!(m.cards.is_empty(), "a refusal makes no card");
+    }
+
+    #[test]
+    fn two_folders_make_two_cards_and_the_last_is_focused() {
+        let (mut m, _a, _b) = two_workspaces();
+        let tmp = std::env::temp_dir().canonicalize().unwrap();
+        let (d1, d2) = (tmp.clone(), tmp.join("."));
+        let first = m.open_terminal_at(&d1.to_string_lossy()).unwrap();
+        let second = m.open_terminal_at(&d2.to_string_lossy()).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(m.cards.len(), 2);
+        assert_eq!(m.focused().map(|c| c.id.clone()), Some(second));
     }
 }

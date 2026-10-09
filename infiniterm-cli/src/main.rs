@@ -77,6 +77,11 @@ ift — drive infiniterm from a shell
                              ssh; --from <file> uses a file, --platform
                              linux-x86_64|linux-aarch64 skips asking the
                              host). Settings start with the defaults.
+  ift terminal <dir>...      a terminal card whose shell starts in each folder,
+                             on the workspace on screen, the last one
+                             focused; starts infiniterm first when it is not
+                             running (what Finder's Services > Open in
+                             infiniterm does)
   ift send <card> [text] [--enter] [--key NAME]...
                              type into a card's shell, without moving the
                              focus; the card is its number (#7) or its id;
@@ -130,12 +135,13 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 23] = [
+pub const SUBCOMMANDS: [&str; 24] = [
     "diff",
     "ls",
     "sessions",
     "attach",
     "connect",
+    "terminal",
     "send",
     "read",
     "close",
@@ -201,6 +207,7 @@ fn main() -> ExitCode {
         },
         Some("ls") if args.iter().any(|a| a == "--agents") => send("ls", rest()),
         Some("ls") => send_table("ls", &LS_HEADER),
+        Some("terminal") => terminal_cmd(&args[1..]),
         Some("send") => send("send", rest()),
         Some("read") => send("read", rest()),
         Some("close") => send("close", rest()),
@@ -357,6 +364,41 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
     let dir = std::fs::canonicalize(&dir)
         .map_err(|_| format!("no such directory: {}", dir.display()))?;
     Ok(dir.join(name))
+}
+
+/// How long `ift terminal` waits for a launched app to open its socket:
+/// CEF and the canvas load take a few seconds on a cold start.
+const LAUNCH_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// `ift terminal <dir>...`: resolves each path here, since the app's working
+/// directory is not the caller's, and starts the app first when its socket
+/// is not there.
+fn terminal_cmd(paths: &[String]) -> ExitCode {
+    if paths.is_empty() {
+        eprintln!("ift: terminal takes a directory");
+        return ExitCode::from(2);
+    }
+    let mut dirs = Vec::new();
+    for p in paths {
+        match std::fs::canonicalize(p) {
+            Ok(full) if full.is_dir() => dirs.push(full.to_string_lossy().into_owned()),
+            Ok(_) => {
+                eprintln!("ift: not a directory: {p}");
+                return ExitCode::from(2);
+            }
+            Err(_) => {
+                eprintln!("ift: cannot resolve {p}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    if !socket::running() {
+        if launch() != ExitCode::SUCCESS || !socket::wait_for_socket(LAUNCH_WAIT) {
+            eprintln!("ift: infiniterm did not start");
+            return ExitCode::from(1);
+        }
+    }
+    send("terminal", dirs)
 }
 
 /// `ift diff [path]`: the changes under a directory, or of one file.
