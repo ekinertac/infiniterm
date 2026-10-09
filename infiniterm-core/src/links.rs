@@ -49,6 +49,8 @@ struct Patterns {
     path: Regex,
     trailing: Regex,
     line_suffix: Regex,
+    explicit_ref: Regex,
+    bare_ref: Regex,
 }
 
 /// Top-level domains that make `name.tld` a web address without a scheme.
@@ -92,10 +94,95 @@ fn patterns() -> &'static Patterns {
         .unwrap(),
         trailing: Regex::new(r#"[.,;:)\]'"]+$"#).unwrap(),
         line_suffix: Regex::new(r"(?-u):(\d+)(?::\d+)?$").unwrap(),
+        explicit_ref: Regex::new(r"(?-u)([A-Za-z0-9][A-Za-z0-9_.-]*)/([A-Za-z0-9_.-]+)#(\d{1,7})").unwrap(),
+        bare_ref: Regex::new(r"(?-u)#(\d{1,7})").unwrap(),
     })
 }
 
 pub fn find_links(line: &str) -> Vec<Found> {
+    find_links_in(line, None)
+}
+
+/// A character that can be part of the word before or after a reference:
+/// `x#12` and `#12ab` are not issue numbers.
+fn is_word(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// `owner/repo#432` anywhere, and a bare `#432` when the card's directory
+/// belongs to a GitHub repository (`repo`): the issue or pull request page
+/// (#335). A bare number needs a space or an opening bracket or quote before
+/// it and no word character after, so `#!/bin/sh`, `a#1` and `#12ab` are not
+/// references. A colour like `#123` is, which only shows as an underline under
+/// Cmd.
+fn issue_refs(line: &str, repo: Option<&crate::git_repo::Repo>) -> Vec<Found> {
+    let p = patterns();
+    let mut out = vec![];
+    let after_ok = |end: usize| !line[end..].chars().next().is_some_and(is_word);
+    for c in p.explicit_ref.captures_iter(line) {
+        let all = c.get(0).unwrap();
+        let before = line[..all.start()].chars().next_back();
+        if before.is_some_and(|b| is_word(b) || matches!(b, '/' | '.' | '-' | '#' | ':'))
+            || !after_ok(all.end())
+        {
+            continue;
+        }
+        let r = crate::git_repo::Repo {
+            owner: c[1].to_string(),
+            name: c[2].to_string(),
+        };
+        out.push(Found {
+            kind: LinkKind::Url,
+            start: all.start(),
+            end: all.end(),
+            text: all.as_str().to_string(),
+            target: r.issue_url(&c[3]),
+            line: None,
+        });
+    }
+    if let Some(repo) = repo {
+        for c in p.bare_ref.captures_iter(line) {
+            let all = c.get(0).unwrap();
+            let before = line[..all.start()].chars().next_back();
+            let opens = before.is_none_or(|b| {
+                b.is_whitespace() || matches!(b, '(' | '[' | '{' | '"' | '\'' | '`' | '*' | ',')
+            });
+            if !opens || !after_ok(all.end()) {
+                continue;
+            }
+            // Inside an explicit `owner/repo#432` already.
+            if out
+                .iter()
+                .any(|f| all.start() >= f.start && all.end() <= f.end)
+            {
+                continue;
+            }
+            out.push(Found {
+                kind: LinkKind::Url,
+                start: all.start(),
+                end: all.end(),
+                text: all.as_str().to_string(),
+                target: repo.issue_url(&c[1]),
+                line: None,
+            });
+        }
+    }
+    out
+}
+
+/// `find_links` plus the references to issues and pull requests of `repo`.
+pub fn find_links_in(line: &str, repo: Option<&crate::git_repo::Repo>) -> Vec<Found> {
+    let refs = issue_refs(line, repo);
+    let mut found = find_links_plain(line);
+    // A reference wins over the path or address it overlaps: `o/r#432` also
+    // reads as the path `o/r` and `#432` as the tail of an address.
+    found.retain(|f| !refs.iter().any(|r| f.start < r.end && r.start < f.end));
+    found.extend(refs);
+    found.sort_by_key(|f| f.start);
+    found
+}
+
+fn find_links_plain(line: &str) -> Vec<Found> {
     let p = patterns();
     let mut found: Vec<Found> = vec![];
     for m in p.url.find_iter(line) {
@@ -282,5 +369,96 @@ mod tests {
         assert!(find_links("a / b . c")
             .iter()
             .all(|f| f.kind != LinkKind::Path));
+    }
+
+    fn repo() -> crate::git_repo::Repo {
+        crate::git_repo::Repo {
+            owner: "ekinertac".into(),
+            name: "infiniterm".into(),
+        }
+    }
+
+    fn texts(line: &str, repo: Option<&crate::git_repo::Repo>) -> Vec<(String, String)> {
+        find_links_in(line, repo)
+            .into_iter()
+            .map(|f| (f.text, f.target))
+            .collect()
+    }
+
+    // The case that started it (#335): an agent's summary line.
+    #[test]
+    fn the_numbers_in_a_summary_line_are_links_inside_a_repo() {
+        let line =
+            "Four issues are fixed and merged in PR #349 (#334, #336, #340, #346, all closed)";
+        let found = texts(line, Some(&repo()));
+        let numbers: Vec<&str> = found.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(numbers, ["#349", "#334", "#336", "#340", "#346"]);
+        assert_eq!(
+            found[0].1,
+            "https://github.com/ekinertac/infiniterm/issues/349"
+        );
+        // Outside a repo a bare number is plain text.
+        assert!(texts(line, None).is_empty());
+    }
+
+    #[test]
+    fn a_bare_number_needs_a_clean_edge_on_both_sides() {
+        let r = repo();
+        for plain in [
+            "#!/bin/sh",
+            "a#12",
+            "x#1",
+            "#12ab",
+            "#",
+            "# 12",
+            "color #12_x",
+        ] {
+            assert!(
+                texts(plain, Some(&r)).iter().all(|(t, _)| !t.contains('#')),
+                "{plain}"
+            );
+        }
+        for (line, want) in [
+            ("#12", "#12"),
+            ("see #12.", "#12"),
+            ("(#12)", "#12"),
+            ("[#12]", "#12"),
+            ("\"#12\"", "#12"),
+            ("`#12`", "#12"),
+            ("fixes #12, #13", "#12"),
+        ] {
+            assert_eq!(texts(line, Some(&r))[0].0, want, "{line}");
+        }
+    }
+
+    #[test]
+    fn owner_repo_number_is_a_link_anywhere_and_beats_the_path_it_contains() {
+        let found = texts("see curiousgamesdev/CG-RGS#432 now", None);
+        assert_eq!(
+            found,
+            vec![(
+                "curiousgamesdev/CG-RGS#432".to_string(),
+                "https://github.com/curiousgamesdev/CG-RGS/issues/432".to_string()
+            )]
+        );
+        // With a repo of its own, the explicit one is not re-read as a bare number.
+        let found = texts("o/r#5 and #6", Some(&repo()));
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].1, "https://github.com/o/r/issues/5");
+        assert_eq!(
+            found[1].1,
+            "https://github.com/ekinertac/infiniterm/issues/6"
+        );
+        // A path with a hash in it stays a path.
+        assert!(texts("src/lib.rs#12x", None)
+            .iter()
+            .all(|(t, _)| !t.contains('#')));
+    }
+
+    #[test]
+    fn a_reference_beside_a_url_leaves_the_url_alone() {
+        let found = texts("https://github.com/a/b/issues/7 and #8", Some(&repo()));
+        assert_eq!(found[0].0, "https://github.com/a/b/issues/7");
+        assert_eq!(found[1].0, "#8");
     }
 }

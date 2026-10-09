@@ -27,9 +27,10 @@ use gpui::{
     Keystroke, Pixels, SharedString, TextRun, Window,
 };
 use infiniterm_core::backend::PaneId;
+use infiniterm_core::git_repo::Repo;
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::ift::{open_plan, url_plan, PathKind};
-use infiniterm_core::links::{find_links, Found, LinkKind};
+use infiniterm_core::links::{find_links_in, Found, LinkKind};
 use infiniterm_core::links_fs::path_kinds;
 use infiniterm_term::grid::{CursorKind, Frame, Grid, SelectKind, TermEvent, SPACER};
 use infiniterm_term::keys::{encode, encode_with, paste, Key};
@@ -163,6 +164,9 @@ pub struct TerminalBody {
     frame: Frame,
     /// The last frame's links, per row, with whether the filesystem said yes.
     links: Vec<Vec<(Found, Option<PathKind>)>>,
+    /// The GitHub repository of the card's directory, read when the directory
+    /// changes: what a bare `#349` in the output links to (#335).
+    repo: Option<(String, Option<Repo>)>,
     link_texts: Vec<String>,
     hover: Option<(usize, usize)>,
     /// A button held for a drag the program is following.
@@ -299,6 +303,7 @@ impl TerminalBody {
             selecting: false,
             frame: Frame::default(),
             links: vec![],
+            repo: None,
             link_texts: vec![],
             hover: None,
             dragging: None,
@@ -508,6 +513,14 @@ impl TerminalBody {
     fn refresh_links(&mut self, frame: &Frame, rebuilt: &[usize]) {
         self.link_texts.resize(frame.rows.len(), String::new());
         self.links.resize(frame.rows.len(), vec![]);
+        // The directory's repository, looked up again only when it changes.
+        if self.repo.as_ref().map(|(c, _)| c.as_str()) != Some(self.cwd.as_str()) {
+            self.repo = Some((
+                self.cwd.clone(),
+                infiniterm_core::git_repo::github_repo(&self.cwd),
+            ));
+        }
+        let repo = self.repo.as_ref().and_then(|(_, r)| r.clone());
         for &r in rebuilt {
             let row = &frame.rows[r];
             let line = row.text.trim_end();
@@ -516,18 +529,18 @@ impl TerminalBody {
             }
             self.link_texts[r].clear();
             self.link_texts[r].push_str(line);
-            self.links[r] = if line.contains(['/', '.']) {
-                Self::scan_links(line, &self.cwd)
+            self.links[r] = if line.contains(['/', '.', '#']) {
+                Self::scan_links(line, &self.cwd, repo.as_ref())
             } else {
                 vec![]
             };
         }
     }
 
-    fn scan_links(line: &str, cwd: &str) -> Vec<(Found, Option<PathKind>)> {
+    fn scan_links(line: &str, cwd: &str, repo: Option<&Repo>) -> Vec<(Found, Option<PathKind>)> {
         {
             {
-                let found = find_links(line);
+                let found = find_links_in(line, repo);
                 let paths: Vec<&str> = found
                     .iter()
                     .filter(|f| f.kind == LinkKind::Path)
@@ -1705,7 +1718,10 @@ mod tests {
         let line = "see https://github.com/a/b now";
         b.feed(format!("{line}\r\n").as_bytes());
         b.link_texts = vec![line.to_string()];
-        b.links = vec![find_links(line).into_iter().map(|f| (f, None)).collect()];
+        b.links = vec![find_links_in(line, None)
+            .into_iter()
+            .map(|f| (f, None))
+            .collect()];
         let at = |col: f64| Point {
             x: PAD + col * 8.4 + 1.,
             y: PAD + 1.,
