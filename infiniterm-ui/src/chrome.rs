@@ -70,6 +70,13 @@ pub const FAR_REFRESH_MS: f64 = 250.;
 /// two full cards: a pair side by side still reads, a wall of them does
 /// not and now costs nothing. Counted from the grids, not from what is in
 /// them, so the flag does not flip as output scrolls.
+///
+/// Remeasured 2026-10-09 (#330, release build, 13 busy cards, about 80,000
+/// glyphs): 215 nanoseconds a glyph, 17 ms a frame, and 44 nanoseconds, 3.5
+/// ms, once a card's rows are painted in one layer (`terminal_body.rs`).
+/// gpui's per-primitive ordering was 90% of the old cost. The default rose
+/// from 30,000 to 150,000 cells with it: about 7 ms a frame if every cell
+/// held a glyph.
 #[cfg(test)]
 pub const GLYPH_BUDGET_CELLS: usize = infiniterm_core::config::DEFAULT_GLYPH_BUDGET;
 
@@ -485,35 +492,35 @@ mod tests {
         assert!(gpui::px(6.7) < legible_font_px(1.));
     }
 
-    /// One full card on Ekin's canvas is about 151 by 87 cells. A pair
-    /// still reads; a wall of eight cost 85 to 100 ms a frame in glyphs.
+    /// One full card on Ekin's canvas is about 151 by 87 cells. The default
+    /// budget holds about eleven of them; a wall of twenty is bars.
     #[test]
-    fn the_glyph_budget_is_about_two_full_cards() {
+    fn the_glyph_budget_is_about_eleven_full_cards() {
         let card = 151 * 87;
         assert!(
             !over_glyph_budget(card, 0, GLYPH_BUDGET_CELLS),
             "one card paints glyphs"
         );
         assert!(
-            !over_glyph_budget(card * 2, 0, GLYPH_BUDGET_CELLS),
-            "a pair side by side still does"
+            !over_glyph_budget(card * 11, 0, GLYPH_BUDGET_CELLS),
+            "eleven side by side still do"
         );
         assert!(
-            over_glyph_budget(card * 3, 0, GLYPH_BUDGET_CELLS),
-            "three is past it"
+            over_glyph_budget(card * 12, 0, GLYPH_BUDGET_CELLS),
+            "twelve is past it"
         );
         assert!(
-            over_glyph_budget(card * 8, 0, GLYPH_BUDGET_CELLS),
-            "a 4x2 fit-all is bars"
+            over_glyph_budget(card * 20, 0, GLYPH_BUDGET_CELLS),
+            "a wall of twenty is bars"
         );
     }
 
-    /// A window that holds 60,000 cells at 100% (the 4K) and is covered
-    /// edge to edge in cards shows 60,000 / zoom^2 of them. At 98% that is
+    /// A window that holds 200,000 cells at 100% (a large one) and is covered
+    /// edge to edge in cards shows 200,000 / zoom^2 of them. Near 100% that is
     /// text; at 70% it is bars.
     #[test]
     fn a_window_full_of_cards_is_text_near_100_percent() {
-        let window = 60_000;
+        let window = 200_000;
         let shown = |zoom: f32| (window as f32 / (zoom * zoom)) as usize;
         assert!(
             !over_glyph_budget(shown(0.98), window, GLYPH_BUDGET_CELLS),
@@ -533,9 +540,9 @@ mod tests {
     /// default read once the budget covers them.
     #[test]
     fn a_larger_budget_keeps_text_on_a_wall_of_cards() {
-        let twelve = 12 * 50 * 80;
-        assert!(over_glyph_budget(twelve, 12_000, GLYPH_BUDGET_CELLS));
-        assert!(!over_glyph_budget(twelve, 12_000, 120_000));
+        let wall = 20 * 151 * 87;
+        assert!(over_glyph_budget(wall, 12_000, GLYPH_BUDGET_CELLS));
+        assert!(!over_glyph_budget(wall, 12_000, 400_000));
         // The window-relative rule still applies when it is larger.
         assert!(!over_glyph_budget(100_000, 100_000, 1_000));
     }

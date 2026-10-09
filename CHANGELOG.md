@@ -8,7 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-09
 
-- New setting `ui.glyphBudget` (default 30000): how many terminal cells may be on screen before every card turns to bars. Cards turn to bars when a frame would paint too much text, not at a fixed zoom, so a wall of cards can be bars at 50% while one card reads at 30%. Raise it to read more cards at a smaller zoom; each cell costs about 1.7 microseconds a frame.
+- Terminal text is about five times cheaper to draw. Profiling 13 busy cards showed 90% of a glyph's cost was gpui ordering each one against everything drawn before it; a card's rows now share one order. A frame of those cards went from 17.5 ms to 4 ms, so zooming and panning over many cards of text is smooth. With that, `ui.glyphBudget` (the text-to-bars limit) now defaults to 150000 cells, about eleven full cards, instead of 30000.
+- New setting `ui.glyphBudget` (default 150000): how many terminal cells may be on screen before every card turns to bars. Cards turn to bars when a frame would paint too much text, not at a fixed zoom, so a wall of cards can be bars at 50% while one card reads at 30%. Raise it to read more cards at a smaller zoom; each cell costs at most 50 nanoseconds a frame.
 
 ## 0.5.11 (build 801), 2026-10-09
 

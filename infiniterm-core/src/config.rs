@@ -242,10 +242,10 @@ impl Config {
     }
 }
 
-/// `ui.glyphBudget`'s default: about two full cards of terminal cells, the
+/// `ui.glyphBudget`'s default: about eleven full cards of terminal cells, the
 /// cost of one frame in glyphs (`infiniterm-ui/src/chrome.rs`, where the rule
 /// and its measurements live).
-pub const DEFAULT_GLYPH_BUDGET: usize = 30_000;
+pub const DEFAULT_GLYPH_BUDGET: usize = 150_000;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1231,7 +1231,7 @@ mod tests {
 
     #[test]
     fn the_grid_is_on_unless_turned_off() {
-        assert_eq!(m(json!({})).ui.glyph_budget, 30_000);
+        assert_eq!(m(json!({})).ui.glyph_budget, 150_000);
         assert_eq!(
             m(json!({"ui.glyphBudget": 150000})).ui.glyph_budget,
             150_000
