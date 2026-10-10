@@ -15,7 +15,6 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-10-09
 
 - New: in Finder, select one or more folders and choose Services > Open in infiniterm (right-click, Services). Each folder becomes a terminal card whose shell starts there, on the workspace you are looking at, and the last one is focused. The same is `ift terminal <folder>...`, which starts infiniterm first when it is not running. The Services item exists in the app bundle; if it is missing, enable it under System Settings > Keyboard > Keyboard Shortcuts > Services > Files and Folders.
-||||||| c33ba90
 - Every new terminal card sets `FORCE_HYPERLINK=1`, so Claude Code (and other tools that decide by terminal name) print links as real hyperlinks: a markdown link in its reply is clickable text, underlined, instead of `text (url)`. A card that is already open keeps its old environment; open a new one. To turn it off, set `"terminal.env": ["FORCE_HYPERLINK=0"]`.
 - Link feedback is the same for every kind of link: holding Cmd over a link in a terminal draws a full-strength double underline over a faint tint and turns the pointer to a hand. A link a program marked itself (OSC 8) has a thin dim underline at rest, so hovering visibly changes it.
 - A link a program marked itself (OSC 8) is underlined at rest, so text that is a link and does not look like one is not just text. Links found by pattern (URLs, paths, `#349`) still show only under Cmd+hover.
