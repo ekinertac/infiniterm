@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-06
 
+- The editor completes words while you type. Two letters open a list of words from the file, nearest to the caret first, and from the card's other tabs, marked with the tab's name. In a source file, words inside comments and strings are left out. Tab takes the top row; Enter takes a row only after you moved it with Up or Down, so a word you typed is never replaced by Enter. Letters in order match from three letters (`gtl` finds `getTotalLength`). Turn it off with `editor.completeWords`.
 - `ui.cardRadius` rounds the corners of cards and group frames, in pixels at 100% zoom (0 to 40; 0, the default, keeps them square). The border, the focus ring, the label chip in the card's corner, the tab strip and the browser page follow it. The window's own corners stay macOS's.
 - `cards.gap` sets the space between cards in pixels (0 to 200, 25 by default). New cards, splits, growing a card, Canvas: tidy and group frames all use it. Cards already on the canvas stay where they are until they are moved or tidied.
 

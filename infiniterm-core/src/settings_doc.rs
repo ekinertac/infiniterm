@@ -211,6 +211,16 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["A wash behind the line the cursor is on."],
     ),
     (
+        "editor.completeWords",
+        &[
+            "Offer words from the file and the card's other tabs while you type in",
+            "an editor (two letters open the list, Tab takes the top one, Enter only",
+            "after you moved the row). Inside comments and strings of a file with a",
+            "grammar, words are not collected. settings.json and files that name a",
+            "JSON schema complete their own keys regardless.",
+        ],
+    ),
+    (
         "editor.selectionColor",
         &[
             "Behind selected text, as a CSS colour. Empty is the theme's yellow: a",

@@ -338,8 +338,31 @@ impl CardBody for EditorTabs {
         if k.key != "escape" {
             self.last_escape_ms = None;
         }
+        // The word popup draws on the card's other tabs too; their word
+        // lists are cached per tab and rebuilt only when that tab's text
+        // changes.
+        let active = self.active;
+        let others: Vec<(String, std::sync::Arc<Vec<String>>)> = if self.tabs.len() > 1 {
+            self.tabs
+                .iter_mut()
+                .enumerate()
+                .filter(|(i, _)| *i != active)
+                .map(|(_, (handle, b))| {
+                    let name = match handle.rsplit('/').next() {
+                        Some(n) if !n.is_empty() => n.to_string(),
+                        _ => "untitled".to_string(),
+                    };
+                    (name, b.word_set())
+                })
+                .collect()
+        } else {
+            vec![]
+        };
         match self.active_body() {
-            Some(b) => b.key(k, now, cx),
+            Some(b) => {
+                b.other_words = others;
+                b.key(k, now, cx)
+            }
             None => BodyAction::None,
         }
     }
