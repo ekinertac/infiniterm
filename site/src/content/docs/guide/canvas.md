@@ -12,7 +12,7 @@ Every card sits on one canvas you pan and zoom. Cards never move on their own: a
 - **Diff**: `ift diff` opens the changes against git HEAD, the changed files on the left and one file's diff on the right. `Cmd B` adds a blame gutter.
 - **Transcript**: `Cmd I` on a card running Claude Code or Pi opens its session beside it as turns, with tool calls folded under each.
 - **Page**: a Markdown file rendered (headings, lists, code, links), read-only. It never takes the keyboard: the wheel scrolls it, and while it is focused the arrows, Page Up/Down, Space, Home and End do too; every other key stays the canvas's. A scrollbar at the right edge shows when there is more below. Web links open in the browser, links to other `.md` files open as Pages. The "Start here" card a first launch shows is one.
-- **Browser**: Chromium inside the card, with the Claude in Chrome extension loaded, so Claude Code can drive a browser on your canvas. `Cmd L` opens the address bar, and so does `Cmd T` on the new blank tab. Middle-click or `Cmd` + click on a link opens it in a new tab, middle-click on a tab closes it, and the mouse's back and forward buttons walk the history (Back on a tab a link opened closes it).
+- **Browser**: Chromium inside the card, with the Claude in Chrome extension loaded, so Claude Code can drive a browser on your canvas. "Browser: open DevTools" in the palette opens Chromium's DevTools for the page in a card beside it. It uses a debugging port on a random loopback port that only that DevTools page may use; a program running on your Mac could still attach to it, so `"browser.devtools": false` turns the feature off (restart the app after changing it). `Cmd L` opens the address bar, and so does `Cmd T` on the new blank tab. Middle-click or `Cmd` + click on a link opens it in a new tab, middle-click on a tab closes it, and the mouse's back and forward buttons walk the history (Back on a tab a link opened closes it).
 
 ## Where a new card goes
 
@@ -43,15 +43,15 @@ Canvas: tidy, in the palette, packs the cards back onto the grid in reading orde
 - `Cmd` + scroll, or a pinch on the trackpad, zooms around the pointer. The palette has zoom in and out too. (`Cmd =` and `Cmd -` change the terminal font size; see [Terminal cards](../terminal/).)
 - `Cmd 0` actual size, `Cmd 1` fit the focused card, `Cmd 2` fit everything.
 - `Cmd 3` fits the selected cards when several are selected. With one card it fits the card's group, or else the block of cards around it (every card within a gutter of the next).
-- Double-click a card's frame or label to fit it; double-click empty canvas to fit everything. A terminal card drawn as bars, because you are zoomed out too far to read it or the canvas is crowded, fits on a double-click anywhere on it.
+- Double-click a card's frame or label to fit it; double-click empty canvas to fit everything. A terminal card drawn as bars (only when `ui.textAsBars` is on, see below) fits on a double-click anywhere on it.
 
-Zoomed far out, text is drawn as bars, one per word, so a full card still reads as full. The line is set by what the screen can draw, not a fixed zoom level.
+Cards draw their text at every zoom. On a slow Mac you can turn on `"ui.textAsBars": true`: far out, or with many cards on screen, text is then drawn as bars, one per word, so a full card still reads as full. `ui.minTextPx` (7 by default) is how big a glyph must be, in device pixels, before text replaces bars, and `ui.glyphBudget` is how many terminal cells may be on screen before every card turns to bars. Neither does anything while `ui.textAsBars` is off.
 
-### Reading mode
+### Zooming in on a card's bottom
 
-`Cmd 1` on a terminal card that is already fitted zooms in to 150% with the card's bottom edge at the bottom of the window, which is where a long agent answer ends. The status bar says "reading". `ui.readZoom` sets the zoom (1.1 to 4).
+`Cmd 1` on a terminal card that is already fitted zooms in to 150% with the card's bottom edge at the bottom of the window, which is where a long agent answer ends. The status bar says "zoomed". `ui.cardZoom` sets the zoom (1.1 to 4, and `0` turns the behaviour off, so a second `Cmd 1` does nothing new); the older name `ui.readZoom` still works.
 
-While the mode is on, `Cmd Up` and `Cmd Down` pan three rows inside the card. Typing and `Enter` still reach the shell and bring the view back to the bottom. `Cmd 1` again or `Cmd 2` leaves the mode, and so does panning or zooming by hand. The palette has it as "Canvas: read the focused card".
+While it is on, `Cmd Up` and `Cmd Down` pan three rows inside the card. Typing and `Enter` still reach the shell and bring the view back to the bottom. `Cmd 1` again or `Cmd 2` leaves it, and so does panning or zooming by hand. The palette has it as "Canvas: zoom in on the focused card's bottom".
 
 ### Maximising a card
 
@@ -91,7 +91,7 @@ Drag a tab onto another tab to put it in that place. From the keyboard, "Workspa
 
 With `"ui.workspaceIsolation": true`, `Ctrl Tab` walks only the current workspace's cards and the status bar counts only them; the palette still lists every card, so it stays the way across.
 
-"Card: move to workspace…" in the palette sends the focused card, or the selection, to another workspace or a new one. The card takes a free slot there and you stay where you are.
+"Card: move to workspace…" in the palette sends the focused card, or the selection, to another workspace or a new one. The card takes a free slot there and you stay where you are. "Group: move to workspace…" does the same for the focused card's whole group, with its frame, its name and its cards in the same arrangement and sizes. It lands in the first free block of the other workspace.
 
 ## Card labels and numbers
 
@@ -101,7 +101,7 @@ The label sits top right by default. `"ui.cardLabelPosition"` moves it to `"top 
 
 ### Locking a browser card
 
-A page needs the keyboard for itself, so a browser card works like a locked editor. Click into the page, or press `Enter` on a card you arrived at with the arrows, and the keyboard is the page's: the ring turns the warning colour and the status bar says so. Chrome's own chords work then (`Cmd T`, `Cmd W`, `Cmd 1` to `Cmd 9` for tabs). Press `Escape` twice within 400 ms to let go; a single `Escape` goes to the page, which uses it. `Cmd Escape` lets go at once.
+A page needs the keyboard for itself, so a browser card works like a locked editor. Click into the page, or press `Enter` on a card you arrived at with the arrows, and the keyboard is the page's: the ring turns the warning colour and the status bar says so. Chrome's own chords work then (`Cmd T`, `Cmd W`, `Cmd 1` to `Cmd 9` for tabs). Press `Escape` twice within 400 ms to let go; a single `Escape` goes to the page, which uses it. `Cmd Escape` lets go at once. `Cmd Shift P` opens the command palette from a locked page too.
 
 ## The right-click menu
 
@@ -115,6 +115,8 @@ Right-click opens the native macOS menu, with each command's shortcut at the rig
 - **A file or folder in an editor's tree**: the row lights up while the menu is open. Open, Reveal in Finder, Copy Path and Copy Relative Path.
 - **A tab of an editor or browser card**: switches to that tab, then New Tab, Close Tab and Reopen Closed Tab. A browser tab also has Reload, Copy Address and Open in System Browser.
 - **A browser page**: Back and Forward when there is somewhere to go, Reload, Cut, Copy and Paste where they apply, and Open Page in System Browser. On a link: Copy Link Address, Open Link in New Tab, Open Link in New Card and Open Link in System Browser.
+
+With several cards selected, a right-click on one of them keeps the selection and opens a menu for all of them: Group, Protect, Clear State Colour, Fit Selection, Move to Workspace… and Close. Rename, Split and Size are left out, since they are for one card. A right-click on a card outside the selection selects that card alone.
 
 A terminal program that uses the mouse, such as vim, tmux or htop, still gets the plain right-click. Hold `Shift` to open the menu over it.
 
