@@ -26,6 +26,8 @@ pub enum Source {
     Snippets,
     /// `card.moveToWorkspace`: the other workspaces, then a new one.
     MoveTo,
+    /// `group.moveToWorkspace`: the same rows, for the focused card's group.
+    MoveGroupTo,
     /// `window.color` (#157, #160): named colours previewed live, then a hex code.
     WindowColor,
 }
@@ -48,6 +50,7 @@ impl Source {
             Source::Sizes => "sizes",
             Source::Snippets => "snippets",
             Source::MoveTo => "moveTo",
+            Source::MoveGroupTo => "moveGroupTo",
             Source::WindowColor => "windowColor",
         }
     }
@@ -70,6 +73,7 @@ impl Source {
                 | Source::SlotKind
                 | Source::Sizes
                 | Source::MoveTo
+                | Source::MoveGroupTo
                 | Source::Themes
                 | Source::WindowColor
         )
@@ -85,13 +89,14 @@ impl Source {
     /// Prompt text in the empty input.
     pub fn placeholder(self) -> &'static str {
         match self {
-            Source::Commands => "Run a command",
+            Source::Commands => "Run a command…",
             Source::Themes => "Switch theme",
             Source::Placement => "New terminal…",
             Source::SlotKind => "New card in this slot…",
             Source::Sizes => "Resize the card to…",
             Source::Snippets => "Paste a snippet…",
             Source::MoveTo => "Move to workspace…",
+            Source::MoveGroupTo => "Move the group to workspace…",
             Source::WindowColor => "Window colour…",
         }
     }
@@ -296,7 +301,7 @@ impl Model {
                     ("file", "Editor: on a file you name", None),
                     ("untitled", "Editor: empty", chord("card.new.editor")),
                     ("diff", "Diff: this card against git HEAD", None),
-                    ("browser", "Browser: open a URL", None),
+                    ("browser", "Browser: open a URL…", None),
                     ("claude", "Terminal: Claude Code in this directory", None),
                     ("pi", "Terminal: Pi in this directory", None),
                 ]
@@ -313,7 +318,7 @@ impl Model {
             Source::SlotKind => [
                 ("terminal", "Terminal"),
                 ("editor", "Editor: empty"),
-                ("browser", "Browser: open a URL"),
+                ("browser", "Browser: open a URL…"),
             ]
             .into_iter()
             .map(|(id, label)| PaletteItem {
@@ -324,7 +329,7 @@ impl Model {
             .collect(),
             // The workspaces in tab order, less the one you are on, each with
             // how many cards it holds, then a new one.
-            Source::MoveTo => {
+            Source::MoveTo | Source::MoveGroupTo => {
                 let here = self.active_workspace.clone();
                 let mut rows: Vec<PaletteItem> = self
                     .workspaces
@@ -423,6 +428,7 @@ mod dims_tests {
             Source::Sizes,
             Source::Snippets,
             Source::MoveTo,
+            Source::MoveGroupTo,
             Source::WindowColor,
         ] {
             assert!(s.dims_canvas(), "{s:?}");

@@ -76,6 +76,22 @@ pub fn after_closing<'a>(ids: &'a [String], closing_id: &str) -> Option<&'a str>
         .map(String::as_str)
 }
 
+/// Where the workspace `id` sits after it is moved to index `to` of the
+/// tab row (clamped), as the new order of ids; `None` when it is not there or
+/// would not move. A drag drops a tab on another tab and takes that tab's
+/// place, the way a browser's tab strip does.
+pub fn reordered(order: &[String], id: &str, to: usize) -> Option<Vec<String>> {
+    let from = order.iter().position(|w| w == id)?;
+    let to = to.min(order.len() - 1);
+    if from == to {
+        return None;
+    }
+    let mut next = order.to_vec();
+    let moved = next.remove(from);
+    next.insert(to, moved);
+    Some(next)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +173,17 @@ mod tests {
     fn closing_last_or_unknown_has_no_target() {
         assert_eq!(after_closing(&ids(&["only"]), "only"), None);
         assert_eq!(after_closing(&ids(&["a", "b", "c"]), "gone"), None);
+    }
+
+    #[test]
+    fn a_dragged_tab_takes_the_place_of_the_one_it_drops_on() {
+        let order: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
+        let ids = |v: Vec<String>| v.join("");
+        assert_eq!(ids(reordered(&order, "a", 2).unwrap()), "bcad");
+        assert_eq!(ids(reordered(&order, "d", 0).unwrap()), "dabc");
+        assert_eq!(ids(reordered(&order, "b", 99).unwrap()), "acdb");
+        assert_eq!(reordered(&order, "c", 2), None);
+        assert_eq!(reordered(&order, "zzz", 1), None);
+        assert_eq!(reordered(&[], "a", 0), None);
     }
 }

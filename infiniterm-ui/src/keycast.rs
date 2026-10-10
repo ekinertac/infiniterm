@@ -81,7 +81,9 @@ impl AppView {
             .flex()
             .flex_col()
             .items_start()
-            .gap(px(KEYCAST_GAP_PX * ui));
+            .gap(px(KEYCAST_GAP_PX * ui))
+            .font_family(chrome.typography.family.clone())
+            .font_weight(chrome.typography.regular.weight);
         for k in &self.keycasts {
             let alpha = keycast_alpha(k.at, now);
             column = column.child(
@@ -93,7 +95,7 @@ impl AppView {
                     .py(px(9. * ui))
                     .rounded_md()
                     .bg(crate::chrome::with_alpha(chrome.bar_bg, 0.92 * alpha))
-                    .text_size(px(KEYCAST_FONT_PX * ui))
+                    .text_size(px(chrome.typography.size(KEYCAST_FONT_PX) * ui))
                     .text_color(crate::chrome::with_alpha(chrome.text_muted, alpha))
                     .child(
                         div()
@@ -102,6 +104,7 @@ impl AppView {
                             .rounded_sm()
                             .bg(crate::chrome::with_alpha(chrome.text_bright, alpha))
                             .text_color(crate::chrome::with_alpha(chrome.bar_bg, alpha))
+                            .font_weight(chrome.typography.bold.weight)
                             .child(k.chord.clone()),
                     )
                     .child(k.label.clone()),

@@ -36,10 +36,10 @@ die() { printf 'infiniterm install: %s\n' "$*" >&2; exit 1; }
 hooks="ask"
 while [ $# -gt 0 ]; do
     case "$1" in
-        --hooks) [ $# -ge 2 ] || { say "--hooks takes a list: claude,pi,codex,opencode" >&2; exit 2; }; hooks="$2"; shift ;;
+        --hooks) [ $# -ge 2 ] || { say "--hooks takes a list: claude,pi,codex,opencode,cursor" >&2; exit 2; }; hooks="$2"; shift ;;
         --hooks=*) hooks="${1#--hooks=}" ;;
         --no-hooks) hooks="" ;;
-        -h|--help) say "usage: install.sh [--hooks claude,pi,codex,opencode | --no-hooks]"; exit 0 ;;
+        -h|--help) say "usage: install.sh [--hooks claude,pi,codex,opencode,cursor | --no-hooks]"; exit 0 ;;
         *) say "unknown option: $1 (try --hooks claude,pi or --no-hooks)" >&2; exit 2 ;;
     esac
     shift
@@ -47,7 +47,7 @@ done
 case ",$hooks," in
     ,ask,|,,) ;;
     *) for h in $(printf '%s' "$hooks" | tr ',' ' '); do
-           case "$h" in claude|pi|codex|opencode) ;; *) say "unknown hook: $h (claude, pi, codex or opencode)" >&2; exit 2 ;; esac
+           case "$h" in claude|pi|codex|opencode|cursor) ;; *) say "unknown hook: $h (claude, pi, codex, opencode or cursor)" >&2; exit 2 ;; esac
        done ;;
 esac
 
@@ -96,12 +96,13 @@ supported() { "$IFT" --help 2>/dev/null | grep -q "install-$1-hooks"; }
 if [ "$hooks" = ask ]; then
     hooks=""
     if (: </dev/tty) 2>/dev/null; then
-        for h in claude pi codex opencode; do
+        for h in claude pi codex opencode cursor; do
             case "$h" in
                 claude) found=$(command -v claude || { [ -d "$HOME/.claude" ] && echo yes; } || true); what="Claude Code (edits ~/.claude/settings.json)" ;;
                 pi) found=$(command -v pi || { [ -d "$HOME/.pi" ] && echo yes; } || true); what="Pi (adds an extension to ~/.pi/agent)" ;;
                 codex) found=$(command -v codex || { [ -d "${CODEX_HOME:-$HOME/.codex}" ] && echo yes; } || true); what="Codex (edits ~/.codex/hooks.json; approve them once with /hooks in Codex)" ;;
                 opencode) found=$(command -v opencode || { [ -d "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" ] && echo yes; } || true); what="OpenCode (adds a plugin to ~/.config/opencode/plugins)" ;;
+                cursor) found=$(command -v cursor || { [ -d "$HOME/.cursor" ] && echo yes; } || true); what="Cursor (edits ~/.cursor/hooks.json for the agent CLI)" ;;
             esac
             [ -n "$found" ] || continue
             supported "$h" || continue
@@ -111,7 +112,7 @@ if [ "$hooks" = ask ]; then
         done
     else
         say "No terminal to ask, so no agent hooks were installed. To add them:"
-        for h in claude pi codex opencode; do supported "$h" && say "  ift install-$h-hooks"; done
+        for h in claude pi codex opencode cursor; do supported "$h" && say "  ift install-$h-hooks"; done
     fi
 fi
 for h in $(printf '%s' "$hooks" | tr ',' ' '); do

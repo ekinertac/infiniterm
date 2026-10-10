@@ -268,9 +268,18 @@ impl Model {
     /// Opens the welcome card (`welcome::welcome_path`, written by the ui at
     /// launch) beside `after`, or focuses it when one is already open.
     pub fn open_welcome(&mut self, after: Option<&str>) -> Option<String> {
-        let path = crate::welcome::welcome_path()
-            .to_string_lossy()
-            .into_owned();
+        self.open_page(crate::welcome::welcome_path(), after)
+    }
+
+    /// Opens the changelog card (`changelog::changelog_path`, written by the
+    /// ui at launch) beside `after`, or focuses it when one is already open.
+    pub fn open_changelog(&mut self, after: Option<&str>) -> Option<String> {
+        self.open_page(crate::changelog::changelog_path(), after)
+    }
+
+    /// A Page card on `path` beside `after`, or the one already open on it.
+    fn open_page(&mut self, path: std::path::PathBuf, after: Option<&str>) -> Option<String> {
+        let path = path.to_string_lossy().into_owned();
         let existing = self
             .here()
             .into_iter()

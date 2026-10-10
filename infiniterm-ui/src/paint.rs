@@ -182,7 +182,11 @@ impl AppView {
         self.apply_hover_cursor(window);
         // Over a frame band the cursor says what a press would do: arrows
         // on an edge or corner, a hand on the band that moves the card.
-        if let Some((_, edge)) = &self.hover_edge {
+        if let Some((_, edge)) = self
+            .hover_edge
+            .as_ref()
+            .filter(|_| !self.model.modal_open())
+        {
             use infiniterm_core::resize::Edge;
             let style = match edge {
                 None => gpui::CursorStyle::OpenHand,
@@ -274,6 +278,13 @@ impl AppView {
 
     fn paint_world(&mut self, bounds: Bounds<Pixels>, now: f64, window: &mut Window, cx: &mut App) {
         self.label_hits.clear();
+        // Bars off (`ui.textAsBars`): no glyph is too small to draw.
+        let ui = &self.model.config.ui;
+        crate::chrome::set_legible_device_px(if ui.text_as_bars {
+            ui.min_text_px as f32
+        } else {
+            0.
+        });
         let origin = bounds.origin;
         let vp = self.model.viewport;
         let view = self.model.view_size;
@@ -399,7 +410,7 @@ impl AppView {
                 window,
                 &group.name,
                 label_px,
-                &chrome.ui_font,
+                &chrome.typography.regular,
                 chrome.group_label_fg,
             );
             let h = label_px * GROUP_LABEL_TAB_HEIGHT_RATIO;
@@ -516,7 +527,12 @@ impl AppView {
         let window_area = f32::from(visible.size.width) * f32::from(visible.size.height);
         let scale = vp.scale as f32;
         let window_cells = (density * window_area * scale * scale) as usize;
-        let crowded = crate::chrome::over_glyph_budget(cells, window_cells);
+        let crowded = self.model.config.ui.text_as_bars
+            && crate::chrome::over_glyph_budget(
+                cells,
+                window_cells,
+                self.model.config.ui.glyph_budget,
+            );
         self.crowded = crowded;
         for (id, _) in &on_screen {
             if let Some(b) = self.bodies.get_mut(id) {
@@ -642,12 +658,12 @@ impl AppView {
             if let Some(hint) = sel.hints.get(&card.id) {
                 // Big enough to read from across the canvas, over the body
                 // rather than in a corner.
-                let hp = px(SLOT_HINT_FONT_PX * inv * vp.scale as f32);
+                let hp = px(chrome.typography.size(SLOT_HINT_FONT_PX) * inv * vp.scale as f32);
                 let line = crate::text::shape(
                     window,
                     &hint.to_string(),
                     hp,
-                    &chrome.mono_font,
+                    &chrome.typography.regular,
                     chrome.sel_fg,
                 );
                 let hb = Bounds::new(
@@ -775,7 +791,7 @@ impl AppView {
             * PHANTOM_LABEL_SCALE
             * inv
             * scale as f32);
-        let line = crate::text::shape(window, &text, fp, &chrome.mono_font, color);
+        let line = crate::text::shape(window, &text, fp, &chrome.typography.regular, color);
         let tb = Bounds::new(
             point(
                 b.origin.x + b.size.width / 2. - line.width / 2.,
@@ -918,7 +934,13 @@ impl AppView {
             let (head, tail) = split_label(&label);
             let room = b.size.width - border * 2. - label_px;
             let mut text = format!("{head}{tail}");
-            let mut line = crate::text::shape(window, &text, label_px, &chrome.ui_font, label_fg);
+            let mut line = crate::text::shape(
+                window,
+                &text,
+                label_px,
+                &chrome.typography.regular,
+                label_fg,
+            );
             let mut keep = head.chars().count();
             while line.width > room && keep > 0 {
                 keep /= 2;
@@ -931,7 +953,13 @@ impl AppView {
                     .rev()
                     .collect();
                 text = format!("\u{2026}{cut}{tail}");
-                line = crate::text::shape(window, &text, label_px, &chrome.ui_font, label_fg);
+                line = crate::text::shape(
+                    window,
+                    &text,
+                    label_px,
+                    &chrome.typography.regular,
+                    label_fg,
+                );
             }
             // The tail alone can still be wider than the card: a label with
             // no slash in it is ALL tail, and an agent's session name has
@@ -939,10 +967,23 @@ impl AppView {
             if line.width > room {
                 text = crate::text::elide(&text, f32::from(room), |t| {
                     f32::from(
-                        crate::text::shape(window, t, label_px, &chrome.ui_font, label_fg).width,
+                        crate::text::shape(
+                            window,
+                            t,
+                            label_px,
+                            &chrome.typography.regular,
+                            label_fg,
+                        )
+                        .width,
                     )
                 });
-                line = crate::text::shape(window, &text, label_px, &chrome.ui_font, label_fg);
+                line = crate::text::shape(
+                    window,
+                    &text,
+                    label_px,
+                    &chrome.typography.regular,
+                    label_fg,
+                );
             }
             let w = line.width + label_px;
             let lb = Bounds::new(point(place(w), top), size(w, h));
@@ -985,8 +1026,13 @@ impl AppView {
             CardKind::Terminal => {}
         }
         for badge in badges.into_iter().filter(|_| !hide) {
-            let line =
-                crate::text::shape(window, &badge, label_px, &chrome.ui_font, chrome.text_muted);
+            let line = crate::text::shape(
+                window,
+                &badge,
+                label_px,
+                &chrome.typography.regular,
+                chrome.text_muted,
+            );
             let w = line.width + label_px;
             let bb = Bounds::new(point(place(w), top), size(w, h));
             let radii = if std::mem::take(&mut in_corner) {
@@ -999,8 +1045,13 @@ impl AppView {
         }
         // Red: the one thing on a card that changes what a keystroke does.
         if let Some(remote) = &card.remote {
-            let line =
-                crate::text::shape(window, remote, label_px, &chrome.ui_font, chrome.remote_fg);
+            let line = crate::text::shape(
+                window,
+                remote,
+                label_px,
+                &chrome.typography.regular,
+                chrome.remote_fg,
+            );
             // The other end of the label's edge, so the two never overlap.
             let w = line.width + label_px;
             let x = if corner.left() {

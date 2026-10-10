@@ -122,6 +122,11 @@ pub struct Row {
     /// text rather than in it, so a column is still a character everywhere
     /// else; only the shaper reads these (`terminal_body::shape_row`).
     pub zerowidth: Vec<(usize, String)>,
+    /// OSC 8 hyperlinks on this row: the columns from `start` up to `end` (not
+    /// included) point at the address. A program wrote them (`ls --hyperlink`,
+    /// an agent's markdown links), so the text can say anything; the ui opens
+    /// only web addresses (`links::merge_hyperlinks`).
+    pub hyperlinks: Vec<(usize, usize, String)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -841,6 +846,7 @@ impl Grid {
                     runs: Vec::new(),
                     text: String::with_capacity(cols),
                     zerowidth: Vec::new(),
+                    hyperlinks: Vec::new(),
                 })
                 .collect();
         }
@@ -888,6 +894,9 @@ impl Grid {
         out.runs.clear();
         out.text.clear();
         out.zerowidth.clear();
+        out.hyperlinks.clear();
+        // The hyperlink spans being read along the row: (start column, id, address).
+        let mut open: Option<(usize, String, String)> = None;
         let grid_line = Line(line as i32 - offset as i32);
         let row = &self.term.grid()[grid_line];
         // The matches touching this row, found once: checking every cell
@@ -906,6 +915,18 @@ impl Grid {
             let cell = &row[Column(col)];
             let flags = cell.flags;
             let point = Point::new(grid_line, Column(col));
+            let link = cell.hyperlink();
+            if link.is_some() || open.is_some() {
+                let same = matches!((&open, &link), (Some((_, id, _)), Some(h)) if id == h.id());
+                if !same {
+                    if let Some((start, _, uri)) = open.take() {
+                        out.hyperlinks.push((start, col, uri));
+                    }
+                    if let Some(h) = &link {
+                        open = Some((col, h.id().to_string(), h.uri().to_string()));
+                    }
+                }
+            }
             let selected = selection.is_some_and(|s| s.contains(point));
             // Find: every match, and the current one, which wears the
             // selection pair like a selection would.
@@ -918,6 +939,7 @@ impl Grid {
             // short lines is nearly all of it.
             if cell.c == ' '
                 && flags.is_empty()
+                && link.is_none()
                 && !selected
                 && !found
                 && matches!(cell.bg, Color::Named(NamedColor::Background))
@@ -1007,6 +1029,9 @@ impl Grid {
                     out.runs.push(run);
                 }
             }
+        }
+        if let Some((start, _, uri)) = open.take() {
+            out.hyperlinks.push((start, self.size.cols, uri));
         }
     }
 }
@@ -1190,6 +1215,51 @@ mod tests {
             .iter()
             .map(|r| r.text.trim_end().to_string())
             .collect()
+    }
+
+    // OSC 8 (`ESC ] 8 ; ; URI ST text ESC ] 8 ; ; ST`): the cells between the
+    // two carry the address, and the row reports the columns, spaces inside
+    // the span included.
+    #[test]
+    fn an_osc8_hyperlink_is_reported_as_a_span_of_columns() {
+        let mut g = Grid::new(40, 2, 100);
+        g.advance(
+            b"see \x1b]8;;https://github.com/o/r/issues/432\x1b\\issue 432\x1b]8;;\x1b\\ now\r\nplain",
+        );
+        let f = g.frame(&Palette::default_palette());
+        assert_eq!(
+            f.rows[0].hyperlinks,
+            vec![(4, 13, "https://github.com/o/r/issues/432".to_string())]
+        );
+        assert_eq!(&f.rows[0].text[4..13], "issue 432");
+        assert!(f.rows[1].hyperlinks.is_empty());
+        // Two links back to back stay two spans; one ending at the row's edge closes there.
+        let mut g = Grid::new(10, 1, 100);
+        g.advance(b"\x1b]8;;http://a.io\x1b\\aa\x1b]8;;http://b.io\x1b\\bbbbbbbb");
+        let f = g.frame(&Palette::default_palette());
+        assert_eq!(
+            f.rows[0].hyperlinks,
+            vec![
+                (0, 2, "http://a.io".to_string()),
+                (2, 10, "http://b.io".to_string())
+            ]
+        );
+    }
+
+    // Claude Code writes OSC 8 with an id and a BEL terminator, not the ST
+    // form the tests above use; both must read the same.
+    #[test]
+    fn an_osc8_hyperlink_with_an_id_and_a_bel_terminator_is_read() {
+        let mut g = Grid::new(40, 1, 100);
+        g.advance(
+            b"See \x1b]8;id=1v04av0;https://github.com/o/r/issues/337\x07#337\x1b]8;;\x07 and more",
+        );
+        let f = g.frame(&Palette::default_palette());
+        assert_eq!(
+            f.rows[0].hyperlinks,
+            vec![(4, 8, "https://github.com/o/r/issues/337".to_string())]
+        );
+        assert_eq!(&f.rows[0].text[4..8], "#337");
     }
 
     // ⚠️ is a text symbol plus U+FE0F, 🏃‍♀️ a runner, a joiner, ♀ and

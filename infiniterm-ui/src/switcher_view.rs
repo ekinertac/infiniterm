@@ -99,8 +99,12 @@ impl AppView {
                             .border_color(chrome.overlay_border)
                             .rounded_md()
                             .shadow_lg()
-                            .font_family("Menlo")
-                            .text_size(px(crate::overlays::OVERLAY_BODY_FONT_PX * ui))
+                            .font_family(chrome.typography.family.clone())
+                            .font_weight(chrome.typography.regular.weight)
+                            .text_size(px(chrome
+                                .typography
+                                .size(crate::overlays::OVERLAY_BODY_FONT_PX)
+                                * ui))
                             .text_color(chrome.text)
                             .child(list),
                     ),

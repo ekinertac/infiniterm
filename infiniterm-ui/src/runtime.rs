@@ -60,6 +60,7 @@ impl AppView {
             show_character_palette: false,
             pan: None,
             left_on_canvas: false,
+            middle_press: None,
             marquee: None,
             crowded: false,
             gesture: None,
@@ -102,6 +103,8 @@ impl AppView {
             frame_rate: Default::default(),
             themes_dir: PathBuf::new(),
             backgrounds_dir: AppView::bundled_backgrounds(),
+            paste_request: None,
+            page_menu_open: false,
             background: Default::default(),
             scale_factor,
             cef_running: false,
@@ -179,6 +182,7 @@ impl AppView {
                 theme,
                 hex3(&self.model.config.editor.selection_color),
                 hex3(&self.model.config.editor.selection_text_color),
+                hex3(&self.model.config.terminal.cursor_color),
             ),
             None => infiniterm_term::palette::Palette::default_palette(),
         };
@@ -257,7 +261,7 @@ impl AppView {
     /// A snippet into a card the way Cmd+V goes: the terminal's paste path
     /// (bracketed when the program asked), any other body's `insert_text`.
     /// A masked or displaced card has no live body and gets nothing.
-    fn paste_text(&mut self, card_id: &str, text: &str) {
+    pub(crate) fn paste_text(&mut self, card_id: &str, text: &str) {
         let Some(body) = self.live_body(card_id) else {
             return;
         };
@@ -398,6 +402,30 @@ impl AppView {
                 Effect::RefreshThemes => self.refresh_themes(),
                 Effect::RefreshSnippets => self.refresh_snippets(),
                 Effect::PasteText { card_id, text } => self.paste_text(&card_id, &text),
+                // The right-click menu's terminal acts (#278). The clipboard is
+                // read in the poll task, where there is an app context.
+                Effect::Terminal { card_id, action } => {
+                    use infiniterm_core::model::TerminalAction;
+                    match action {
+                        TerminalAction::Copy => {
+                            if let Some(text) = self
+                                .terminal_body(&card_id)
+                                .and_then(|b| b.grid.selection_text())
+                            {
+                                self.clipboard_out = Some(text);
+                            }
+                        }
+                        TerminalAction::Paste => self.paste_request = Some(card_id),
+                        TerminalAction::SearchSelection => {
+                            if let Some(text) = self
+                                .terminal_body(&card_id)
+                                .and_then(|b| b.grid.selection_text())
+                            {
+                                self.model.open_web_search(&text);
+                            }
+                        }
+                    }
+                }
                 Effect::Editor { card_id, action } => self.editor_effect(&card_id, action),
                 Effect::Browser { card_id, action } => self.browser_effect(&card_id, action),
                 // A terminal's scrollback is ours to search; a page is
@@ -650,6 +678,7 @@ impl AppView {
             match change.file {
                 ConfigFile::Settings => {
                     self.model.apply_settings_text(&change.contents);
+                    self.chrome.apply_ui_typography(&self.model.config.ui);
                     self.animator.animations_on =
                         self.model.config.ui.animations && !self.reduce_motion;
                 }
@@ -683,6 +712,14 @@ impl AppView {
             // Claude Code renames its card at the END of a turn, which is
             // exactly when the card stops producing the output that would
             // have forced a frame, so it looked like the rename was refused.
+            self.redraw = true;
+        }
+        // Folders sent by Finder's service: a terminal card each, the last
+        // focused. A refused one (gone since) is a notice, not a card.
+        for dir in crate::finder_service::take() {
+            if let Err(e) = self.model.open_terminal_at(&dir) {
+                self.model.notify(e);
+            }
             self.redraw = true;
         }
         self.perform_effects();
@@ -854,6 +891,7 @@ pub fn startup(app: &mut AppView) {
     app.themes_dir = ensure_themes_dir(AppView::bundled_themes().as_deref());
     app.refresh_themes();
     app.model.apply_settings_text(&settings);
+    app.chrome.apply_ui_typography(&app.model.config.ui);
     app.model.apply_keymap_text(&keys);
     // The "Start here" card's file, rewritten every launch like the defaults
     // so its keys follow the keymap in force and its agent list follows what
@@ -872,6 +910,15 @@ pub fn startup(app: &mut AppView) {
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
             .and_then(|()| std::fs::write(&path, welcome::render(&app.model.keymap, &agents)));
+        if let Err(e) = written {
+            eprintln!("[infiniterm/warn] could not write {}: {e}", path.display());
+        }
+        // The changelog card's file (`help.changelog`), this build's own text.
+        let path = infiniterm_core::changelog::changelog_path();
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&path, infiniterm_core::changelog::text()));
         if let Err(e) = written {
             eprintln!("[infiniterm/warn] could not write {}: {e}", path.display());
         }

@@ -69,6 +69,27 @@ pub fn readable_on(hex: &str) -> &'static str {
     }
 }
 
+/// Least contrast ratio (WCAG's, 1 to 21) a theme's `Cursor Text Color` must
+/// have against its cursor to be trusted: many themes leave the two equal or
+/// near, which hid the letter under a block cursor (#343).
+const MIN_CURSOR_CONTRAST: f64 = 3.;
+
+fn contrast_ratio(a: &str, b: &str) -> f64 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// The colour for the letter under a block cursor: the theme's own cursor
+/// text when it reads against the cursor, else black or white, whichever
+/// does. `accent` is None when the cursor colour was set by the user, since
+/// the theme chose its text for another cursor.
+pub fn cursor_text_on(cursor: &str, accent: Option<&str>) -> String {
+    match accent.filter(|a| !a.is_empty()) {
+        Some(a) if contrast_ratio(cursor, a) >= MIN_CURSOR_CONTRAST => a.to_string(),
+        _ => readable_on(cursor).to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +159,17 @@ mod tests {
     fn malformed_color_safe() {
         assert_eq!(luminance("nonsense"), 0.);
         assert_eq!(readable_on("nonsense"), LABEL_FG_LIGHT);
+    }
+
+    #[test]
+    fn the_letter_under_a_cursor_reads_against_it() {
+        // A theme whose cursor text equals its cursor falls back to black or white.
+        assert_eq!(cursor_text_on("#e0e0e0", Some("#e0e0e0")), LABEL_FG_DARK);
+        assert_eq!(cursor_text_on("#202020", Some("#202020")), LABEL_FG_LIGHT);
+        // A readable theme choice is kept.
+        assert_eq!(cursor_text_on("#e0e0e0", Some("#101010")), "#101010");
+        // No accent (a cursor colour the user set): black or white.
+        assert_eq!(cursor_text_on("#ffcc00", None), LABEL_FG_DARK);
+        assert_eq!(cursor_text_on("#223344", Some("")), LABEL_FG_LIGHT);
     }
 }

@@ -149,10 +149,12 @@ impl AppView {
                 } else {
                     chrome.text_bright
                 })
-                // No caret against the placeholder: the box is empty, and a
-                // caret there suggests those words are text you typed.
+                // The caret leads the placeholder, so an empty box reads as
+                // an input (field.rs `empty_with_placeholder`).
                 .when(placeholder, |d| {
-                    d.child("search or enter address".to_string())
+                    d.child(crate::field::Field::empty_with_placeholder(
+                        "search or enter address",
+                    ))
                 })
                 .when(!placeholder, |d| {
                     d.child(
@@ -196,7 +198,8 @@ impl AppView {
                     .when(row_index > 0, |d| {
                         d.border_t_1().border_color(chrome.bar_border).mt_1()
                     })
-                    .text_size(px(PALETTE_SECTION_FONT_PX * ui))
+                    .font_weight(chrome.typography.bold.weight)
+                    .text_size(px(chrome.typography.size(PALETTE_SECTION_FONT_PX) * ui))
                     .text_color(chrome.text_faint)
                     .child(section.heading.clone()),
             );
@@ -220,6 +223,10 @@ impl AppView {
                         // border, since gpui does not clip by default.
                         .overflow_hidden()
                         .when(selected, |d| d.bg(chrome.row_selected))
+                        .cursor_pointer()
+                        .when(!selected, |d| {
+                            d.hover(|s| s.bg(crate::chrome::hover_fill(chrome.row_selected)))
+                        })
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _: &MouseDownEvent, _, cx| {
@@ -272,7 +279,7 @@ impl AppView {
             .py_1()
             .border_t_1()
             .border_color(chrome.control_border)
-            .text_size(px(PALETTE_SECTION_FONT_PX * ui))
+            .text_size(px(chrome.typography.size(PALETTE_SECTION_FONT_PX) * ui))
             .text_color(chrome.text_faint)
             .child(key_cap_box("enter", chrome, ui))
             .child(div().child("open"));
@@ -320,8 +327,9 @@ impl AppView {
                             .border_color(chrome.overlay_border)
                             .rounded_md()
                             .shadow_lg()
-                            .font_family("Menlo")
-                            .text_size(px(OVERLAY_BODY_FONT_PX * ui))
+                            .font_family(chrome.typography.family.clone())
+                            .font_weight(chrome.typography.regular.weight)
+                            .text_size(px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui))
                             .text_color(chrome.text)
                             // The sheet swallows the click that would
                             // otherwise reach the backdrop and close it.
@@ -482,8 +490,9 @@ impl AppView {
             .border_color(chrome.overlay_border)
             .rounded_md()
             .shadow_lg()
-            .font_family("Menlo")
-            .text_size(px(OVERLAY_BODY_FONT_PX * ui))
+            .font_family(chrome.typography.family.clone())
+            .font_weight(chrome.typography.regular.weight)
+            .text_size(px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui))
             .child(
                 div()
                     .flex_1()
@@ -492,7 +501,9 @@ impl AppView {
                     } else {
                         chrome.text_bright
                     })
-                    .when(query.is_empty(), |d| d.child("find in page".to_string()))
+                    .when(query.is_empty(), |d| {
+                        d.child(crate::field::Field::empty_with_placeholder("find in page"))
+                    })
                     .when(!query.is_empty(), |d| {
                         d.child(self.find_field.inline_composing(
                             chrome.sel_bg,
@@ -503,7 +514,7 @@ impl AppView {
             )
             .child(
                 div()
-                    .text_size(px(PALETTE_SECTION_FONT_PX * ui))
+                    .text_size(px(chrome.typography.size(PALETTE_SECTION_FONT_PX) * ui))
                     .text_color(if matches == 0 && !query.is_empty() {
                         chrome.warn
                     } else {
@@ -514,6 +525,7 @@ impl AppView {
             .child(
                 div()
                     .id("find-close")
+                    .cursor_pointer()
                     .text_color(chrome.text_faint)
                     .on_mouse_down(
                         MouseButton::Left,

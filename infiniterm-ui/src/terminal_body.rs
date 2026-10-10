@@ -27,9 +27,10 @@ use gpui::{
     Keystroke, Pixels, SharedString, TextRun, Window,
 };
 use infiniterm_core::backend::PaneId;
+use infiniterm_core::git_repo::Repo;
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::ift::{open_plan, url_plan, PathKind};
-use infiniterm_core::links::{find_links, Found, LinkKind};
+use infiniterm_core::links::{find_links_in, merge_hyperlinks, Found, LinkKind};
 use infiniterm_core::links_fs::path_kinds;
 use infiniterm_term::grid::{CursorKind, Frame, Grid, SelectKind, TermEvent, SPACER};
 use infiniterm_term::keys::{encode, encode_with, paste, Key};
@@ -139,6 +140,8 @@ pub struct TerminalBody {
     /// Too many cells on screen for glyphs to be affordable this frame;
     /// set by `paint_world` from the frame's budget.
     crowded: bool,
+    /// The last paint drew bars, not glyphs (`draws_bars`).
+    bars: bool,
     /// A selection drag has left the card by the top (negative) or bottom
     /// (positive) edge: the grid scrolls this many lines a frame, growing
     /// with the distance, and the selection follows to the edge row. Set
@@ -161,7 +164,13 @@ pub struct TerminalBody {
     frame: Frame,
     /// The last frame's links, per row, with whether the filesystem said yes.
     links: Vec<Vec<(Found, Option<PathKind>)>>,
+    /// The GitHub repository of the card's directory, read when the directory
+    /// changes: what a bare `#349` in the output links to (#335).
+    repo: Option<(String, Option<Repo>)>,
     link_texts: Vec<String>,
+    /// The OSC 8 spans each row was scanned with, to tell a row whose text
+    /// is the same but whose links are not.
+    link_spans: Vec<Vec<(usize, usize, String)>>,
     hover: Option<(usize, usize)>,
     /// A button held for a drag the program is following.
     dragging: Option<MouseButton>,
@@ -246,20 +255,6 @@ pub fn term_font(family: &str) -> gpui::Font {
     f
 }
 
-/// `"normal"`, `"bold"`, or a number 100 to 900, as CSS spells weights.
-pub fn weight_of(s: &str) -> FontWeight {
-    match s.trim() {
-        "bold" => FontWeight::BOLD,
-        "normal" | "" => FontWeight::NORMAL,
-        n => n
-            .parse::<f32>()
-            .ok()
-            .filter(|w| (100. ..=900.).contains(w))
-            .map(FontWeight)
-            .unwrap_or(FontWeight::NORMAL),
-    }
-}
-
 impl TerminalBody {
     pub fn new(
         metrics: &Metrics,
@@ -287,6 +282,7 @@ impl TerminalBody {
             cwd,
             error: None,
             crowded: false,
+            bars: false,
             autoscroll: 0.,
             drag_local: Point { x: 0., y: 0. },
             displaced: false,
@@ -310,7 +306,9 @@ impl TerminalBody {
             selecting: false,
             frame: Frame::default(),
             links: vec![],
+            repo: None,
             link_texts: vec![],
+            link_spans: vec![],
             hover: None,
             dragging: None,
             scale: 1.,
@@ -490,6 +488,22 @@ impl TerminalBody {
         }
     }
 
+    /// The first and last column of the link under a cell. Link texts hold
+    /// one character per cell, so a char count is a column.
+    fn link_span(&self, col: usize, row: usize) -> Option<(usize, usize)> {
+        let (f, _) = self.link_at(col, row)?;
+        let text = self.link_texts.get(row)?;
+        let from = text[..f.start].chars().count();
+        let to = text[..f.end].chars().count();
+        (to > from).then_some((from, to - 1))
+    }
+
+    /// Cmd is held with the pointer over a link: what turns the cursor to a hand.
+    pub fn link_hovered(&self) -> bool {
+        self.hover
+            .is_some_and(|(c, r)| self.link_at(c, r).is_some())
+    }
+
     /// The link under a cell, if the row has one there.
     fn link_at(&self, col: usize, row: usize) -> Option<&(Found, Option<PathKind>)> {
         let text = self.link_texts.get(row)?;
@@ -508,27 +522,42 @@ impl TerminalBody {
     /// cannot hold a link and is not scanned.
     fn refresh_links(&mut self, frame: &Frame, rebuilt: &[usize]) {
         self.link_texts.resize(frame.rows.len(), String::new());
+        self.link_spans.resize(frame.rows.len(), vec![]);
         self.links.resize(frame.rows.len(), vec![]);
+        // The directory's repository, looked up again only when it changes.
+        if self.repo.as_ref().map(|(c, _)| c.as_str()) != Some(self.cwd.as_str()) {
+            self.repo = Some((
+                self.cwd.clone(),
+                infiniterm_core::git_repo::github_repo(&self.cwd),
+            ));
+        }
+        let repo = self.repo.as_ref().and_then(|(_, r)| r.clone());
         for &r in rebuilt {
             let row = &frame.rows[r];
             let line = row.text.trim_end();
-            if line == self.link_texts[r] {
+            if line == self.link_texts[r] && row.hyperlinks == self.link_spans[r] {
                 continue;
             }
             self.link_texts[r].clear();
             self.link_texts[r].push_str(line);
-            self.links[r] = if line.contains(['/', '.']) {
-                Self::scan_links(line, &self.cwd)
+            self.link_spans[r] = row.hyperlinks.clone();
+            self.links[r] = if line.contains(['/', '.', '#']) || !row.hyperlinks.is_empty() {
+                Self::scan_links(line, &self.cwd, repo.as_ref(), &row.hyperlinks)
             } else {
                 vec![]
             };
         }
     }
 
-    fn scan_links(line: &str, cwd: &str) -> Vec<(Found, Option<PathKind>)> {
+    fn scan_links(
+        line: &str,
+        cwd: &str,
+        repo: Option<&Repo>,
+        spans: &[(usize, usize, String)],
+    ) -> Vec<(Found, Option<PathKind>)> {
         {
             {
-                let found = find_links(line);
+                let found = merge_hyperlinks(find_links_in(line, repo), line, spans);
                 let paths: Vec<&str> = found
                     .iter()
                     .filter(|f| f.kind == LinkKind::Path)
@@ -797,6 +826,10 @@ impl CardBody for TerminalBody {
         // The corner label names the card instead.
         let legible =
             font_size >= crate::chrome::legible_font_px(window.scale_factor()) && !self.crowded;
+        self.bars = !legible;
+        // Where a solid block sits: the letter under it is drawn in the
+        // palette's cursor text colour (#343).
+        let mut block_cursor: Option<(usize, usize)> = None;
         // The cursor under the text: solid when focused and on, hollow when
         // the card is not focused, nothing while scrolled into history.
         // The visual cursor is drawn anywhere in the history, and solid.
@@ -824,6 +857,9 @@ impl CardBody for TerminalBody {
                 _ => Bounds::new(point(x, y), size(cell_w, line_h)),
             };
             let color = rgb(self.palette.cursor);
+            if focused && !matches!(frame.cursor_kind, CursorKind::Beam | CursorKind::Underline) {
+                block_cursor = Some((col, row));
+            }
             if focused || frame.cursor_kind != CursorKind::Block {
                 window.paint_quad(fill(rect, color));
             } else {
@@ -888,84 +924,114 @@ impl CardBody for TerminalBody {
         }
         let hover = self.hover;
         let shown = window.content_mask().bounds;
-        for (r, row) in frame.rows.iter().enumerate() {
-            if row_paints_nothing(row) || !row_on_screen(origin.y, line_h, r, shown) {
-                continue;
-            }
-            let y = origin.y + line_h * r as f32;
-            // Backgrounds first, per run, so a full-width highlight is a quad
-            // and not a shaped-line property.
-            let mut x = origin.x;
-            for run in &row.runs {
-                let w = cell_w * run.text.chars().count() as f32;
-                if let Some(bg) = run.bg {
-                    window.paint_quad(fill(Bounds::new(point(x, y), size(w, line_h)), rgb(bg)));
+        // One layer for every row: gpui orders each primitive against all the
+        // ones before it through a bounds tree, which was 90% of the time of
+        // a glyph (profiled 2026-10-09, 13 busy cards); inside a layer they
+        // share one order and skip the tree. Within an order gpui draws
+        // quads, then underlines, then glyphs, which is the order the rows
+        // are painted in anyway.
+        window.paint_layer(bounds, |window| {
+            for (r, row) in frame.rows.iter().enumerate() {
+                if row_paints_nothing(row) || !row_on_screen(origin.y, line_h, r, shown) {
+                    continue;
                 }
-                x += w;
-            }
-            // The underline is the Cmd+hover affordance and nothing else.
-            // Underlining every confirmed link marked up most of the output
-            // of anything that prints paths, which is most things.
-            if let Some(links) = self.links.get(r) {
-                for (f, _) in links {
-                    let start = row.text[..f.start.min(row.text.len())].chars().count();
-                    let len = row.text[f.start.min(row.text.len())..f.end.min(row.text.len())]
-                        .chars()
-                        .count();
-                    if !under_hover(hover, r, start, len) {
-                        continue;
+                let y = origin.y + line_h * r as f32;
+                let under_cursor;
+                let row = match block_cursor {
+                    Some((col, cursor_row)) if cursor_row == r => {
+                        under_cursor = with_cursor_cell(
+                            row,
+                            col,
+                            self.palette.cursor,
+                            self.palette.cursor_text,
+                        );
+                        &under_cursor
                     }
-                    let ux = origin.x + cell_w * start as f32;
-                    window.paint_quad(fill(
-                        Bounds::new(
-                            point(ux, y + line_h - px(LINK_UNDERLINE_OFFSET_PX)),
-                            size(cell_w * len as f32, px(crate::chrome::HAIRLINE_PX as f32)),
-                        ),
-                        rgb(self.palette.selection),
-                    ));
+                    _ => row,
+                };
+                // Backgrounds first, per run, so a full-width highlight is a quad
+                // and not a shaped-line property.
+                let mut x = origin.x;
+                for run in &row.runs {
+                    let w = cell_w * run.text.chars().count() as f32;
+                    if let Some(bg) = run.bg {
+                        window.paint_quad(fill(Bounds::new(point(x, y), size(w, line_h)), rgb(bg)));
+                    }
+                    x += w;
                 }
-            }
-            // Shape per chunk, cached against the row's content and size.
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            use std::hash::{Hash, Hasher};
-            row.text.hash(&mut hasher);
-            // A U+FE0F arriving on a cell whose character did not change
-            // must still reshape the row.
-            row.zerowidth.hash(&mut hasher);
-            f32::from(font_size).to_bits().hash(&mut hasher);
-            for run in &row.runs {
-                (
-                    run.fg,
-                    run.bg,
-                    run.bold,
-                    run.italic,
-                    run.underline,
-                    run.strikeout,
-                    run.dim,
-                    run.text.len(),
-                )
-                    .hash(&mut hasher);
-            }
-            let key = hasher.finish();
-            if self.shaped.len() <= r {
-                self.shaped.resize_with(r + 1, || (0, ShapedRow::default()));
-            }
-            if self.shaped[r].0 != key {
+                // The underline is the Cmd+hover affordance and nothing else.
+                // Underlining every confirmed link marked up most of the output
+                // of anything that prints paths, which is most things.
+                if let Some(links) = self.links.get(r) {
+                    for (f, _) in links {
+                        let start = row.text[..f.start.min(row.text.len())].chars().count();
+                        let len = row.text[f.start.min(row.text.len())..f.end.min(row.text.len())]
+                            .chars()
+                            .count();
+                        let hovered = under_hover(hover, r, start, len);
+                        let Some(look) = link_look(f.marked, hovered) else {
+                            continue;
+                        };
+                        let ux = origin.x + cell_w * start as f32;
+                        let ink: gpui::Hsla = rgb(self.palette.selection);
+                        if look.tint > 0. {
+                            window.paint_quad(fill(
+                                Bounds::new(point(ux, y), size(cell_w * len as f32, line_h)),
+                                crate::chrome::with_alpha(ink, look.tint),
+                            ));
+                        }
+                        let thick = px(crate::chrome::HAIRLINE_PX as f32 * look.thickness);
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(ux, y + line_h - px(LINK_UNDERLINE_OFFSET_PX) - thick / 2.),
+                                size(cell_w * len as f32, thick),
+                            ),
+                            crate::chrome::with_alpha(ink, look.alpha),
+                        ));
+                    }
+                }
+                // Shape per chunk, cached against the row's content and size.
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                use std::hash::{Hash, Hasher};
+                row.text.hash(&mut hasher);
+                // A U+FE0F arriving on a cell whose character did not change
+                // must still reshape the row.
+                row.zerowidth.hash(&mut hasher);
+                f32::from(font_size).to_bits().hash(&mut hasher);
+                for run in &row.runs {
+                    (
+                        run.fg,
+                        run.bg,
+                        run.bold,
+                        run.italic,
+                        run.underline,
+                        run.strikeout,
+                        run.dim,
+                        run.text.len(),
+                    )
+                        .hash(&mut hasher);
+                }
+                let key = hasher.finish();
+                if self.shaped.len() <= r {
+                    self.shaped.resize_with(r + 1, || (0, ShapedRow::default()));
+                }
+                if self.shaped[r].0 != key {
+                    let t = std::time::Instant::now();
+                    let shaped = shape_row(row, &base, bold_weight, font_size, window);
+                    self.shaped[r] = (key, shaped);
+                    timing_add(2, t);
+                }
                 let t = std::time::Instant::now();
-                let shaped = shape_row(row, &base, bold_weight, font_size, window);
-                self.shaped[r] = (key, shaped);
-                timing_add(2, t);
+                paint_row(
+                    &self.shaped[r].1,
+                    point(origin.x, y),
+                    cell_w,
+                    line_h,
+                    window,
+                );
+                timing_add(3, t);
             }
-            let t = std::time::Instant::now();
-            paint_row(
-                &self.shaped[r].1,
-                point(origin.x, y),
-                cell_w,
-                line_h,
-                window,
-            );
-            timing_add(3, t);
-        }
+        });
         let visual = frame.visual;
         self.frame = frame;
         if visual {
@@ -1068,6 +1134,10 @@ impl CardBody for TerminalBody {
         }
     }
 
+    fn draws_bars(&self) -> bool {
+        self.bars || self.crowded
+    }
+
     fn caret_bounds(&self) -> Option<Bounds<Pixels>> {
         let painted = self.painted_bounds?;
         let scale = self.scale;
@@ -1152,7 +1222,15 @@ impl CardBody for TerminalBody {
                     2 => SelectKind::Words,
                     _ => SelectKind::Lines,
                 };
-                self.grid.start_selection(col, row, kind);
+                // A double-click on a link takes the whole address: the
+                // word rule stops at the colon of `https://`.
+                match self.link_span(col, row).filter(|_| clicks == 2) {
+                    Some((from, to)) => {
+                        self.grid.start_selection(from, row, SelectKind::Cells);
+                        self.grid.update_selection(to, row, true);
+                    }
+                    None => self.grid.start_selection(col, row, kind),
+                }
             }
             self.selecting = true;
             self.drag_local = local;
@@ -1467,12 +1545,89 @@ fn under_hover(hover: Option<(usize, usize)>, r: usize, start: usize, len: usize
     hover.is_some_and(|(hc, hr)| hr == r && hc >= start && hc < start + len)
 }
 
+/// How a link is drawn now (#335): `thickness` in hairlines, `alpha` of the
+/// underline, `tint` the faint fill behind the text (0 for none).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LinkLook {
+    thickness: f32,
+    alpha: f32,
+    tint: f32,
+}
+
+/// The look of a link, or `None` for no mark. A link the program marked itself
+/// (OSC 8) wears a thin dim underline at rest, because its text need not look
+/// like one; one found by pattern shows nothing until Cmd+hover, which makes
+/// every link, marked or not, a full-strength double underline over a faint
+/// tint, so the feedback is the same and a marked link visibly changes.
+fn link_look(marked: bool, hovered: bool) -> Option<LinkLook> {
+    match (marked, hovered) {
+        (_, true) => Some(LinkLook {
+            thickness: 2.,
+            alpha: 1.,
+            tint: 0.15,
+        }),
+        (true, false) => Some(LinkLook {
+            thickness: 1.,
+            alpha: 0.5,
+            tint: 0.,
+        }),
+        (false, false) => None,
+    }
+}
+
 /// Whether a row can be skipped by the painter. Blank text is not enough:
 /// a space with a background is a painted cell. Pi draws its cursor as an
 /// inverse-video space, and on an empty input line that space is the whole
 /// row, so skipping "rows with no text" skipped the cursor and it could
 /// not be seen until something was typed beside it. The same skip would
 /// have hidden any TUI's full-width highlight on an empty row.
+/// A copy of `row` whose cell at `col` is the cursor's: the cursor colour
+/// behind and the cursor text colour on the letter. The block is painted
+/// under the text, and a theme whose cursor is its foreground left the
+/// letter the colour of the block (#343); a cell with its own background
+/// also painted over the block. The row's text is untouched.
+fn with_cursor_cell(
+    row: &infiniterm_term::grid::Row,
+    col: usize,
+    cursor: [u8; 3],
+    text: [u8; 3],
+) -> infiniterm_term::grid::Row {
+    let mut runs = Vec::with_capacity(row.runs.len() + 2);
+    let mut at = 0usize;
+    for run in &row.runs {
+        let n = run.text.chars().count();
+        if col < at || col >= at + n {
+            runs.push(run.clone());
+            at += n;
+            continue;
+        }
+        let chars: Vec<char> = run.text.chars().collect();
+        let i = col - at;
+        for (part, own) in [
+            (&chars[..i], false),
+            (&chars[i..=i], true),
+            (&chars[i + 1..], false),
+        ] {
+            if part.is_empty() {
+                continue;
+            }
+            let mut piece = run.clone();
+            piece.text = part.iter().collect();
+            if own {
+                piece.fg = text;
+                piece.bg = Some(cursor);
+                piece.dim = false;
+            }
+            runs.push(piece);
+        }
+        at += n;
+    }
+    infiniterm_term::grid::Row {
+        runs,
+        ..row.clone()
+    }
+}
+
 fn row_paints_nothing(row: &infiniterm_term::grid::Row) -> bool {
     row.text.trim().is_empty() && row.runs.iter().all(|r| r.bg.is_none())
 }
@@ -1535,6 +1690,42 @@ mod tests {
         assert!(row_on_screen(px(-10.), h, 5, shown));
     }
 
+    /// The letter under a block cursor takes the cursor text colour on the
+    /// cursor colour, and the rest of the row and its text are left alone.
+    #[test]
+    fn the_cursor_cell_is_split_out_of_its_run() {
+        use infiniterm_term::grid::{Row, Run};
+        let run = |text: &str, fg: [u8; 3]| Run {
+            text: text.into(),
+            fg,
+            bg: None,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikeout: false,
+            dim: false,
+        };
+        let row = Row {
+            runs: vec![run("ab", [1, 1, 1]), run("cde", [2, 2, 2])],
+            text: "abcde".into(),
+            ..Row::default()
+        };
+        let out = with_cursor_cell(&row, 3, [9, 9, 9], [7, 7, 7]);
+        let texts: Vec<_> = out.runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts, ["ab", "c", "d", "e"]);
+        assert_eq!(out.text, "abcde");
+        assert_eq!(
+            (out.runs[2].fg, out.runs[2].bg),
+            ([7, 7, 7], Some([9, 9, 9]))
+        );
+        assert_eq!(out.runs[1].fg, [2, 2, 2]);
+        assert_eq!(out.runs[3].bg, None);
+        // The first and last cells of the row, and a column past the end.
+        assert_eq!(with_cursor_cell(&row, 0, [9; 3], [7; 3]).runs[0].text, "a");
+        assert_eq!(with_cursor_cell(&row, 4, [9; 3], [7; 3]).runs.len(), 3);
+        assert_eq!(with_cursor_cell(&row, 9, [9; 3], [7; 3]).runs, row.runs);
+    }
+
     fn body() -> TerminalBody {
         let metrics = Metrics {
             family: "Menlo".into(),
@@ -1572,6 +1763,7 @@ mod tests {
             runs: vec![run(Some([200, 200, 200]))],
             text: " ".into(),
             zerowidth: vec![],
+            hyperlinks: vec![],
         };
         assert!(
             !row_paints_nothing(&cursor),
@@ -1581,6 +1773,7 @@ mod tests {
             runs: vec![run(None)],
             text: "      ".into(),
             zerowidth: vec![],
+            hyperlinks: vec![],
         };
         assert!(
             row_paints_nothing(&empty),
@@ -1590,6 +1783,7 @@ mod tests {
             runs: vec![run(None)],
             text: " x ".into(),
             zerowidth: vec![],
+            hyperlinks: vec![],
         };
         assert!(!row_paints_nothing(&text));
     }
@@ -1675,6 +1869,66 @@ mod tests {
         assert!(!under_hover(Some((9, 3)), 3, 5, 4));
         assert!(!under_hover(Some((5, 2)), 3, 5, 4));
         assert!(!under_hover(Some((4, 3)), 3, 5, 4));
+    }
+
+    // A link the program marked (OSC 8) wears a dim thin underline at rest; one
+    // found by pattern nothing. Under Cmd+hover both get the strong look, so a
+    // marked link visibly changes.
+    #[test]
+    fn a_marked_link_changes_when_hovered_and_a_pattern_link_appears() {
+        assert_eq!(link_look(false, false), None);
+        let rest = link_look(true, false).unwrap();
+        let hover = link_look(true, true).unwrap();
+        assert!(rest.alpha < hover.alpha && rest.thickness < hover.thickness);
+        assert_eq!(rest.tint, 0.);
+        assert!(hover.tint > 0.);
+        assert_eq!(link_look(false, true), Some(hover));
+    }
+
+    // OSC 8 end to end through the body: bytes in, the row's span in, a link
+    // at those columns that opens the program's address (#335). A `file:` one
+    // is not offered.
+    #[test]
+    fn an_osc8_hyperlink_in_the_output_is_a_link_at_its_columns() {
+        let mut b = body();
+        b.feed(
+            b"go \x1b]8;;https://example.com/osc8\x1b\\CLICK ME\x1b]8;;\x1b\\ ok \x1b]8;;file:///etc/passwd\x1b\\NOPE\x1b]8;;\x1b\\\r\n",
+        );
+        let frame = b
+            .grid
+            .frame(&infiniterm_term::palette::Palette::default_palette());
+        b.refresh_links(&frame, &[0]);
+        let (found, _) = b.link_at(5, 0).expect("a link under CLICK ME").clone();
+        assert_eq!(found.target, "https://example.com/osc8");
+        assert_eq!(found.text, "CLICK ME");
+        assert!(found.marked, "an OSC 8 link is underlined at rest");
+        assert!(b.link_at(0, 0).is_none(), "plain text before it");
+        assert!(b.link_at(16, 0).is_none(), "a file: address is not offered");
+    }
+
+    // The word rule stops at the colon of `https://`, so a double-click on
+    // an address selected only `//host/path`.
+    #[test]
+    fn a_double_click_on_a_link_selects_the_whole_address() {
+        let mut b = body();
+        let line = "see https://github.com/a/b now";
+        b.feed(format!("{line}\r\n").as_bytes());
+        b.link_texts = vec![line.to_string()];
+        b.links = vec![find_links_in(line, None)
+            .into_iter()
+            .map(|f| (f, None))
+            .collect()];
+        let at = |col: f64| Point {
+            x: PAD + col * 8.4 + 1.,
+            y: PAD + 1.,
+        };
+        let plain = gpui::Modifiers::default();
+        b.mouse_down(at(12.), gpui::MouseButton::Left, &plain, 2);
+        b.mouse_up(at(12.), gpui::MouseButton::Left, &plain);
+        assert_eq!(
+            b.grid.selection_text().as_deref(),
+            Some("https://github.com/a/b")
+        );
     }
 
     // `terminal.copyOnSelect`: a finished drag hands its text to the
@@ -1833,13 +2087,16 @@ mod tests {
         assert_eq!(b.grid.selection_text().as_deref(), Some("six"));
     }
 
+    // A crowded frame draws every card as bars, and a double-click there fits
+    // the card (`pan_mode::double_click_fits`); a readable card says no.
     #[test]
-    fn weights_are_spelled_as_css_spells_them() {
-        assert_eq!(weight_of("normal"), FontWeight::NORMAL);
-        assert_eq!(weight_of("bold"), FontWeight::BOLD);
-        assert_eq!(weight_of("800"), FontWeight(800.));
-        assert_eq!(weight_of(" 600 "), FontWeight(600.));
-        assert_eq!(weight_of("heavy"), FontWeight::NORMAL);
-        assert_eq!(weight_of("1000"), FontWeight::NORMAL);
+    fn a_crowded_terminal_reports_that_it_draws_bars() {
+        use crate::body::CardBody;
+        let mut b = body();
+        assert!(!b.draws_bars());
+        b.set_crowded(true);
+        assert!(b.draws_bars());
+        b.set_crowded(false);
+        assert!(!b.draws_bars());
     }
 }

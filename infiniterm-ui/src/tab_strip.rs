@@ -11,13 +11,12 @@
 //!
 //! Called by `editor_tabs.rs`. `body::TabClick` is the shared answer.
 use crate::body::TabClick;
-use gpui::{fill, font, point, px, size, App, Bounds, Hsla, Pixels, Window};
+use gpui::{fill, point, px, size, App, Bounds, Font, Hsla, Pixels, Window};
 use infiniterm_core::grid::Point;
 
-/// The strip is sized from its FONT, and the font is the terminal's
-/// (`terminal.fontSize`, in screen pixels, times `ui_scale`): an 11 px
-/// strip under 19 px text was unreadable. Everything else is a ratio of
-/// that, so the strip keeps its proportions at any size.
+/// The strip is sized from `ui.fontSize`, in screen pixels times `ui_scale`.
+/// Everything else is a ratio of that, so the strip keeps its proportions
+/// at any size.
 pub const TAB_STRIP_HEIGHT_RATIO: f64 = 1.9;
 /// A tab's width in font sizes. Fixed rather than proportional to the
 /// card: a card with many tabs would otherwise shrink every tab to a
@@ -36,8 +35,9 @@ pub struct StripStyle {
     pub active_bg: Hsla,
     pub text_bright: Hsla,
     pub text_muted: Hsla,
-    pub font_family: String,
-    /// `terminal.fontSize`: the strip's font, in screen pixels.
+    pub regular: Font,
+    pub bold: Font,
+    /// `ui.fontSize`: the strip's font, in screen pixels.
     pub font_px: f64,
 }
 
@@ -120,7 +120,6 @@ pub fn paint_strip(
     let strip_font = px(unit as f32);
     let close_w = px((TAB_STRIP_CLOSE_WIDTH_RATIO * unit) as f32);
     let close_left = px((close_band_left_ratio() * unit) as f32);
-    let f = font(style.font_family.clone());
     if strip_font >= crate::chrome::legible_font_px(window.scale_factor()) {
         let pad = px((TAB_STRIP_LABEL_PAD_RATIO * unit) as f32);
         for (i, label) in labels.iter().enumerate() {
@@ -128,11 +127,11 @@ pub fn paint_strip(
                 point(strip.origin.x + tab_w * (i as f32), strip.origin.y),
                 size(tab_w, strip_h),
             );
-            let color = if i == active {
+            let (color, font) = if i == active {
                 window.paint_quad(fill(tab_bounds, style.active_bg));
-                style.text_bright
+                (style.text_bright, &style.bold)
             } else {
-                style.text_muted
+                (style.text_muted, &style.regular)
             };
             let sep = Bounds::new(
                 point(tab_bounds.origin.x + tab_w - border, tab_bounds.origin.y),
@@ -141,11 +140,11 @@ pub fn paint_strip(
             window.paint_quad(fill(sep, style.border));
             let room = f32::from(close_left) - f32::from(pad) * 2.;
             let shown = crate::text::elide(label, room, |t| {
-                f32::from(crate::text::shape(window, t, strip_font, &f, color).width)
+                f32::from(crate::text::shape(window, t, strip_font, font, color).width)
             });
-            let line = crate::text::shape(window, &shown, strip_font, &f, color);
+            let line = crate::text::shape(window, &shown, strip_font, font, color);
             crate::text::paint_in(window, cx, &line, tab_bounds, pad);
-            let close_line = crate::text::shape(window, "×", strip_font, &f, color);
+            let close_line = crate::text::shape(window, "×", strip_font, font, color);
             let close_bounds = Bounds::new(
                 point(
                     tab_bounds.origin.x + close_left + (close_w - close_line.width) / 2.,
@@ -155,7 +154,7 @@ pub fn paint_strip(
             );
             crate::text::paint_in(window, cx, &close_line, close_bounds, px(0.));
         }
-        let plus = crate::text::shape(window, "+", strip_font, &f, style.text_muted);
+        let plus = crate::text::shape(window, "+", strip_font, &style.regular, style.text_muted);
         let plus_bounds = Bounds::new(
             point(
                 strip.origin.x + tab_w * (labels.len() as f32) + tab_w / 2. - plus.width / 2.,
@@ -166,7 +165,13 @@ pub fn paint_strip(
         crate::text::paint_in(window, cx, &plus, plus_bounds, px(0.));
         if card_number > 0 {
             let number = number_label(card_number, protected);
-            let line = crate::text::shape(window, &number, strip_font, &f, style.text_muted);
+            let line = crate::text::shape(
+                window,
+                &number,
+                strip_font,
+                &style.regular,
+                style.text_muted,
+            );
             let number_bounds = Bounds::new(
                 point(
                     strip.origin.x + strip.size.width - line.width - pad,

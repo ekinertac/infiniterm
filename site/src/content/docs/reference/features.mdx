@@ -1,0 +1,23 @@
+---
+title: Every feature
+description: Everything infiniterm does, one line each, with a link to where the guide explains it.
+---
+
+{/* Rendered from src/data/features.ts, the same list as the /features page. */}
+import { featureGroups, featureHtml } from '../../../data/features';
+
+One line per feature. Each links to the part of the guide that explains it.
+
+{featureGroups.map((g) => (
+  <>
+    <h2 id={g.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}>{g.title}</h2>
+    <ul>
+      {g.items.map((f) => (
+        <li>
+          <span set:html={featureHtml(f.text)} />
+          {f.href && <> <a href={`/${f.href}`}>Guide</a></>}
+        </li>
+      ))}
+    </ul>
+  </>
+))}

@@ -70,6 +70,8 @@ pub struct Terminal {
     pub backend: TerminalBackend,
     pub cursor_style: CursorStyle,
     pub cursor_blink: bool,
+    /// The cursor's colour as a CSS hex colour. Empty follows the theme.
+    pub cursor_color: String,
     pub font_family: String,
     pub font_size: f64,
     pub font_weight: String,
@@ -206,6 +208,8 @@ pub struct Editor {
     /// on the theme's background: a highlighter pen, visible on any scheme.
     pub selection_color: String,
     pub selection_text_color: String,
+    /// The caret's colour. Empty follows the theme.
+    pub cursor_color: String,
     pub wrap: Wrap,
 }
 
@@ -228,6 +232,11 @@ pub struct Browser {
     /// default: it is the only thing in this app that talks to anything but
     /// the page you asked for.
     pub suggestions: bool,
+    /// Opens CEF's debugging port on a random loopback port at launch, which
+    /// the DevTools command needs (read at launch: CEF cannot open or close
+    /// the port later). ON by default (Ekin, 2026-10-09): easier to use, and
+    /// the port takes connections only from our own frontend's origin.
+    pub devtools: bool,
     /// EXTRA tab-to-search sites, added to the nine built in. Empty in the
     /// defaults file, so nobody has to scroll past a list they did not
     /// write; `Config::engines` is what the omnibox actually reads.
@@ -245,9 +254,21 @@ impl Config {
     }
 }
 
+/// `ui.glyphBudget`'s default: about eleven full cards of terminal cells, the
+/// cost of one frame in glyphs (`infiniterm-ui/src/chrome.rs`, where the rule
+/// and its measurements live).
+pub const DEFAULT_GLYPH_BUDGET: usize = 150_000;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ui {
+    /// The app chrome's typeface. `.SystemUIFont` is gpui's platform-native
+    /// UI font alias, which is Apple's app font on macOS.
+    pub font_family: String,
+    /// General chrome size in screen pixels before the UI-scale multiplier.
+    pub font_size: f64,
+    pub font_weight: String,
+    pub font_weight_bold: String,
     /// How much of an inactive card's text is dimmed away, 0 to 1.
     pub inactive_dim: f64,
     /// How much the whole canvas is dimmed while another app is in front.
@@ -275,6 +296,16 @@ pub struct Ui {
     /// Rounded card corners, in pixels at 100% zoom; 0 keeps them square (#235).
     pub card_radius: f64,
     /// Whether the canvas draws its grid (#96).
+    /// Canvas scale reading mode zooms to (#313): 1.5 is 150%.
+    pub card_zoom: f64,
+    /// Terminal cells that may be on screen before every card draws bars
+    /// instead of text (`chrome::over_glyph_budget`).
+    pub glyph_budget: usize,
+    /// Device pixels a glyph needs to be drawn at all; smaller text is bars.
+    pub min_text_px: f64,
+    /// Whether far or crowded cards draw bars instead of text at all. Off
+    /// draws every glyph at any zoom, however many (`chrome::over_glyph_budget`).
+    pub text_as_bars: bool,
     pub show_grid: bool,
     /// Screen pixels left around a card or cluster when it is fitted (#87).
     pub fit_padding: f64,
@@ -333,6 +364,7 @@ pub fn default_config() -> Config {
             backend: TerminalBackend::Daemon,
             cursor_style: CursorStyle::Block,
             cursor_blink: true,
+            cursor_color: String::new(),
             // What every Mac has. A Nerd Font is one you install, and a
             // default that renders tofu on a fresh machine is worse than one
             // that renders plain ASCII.
@@ -377,15 +409,21 @@ pub fn default_config() -> Config {
             complete_words: true,
             selection_color: String::new(),
             selection_text_color: String::new(),
+            cursor_color: String::new(),
             wrap: Wrap::Prose,
         },
         browser: Browser {
             zoom: 1.,
             search_engine: crate::omni::address::SEARCH_TEMPLATE.into(),
             suggestions: false,
+            devtools: true,
             engines: vec![],
         },
         ui: Ui {
+            font_family: ".SystemUIFont".into(),
+            font_size: 13.,
+            font_weight: "normal".into(),
+            font_weight_bold: "bold".into(),
             inactive_dim: 0.45,
             unfocused_dim: 0.4,
             window_opacity: 1.,
@@ -398,6 +436,10 @@ pub fn default_config() -> Config {
             window_color: String::new(),
             card_opacity: 1.,
             card_radius: 0.,
+            card_zoom: 1.5,
+            glyph_budget: DEFAULT_GLYPH_BUDGET,
+            min_text_px: 7.,
+            text_as_bars: false,
             show_grid: true,
             fit_padding: FIT_PADDING,
             fit_magnify: false,
@@ -575,6 +617,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 ],
             ),
             cursor_blink: bool_(t.get("cursorBlink"), d.terminal.cursor_blink),
+            cursor_color: str_(t.get("cursorColor"), &d.terminal.cursor_color),
             font_family: str_(t.get("fontFamily"), &d.terminal.font_family),
             font_size: num(t.get("fontSize"), d.terminal.font_size, 6., 96.),
             font_weight: str_(t.get("fontWeight"), &d.terminal.font_weight),
@@ -623,6 +666,7 @@ pub fn merge_config(raw: &Value) -> Config {
             complete_words: bool_(e.get("completeWords"), d.editor.complete_words),
             selection_color: str_(e.get("selectionColor"), &d.editor.selection_color),
             selection_text_color: str_(e.get("selectionTextColor"), &d.editor.selection_text_color),
+            cursor_color: str_(e.get("cursorColor"), &d.editor.cursor_color),
             wrap: one(
                 e.get("wrap"),
                 d.editor.wrap,
@@ -647,6 +691,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 _ => d.browser.search_engine.clone(),
             },
             suggestions: bool_(b.get("suggestions"), d.browser.suggestions),
+            devtools: bool_(b.get("devtools"), d.browser.devtools),
             engines: b
                 .get("engines")
                 .and_then(Value::as_array)
@@ -668,6 +713,10 @@ pub fn merge_config(raw: &Value) -> Config {
                 .unwrap_or_default(),
         },
         ui: Ui {
+            font_family: str_(u.get("fontFamily"), &d.ui.font_family),
+            font_size: num(u.get("fontSize"), d.ui.font_size, 6., 64.),
+            font_weight: str_(u.get("fontWeight"), &d.ui.font_weight),
+            font_weight_bold: str_(u.get("fontWeightBold"), &d.ui.font_weight_bold),
             inactive_dim: num(u.get("inactiveDim"), d.ui.inactive_dim, 0., 1.),
             unfocused_dim: num(u.get("unfocusedDim"), d.ui.unfocused_dim, 0., 1.),
             window_opacity: num(u.get("windowOpacity"), d.ui.window_opacity, 0.1, 1.),
@@ -698,6 +747,29 @@ pub fn merge_config(raw: &Value) -> Config {
                 .to_string(),
             card_opacity: num(u.get("cardOpacity"), d.ui.card_opacity, 0.1, 1.),
             card_radius: num(u.get("cardRadius"), d.ui.card_radius, 0., 40.),
+            // `ui.readZoom` was this setting's name in 0.5.11; the new one wins.
+            card_zoom: {
+                let v = num(
+                    u.get("cardZoom").or_else(|| u.get("readZoom")),
+                    d.ui.card_zoom,
+                    0.,
+                    4.,
+                );
+                // 0 turns it off; anything else is a zoom of at least 1.1.
+                if v > 0. {
+                    v.max(1.1)
+                } else {
+                    0.
+                }
+            },
+            min_text_px: num(u.get("minTextPx"), d.ui.min_text_px, 2., 20.),
+            text_as_bars: bool_(u.get("textAsBars"), d.ui.text_as_bars),
+            glyph_budget: num(
+                u.get("glyphBudget"),
+                d.ui.glyph_budget as f64,
+                1_000.,
+                5_000_000.,
+            ) as usize,
             show_grid: bool_(u.get("showGrid"), d.ui.show_grid),
             fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
             fit_magnify: bool_(u.get("fitMagnify"), d.ui.fit_magnify),
@@ -775,6 +847,7 @@ mod tests {
             crate::omni::address::SEARCH_TEMPLATE
         );
         assert!(!d.browser.suggestions, "the network call is opt in");
+        assert!(d.browser.devtools, "DevTools is on unless switched off");
         // The defaults file shows an empty list; the built-ins are in code.
         assert!(d.browser.engines.is_empty());
         assert_eq!(
@@ -985,6 +1058,45 @@ mod tests {
     }
 
     #[test]
+    fn ui_typography_defaults_to_the_system_font_and_clamps_its_base_size() {
+        let u = m(json!({})).ui;
+        assert_eq!(u.font_family, ".SystemUIFont");
+        assert_eq!(u.font_size, 13.);
+        assert_eq!(u.font_weight, "normal");
+        assert_eq!(u.font_weight_bold, "bold");
+
+        let c = m(json!({
+            "ui.fontFamily": "JetBrainsMono Nerd Font",
+            "ui.fontSize": 999,
+            "ui.fontWeight": "450",
+            "ui.fontWeightBold": "750"
+        }));
+        assert_eq!(c.ui.font_family, "JetBrainsMono Nerd Font");
+        assert_eq!(c.ui.font_size, 64.);
+        assert_eq!(c.ui.font_weight, "450");
+        assert_eq!(c.ui.font_weight_bold, "750");
+        assert_eq!(m(json!({"ui.fontSize": 0})).ui.font_size, 6.);
+        assert_eq!(
+            m(json!({"ui.fontFamily": "  "})).ui.font_family,
+            ".SystemUIFont"
+        );
+    }
+
+    #[test]
+    fn ui_and_terminal_typography_are_independent() {
+        let c = m(json!({
+            "ui.fontFamily": "SF Pro",
+            "ui.fontSize": 16,
+            "terminal.fontFamily": "JetBrainsMono Nerd Font",
+            "terminal.fontSize": 20
+        }));
+        assert_eq!(c.ui.font_family, "SF Pro");
+        assert_eq!(c.ui.font_size, 16.);
+        assert_eq!(c.terminal.font_family, "JetBrainsMono Nerd Font");
+        assert_eq!(c.terminal.font_size, 20.);
+    }
+
+    #[test]
     fn a_non_numeric_chrome_size_falls_back_rather_than_reaching_the_renderer() {
         assert_eq!(
             m(json!({"ui": {"cardLabelSize": "big"}}))
@@ -1163,6 +1275,28 @@ mod tests {
 
     #[test]
     fn the_grid_is_on_unless_turned_off() {
+        assert_eq!(m(json!({})).ui.glyph_budget, 150_000);
+        assert_eq!(
+            m(json!({"ui.glyphBudget": 150000})).ui.glyph_budget,
+            150_000
+        );
+        assert_eq!(m(json!({"ui.glyphBudget": 5})).ui.glyph_budget, 1_000);
+        assert!(!m(json!({})).ui.text_as_bars);
+        assert!(m(json!({"ui.textAsBars": true})).ui.text_as_bars);
+        assert_eq!(m(json!({})).ui.min_text_px, 7.);
+        assert_eq!(m(json!({"ui.minTextPx": 4})).ui.min_text_px, 4.);
+        assert_eq!(m(json!({"ui.minTextPx": 1})).ui.min_text_px, 2.);
+        assert_eq!(m(json!({})).ui.card_zoom, 1.5);
+        assert_eq!(m(json!({"ui.cardZoom": 2})).ui.card_zoom, 2.);
+        assert_eq!(m(json!({"ui.cardZoom": 9})).ui.card_zoom, 4.);
+        assert_eq!(m(json!({"ui.cardZoom": 1})).ui.card_zoom, 1.1);
+        assert_eq!(m(json!({"ui.cardZoom": 0})).ui.card_zoom, 0., "0 is off");
+        // The old name still applies, and the new one wins over it.
+        assert_eq!(m(json!({"ui.readZoom": 2})).ui.card_zoom, 2.);
+        assert_eq!(
+            m(json!({"ui.readZoom": 2, "ui.cardZoom": 3})).ui.card_zoom,
+            3.
+        );
         assert!(m(json!({})).ui.show_grid);
         assert!(!m(json!({"ui.showGrid": false})).ui.show_grid);
         assert!(m(json!({"ui.showGrid": "no"})).ui.show_grid);

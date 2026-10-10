@@ -17,13 +17,13 @@ use crate::tab_strip::StripStyle;
 use crate::page_body::{PageBody, PageColors};
 use crate::transcript_body::{TranscriptBody, TranscriptColors};
 use crate::AppView;
-use gpui::Window;
+use gpui::{px, TextRun, Window};
 use infiniterm_core::config::Wrap;
 use infiniterm_core::editor_theme::{editor_colors, syntax_rules, Chrome as EditorChrome};
 use infiniterm_core::grid::Size;
 use infiniterm_core::model::EditorAction;
 use infiniterm_core::saved_layout::CardKind;
-use infiniterm_core::sidebar::{sidebar_extent, sidebar_width};
+use infiniterm_core::sidebar::{clamp_sidebar, sidebar_extent, sidebar_width};
 use infiniterm_editor::language::Language;
 
 /// The generated config files are rewritten on every launch, so an edit
@@ -69,6 +69,7 @@ impl AppView {
             &chrome,
             &cfg.editor.selection_color,
             &cfg.editor.selection_text_color,
+            &cfg.editor.cursor_color,
         );
         let rules = syntax_rules(self.chrome.theme.as_ref());
         let style = StripStyle {
@@ -77,9 +78,24 @@ impl AppView {
             active_bg: self.chrome.row_selected,
             text_bright: self.chrome.text_bright,
             text_muted: self.chrome.text_muted,
-            font_family: crate::terminals::family_of(&cfg.terminal.font_family),
-            font_px: cfg.terminal.font_size,
+            regular: self.chrome.typography.regular.clone(),
+            bold: self.chrome.typography.bold.clone(),
+            font_px: self.chrome.typography.font_size,
         };
+        let status_probe = window.text_system().shape_line(
+            "M".into(),
+            px(style.font_px as f32),
+            &[TextRun {
+                len: 1,
+                font: style.regular.clone(),
+                color: gpui::black(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }],
+            None,
+        );
+        let status_cell_w = f32::from(status_probe.width) as f64;
         let ui_scale = self.model.ui_scale as f32;
         let now = crate::now_ms();
         let cards: Vec<_> = self
@@ -148,6 +164,15 @@ impl AppView {
                 body.metrics = metrics.clone();
                 body.mark_dirty();
             }
+            if body.status_font != style.regular
+                || body.status_font_px != style.font_px
+                || body.status_cell_w != status_cell_w
+            {
+                body.status_font = style.regular.clone();
+                body.status_font_px = style.font_px;
+                body.status_cell_w = status_cell_w;
+                body.mark_dirty();
+            }
             if body.colors != colors || body.rules != rules {
                 body.colors = colors.clone();
                 body.rules = rules.clone();
@@ -197,6 +222,21 @@ impl AppView {
                             if let Some(h) = c.tabs.get_mut(c.active_tab) {
                                 *h = path;
                             }
+                            self.model.dirty_layout = true;
+                        }
+                    }
+                    // The tree's divider dragged: the width the card keeps,
+                    // clamped so the text keeps its minimum (#258).
+                    EditorEvent::Sidebar(w) => {
+                        if let Some(c) = self.model.card_mut(&card.id) {
+                            let extent = sidebar_extent(
+                                infiniterm_core::grid::Size {
+                                    w: c.rect.w,
+                                    h: c.rect.h,
+                                },
+                                c.sidebar_top,
+                            );
+                            c.sidebar = Some(clamp_sidebar(w, extent));
                             self.model.dirty_layout = true;
                         }
                     }
@@ -375,6 +415,7 @@ impl AppView {
             &chrome,
             &cfg.editor.selection_color,
             &cfg.editor.selection_text_color,
+            &cfg.editor.cursor_color,
         );
         let rules = syntax_rules(self.chrome.theme.as_ref());
         let cards: Vec<_> = self
@@ -448,6 +489,21 @@ impl AppView {
                     EditorEvent::None => {}
                     EditorEvent::Notice(text) => self.model.notify(text),
                     EditorEvent::OpenTab(_) => {}
+                    // The tree's divider dragged: the width the card keeps,
+                    // clamped so the text keeps its minimum (#258).
+                    EditorEvent::Sidebar(w) => {
+                        if let Some(c) = self.model.card_mut(&card.id) {
+                            let extent = sidebar_extent(
+                                infiniterm_core::grid::Size {
+                                    w: c.rect.w,
+                                    h: c.rect.h,
+                                },
+                                c.sidebar_top,
+                            );
+                            c.sidebar = Some(clamp_sidebar(w, extent));
+                            self.model.dirty_layout = true;
+                        }
+                    }
                     EditorEvent::PathChanged { path, cwd } => {
                         if let Some(c) = self.model.card_mut(&card.id) {
                             c.path = Some(path);
@@ -528,6 +584,49 @@ impl AppView {
                 }
             }
             EditorAction::ToggleBlame => {} // the diff card, Phase 7
+            // The file tree's menu: the row it was opened on, else the cursor's.
+            EditorAction::Tree(act) => {
+                use infiniterm_core::model::TreeAct;
+                let Some(body) = self.editor_for(card_id) else {
+                    return;
+                };
+                let entry = body.menu_entry();
+                let root = body.tree_root().map(String::from);
+                if act == TreeAct::Open {
+                    body.tree_open_entry();
+                    return;
+                }
+                let Some(entry) = entry else { return };
+                match act {
+                    TreeAct::RevealInFinder => {
+                        let _ = std::process::Command::new("open")
+                            .args(["-R", &entry.path])
+                            .spawn();
+                    }
+                    TreeAct::CopyPath => self.clipboard_out = Some(entry.path),
+                    TreeAct::CopyRelativePath => {
+                        let relative = root
+                            .as_deref()
+                            .and_then(|r| entry.path.strip_prefix(r))
+                            .map(|p| p.trim_start_matches('/').to_string())
+                            .filter(|p| !p.is_empty())
+                            .unwrap_or_else(|| entry.path.clone());
+                        self.clipboard_out = Some(relative);
+                    }
+                    TreeAct::Open => {}
+                }
+            }
+            // The lock is the body's: the card's flag is written back from it
+            // every frame, so dropping it on the card alone would be undone.
+            EditorAction::Unlock => {
+                if let Some(t) = self.editor_tabs_for(card_id) {
+                    t.locked = false;
+                    t.mark_dirty();
+                }
+                if let Some(c) = self.model.card_mut(card_id) {
+                    c.locked = false;
+                }
+            }
         }
     }
 

@@ -379,6 +379,11 @@ pub fn terminal_identity() -> Vec<(String, String)> {
             "TERM_PROGRAM_VERSION".into(),
             env!("CARGO_PKG_VERSION").into(),
         ),
+        // The terminal reads OSC 8 hyperlinks (#335), but programs that decide
+        // by who the terminal is (Claude Code, anything using the
+        // supports-hyperlinks package) have never heard of infiniterm and
+        // print `text (url)` instead. This is their documented switch.
+        ("FORCE_HYPERLINK".into(), "1".into()),
     ]
 }
 
@@ -392,6 +397,13 @@ pub fn default_shell() -> String {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn every_card_is_told_the_terminal_reads_hyperlinks() {
+        let id = terminal_identity();
+        assert!(id.contains(&("FORCE_HYPERLINK".to_string(), "1".to_string())));
+        assert!(id.contains(&("TERM_PROGRAM".to_string(), "infiniterm".to_string())));
+    }
 
     /// Drains events for `pane` until `needle` is seen or the deadline passes.
     fn wait_for_output(

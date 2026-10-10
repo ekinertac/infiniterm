@@ -74,12 +74,14 @@ pub fn apply_hook_event(prev: AgentState, event: &str) -> AgentState {
 /// The command that resumes an agent's session in a fresh shell, offered
 /// as a lost session's last history line (terminals.rs). `kind` is the
 /// card's `agent_kind`; none is Claude Code. Checked against each CLI:
-/// `codex resume <SESSION_ID>`, `opencode --session <id>`.
+/// `codex resume <SESSION_ID>`, `opencode --session <id>`,
+/// `cursor agent --resume <id>`.
 pub fn resume_command(kind: Option<&str>, session: &str) -> Option<String> {
     match kind {
         None | Some("claude") => Some(format!("claude --resume {session}")),
         Some("codex") => Some(format!("codex resume {session}")),
         Some("opencode") => Some(format!("opencode --session {session}")),
+        Some("cursor") => Some(format!("cursor agent --resume {session}")),
         // Pi reports a session file, not an id it resumes by.
         _ => None,
     }
@@ -113,6 +115,10 @@ mod tests {
         assert_eq!(
             resume_command(Some("opencode"), "a1").as_deref(),
             Some("opencode --session a1")
+        );
+        assert_eq!(
+            resume_command(Some("cursor"), "a1").as_deref(),
+            Some("cursor agent --resume a1")
         );
         assert_eq!(resume_command(Some("pi"), "a1"), Option::None);
     }

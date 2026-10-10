@@ -17,9 +17,28 @@ pub fn chord_fits_all(button: u8, left_held_on_canvas: bool) -> bool {
     button == 2 && left_held_on_canvas
 }
 
+/// A double-click in a card's body fits the card when the body is drawn as
+/// bars (too small to read, or over the frame's glyph budget). Readable, the
+/// double-click is the program's (a word selected in a terminal); as bars
+/// there is no word to select, and zooming in is what the click is for.
+pub fn double_click_fits(click_count: usize, drawn_as_bars: bool) -> bool {
+    click_count >= 2 && drawn_as_bars
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_double_click_fits_only_a_card_drawn_as_bars() {
+        assert!(double_click_fits(2, true));
+        assert!(double_click_fits(3, true));
+        assert!(!double_click_fits(1, true), "one click is only a focus");
+        assert!(
+            !double_click_fits(2, false),
+            "readable text keeps its double-click"
+        );
+    }
+
     #[test]
     fn middle_with_or_without_cmd() {
         assert!(starts_pan(MIDDLE_BUTTON, false));

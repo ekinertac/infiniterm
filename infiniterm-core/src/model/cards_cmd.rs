@@ -8,6 +8,7 @@ use super::{
     BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
     TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
 };
+use super::{TerminalAction, TreeAct};
 use crate::card_label::{card_label, tilde_path, Labelled};
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
 use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
@@ -60,6 +61,43 @@ impl Model {
                 m.notify("no room: a card is in the way");
                 return;
             }
+            m.mark_swap(std::slice::from_ref(&id));
+            if let Some(c) = m.card_mut(&id) {
+                c.rect = next;
+                c.soft_group_id = None;
+            }
+            m.dirty_layout = true;
+            m.reveal_focused();
+        })
+    }
+
+    /// The active card slid toward `dir` into the gap beside it
+    /// (`slide::slide`): the keyboard's way to close the space a resize left.
+    /// Cards may not overlap, so what is in the way is the end of the slide;
+    /// the card stops being half of a split pair, as a resize does.
+    pub fn slide_active(&mut self, dir: Direction) {
+        self.with_active_card(|m, id| {
+            let Some(card) = m.card(&id).cloned() else {
+                return;
+            };
+            let mut taken: Vec<Rect> = m
+                .here()
+                .iter()
+                .filter(|c| c.id != id)
+                .map(|c| c.rect)
+                .collect();
+            taken.extend(m.other_frames(Some(&id), &card.workspace_id));
+            let origin = Point {
+                x: HALF_CELL,
+                y: HALF_CELL,
+            };
+            let Some(next) =
+                crate::slide::slide(card.rect, dir, &taken, m.default_size(), origin, m.gap())
+            else {
+                m.notify("nowhere to slide");
+                return;
+            };
+            m.remember_layout();
             m.mark_swap(std::slice::from_ref(&id));
             if let Some(c) = m.card_mut(&id) {
                 c.rect = next;
@@ -949,6 +987,11 @@ impl Model {
     /// stays on the card that moved, so pressing the same key twice walks
     /// one card past two neighbours.
     pub fn swap(&mut self, dir: Direction) {
+        // Several cards selected: the whole selection moves as one block.
+        if self.selected_ids().len() > 1 {
+            self.move_selection(dir);
+            return;
+        }
         self.with_active_card(|m, id| {
             let Some(card) = m.card(&id).cloned() else {
                 return;
@@ -983,6 +1026,45 @@ impl Model {
             m.dirty_layout = true;
             m.reveal_focused(); // the card may have swapped off screen
         });
+    }
+
+    /// The selection as one block, a block-width over (`swap::move_block`):
+    /// into free space, or trading places with the cards there. A move that
+    /// would split a card, or land in another group's frame, says so and
+    /// changes nothing. Focus stays on the card that had it.
+    fn move_selection(&mut self, dir: Direction) {
+        let selected = self.selected_ids();
+        let here = self.here();
+        let placed = self.placed(&here);
+        let ws = self.active_workspace.clone().unwrap_or_default();
+        // A frame is foreign when none of the moving cards belong to its group.
+        let own: Vec<String> = placed
+            .iter()
+            .filter(|c| selected.contains(&c.id))
+            .filter_map(|c| c.group_id.clone())
+            .collect();
+        let occupied: Vec<crate::grid::Rect> = self
+            .groups
+            .iter()
+            .filter(|g| !own.contains(&g.id))
+            .filter_map(|g| self.group_frame(&g.id, &ws))
+            .collect();
+        let Some(moves) = crate::swap::move_block(&placed, &selected, dir, self.gap(), &occupied)
+        else {
+            self.notify("no room to move the selection that way");
+            return;
+        };
+        self.remember_layout();
+        // Armed BEFORE the rects change, so the move animates.
+        let ids: Vec<String> = moves.iter().map(|m| m.id.clone()).collect();
+        self.mark_swap(&ids);
+        for m in moves {
+            if let Some(c) = self.card_mut(&m.id) {
+                c.rect = m.rect;
+            }
+        }
+        self.dirty_layout = true;
+        self.reveal_focused();
     }
 
     fn sidebar_by(&mut self, delta: f64) {
@@ -1107,6 +1189,7 @@ impl Model {
             }
             Source::Snippets => self.paste_snippet(id),
             Source::MoveTo => self.move_selection_to(id),
+            Source::MoveGroupTo => self.move_group_to(id),
             Source::WindowColor => self.window_color_run(id),
             Source::SlotKind => match id {
                 "terminal" => {
@@ -1172,7 +1255,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // The macOS open panel, not a typed path: typing paths was tiring and
     // the panel has search, recents and the sidebar (#64). `ift <path>`
     // still opens a typed one.
-    r.register("card.open.file", "Editor: open a file", |m| {
+    r.register("card.open.file", "Editor: open a file…", |m| {
         let from = m.selection.focused_id.clone();
         m.effects.push(Effect::PickFile { from });
     });
@@ -1210,18 +1293,18 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     });
     // Cmd+L. Not a prompt: the omnibox ranks history, open cards and what
     // you typed.
-    r.register("card.omnibox", "Browser: address bar", Model::open_omnibox);
+    r.register("card.omnibox", "Browser: address bar…", Model::open_omnibox);
     // The placement menu's "browser": a NEW card beside the active one,
     // never editing it even when the active card is itself a browser
     // (`open_omnibox`'s own rule, and wrong here), so this is its own
     // entry point rather than `card.omnibox` with different arguments.
-    r.register("card.new.browser", "Browser: open a URL", |m| {
+    r.register("card.new.browser", "Browser: open a URL…", |m| {
         if m.browser_refused() {
             return;
         }
         m.open_omnibox_for_new_card(false);
     });
-    r.register("browser.navigate", "Browser: go to a URL", |m| {
+    r.register("browser.navigate", "Browser: go to a URL…", |m| {
         m.with_active_card(|m, id| {
             let Some(card) = m.card(&id).cloned() else {
                 return;
@@ -1258,13 +1341,88 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             })
         },
     );
+    // The file tree's menu (#281). They act on the row the menu was opened on,
+    // else the tree's cursor row; only an editor card has a tree.
+    for (id, label, act) in [
+        (
+            "editor.tree.open",
+            "Editor: open the tree's file",
+            TreeAct::Open,
+        ),
+        (
+            "editor.tree.reveal",
+            "Editor: reveal the tree's file in Finder",
+            TreeAct::RevealInFinder,
+        ),
+        (
+            "editor.tree.copyPath",
+            "Editor: copy the tree file's path",
+            TreeAct::CopyPath,
+        ),
+        (
+            "editor.tree.copyRelativePath",
+            "Editor: copy the tree file's relative path",
+            TreeAct::CopyRelativePath,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.with_active_card(|m, card_id| {
+                if m.card(&card_id).is_some_and(|c| c.kind == CardKind::Editor) {
+                    m.effects.push(Effect::Editor {
+                        card_id,
+                        action: EditorAction::Tree(act),
+                    });
+                }
+            })
+        });
+    }
+    // The terminal's own Cmd+C and Cmd+V are the body's keys; these are the same
+    // acts as commands so a menu can name them (#278). Only a terminal card.
+    for (id, label, action) in [
+        (
+            "terminal.copy",
+            "Terminal: copy the selection",
+            TerminalAction::Copy,
+        ),
+        ("terminal.paste", "Terminal: paste", TerminalAction::Paste),
+        (
+            "terminal.searchSelection",
+            "Terminal: search the web for the selection",
+            TerminalAction::SearchSelection,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.with_active_card(|m, card_id| {
+                if m.card(&card_id)
+                    .is_some_and(|c| c.kind == CardKind::Terminal)
+                {
+                    m.effects.push(Effect::Terminal { card_id, action });
+                }
+            })
+        });
+    }
     // A focused browser card gives every key to the page; this is the one
     // chord that comes back out, to the nearest other card.
-    r.register("browser.leave", "Browser: leave the page", |m| {
+    r.register("browser.leave", "Card: leave the page or the editor", |m| {
         m.with_active_card(|m, id| {
             let Some(card) = m.card(&id).cloned() else {
                 return;
             };
+            // A locked editor: the lock is dropped and focus stays on the
+            // card. Escape does it too when it has nothing else to close
+            // (`input.rs`); this is the chord you can rebind (#265).
+            if card.kind == CardKind::Editor {
+                if card.locked {
+                    if let Some(c) = m.card_mut(&id) {
+                        c.locked = false;
+                    }
+                    m.effects.push(Effect::Editor {
+                        card_id: id,
+                        action: EditorAction::Unlock,
+                    });
+                }
+                return;
+            }
             if card.kind != CardKind::Browser {
                 return;
             }
@@ -1306,8 +1464,8 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             .retain(|s| !matches!(s, UndoStep::Closed(c) if c.id == id));
         m.reopen_card(card);
     });
-    r.register("browser.find", "Browser: find in page", Model::open_find);
-    r.register("card.find", "Card: find in this card", Model::find_in_card);
+    r.register("browser.find", "Browser: find in page…", Model::open_find);
+    r.register("card.find", "Card: find in this card…", Model::find_in_card);
     r.register("terminal.font.bigger", "Terminal: bigger font", |m| {
         m.step_terminal_font(1.)
     });
@@ -1339,6 +1497,13 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("browser.reload", "Browser: reload the page", |m| {
         m.browser_history(BrowserAction::Reload)
     });
+    r.register("browser.devtools", "Browser: open DevTools", |m| {
+        if !m.config.browser.devtools {
+            m.notify("DevTools is off: set browser.devtools to true and restart");
+            return;
+        }
+        m.browser_history(BrowserAction::DevTools)
+    });
     // The only way a page's address leaves the app without being retyped.
     r.register("browser.copyUrl", "Browser: copy the page's address", |m| {
         m.with_active_card(|m, id| {
@@ -1369,7 +1534,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("editor.find", "Editor: find", |m| {
         m.editor_action(EditorAction::Find)
     });
-    r.register("editor.goToLine", "Editor: go to a line", |m| {
+    r.register("editor.goToLine", "Editor: go to a line…", |m| {
         m.with_active_card(|m, id| {
             if m.card(&id).is_some_and(|c| c.kind == CardKind::Editor) {
                 m.prompt.ask("go to line", "", Pending::GoToLine(id));
@@ -1564,6 +1729,11 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         Direction::Down,
     ] {
         r.register(
+            &format!("card.slide.{}", dir_name(dir)),
+            &format!("Card: slide {} to the next card or slot", dir_name(dir)),
+            move |m| m.slide_active(dir),
+        );
+        r.register(
             &format!("card.swap.{}", dir_name(dir)),
             &format!("Card: swap with the one {}", super::context::where_(dir)),
             move |m| m.swap(dir),
@@ -1633,7 +1803,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.set_mask(&id, on);
         }
     });
-    r.register("card.place", "Card: new… (choose where)", |m| {
+    r.register("card.place", "Card: new (choose where)…", |m| {
         if m.palette.source == Some(Source::Placement) {
             m.close_palette(false);
         } else {
@@ -1685,7 +1855,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     );
     // The card is captured in the pending value, so a rename still lands on
     // the right one if focus moves while the prompt is open.
-    r.register("card.rename", "Card: rename", |m| {
+    r.register("card.rename", "Card: rename…", |m| {
         let Some(card) = m.focused().cloned() else {
             return;
         };

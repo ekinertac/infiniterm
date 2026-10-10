@@ -42,6 +42,10 @@ pub const MOUSE_GESTURES: &[(&str, &str)] = &[
         "Mouse: double-click a frame to fit the card",
     ),
     (
+        "mouse.fitCard.barsdoubleclick",
+        "Mouse: double-click a card drawn as bars to fit it",
+    ),
+    (
         "mouse.fitAll.doubleclick",
         "Mouse: double-click the canvas to fit all",
     ),

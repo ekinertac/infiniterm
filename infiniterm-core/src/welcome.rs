@@ -83,7 +83,7 @@ pub fn render(keymap: &Keymap, agents: &[Agent]) -> String {
     out.push_str(
         "Cards stay where you put them. Nothing moves on its own.\n\n\
          `Cmd` belongs to infiniterm. Every other key goes to the terminal, so vim, tmux and your shell work as usual.\n\n\
-         Click into a file in an editor card to type in it: the keyboard is the file's until you press Escape twice. This card is a page: the wheel or the arrows scroll it, and it never takes the keyboard.\n\n\
+         Click into a file in an editor card to type in it: the keyboard is the file's until you press Escape. This card is a page: the wheel or the arrows scroll it, and it never takes the keyboard.\n\n\
          ## Keys to start with\n\n",
     );
     for (id, does) in KEYS {
@@ -132,7 +132,7 @@ pub fn render(keymap: &Keymap, agents: &[Agent]) -> String {
     out
 }
 
-/// The four agents with hooks, looked up under `home`. `xdg_config` and
+/// The agents with hooks, looked up under `home`. `xdg_config` and
 /// `codex_home` are the overrides those agents honour, when set.
 pub fn agents_on_this_mac(
     home: &Path,
@@ -151,6 +151,7 @@ pub fn agents_on_this_mac(
         .unwrap_or_else(|| home.join(".config"))
         .join("opencode");
     let pi = home.join(".pi");
+    let cursor = home.join(".cursor");
     vec![
         Agent {
             name: "Claude Code",
@@ -179,6 +180,16 @@ pub fn agents_on_this_mac(
                 .join("extensions")
                 .join("infiniterm.ts")
                 .is_file(),
+        },
+        Agent {
+            name: "Cursor",
+            install: "install-cursor-hooks",
+            present: cursor.is_dir(),
+            wired: cursor
+                .join("hooks")
+                .join("infiniterm-cursor-hook.sh")
+                .is_file()
+                && has(cursor.join("hooks.json"), "infiniterm-cursor-hook"),
         },
     ]
 }

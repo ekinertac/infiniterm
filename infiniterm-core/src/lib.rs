@@ -9,6 +9,7 @@ pub mod words;
 pub mod grid;
 
 pub mod background;
+pub mod changelog;
 
 pub mod remote_identity;
 
@@ -41,6 +42,7 @@ pub mod welcome;
 
 pub mod groups;
 
+pub mod when;
 pub mod workspaces;
 
 pub mod momentum;
@@ -61,6 +63,8 @@ pub mod commands;
 pub mod complete;
 pub mod config;
 pub mod config_files;
+pub mod context_menu;
+pub mod devtools;
 pub mod drop;
 pub mod editor_keys;
 pub mod editor_theme;
@@ -70,6 +74,7 @@ pub mod frame_rate;
 pub mod fullscreen;
 pub mod fuzzy;
 pub mod git;
+pub mod git_repo;
 pub mod hooks;
 pub mod ift;
 pub mod inspect;
@@ -88,6 +93,7 @@ pub mod palette;
 pub mod palette_usage;
 pub mod paths;
 pub mod prompt;
+pub mod reading;
 pub mod saved_layout;
 pub mod schema;
 pub mod schema_store;
@@ -96,6 +102,7 @@ pub mod settings_doc;
 pub mod shell_history;
 pub mod shortcuts;
 pub mod site_reference;
+pub mod slide;
 pub mod slot_snap;
 pub mod snippets;
 pub mod switcher;

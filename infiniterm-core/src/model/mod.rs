@@ -33,6 +33,7 @@ pub mod lifecycle;
 pub mod omni_cmd;
 pub mod palette_state;
 pub mod persist;
+pub mod reading_cmd;
 pub mod register;
 pub mod settings_in;
 pub mod tabs_cmd;
@@ -295,7 +296,7 @@ pub enum Effect {
     /// Cmd+E on a terminal: the ui reads its selection and calls
     /// `Model::find_with`.
     FindSelection(String),
-    /// "Editor: open a file": the ui shows the macOS open panel (#64) and
+    /// "Editor: open a file…": the ui shows the macOS open panel (#64) and
     /// hands the pick to `Model::open_picked`, beside `from`.
     PickFile {
         from: Option<String>,
@@ -347,6 +348,12 @@ pub enum Effect {
         card_id: String,
         action: EditorAction,
     },
+    /// An action on a terminal's selection or the clipboard, which only the
+    /// ui can reach (the right-click menu's Copy, Paste and Search).
+    Terminal {
+        card_id: String,
+        action: TerminalAction,
+    },
     /// An action the page owns, for the same reason.
     Browser {
         card_id: String,
@@ -383,13 +390,48 @@ pub enum Effect {
     LogDims,
 }
 
+/// The parts of a `when`'s context only a card body can answer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UiContext {
+    pub suggest_widget_visible: bool,
+    pub find_widget_visible: bool,
+    pub editor_has_selection: bool,
+    pub terminal_has_selection: bool,
+}
+
+/// What a terminal card's context menu asks of the ui.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalAction {
+    /// The selection to the clipboard.
+    Copy,
+    /// The clipboard into the program, bracketed when it asked.
+    Paste,
+    /// The selection as a web search in a browser card.
+    SearchSelection,
+}
+
+/// What the file tree's context menu does to the row it was opened on (#281).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TreeAct {
+    /// A file opens in a tab; a folder opens or closes.
+    Open,
+    RevealInFinder,
+    CopyPath,
+    CopyRelativePath,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditorAction {
+    /// A file tree row's menu action; the ui knows which row.
+    Tree(TreeAct),
     Save,
     Find,
     GoToLine,
     ToggleBlame,
     ToggleExplorer,
+    /// Leave the text: the lock is dropped and the card is an ordinary card
+    /// on the canvas again (`browser.leave`, #265).
+    Unlock,
     /// A palette-only text transform (Batch 1, 2026-09-24): no chord of its
     /// own, reachable only through the command palette, `cards_cmd.rs`'s
     /// `editor.transform.*` entries.
@@ -421,6 +463,9 @@ pub enum BrowserAction {
     Back,
     Forward,
     Reload,
+    /// Open DevTools for this page in a card beside it (the ui owns the
+    /// port and the page's target id).
+    DevTools,
 }
 
 /// Find in page. `next` false is a new search, true steps through the one
@@ -582,6 +627,12 @@ pub struct Model {
     /// Whether the view is FRAMING one card (`canvas.zoom.fitCard`): while
     /// it holds, moving focus re-fits the view instead of nudging.
     pub framing: bool,
+    /// The card `canvas.zoom.fitCard` framed, while framing holds: Cmd+1 on
+    /// it again enters reading mode.
+    pub framed_card: Option<String>,
+    /// Reading mode (`reading_cmd.rs`), set only while the view is on one
+    /// terminal card's bottom at `ui.readZoom`.
+    pub reading: Option<reading_cmd::Reading>,
     /// The scale an in-flight zoom is heading for, set by the animator, so a
     /// held key ramps from the target rather than the passing scale.
     pub pending_scale: Option<f64>,
@@ -611,6 +662,12 @@ pub struct Model {
     pub dirty_layout: bool,
     pub config: Config,
     pub keymap: Keymap,
+    /// Bindings with a `when` from keybindings.json (#269); the last one whose
+    /// clause holds wins over `keymap` (`conditional_for`).
+    pub conditional_keys: Vec<crate::keymap::CondBinding>,
+    /// What only the ui knows about the keyboard's context, written by it each
+    /// frame (the completion popup, the editor's find panel and selection).
+    pub ui_context: UiContext,
     pub settings_error: Option<String>,
     pub theme_names: Vec<String>,
     /// the snippets folder's files, read by the ui when the picker opens
@@ -698,6 +755,8 @@ impl Model {
             viewport: INITIAL_VIEWPORT,
             view_size: Size { w: 0., h: 0. },
             framing: false,
+            framed_card: None,
+            reading: None,
             pending_scale: None,
             ui_scale: 1.,
             usage: Usage::default(),
@@ -716,6 +775,8 @@ impl Model {
             dirty_layout: false,
             config: default_config(),
             keymap: default_keymap(),
+            conditional_keys: vec![],
+            ui_context: UiContext::default(),
             settings_error: None,
             theme_names: vec![],
             snippets: vec![],
@@ -1035,6 +1096,9 @@ impl Model {
             v.typed = true;
         }
         self.promote_focus();
+        // Typing while reading: the view goes back to the bottom, where the
+        // prompt is.
+        self.read_to_bottom();
         // Typing into a done card is reading it.
         if let Some(id) = self
             .focused()
@@ -1173,6 +1237,13 @@ impl Model {
         .collect()
     }
 
+    /// Whether `id` is one of several selected cards: a right-click on it keeps
+    /// the selection and the menu acts on all of it (#346), as in Finder.
+    pub fn in_multi_selection(&self, id: &str) -> bool {
+        let selected = self.selected_ids();
+        selected.len() > 1 && selected.iter().any(|s| s == id)
+    }
+
     pub fn selected_ids(&self) -> Vec<String> {
         self.selected().into_iter().map(|c| c.id.clone()).collect()
     }
@@ -1302,7 +1373,7 @@ impl Model {
         self.viewport = entering.viewport;
         let remembered = entering.focused.clone();
         self.active_workspace = Some(id.to_string());
-        self.framing = false;
+        self.stop_framing();
         self.effects.push(Effect::CancelAnimation);
         let here = self.focused().is_some_and(|c| c.workspace_id == id);
         if !here {

@@ -10,6 +10,26 @@ use crate::workspaces::{after_closing, step_workspace};
 pub const NEW_WORKSPACE_ROW: &str = "new";
 
 impl Model {
+    /// Puts workspace `id` at tab position `to` (`workspaces::reordered`),
+    /// the order the tabs, `workspace.show.N` and Ctrl+digit read. The saved
+    /// layout writes the order, so it stays.
+    pub fn move_workspace(&mut self, id: &str, to: usize) {
+        let order: Vec<String> = self.workspaces.iter().map(|w| w.id.clone()).collect();
+        let Some(next) = crate::workspaces::reordered(&order, id, to) else {
+            return;
+        };
+        let mut old = std::mem::take(&mut self.workspaces);
+        self.workspaces = next
+            .iter()
+            .filter_map(|n| {
+                old.iter()
+                    .position(|w| &w.id == n)
+                    .map(|i| old.swap_remove(i))
+            })
+            .collect();
+        self.dirty_layout = true;
+    }
+
     /// The selection (else the focused card) to workspace `to`, or a new
     /// one: each card keeps its size and takes the destination's first free
     /// block slot (Cmd+T's rule, `layout::block_slot`), in the order you
@@ -109,6 +129,89 @@ impl Model {
         self.dirty_layout = true;
     }
 
+    /// The focused card's whole group to workspace `to`, or a new one: the
+    /// frame, the name and the cards in their arrangement and sizes, moved
+    /// as one block (#348). The block takes the destination's first free
+    /// slot of its size (`layout::block_slot`, as a card does), frame pad
+    /// included. A group is all or nothing: one card of it focused or
+    /// selected moves the lot. You stay where you are.
+    pub fn move_group_to(&mut self, to: &str) {
+        let here = self.active_workspace.clone().unwrap_or_default();
+        let Some(group) = self.focused().and_then(|c| c.group_id.clone()) else {
+            self.notify("the focused card is in no group");
+            return;
+        };
+        let mut ids: Vec<String> = self
+            .cards
+            .iter()
+            .filter(|c| c.group_id.as_deref() == Some(group.as_str()) && c.workspace_id == here)
+            .map(|c| c.id.clone())
+            .collect();
+        // An in-place editor goes with the terminal it covers.
+        let bases: Vec<String> = ids
+            .iter()
+            .filter_map(|id| self.covers.get(id).cloned())
+            .filter(|b| !ids.contains(b))
+            .collect();
+        ids.extend(bases);
+        let Some(frame) = self.group_frame(&group, &here) else {
+            return;
+        };
+        let to = if to == NEW_WORKSPACE_ROW {
+            self.add_workspace(None)
+        } else if self.workspaces.iter().any(|w| w.id == to) && to != here {
+            to.to_string()
+        } else {
+            return;
+        };
+        let mut placed: Vec<crate::grid::Rect> =
+            self.cards_on(Some(&to)).iter().map(|c| c.rect).collect();
+        placed.extend(self.other_frames(None, &to));
+        let origin = crate::grid::Point {
+            x: crate::grid::HALF_CELL,
+            y: crate::grid::HALF_CELL,
+        };
+        let size = crate::grid::Size {
+            w: frame.w,
+            h: frame.h,
+        };
+        let slot = crate::layout::block_slot(&placed, size, origin, self.gap());
+        let (dx, dy) = (slot.x - frame.x, slot.y - frame.y);
+        for id in &ids {
+            if let Some(c) = self.card_mut(id) {
+                c.workspace_id = to.clone();
+                c.rect.x += dx;
+                c.rect.y += dy;
+            }
+            if let Some(at) = self.cover_at.get_mut(id) {
+                at.x += dx;
+                at.y += dy;
+            }
+        }
+        if let Some(w) = self.workspaces.iter_mut().find(|w| w.id == to) {
+            w.focused = self.selection.focused_id.clone();
+        }
+        let back = self
+            .focus_trail
+            .iter()
+            .rev()
+            .find(|t| self.card(t).is_some_and(|c| c.workspace_id == here))
+            .cloned();
+        self.set_focus(back.as_deref());
+        let (name, group_name) = (
+            self.workspaces
+                .iter()
+                .find(|w| w.id == to)
+                .map(|w| w.name.clone())
+                .unwrap_or_default(),
+            self.group(&group)
+                .map(|g| g.name.clone())
+                .unwrap_or_default(),
+        );
+        self.notify(format!("moved group \"{group_name}\" to {name}"));
+        self.dirty_layout = true;
+    }
+
     fn workspace_ids(&self) -> Vec<String> {
         self.workspaces.iter().map(|w| w.id.clone()).collect()
     }
@@ -167,6 +270,21 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             },
         );
     }
+    // The tab row's order, from the keyboard as well as by dragging a tab.
+    for (name, label, step) in [
+        ("left", "Workspace: move this tab left", -1_isize),
+        ("right", "Workspace: move this tab right", 1),
+    ] {
+        r.register(&format!("workspace.reorder.{name}"), label, move |m| {
+            let Some(id) = m.active_workspace.clone() else {
+                return;
+            };
+            let Some(at) = m.workspaces.iter().position(|w| w.id == id) else {
+                return;
+            };
+            m.move_workspace(&id, (at as isize + step).max(0) as usize);
+        });
+    }
     // Numbered, not prompted: a workspace is made far more often than named.
     // Opens with one terminal, like the app itself.
     r.register("workspace.new", "Workspace: new", |m| {
@@ -183,7 +301,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.set_focus(Some(&id));
         m.reveal_focused();
     });
-    r.register("workspace.rename", "Workspace: rename", |m| {
+    r.register("workspace.rename", "Workspace: rename…", |m| {
         let Some(ws) = m.active_ws().cloned() else {
             return;
         };
@@ -219,4 +337,15 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.open_palette(Source::MoveTo);
         }
     });
+    r.register(
+        "group.moveToWorkspace",
+        "Group: move to workspace…",
+        |m| {
+            if m.focused().is_some_and(|c| c.group_id.is_some()) {
+                m.open_palette(Source::MoveGroupTo);
+            } else if m.selection.focused_id.is_some() {
+                m.notify("the focused card is in no group");
+            }
+        },
+    );
 }

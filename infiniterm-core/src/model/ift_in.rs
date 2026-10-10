@@ -279,6 +279,23 @@ impl Model {
                 self.close_card_with(&id, false, true);
                 ok(String::new())
             }
+            // `ift terminal <dir>...`: a terminal card in each directory, on
+            // the workspace on screen, the last one focused (the Finder
+            // service's path, from a script). Absolute paths only: the cli
+            // resolves them, the app's own working directory means nothing.
+            "terminal" => {
+                if req.args.is_empty() {
+                    return err("terminal takes a directory");
+                }
+                let mut made = Vec::new();
+                for dir in &req.args {
+                    match self.open_terminal_at(dir) {
+                        Ok(id) => made.push(id),
+                        Err(e) => return err(&e),
+                    }
+                }
+                ok(made.join("\n"))
+            }
             // `ift run <command-id>`: any registered command, as the palette
             // would run it on the card in focus (`ift commands` lists them).
             "run" => {
@@ -495,6 +512,21 @@ mod tests {
         assert!(r.ok);
         assert!(m.card(&a).is_none());
         assert!(!ask(&mut m, "close", &["999"]).ok);
+    }
+
+    // `ift terminal`: a card per directory, and a refusal says why and makes
+    // nothing.
+    #[test]
+    fn terminal_opens_a_card_per_directory() {
+        let (mut m, _a, _b) = two_cards();
+        let before = m.cards.len();
+        let r = ask(&mut m, "terminal", &["/tmp", "/"]);
+        assert!(r.ok, "{}", r.text);
+        assert_eq!(m.cards.len(), before + 2);
+        let r = ask(&mut m, "terminal", &["relative"]);
+        assert!(!r.ok);
+        assert!(!ask(&mut m, "terminal", &[]).ok);
+        assert_eq!(m.cards.len(), before + 2);
     }
 
     #[test]

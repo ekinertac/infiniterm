@@ -146,6 +146,19 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // been split the whole space those halves share. Framing half a slot
     // put the other half off screen, and a split is not somewhere else.
     r.register("canvas.zoom.fitCard", "Canvas: fit the selection", |m| {
+        // Cmd+1 on the terminal card the view already frames: reading mode
+        // (#313). Pressed again, or Cmd+2, it leaves, through the fit below.
+        if m.reading.is_none()
+            && m.config.ui.card_zoom > 0.
+            && m.framing
+            && m.selected().len() == 1
+            && m.framed_card.is_some()
+            && m.framed_card.as_deref() == m.selection.focused_id.as_deref()
+            && m.focused().is_some_and(|c| c.kind == CardKind::Terminal)
+        {
+            m.read_card();
+            return;
+        }
         let selected = m.selected();
         let rects: Vec<_> = selected.iter().map(|c| c.rect).collect();
         let groups: Vec<_> = selected.iter().map(|c| c.soft_group_id.clone()).collect();
@@ -218,7 +231,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         }
     });
     // Toggle: the key that opened it is the obvious one to press to dismiss it.
-    r.register("app.palette", "Run a command", |m| {
+    r.register("app.palette", "Run a command…", |m| {
         if m.palette_open() {
             m.close_palette(false);
         } else {
@@ -267,6 +280,12 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.set_focus(Some(&id));
         }
     });
+    r.register("help.changelog", "Help: open the changelog", |m| {
+        let from = m.focused().map(|c| c.id.clone());
+        if let Some(id) = m.open_changelog(from.as_deref()) {
+            m.set_focus(Some(&id));
+        }
+    });
     r.register(
         "app.keybindings",
         "App: open keybindings, beside the defaults",
@@ -274,7 +293,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     );
     // The theme picker: the reason the palette exists. The theme in force is
     // captured HERE, before any preview runs, so cancel can put it back.
-    r.register("theme.pick", "Theme: switch", |m| {
+    r.register("theme.pick", "Theme: switch…", |m| {
         m.theme_before_preview = m.theme_current.clone();
         m.effects.push(Effect::RefreshThemes);
         m.open_palette(Source::Themes);

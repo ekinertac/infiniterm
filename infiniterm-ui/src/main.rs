@@ -24,6 +24,8 @@ mod editor_body;
 mod editor_tabs;
 mod editors;
 mod field;
+mod fonts;
+mod finder_service;
 mod fullscreen;
 mod icon_font;
 mod ime;
@@ -31,7 +33,9 @@ mod input;
 mod instance_icon;
 mod keycast;
 mod keycode;
+mod menus;
 mod middle_drag;
+mod native_menu;
 mod omnibox;
 mod overlays;
 mod page_body;
@@ -39,6 +43,7 @@ mod paint;
 mod runtime;
 mod scrollbar;
 mod switcher_view;
+mod tab_drag;
 mod tab_strip;
 mod terminal_body;
 mod terminals;
@@ -68,14 +73,40 @@ impl AppView {
     /// The title bar's height under the interface multiplier. The traffic
     /// lights stay where macOS put them; the bar grows around them.
     pub fn titlebar_h(&self) -> f32 {
-        TITLEBAR_H * self.model.ui_scale as f32
+        titlebar_base_h(self.model.config.ui.font_size as f32) * self.model.ui_scale as f32
     }
 
     pub fn statusbar_h(&self) -> f32 {
-        STATUSBAR_H * self.model.ui_scale as f32
+        statusbar_base_h(self.model.config.ui.status_bar_size as f32) * self.model.ui_scale as f32
     }
 }
 pub const STATUSBAR_H: f32 = 22.;
+
+fn titlebar_base_h(font_size: f32) -> f32 {
+    TITLEBAR_H.max(font_size * 2.4)
+}
+
+fn statusbar_base_h(font_size: f32) -> f32 {
+    STATUSBAR_H.max(font_size * 2.)
+}
+
+#[cfg(test)]
+mod chrome_height_tests {
+    use super::{statusbar_base_h, titlebar_base_h, STATUSBAR_H, TITLEBAR_H};
+
+    #[test]
+    fn default_type_sizes_preserve_existing_bar_heights() {
+        assert_eq!(titlebar_base_h(13.), TITLEBAR_H);
+        assert_eq!(statusbar_base_h(11.), STATUSBAR_H);
+    }
+
+    #[test]
+    fn large_type_grows_bars_instead_of_clipping() {
+        assert!(titlebar_base_h(32.) > TITLEBAR_H);
+        assert!(statusbar_base_h(32.) > STATUSBAR_H);
+    }
+}
+
 /// Movement below this is a click with a shaky hand, not a drag.
 pub const DRAG_SLOP: f64 = 4.;
 /// The edge band of a card that moves or resizes it, in screen pixels.
@@ -182,6 +213,8 @@ pub struct AppView {
     /// The left button went down on empty canvas and has not come up: a
     /// right click now fits everything (`pan_mode::chord_fits_all`).
     pub left_on_canvas: bool,
+    /// Where the middle button went down, to tell a click from a pan.
+    pub middle_press: Option<Point>,
     /// The last frame was over its glyph budget (`paint_world`): cards drew
     /// bars, and content frames are rationed (`AppView::far`).
     pub crowded: bool,
@@ -209,6 +242,8 @@ pub struct AppView {
     /// the card each frame: simplest thing that works for a menu open for a
     /// couple of clicks, at the cost of not tracking a pan mid-menu.
     pub context_menu: Option<crate::browsers::CardContextMenu>,
+    /// The page's native menu is open (`browsers.rs::show_page_menu`).
+    pub page_menu_open: bool,
     /// The prompt's field, opened with the suggestion selected; the palette's query.
     pub prompt_field: field::Field,
     pub query_field: field::Field,
@@ -220,6 +255,9 @@ pub struct AppView {
     /// "Open a file" asked for the open panel (`Effect::PickFile`); the idle
     /// timer, which has the app, shows it (#64). The card it opens beside.
     pub pick_request: Option<Option<String>>,
+    /// A terminal's Paste from the right-click menu: the card to paste into,
+    /// read from the clipboard in the poll task.
+    pub paste_request: Option<String>,
     /// `ift read` requests the poll timer answers once the output is parsed.
     pub read_requests: Vec<crate::terminals::ReadRequest>,
     pub shortcuts_scroll: gpui::ScrollHandle,
@@ -351,6 +389,7 @@ fn main() {
     }
     Application::new().run(move |cx: &mut App| {
         keycode::install();
+        finder_service::register();
         let cef_running = match cef.as_mut() {
             Some(p) => {
                 infiniterm_browser::app_protocol::install();
@@ -511,6 +550,14 @@ fn main() {
                         // The macOS open panel, asked for by "Open a file"
                         // (#64). Its answer arrives later, on its own task.
                         this.answer_reads(now_ms(), cx);
+                        if this.context_menu.is_some() {
+                            this.show_page_menu(cx);
+                        }
+                        if let Some(card) = this.paste_request.take() {
+                            if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                                this.paste_text(&card, &text);
+                            }
+                        }
                         if let Some(from) = this.pick_request.take() {
                             let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
                                 files: true,

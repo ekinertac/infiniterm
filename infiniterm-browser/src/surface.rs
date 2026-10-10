@@ -42,10 +42,19 @@ pub struct ContextMenuRequest {
     pub link_url: Option<String>,
     pub editable: bool,
     pub has_selection: bool,
+    /// The page's history, so the menu offers Back and Forward only when
+    /// there is somewhere to go.
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    /// The page's own address, for "open in the system browser".
+    pub page_url: String,
 }
 
 #[derive(Default)]
 pub struct Shared {
+    /// The page's DevTools target id, asked for after each load (see
+    /// `TargetIdBuilder`). None until the first load ends.
+    pub target_id: Option<String>,
     pub frame: Option<Arc<Frame>>,
     /// A frame arrived since the ui last took one.
     pub dirty: bool,
@@ -249,7 +258,15 @@ wrap_load_handler! {
     }
 
     impl LoadHandler {
-        fn on_loading_state_change(&self, _browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, _can_go_back: ::std::os::raw::c_int, _can_go_forward: ::std::os::raw::c_int) {
+        fn on_loading_state_change(&self, browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, _can_go_back: ::std::os::raw::c_int, _can_go_forward: ::std::os::raw::c_int) {
+            // Ask again once a load ends: a page that moved to another site
+            // can come back with another main frame, and the DevTools
+            // command needs the id the page has now.
+            if is_loading == 0 {
+                if let Some(host) = browser.and_then(|b| b.host()) {
+                    host.execute_dev_tools_method(TARGET_QUERY_ID, Some(&"Page.getFrameTree".into()), None);
+                }
+            }
             self.handler.shared.borrow_mut().loading = is_loading == 1;
         }
     }
@@ -292,7 +309,7 @@ wrap_context_menu_handler! {
         // is no native window to anchor one to) is never asked for.
         fn run_context_menu(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             _frame: Option<&mut cef::Frame>,
             params: Option<&mut ContextMenuParams>,
             _model: Option<&mut MenuModel>,
@@ -310,6 +327,9 @@ wrap_context_menu_handler! {
                         flags,
                         sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0,
                     ),
+                    can_go_back: browser.as_ref().is_some_and(|b| b.can_go_back() == 1),
+                    can_go_forward: browser.as_ref().is_some_and(|b| b.can_go_forward() == 1),
+                    page_url: CefStringUtf16::from(&params.page_url()).to_string(),
                 });
             }
             if let Some(callback) = callback {
@@ -326,6 +346,69 @@ fn has_flag(flags: u32, bit: u32) -> bool {
     flags & bit != 0
 }
 
+wrap_request_handler! {
+    struct RequestBuilder {
+        handler: Handler,
+    }
+
+    impl RequestHandler {
+        // A middle-click or Cmd+click on a link reaches the browser process
+        // here, not through `on_before_popup`: with no answer Chromium
+        // follows the link in the tab it came from. The address is queued
+        // for the ui as a popup is, and the navigation refused.
+        fn on_open_urlfrom_tab(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            target_url: Option<&CefString>,
+            target_disposition: WindowOpenDisposition,
+            _user_gesture: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            if target_disposition == sys::cef_window_open_disposition_t::CEF_WOD_CURRENT_TAB.into() {
+                return 0;
+            }
+            if let Some(url) = target_url {
+                let url = url.to_string();
+                if !url.is_empty() {
+                    self.handler.shared.borrow_mut().popups.push(url);
+                }
+            }
+            1
+        }
+    }
+}
+
+/// The message id of our one DevTools question, `Page.getFrameTree`: its
+/// answer carries the main frame's id, which is the page's target id on the
+/// debugging port. CEF's own frame identifier is a different value.
+const TARGET_QUERY_ID: i32 = 7001;
+
+wrap_dev_tools_message_observer! {
+    struct TargetIdBuilder {
+        handler: Handler,
+    }
+
+    impl DevToolsMessageObserver {
+        fn on_dev_tools_method_result(
+            &self,
+            _browser: Option<&mut Browser>,
+            message_id: ::std::os::raw::c_int,
+            success: ::std::os::raw::c_int,
+            result: Option<&[u8]>,
+        ) {
+            if message_id != TARGET_QUERY_ID || success != 1 {
+                return;
+            }
+            let Some(text) = result.and_then(|r| std::str::from_utf8(r).ok()) else {
+                return;
+            };
+            if let Some(id) = infiniterm_core::devtools::target_id_from_frame_tree(text) {
+                self.handler.shared.borrow_mut().target_id = Some(id);
+            }
+        }
+    }
+}
+
 wrap_client! {
     struct ClientBuilder {
         render_handler: RenderHandler,
@@ -334,9 +417,13 @@ wrap_client! {
         load_handler: LoadHandler,
         find_handler: FindHandler,
         context_menu_handler: ContextMenuHandler,
+        request_handler: RequestHandler,
     }
 
     impl Client {
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(self.request_handler.clone())
+        }
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(self.render_handler.clone())
         }
@@ -361,6 +448,8 @@ wrap_client! {
 pub struct Surface {
     browser: cef::Browser,
     pub shared: Rc<RefCell<Shared>>,
+    /// Keeps the target id observer registered for as long as the surface.
+    _target_id_observer: Option<Registration>,
 }
 
 impl Surface {
@@ -376,6 +465,7 @@ impl Surface {
         let handler = Handler {
             shared: shared.clone(),
         };
+        let handler_for_observer = handler.clone();
         let window_info = WindowInfo {
             windowless_rendering_enabled: 1,
             ..Default::default()
@@ -390,7 +480,8 @@ impl Surface {
             DisplayBuilder::new(handler.clone()),
             LoadBuilder::new(handler.clone()),
             FindBuilder::new(handler.clone()),
-            ContextMenuBuilder::new(handler),
+            ContextMenuBuilder::new(handler.clone()),
+            RequestBuilder::new(handler),
         );
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
@@ -400,17 +491,30 @@ impl Surface {
             None,
             None,
         )?;
+        let mut target_id_observer = None;
         if let Some(host) = browser.host() {
             moat::apply(&host);
+            let mut observer = TargetIdBuilder::new(handler_for_observer);
+            target_id_observer = host.add_dev_tools_message_observer(Some(&mut observer));
         }
         if let Some(frame) = browser.main_frame() {
             frame.load_url(Some(&url.into()));
         }
-        Some(Surface { browser, shared })
+        Some(Surface {
+            browser,
+            shared,
+            _target_id_observer: target_id_observer,
+        })
     }
 
     fn host(&self) -> Option<BrowserHost> {
         self.browser.host()
+    }
+
+    /// The page's id on the debugging port, once a load has ended and CEF
+    /// has answered; the DevTools command builds its address from it.
+    pub fn target_id(&self) -> Option<String> {
+        self.shared.borrow().target_id.clone()
     }
 
     pub fn navigate(&self, url: &str) {
@@ -425,6 +529,12 @@ impl Surface {
 
     pub fn forward(&self) {
         self.browser.go_forward();
+    }
+
+    /// Whether the page has history behind it: a tab a link opened has none,
+    /// and Back there means "close this tab".
+    pub fn can_go_back(&self) -> bool {
+        self.browser.can_go_back() == 1
     }
 
     pub fn reload(&self) {
@@ -539,10 +649,17 @@ impl Surface {
     }
 
     fn mouse(x: f32, y: f32, mods: Mods) -> MouseEvent {
+        // Cmd is for the mouse only: a key sent with it would reach the page
+        // as a shortcut the app already took.
+        let command = if mods.command {
+            sys::cef_event_flags_t::EVENTFLAG_COMMAND_DOWN.0
+        } else {
+            0
+        };
         MouseEvent {
             x: x as i32,
             y: y as i32,
-            modifiers: Self::flags(mods),
+            modifiers: Self::flags(mods) | command,
         }
     }
 
@@ -582,8 +699,18 @@ impl Surface {
                 Button::Middle => MouseButtonType::MIDDLE,
                 Button::Right => MouseButtonType::RIGHT,
             };
+            let mut event = Self::mouse(x, y, mods);
+            // Chromium reads which button is down from the flags as well as
+            // from the event's button: without this a middle press on a link
+            // was a plain click.
+            if !up && button == Button::Middle {
+                event.modifiers |= sys::cef_event_flags_t::EVENTFLAG_MIDDLE_MOUSE_BUTTON.0;
+            }
+            if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                eprintln!("[mouse] {button:?} up={up} flags={:#x} at {},{}", event.modifiers, event.x, event.y);
+            }
             host.send_mouse_click_event(
-                Some(&Self::mouse(x, y, mods)),
+                Some(&event),
                 b,
                 up as i32,
                 clicks.max(1) as i32,
@@ -685,6 +812,8 @@ pub struct Mods {
     pub shift: bool,
     pub control: bool,
     pub alt: bool,
+    /// Cmd: with it Chromium opens a clicked link in a new tab.
+    pub command: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

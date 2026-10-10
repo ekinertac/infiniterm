@@ -8,7 +8,9 @@
 //! arrives as hex strings from `itermcolors.rs`. Sizes that must hold on
 //! screen at every zoom are in SCREEN pixels here and divided by the scale
 //! at paint time (`chrome.rs` in core has the maths).
-use gpui::{font, rgb, Font, Hsla, Rgba};
+use crate::fonts::UiTypography;
+use gpui::{rgb, Hsla, Rgba};
+use infiniterm_core::config::Ui;
 use infiniterm_core::itermcolors::Theme;
 
 /// A one-device-pixel line: the thinnest gpui draws crisply. Every card
@@ -40,8 +42,28 @@ pub const LEGIBLE_FLOOR_PX: f32 = 4.5;
 /// is drawn as bars: enough device pixels to draw a glyph, and big enough
 /// to read. 7 on a 1x screen, as it always was; 4.5 on Retina.
 pub fn legible_font_px(scale_factor: f32) -> gpui::Pixels {
-    let pixels = LEGIBLE_FONT_PX as f32 / scale_factor.max(1.);
-    gpui::px(pixels.max(LEGIBLE_FLOOR_PX))
+    legible_px(
+        f32::from_bits(LEGIBLE_DEVICE_PX.load(std::sync::atomic::Ordering::Relaxed)),
+        scale_factor,
+    )
+}
+
+/// `ui.minTextPx`: the device pixels a glyph needs to be drawn, set once a
+/// frame from the config (`set_legible_device_px`). Process-wide because
+/// nine painters ask and the app has one window; 7 until a frame sets it.
+static LEGIBLE_DEVICE_PX: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(7.0f32.to_bits());
+
+pub fn set_legible_device_px(px: f32) {
+    LEGIBLE_DEVICE_PX.store(px.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The rule behind `legible_font_px`, for `device` pixels a glyph needs: the
+/// logical size they make on this screen, never under the physical floor
+/// (4.5 logical) unless the setting itself asks for less.
+pub fn legible_px(device: f32, scale_factor: f32) -> gpui::Pixels {
+    let pixels = device / scale_factor.max(1.);
+    gpui::px(pixels.max(LEGIBLE_FLOOR_PX.min(device)))
 }
 /// While the frame is over its glyph budget (`AppView::crowded`), a frame
 /// asked for by output or the cursor blink is painted at most this often:
@@ -68,7 +90,15 @@ pub const FAR_REFRESH_MS: f64 = 250.;
 /// two full cards: a pair side by side still reads, a wall of them does
 /// not and now costs nothing. Counted from the grids, not from what is in
 /// them, so the flag does not flip as output scrolls.
-pub const GLYPH_BUDGET_CELLS: usize = 30_000;
+///
+/// Remeasured 2026-10-09 (#330, release build, 13 busy cards, about 80,000
+/// glyphs): 215 nanoseconds a glyph, 17 ms a frame, and 44 nanoseconds, 3.5
+/// ms, once a card's rows are painted in one layer (`terminal_body.rs`).
+/// gpui's per-primitive ordering was 90% of the old cost. The default rose
+/// from 30,000 to 150,000 cells with it: about 7 ms a frame if every cell
+/// held a glyph.
+#[cfg(test)]
+pub const GLYPH_BUDGET_CELLS: usize = infiniterm_core::config::DEFAULT_GLYPH_BUDGET;
 
 /// The budget also grows with the WINDOW: it is at least this many
 /// windowfuls of text at 100%. A fixed 30,000 was less than one windowful
@@ -80,10 +110,13 @@ pub const GLYPH_BUDGET_WINDOWS: f32 = 1.5;
 
 /// Whether a frame showing `cells` of text across its visible cards must
 /// drop to bars, when the window would hold `window_cells` at 100%. The
-/// rule, so it can be argued with in one place.
-pub fn over_glyph_budget(cells: usize, window_cells: usize) -> bool {
+/// rule, so it can be argued with in one place. `budget` is the floor, the
+/// user's `ui.glyphBudget` (default `GLYPH_BUDGET_CELLS`): raising it trades
+/// frame time for text at a smaller zoom (Ekin, 2026-10-09: twelve 50 by 80
+/// cards at 49% read fine and were bars).
+pub fn over_glyph_budget(cells: usize, window_cells: usize, budget: usize) -> bool {
     let relative = (window_cells as f32 * GLYPH_BUDGET_WINDOWS) as usize;
-    cells > GLYPH_BUDGET_CELLS.max(relative)
+    cells > budget.max(relative)
 }
 /// Lines scrolled per wheel tick, shared by every card body with a text
 /// buffer, so the terminal, editor, diff and transcript all feel the same
@@ -239,8 +272,7 @@ pub struct Chrome {
     pub phantom: Hsla,
     /// The loaded theme, for the label colours chosen by hashing an id.
     pub theme: Option<Theme>,
-    pub ui_font: Font,
-    pub mono_font: Font,
+    pub typography: UiTypography,
 }
 
 /// `#rrggbb` or `#rgb` to a colour; `None` for anything else.
@@ -274,6 +306,12 @@ impl gpui::Global for CardRadius {}
 /// The radius a card body rounds its own quads with; 0 when none is set.
 pub fn card_radius(cx: &gpui::App) -> gpui::Pixels {
     gpui::px(cx.try_global::<CardRadius>().map_or(0., |r| r.0))
+}
+
+/// The fill under the pointer on a clickable row: the selected row's colour,
+/// fainter, so the row you would pick by clicking is visible before you click.
+pub fn hover_fill(selected: Hsla) -> Hsla {
+    with_alpha(selected, selected.a * 0.6)
 }
 
 /// A card body's whole-body fill: the card fill, rounded to the card.
@@ -403,9 +441,12 @@ impl Chrome {
             },
             phantom: c(0x4a5568),
             theme: None,
-            ui_font: font("Menlo"),
-            mono_font: font("Menlo"),
+            typography: UiTypography::from_config(&infiniterm_core::config::default_config().ui),
         }
+    }
+
+    pub fn apply_ui_typography(&mut self, ui: &Ui) {
+        self.typography = UiTypography::from_config(ui);
     }
 
     /// A theme drives BOTH the terminal and the chrome: card ground, label
@@ -471,30 +512,82 @@ mod tests {
         assert!(gpui::px(6.7) < legible_font_px(1.));
     }
 
-    /// One full card on Ekin's canvas is about 151 by 87 cells. A pair
-    /// still reads; a wall of eight cost 85 to 100 ms a frame in glyphs.
+    /// `ui.minTextPx` below the physical floor wins over it; at the default it
+    /// changes nothing.
     #[test]
-    fn the_glyph_budget_is_about_two_full_cards() {
-        let card = 151 * 87;
-        assert!(!over_glyph_budget(card, 0), "one card paints glyphs");
-        assert!(
-            !over_glyph_budget(card * 2, 0),
-            "a pair side by side still does"
-        );
-        assert!(over_glyph_budget(card * 3, 0), "three is past it");
-        assert!(over_glyph_budget(card * 8, 0), "a 4x2 fit-all is bars");
+    fn a_zero_line_draws_every_glyph() {
+        // `ui.textAsBars` off sets 0 device pixels: nothing is too small.
+        assert_eq!(legible_px(0., 1.), gpui::px(0.));
+        assert_eq!(legible_px(0., 2.), gpui::px(0.));
+        assert!(gpui::px(0.5) >= legible_px(0., 2.));
     }
 
-    /// A window that holds 60,000 cells at 100% (the 4K) and is covered
-    /// edge to edge in cards shows 60,000 / zoom^2 of them. At 98% that is
+    #[test]
+    fn the_min_text_setting_moves_the_line() {
+        assert_eq!(legible_px(7., 1.), gpui::px(7.));
+        assert_eq!(legible_px(7., 2.), gpui::px(LEGIBLE_FLOOR_PX));
+        // 4 device pixels: 4 on a 1x screen, and 4 (not 4.5) on a 2x one.
+        assert_eq!(legible_px(4., 1.), gpui::px(4.));
+        assert_eq!(legible_px(4., 2.), gpui::px(4.));
+        // A larger setting draws bars sooner.
+        assert_eq!(legible_px(10., 1.), gpui::px(10.));
+        assert!(gpui::px(6.5) >= legible_px(4., 1.));
+        assert!(gpui::px(6.5) < legible_px(7., 1.));
+    }
+
+    /// One full card on Ekin's canvas is about 151 by 87 cells. The default
+    /// budget holds about eleven of them; a wall of twenty is bars.
+    #[test]
+    fn the_glyph_budget_is_about_eleven_full_cards() {
+        let card = 151 * 87;
+        assert!(
+            !over_glyph_budget(card, 0, GLYPH_BUDGET_CELLS),
+            "one card paints glyphs"
+        );
+        assert!(
+            !over_glyph_budget(card * 11, 0, GLYPH_BUDGET_CELLS),
+            "eleven side by side still do"
+        );
+        assert!(
+            over_glyph_budget(card * 12, 0, GLYPH_BUDGET_CELLS),
+            "twelve is past it"
+        );
+        assert!(
+            over_glyph_budget(card * 20, 0, GLYPH_BUDGET_CELLS),
+            "a wall of twenty is bars"
+        );
+    }
+
+    /// A window that holds 200,000 cells at 100% (a large one) and is covered
+    /// edge to edge in cards shows 200,000 / zoom^2 of them. Near 100% that is
     /// text; at 70% it is bars.
     #[test]
     fn a_window_full_of_cards_is_text_near_100_percent() {
-        let window = 60_000;
+        let window = 200_000;
         let shown = |zoom: f32| (window as f32 / (zoom * zoom)) as usize;
-        assert!(!over_glyph_budget(shown(0.98), window), "98% reads");
-        assert!(!over_glyph_budget(shown(0.85), window), "85% reads");
-        assert!(over_glyph_budget(shown(0.70), window), "70% is bars");
+        assert!(
+            !over_glyph_budget(shown(0.98), window, GLYPH_BUDGET_CELLS),
+            "98% reads"
+        );
+        assert!(
+            !over_glyph_budget(shown(0.85), window, GLYPH_BUDGET_CELLS),
+            "85% reads"
+        );
+        assert!(
+            over_glyph_budget(shown(0.70), window, GLYPH_BUDGET_CELLS),
+            "70% is bars"
+        );
+    }
+
+    /// `ui.glyphBudget` raises the floor: twelve full cards that are bars by
+    /// default read once the budget covers them.
+    #[test]
+    fn a_larger_budget_keeps_text_on_a_wall_of_cards() {
+        let wall = 20 * 151 * 87;
+        assert!(over_glyph_budget(wall, 12_000, GLYPH_BUDGET_CELLS));
+        assert!(!over_glyph_budget(wall, 12_000, 400_000));
+        // The window-relative rule still applies when it is larger.
+        assert!(!over_glyph_budget(100_000, 100_000, 1_000));
     }
 }
 

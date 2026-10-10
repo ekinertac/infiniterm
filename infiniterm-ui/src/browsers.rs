@@ -10,13 +10,10 @@
 //! is the whole of how one becomes a surface. CEF itself is started once
 //! in `main.rs`; `cef_running` says whether it is.
 use crate::browser_body::BrowserBody;
-use crate::overlays::OVERLAY_BODY_FONT_PX;
 use crate::tab_strip::StripStyle;
 use crate::{now_ms, AppView};
-use gpui::prelude::*;
-use gpui::{div, px, MouseButton, MouseDownEvent};
 use infiniterm_core::grid::{Point, Size};
-use infiniterm_core::ift::url_plan;
+use infiniterm_core::ift::{url_plan, OpenPlan};
 use infiniterm_core::model::{BrowserAction, FindRequest};
 use infiniterm_core::saved_layout::CardKind;
 use infiniterm_core::viewport::screen_pos_of;
@@ -32,6 +29,9 @@ pub struct CardContextMenu {
     pub link_url: Option<String>,
     pub editable: bool,
     pub has_selection: bool,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    pub page_url: String,
 }
 
 /// What a slim menu item does. Copy-able so a render closure can capture it
@@ -47,6 +47,8 @@ pub enum ContextMenuAction {
     CopyLinkAddress,
     OpenLinkInNewCard,
     OpenLinkInNewTab,
+    OpenInSystemBrowser,
+    OpenLinkInSystemBrowser,
 }
 
 /// What the body has to do to hold the tabs the card says it has.
@@ -121,18 +123,17 @@ impl AppView {
         let scale = self.scale_factor;
         let card_bg = self.chrome.card_bg;
         let text = self.chrome.text;
-        let family = crate::terminals::family_of(&self.model.config.terminal.font_family);
         // The same `StripStyle` the editor's strip takes, so the two look
-        // and size alike: `terminal.fontSize` is the strip's font too, not
-        // a strip-only constant.
+        // and size alike under the app's UI typography.
         let style = StripStyle {
             bg: self.chrome.bar_bg,
             border: self.chrome.bar_border,
             active_bg: self.chrome.row_selected,
             text_bright: self.chrome.text_bright,
             text_muted: self.chrome.text_muted,
-            font_family: family.clone(),
-            font_px: self.model.config.terminal.font_size,
+            regular: self.chrome.typography.regular.clone(),
+            bold: self.chrome.typography.bold.clone(),
+            font_px: self.chrome.typography.font_size,
         };
         let inactive_dim = self.model.config.ui.inactive_dim;
         let ui_scale = self.model.ui_scale as f32;
@@ -174,7 +175,6 @@ impl AppView {
             body.card_bg = card_bg;
             body.text = text;
             body.style = style.clone();
-            body.font_family = family.clone();
             body.inactive_dim = inactive_dim;
             body.card_number = card.number;
             body.protected = card.protected;
@@ -266,6 +266,9 @@ impl AppView {
                 link_url: request.link_url,
                 editable: request.editable,
                 has_selection: request.has_selection,
+                can_go_back: request.can_go_back,
+                can_go_forward: request.can_go_forward,
+                page_url: request.page_url,
             });
         }
         for (id, urls) in retabs {
@@ -339,6 +342,20 @@ impl AppView {
                 }
                 return;
             }
+            ContextMenuAction::OpenInSystemBrowser | ContextMenuAction::OpenLinkInSystemBrowser => {
+                let url = if action == ContextMenuAction::OpenLinkInSystemBrowser {
+                    menu.link_url
+                } else {
+                    Some(menu.page_url).filter(|u| !u.is_empty())
+                };
+                if let Some(url) = url {
+                    if let Err(e) = infiniterm_core::links_fs::open_url(&url) {
+                        self.model.notify(format!("could not open {url}"));
+                        eprintln!("[infiniterm] {e}");
+                    }
+                }
+                return;
+            }
             _ => {}
         }
         let Some(surface) = self
@@ -362,94 +379,113 @@ impl AppView {
             }
             ContextMenuAction::CopyLinkAddress
             | ContextMenuAction::OpenLinkInNewCard
-            | ContextMenuAction::OpenLinkInNewTab => {
+            | ContextMenuAction::OpenLinkInNewTab
+            | ContextMenuAction::OpenInSystemBrowser
+            | ContextMenuAction::OpenLinkInSystemBrowser => {
                 unreachable!("handled above, before the surface borrow")
             }
         }
     }
 
-    /// The slim menu itself: a floating sheet at the click point over a
-    /// transparent full-canvas backdrop, so a click anywhere else dismisses
-    /// it the way the omnibox's backdrop does. Empty when nothing is open.
-    pub fn render_context_menu(&self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+    /// The page's right-click menu, native like the others (#281): Chromium
+    /// said what is under the pointer (`context_menu`), this builds the rows
+    /// from it and opens them from a task, as every native menu must
+    /// (`native_menu.rs`). The choice goes through `context_menu_choose`; a
+    /// dismissed menu just forgets the request.
+    pub fn show_page_menu(&mut self, cx: &mut gpui::Context<Self>) {
+        use crate::native_menu::{pop_up, Row};
+        if self.page_menu_open {
+            return;
+        }
         let Some(menu) = &self.context_menu else {
-            return div();
+            return;
         };
-        let chrome = &self.chrome;
-        let ui = self.model.ui_scale as f32;
-        let mut items: Vec<(&'static str, ContextMenuAction)> = vec![
-            ("Back", ContextMenuAction::Back),
-            ("Forward", ContextMenuAction::Forward),
-            ("Reload", ContextMenuAction::Reload),
-        ];
-        if menu.editable {
-            items.push(("Cut", ContextMenuAction::Cut));
+        let mut actions: Vec<ContextMenuAction> = vec![];
+        let mut item = |title: &str, action: ContextMenuAction, chord: &str| -> Row {
+            actions.push(action);
+            Row::Item {
+                tag: actions.len() as i64 - 1,
+                title: title.into(),
+                enabled: true,
+                chord: (!chord.is_empty()).then(|| chord.to_string()),
+            }
+        };
+        // What Chrome shows: Back, Forward and Reload belong to the page, so
+        // not on a link, a selection or a field, and Back and Forward only
+        // when there is somewhere to go.
+        let mut rows: Vec<Row> = vec![];
+        let on_page = menu.link_url.is_none() && !menu.editable && !menu.has_selection;
+        if on_page {
+            if menu.can_go_back {
+                rows.push(item("Back", ContextMenuAction::Back, ""));
+            }
+            if menu.can_go_forward {
+                rows.push(item("Forward", ContextMenuAction::Forward, ""));
+            }
+            rows.push(item("Reload", ContextMenuAction::Reload, ""));
         }
         if menu.editable || menu.has_selection {
-            items.push(("Copy", ContextMenuAction::Copy));
-        }
-        if menu.editable {
-            items.push(("Paste", ContextMenuAction::Paste));
+            if !rows.is_empty() {
+                rows.push(Row::Separator);
+            }
+            if menu.editable {
+                rows.push(item("Cut", ContextMenuAction::Cut, "cmd+x"));
+            }
+            rows.push(item("Copy", ContextMenuAction::Copy, "cmd+c"));
+            if menu.editable {
+                rows.push(item("Paste", ContextMenuAction::Paste, "cmd+v"));
+            }
         }
         if menu.link_url.is_some() {
-            items.push(("Copy link address", ContextMenuAction::CopyLinkAddress));
-            items.push(("Open link in new tab", ContextMenuAction::OpenLinkInNewTab));
-            items.push((
-                "Open link in new card",
+            if !rows.is_empty() {
+                rows.push(Row::Separator);
+            }
+            rows.push(item(
+                "Open Link in New Tab",
+                ContextMenuAction::OpenLinkInNewTab,
+                "",
+            ));
+            rows.push(item(
+                "Open Link in New Card",
                 ContextMenuAction::OpenLinkInNewCard,
+                "",
+            ));
+            rows.push(item(
+                "Copy Link Address",
+                ContextMenuAction::CopyLinkAddress,
+                "",
             ));
         }
-        let mut sheet = div().flex().flex_col().py_1();
-        for (label, action) in items {
-            sheet = sheet.child(
-                div()
-                    .id(gpui::SharedString::from(format!("ctxmenu-{label}")))
-                    .px_3()
-                    .py_1()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                            this.context_menu_choose(action, cx);
-                            cx.notify();
-                        }),
-                    )
-                    .child(label),
-            );
+        // The footer of every browser menu.
+        if !rows.is_empty() {
+            rows.push(Row::Separator);
         }
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                    this.context_menu = None;
-                    cx.notify();
-                }),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(menu.x as f32))
-                    .top(px(menu.y as f32))
-                    .flex()
-                    .flex_col()
-                    .bg(chrome.overlay_bg)
-                    .border_1()
-                    .border_color(chrome.overlay_border)
-                    .rounded_md()
-                    .shadow_lg()
-                    .font_family("Menlo")
-                    .text_size(px(OVERLAY_BODY_FONT_PX * ui))
-                    .text_color(chrome.text)
-                    // The sheet swallows the click that would otherwise
-                    // reach the backdrop and close it.
-                    .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation()
-                    })
-                    .child(sheet),
-            )
+        if menu.link_url.is_some() {
+            rows.push(item(
+                "Open Link in System Browser",
+                ContextMenuAction::OpenLinkInSystemBrowser,
+                "",
+            ));
+        } else {
+            rows.push(item(
+                "Open Page in System Browser",
+                ContextMenuAction::OpenInSystemBrowser,
+                "",
+            ));
+        }
+        self.page_menu_open = true;
+        cx.spawn(async move |view, cx| {
+            let chosen = pop_up(&rows);
+            let _ = view.update(cx, |this, cx| {
+                this.page_menu_open = false;
+                match chosen.and_then(|tag| actions.get(tag as usize).copied()) {
+                    Some(action) => this.context_menu_choose(action, cx),
+                    None => this.context_menu = None,
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }
 
@@ -457,6 +493,10 @@ impl AppView {
     /// Back and forward. The page owns its history, so this is the whole
     /// implementation: the model only says which card and which direction.
     pub fn browser_effect(&mut self, card_id: &str, action: BrowserAction) {
+        if action == BrowserAction::DevTools {
+            self.open_devtools(card_id);
+            return;
+        }
         let Some(body) = self
             .bodies
             .get_mut(card_id)
@@ -471,6 +511,72 @@ impl AppView {
             BrowserAction::Back => surface.back(),
             BrowserAction::Forward => surface.forward(),
             BrowserAction::Reload => surface.reload(),
+            // Handled before the surface is looked up: it needs the port and
+            // opens a card, not a call on the page.
+            BrowserAction::DevTools => {}
+        }
+    }
+
+    /// DevTools for a browser card: the debugging port serves Chromium's
+    /// own DevTools page, and an ordinary browser card beside the page's
+    /// shows it (CEF's windowless DevTools does not exist, see
+    /// `infiniterm_core::devtools`). The target id is the one the surface
+    /// read after its last load.
+    fn open_devtools(&mut self, card_id: &str) {
+        let Some(port) = infiniterm_browser::process::devtools_port() else {
+            self.model
+                .notify("DevTools has no port: it is off, or none was free; restart the app");
+            return;
+        };
+        let target = self
+            .bodies
+            .get_mut(card_id)
+            .and_then(|b| b.as_any_mut().downcast_mut::<BrowserBody>())
+            .and_then(|body| body.active_surface())
+            .and_then(|surface| surface.target_id());
+        let Some(target) = target else {
+            self.model
+                .notify("the page is still loading: try again in a moment");
+            return;
+        };
+        let cwd = self
+            .model
+            .card(card_id)
+            .map(|c| c.cwd.clone())
+            .unwrap_or_default();
+        let url = infiniterm_core::devtools::frontend_url(port, &target);
+        self.model
+            .open_in_card(OpenPlan::Browser { cwd, url }, Some(card_id));
+    }
+
+    /// The mouse's back and forward buttons, over a browser page. Back on a
+    /// tab with no history of its own (one a link opened) closes it, as in
+    /// Chrome, when the card has another tab to land on.
+    pub fn mouse_navigate(&mut self, e: &gpui::MouseDownEvent, forward: bool) {
+        if self.model.modal_open() {
+            return;
+        }
+        let p = self.to_content(e.position);
+        let crate::input::Hit::CardBody { id, .. } = self.hit(p) else {
+            return;
+        };
+        let Some(card) = self.model.card(&id) else {
+            return;
+        };
+        if card.kind != CardKind::Browser {
+            return;
+        }
+        let several_tabs = card.tabs.len() > 1;
+        let Some(surface) = self.browser_for(&id).and_then(|b| b.active_surface()) else {
+            return;
+        };
+        if forward {
+            surface.forward();
+        } else if surface.can_go_back() {
+            surface.back();
+        } else if several_tabs {
+            self.model.browser_tab_close(&id);
+            self.perform_effects();
         }
     }
 
@@ -499,14 +605,39 @@ impl AppView {
     /// arrow: nothing else in the app sets a cursor style, so this is
     /// decided fresh every frame rather than left to whatever gpui reset
     /// to on its own.
+    ///
+    /// gpui gives a WINDOW-level cursor precedence over every element's own
+    /// (`cursor_pointer` on a row), so asking for the arrow every frame, as
+    /// this once did, made every pointer in the palette, the dialogs and the
+    /// tabs a no-op (#256). It now asks only when the pointer is over a
+    /// browser page and no overlay is up; everywhere else the elements
+    /// decide, and gpui's default is the arrow.
     pub fn apply_hover_cursor(&mut self, window: &mut gpui::Window) {
-        let style = self
-            .hover_body
-            .clone()
-            .and_then(|id| self.browser_for(&id))
+        if self.model.modal_open() {
+            return;
+        }
+        let hover = self.hover_body.clone();
+        let style = hover
+            .as_ref()
+            .and_then(|id| self.browser_for(id))
             .map(|b| b.cursor_style())
-            .unwrap_or(gpui::CursorStyle::Arrow);
-        window.set_window_cursor_style(style);
+            .or_else(|| {
+                // An editor's tree divider: the resize cursor (#258).
+                hover
+                    .as_ref()
+                    .and_then(|id| self.editor_tabs_for(id))
+                    .and_then(|t| t.divider_cursor())
+            })
+            .or_else(|| {
+                // Cmd over a link in a terminal: the hand, as over a page's.
+                let id = hover.as_ref()?;
+                self.terminal_body(id)
+                    .is_some_and(|b| b.link_hovered())
+                    .then_some(gpui::CursorStyle::PointingHand)
+            });
+        if let Some(style) = style {
+            window.set_window_cursor_style(style);
+        }
     }
 
     /// Chromium reports a find's progress several times per search; the

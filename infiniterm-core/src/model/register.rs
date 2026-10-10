@@ -13,6 +13,7 @@ pub fn register_commands(r: &mut CommandRegistry<Model>) {
     super::groups_cmd::register(r);
     super::dev_cmd::register(r);
     super::tabs_cmd::register(r);
+    super::reading_cmd::register(r);
 }
 
 /// What the command trace says about each command: the card it acted on.
@@ -53,6 +54,20 @@ pub fn handle_chord(m: &mut Model, r: &CommandRegistry<Model>, chord: &str) -> b
 /// label a chord with the command it ACTUALLY ran: on a locked card the
 /// keymap says "Card: new terminal" for Cmd+T while this says the tab.
 pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
+    // A user's `when` binding for this chord, in force right now, comes first
+    // (#269): it runs, or, with `command: null`, unbinds the chord here.
+    if let Some(bound) = m.conditional_for(chord) {
+        return bound;
+    }
+    // In reading mode Cmd+Up and Cmd+Down pan the view along the card; at every
+    // other time they are the program's (#313).
+    if m.reading.is_some() {
+        match chord {
+            "cmd+arrowup" => return Some("canvas.zoom.cardBottom.up".into()),
+            "cmd+arrowdown" => return Some("canvas.zoom.cardBottom.down".into()),
+            _ => {}
+        }
+    }
     let card = m.focused();
     let kind = card.map(|c| c.kind);
     // An editor keeps its find, comment, undo and select-to-boundary
@@ -78,7 +93,26 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
     // editor card locks the same way with its own tab commands behind the
     // same chords (`editor_keys::lock_override`); what neither table
     // knows falls through to the body, where the editor's own keys live.
-    if locked && !is_workspace_switch(chord) && !is_locked_carveout(chord, kind) {
+    // The way out is whatever the keymap binds to `browser.leave`: Cmd+Escape
+    // by default, and a rebind (the user's keybindings.json) must work on a
+    // locked card too, or the chord would go to the page or the text.
+    let leaves = m
+        .keymap
+        .iter()
+        .any(|(c, id)| c == chord && id == "browser.leave");
+    // The command palette opens from a locked card too (#334): it is how you
+    // reach every command, so a lock must not hide it. Whatever chord the
+    // keymap binds to it, as for `browser.leave`.
+    let opens_palette = m
+        .keymap
+        .iter()
+        .any(|(c, id)| c == chord && id == "app.palette");
+    if locked
+        && !is_workspace_switch(chord)
+        && !is_locked_carveout(chord, kind)
+        && !leaves
+        && !opens_palette
+    {
         let id = if kind == Some(crate::saved_layout::CardKind::Editor) {
             crate::editor_keys::lock_override(chord)
         } else {
@@ -112,8 +146,10 @@ fn is_workspace_switch(chord: &str) -> bool {
 }
 
 /// The other carve-outs a locked card does not claim: the way out of a
-/// locked page (`browser.leave`, bound to `cmd+escape` in the default
-/// keymap; a no-op on an editor, which unlocks by double-Escape only) and,
+/// locked page or editor (`browser.leave`, bound to `cmd+escape` in the
+/// default keymap and followed through the keymap if rebound, see
+/// `resolve_chord`; an editor also unlocks on an Escape with nothing else to
+/// close) and,
 /// for a BROWSER only, the omnibox (`cmd+l`, an app overlay, not the page
 /// — the design doc: "the omnibox already does this"). A locked editor
 /// does not carve `cmd+l` out: 2026-09-24, Ekin wants an editor's own
@@ -442,6 +478,151 @@ mod tests {
         assert!(missing.is_empty(), "{missing:?}");
     }
 
+    // #277: a command that needs a second action from you (a name, a file, a
+    // choice) says so with an ellipsis, as every Mac menu does, in the palette
+    // and in the context menu alike. Found by running every command on a
+    // terminal, an editor and a browser card and seeing what is left open.
+    #[test]
+    fn a_command_that_asks_for_more_ends_its_label_with_an_ellipsis() {
+        // Information to read, not an answer to give, and a save that asks only
+        // for a file that has no name yet.
+        const NO_ELLIPSIS: &[&str] = &["app.about", "app.shortcuts", "card.save"];
+        // Ask only with state the probe does not build (a group, a snippet
+        // folder), so they are named here.
+        const ALSO_ASK: &[&str] = &[
+            "group.rename",
+            "card.moveToWorkspace",
+            "group.moveToWorkspace",
+            "window.color",
+            "card.size",
+            "snippet.paste",
+        ];
+        let probe = Harness::new();
+        let labels: Vec<(String, String)> = probe
+            .r
+            .all()
+            .iter()
+            .map(|c| (c.id.clone(), c.label.clone()))
+            .collect();
+        let mut missing = vec![];
+        for (id, label) in &labels {
+            let mut asks = ALSO_ASK.contains(&id.as_str());
+            for kind in [CardKind::Terminal, CardKind::Editor, CardKind::Browser] {
+                let mut h = Harness::new();
+                let card = h.focused().id.clone();
+                h.m.card_mut(&card).unwrap().kind = kind;
+                h.m.card_mut(&card).unwrap().locked = kind != CardKind::Terminal;
+                h.m.take_effects();
+                run_with_effects(&mut h.m, &h.r, id);
+                let effects = h.m.take_effects();
+                asks |= h.m.modal_open()
+                    || h.m.find.open
+                    || effects.iter().any(|e| matches!(e, Effect::PickFile { .. }));
+            }
+            if asks && !NO_ELLIPSIS.contains(&id.as_str()) && !label.ends_with('\u{2026}') {
+                missing.push(format!("{id} -> {label}"));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "these ask for more and need an ellipsis: {missing:#?}"
+        );
+        // and the other way: an ellipsis is a promise
+        for (id, label) in &labels {
+            if label.ends_with('\u{2026}') {
+                assert!(!NO_ELLIPSIS.contains(&id.as_str()), "{id}");
+            }
+        }
+    }
+
+    // #278: a context menu names only registered commands, builds from the live
+    // registry and keymap, and an item for a command that asks for more keeps
+    // the label's ellipsis.
+    #[test]
+    fn the_context_menus_name_real_commands_and_build_from_the_registry() {
+        use crate::context_menu::{self, Area, Row, Source};
+        let mut h = Harness::new();
+        // an editor focused: the tab strip's rows are per card kind
+        let card = h.focused().id.clone();
+        h.m.card_mut(&card).unwrap().kind = CardKind::Editor;
+        for area in [
+            Area::Terminal,
+            Area::Frame,
+            Area::Canvas,
+            Area::Tab,
+            Area::Editor,
+            Area::Tree,
+            Area::TabStrip,
+        ] {
+            for id in context_menu::command_ids(area) {
+                assert!(
+                    h.r.get(id).is_some(),
+                    "{area:?} names {id}, which is not a command"
+                );
+            }
+            let ctx = h.m.key_context();
+            let rows = context_menu::rows(
+                area,
+                &Source {
+                    context: &ctx,
+                    label: &|id| h.r.get(id).map(|c| c.label.clone()),
+                    chord: &|id| {
+                        h.m.keymap
+                            .iter()
+                            .find(|(_, c)| c == id)
+                            .map(|(k, _)| k.clone())
+                    },
+                },
+            );
+            fn items(rows: &[Row], out: &mut Vec<(String, String)>) {
+                for r in rows {
+                    match r {
+                        Row::Item { command, title, .. } => {
+                            out.push((command.clone(), title.clone()))
+                        }
+                        Row::Submenu { rows, .. } => items(rows, out),
+                        Row::Separator => {}
+                    }
+                }
+            }
+            let mut all = vec![];
+            items(&rows, &mut all);
+            assert!(!all.is_empty(), "{area:?}");
+            for (command, title) in all {
+                let label = h.r.get(&command).unwrap().label.clone();
+                // a table title may replace the label's, but never drops the promise
+                if label.ends_with('\u{2026}') {
+                    assert!(title.ends_with('\u{2026}'), "{command}: {label} -> {title}");
+                }
+            }
+        }
+    }
+
+    // The terminal menu's Copy, Paste and Search act on a terminal card only.
+    #[test]
+    fn the_terminal_menu_commands_reach_the_ui_only_for_a_terminal() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        for command in [
+            "terminal.copy",
+            "terminal.paste",
+            "terminal.searchSelection",
+        ] {
+            let effects = h.run(command);
+            assert!(
+                effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::Terminal { card_id, .. } if *card_id == id)),
+                "{command}"
+            );
+        }
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        let effects = h.run("terminal.copy");
+        assert!(effects
+            .iter()
+            .all(|e| !matches!(e, Effect::Terminal { .. })));
+    }
+
     #[test]
     fn every_label_carries_its_domain_prefix() {
         let h = Harness::new();
@@ -562,6 +743,22 @@ mod tests {
         assert_eq!(h.m.cards.len(), 2);
         assert_eq!(h.focused().kind, CardKind::Page);
         h.run("help.welcome");
+        assert_eq!(h.m.cards.len(), 2, "a second run focuses the open one");
+    }
+
+    #[test]
+    fn help_changelog_opens_the_card_once_beside_the_focused_one() {
+        let mut h = Harness::new();
+        let first = h.focused().rect;
+        h.run("help.changelog");
+        assert_eq!(h.m.cards.len(), 2);
+        assert_eq!(h.focused().kind, CardKind::Page);
+        let path = crate::changelog::changelog_path()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(h.focused().path.as_deref(), Some(path.as_str()));
+        assert!(h.focused().rect.x > first.x, "beside, not over");
+        h.run("help.changelog");
         assert_eq!(h.m.cards.len(), 2, "a second run focuses the open one");
     }
 
@@ -803,6 +1000,198 @@ mod tests {
     // The way back up: a quarter kept after Cmd+Ctrl+W grows to the
     // default size from its corner when the space is free, and stays put
     // with a word when a card is in the way.
+    // A resize keeps the top-left corner, so a smaller card sits far from its
+    // neighbour; sliding closes the gap from the keyboard, undoably.
+    #[test]
+    fn a_card_slides_into_the_gap_a_resize_left() {
+        let mut h = Harness::new();
+        let left = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let right = h.focused().id.clone();
+        assert_ne!(left, right);
+        // Shrink the right card to a half and slide it back toward the left one.
+        h.run("card.size.reset");
+        let before = h.m.card(&right).unwrap().rect;
+        let anchor = h.m.card(&left).unwrap().rect;
+        // Pull the card away to make a gap, as a resize of the left one would.
+        h.m.card_mut(&right).unwrap().rect.x += 400.;
+        h.m.set_focus(Some(&right));
+        h.run("card.slide.left");
+        let slid = h.m.card(&right).unwrap().rect;
+        let (l, r) = if slid.x > anchor.x {
+            (anchor, slid)
+        } else {
+            (slid, anchor)
+        };
+        assert!(
+            (r.x - (l.x + l.w) - h.m.gap()).abs() < 1.,
+            "one gutter apart: {anchor:?} {slid:?} (was {before:?})"
+        );
+        // Snug now: a second slide says so and moves nothing.
+        let at = h.m.card(&right).unwrap().rect;
+        h.run("card.slide.left");
+        assert_eq!(h.m.card(&right).unwrap().rect, at);
+        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("nowhere")));
+        // Cmd+Z puts it back where the gap was.
+        h.run("layout.undo");
+        assert!(h.m.card(&right).unwrap().rect.x > at.x);
+    }
+
+    #[test]
+    fn the_slide_chords_are_bound_and_the_commands_exist() {
+        let h = Harness::new();
+        for dir in ["left", "right", "up", "down"] {
+            let id = format!("card.slide.{dir}");
+            assert!(h.r.get(&id).is_some(), "{id} is registered");
+            assert!(
+                h.m.keymap.iter().any(|(_, bound)| *bound == id),
+                "{id} has a default chord"
+            );
+        }
+    }
+
+    // Reading mode (#313): Cmd+1 on a fitted terminal card zooms to the card's
+    // bottom, Cmd+Up and Cmd+Down pan along it and only while it is on, typing
+    // returns to the bottom, Cmd+1 or Cmd+2 leaves.
+    #[test]
+    fn cmd1_on_a_fitted_terminal_card_enters_reading_mode() {
+        let mut h = Harness::new();
+        h.m.view_size = crate::grid::Size { w: 3840., h: 2000. };
+        let id = h.focused().id.clone();
+        h.m.set_focus(Some(&id));
+        // Cmd+Up is the program's until the mode is on.
+        assert_eq!(resolve_chord(&h.m, "cmd+arrowup"), None);
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.framing && h.m.reading.is_none());
+        let effects = h.run("canvas.zoom.fitCard");
+        let scale = h.m.config.ui.card_zoom;
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::AnimateFit(v) if v.scale == scale)),
+            "zoomed to ui.cardZoom: {effects:?}"
+        );
+        assert!(h.m.reading.is_some());
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+arrowup").as_deref(),
+            Some("canvas.zoom.cardBottom.up")
+        );
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+arrowdown").as_deref(),
+            Some("canvas.zoom.cardBottom.down")
+        );
+
+        // Panning up moves toward the card's top, never past it.
+        let bottom = h.m.reading.as_ref().unwrap().y;
+        h.run("canvas.zoom.cardBottom.up");
+        let up = h.m.reading.as_ref().unwrap().y;
+        assert!(up < bottom);
+        for _ in 0..500 {
+            h.run("canvas.zoom.cardBottom.up");
+        }
+        let top = h.m.reading.as_ref().unwrap().y;
+        assert_eq!(top, h.m.reading.as_ref().unwrap().frame.lo);
+        // Typing goes back to the bottom and keeps the mode.
+        h.m.note_input();
+        assert_eq!(h.m.reading.as_ref().unwrap().y, bottom);
+        h.run("canvas.zoom.cardBottom.down");
+        assert_eq!(
+            h.m.reading.as_ref().unwrap().y,
+            bottom,
+            "already at the bottom"
+        );
+
+        // Cmd+1 leaves, back to the plain fit; Cmd+1 again is reading again.
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.reading.is_none() && h.m.framing);
+        assert_eq!(resolve_chord(&h.m, "cmd+arrowup"), None);
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.reading.is_some());
+        // Cmd+2 leaves too, and the keys are the program's again.
+        h.run("canvas.zoom.fitAll");
+        assert!(h.m.reading.is_none() && !h.m.framing);
+    }
+
+    #[test]
+    fn card_zoom_zero_turns_the_second_cmd1_off() {
+        let mut h = Harness::new();
+        h.m.view_size = crate::grid::Size { w: 3840., h: 2000. };
+        h.m.config.ui.card_zoom = 0.;
+        let id = h.focused().id.clone();
+        h.m.set_focus(Some(&id));
+        h.run("canvas.zoom.fitCard");
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.reading.is_none(), "a second Cmd+1 is only a fit again");
+        h.run("canvas.zoom.cardBottom");
+        assert!(h.m.reading.is_none());
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("ui.cardZoom")));
+    }
+
+    #[test]
+    fn reading_mode_is_for_terminal_cards_and_a_hand_pan_leaves_it() {
+        let mut h = Harness::new();
+        h.m.view_size = crate::grid::Size { w: 3840., h: 2000. };
+        let id = h.focused().id.clone();
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.set_focus(Some(&id));
+        h.run("canvas.zoom.fitCard");
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.reading.is_none(), "an editor card never reads");
+        h.m.cards[0].kind = CardKind::Terminal;
+        h.run("canvas.zoom.cardBottom");
+        assert!(h.m.reading.is_some());
+        h.m.stop_framing(); // what a pan or a wheel zoom does
+        assert!(h.m.reading.is_none());
+        h.run("canvas.zoom.cardBottom.up");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("not zoomed on a card")));
+    }
+
+    // The palette is the way to every command: a locked editor or browser
+    // card does not swallow its chord (#334).
+    #[test]
+    fn the_palette_opens_from_a_locked_card() {
+        for kind in [CardKind::Editor, CardKind::Browser] {
+            let mut h = Harness::new();
+            let id = h.m.cards[0].id.clone();
+            h.m.cards[0].kind = kind;
+            h.m.cards[0].locked = true;
+            h.m.set_focus(Some(&id));
+            assert_eq!(
+                resolve_chord(&h.m, "cmd+shift+p").as_deref(),
+                Some("app.palette"),
+                "{kind:?}"
+            );
+            // The lock still holds for a chord the app has no business with.
+            assert_eq!(resolve_chord(&h.m, "cmd+shift+alt+ctrl+9"), None);
+        }
+    }
+
+    // A right-click on one of several selected cards keeps the selection
+    // (#346): the model says so, and one outside it is not in it.
+    #[test]
+    fn a_card_of_a_multi_selection_is_recognised() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let c = h.focused().id.clone();
+        assert!(!h.m.in_multi_selection(&c), "one card is no selection");
+        h.m.set_focus(Some(&a));
+        h.m.extend_to(&b);
+        assert_eq!(h.m.selected_ids().len(), 2);
+        assert!(h.m.in_multi_selection(&a) && h.m.in_multi_selection(&b));
+        assert!(!h.m.in_multi_selection(&c), "a card outside is not in it");
+    }
+
     #[test]
     fn full_size_restores_the_default_when_the_space_is_free() {
         let mut h = Harness::new();
@@ -1405,6 +1794,32 @@ mod tests {
         assert!(h.m.selection.phantom.is_none());
     }
 
+    // #253: with the address bar open from the phantom's kind picker the phantom
+    // is still waiting, and the bare Enter that submits the address reached the
+    // phantom first and opened the picker again. No overlay lets a bare key
+    // through to the canvas behind it.
+    #[test]
+    fn a_bare_key_does_not_reach_the_phantom_while_an_overlay_is_open() {
+        let mut h = Harness::new();
+        h.run("focus.move.right");
+        assert!(h.m.selection.phantom.is_some());
+        h.m.handle_bare_key(focus_cmd::BareKey::Enter);
+        h.m.close_palette(true);
+        h.m.palette_run(Source::SlotKind, "browser");
+        assert!(h.m.omni.open && h.m.selection.phantom.is_some());
+        assert!(!h.m.handle_bare_key(focus_cmd::BareKey::Enter));
+        assert!(!h.m.handle_bare_key(focus_cmd::BareKey::Char('a')));
+        assert!(!h.m.palette_open(), "no second picker");
+        h.m.shortcuts_open = true;
+        h.m.close_omnibox();
+        assert!(!h.m.handle_bare_key(focus_cmd::BareKey::Enter));
+        assert!(!h.m.palette_open());
+        h.m.shortcuts_open = false;
+        // and with nothing open the phantom still takes Enter
+        assert!(h.m.handle_bare_key(focus_cmd::BareKey::Enter));
+        assert!(h.m.palette_open());
+    }
+
     // "Browser" in the phantom's kind picker used to open the old text
     // prompt; it opens the omnibox now, and Enter has to land the result in
     // the SAME phantom rect the picker was opened from, not beside whatever
@@ -1479,6 +1894,175 @@ mod tests {
         h.run("focus.extend.right");
         assert!(h.m.handle_bare_key(focus_cmd::BareKey::Escape));
         assert!(h.m.selection.extra.is_empty());
+    }
+
+    // Several cards selected: Cmd+Alt+Shift+Arrow moves the selection as one
+    // block, a block over, trading places with the cards there (#238).
+    #[test]
+    fn a_selection_moves_as_one_block_and_swaps_with_what_is_there() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let c = h.focused().id.clone();
+        let rects = |h: &Harness| -> Vec<crate::grid::Rect> {
+            [&a, &b, &c]
+                .iter()
+                .map(|id| h.m.card(id).unwrap().rect)
+                .collect()
+        };
+        let before = rects(&h);
+        // a and b selected, b focused
+        h.m.focus_extended(&b, vec![a.clone()]);
+        assert_eq!(h.m.selected_ids().len(), 2);
+        let effects = h.run("card.swap.right");
+        let after = rects(&h);
+        assert_ne!(after, before, "the selection moved");
+        // the pair moved together: the gap between a and b is unchanged
+        assert_eq!(after[1].x - after[0].x, before[1].x - before[0].x);
+        assert_eq!(after[1].y - after[0].y, before[1].y - before[0].y);
+        assert!(effects.iter().any(|e| matches!(e, Effect::MarkSwap(_))));
+        // nothing overlaps, focus stayed, the selection is still two cards
+        for (i, x) in after.iter().enumerate() {
+            for y in &after[i + 1..] {
+                assert!(!crate::layout::rects_overlap(*x, *y), "{x:?} over {y:?}");
+            }
+        }
+        assert_eq!(h.focused().id, b);
+        assert_eq!(h.m.selected_ids().len(), 2);
+        // and it undoes in one step
+        h.run("layout.undo");
+        assert_eq!(rects(&h), before);
+    }
+
+    // The tab row's order (#242): a drag does it with the mouse, these keep it
+    // from being mouse-only. The workspace that moved stays the active one.
+    #[test]
+    fn workspace_tabs_reorder_and_the_moved_one_stays_active() {
+        let mut h = Harness::new();
+        h.run("workspace.new");
+        h.run("workspace.new");
+        let ids: Vec<String> = h.m.workspaces.iter().map(|w| w.id.clone()).collect();
+        let order =
+            |h: &Harness| -> Vec<String> { h.m.workspaces.iter().map(|w| w.id.clone()).collect() };
+        let last = ids[2].clone();
+        assert_eq!(h.m.active_workspace.as_deref(), Some(last.as_str()));
+        h.run("workspace.reorder.left");
+        assert_eq!(
+            order(&h),
+            vec![ids[0].clone(), last.clone(), ids[1].clone()]
+        );
+        h.run("workspace.reorder.left");
+        h.run("workspace.reorder.left");
+        assert_eq!(
+            order(&h),
+            vec![last.clone(), ids[0].clone(), ids[1].clone()],
+            "stops at the left end"
+        );
+        assert_eq!(h.m.active_workspace.as_deref(), Some(last.as_str()));
+        h.run("workspace.reorder.right");
+        assert_eq!(order(&h)[1], last);
+        // what a drop does: the tab takes the index of the tab it lands on
+        h.m.move_workspace(&last, 2);
+        assert_eq!(
+            order(&h),
+            vec![ids[0].clone(), ids[1].clone(), last.clone()]
+        );
+        assert!(h.m.dirty_layout, "the order is saved");
+    }
+
+    // A settings.json that stops parsing keeps the settings in force and says
+    // so; it used to reset every setting to its default (#246).
+    #[test]
+    fn a_broken_settings_file_keeps_the_last_good_settings() {
+        let mut h = Harness::new();
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.cardOpacity": 0.9}"#);
+        assert_eq!(h.m.config.terminal.font_size, 21.);
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.cardOpacity": 0.9,, "x": 1}"#);
+        assert!(h.m.settings_error.is_some());
+        assert_eq!(
+            h.m.config.terminal.font_size, 21.,
+            "the last good settings stay"
+        );
+        assert_eq!(h.m.config.ui.card_opacity, 0.9);
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 18}"#);
+        assert!(h.m.settings_error.is_none());
+        assert_eq!(h.m.config.terminal.font_size, 18.);
+    }
+
+    // The file is checked before it is applied, and a file with an error is not
+    // accepted: the settings in force stay and the notice says what is wrong.
+    #[test]
+    fn a_settings_file_with_an_error_is_not_accepted() {
+        let mut h = Harness::new();
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21}"#);
+        let warned = |h: &mut Harness| {
+            h.m.take_effects()
+                .iter()
+                .filter_map(|e| match e {
+                    Effect::Warn(w) => Some(w.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let _ = warned(&mut h);
+        // a setting of the wrong kind
+        h.m.apply_settings_text(r#"{"terminal.fontSize": "big", "ui.showGrid": false}"#);
+        let w = warned(&mut h);
+        assert!(
+            w.iter()
+                .any(|m| m.contains("terminal.fontSize") && m.contains("a number")),
+            "{w:?}"
+        );
+        assert_eq!(
+            h.m.config.terminal.font_size, 21.,
+            "nothing of it was applied"
+        );
+        assert!(h.m.config.ui.show_grid, "not even the part that was fine");
+        // a file that is not an object
+        h.m.apply_settings_text("[1, 2]");
+        assert!(!warned(&mut h).is_empty());
+        assert_eq!(h.m.config.terminal.font_size, 21.);
+        // what must NOT be refused: the nested shape, a list for the background,
+        // an unknown name, a number out of range, a trailing comma, comments
+        h.m.apply_settings_text(
+            "{ // mine\n \"terminal\": {\"fontSize\": 19,},\n \"ui.backgroundImage\": [\"dusk\", \"ember\"],\n \"nope.nothing\": 1,\n \"ui.cardOpacity\": 7,\n}",
+        );
+        assert!(warned(&mut h).is_empty());
+        assert!(h.m.settings_error.is_none());
+        assert_eq!(h.m.config.terminal.font_size, 19.);
+        assert_eq!(h.m.config.ui.background_image.len(), 2);
+    }
+
+    #[test]
+    fn a_keybindings_file_with_an_error_keeps_the_bindings_you_had() {
+        let mut h = Harness::new();
+        h.m.apply_keymap_text(r#"{"cmd+shift+y": "app.palette"}"#);
+        let had = h.m.keymap.clone();
+        let _ = h.m.take_effects();
+        h.m.apply_keymap_text(r#"{"cmd+shift+y": "app.palette",,}"#);
+        assert_eq!(h.m.keymap, had, "the bindings in force stay");
+        assert!(h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::Warn(w) if w.contains("not applied"))));
+    }
+
+    // Saving a setting into a file whose last entry already ends in a comma
+    // must leave a file that still parses.
+    #[test]
+    fn saving_a_setting_into_a_file_with_a_trailing_comma_still_parses() {
+        let text = "{\n  \"terminal.fontSize\": 16,\n  \"ui.cardOpacity\": 0.9,\n}\n";
+        let patched =
+            Model::patched_settings(Some(text), "ui.windowColor", &serde_json::json!("lime"))
+                .expect("a change");
+        let mut h = Harness::new();
+        h.m.apply_settings_text(&patched);
+        assert!(h.m.settings_error.is_none(), "{patched}");
+        assert_eq!(h.m.config.ui.window_color, "lime");
+        assert_eq!(h.m.config.terminal.font_size, 16.);
     }
 
     // A swap trades whole rects; focus stays on the card that moved.
@@ -2542,6 +3126,81 @@ mod tests {
     }
 
     #[test]
+    fn a_group_moves_to_another_workspace_with_its_arrangement() {
+        let mut h = Harness::new();
+        let here = h.m.active_workspace.clone().unwrap();
+        h.run("card.new.terminal");
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let outsider = h.focused().id.clone();
+        h.m.focus_extended(&b, vec![a.clone()]);
+        h.run("group.new");
+        let (pending, text) = h.m.prompt.settle(Some("Pair")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        let group = h.m.card(&a).unwrap().group_id.clone().unwrap();
+        let (ra, rb) = (h.m.card(&a).unwrap().rect, h.m.card(&b).unwrap().rect);
+        let there = h.m.add_workspace(Some("Acme"));
+        let resident = h.m.add_card(
+            "/Users/me",
+            NewCard {
+                workspace_id: Some(there.clone()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&a));
+        h.run("group.moveToWorkspace");
+        assert_eq!(h.m.palette.source, Some(Source::MoveGroupTo));
+        h.m.palette_run(Source::MoveGroupTo, &there);
+        let (ma, mb) = (h.m.card(&a).unwrap().clone(), h.m.card(&b).unwrap().clone());
+        assert_eq!(
+            (ma.workspace_id.as_str(), mb.workspace_id.as_str()),
+            (there.as_str(), there.as_str())
+        );
+        assert_eq!(
+            ma.group_id.as_deref(),
+            Some(group.as_str()),
+            "still grouped"
+        );
+        assert_eq!(mb.group_id.as_deref(), Some(group.as_str()));
+        // The arrangement and the sizes are kept: the same offset between them.
+        assert_eq!(
+            (mb.rect.x - ma.rect.x, mb.rect.y - ma.rect.y),
+            (rb.x - ra.x, rb.y - ra.y)
+        );
+        assert_eq!((ma.rect.w, ma.rect.h), (ra.w, ra.h));
+        // Clear of the card already there, and the group's frame is on the new canvas.
+        let r = h.m.card(&resident).unwrap().rect;
+        assert!(!crate::layout::rects_overlap(ma.rect, r));
+        assert!(!crate::layout::rects_overlap(mb.rect, r));
+        assert!(h.m.group_frame(&group, &there).is_some());
+        assert_eq!(
+            h.m.card(&outsider).unwrap().workspace_id,
+            here,
+            "others stay"
+        );
+        assert_eq!(
+            h.m.active_workspace.as_deref(),
+            Some(here.as_str()),
+            "you stay"
+        );
+        assert_eq!(h.m.notice.as_deref(), Some("moved group \"Pair\" to Acme"));
+    }
+
+    #[test]
+    fn a_card_outside_any_group_has_no_group_to_move() {
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        h.run("group.moveToWorkspace");
+        assert_eq!(h.m.palette.source, None);
+        assert_eq!(
+            h.m.notice.as_deref(),
+            Some("the focused card is in no group")
+        );
+    }
+
+    #[test]
     fn a_card_can_move_to_a_new_workspace() {
         let mut h = Harness::new();
         h.run("card.new.terminal");
@@ -2914,6 +3573,36 @@ mod tests {
         }));
     }
 
+    // DevTools needs the debugging port, which the setting decides at
+    // launch: with the setting off the command says so instead of asking the
+    // ui for a port that was never opened.
+    #[test]
+    fn devtools_goes_to_the_page_s_card_and_says_when_it_is_off() {
+        use crate::model::BrowserAction;
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        let effects = h.run("browser.devtools");
+        assert_eq!(h.m.notice.as_deref(), Some("not a browser card"));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Browser { .. })));
+
+        h.m.cards[0].kind = CardKind::Browser;
+        assert!(h.run("browser.devtools").contains(&Effect::Browser {
+            card_id: id.clone(),
+            action: BrowserAction::DevTools,
+        }));
+
+        h.m.config.browser.devtools = false;
+        let effects = h.run("browser.devtools");
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Browser { .. })));
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .unwrap_or("")
+            .contains("browser.devtools"));
+    }
+
     // Locking a browser card hands Chrome's own tab shortcuts to the page's
     // chrome instead of the app's: Cmd+T stops making a new card and starts
     // a tab on the one that is locked.
@@ -3041,6 +3730,164 @@ mod tests {
         }
     }
 
+    // #269: a binding with a `when` wins only where its clause holds, the last
+    // matching one in the file wins, `command: null` unbinds a chord in a
+    // context, and a key without cmd works where the file's reader allowed it.
+    #[test]
+    fn a_when_binding_wins_where_its_clause_holds_and_the_last_match_wins() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone(); // a terminal
+        h.m.apply_keymap_text(
+            r#"{"cmd+shift+y": [
+                {"command": "app.shortcuts", "when": "editorFocus"},
+                {"command": "card.new.terminal", "when": "terminalFocus"},
+                {"command": "app.palette", "when": "terminalFocus"}
+            ]}"#,
+        );
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+shift+y").as_deref(),
+            Some("app.palette"),
+            "the last match"
+        );
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+shift+y").as_deref(),
+            Some("app.shortcuts")
+        );
+        h.m.card_mut(&id).unwrap().kind = CardKind::Browser;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+shift+y"),
+            None,
+            "no clause holds, no default"
+        );
+        // a null command unbinds the DEFAULT chord in that context only
+        h.m.card_mut(&id).unwrap().kind = CardKind::Terminal;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+t").as_deref(),
+            Some("card.new.terminal")
+        );
+        h.m.apply_keymap_text(r#"{"cmd+t": {"command": null, "when": "terminalFocus"}}"#);
+        assert_eq!(resolve_chord(&h.m, "cmd+t"), None, "unbound in a terminal");
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+t").as_deref(),
+            Some("card.new.terminal"),
+            "still bound elsewhere"
+        );
+        // a broken file leaves the bindings that were in force
+        h.m.apply_keymap_text(r#"{"cmd+t": ,}"#);
+        assert_eq!(h.m.conditional_keys.len(), 1);
+    }
+
+    #[test]
+    fn a_key_without_cmd_binds_only_where_the_when_holds_and_the_context_reads_the_model() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.apply_keymap_text(
+            r#"{"f2": {"command": "app.palette", "when": "editorTextFocus && !suggestWidgetVisible"}}"#,
+        );
+        assert!(h.m.conditional_keys.len() == 1);
+        // a terminal: never
+        assert_eq!(h.m.conditional_for("f2"), None);
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        assert_eq!(h.m.conditional_for("f2"), None, "an editor you are not in");
+        h.m.card_mut(&id).unwrap().locked = true;
+        assert_eq!(h.m.conditional_for("f2"), Some(Some("app.palette".into())));
+        // the body's own state, written by the ui
+        h.m.ui_context.suggest_widget_visible = true;
+        assert_eq!(h.m.conditional_for("f2"), None, "a popup is open");
+        h.m.ui_context = Default::default();
+        // overlays are named, and the context says what is focused
+        let ctx = h.m.key_context();
+        assert_eq!(
+            (ctx.card_kind, ctx.card_locked, ctx.overlay),
+            ("editor", true, "none")
+        );
+        h.run("app.palette");
+        assert_eq!(h.m.key_context().overlay, "palette");
+        h.m.close_palette(true);
+        h.m.selection.extra = vec!["x".into()];
+        assert!(h.m.key_context().multi_selection);
+    }
+
+    // The examples in a new keybindings.json are commented lines that must
+    // work when switched on: they parse with no error and every command in
+    // them exists, so they cannot rot as commands are renamed.
+    #[test]
+    fn the_keybinding_examples_in_a_new_file_parse_and_name_real_commands() {
+        let h = Harness::new();
+        let lines: Vec<&str> = settings_in::EMPTY_KEYBINDINGS
+            .lines()
+            .filter_map(|l| l.strip_prefix("//   "))
+            .collect();
+        assert!(lines.len() >= 8, "the examples are there: {lines:?}");
+        let file = format!("{{\n{}\n}}", lines.join("\n"));
+        let parsed = crate::keymap::parse_keymap(&crate::jsonc::parse_jsonc(&file).unwrap());
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let ids: Vec<String> = parsed
+            .bindings
+            .iter()
+            .filter_map(|(_, id)| id.clone())
+            .chain(parsed.conditional.iter().filter_map(|c| c.command.clone()))
+            .collect();
+        assert!(ids.len() >= 8);
+        for id in ids {
+            assert!(h.r.get(&id).is_some(), "{id} is not a command");
+        }
+        // and the new file itself, as written, has no bindings and no errors
+        let mut m = Model::new();
+        m.apply_keymap_text(settings_in::EMPTY_KEYBINDINGS);
+        assert!(m.conditional_keys.is_empty());
+        assert!(m
+            .take_effects()
+            .iter()
+            .all(|e| !matches!(e, Effect::Warn(_))));
+    }
+
+    // The way out of a locked editor is a command in the keymap (#265):
+    // Cmd+Escape by default, and a rebind in keybindings.json works while the
+    // card is locked, or the chord would go to the text.
+    #[test]
+    fn the_way_out_of_a_locked_editor_is_a_rebindable_command() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        h.m.card_mut(&id).unwrap().locked = true;
+        // the default chord
+        let effects = {
+            assert!(handle_chord(&mut h.m, &h.r, "cmd+escape"));
+            h.m.take_effects()
+        };
+        assert!(!h.m.card(&id).unwrap().locked);
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor { card_id, action: EditorAction::Unlock } if *card_id == id
+        )));
+        // another chord, once bound to it: claimed while locked
+        h.m.card_mut(&id).unwrap().locked = true;
+        h.m.apply_keymap_text(r#"{"cmd+escape": null, "cmd+shift+e": "browser.leave"}"#);
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+shift+e").as_deref(),
+            Some("browser.leave")
+        );
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+escape"),
+            None,
+            "unbound: the text has it"
+        );
+        let _ = h.m.take_effects();
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+shift+e"));
+        assert!(!h.m.card(&id).unwrap().locked);
+        // an editor that is not locked: nothing to do, nothing happens
+        let _ = h.m.take_effects();
+        h.run("browser.leave");
+        assert!(h
+            .m
+            .take_effects()
+            .iter()
+            .all(|e| !matches!(e, Effect::Editor { .. })));
+    }
+
     // Two chords stay the app's even on a locked card: the omnibox (an app
     // overlay, not the page) and the way out of a locked page
     // (`browser.leave`, `cmd+escape` in the default keymap). Neither is in
@@ -3087,6 +3934,53 @@ mod tests {
         assert!(!is_workspace_switch("ctrl+55"));
         assert!(!is_workspace_switch("cmd+5"));
         assert!(!is_workspace_switch("ctrl+shift+5"));
+    }
+
+    // Cmd+T on a browser card opens a blank tab, and a blank page with no way
+    // to type was a dead end: the address bar opens on it, empty, and Enter
+    // navigates that tab.
+    #[test]
+    fn a_new_browser_tab_opens_the_address_bar_empty() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].url = Some("https://a.example/one".into());
+        h.m.set_focus(Some(&id));
+        h.run("browser.tab.new");
+        assert!(h.m.omni.open);
+        assert_eq!(h.m.omni.query, "");
+        assert_eq!(h.m.omni.target.as_deref(), Some(id.as_str()));
+        h.m.omni_type("b.example");
+        h.m.omni_enter();
+        let card = h.m.card(&id).unwrap();
+        assert_eq!(card.tabs.len(), 2);
+        assert_eq!(card.url.as_deref(), Some("https://b.example"));
+    }
+
+    #[test]
+    fn the_zoom_chords_zoom_a_browser_page_locked_or_not() {
+        for locked in [false, true] {
+            let mut h = Harness::new();
+            let id = h.m.cards[0].id.clone();
+            h.m.cards[0].kind = CardKind::Browser;
+            h.m.cards[0].locked = locked;
+            h.m.set_focus(Some(&id));
+            for (chord, up) in [("cmd+=", true), ("cmd+-", false)] {
+                assert_eq!(
+                    resolve_chord(&h.m, chord).as_deref(),
+                    Some(if up {
+                        "browser.zoom.in"
+                    } else {
+                        "browser.zoom.out"
+                    })
+                );
+            }
+            h.run("browser.zoom.in");
+            assert!(
+                h.m.card(&id).unwrap().zoom.unwrap() > 1.0,
+                "locked={locked}"
+            );
+        }
     }
 
     // Cmd+L on a browser card edits THAT card's address; anywhere else it

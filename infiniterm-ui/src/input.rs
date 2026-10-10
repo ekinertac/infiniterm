@@ -155,9 +155,19 @@ impl AppView {
                 Pan::Pending(p)
             });
             if button == 1 {
+                self.middle_press = Some(p);
                 self.begin_pan(p);
             }
             return;
+        }
+        // A right-click on one of several selected cards keeps the selection:
+        // the menu opens over it and acts on all of it (#346).
+        if button == 2 {
+            if let Hit::CardBody { id, .. } | Hit::CardEdge { id, .. } = self.hit(p) {
+                if self.model.in_multi_selection(&id) {
+                    return;
+                }
+            }
         }
         match self.hit(p) {
             Hit::Nothing => {
@@ -305,6 +315,18 @@ impl AppView {
                         // card slide under the pointer as it went.
                         self.reveal_on_release = Some(p);
                     }
+                    // As bars there is no word to select: the double-click
+                    // zooms in on the card, not into the program.
+                    if infiniterm_core::pan_mode::double_click_fits(
+                        e.click_count,
+                        self.live_body(&id).is_some_and(|b| b.draws_bars()),
+                    ) {
+                        self.note_use("mouse.fitCard.barsdoubleclick");
+                        self.model.set_focus(Some(&id));
+                        self.run_command("canvas.zoom.fitCard");
+                        self.perform_effects();
+                        return;
+                    }
                     let (action, captures) = match self.live_body(&id) {
                         Some(body) => (
                             body.mouse_down(local, e.button, &e.modifiers, e.click_count),
@@ -329,7 +351,7 @@ impl AppView {
             y: p.y,
             t: now_ms(),
         }];
-        self.model.framing = false;
+        self.model.stop_framing();
     }
 
     pub fn mouse_move(&mut self, e: &MouseMoveEvent) {
@@ -495,7 +517,7 @@ impl AppView {
         // Divide by scale so the content tracks the cursor exactly at any zoom.
         self.model.viewport.x -= (p.x - last.x) / scale;
         self.model.viewport.y -= (p.y - last.y) / scale;
-        self.model.framing = false;
+        self.model.stop_framing();
         self.model.dirty_layout = true;
         self.pan = Some(Pan::Dragging(p));
         let t = now_ms();
@@ -506,6 +528,17 @@ impl AppView {
         while self.samples.len() > 2 && self.samples[0].t < cutoff {
             self.samples.remove(0);
         }
+    }
+
+    /// A whole click, press and release, delivered to a page.
+    fn click_page(&mut self, id: &str, local: Point, e: &MouseUpEvent) {
+        let Some(body) = self.live_body(id) else {
+            return;
+        };
+        let action = body.mouse_down(local, e.button, &e.modifiers, 1);
+        body.mouse_up(local, e.button, &e.modifiers);
+        self.body_action(id, action);
+        self.perform_effects();
     }
 
     pub fn mouse_up(&mut self, e: &MouseUpEvent) {
@@ -539,7 +572,28 @@ impl AppView {
         // Cmd+click open a link. Cmd must still be down: releasing it first
         // means a plain click, which would start a text selection.
         let was_click = matches!(self.pan, Some(Pan::Pending(_))) && e.modifiers.platform;
+        // A middle press that never travelled is a click too, and on a page it
+        // is how a link opens in a new tab; the pan took the press first.
+        let middle_click = e.button == MouseButton::Middle
+            && self
+                .middle_press
+                .take()
+                .is_some_and(|s| (p.x - s.x).hypot(p.y - s.y) < crate::DRAG_SLOP);
         self.pan = None;
+        if middle_click {
+            if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                eprintln!("[mouse] middle click without travel");
+            }
+            if let Hit::CardBody { id, local } = self.hit(p) {
+                if self.model.card(&id).is_some_and(|c| {
+                    use infiniterm_core::saved_layout::CardKind;
+                    matches!(c.kind, CardKind::Browser | CardKind::Editor)
+                }) {
+                    self.click_page(&id, local, e);
+                }
+            }
+            return;
+        }
         if was_click {
             // Cmd+click adds a card to the selection or takes it out
             // (`toggle_selected`); on the card you are alone in, it is the
@@ -559,6 +613,16 @@ impl AppView {
                     None => crate::body::BodyAction::None,
                 };
                 self.body_action(&id, action);
+                // A page opens a link on the release, not the press.
+                if self
+                    .model
+                    .card(&id)
+                    .is_some_and(|c| c.kind == infiniterm_core::saved_layout::CardKind::Browser)
+                {
+                    if let Some(body) = self.live_body(&id) {
+                        body.mouse_up(local, e.button, &e.modifiers);
+                    }
+                }
                 self.perform_effects();
             }
             return;
@@ -675,7 +739,7 @@ impl AppView {
             let vp = self.model.viewport;
             let next = (vp.scale * factor).clamp(MIN_SCALE, MAX_SCALE);
             self.model.viewport = anchored_viewport(world_pos_of(p, vp), p, next);
-            self.model.framing = false;
+            self.model.stop_framing();
             self.model.dirty_layout = true;
             return;
         }
@@ -695,12 +759,29 @@ impl AppView {
     /// first was not marked handled; gpui drops the second only when the
     /// two parse identically, which Cmd+= on a non-US layout does not, so
     /// the caller must stop propagation on a handled chord.
+    /// Writes the focused editor's popup, find panel and selection into the
+    /// model, where a keybinding's `when` can see them.
+    pub(crate) fn sync_ui_context(&mut self) {
+        let id = self.model.selection.focused_id.clone();
+        let mut flags = id
+            .as_ref()
+            .and_then(|id| self.editor_tabs_for(id).map(|t| t.context_flags()))
+            .unwrap_or_default();
+        flags.terminal_has_selection = id
+            .as_ref()
+            .and_then(|id| self.terminal_body(id).map(|b| b.grid.has_selection()))
+            .unwrap_or(false);
+        self.model.ui_context = flags;
+    }
+
     pub fn key_down(&mut self, e: &KeyDownEvent, cx: &mut gpui::App) -> bool {
         let k: &Keystroke = &e.keystroke;
         let m = &k.modifiers;
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
             eprintln!("[key] {k:?} dead={}", crate::keycode::last_dead());
         }
+        // What a `when` in keybindings.json can ask that only a body knows.
+        self.sync_ui_context();
         // A dead key (Option+E on a US layout, waiting for its vowel) is
         // nobody's to take: taking it tells macOS it was handled and the
         // composition never happens. gpui reports it as the standalone
@@ -736,7 +817,30 @@ impl AppView {
         // bar open and unresponsive. `find.open` is checked on its own
         // because it deliberately does not join `overlay_open()` (see
         // `overlays.rs::render_find_bar`).
+        // A user's `when` binding on a key without cmd (#269): it runs before
+        // the built-in Escape and bare-key rules below, so it can replace
+        // them; `command: null` in a context switches the built-in Escape off
+        // there. The file's reader only accepts such a binding when its `when`
+        // is false for a focused terminal, so no terminal input is taken.
+        let mut escape_unbound = false;
+        if !m.platform && !m.control && !self.model.overlay_open() {
+            let chord = bare_chord(k);
+            match self.model.conditional_for(&chord) {
+                Some(Some(id)) => {
+                    infiniterm_core::model::register::run_with_effects(
+                        &mut self.model,
+                        &self.registry,
+                        &id,
+                    );
+                    self.perform_effects();
+                    return true;
+                }
+                Some(None) => escape_unbound = chord == "escape",
+                None => {}
+            }
+        }
         if k.key == "escape"
+            && !escape_unbound
             && !m.platform
             && !m.control
             && !m.alt
@@ -751,13 +855,18 @@ impl AppView {
                         *last = if was { None } else { Some(now) };
                         was
                     };
-                    // The same double-Escape for a locked editor card as
-                    // for a browser: whichever body the card has.
+                    // A browser needs two Escapes (a page uses a single one
+                    // itself). A locked editor unlocks on an Escape that has
+                    // nothing else to do: while a popup, the find panel,
+                    // extra cursors or a selection is there, Escape closes
+                    // that and the card stays locked, so the next one leaves
+                    // (#265, Ekin: "you close find with Esc, you close
+                    // autocomplete with Esc").
                     let double = match self.browser_for(&id) {
                         Some(b) => step(&mut b.last_escape_ms),
                         None => self
                             .editor_tabs_for(&id)
-                            .is_some_and(|t| step(&mut t.last_escape_ms)),
+                            .is_some_and(|t| !t.escape_has_work()),
                     };
                     if double {
                         if let Some(body) = self.browser_for(&id) {
@@ -1128,4 +1237,18 @@ impl AppView {
         }
         self.perform_effects();
     }
+}
+
+/// The chord a key without cmd or ctrl spells, as `keymap::chord_for` spells
+/// one: modifiers in its order (alt, shift), then the key's name.
+fn bare_chord(k: &Keystroke) -> String {
+    let mut parts: Vec<&str> = vec![];
+    if k.modifiers.alt {
+        parts.push("alt");
+    }
+    if k.modifiers.shift {
+        parts.push("shift");
+    }
+    parts.push(k.key.as_str());
+    parts.join("+")
 }

@@ -49,6 +49,46 @@ pub struct EditorTabs {
 }
 
 impl EditorTabs {
+    /// Escape still has something to close in the active tab (a popup, the
+    /// find panel, extra cursors, a selection); see `EditorBody::escape_has_work`.
+    pub fn escape_has_work(&self) -> bool {
+        self.active_body_ref().is_some_and(|b| b.escape_has_work())
+    }
+
+    /// The tab under a point of the card (a right-click's), `None` off the
+    /// tabs, on the "+" and below the strip.
+    pub fn tab_at(&self, local: Point) -> Option<usize> {
+        match strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
+            Some(crate::body::TabClick::Switch(i) | crate::body::TabClick::Close(i)) => Some(i),
+            _ => None,
+        }
+    }
+
+    /// The tree row at a point of the card body, in the active tab.
+    pub fn tree_row_at(&self, local: Point) -> Option<usize> {
+        let below = self.below_strip(local);
+        self.active_body_ref().and_then(|b| b.tree_row_at(below))
+    }
+
+    /// Lights (or clears) the tree row a menu is open on.
+    pub fn set_menu_row(&mut self, row: Option<usize>) {
+        if let Some(b) = self.active_body() {
+            b.set_menu_row(row);
+        }
+    }
+
+    /// The editor's part of a keybinding's context (`EditorBody::context_flags`).
+    pub fn context_flags(&self) -> infiniterm_core::model::UiContext {
+        self.active_body_ref()
+            .map(|b| b.context_flags())
+            .unwrap_or_default()
+    }
+
+    /// The resize cursor while the tree's divider is under the pointer or held.
+    pub fn divider_cursor(&self) -> Option<gpui::CursorStyle> {
+        self.active_body_ref().and_then(|b| b.divider_cursor())
+    }
+
     pub fn new(card_id: &str, metrics: &Metrics, world: Size, style: StripStyle) -> EditorTabs {
         EditorTabs {
             card_id: card_id.to_string(),
@@ -378,6 +418,10 @@ impl CardBody for EditorTabs {
             if button == gpui::MouseButton::Left {
                 return BodyAction::BrowserTab(hit);
             }
+            // Middle-click closes a tab, as in every browser.
+            if let (gpui::MouseButton::Middle, crate::body::TabClick::Switch(i)) = (button, hit) {
+                return BodyAction::BrowserTab(crate::body::TabClick::Close(i));
+            }
             return BodyAction::None;
         }
         let below = self.below_strip(local);
@@ -477,7 +521,12 @@ mod tests {
             active_bg: gpui::black(),
             text_bright: gpui::white(),
             text_muted: gpui::white(),
-            font_family: "Menlo".into(),
+            regular: gpui::font("Menlo"),
+            bold: {
+                let mut font = gpui::font("Menlo");
+                font.weight = FontWeight::BOLD;
+                font
+            },
             font_px: 14.,
         };
         EditorTabs::new("c1", &metrics, Size { w: 800., h: 600. }, style)

@@ -1,0 +1,63 @@
+---
+// /features: every feature, grouped, in the landing page's design. The list
+// itself is src/data/features.ts, which reference/features.mdx renders too.
+// Each line links to the guide section that explains it.
+import Landing from '../layouts/Landing.astro';
+import { featureGroups, featureHtml } from '../data/features';
+
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+const INSTALL = 'curl -fsSL https://infiniterm.app/install.sh | sh';
+---
+
+<Landing
+  title="Every feature | infiniterm"
+  description="Everything infiniterm does, one line each, with a link to where the guide explains it."
+  path="features/"
+>
+  <main class="all-features">
+    <section class="intro">
+      <h1>Every feature.</h1>
+      <p class="lede">One line each, grouped by what you are doing. Each line links to the part of the guide that explains it.</p>
+    </section>
+
+    {
+      featureGroups.map((g) => (
+        <section class="group">
+          <h2>{g.title}</h2>
+          <ul>
+            {g.items.map((f) => (
+              <li>
+                <span set:html={featureHtml(f.text)} />
+                {f.href && (
+                  <a class="read" href={`${base}${f.href}`} aria-label="Read about it in the guide">
+                    Guide →
+                  </a>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))
+    }
+
+    <section class="next">
+      <h2>Try it.</h2>
+      <div class="install">
+        <code>{INSTALL}</code>
+      </div>
+      <p class="fine">macOS 13 or later on Apple Silicon. Free for personal use, <a href={`${base}#pricing`}>$29 for work</a>.</p>
+    </section>
+  </main>
+</Landing>
+
+<style>
+  .intro h1 { font-size: clamp(2.4rem, 5vw, 3.6rem); letter-spacing: -0.03em; margin: 56px 0 0; }
+  .group { padding-block: 36px !important; border-top: 1px solid var(--dot); }
+  .group h2 { font-size: 1.5rem; }
+  .group ul { list-style: none; margin: 20px 0 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 48px; }
+  .group li { color: var(--ink-soft); line-height: 1.45; }
+  .group li :global(code) { font: 0.88em var(--mono); color: var(--ink); }
+  .read { margin-left: 6px; font-size: 0.9rem; font-weight: 600; white-space: nowrap; }
+  .next .install { margin-top: 20px; max-width: 560px; }
+  @media (max-width: 760px) { .group ul { grid-template-columns: 1fr; } }
+</style>

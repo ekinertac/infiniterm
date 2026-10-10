@@ -6,9 +6,116 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-06
+### 2026-10-10
 
 - The editor completes words while you type. Two letters open a list of words from the file, nearest to the caret first, and from the card's other tabs, marked with the tab's name. In a source file, words inside comments and strings are left out. Tab takes the top row; Enter takes a row only after you moved it with Up or Down, so a word you typed is never replaced by Enter. Letters in order match from three letters (`gtl` finds `getTotalLength`). Turn it off with `editor.completeWords`.
+- Fixed: the letter under a block cursor can be read. A theme whose cursor colour equals its text colour hid it, in terminals and in editors. The letter is now drawn in the theme's cursor text colour, or black or white when that does not contrast with the cursor. New settings `terminal.cursorColor` and `editor.cursorColor` (a hex colour, empty follows the theme) set the cursor's colour; the letter under it follows.
+- The right-click menu of a selection of several cards offers what acts on all of them: Group, Protect, Clear State Colour, Fit Selection, Move to Workspace and Close. Rename, Split and Size, which are for one card, are left out. The menu is the same whichever card of the selection you click.
+- New: `Group: move to workspace…` (command palette) sends the focused card's whole group to another workspace or a new one, with its frame, name, and its cards in the same arrangement and sizes. It lands in the first free block of the destination, and you stay where you are. The group's own right-click menu is not built yet.
+
+### 2026-10-09
+
+- New: in Finder, select one or more folders and choose Services > Open in infiniterm (right-click, Services). Each folder becomes a terminal card whose shell starts there, on the workspace you are looking at, and the last one is focused. The same is `ift terminal <folder>...`, which starts infiniterm first when it is not running. The Services item exists in the app bundle; if it is missing, enable it under System Settings > Keyboard > Keyboard Shortcuts > Services > Files and Folders.
+||||||| c33ba90
+- Every new terminal card sets `FORCE_HYPERLINK=1`, so Claude Code (and other tools that decide by terminal name) print links as real hyperlinks: a markdown link in its reply is clickable text, underlined, instead of `text (url)`. A card that is already open keeps its old environment; open a new one. To turn it off, set `"terminal.env": ["FORCE_HYPERLINK=0"]`.
+- Link feedback is the same for every kind of link: holding Cmd over a link in a terminal draws a full-strength double underline over a faint tint and turns the pointer to a hand. A link a program marked itself (OSC 8) has a thin dim underline at rest, so hovering visibly changes it.
+- A link a program marked itself (OSC 8) is underlined at rest, so text that is a link and does not look like one is not just text. Links found by pattern (URLs, paths, `#349`) still show only under Cmd+hover.
+- Terminal hyperlinks (OSC 8) work: text a program marks as a link, such as `ls --hyperlink`, `rg --hyperlink-format`, `gcc` or an agent's markdown link `[#432](https://...)`, opens its address on Cmd+click, with the Cmd+hover underline, whatever the visible text says. Only `http` and `https` addresses open: `file:` and an application's own scheme are ignored, since the text of a link can lie.
+- Issue and pull request numbers in terminal output are links. In a card whose directory is a GitHub checkout, `#349` opens `github.com/<owner>/<repo>/issues/349` on Cmd+click (GitHub redirects to the pull request when it is one), and `owner/repo#349` works in any card. A bare number needs a space, bracket or quote before it and no letter after it, so `#!/bin/sh` and `a#1` are not links; a colour like `#123` is one, which shows only as an underline under Cmd. The repository is read from `.git/config` (a worktree too), `origin` first.
+- Fixed: a right-click on one of several selected cards keeps the selection, as in Finder, and opens its menu with the selection still there. A right-click on a card outside the selection selects that card alone, as before. The menu's items for several cards come next.
+- Renamed and switchable: the zoom Cmd+1 does on an already fitted terminal card is now "zoom in on the focused card's bottom", not "reading mode". The setting is `ui.cardZoom` (the old `ui.readZoom` still works); 0 turns it off, so a second Cmd+1 does nothing new. The palette commands are `Canvas: zoom in on the focused card's bottom` and the two pan commands, and the status bar says "zoomed".
+- Fixed: the command palette (Cmd+Shift+P) opens from a locked editor or browser card. The lock swallowed the chord.
+- Fixed: card labels, group names and the selection hints are drawn in the regular UI weight again. Since the interface font settings in 0.5.11 they were bold, and `ui.fontWeight` did not change them; they follow `ui.fontWeight` now.
+- New setting `ui.minTextPx` (default 7; it applies only with `ui.textAsBars` on): how big a glyph must be, in device pixels, before text is drawn instead of bars. At 7 a 19 px terminal font turns to bars below 37% zoom, so a canvas of twenty cards zoomed out to 34% is bars however high `ui.glyphBudget` is; set 4 to draw the text down to about 21%. `ui.textAsBars` is off by default: cards draw their text at every zoom and however many are on screen, because after the faster drawing the bars bought nothing (18 cards printing at once while zooming: about 45 frames a second with text). Turn it on to get the old bars on a slow Mac.
+- New: `Browser: open DevTools` in the command palette opens Chromium's DevTools for the page in a card beside it: Elements, Console, Network and the rest. It works through a debugging port that opens on a random loopback port at each launch; only the DevTools page the app opens may connect to it, a web page cannot. The port is on by default. A program running on this Mac can still attach to it, so `browser.devtools` turns the feature off; restart the app after changing it. There is no key for it yet.
+- Terminal text is about five times cheaper to draw. Profiling 13 busy cards showed 90% of a glyph's cost was gpui ordering each one against everything drawn before it; a card's rows now share one order. A frame of those cards went from 17.5 ms to 4 ms, so zooming and panning over many cards of text is smooth. With that, `ui.glyphBudget` (the text-to-bars limit) now defaults to 150000 cells, about eleven full cards, instead of 30000.
+- New setting `ui.glyphBudget` (default 150000; it applies only with `ui.textAsBars` on): how many terminal cells may be on screen before every card turns to bars. Cards turn to bars when a frame would paint too much text, not at a fixed zoom, so a wall of cards can be bars at 50% while one card reads at 30%. Raise it to read more cards at a smaller zoom; each cell costs at most 50 nanoseconds a frame.
+
+## 0.5.11 (build 801), 2026-10-09
+
+### Canvas
+
+- New: reading mode for terminal cards. Press Cmd+1 on a card that is already fitted: the canvas zooms to 150% (`ui.readZoom`) with the card's bottom edge at the bottom of the window, so you read the prompt and the newest lines at a larger size. Cmd+Up and Cmd+Down pan along the card, only while this mode is on and never past the card's edges. Typing and Enter work as usual and bring the view back to the bottom. Cmd+1 again or Cmd+2 leaves; so does panning or zooming by hand. The status bar says "reading" while it is on. `Canvas: read the focused card` is the command.
+- New: `Card: slide left / right / up / down to the next card or slot` (Cmd+Ctrl+Alt+Arrow). After a resize leaves a gap, the card moves along its row or column until it is one gutter from the next card in line, or to the next grid slot when nothing is in the way. It never overlaps a card, and Cmd+Z puts it back.
+- Double-clicking a terminal card that is drawn as bars (zoomed out too far to read, or too many cards on screen) fits that card, like Cmd+1, instead of selecting a word nobody can see. A readable card keeps its double-click.
+
+### Interface
+
+- New settings `ui.fontFamily`, `ui.fontSize`, `ui.fontWeight` and `ui.fontWeightBold` (Tarık Kavaz): the font of the interface itself, meaning the workspace tabs, card labels, status bar, palette and dialogs. The default is now the macOS system font instead of the terminal's monospace one. Terminal, editor and document text keep their own settings. A change applies at once.
+- New: `Help: open the changelog` in the command palette opens this changelog as a card beside the focused one, newest release first. It is the text of the build you run, so an update brings its own.
+
+### Agents
+
+- Cursor reports its state like the other agents (Tarık Kavaz): `ift install-cursor-hooks` wires infiniterm into `~/.cursor/hooks.json`, and a card running Cursor's agent shows working, failed and done, and a lost session resumes with `cursor agent --resume`. It never turns yellow: Cursor has no hook while an approval dialog is open, so the card stays violet until you allow or deny. It has not been tried on a live session yet.
+
+## 0.5.10 (build 775), 2026-10-08
+
+### Window
+
+- Fixed: dragging a window corner resizes the app on macOS 27 when the browser is enabled (thanks to Tarık Kavaz). CEF was left on the native AppKit message pump, which ended the resize at once; it now uses the external pump the app already asked for.
+
+## 0.5.9 (build 767), 2026-10-08
+
+### Right-click menus
+
+- Right-click opens a native macOS menu, the same system menu other Mac apps show, with each command's shortcut at the right edge and unavailable rows greyed. On a terminal: Copy, Paste, Find, Search the Web for Selection, Split, New, Clear Buffer, Show Transcript, Rename, Protect, Mask, Size, Move to Workspace and Close. On a card's frame or label, on bare canvas, on a workspace tab and on an editor there is a menu of its own (the editor's has the Transform submenu). A terminal program that uses the mouse (vim, tmux, htop) still gets the plain right-click; hold Shift to open the menu over it.
+- The menu covers more places. A right-click on a file or folder in an editor's tree lights the row and opens a menu for it: Open, Reveal in Finder, Copy Path and Copy Relative Path. A right-click on a tab of an editor or a browser card opens a tab menu (New Tab, Close Tab, Reopen Closed Tab, and for a browser Reload, Copy Address and Open in System Browser).
+- Right-clicking a workspace tab no longer switches to it; only a command you choose from its menu does, and Move Left / Move Right keep you in the workspace you were in.
+
+### Browser
+
+- Middle-click and Cmd+click on a link open it in a new tab. Middle-click on a tab closes it, in browser and editor cards.
+- Cmd+T opens the address bar on the new blank tab, so the tab is never a blank page with nowhere to type.
+- The mouse's back and forward buttons move through the page's history. Back on a tab a link opened closes it.
+- The page's right-click menu is native, shows Back and Forward only when there is somewhere to go, shows them only on the page itself (not on a link, a selection or a field), and ends with "Open Page in System Browser" (on a link, "Open Link in System Browser").
+
+### Commands
+
+- A command that needs a second action from you ends its label with an ellipsis, in the command palette as everywhere on a Mac: Run a command…, Card: rename…, Workspace: rename…, Group: rename…, Editor: open a file…, Editor: go to a line…, Browser: open a URL…, go to a URL…, address bar…, find in page…, Card: find in this card…, Card: new (choose where)…, Browser: new tab…, Theme: switch… and Group: the selection…. A test finds the commands that leave something open and fails when one has no ellipsis.
+
+### Terminal
+
+- Double-clicking a link selects the whole address; it used to stop at the colon of `https://`.
+
+## 0.5.8 (build 743), 2026-10-07
+
+### Keybindings
+
+- Keybindings can carry a `when`, as in VS Code, so a binding applies only in some situations. A chord takes an object (or a list of them) in `keybindings.json`: `{"cmd+shift+e": {"command": "browser.leave", "when": "editorTextFocus"}}`; the last one whose `when` holds wins, and `"command": null` unbinds the chord in that situation. A key without cmd, such as Esc or F2, can now be bound too, but only with a `when` that is false in a focused terminal (for example `editorTextFocus`), so it can never take a terminal's input. A `when` joins keys with `&&` and `||`, negates with `!`, compares with `==` and `!=`, and groups with parentheses. The keys: cardKind, terminalFocus, editorFocus, editorTextFocus, browserFocus, cardLocked, overlay, phantomFocus, multiSelection, suggestWidgetVisible, findWidgetVisible and editorHasSelection (each described in `keybindings.default.json`). A mistake in a `when` is reported and that binding is ignored. The existing shape still works.
+- A new `keybindings.json` starts with commented examples to switch on by deleting the `//`: another chord to leave a locked editor, turning off the single-Escape unlock, F2 for go-to-line with a `when`, moving workspace tabs and stepping through themes from the keyboard, Cmd+O to open a file and Cmd+Alt+C to start Claude Code. Each example is tested to parse and to name a real command.
+
+### Editor
+
+- A locked editor unlocks with a single Escape when Escape has nothing else to do. A completion popup, the find panel, extra cursors and a selection each take the Escape first (and the card stays locked), so closing the popup or the find panel with Esc and leaving with the next Esc works as in any editor. A browser card still takes a double Escape. Cmd+Escape (`browser.leave`, "Card: leave the page or the editor") also unlocks an editor now, and it is a keybinding like any other: bind `browser.leave` to another chord in `keybindings.json` and that chord is the way out while the card is locked.
+
+## 0.5.7 (build 731), 2026-10-06
+
+### Editor
+
+- The editor's file tree can be resized with the mouse: drag the line between the tree and the text. The pointer turns into a resize cursor over it and the line gets thicker, and a press on it no longer locks the card. The keyboard commands for the width are still there.
+
+### Canvas and dialogs
+
+- Rows and buttons you can click show it: the pointer becomes a hand and the row under it lights up, in the command palette, the address bar's list, the shortcuts panel, the dialogs' buttons, the browser's context menu and the workspace tabs. (The hand did not show in the first build with the highlight: the cursor was reset to the arrow every frame.)
+- An empty input box (the command palette, the address bar, the find bar, the shortcuts filter) shows a text cursor before its placeholder, so it reads as something to type into.
+- A click outside the command palette or the shortcuts panel closes it, as Escape does (a previewed theme goes back).
+- Fixed: choosing Browser for an empty slot opened the address bar, but pressing Enter in it opened the kind picker again behind it instead of going to the address. A key typed in any open overlay no longer reaches the empty slot behind it.
+
+## 0.5.6 (build 714), 2026-10-06
+
+### Settings
+
+- Setting a value from the palette (the window colour, for one) no longer breaks `settings.json` when its last entry already ends in a comma: the new line added a second comma and the file stopped parsing. A comment on the last line keeps its comma outside the comment too.
+- `settings.json` is checked before it is applied. A file with an error (it does not parse, it is not one object, or a setting holds the wrong kind of value, such as text for a number) is not accepted: the settings you had stay, a notice says what is wrong, and the status bar keeps saying "settings.json not applied" until a valid file arrives. Before, one stray comma reset every setting to its default (font, background, window colour). `keybindings.json` keeps the bindings you had the same way.
+
+### Editor
+
+- Typing in the editor no longer opens a completion popup after every key. It opens for a word being typed in a file it knows (settings.json, or a JSON file with a schema), not after a newline, a space or a comma, and Enter makes a newline unless you chose a row with Up or Down (Tab always takes the row).
+
+### Canvas
+
+- Workspace tabs can be reordered: drag a tab onto another to take its place. The palette has "Workspace: move this tab left" and "move this tab right" for the keyboard. The order is saved and is the one Ctrl+digit and "Workspace: go to N" use.
+- With several cards selected, Cmd+Alt+Shift+Arrow moves the whole selection one block over, as one piece: into free space, or trading places with the cards that are there. It stops with "no room to move the selection that way" when a card would be split or the block would land in another group's frame, and Cmd+Z undoes it in one step.
 - `ui.cardRadius` rounds the corners of cards and group frames, in pixels at 100% zoom (0 to 40; 0, the default, keeps them square). The border, the focus ring, the label chip in the card's corner, the tab strip and the browser page follow it. The window's own corners stay macOS's.
 - `cards.gap` sets the space between cards in pixels (0 to 200, 25 by default). New cards, splits, growing a card, Canvas: tidy and group frames all use it. Cards already on the canvas stay where they are until they are moved or tidied.
 

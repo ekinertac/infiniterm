@@ -75,6 +75,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     ),
     ("terminal.cursorBlink", &["Whether the cursor blinks."]),
     (
+        "terminal.cursorColor",
+        &[
+            "The cursor's colour as a hex colour (\"#ffcc00\"). Empty follows the theme.",
+            "The letter under a block cursor is drawn in black or white, whichever reads.",
+        ],
+    ),
+    (
         "terminal.fontFamily",
         &[
             "Any monospace family installed on the system. A Nerd Font is needed for the",
@@ -155,14 +162,18 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "cards.width",
         &[
-            "Width in 25px grid cells, or 0 to size new cards from the window: the canvas at",
-            "100% minus a margin, at most 80 cells wide. 69 is 1725px, a full iTerm2 window.",
-            "Existing cards keep the size they have.",
+            "Width in 25px grid squares of canvas (not text columns), or 0 to size new cards from",
+            "the window: the canvas at 100% minus a margin, at most 80 squares wide. 69 is 1725px,",
+            "a full iTerm2 window. At terminal.fontSize 19 a square is about 2.6 text columns,",
+            "so 50 is about 130 columns. Existing cards keep the size they have.",
         ],
     ),
     (
         "cards.height",
-        &["Height in 25px grid cells, or 0 to size from the window. 80 is 2000px."],
+        &[
+            "Height in 25px grid squares of canvas (not text rows), or 0 to size from the window.",
+            "80 is 2000px; at terminal.fontSize 19 and lineHeight 1.2 that is about 87 text rows.",
+        ],
     ),
     (
         "cards.gap",
@@ -232,6 +243,10 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["Selected text itself. Empty is the theme's background, dark on the yellow."],
     ),
     (
+        "editor.cursorColor",
+        &["The caret's colour as a hex colour. Empty follows the theme."],
+    ),
+    (
         "editor.wrap",
         &[
             "Long lines. \"prose\" wraps .md and .txt and leaves code alone; \"always\" and",
@@ -265,6 +280,16 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "browser.devtools",
+        &[
+            "Let a browser card open DevTools (the palette's Browser: open DevTools).",
+            "ON by default. It opens a debugging port on a random loopback port;",
+            "only our own DevTools page may connect to it, a web page cannot.",
+            "A program on this Mac can still attach to the port: turn it off if",
+            "that matters to you. Read at launch: restart after changing it.",
+        ],
+    ),
+    (
         "browser.engines",
         &[
             "Extra sites Tab can scope a search to, added to the nine built in",
@@ -277,6 +302,28 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "ui",
         &["The app's own chrome: labels, the status bar, dimming."],
+    ),
+    (
+        "ui.fontFamily",
+        &[
+            "Font family for the app's own chrome. .SystemUIFont, the default, is the",
+            "platform's native app UI font. A comma-separated list uses the first real name.",
+        ],
+    ),
+    (
+        "ui.fontSize",
+        &[
+            "Base chrome size in screen pixels, before the Cmd+Shift+= multiplier.",
+            "Workspace tabs, card tab strips, palettes and dialogs derive their sizes from it.",
+        ],
+    ),
+    (
+        "ui.fontWeight",
+        &["Normal chrome weight: \"normal\", \"bold\", or a number from 100 to 900."],
+    ),
+    (
+        "ui.fontWeightBold",
+        &["Emphasised chrome weight: \"normal\", \"bold\", or a number from 100 to 900."],
     ),
     (
         "ui.inactiveDim",
@@ -352,6 +399,49 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "How opaque a card's background is, 0.1 to 1. Text stays solid, so it never gets",
             "blurry; below 1 the canvas, the grid and ui.backgroundImage show through. Cells a",
             "program colours itself (vim's status line) and browser cards stay opaque.",
+        ],
+    ),
+    (
+        "ui.glyphBudget",
+        &[
+            "How many terminal cells (text columns times rows, not cards.width squares) may be",
+            "on screen, across every visible card, before the canvas draws all of them as bars",
+            "instead of text. Default 150000, about eleven full cards. A card of cards.width 50",
+            "by cards.height 80 holds about 11000 at terminal.fontSize 19, so twelve need about",
+            "130000. A window covered edge to edge in cards reads down to about 82% zoom, and the",
+            "limit grows with the window. Each cell costs at most 50 nanoseconds a frame, so",
+            "150000 is under 8 ms while the canvas moves; raise it until zooming gets slow.",
+            "1000 to 5000000.",
+        ],
+    ),
+    (
+        "ui.textAsBars",
+        &[
+            "Off (the default): every card draws its text at every zoom, however small and however",
+            "many cards are on screen. On: a card draws faint bars instead of text when its font is",
+            "smaller than ui.minTextPx or more than ui.glyphBudget cells are on screen, which keeps",
+            "the canvas fast on a slow Mac. Measured on an M4 Mac mini, 18 cards printing at once while",
+            "zooming: about 45 frames a second with text, and no faster with bars.",
+        ],
+    ),
+    (
+        "ui.minTextPx",
+        &[
+            "How many device pixels tall a font must be on screen before its text is drawn; below",
+            "that every card draws bars instead. Default 7: with terminal.fontSize 19 that is 37%",
+            "zoom on a 1x screen, so a canvas of 20 cards zoomed out to 34% is bars whatever",
+            "ui.glyphBudget says. 4 draws the text down to about 21% (tiny, but you see its shape).",
+            "A retina screen keeps a floor of 4.5 points unless this is lower. 2 to 20.",
+        ],
+    ),
+    (
+        "ui.cardZoom",
+        &[
+            "The canvas scale Cmd+1 zooms to on a terminal card that is already fitted: 1.5 is 150%,",
+            "with the card's bottom at the window's bottom, so you read the prompt and the newest",
+            "lines larger. Cmd+Up and Cmd+Down pan along the card, Cmd+1 or Cmd+2 leaves, and typing",
+            "returns the view to the bottom. 0 turns it off: a second Cmd+1 does nothing new.",
+            "1.1 to 4. It was called ui.readZoom, which still works.",
         ],
     ),
     (

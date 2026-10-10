@@ -551,7 +551,11 @@ impl Model {
     /// belongs to the shell. With the palette or a prompt up, Enter and
     /// Escape are theirs.
     pub fn handle_bare_key(&mut self, key: BareKey) -> bool {
-        if self.palette_open() || self.prompt.is_open() {
+        // Any overlay that owns the keyboard: the address bar and the
+        // shortcuts panel were missing, so with a phantom waiting, Enter in
+        // the omnibox (opened from the phantom's own kind picker) reached the
+        // phantom first and opened the picker again (#253).
+        if self.modal_open() || self.find.open {
             return false;
         }
         if !self.selection.hints.is_empty() {

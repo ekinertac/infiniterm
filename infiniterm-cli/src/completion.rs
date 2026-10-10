@@ -70,6 +70,7 @@ _ift() {
     'sessions:session daemons still running, app or no app'
     'attach:connect a session'\''s shell to this terminal'
     'connect:open a second infiniterm for a host'
+    'terminal:a terminal card in each folder'
     'send:type into a card'\''s shell'
     'read:print what a card shows'
     'close:close a card'
@@ -85,6 +86,7 @@ _ift() {
     'install-codex-hooks:wire infiniterm into ~/.codex/hooks.json'
     'install-opencode-hooks:install the OpenCode plugin'
     'install-pi-hooks:install the Pi extension'
+    'install-cursor-hooks:wire infiniterm into ~/.cursor/hooks.json'
     'install-extension:add an extension the browser cards load'
     'completion:print the zsh completion'
   )
@@ -101,11 +103,13 @@ _ift() {
     close) (( CURRENT == 3 )) && _ift_cards ;;
     run) (( CURRENT == 3 )) && _ift_command_ids ;;
     diff) _files -/ ;;
+    terminal) _files -/ ;;
     group) _ift_groups ;;
     install-pi-hooks) _arguments '--dry-run[show the edit, write nothing]' '1:agent dir:_files -/' ;;
     install-claude-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
     install-codex-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
     install-opencode-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
+    install-cursor-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
     install-extension) _files -/ ;;
     sessions) _arguments '--full[every column: id, pid, cwd, command, started]' ;;
     completion) _values 'shell' zsh ;;
