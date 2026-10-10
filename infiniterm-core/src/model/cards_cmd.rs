@@ -1189,6 +1189,7 @@ impl Model {
             }
             Source::Snippets => self.paste_snippet(id),
             Source::MoveTo => self.move_selection_to(id),
+            Source::MoveGroupTo => self.move_group_to(id),
             Source::WindowColor => self.window_color_run(id),
             Source::SlotKind => match id {
                 "terminal" => {

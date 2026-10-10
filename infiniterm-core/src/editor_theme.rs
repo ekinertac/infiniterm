@@ -123,6 +123,9 @@ pub struct EditorColors {
     pub background: String,
     pub foreground: String,
     pub cursor: String,
+    /// The letter under the caret: the theme's cursor text if it reads
+    /// against the cursor, else black or white (#343).
+    pub cursor_text: String,
     pub selection: String,
     pub selection_text: String,
     pub gutter: String,
@@ -161,6 +164,7 @@ pub fn editor_colors(
     chrome: &Chrome,
     selection_override: &str,
     selection_text_override: &str,
+    cursor_override: &str,
 ) -> EditorColors {
     let get = |k: &str| {
         theme
@@ -171,10 +175,20 @@ pub fn editor_colors(
     let bg = get("background").unwrap_or(&chrome.card_bg);
     let fg = get("foreground").unwrap_or(&chrome.text);
     let non_blank = |s: &str| Some(s.trim()).filter(|s| !s.is_empty()).map(String::from);
+    let own_cursor = non_blank(cursor_override);
+    let cursor = own_cursor
+        .clone()
+        .unwrap_or_else(|| get("cursor").unwrap_or(fg).to_string());
+    let accent = if own_cursor.is_some() {
+        None
+    } else {
+        get("cursorAccent")
+    };
     EditorColors {
         background: mix_hex(bg, fg, 0.05),
         foreground: fg.to_string(),
-        cursor: get("cursor").unwrap_or(fg).to_string(),
+        cursor_text: crate::label_colors::cursor_text_on(&cursor, accent),
+        cursor,
         // A highlighter pen: the theme's yellow with the background as the
         // text colour. Not the theme's own selection colour, which was
         // chosen against a prompt and is often a shade off the background,
@@ -262,7 +276,7 @@ mod tests {
 
     #[test]
     fn takes_the_terminal_background_and_foreground() {
-        let c = editor_colors(Some(&theme()), &chrome(), "", "");
+        let c = editor_colors(Some(&theme()), &chrome(), "", "", "");
         // Lifted a shade toward the foreground, so an editor reads as a different surface.
         assert_eq!(c.background, mix_hex("#101010", "#e0e0e0", 0.05));
         assert_eq!(c.background, "#1a1a1a");
@@ -273,7 +287,7 @@ mod tests {
 
     #[test]
     fn uses_the_chrome_palette_when_there_is_no_theme() {
-        let c = editor_colors(None, &chrome(), "", "");
+        let c = editor_colors(None, &chrome(), "", "", "");
         assert_eq!(c.background, mix_hex("#0e101a", "#b9c4d2", 0.05));
         assert_eq!(c.foreground, "#b9c4d2");
         assert_eq!(c.gutter, "#5a6472");
@@ -283,10 +297,10 @@ mod tests {
     fn selects_with_the_theme_yellow_and_dark_text_unless_the_settings_say_otherwise() {
         let mut t = theme();
         t.insert("selectionBackground".into(), "#222".into());
-        let c = editor_colors(Some(&t), &chrome(), "", "");
+        let c = editor_colors(Some(&t), &chrome(), "", "", "");
         assert_eq!(c.selection, "#e5c07b"); // the yellow, not the theme's own selection colour
         assert_eq!(c.selection_text, "#101010");
-        let o = editor_colors(Some(&t), &chrome(), "#010203", "#fff");
+        let o = editor_colors(Some(&t), &chrome(), "#010203", "#fff", "");
         assert_eq!(o.selection, "#010203");
         assert_eq!(o.selection_text, "#fff");
     }
@@ -298,5 +312,18 @@ mod tests {
         assert_eq!(mix_hex("#000000", "#ffffff", 0.5), "#808080");
         assert_eq!(mix_hex("#fff", "#000", 1.), "#000000");
         assert_eq!(mix_hex("rgba(1,2,3,0.5)", "#000", 0.5), "rgba(1,2,3,0.5)");
+    }
+
+    #[test]
+    fn the_caret_colour_setting_wins_and_the_letter_under_it_reads() {
+        let mut t = theme();
+        t.insert("cursor".into(), "#e0e0e0".into());
+        t.insert("cursorAccent".into(), "#e0e0e0".into());
+        let c = editor_colors(Some(&t), &chrome(), "", "", "");
+        assert_eq!(c.cursor, "#e0e0e0");
+        assert_eq!(c.cursor_text, crate::label_colors::LABEL_FG_DARK);
+        let o = editor_colors(Some(&t), &chrome(), "", "", "#102030");
+        assert_eq!(o.cursor, "#102030");
+        assert_eq!(o.cursor_text, crate::label_colors::LABEL_FG_LIGHT);
     }
 }

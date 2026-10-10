@@ -182,6 +182,7 @@ impl AppView {
                 theme,
                 hex3(&self.model.config.editor.selection_color),
                 hex3(&self.model.config.editor.selection_text_color),
+                hex3(&self.model.config.terminal.cursor_color),
             ),
             None => infiniterm_term::palette::Palette::default_palette(),
         };

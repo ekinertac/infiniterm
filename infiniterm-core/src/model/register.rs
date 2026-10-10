@@ -63,8 +63,8 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
     // other time they are the program's (#313).
     if m.reading.is_some() {
         match chord {
-            "cmd+arrowup" => return Some("canvas.read.up".into()),
-            "cmd+arrowdown" => return Some("canvas.read.down".into()),
+            "cmd+arrowup" => return Some("canvas.zoom.cardBottom.up".into()),
+            "cmd+arrowdown" => return Some("canvas.zoom.cardBottom.down".into()),
             _ => {}
         }
     }
@@ -100,7 +100,19 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
         .keymap
         .iter()
         .any(|(c, id)| c == chord && id == "browser.leave");
-    if locked && !is_workspace_switch(chord) && !is_locked_carveout(chord, kind) && !leaves {
+    // The command palette opens from a locked card too (#334): it is how you
+    // reach every command, so a lock must not hide it. Whatever chord the
+    // keymap binds to it, as for `browser.leave`.
+    let opens_palette = m
+        .keymap
+        .iter()
+        .any(|(c, id)| c == chord && id == "app.palette");
+    if locked
+        && !is_workspace_switch(chord)
+        && !is_locked_carveout(chord, kind)
+        && !leaves
+        && !opens_palette
+    {
         let id = if kind == Some(crate::saved_layout::CardKind::Editor) {
             crate::editor_keys::lock_override(chord)
         } else {
@@ -480,6 +492,7 @@ mod tests {
         const ALSO_ASK: &[&str] = &[
             "group.rename",
             "card.moveToWorkspace",
+            "group.moveToWorkspace",
             "window.color",
             "card.size",
             "snippet.paste",
@@ -1051,37 +1064,37 @@ mod tests {
         h.run("canvas.zoom.fitCard");
         assert!(h.m.framing && h.m.reading.is_none());
         let effects = h.run("canvas.zoom.fitCard");
-        let scale = h.m.config.ui.read_zoom;
+        let scale = h.m.config.ui.card_zoom;
         assert!(
             effects
                 .iter()
                 .any(|e| matches!(e, Effect::AnimateFit(v) if v.scale == scale)),
-            "zoomed to ui.readZoom: {effects:?}"
+            "zoomed to ui.cardZoom: {effects:?}"
         );
         assert!(h.m.reading.is_some());
         assert_eq!(
             resolve_chord(&h.m, "cmd+arrowup").as_deref(),
-            Some("canvas.read.up")
+            Some("canvas.zoom.cardBottom.up")
         );
         assert_eq!(
             resolve_chord(&h.m, "cmd+arrowdown").as_deref(),
-            Some("canvas.read.down")
+            Some("canvas.zoom.cardBottom.down")
         );
 
         // Panning up moves toward the card's top, never past it.
         let bottom = h.m.reading.as_ref().unwrap().y;
-        h.run("canvas.read.up");
+        h.run("canvas.zoom.cardBottom.up");
         let up = h.m.reading.as_ref().unwrap().y;
         assert!(up < bottom);
         for _ in 0..500 {
-            h.run("canvas.read.up");
+            h.run("canvas.zoom.cardBottom.up");
         }
         let top = h.m.reading.as_ref().unwrap().y;
         assert_eq!(top, h.m.reading.as_ref().unwrap().frame.lo);
         // Typing goes back to the bottom and keeps the mode.
         h.m.note_input();
         assert_eq!(h.m.reading.as_ref().unwrap().y, bottom);
-        h.run("canvas.read.down");
+        h.run("canvas.zoom.cardBottom.down");
         assert_eq!(
             h.m.reading.as_ref().unwrap().y,
             bottom,
@@ -1100,6 +1113,25 @@ mod tests {
     }
 
     #[test]
+    fn card_zoom_zero_turns_the_second_cmd1_off() {
+        let mut h = Harness::new();
+        h.m.view_size = crate::grid::Size { w: 3840., h: 2000. };
+        h.m.config.ui.card_zoom = 0.;
+        let id = h.focused().id.clone();
+        h.m.set_focus(Some(&id));
+        h.run("canvas.zoom.fitCard");
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.reading.is_none(), "a second Cmd+1 is only a fit again");
+        h.run("canvas.zoom.cardBottom");
+        assert!(h.m.reading.is_none());
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("ui.cardZoom")));
+    }
+
+    #[test]
     fn reading_mode_is_for_terminal_cards_and_a_hand_pan_leaves_it() {
         let mut h = Harness::new();
         h.m.view_size = crate::grid::Size { w: 3840., h: 2000. };
@@ -1110,16 +1142,54 @@ mod tests {
         h.run("canvas.zoom.fitCard");
         assert!(h.m.reading.is_none(), "an editor card never reads");
         h.m.cards[0].kind = CardKind::Terminal;
-        h.run("canvas.read");
+        h.run("canvas.zoom.cardBottom");
         assert!(h.m.reading.is_some());
         h.m.stop_framing(); // what a pan or a wheel zoom does
         assert!(h.m.reading.is_none());
-        h.run("canvas.read.up");
+        h.run("canvas.zoom.cardBottom.up");
         assert!(h
             .m
             .notice
             .as_deref()
-            .is_some_and(|n| n.contains("not in reading mode")));
+            .is_some_and(|n| n.contains("not zoomed on a card")));
+    }
+
+    // The palette is the way to every command: a locked editor or browser
+    // card does not swallow its chord (#334).
+    #[test]
+    fn the_palette_opens_from_a_locked_card() {
+        for kind in [CardKind::Editor, CardKind::Browser] {
+            let mut h = Harness::new();
+            let id = h.m.cards[0].id.clone();
+            h.m.cards[0].kind = kind;
+            h.m.cards[0].locked = true;
+            h.m.set_focus(Some(&id));
+            assert_eq!(
+                resolve_chord(&h.m, "cmd+shift+p").as_deref(),
+                Some("app.palette"),
+                "{kind:?}"
+            );
+            // The lock still holds for a chord the app has no business with.
+            assert_eq!(resolve_chord(&h.m, "cmd+shift+alt+ctrl+9"), None);
+        }
+    }
+
+    // A right-click on one of several selected cards keeps the selection
+    // (#346): the model says so, and one outside it is not in it.
+    #[test]
+    fn a_card_of_a_multi_selection_is_recognised() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let c = h.focused().id.clone();
+        assert!(!h.m.in_multi_selection(&c), "one card is no selection");
+        h.m.set_focus(Some(&a));
+        h.m.extend_to(&b);
+        assert_eq!(h.m.selected_ids().len(), 2);
+        assert!(h.m.in_multi_selection(&a) && h.m.in_multi_selection(&b));
+        assert!(!h.m.in_multi_selection(&c), "a card outside is not in it");
     }
 
     #[test]
@@ -3052,6 +3122,81 @@ mod tests {
             ws.focused.as_deref(),
             Some(mover.as_str()),
             "lands on it there"
+        );
+    }
+
+    #[test]
+    fn a_group_moves_to_another_workspace_with_its_arrangement() {
+        let mut h = Harness::new();
+        let here = h.m.active_workspace.clone().unwrap();
+        h.run("card.new.terminal");
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let outsider = h.focused().id.clone();
+        h.m.focus_extended(&b, vec![a.clone()]);
+        h.run("group.new");
+        let (pending, text) = h.m.prompt.settle(Some("Pair")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        let group = h.m.card(&a).unwrap().group_id.clone().unwrap();
+        let (ra, rb) = (h.m.card(&a).unwrap().rect, h.m.card(&b).unwrap().rect);
+        let there = h.m.add_workspace(Some("Acme"));
+        let resident = h.m.add_card(
+            "/Users/me",
+            NewCard {
+                workspace_id: Some(there.clone()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&a));
+        h.run("group.moveToWorkspace");
+        assert_eq!(h.m.palette.source, Some(Source::MoveGroupTo));
+        h.m.palette_run(Source::MoveGroupTo, &there);
+        let (ma, mb) = (h.m.card(&a).unwrap().clone(), h.m.card(&b).unwrap().clone());
+        assert_eq!(
+            (ma.workspace_id.as_str(), mb.workspace_id.as_str()),
+            (there.as_str(), there.as_str())
+        );
+        assert_eq!(
+            ma.group_id.as_deref(),
+            Some(group.as_str()),
+            "still grouped"
+        );
+        assert_eq!(mb.group_id.as_deref(), Some(group.as_str()));
+        // The arrangement and the sizes are kept: the same offset between them.
+        assert_eq!(
+            (mb.rect.x - ma.rect.x, mb.rect.y - ma.rect.y),
+            (rb.x - ra.x, rb.y - ra.y)
+        );
+        assert_eq!((ma.rect.w, ma.rect.h), (ra.w, ra.h));
+        // Clear of the card already there, and the group's frame is on the new canvas.
+        let r = h.m.card(&resident).unwrap().rect;
+        assert!(!crate::layout::rects_overlap(ma.rect, r));
+        assert!(!crate::layout::rects_overlap(mb.rect, r));
+        assert!(h.m.group_frame(&group, &there).is_some());
+        assert_eq!(
+            h.m.card(&outsider).unwrap().workspace_id,
+            here,
+            "others stay"
+        );
+        assert_eq!(
+            h.m.active_workspace.as_deref(),
+            Some(here.as_str()),
+            "you stay"
+        );
+        assert_eq!(h.m.notice.as_deref(), Some("moved group \"Pair\" to Acme"));
+    }
+
+    #[test]
+    fn a_card_outside_any_group_has_no_group_to_move() {
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        h.run("group.moveToWorkspace");
+        assert_eq!(h.m.palette.source, None);
+        assert_eq!(
+            h.m.notice.as_deref(),
+            Some("the focused card is in no group")
         );
     }
 

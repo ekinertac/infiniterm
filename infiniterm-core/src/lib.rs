@@ -73,6 +73,7 @@ pub mod frame_rate;
 pub mod fullscreen;
 pub mod fuzzy;
 pub mod git;
+pub mod git_repo;
 pub mod hooks;
 pub mod ift;
 pub mod inspect;

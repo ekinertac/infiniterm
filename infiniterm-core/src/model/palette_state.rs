@@ -26,6 +26,8 @@ pub enum Source {
     Snippets,
     /// `card.moveToWorkspace`: the other workspaces, then a new one.
     MoveTo,
+    /// `group.moveToWorkspace`: the same rows, for the focused card's group.
+    MoveGroupTo,
     /// `window.color` (#157, #160): named colours previewed live, then a hex code.
     WindowColor,
 }
@@ -48,6 +50,7 @@ impl Source {
             Source::Sizes => "sizes",
             Source::Snippets => "snippets",
             Source::MoveTo => "moveTo",
+            Source::MoveGroupTo => "moveGroupTo",
             Source::WindowColor => "windowColor",
         }
     }
@@ -70,6 +73,7 @@ impl Source {
                 | Source::SlotKind
                 | Source::Sizes
                 | Source::MoveTo
+                | Source::MoveGroupTo
                 | Source::Themes
                 | Source::WindowColor
         )
@@ -92,6 +96,7 @@ impl Source {
             Source::Sizes => "Resize the card to…",
             Source::Snippets => "Paste a snippet…",
             Source::MoveTo => "Move to workspace…",
+            Source::MoveGroupTo => "Move the group to workspace…",
             Source::WindowColor => "Window colour…",
         }
     }
@@ -324,7 +329,7 @@ impl Model {
             .collect(),
             // The workspaces in tab order, less the one you are on, each with
             // how many cards it holds, then a new one.
-            Source::MoveTo => {
+            Source::MoveTo | Source::MoveGroupTo => {
                 let here = self.active_workspace.clone();
                 let mut rows: Vec<PaletteItem> = self
                     .workspaces
@@ -423,6 +428,7 @@ mod dims_tests {
             Source::Sizes,
             Source::Snippets,
             Source::MoveTo,
+            Source::MoveGroupTo,
             Source::WindowColor,
         ] {
             assert!(s.dims_canvas(), "{s:?}");

@@ -75,6 +75,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     ),
     ("terminal.cursorBlink", &["Whether the cursor blinks."]),
     (
+        "terminal.cursorColor",
+        &[
+            "The cursor's colour as a hex colour (\"#ffcc00\"). Empty follows the theme.",
+            "The letter under a block cursor is drawn in black or white, whichever reads.",
+        ],
+    ),
+    (
         "terminal.fontFamily",
         &[
             "Any monospace family installed on the system. A Nerd Font is needed for the",
@@ -224,6 +231,10 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "editor.selectionTextColor",
         &["Selected text itself. Empty is the theme's background, dark on the yellow."],
+    ),
+    (
+        "editor.cursorColor",
+        &["The caret's colour as a hex colour. Empty follows the theme."],
     ),
     (
         "editor.wrap",
@@ -414,12 +425,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
-        "ui.readZoom",
+        "ui.cardZoom",
         &[
-            "The canvas scale reading mode zooms to: 1.5 is 150%. Press Cmd+1 on a terminal card",
-            "that is already fitted: the view zooms to this scale with the card's bottom at the",
-            "window's bottom, and Cmd+Up and Cmd+Down pan along the card. Cmd+1 or Cmd+2 leaves.",
-            "Typing returns the view to the bottom. 1.1 to 4.",
+            "The canvas scale Cmd+1 zooms to on a terminal card that is already fitted: 1.5 is 150%,",
+            "with the card's bottom at the window's bottom, so you read the prompt and the newest",
+            "lines larger. Cmd+Up and Cmd+Down pan along the card, Cmd+1 or Cmd+2 leaves, and typing",
+            "returns the view to the bottom. 0 turns it off: a second Cmd+1 does nothing new.",
+            "1.1 to 4. It was called ui.readZoom, which still works.",
         ],
     ),
     (

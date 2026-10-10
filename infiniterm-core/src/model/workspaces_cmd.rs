@@ -129,6 +129,89 @@ impl Model {
         self.dirty_layout = true;
     }
 
+    /// The focused card's whole group to workspace `to`, or a new one: the
+    /// frame, the name and the cards in their arrangement and sizes, moved
+    /// as one block (#348). The block takes the destination's first free
+    /// slot of its size (`layout::block_slot`, as a card does), frame pad
+    /// included. A group is all or nothing: one card of it focused or
+    /// selected moves the lot. You stay where you are.
+    pub fn move_group_to(&mut self, to: &str) {
+        let here = self.active_workspace.clone().unwrap_or_default();
+        let Some(group) = self.focused().and_then(|c| c.group_id.clone()) else {
+            self.notify("the focused card is in no group");
+            return;
+        };
+        let mut ids: Vec<String> = self
+            .cards
+            .iter()
+            .filter(|c| c.group_id.as_deref() == Some(group.as_str()) && c.workspace_id == here)
+            .map(|c| c.id.clone())
+            .collect();
+        // An in-place editor goes with the terminal it covers.
+        let bases: Vec<String> = ids
+            .iter()
+            .filter_map(|id| self.covers.get(id).cloned())
+            .filter(|b| !ids.contains(b))
+            .collect();
+        ids.extend(bases);
+        let Some(frame) = self.group_frame(&group, &here) else {
+            return;
+        };
+        let to = if to == NEW_WORKSPACE_ROW {
+            self.add_workspace(None)
+        } else if self.workspaces.iter().any(|w| w.id == to) && to != here {
+            to.to_string()
+        } else {
+            return;
+        };
+        let mut placed: Vec<crate::grid::Rect> =
+            self.cards_on(Some(&to)).iter().map(|c| c.rect).collect();
+        placed.extend(self.other_frames(None, &to));
+        let origin = crate::grid::Point {
+            x: crate::grid::HALF_CELL,
+            y: crate::grid::HALF_CELL,
+        };
+        let size = crate::grid::Size {
+            w: frame.w,
+            h: frame.h,
+        };
+        let slot = crate::layout::block_slot(&placed, size, origin, self.gap());
+        let (dx, dy) = (slot.x - frame.x, slot.y - frame.y);
+        for id in &ids {
+            if let Some(c) = self.card_mut(id) {
+                c.workspace_id = to.clone();
+                c.rect.x += dx;
+                c.rect.y += dy;
+            }
+            if let Some(at) = self.cover_at.get_mut(id) {
+                at.x += dx;
+                at.y += dy;
+            }
+        }
+        if let Some(w) = self.workspaces.iter_mut().find(|w| w.id == to) {
+            w.focused = self.selection.focused_id.clone();
+        }
+        let back = self
+            .focus_trail
+            .iter()
+            .rev()
+            .find(|t| self.card(t).is_some_and(|c| c.workspace_id == here))
+            .cloned();
+        self.set_focus(back.as_deref());
+        let (name, group_name) = (
+            self.workspaces
+                .iter()
+                .find(|w| w.id == to)
+                .map(|w| w.name.clone())
+                .unwrap_or_default(),
+            self.group(&group)
+                .map(|g| g.name.clone())
+                .unwrap_or_default(),
+        );
+        self.notify(format!("moved group \"{group_name}\" to {name}"));
+        self.dirty_layout = true;
+    }
+
     fn workspace_ids(&self) -> Vec<String> {
         self.workspaces.iter().map(|w| w.id.clone()).collect()
     }
@@ -254,4 +337,15 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.open_palette(Source::MoveTo);
         }
     });
+    r.register(
+        "group.moveToWorkspace",
+        "Group: move to workspace…",
+        |m| {
+            if m.focused().is_some_and(|c| c.group_id.is_some()) {
+                m.open_palette(Source::MoveGroupTo);
+            } else if m.selection.focused_id.is_some() {
+                m.notify("the focused card is in no group");
+            }
+        },
+    );
 }
