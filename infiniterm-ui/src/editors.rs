@@ -69,6 +69,7 @@ impl AppView {
             &chrome,
             &cfg.editor.selection_color,
             &cfg.editor.selection_text_color,
+            &cfg.editor.cursor_color,
         );
         let rules = syntax_rules(self.chrome.theme.as_ref());
         let style = StripStyle {
@@ -413,6 +414,7 @@ impl AppView {
             &chrome,
             &cfg.editor.selection_color,
             &cfg.editor.selection_text_color,
+            &cfg.editor.cursor_color,
         );
         let rules = syntax_rules(self.chrome.theme.as_ref());
         let cards: Vec<_> = self

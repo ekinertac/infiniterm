@@ -6,6 +6,12 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-10
+
+- Fixed: the letter under a block cursor can be read. A theme whose cursor colour equals its text colour hid it, in terminals and in editors. The letter is now drawn in the theme's cursor text colour, or black or white when that does not contrast with the cursor. New settings `terminal.cursorColor` and `editor.cursorColor` (a hex colour, empty follows the theme) set the cursor's colour; the letter under it follows.
+- The right-click menu of a selection of several cards offers what acts on all of them: Group, Protect, Clear State Colour, Fit Selection, Move to Workspace and Close. Rename, Split and Size, which are for one card, are left out. The menu is the same whichever card of the selection you click.
+- New: `Group: move to workspace…` (command palette) sends the focused card's whole group to another workspace or a new one, with its frame, name, and its cards in the same arrangement and sizes. It lands in the first free block of the destination, and you stay where you are. The group's own right-click menu is not built yet.
+
 ### 2026-10-09
 
 - Every new terminal card sets `FORCE_HYPERLINK=1`, so Claude Code (and other tools that decide by terminal name) print links as real hyperlinks: a markdown link in its reply is clickable text, underlined, instead of `text (url)`. A card that is already open keeps its old environment; open a new one. To turn it off, set `"terminal.env": ["FORCE_HYPERLINK=0"]`.

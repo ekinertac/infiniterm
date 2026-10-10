@@ -54,7 +54,16 @@ impl AppView {
     /// nothing when the click belongs to a program or a browser page.
     pub fn open_context_menu(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
         let mut lit: Option<String> = None;
-        let area = match self.hit(self.to_content(e.position)) {
+        let hit = self.hit(self.to_content(e.position));
+        // A card of a selection of several: the menu of what acts on all of
+        // them, whichever body the pointer is over (#347).
+        if let Hit::CardBody { id, .. } | Hit::CardEdge { id, .. } = &hit {
+            if self.model.in_multi_selection(id) {
+                self.show_menu(Area::Frame, None, None, cx);
+                return;
+            }
+        }
+        let area = match hit {
             Hit::CardBody { id, local } => {
                 let Some(kind) = self.model.card(&id).map(|c| c.kind) else {
                     return;

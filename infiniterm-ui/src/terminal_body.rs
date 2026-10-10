@@ -827,6 +827,9 @@ impl CardBody for TerminalBody {
         let legible =
             font_size >= crate::chrome::legible_font_px(window.scale_factor()) && !self.crowded;
         self.bars = !legible;
+        // Where a solid block sits: the letter under it is drawn in the
+        // palette's cursor text colour (#343).
+        let mut block_cursor: Option<(usize, usize)> = None;
         // The cursor under the text: solid when focused and on, hollow when
         // the card is not focused, nothing while scrolled into history.
         // The visual cursor is drawn anywhere in the history, and solid.
@@ -854,6 +857,9 @@ impl CardBody for TerminalBody {
                 _ => Bounds::new(point(x, y), size(cell_w, line_h)),
             };
             let color = rgb(self.palette.cursor);
+            if focused && !matches!(frame.cursor_kind, CursorKind::Beam | CursorKind::Underline) {
+                block_cursor = Some((col, row));
+            }
             if focused || frame.cursor_kind != CursorKind::Block {
                 window.paint_quad(fill(rect, color));
             } else {
@@ -930,6 +936,19 @@ impl CardBody for TerminalBody {
                     continue;
                 }
                 let y = origin.y + line_h * r as f32;
+                let under_cursor;
+                let row = match block_cursor {
+                    Some((col, cursor_row)) if cursor_row == r => {
+                        under_cursor = with_cursor_cell(
+                            row,
+                            col,
+                            self.palette.cursor,
+                            self.palette.cursor_text,
+                        );
+                        &under_cursor
+                    }
+                    _ => row,
+                };
                 // Backgrounds first, per run, so a full-width highlight is a quad
                 // and not a shaped-line property.
                 let mut x = origin.x;
@@ -1562,6 +1581,53 @@ fn link_look(marked: bool, hovered: bool) -> Option<LinkLook> {
 /// row, so skipping "rows with no text" skipped the cursor and it could
 /// not be seen until something was typed beside it. The same skip would
 /// have hidden any TUI's full-width highlight on an empty row.
+/// A copy of `row` whose cell at `col` is the cursor's: the cursor colour
+/// behind and the cursor text colour on the letter. The block is painted
+/// under the text, and a theme whose cursor is its foreground left the
+/// letter the colour of the block (#343); a cell with its own background
+/// also painted over the block. The row's text is untouched.
+fn with_cursor_cell(
+    row: &infiniterm_term::grid::Row,
+    col: usize,
+    cursor: [u8; 3],
+    text: [u8; 3],
+) -> infiniterm_term::grid::Row {
+    let mut runs = Vec::with_capacity(row.runs.len() + 2);
+    let mut at = 0usize;
+    for run in &row.runs {
+        let n = run.text.chars().count();
+        if col < at || col >= at + n {
+            runs.push(run.clone());
+            at += n;
+            continue;
+        }
+        let chars: Vec<char> = run.text.chars().collect();
+        let i = col - at;
+        for (part, own) in [
+            (&chars[..i], false),
+            (&chars[i..=i], true),
+            (&chars[i + 1..], false),
+        ] {
+            if part.is_empty() {
+                continue;
+            }
+            let mut piece = run.clone();
+            piece.text = part.iter().collect();
+            if own {
+                piece.fg = text;
+                piece.bg = Some(cursor);
+                piece.dim = false;
+            }
+            runs.push(piece);
+        }
+        at += n;
+    }
+    infiniterm_term::grid::Row {
+        runs,
+        ..row.clone()
+    }
+}
+
 fn row_paints_nothing(row: &infiniterm_term::grid::Row) -> bool {
     row.text.trim().is_empty() && row.runs.iter().all(|r| r.bg.is_none())
 }
@@ -1622,6 +1688,42 @@ mod tests {
         );
         // A row cut by the edge still paints.
         assert!(row_on_screen(px(-10.), h, 5, shown));
+    }
+
+    /// The letter under a block cursor takes the cursor text colour on the
+    /// cursor colour, and the rest of the row and its text are left alone.
+    #[test]
+    fn the_cursor_cell_is_split_out_of_its_run() {
+        use infiniterm_term::grid::{Row, Run};
+        let run = |text: &str, fg: [u8; 3]| Run {
+            text: text.into(),
+            fg,
+            bg: None,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikeout: false,
+            dim: false,
+        };
+        let row = Row {
+            runs: vec![run("ab", [1, 1, 1]), run("cde", [2, 2, 2])],
+            text: "abcde".into(),
+            ..Row::default()
+        };
+        let out = with_cursor_cell(&row, 3, [9, 9, 9], [7, 7, 7]);
+        let texts: Vec<_> = out.runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts, ["ab", "c", "d", "e"]);
+        assert_eq!(out.text, "abcde");
+        assert_eq!(
+            (out.runs[2].fg, out.runs[2].bg),
+            ([7, 7, 7], Some([9, 9, 9]))
+        );
+        assert_eq!(out.runs[1].fg, [2, 2, 2]);
+        assert_eq!(out.runs[3].bg, None);
+        // The first and last cells of the row, and a column past the end.
+        assert_eq!(with_cursor_cell(&row, 0, [9; 3], [7; 3]).runs[0].text, "a");
+        assert_eq!(with_cursor_cell(&row, 4, [9; 3], [7; 3]).runs.len(), 3);
+        assert_eq!(with_cursor_cell(&row, 9, [9; 3], [7; 3]).runs, row.runs);
     }
 
     fn body() -> TerminalBody {

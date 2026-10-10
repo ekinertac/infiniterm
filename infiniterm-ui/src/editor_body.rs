@@ -355,6 +355,7 @@ impl EditorBody {
                 background: "#0e101a".into(),
                 foreground: "#b9c4d2".into(),
                 cursor: "#b9c4d2".into(),
+                cursor_text: "#0e101a".into(),
                 selection: "#e39500".into(),
                 selection_text: "#0e101a".into(),
                 gutter: "#5a6472".into(),
@@ -2897,6 +2898,39 @@ impl CardBody for EditorBody {
                                     rect,
                                     crate::chrome::with_alpha(cursor_color, CURSOR_ALPHA),
                                 ));
+                                // The caret is a block painted over the text,
+                                // so the letter under it is drawn again in the
+                                // cursor text colour (#343). A line with a tab
+                                // has its columns moved by the expansion, so
+                                // it keeps the show-through.
+                                let text = self.buffer.line(line);
+                                if !text.contains('\t') {
+                                    if let Some(ch) = text.chars().nth(col) {
+                                        if !ch.is_whitespace() {
+                                            let one = SharedString::from(ch.to_string());
+                                            let run = TextRun {
+                                                len: one.len(),
+                                                font: base.clone(),
+                                                color: hex(&self.colors.cursor_text),
+                                                background_color: None,
+                                                underline: None,
+                                                strikethrough: None,
+                                            };
+                                            let glyph = window.text_system().shape_line(
+                                                one,
+                                                font_size,
+                                                &[run],
+                                                None,
+                                            );
+                                            let _ = glyph.paint(
+                                                point(text_x + cell_w * vcol as f32, y),
+                                                line_h,
+                                                window,
+                                                cx,
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             window.paint_quad(

@@ -130,6 +130,7 @@ impl DiffBody {
                 background: "#0e101a".into(),
                 foreground: "#b9c4d2".into(),
                 cursor: "#b9c4d2".into(),
+                cursor_text: "#0e101a".into(),
                 selection: "#e39500".into(),
                 selection_text: "#0e101a".into(),
                 gutter: "#5a6472".into(),

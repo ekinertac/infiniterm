@@ -70,6 +70,8 @@ pub struct Terminal {
     pub backend: TerminalBackend,
     pub cursor_style: CursorStyle,
     pub cursor_blink: bool,
+    /// The cursor's colour as a CSS hex colour. Empty follows the theme.
+    pub cursor_color: String,
     pub font_family: String,
     pub font_size: f64,
     pub font_weight: String,
@@ -203,6 +205,8 @@ pub struct Editor {
     /// on the theme's background: a highlighter pen, visible on any scheme.
     pub selection_color: String,
     pub selection_text_color: String,
+    /// The caret's colour. Empty follows the theme.
+    pub cursor_color: String,
     pub wrap: Wrap,
 }
 
@@ -357,6 +361,7 @@ pub fn default_config() -> Config {
             backend: TerminalBackend::Daemon,
             cursor_style: CursorStyle::Block,
             cursor_blink: true,
+            cursor_color: String::new(),
             // What every Mac has. A Nerd Font is one you install, and a
             // default that renders tofu on a fresh machine is worse than one
             // that renders plain ASCII.
@@ -400,6 +405,7 @@ pub fn default_config() -> Config {
             highlight_line: true,
             selection_color: String::new(),
             selection_text_color: String::new(),
+            cursor_color: String::new(),
             wrap: Wrap::Prose,
         },
         browser: Browser {
@@ -607,6 +613,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 ],
             ),
             cursor_blink: bool_(t.get("cursorBlink"), d.terminal.cursor_blink),
+            cursor_color: str_(t.get("cursorColor"), &d.terminal.cursor_color),
             font_family: str_(t.get("fontFamily"), &d.terminal.font_family),
             font_size: num(t.get("fontSize"), d.terminal.font_size, 6., 96.),
             font_weight: str_(t.get("fontWeight"), &d.terminal.font_weight),
@@ -654,6 +661,7 @@ pub fn merge_config(raw: &Value) -> Config {
             highlight_line: bool_(e.get("highlightLine"), d.editor.highlight_line),
             selection_color: str_(e.get("selectionColor"), &d.editor.selection_color),
             selection_text_color: str_(e.get("selectionTextColor"), &d.editor.selection_text_color),
+            cursor_color: str_(e.get("cursorColor"), &d.editor.cursor_color),
             wrap: one(
                 e.get("wrap"),
                 d.editor.wrap,
