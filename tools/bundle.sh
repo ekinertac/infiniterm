@@ -116,7 +116,10 @@ NSSystemAdministrationUsageDescription|do administrator tasks"
 # selected folder. NSPortName is the bundle's name, which is how macOS finds
 # the process to send the message to; infiniterm-ui/src/finder_service.rs
 # answers `openFolder:userData:error:`. Deleted first so a re-run does not
-# stack a second entry. No entitlement: the app is not sandboxed.
+# stack a second entry. NSSendFileTypes, not NSSendTypes: Finder sends files,
+# and a service for a selected file or folder is matched by its file type;
+# NSSendTypes names pasteboard types, and public.folder is not one, so the
+# item never showed (2026-10-10). No entitlement: the app is not sandboxed.
 /usr/libexec/PlistBuddy -c "Delete :NSServices" "$plist" 2>/dev/null || true
 for cmd in \
     "Add :NSServices array" \
@@ -125,8 +128,8 @@ for cmd in \
     "Add :NSServices:0:NSMenuItem:default string Open in infiniterm" \
     "Add :NSServices:0:NSMessage string openFolder" \
     "Add :NSServices:0:NSPortName string infiniterm" \
-    "Add :NSServices:0:NSSendTypes array" \
-    "Add :NSServices:0:NSSendTypes:0 string public.folder"; do
+    "Add :NSServices:0:NSSendFileTypes array" \
+    "Add :NSServices:0:NSSendFileTypes:0 string public.folder"; do
     /usr/libexec/PlistBuddy -c "$cmd" "$plist"
 done
 echo "$usage_keys" | while IFS='|' read -r key what; do
