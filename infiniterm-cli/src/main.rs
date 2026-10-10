@@ -392,11 +392,11 @@ fn terminal_cmd(paths: &[String]) -> ExitCode {
             }
         }
     }
-    if !socket::running() {
-        if launch() != ExitCode::SUCCESS || !socket::wait_for_socket(LAUNCH_WAIT) {
-            eprintln!("ift: infiniterm did not start");
-            return ExitCode::from(1);
-        }
+    if !socket::running()
+        && (launch() != ExitCode::SUCCESS || !socket::wait_for_socket(LAUNCH_WAIT))
+    {
+        eprintln!("ift: infiniterm did not start");
+        return ExitCode::from(1);
     }
     send("terminal", dirs)
 }

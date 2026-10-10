@@ -13,8 +13,9 @@
 //!
 //! Constraints: the entry exists only in a bundled app. If macOS starts a
 //! second process for the service instead of messaging the running one, that
-//! process exits on the socket lock (`main`) and the folders are lost; see
-//! the plan in `.cursor/plans/` for the fallback.
+//! process exits on the socket lock (`main`) and the folders are lost; the
+//! fallback then is to hand them to the running instance over its socket
+//! (`ift terminal`).
 use objc::declare::ClassDecl;
 use objc::runtime::{Class, Object, Sel, BOOL, YES};
 use objc::{class, msg_send, sel, sel_impl};
