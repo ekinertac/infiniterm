@@ -714,6 +714,14 @@ impl AppView {
             // have forced a frame, so it looked like the rename was refused.
             self.redraw = true;
         }
+        // Folders sent by Finder's service: a terminal card each, the last
+        // focused. A refused one (gone since) is a notice, not a card.
+        for dir in crate::finder_service::take() {
+            if let Err(e) = self.model.open_terminal_at(&dir) {
+                self.model.notify(e);
+            }
+            self.redraw = true;
+        }
         self.perform_effects();
     }
 

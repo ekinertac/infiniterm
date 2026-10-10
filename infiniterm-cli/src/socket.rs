@@ -32,6 +32,24 @@ fn socket_path() -> std::path::PathBuf {
     std::env::temp_dir().join("infiniterm.sock")
 }
 
+/// Whether an app is listening: a connect that succeeds, the same test
+/// `exchange` makes. A stale socket file from a crash fails it.
+pub fn running() -> bool {
+    UnixStream::connect(socket_path()).is_ok()
+}
+
+/// Polls until `running()` or `limit` passes; for an app just launched.
+pub fn wait_for_socket(limit: Duration) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < limit {
+        if running() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    false
+}
+
 /// The card this is running in, from the env var the app exports at spawn.
 fn card_id() -> String {
     std::env::var("INFINITERM_CARD_ID").unwrap_or_default()

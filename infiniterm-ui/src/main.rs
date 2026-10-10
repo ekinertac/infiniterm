@@ -25,6 +25,7 @@ mod editor_tabs;
 mod editors;
 mod field;
 mod fonts;
+mod finder_service;
 mod fullscreen;
 mod icon_font;
 mod ime;
@@ -388,6 +389,7 @@ fn main() {
     }
     Application::new().run(move |cx: &mut App| {
         keycode::install();
+        finder_service::register();
         let cef_running = match cef.as_mut() {
             Some(p) => {
                 infiniterm_browser::app_protocol::install();

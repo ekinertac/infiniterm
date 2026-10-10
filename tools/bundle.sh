@@ -112,6 +112,23 @@ NSRemovableVolumesUsageDescription|read files on a removable drive
 NSSiriUsageDescription|use Siri
 NSSpeechRecognitionUsageDescription|use speech recognition
 NSSystemAdministrationUsageDescription|do administrator tasks"
+# Finder's Services > "Open in infiniterm" (#344): a terminal card for each
+# selected folder. NSPortName is the bundle's name, which is how macOS finds
+# the process to send the message to; infiniterm-ui/src/finder_service.rs
+# answers `openFolder:userData:error:`. Deleted first so a re-run does not
+# stack a second entry. No entitlement: the app is not sandboxed.
+/usr/libexec/PlistBuddy -c "Delete :NSServices" "$plist" 2>/dev/null || true
+for cmd in \
+    "Add :NSServices array" \
+    "Add :NSServices:0 dict" \
+    "Add :NSServices:0:NSMenuItem dict" \
+    "Add :NSServices:0:NSMenuItem:default string Open in infiniterm" \
+    "Add :NSServices:0:NSMessage string openFolder" \
+    "Add :NSServices:0:NSPortName string infiniterm" \
+    "Add :NSServices:0:NSSendTypes array" \
+    "Add :NSServices:0:NSSendTypes:0 string public.folder"; do
+    /usr/libexec/PlistBuddy -c "$cmd" "$plist"
+done
 echo "$usage_keys" | while IFS='|' read -r key what; do
     text="A program running in an infiniterm card wants to $what. infiniterm itself never does; it only passes the request on to macOS."
     /usr/libexec/PlistBuddy -c "Set :$key $text" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :$key string $text" "$plist"
