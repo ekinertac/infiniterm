@@ -57,9 +57,13 @@ These go in `settings.json`; every setting is on the [settings reference](../../
 - `"terminal.env": ["EDITOR=ift"]` adds environment variables to new cards.
 - `"terminal.shell"` takes arguments too, like `"/bin/zsh -l"`.
 
+## Cursor colour
+
+A block cursor draws the letter under it in the theme's cursor text colour, or black or white when that would not contrast. `terminal.cursorColor` and `editor.cursorColor` (a hex colour such as `"#ff9900"`; empty follows the theme) set the cursor's colour, and the letter under it follows.
+
 ## Links and paths
 
-Hold `Cmd` over a link or a path that exists and it underlines; `Cmd` + click opens it beside the card, a file in an editor card and a URL in a browser card. A double-click on a link selects the whole address. Dropping a file from the Finder onto a terminal pastes its shell-escaped path.
+Hold `Cmd` over a link or a path that exists and it underlines; `Cmd` + click opens it beside the card, a file in an editor card and a URL in a browser card. A double-click on a link selects the whole address. Links a program marks itself (OSC 8: `ls --hyperlink`, `rg --hyperlink-format`, `gcc`, and the markdown links in an agent's reply) are underlined at rest and open on `Cmd` + click, whatever their visible text says; only `http` and `https` addresses open, since the text of a link can lie. Every new terminal card sets `FORCE_HYPERLINK=1` so Claude Code prints real links; a card that is already open keeps its old environment, and `"terminal.env": ["FORCE_HYPERLINK=0"]` turns it off. Issue and pull request numbers are links too: in a card whose directory is a GitHub checkout, `#349` opens that issue or pull request, and `owner/repo#349` works in any card. A bare number needs a space, bracket or quote before it and no letter after it. Holding `Cmd` over any link draws a strong double underline and turns the pointer to a hand. Dropping a file from the Finder onto a terminal pastes its shell-escaped path.
 
 ## Privacy prompts
 
