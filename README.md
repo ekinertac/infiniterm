@@ -8,7 +8,7 @@
 
 <p align="center"><a href="https://infiniterm.app">infiniterm.app</a> &nbsp;&nbsp; <a href="https://infiniterm.app/guide/install/">Docs</a> &nbsp;&nbsp; <a href="https://github.com/ekinertac/infiniterm/releases/latest">Download</a></p>
 
-![An infiniterm window at 19% zoom: 33 terminal cards, their borders coloured by each agent's state](assets/screenshot-canvas.png)
+![An infiniterm window with six cards: vim, an editor with a file tree and four agent sessions, their borders coloured by state: yellow for the one asking you something, violet for the one working, green and red](site/public/canvas.png)
 
 ## Setup
 
