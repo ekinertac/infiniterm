@@ -75,6 +75,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     ),
     ("terminal.cursorBlink", &["Whether the cursor blinks."]),
     (
+        "terminal.cursorColor",
+        &[
+            "The cursor's colour as a hex colour (\"#ffcc00\"). Empty follows the theme.",
+            "The letter under a block cursor is drawn in black or white, whichever reads.",
+        ],
+    ),
+    (
         "terminal.fontFamily",
         &[
             "Any monospace family installed on the system. A Nerd Font is needed for the",
@@ -224,6 +231,10 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "editor.selectionTextColor",
         &["Selected text itself. Empty is the theme's background, dark on the yellow."],
+    ),
+    (
+        "editor.cursorColor",
+        &["The caret's colour as a hex colour. Empty follows the theme."],
     ),
     (
         "editor.wrap",

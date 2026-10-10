@@ -492,6 +492,7 @@ mod tests {
         const ALSO_ASK: &[&str] = &[
             "group.rename",
             "card.moveToWorkspace",
+            "group.moveToWorkspace",
             "window.color",
             "card.size",
             "snippet.paste",
@@ -3121,6 +3122,81 @@ mod tests {
             ws.focused.as_deref(),
             Some(mover.as_str()),
             "lands on it there"
+        );
+    }
+
+    #[test]
+    fn a_group_moves_to_another_workspace_with_its_arrangement() {
+        let mut h = Harness::new();
+        let here = h.m.active_workspace.clone().unwrap();
+        h.run("card.new.terminal");
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let outsider = h.focused().id.clone();
+        h.m.focus_extended(&b, vec![a.clone()]);
+        h.run("group.new");
+        let (pending, text) = h.m.prompt.settle(Some("Pair")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        let group = h.m.card(&a).unwrap().group_id.clone().unwrap();
+        let (ra, rb) = (h.m.card(&a).unwrap().rect, h.m.card(&b).unwrap().rect);
+        let there = h.m.add_workspace(Some("Acme"));
+        let resident = h.m.add_card(
+            "/Users/me",
+            NewCard {
+                workspace_id: Some(there.clone()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&a));
+        h.run("group.moveToWorkspace");
+        assert_eq!(h.m.palette.source, Some(Source::MoveGroupTo));
+        h.m.palette_run(Source::MoveGroupTo, &there);
+        let (ma, mb) = (h.m.card(&a).unwrap().clone(), h.m.card(&b).unwrap().clone());
+        assert_eq!(
+            (ma.workspace_id.as_str(), mb.workspace_id.as_str()),
+            (there.as_str(), there.as_str())
+        );
+        assert_eq!(
+            ma.group_id.as_deref(),
+            Some(group.as_str()),
+            "still grouped"
+        );
+        assert_eq!(mb.group_id.as_deref(), Some(group.as_str()));
+        // The arrangement and the sizes are kept: the same offset between them.
+        assert_eq!(
+            (mb.rect.x - ma.rect.x, mb.rect.y - ma.rect.y),
+            (rb.x - ra.x, rb.y - ra.y)
+        );
+        assert_eq!((ma.rect.w, ma.rect.h), (ra.w, ra.h));
+        // Clear of the card already there, and the group's frame is on the new canvas.
+        let r = h.m.card(&resident).unwrap().rect;
+        assert!(!crate::layout::rects_overlap(ma.rect, r));
+        assert!(!crate::layout::rects_overlap(mb.rect, r));
+        assert!(h.m.group_frame(&group, &there).is_some());
+        assert_eq!(
+            h.m.card(&outsider).unwrap().workspace_id,
+            here,
+            "others stay"
+        );
+        assert_eq!(
+            h.m.active_workspace.as_deref(),
+            Some(here.as_str()),
+            "you stay"
+        );
+        assert_eq!(h.m.notice.as_deref(), Some("moved group \"Pair\" to Acme"));
+    }
+
+    #[test]
+    fn a_card_outside_any_group_has_no_group_to_move() {
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        h.run("group.moveToWorkspace");
+        assert_eq!(h.m.palette.source, None);
+        assert_eq!(
+            h.m.notice.as_deref(),
+            Some("the focused card is in no group")
         );
     }
 

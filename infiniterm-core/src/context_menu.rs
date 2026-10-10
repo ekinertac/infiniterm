@@ -96,14 +96,25 @@ const NEW_CARD: Def = Def::Submenu {
     ],
 };
 
+/// The size commands act on the focused card alone, so a selection of
+/// several has no Size menu (#347).
 const SIZE: Def = Def::Submenu {
     title: "Size",
     items: &[
-        titled("card.size", "Fractions\u{2026}"),
-        titled("card.size.reset", "Fill the Free Space"),
-        titled("card.maximize.toggle", "Maximize"),
+        full("card.size", Some("Fractions\u{2026}"), ONE_CARD, "", ""),
+        full(
+            "card.size.reset",
+            Some("Fill the Free Space"),
+            ONE_CARD,
+            "",
+            "",
+        ),
+        full("card.maximize.toggle", Some("Maximize"), ONE_CARD, "", ""),
     ],
 };
+
+/// A `show` clause: the row is for one card, not a selection of several.
+const ONE_CARD: &str = "!multiSelection";
 
 const TERMINAL: &[Def] = &[
     full(
@@ -141,16 +152,23 @@ const TERMINAL: &[Def] = &[
 ];
 
 const FRAME: &[Def] = &[
-    titled("card.rename", "Rename…"),
+    full("card.rename", Some("Rename…"), ONE_CARD, "", ""),
     titled("group.new", "Group…"),
     titled("card.protect", "Protect"),
     titled("card.clearState", "Clear State Colour"),
     Def::Separator,
+    full(
+        "canvas.zoom.fitGroup",
+        Some("Fit Selection"),
+        "multiSelection",
+        "",
+        "",
+    ),
     SIZE,
     titled("card.moveToWorkspace", "Move to Workspace…"),
     Def::Separator,
-    titled("card.split.right", "Split Right"),
-    titled("card.split.down", "Split Down"),
+    full("card.split.right", Some("Split Right"), ONE_CARD, "", ""),
+    full("card.split.down", Some("Split Down"), ONE_CARD, "", ""),
     NEW_CARD,
     Def::Separator,
     titled("card.close", "Close"),
@@ -571,5 +589,51 @@ mod tests {
             titles,
             ["Terminal", "Editor", "Browser\u{2026}", "Claude Code"]
         );
+    }
+
+    #[test]
+    fn a_selection_of_several_cards_gets_the_rows_that_act_on_all_of_them() {
+        let ids = |rows: &[Row]| -> Vec<String> {
+            fn walk(rows: &[Row], out: &mut Vec<String>) {
+                for r in rows {
+                    match r {
+                        Row::Item { command, .. } => out.push(command.clone()),
+                        Row::Submenu { rows, .. } => walk(rows, out),
+                        Row::Separator => {}
+                    }
+                }
+            }
+            let mut out = vec![];
+            walk(rows, &mut out);
+            out
+        };
+        let one = ids(&built(Area::Frame, &ctx()));
+        let many = ids(&built(
+            Area::Frame,
+            &Context {
+                multi_selection: true,
+                ..ctx()
+            },
+        ));
+        for id in [
+            "card.rename",
+            "card.split.right",
+            "card.size",
+            "card.maximize.toggle",
+        ] {
+            assert!(one.iter().any(|c| c == id), "{id} for one card");
+            assert!(!many.iter().any(|c| c == id), "{id} hidden for several");
+        }
+        assert!(!one.iter().any(|c| c == "canvas.zoom.fitGroup"));
+        for id in [
+            "canvas.zoom.fitGroup",
+            "card.moveToWorkspace",
+            "group.new",
+            "card.protect",
+            "card.clearState",
+            "card.close",
+        ] {
+            assert!(many.iter().any(|c| c == id), "{id} for several");
+        }
     }
 }
