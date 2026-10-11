@@ -595,7 +595,10 @@ impl Render for AppView {
                                     let started = std::time::Instant::now();
                                     this.frame(bounds, window, cx);
                                     if std::env::var_os("INFINITERM_KEYLOG").is_some() {
-                                        eprintln!("[main-window] frame {} us", started.elapsed().as_micros());
+                                        eprintln!(
+                                            "[main-window] frame {} us",
+                                            started.elapsed().as_micros()
+                                        );
                                     }
                                     this.needs_frame()
                                 });

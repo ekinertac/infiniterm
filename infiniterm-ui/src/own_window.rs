@@ -24,9 +24,9 @@ use std::ops::Range;
 
 use gpui::{
     canvas, div, prelude::*, px, size, App, Bounds, Context, Entity, EntityInputHandler,
-    FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, TitlebarOptions,
-    UTF16Selection, Window, WindowBounds, WindowHandle, WindowOptions,
+    FocusHandle, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, Render, ScrollWheelEvent, TitlebarOptions, UTF16Selection, Window,
+    WindowBounds, WindowHandle, WindowOptions,
 };
 
 use crate::body::BodyAction;
@@ -127,7 +127,8 @@ impl CardWindow {
     }
 
     fn mouse_down(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
-        let (local, button, mods, clicks) = (card_point(e.position), e.button, e.modifiers, e.click_count);
+        let (local, button, mods, clicks) =
+            (card_point(e.position), e.button, e.modifiers, e.click_count);
         self.with_body(cx, |b, _| b.mouse_down(local, button, &mods, clicks));
         cx.notify();
     }
@@ -147,7 +148,12 @@ impl CardWindow {
         let delta: Point<Pixels> = e.delta.pixel_delta(px(16.));
         let (local, mods) = (card_point(e.position), e.modifiers);
         self.with_body(cx, |b, _| {
-            b.wheel(local, f32::from(delta.x) as f64, f32::from(delta.y) as f64, &mods)
+            b.wheel(
+                local,
+                f32::from(delta.x) as f64,
+                f32::from(delta.y) as f64,
+                &mods,
+            )
         });
         cx.notify();
     }
@@ -180,9 +186,9 @@ impl Render for CardWindow {
         div()
             .size_full()
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
-                this.key_down(e, window, cx)
-            }))
+            .on_key_down(
+                cx.listener(|this, e: &KeyDownEvent, window, cx| this.key_down(e, window, cx)),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, _, cx| this.mouse_down(e, cx)),
@@ -249,15 +255,25 @@ impl EntityInputHandler for CardWindow {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        let end = self.composing.as_deref().map(|m| m.encode_utf16().count()).unwrap_or(0);
+        let end = self
+            .composing
+            .as_deref()
+            .map(|m| m.encode_utf16().count())
+            .unwrap_or(0);
         Some(UTF16Selection {
             range: end..end,
             reversed: false,
         })
     }
 
-    fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
-        self.composing.as_deref().map(|m| 0..m.encode_utf16().count())
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
+        self.composing
+            .as_deref()
+            .map(|m| 0..m.encode_utf16().count())
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
