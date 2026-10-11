@@ -791,6 +791,25 @@ impl AppView {
         if crate::keycode::last_dead() && !m.platform && !m.control {
             return false;
         }
+        // #356 spike: Cmd+Shift+O takes the focused card into its own window.
+        // A key for a card that is out (on the canvas, a placeholder) goes to
+        // its window, not to its shell from here.
+        if m.platform && m.shift && !m.alt && !m.control && k.key == "o" {
+            if let Some(id) = self.model.selection.focused_id.clone() {
+                self.extract_request = Some(id);
+            }
+            return true;
+        }
+        if self
+            .model
+            .selection
+            .focused_id
+            .as_ref()
+            .is_some_and(|id| self.extracted.contains_key(id))
+            && !m.platform
+        {
+            return true;
+        }
         // The card switcher is up (Ctrl held): Tab steps through the chord
         // path below, Enter goes now, Escape puts it back, and nothing
         // else reaches a card while it is open.
@@ -1118,6 +1137,11 @@ impl AppView {
     /// (`decoys.rs`). Everything in this file and ime.rs goes through here.
     pub fn live_body(&mut self, id: &str) -> Option<&mut Box<dyn crate::body::CardBody>> {
         if self.model.card(id).is_some_and(|c| c.masked) {
+            return None;
+        }
+        // A card in its own window takes its input there, not on the canvas
+        // (#356 spike).
+        if self.extracted.contains_key(id) {
             return None;
         }
         self.bodies.get_mut(id)
