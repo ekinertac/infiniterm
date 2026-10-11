@@ -17,7 +17,7 @@ export const featureGroups: FeatureGroup[] = [
     title: 'Agents and card states',
     items: [
       { text: 'Four border colours: working, waiting on you, failed, done.', href: 'guide/card-states/' },
-      { text: 'Claude Code, Codex, OpenCode, Pi and Cursor report through hooks, installed with one command each.', href: 'guide/install/' },
+      { text: 'Claude Code, Codex, OpenCode, Pi, Cursor and Antigravity report through hooks, installed with one command each.', href: 'guide/install/' },
       { text: 'Any command in zsh reports too: a build that runs 5 seconds goes violet, then green or red.', href: 'guide/card-states/' },
       { text: 'Each workspace tab wears one dot per card, lit in that card\'s colour.', href: 'guide/canvas/#groups-and-workspaces' },
       { text: 'Done means unseen: a green card goes grey once you have looked at it.' },
