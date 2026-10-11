@@ -100,12 +100,10 @@ impl AppView {
             .then(|| self.model.selection.focused_id.clone())
             .flatten();
         for card in cards {
-            let world = fit_size(
-                &card.id,
-                card.rect,
-                maximized.as_deref(),
-                self.model.view_size,
-            );
+            // A card in its own window fills that window (#356 spike).
+            let world = self.extracted_size.get(&card.id).copied().unwrap_or_else(|| {
+                fit_size(&card.id, card.rect, maximized.as_deref(), self.model.view_size)
+            });
             let is_terminal = self
                 .bodies
                 .get_mut(&card.id)

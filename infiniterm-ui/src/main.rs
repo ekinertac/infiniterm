@@ -38,6 +38,7 @@ mod middle_drag;
 mod native_menu;
 mod omnibox;
 mod overlays;
+mod own_window;
 mod page_body;
 mod paint;
 mod runtime;
@@ -258,6 +259,16 @@ pub struct AppView {
     /// A terminal's Paste from the right-click menu: the card to paste into,
     /// read from the clipboard in the poll task.
     pub paste_request: Option<String>,
+    /// Cards in a window of their own (#356 spike), by card id. The canvas
+    /// keeps the slot and paints a placeholder; `own_window.rs` owns the
+    /// windows.
+    pub extracted: std::collections::HashMap<String, gpui::WindowHandle<own_window::CardWindow>>,
+    /// The grid size of each extracted card: its window's content, in
+    /// world units at scale 1 (terminals.rs `reconcile_terminals`).
+    pub extracted_size: std::collections::HashMap<String, infiniterm_core::grid::Size>,
+    /// Set by a key, opened by the poll task (`own_window::CardWindow::open`
+    /// must not run inside an app update).
+    pub extract_request: Option<String>,
     /// `ift read` requests the poll timer answers once the output is parsed.
     pub read_requests: Vec<crate::terminals::ReadRequest>,
     pub shortcuts_scroll: gpui::ScrollHandle,
@@ -589,6 +600,47 @@ fn main() {
                             cx.notify();
                         }
                     });
+                    // Extraction (#356 spike). Opened here, after the update
+                    // above has returned, so no second window touches the
+                    // app while it is borrowed.
+                    let asked = poll
+                        .update(cx, |this, _| this.extract_request.take())
+                        .ok()
+                        .flatten();
+                    if let Some(card) = asked {
+                        let app = poll.clone();
+                        let key = card.clone();
+                        let opened = cx
+                            .update(|cx| own_window::CardWindow::open(app, key, cx))
+                            .ok()
+                            .flatten();
+                        if let Some(handle) = opened {
+                            let _ = poll.update(cx, |this, _| {
+                                this.extracted.insert(card, handle);
+                            });
+                        }
+                    }
+                    // An extracted card's window repaints when its body has
+                    // output or a blink is due, as the canvas does.
+                    let windows: Vec<_> = poll
+                        .update(cx, |this, _| {
+                            this.extracted
+                                .iter()
+                                .map(|(c, h)| (c.clone(), *h))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    for (card, handle) in windows {
+                        let now = now_ms();
+                        let wants = poll
+                            .update(cx, |this, _| {
+                                this.bodies.get(&card).is_some_and(|b| b.wants_frame(now))
+                            })
+                            .unwrap_or(false);
+                        if wants {
+                            let _ = handle.update(cx, |_, window, _| window.refresh());
+                        }
+                    }
                     if alive.is_err() {
                         break;
                     }

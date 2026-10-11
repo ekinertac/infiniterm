@@ -547,20 +547,26 @@ impl AppView {
             }
             let focused = sel.focused_id.as_deref() == Some(&card.id);
             let selected = sel.extra.contains(&card.id);
-            // A masked card shows its decoy in its place (decoys.rs).
-            let body = if card.masked {
-                self.decoys
-                    .get_mut(&card.id)
-                    .map(|d| d as &mut dyn crate::body::CardBody)
+            // A card in its own window (#356 spike) keeps its slot as an
+            // empty card; its body paints in that window.
+            if self.extracted.contains_key(&card.id) {
+                window.paint_quad(fill(b, chrome.card_bg));
             } else {
-                self.bodies.get_mut(&card.id).map(|b| b.as_mut())
-            };
-            if let Some(body) = body {
-                // Clipped to the card: a long line or a wash must not
-                // paint over the neighbour.
-                window.with_content_mask(Some(gpui::ContentMask { bounds: b }), |window| {
-                    body.paint(b, vp.scale, focused, now, window, cx)
-                });
+                // A masked card shows its decoy in its place (decoys.rs).
+                let body = if card.masked {
+                    self.decoys
+                        .get_mut(&card.id)
+                        .map(|d| d as &mut dyn crate::body::CardBody)
+                } else {
+                    self.bodies.get_mut(&card.id).map(|b| b.as_mut())
+                };
+                if let Some(body) = body {
+                    // Clipped to the card: a long line or a wash must not
+                    // paint over the neighbour.
+                    window.with_content_mask(Some(gpui::ContentMask { bounds: b }), |window| {
+                        body.paint(b, vp.scale, focused, now, window, cx)
+                    });
+                }
             }
             // The focused card has no scrim of its own, so the away wash is
             // laid on it here; the rest are already dimmed once.
