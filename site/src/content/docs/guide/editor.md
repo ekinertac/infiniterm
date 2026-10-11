@@ -3,7 +3,7 @@ title: Editor cards
 description: Editing files on the canvas, ift as your EDITOR, multiple cursors, tabs, and saving.
 ---
 
-An editor card is a file on the canvas: syntax highlighting for 17 languages through tree-sitter, find and replace, go to line (`Ctrl G`), comment toggle, and a file tree beside it (`Cmd K`). There is no LSP, on purpose; the one completion is for JSON files with a schema (below). A scrollbar at the right edge shows when the file is longer than the card.
+An editor card is a file on the canvas: syntax highlighting for 17 languages through tree-sitter, find and replace, go to line (`Ctrl G`), comment toggle, and a file tree beside it (`Cmd K`). There is no LSP, on purpose; the completions are words from your files and, for JSON files with a schema, keys and values (below). A scrollbar at the right edge shows when the file is longer than the card.
 
 ## Opening files
 
@@ -22,6 +22,10 @@ A file that does not exist yet opens empty, and the first save creates it; closi
 An editor you arrived at with the arrows is a card like any other and takes no keys, so nothing typed at the canvas can land in a file. Click into the text or press `Enter` to lock the keyboard to it: the ring turns the warning colour and the status bar says so. While locked, `Cmd T` / `Cmd W` open and close tabs, `Cmd 1` to `Cmd 9` jump between them, and `Cmd S` saves. Middle-click on a tab closes it. `Escape` lets go once it has nothing else to close: the first press closes a completion list, the find bar, extra cursors or a selection, and the next one unlocks. `Cmd Escape` unlocks at once, and `Cmd Shift P` opens the command palette from a locked editor, as from any card. To use another chord for it, set `"cmd+escape": null` and, for example, `"cmd+shift+e": "browser.leave"` in `keybindings.json`. A chord can also apply only while an editor is locked, see [bindings that apply only sometimes](../configuration/#bindings-that-apply-only-sometimes).
 
 Typing a quote, a backtick or an opening bracket over selected text wraps it: select `foo`, type `(`, get `(foo)`. The text stays selected, so a second press wraps it again.
+
+## Words from your files
+
+Type two letters and a list of words from the file opens under the caret, nearest to the caret first, then words from the card's other tabs, marked with the tab's name. Where the file has a grammar, words inside comments and strings are left out. From three letters, letters in order match too: `gtl` finds `getTotalLength`. `Tab` takes the top row. `Enter` takes a row only after you chose it with Up or Down, so typing a word and pressing `Enter` is still a new line. `Escape` closes the list. To turn it off, set `"editor.completeWords": false`.
 
 ## JSON with a schema
 

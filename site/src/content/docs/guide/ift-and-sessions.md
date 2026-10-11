@@ -13,11 +13,14 @@ ift ~/Code/project     # an editor card with a file tree rooted there
 ift src/main.rs        # edit the file over this terminal card, like vim
 ift -n src/main.rs     # the file in a card of its own, returning at once
 ift src/main.rs:42     # ...at line 42 (file:42:7 for a column)
+ift terminal ~/a ~/b   # a terminal card per folder, its shell starting there
 ift diff               # changes against git HEAD, as a card
 ift diff src/          # only under a path
 ```
 
 Run inside a terminal card, `ift <file>` lays an editor over that card and waits until you close it, so `EDITOR=ift` works for `git commit`. A file that does not exist yet opens empty and the first save creates it, so any word that is not one of `ift`'s commands is taken as a file name. See [Editor cards](../editor/).
+
+`ift terminal <folder>...` makes a terminal card for each folder on the workspace you are looking at and focuses the last one. It starts infiniterm first when it is not running.
 
 A path beats a verb: a directory called `ls` in front of you opens the directory.
 
