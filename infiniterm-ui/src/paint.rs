@@ -9,6 +9,9 @@
 //! SCREEN pixels then divided by the scale, so a 2 px border is 2 px at 25%
 //! and at 400%. Maximise paints the focused card alone, filling the view.
 use crate::{now_ms, AppView, SWAP_MS};
+
+/// Font size, in world points, of the text on a card that is in its own window.
+const EXTRACTED_TEXT_PT: f32 = 36.;
 use gpui::{fill, outline, point, px, size, App, BorderStyle, Bounds, Pixels, Window};
 use infiniterm_core::agent_state::AgentState;
 use infiniterm_core::card_label::split_label;
@@ -551,6 +554,24 @@ impl AppView {
             // empty card; its body paints in that window.
             if self.extracted.contains_key(&card.id) {
                 window.paint_quad(fill(b, chrome.card_bg));
+                // Big and centred, scaled with the zoom like the card: it
+                // has to read across a fit-all canvas (#356 spike).
+                let fp = px(EXTRACTED_TEXT_PT * vp.scale as f32);
+                let line = crate::text::shape(
+                    window,
+                    "In its own window",
+                    fp,
+                    &chrome.typography.regular,
+                    chrome.card_fg,
+                );
+                let tb = Bounds::new(
+                    point(
+                        b.origin.x + b.size.width / 2. - line.width / 2.,
+                        b.origin.y + b.size.height / 2. - fp * 0.6,
+                    ),
+                    size(line.width, fp * 1.4),
+                );
+                crate::text::paint_in(window, cx, &line, tb, px(0.));
             } else {
                 // A masked card shows its decoy in its place (decoys.rs).
                 let body = if card.masked {

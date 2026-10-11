@@ -1139,6 +1139,11 @@ impl AppView {
         if self.model.card(id).is_some_and(|c| c.masked) {
             return None;
         }
+        // A card in its own window takes its input there, not on the canvas
+        // (#356 spike).
+        if self.extracted.contains_key(id) {
+            return None;
+        }
         self.bodies.get_mut(id)
     }
 

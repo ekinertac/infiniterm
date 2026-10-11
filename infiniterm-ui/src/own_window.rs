@@ -163,9 +163,11 @@ impl Render for CardWindow {
             w: f32::from(viewport.width) as f64,
             h: f32::from(viewport.height) as f64,
         };
+        // Set once, when the window first draws: the grid does not follow
+        // later resizes (Ekin, 2026-10-11). The shell keeps this size.
         let card = self.card.clone();
         self.app.update(cx, |app, cx| {
-            if app.extracted_size.get(&card) != Some(&world) {
+            if !app.extracted_size.contains_key(&card) {
                 app.extracted_size.insert(card, world);
                 cx.notify();
             }
@@ -203,11 +205,15 @@ impl Render for CardWindow {
                             cx,
                         );
                         let now = crate::now_ms();
+                        let started = std::time::Instant::now();
                         let wants = app.update(cx, |app, cx| {
                             let body = app.bodies.get_mut(&paint_card)?;
                             body.paint(bounds, 1., true, now, window, cx);
                             Some(body.wants_frame(now))
                         });
+                        if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                            eprintln!("[own-window] paint {} us", started.elapsed().as_micros());
+                        }
                         if wants == Some(true) {
                             window.request_animation_frame();
                         }

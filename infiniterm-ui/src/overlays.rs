@@ -592,7 +592,11 @@ impl Render for AppView {
                                     cx,
                                 );
                                 let more = entity.update(cx, |this, cx| {
+                                    let started = std::time::Instant::now();
                                     this.frame(bounds, window, cx);
+                                    if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                                        eprintln!("[main-window] frame {} us", started.elapsed().as_micros());
+                                    }
                                     this.needs_frame()
                                 });
                                 // Only while something moves or arrives; an idle
