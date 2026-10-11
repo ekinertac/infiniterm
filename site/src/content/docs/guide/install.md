@@ -13,7 +13,7 @@ curl -fsSL https://infiniterm.app/install.sh | sh
 
 It downloads the latest release, checks its checksum, its signature and its notarization the way the app's own updater does, copies it into `/Applications`, and puts `ift` on your PATH. An app already installed is left alone, since it updates itself. [Read the script](/install.sh) first if you like.
 
-Agent hooks edit the agent's config, so the script asks before wiring them, and only for the agents it finds (Claude Code, Pi, Codex, OpenCode, Cursor). With nobody at a terminal to answer (an agent running the install, a CI job) it skips them and prints the commands. To decide up front, end the line with `| sh -s -- --hooks claude,pi,codex,opencode,cursor` (any of them) or `| sh -s -- --no-hooks`.
+Agent hooks edit the agent's config, so the script asks before wiring them, and only for the agents it finds (Claude Code, Pi, Codex, OpenCode, Cursor, Antigravity). With nobody at a terminal to answer (an agent running the install, a CI job) it skips them and prints the commands. To decide up front, end the line with `| sh -s -- --hooks claude,pi,codex,opencode,cursor,antigravity` (any of them) or `| sh -s -- --no-hooks`.
 
 ## Homebrew
 
