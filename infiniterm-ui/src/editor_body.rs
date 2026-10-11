@@ -37,6 +37,7 @@ use infiniterm_core::files::{
 };
 use infiniterm_core::git::{git_show_head, repo_of};
 use infiniterm_core::grid::{Point, Size};
+use infiniterm_core::words::{complete_words, unique_words, Other};
 use infiniterm_editor::buffer::Buffer;
 use infiniterm_editor::diff::{gutter_marks, GutterMark};
 use infiniterm_editor::explorer::{Entry, Tree, TreeAction};
@@ -46,6 +47,7 @@ use infiniterm_editor::language::Language;
 use infiniterm_editor::search::Search;
 use infiniterm_editor::wrap::wrap_line;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// One row on screen: a line, or a piece of a wrapped one, as a char range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,6 +239,13 @@ pub struct EditorBody {
     completer: Option<Box<dyn Provider>>,
     completion: Option<CompletionPopup>,
     completion_closed_at: Option<u64>,
+    /// `editor.completeWords`: plain words when nothing else answers.
+    pub complete_words: bool,
+    /// The other tabs of the card, for the word list (`EditorTabs::key`).
+    pub other_words: Vec<(String, Arc<Vec<String>>)>,
+    /// This text's distinct words, for the other tabs' lists, cached like
+    /// the spans: the buffer's version and the load count.
+    word_cache: (u64, u64, Arc<Vec<String>>),
     /// The column a visual up/down keeps aiming at, with the caret it was
     /// set for: a caret moved by anything else forgets it.
     visual_goal: Option<(usize, usize)>,
@@ -341,6 +350,9 @@ impl EditorBody {
             completer: None,
             completion: None,
             completion_closed_at: None,
+            complete_words: true,
+            other_words: vec![],
+            word_cache: (u64::MAX, 0, Arc::new(vec![])),
             visual_goal: None,
             search: None,
             query: Field::default(),
@@ -1525,10 +1537,6 @@ impl EditorBody {
     /// Only for one plain caret in the text; the selected row stays on the
     /// same item while the list narrows around it.
     fn update_completion(&mut self) {
-        let Some(provider) = self.completer.as_ref() else {
-            self.completion = None;
-            return;
-        };
         if self.buffer.cursor_count() != 1
             || self.buffer.selection().is_some()
             || self.focus != Focus::Buffer
@@ -1539,10 +1547,23 @@ impl EditorBody {
             return;
         }
         // shortcut: the whole text is copied for every key. Fine for a
-        // config file; the cap above is where that stops being true.
+        // config file or a source file; the cap above is where that stops
+        // being true.
         let text = self.buffer.text();
         let cursor = self.buffer.cursor();
-        let offer = provider.complete(&text, cursor);
+        let schema_offer = self
+            .completer
+            .as_ref()
+            .and_then(|p| p.complete(&text, cursor));
+        let words_allowed = self
+            .completer
+            .as_ref()
+            .is_none_or(|p| p.falls_back_to_words());
+        let offer = match schema_offer {
+            Some(o) => Some(o),
+            None if words_allowed => self.word_offer(),
+            None => None,
+        };
         // A popup is for a word being typed, or a quote that opens a key. After
         // a newline, a space or a comma it offered every key again, so every
         // Enter or space opened one, and the next Enter took a completion
@@ -1575,6 +1596,51 @@ impl EditorBody {
         });
     }
 
+    /// Byte ranges of the comments and strings, from the syntax spans:
+    /// words inside them are not collected.
+    fn skip_ranges(&mut self) -> Vec<(usize, usize)> {
+        let mut skip: Vec<(usize, usize)> = self
+            .spans_for()
+            .iter()
+            .filter(|s| s.capture.starts_with("comment") || s.capture.starts_with("string"))
+            .map(|s| (s.start, s.end))
+            .collect();
+        skip.sort_unstable();
+        skip
+    }
+
+    /// The words popup: this text's words nearest the caret, then the other
+    /// tabs'. Not for a picture, a read-only buffer, or with the setting off.
+    fn word_offer(&mut self) -> Option<Offer> {
+        if !self.complete_words || self.image.is_some() || self.read_only {
+            return None;
+        }
+        let skip = self.skip_ranges();
+        let others: Vec<Other> = self
+            .other_words
+            .iter()
+            .map(|(name, words)| Other {
+                name,
+                words: words.as_slice(),
+            })
+            .collect();
+        complete_words(&self.buffer.text(), self.buffer.cursor(), &skip, &others)
+    }
+
+    /// This text's distinct words, for the other tabs of the card.
+    pub fn word_set(&mut self) -> Arc<Vec<String>> {
+        if (self.word_cache.0, self.word_cache.1) != (self.buffer.version, self.loads) {
+            let skip = self.skip_ranges();
+            let words = if self.image.is_some() {
+                vec![]
+            } else {
+                unique_words(&self.buffer.text(), &skip)
+            };
+            self.word_cache = (self.buffer.version, self.loads, Arc::new(words));
+        }
+        self.word_cache.2.clone()
+    }
+
     /// A key for the open popup: Up and Down move, Tab accepts, Enter accepts
     /// a row Up or Down chose (else it closes the popup and stays a newline),
     /// Escape closes. True when the popup took it; nothing is taken with a
@@ -1585,6 +1651,12 @@ impl EditorBody {
             return false;
         };
         if m.platform || m.control || m.alt || m.shift {
+            return false;
+        }
+        // Enter on words: you typed a word and mean the line break. It takes
+        // the top row only once the row was moved on purpose.
+        if k.key == "enter" && !popup.moved && !popup.offer.enter_accepts {
+            self.completion = None;
             return false;
         }
         let n = popup.offer.items.len();
@@ -3698,6 +3770,101 @@ mod tests {
     }
 
     #[test]
+    fn words_open_from_two_letters_tab_takes_the_top_row_and_enter_only_after_a_move() {
+        let mut b = body();
+        b.completer = None;
+        b.buffer = Buffer::new("alpha_beta alpine\nal");
+        b.buffer.move_doc_end(false);
+        b.update_completion();
+        let p = b.completion.as_ref().expect("opens at two letters");
+        assert_eq!(p.offer.items[0].label, "alpine", "nearest first");
+        assert!(!p.offer.enter_accepts);
+        // Enter you meant as a line break: the popup closes and the key passes on.
+        assert!(!b.complete_key(&key("enter"), 0.));
+        assert!(b.completion.is_none());
+        // Tab takes the top row.
+        b.update_completion();
+        b.buffer.type_char('p', 1.);
+        b.update_completion();
+        assert!(b.complete_key(&key("tab"), 2.));
+        assert_eq!(b.buffer.text(), "alpha_beta alpine\nalpine");
+        // After a move on purpose, Enter accepts.
+        b.buffer = Buffer::new("alpha_beta alpine\nal");
+        b.buffer.move_doc_end(false);
+        b.completion_closed_at = None;
+        b.update_completion();
+        assert!(b.complete_key(&key("down"), 3.));
+        assert!(b.complete_key(&key("enter"), 4.));
+        assert_eq!(b.buffer.text(), "alpha_beta alpine\nalpha_beta");
+    }
+
+    #[test]
+    fn the_word_popup_can_be_turned_off_and_is_not_for_a_read_only_buffer() {
+        let mut b = body();
+        b.completer = None;
+        b.buffer = Buffer::new("alpha_beta\nal");
+        b.buffer.move_doc_end(false);
+        b.complete_words = false;
+        b.update_completion();
+        assert!(b.completion.is_none());
+        b.complete_words = true;
+        b.read_only = true;
+        b.update_completion();
+        assert!(b.completion.is_none());
+    }
+
+    #[test]
+    fn words_in_comments_and_strings_of_a_source_file_are_not_collected() {
+        let mut b = body();
+        b.completer = None;
+        b.language = Language::for_path("x.rs");
+        b.buffer = Buffer::new("fn main() {\n    // secret_word in a comment\n    let secret = \"secret_text\";\n    sec");
+        b.buffer.move_doc_end(false);
+        b.update_completion();
+        let labels: Vec<String> = b
+            .completion
+            .as_ref()
+            .expect("secret is a name")
+            .offer
+            .items
+            .iter()
+            .map(|c| c.label.clone())
+            .collect();
+        assert_eq!(labels, vec!["secret"]);
+    }
+
+    #[test]
+    fn the_other_tabs_words_are_offered_with_the_tab_name() {
+        let mut b = body();
+        b.completer = None;
+        b.other_words = vec![("main.rs".into(), Arc::new(vec!["configure".to_string()]))];
+        b.buffer = Buffer::new("conf");
+        b.buffer.move_doc_end(false);
+        b.update_completion();
+        let item = &b.completion.as_ref().unwrap().offer.items[0];
+        assert_eq!(
+            (item.label.as_str(), item.detail.as_str()),
+            ("configure", "main.rs")
+        );
+        // This body's own words, for its siblings: cached until the text changes.
+        let w1 = b.word_set();
+        assert!(Arc::ptr_eq(&w1, &b.word_set()));
+        b.buffer.type_char('x', 0.);
+        assert!(!Arc::ptr_eq(&w1, &b.word_set()));
+    }
+
+    #[test]
+    fn settings_json_never_falls_back_to_words() {
+        let mut b = body();
+        b.completer = settings_provider();
+        b.buffer = Buffer::new("{ \"ui.fitPadding\": 12, \"ui.fitMagnify\": 1\n  fit");
+        b.buffer.move_doc_end(false);
+        b.update_completion();
+        // `fit` outside a key is no place for a word, and no schema offer applies.
+        assert!(b.completion.is_none());
+    }
+
+    #[test]
     fn escape_closes_the_popup_until_the_next_edit_and_other_keys_pass_through() {
         let mut b = body();
         b.completer = settings_provider();
@@ -3718,8 +3885,9 @@ mod tests {
         // No popup, no keys taken.
         b.completion = None;
         assert!(!b.complete_key(&key("enter"), 2.));
-        // A file with no provider never opens one.
+        // A file with no provider and the word popup off never opens one.
         b.completer = None;
+        b.complete_words = false;
         b.update_completion();
         assert!(b.completion.is_none());
     }

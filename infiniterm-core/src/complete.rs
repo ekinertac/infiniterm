@@ -42,11 +42,23 @@ pub struct Completion {
 pub struct Offer {
     pub typed: usize,
     pub items: Vec<Completion>,
+    /// Enter takes the top row at once. True for a schema's keys and
+    /// values; false for words, where typing a word and pressing Enter must
+    /// not swap it for a longer one: Enter accepts only after the row was
+    /// moved with Up or Down.
+    pub enter_accepts: bool,
 }
 
 /// Answers for a text and a caret (a char index).
 pub trait Provider {
     fn complete(&self, doc: &str, caret: usize) -> Option<Offer>;
+
+    /// Whether the editor may offer plain words when this has nothing to
+    /// say. `settings.json` says no: a list of words from the file is wrong
+    /// there, the keys and values are all it should offer.
+    fn falls_back_to_words(&self) -> bool {
+        true
+    }
 }
 
 /// The most rows an offer carries; the popup shows fewer and scrolls.
@@ -151,6 +163,10 @@ impl Provider for SchemaProvider {
         let schema = self.schema(doc)?;
         offer(&schema, &ctx)
     }
+
+    fn falls_back_to_words(&self) -> bool {
+        !self.builtin
+    }
 }
 
 /// Keeps the candidates the typed text allows, best first. A prefix with a
@@ -245,6 +261,7 @@ fn offer(schema: &Schema, ctx: &Context) -> Option<Offer> {
     (!items.is_empty()).then_some(Offer {
         typed: ctx.typed,
         items,
+        enter_accepts: true,
     })
 }
 

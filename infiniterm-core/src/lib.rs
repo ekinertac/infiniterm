@@ -4,6 +4,7 @@
 //! independent of rendering and card bodies; see HANDOVER.md for the port plan.
 
 pub mod viewport;
+pub mod words;
 
 pub mod grid;
 

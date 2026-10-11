@@ -201,6 +201,9 @@ pub struct Canvas {
 pub struct Editor {
     /// A wash behind the line the cursor is on.
     pub highlight_line: bool,
+    /// The word popup: letters typed in an editor offer words from the file
+    /// and the card's other tabs (`words.rs`).
+    pub complete_words: bool,
     /// Selected text's background and colour. Empty means the theme's yellow
     /// on the theme's background: a highlighter pen, visible on any scheme.
     pub selection_color: String,
@@ -403,6 +406,7 @@ pub fn default_config() -> Config {
         },
         editor: Editor {
             highlight_line: true,
+            complete_words: true,
             selection_color: String::new(),
             selection_text_color: String::new(),
             cursor_color: String::new(),
@@ -659,6 +663,7 @@ pub fn merge_config(raw: &Value) -> Config {
         },
         editor: Editor {
             highlight_line: bool_(e.get("highlightLine"), d.editor.highlight_line),
+            complete_words: bool_(e.get("completeWords"), d.editor.complete_words),
             selection_color: str_(e.get("selectionColor"), &d.editor.selection_color),
             selection_text_color: str_(e.get("selectionTextColor"), &d.editor.selection_text_color),
             cursor_color: str_(e.get("cursorColor"), &d.editor.cursor_color),

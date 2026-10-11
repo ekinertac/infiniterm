@@ -180,6 +180,7 @@ impl AppView {
             }
             body.blink = cfg.terminal.cursor_blink;
             body.highlight_line = cfg.editor.highlight_line;
+            body.complete_words = cfg.editor.complete_words;
             let path = body.path.clone().unwrap_or_default();
             body.wrap = match cfg.editor.wrap {
                 Wrap::Always => true,
