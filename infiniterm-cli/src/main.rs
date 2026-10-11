@@ -21,6 +21,7 @@
 
 mod attach;
 mod claude_hooks;
+mod antigravity_hooks;
 mod cursor_hooks;
 mod completion;
 mod connect;
@@ -121,6 +122,9 @@ ift — drive infiniterm from a shell
                              runs Pi against its own agent dir needs its own)
   ift install-cursor-hooks   wire infiniterm into ~/.cursor/hooks.json
                              (Cursor Agent CLI and IDE agent)
+  ift install-antigravity-hooks
+                             wire infiniterm into ~/.gemini/config/hooks.json
+                             (Antigravity CLI, `agy`)
   ift install-extension <path|id|store-url>
                              add an extension the browser cards load: an
                              unpacked directory, or an id / Chrome Web
@@ -135,7 +139,7 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 24] = [
+pub const SUBCOMMANDS: [&str; 25] = [
     "diff",
     "ls",
     "sessions",
@@ -158,6 +162,7 @@ pub const SUBCOMMANDS: [&str; 24] = [
     "install-opencode-hooks",
     "install-pi-hooks",
     "install-cursor-hooks",
+    "install-antigravity-hooks",
     "install-extension",
     "completion",
 ];
@@ -182,6 +187,9 @@ fn main() -> ExitCode {
         ),
         Some("install-cursor-hooks") => {
             install_cursor(args.contains(&"--dry-run".to_string()))
+        }
+        Some("install-antigravity-hooks") => {
+            install_antigravity(args.contains(&"--dry-run".to_string()))
         }
         Some("install-extension") => install_extension(args.get(1).map(String::as_str)),
         Some("install") => install_self(),
@@ -625,6 +633,22 @@ fn write_cursor_script(path: &std::path::Path, body: &str) -> Result<(), ExitCod
 }
 
 fn wire_cursor_hooks_file(path: &std::path::Path, dry_run: bool) -> ExitCode {
+    wire_json_hooks(
+        path,
+        dry_run,
+        cursor_hooks::install,
+        "takes effect in the next cursor agent session",
+    )
+}
+
+/// Reads a hooks file, lets `install` merge ours in, and writes it back only
+/// when something changed; a file that does not parse is never rewritten.
+fn wire_json_hooks(
+    path: &std::path::Path,
+    dry_run: bool,
+    install: impl FnOnce(&mut serde_json::Value) -> Vec<String>,
+    takes_effect: &str,
+) -> ExitCode {
     let existing = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".into());
     let mut settings: serde_json::Value = match serde_json::from_str(&existing) {
         Ok(v) => v,
@@ -635,7 +659,7 @@ fn wire_cursor_hooks_file(path: &std::path::Path, dry_run: bool) -> ExitCode {
         }
     };
 
-    let changed = cursor_hooks::install(&mut settings);
+    let changed = install(&mut settings);
     if changed.is_empty() {
         println!("already wired: {}", path.display());
         return ExitCode::SUCCESS;
@@ -661,8 +685,45 @@ fn wire_cursor_hooks_file(path: &std::path::Path, dry_run: bool) -> ExitCode {
 
     println!("updated {}", path.display());
     println!("  events: {}", changed.join(", "));
-    println!("  takes effect in the next cursor agent session");
+    println!("  {takes_effect}");
     ExitCode::SUCCESS
+}
+
+const ANTIGRAVITY_ADAPTER: &str = include_str!("../adapters/antigravity-hook.sh");
+
+fn antigravity_adapter_source(hook: &str) -> String {
+    ANTIGRAVITY_ADAPTER.replace("__INFINITERM_HOOK__", hook)
+}
+
+/// Antigravity's CLI reads global hooks from `~/.gemini/config/hooks.json`.
+/// The adapter script goes beside the CLI's own hooks, by absolute path:
+/// a relative command would run from whatever the workspace is.
+fn install_antigravity(dry_run: bool) -> ExitCode {
+    let Some(binary) = hook_binary() else {
+        return hook_missing();
+    };
+    let gemini = home().join(".gemini");
+    let script = gemini.join("hooks").join("infiniterm-antigravity-hook.sh");
+    let hooks_json = gemini.join("config").join("hooks.json");
+    let body = antigravity_adapter_source(&binary);
+
+    if std::fs::read_to_string(&script).ok().as_deref() != Some(body.as_str()) {
+        if dry_run {
+            println!("would write {}", script.display());
+        } else if let Err(code) = write_cursor_script(&script, &body) {
+            return code;
+        }
+    } else {
+        println!("already installed: {}", script.display());
+    }
+
+    let script_path = script.to_string_lossy().into_owned();
+    wire_json_hooks(
+        &hooks_json,
+        dry_run,
+        |v| antigravity_hooks::install(v, &script_path),
+        "takes effect in the next agy session (hooks load when a session starts)",
+    )
 }
 
 /// Codex reads hooks from `$CODEX_HOME/hooks.json`, `~/.codex` by default,
@@ -921,6 +982,94 @@ mod tests {
         assert!(src.contains("const HOOK = \"/Applications/x.app/Contents/MacOS/infiniterm-hook\";"));
         assert!(!src.contains("__INFINITERM_HOOK__"));
         assert!(src.contains("pi.on(\"agent_settled\""));
+    }
+
+    /// Runs an adapter script the way an agent does: JSON piped in, a card id
+    /// in the environment, a stand-in for `infiniterm-hook` that records what
+    /// it was called with. Two bugs hid here until a real run: python's stdin
+    /// is the script itself (the piped JSON was never read), and
+    /// `subprocess.run(input=str)` needs `text=True` (the error was swallowed).
+    /// None when python3 is missing, as the adapters themselves do nothing then.
+    fn run_adapter(adapter: &str, event_arg: &str, stdin: &str) -> Option<String> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        if Command::new("python3").arg("--version").output().is_err() {
+            return None;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "ift-adapter-{}-{}",
+            std::process::id(),
+            event_arg.len() + stdin.len()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("call.txt");
+        let fake = dir.join("hook.sh");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" > {0}\ncat >> {0}\n", log.display()),
+        )
+        .unwrap();
+        let script = dir.join("adapter.sh");
+        std::fs::write(&script, adapter.replace("__INFINITERM_HOOK__", &fake.to_string_lossy()))
+            .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        for f in [&fake, &script] {
+            std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut child = Command::new("sh")
+            .arg(&script)
+            .arg(event_arg)
+            .env("INFINITERM_CARD_ID", "card-1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+        child.wait().unwrap();
+        let out = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        Some(out)
+    }
+
+    #[test]
+    fn the_antigravity_adapter_reports_a_turn_and_its_end() {
+        let started = r#"{"conversationId":"c1","workspacePaths":["/work"],"invocationNum":0}"#;
+        let Some(out) = run_adapter(ANTIGRAVITY_ADAPTER, "PreInvocation", started) else {
+            return;
+        };
+        assert!(out.starts_with("UserPromptSubmit antigravity"), "{out}");
+        assert!(out.contains(r#""session_id": "c1""#) && out.contains(r#""cwd": "/work""#));
+        let idle = r#"{"conversationId":"c1","fullyIdle":true,"terminationReason":"NO_TOOL_CALL","error":""}"#;
+        let out = run_adapter(ANTIGRAVITY_ADAPTER, "Stop", idle).unwrap();
+        assert!(out.starts_with("Stop antigravity"), "{out}");
+        let failed = r#"{"conversationId":"c1","fullyIdle":true,"terminationReason":"ERROR","error":"quota"}"#;
+        let out = run_adapter(ANTIGRAVITY_ADAPTER, "Stop", failed).unwrap();
+        assert!(out.starts_with("StopFailure antigravity"), "{out}");
+        // A Stop between steps is not the end of the turn.
+        let busy = r#"{"conversationId":"c1","fullyIdle":false,"terminationReason":"NO_TOOL_CALL"}"#;
+        assert_eq!(run_adapter(ANTIGRAVITY_ADAPTER, "Stop", busy).unwrap(), "");
+        let tool = r#"{"conversationId":"c1","toolCall":{"name":"run_command"}}"#;
+        let out = run_adapter(ANTIGRAVITY_ADAPTER, "PreToolUse", tool).unwrap();
+        assert!(out.contains(r#""tool_name": "run_command""#), "{out}");
+    }
+
+    #[test]
+    fn the_cursor_adapter_reports_a_prompt() {
+        let prompt = r#"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"k1","cwd":"/work"}"#;
+        let Some(out) = run_adapter(CURSOR_ADAPTER, "", prompt) else {
+            return;
+        };
+        assert!(out.starts_with("UserPromptSubmit cursor"), "{out}");
+        assert!(out.contains(r#""session_id": "k1""#), "{out}");
+    }
+
+    #[test]
+    fn the_antigravity_adapter_gets_the_hook_path_and_documents_the_events() {
+        let src = antigravity_adapter_source("/Applications/x.app/Contents/MacOS/infiniterm-hook");
+        assert!(src.contains("HOOK=\"/Applications/x.app/Contents/MacOS/infiniterm-hook\""));
+        assert!(!src.contains("__INFINITERM_HOOK__"));
+        assert!(src.contains("fullyIdle"));
+        assert!(src.contains("agy --conversation"));
     }
 
     #[test]

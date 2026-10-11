@@ -34,6 +34,12 @@ HOOK="__INFINITERM_HOOK__"
 
 command -v python3 >/dev/null 2>&1 || exit 0
 
+# The heredoc below is python's stdin (the script itself), so the JSON the
+# agent pipes in is read here and handed over in the environment. Reading it
+# from inside python got nothing, and no event ever reached the app.
+IFT_HOOK_INPUT=$(cat)
+export IFT_HOOK_INPUT
+
 exec python3 - "$HOOK" <<'PY'
 import json
 import os
@@ -45,7 +51,7 @@ hook_bin = sys.argv[1]
 
 def main() -> None:
     try:
-        raw = sys.stdin.read()
+        raw = os.environ.get("IFT_HOOK_INPUT", "")
         inp = json.loads(raw) if raw.strip() else {}
     except Exception:
         inp = {}
@@ -80,6 +86,7 @@ def main() -> None:
         subprocess.run(
             [hook_bin, event, "cursor"],
             input=json.dumps(payload),
+            text=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=0.5,
