@@ -40,6 +40,10 @@ Nothing flashes, nothing steals focus, nothing sends a notification. You switch 
 
 Native Rust: gpui draws the canvas, `alacritty_terminal` parses the shells, Chromium (CEF) runs the browser cards. No Electron, no account, no telemetry; the one request the app makes on its own is the update check. Early, and in active development.
 
+## Known issues
+
+- **Claude Code's `/tui fullscreen` mode does not work properly here;** most of it misbehaves, and there is no fix planned. Use `/tui default`, which is the way to run Claude Code in infiniterm.
+
 ## Roadmap
 
 Big items only, in rough order. No dates.
