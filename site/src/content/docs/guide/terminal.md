@@ -65,6 +65,10 @@ A block cursor draws the letter under it in the theme's cursor text colour, or b
 
 Hold `Cmd` over a link or a path that exists and it underlines; `Cmd` + click opens it beside the card, a file in an editor card and a URL in a browser card. A double-click on a link selects the whole address. Links a program marks itself (OSC 8: `ls --hyperlink`, `rg --hyperlink-format`, `gcc`, and the markdown links in an agent's reply) are underlined at rest and open on `Cmd` + click, whatever their visible text says; only `http` and `https` addresses open, since the text of a link can lie. Every new terminal card sets `FORCE_HYPERLINK=1` so Claude Code prints real links; a card that is already open keeps its old environment, and `"terminal.env": ["FORCE_HYPERLINK=0"]` turns it off. Issue and pull request numbers are links too: in a card whose directory is a GitHub checkout, `#349` opens that issue or pull request, and `owner/repo#349` works in any card. A bare number needs a space, bracket or quote before it and no letter after it. Holding `Cmd` over any link draws a strong double underline and turns the pointer to a hand. Dropping a file from the Finder onto a terminal pastes its shell-escaped path.
 
+## Claude Code's fullscreen mode
+
+Claude Code's `/tui fullscreen` mode does not work properly in infiniterm: most of it misbehaves, and there is no fix planned. Run `/tui default` in the Claude Code session, which is the way to use it here.
+
 ## Privacy prompts
 
 A program in a card can use what macOS guards: Photos, Contacts, Calendars, Reminders, the camera, the microphone, speech recognition, your location, Bluetooth, other apps (Automation), the Desktop, Documents and Downloads folders, Accessibility, Screen Recording, Input Monitoring and the local network. The first time a program asks, macOS shows its usual dialog. Nothing is asked when you install or launch infiniterm, and infiniterm itself uses none of them.
