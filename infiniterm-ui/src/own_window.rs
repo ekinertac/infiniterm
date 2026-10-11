@@ -163,11 +163,11 @@ impl Render for CardWindow {
             w: f32::from(viewport.width) as f64,
             h: f32::from(viewport.height) as f64,
         };
-        // Set once, when the window first draws: the grid does not follow
-        // later resizes (Ekin, 2026-10-11). The shell keeps this size.
+        // The grid is this window's: it refits on every resize, and the card
+        // gets its canvas size back when the window closes (Ekin, 2026-10-11).
         let card = self.card.clone();
         self.app.update(cx, |app, cx| {
-            if !app.extracted_size.contains_key(&card) {
+            if app.extracted_size.get(&card) != Some(&world) {
                 app.extracted_size.insert(card, world);
                 cx.notify();
             }
@@ -211,6 +211,9 @@ impl Render for CardWindow {
                             // canvas is not drawing while this window has the
                             // keys: feed what the program wrote here (#356
                             // spike; Ekin saw frozen content and lag).
+                            // The refit happens in the canvas's frame too, which
+                            // is not drawing; this window does it for its card.
+                            app.reconcile_terminals(window);
                             app.feed_terminals(now, cx);
                             let body = app.bodies.get_mut(&paint_card)?;
                             body.paint(bounds, 1., true, now, window, cx);
