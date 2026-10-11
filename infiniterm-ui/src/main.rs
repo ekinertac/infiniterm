@@ -632,9 +632,12 @@ fn main() {
                         .unwrap_or_default();
                     for (card, handle) in windows {
                         let now = now_ms();
+                        // Output waiting for the grid is the card's to draw:
+                        // its window feeds it when it paints.
                         let wants = poll
                             .update(cx, |this, _| {
-                                this.bodies.get(&card).is_some_and(|b| b.wants_frame(now))
+                                this.scheduler.pending()
+                                    || this.bodies.get(&card).is_some_and(|b| b.wants_frame(now))
                             })
                             .unwrap_or(false);
                         if wants {

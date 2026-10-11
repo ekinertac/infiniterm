@@ -207,6 +207,11 @@ impl Render for CardWindow {
                         let now = crate::now_ms();
                         let started = std::time::Instant::now();
                         let wants = app.update(cx, |app, cx| {
+                            // The output is parsed in a frame, and the main
+                            // canvas is not drawing while this window has the
+                            // keys: feed what the program wrote here (#356
+                            // spike; Ekin saw frozen content and lag).
+                            app.feed_terminals(now, cx);
                             let body = app.bodies.get_mut(&paint_card)?;
                             body.paint(bounds, 1., true, now, window, cx);
                             Some(body.wants_frame(now))
