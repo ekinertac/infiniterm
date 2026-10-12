@@ -69,6 +69,7 @@ pub mod drop;
 pub mod editor_keys;
 pub mod editor_theme;
 pub mod extensions;
+pub mod extracted_keys;
 pub mod files;
 pub mod frame_rate;
 pub mod fullscreen;

@@ -8,7 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-11
 
-- New: Cmd+Shift+O takes the focused terminal card into a window of its own. The card keeps its place on the canvas as an empty card with "In its own window" on it. The window's terminal refits when you resize it, and the card gets its canvas size back when you close the window (Cmd+W or the red button). Keys to the card on the canvas do nothing while it is out. Only terminal cards for now; the window has no shortcuts of its own yet.
+- New: Cmd+Shift+O takes the focused terminal card into a window of its own. The card keeps its place on the canvas as an empty card with "In its own window" on it. The window's terminal refits when you resize it, and the card gets its canvas size back when you close the window (Cmd+W or the red button). Keys to the card on the canvas do nothing while it is out. In the window Cmd+= and Cmd+- change the font size, Cmd+K clears, Cmd+Shift+C is visual mode, and copy, paste and Cmd+Left / Cmd+Right work as in a card. Find and the other app shortcuts are not there yet. Only terminal cards for now.
 
 ### 2026-10-10
 
