@@ -29,6 +29,8 @@ use gpui::{
     WindowBounds, WindowHandle, WindowOptions,
 };
 
+use infiniterm_core::keymap::{chord_for, KeyPress};
+
 use crate::body::BodyAction;
 use crate::AppView;
 
@@ -100,6 +102,37 @@ impl CardWindow {
             self.close(window, cx);
             cx.stop_propagation();
             return;
+        }
+        // The few app chords that mean something for one terminal (#369): the
+        // font size, clear and visual mode, looked up in the live keymap.
+        if m.platform || m.control {
+            let code = crate::keycode::last_code();
+            let chord = chord_for(&KeyPress {
+                key: &k.key,
+                code,
+                cmd: m.platform,
+                ctrl: m.control,
+                alt: m.alt,
+                shift: if code.is_some() {
+                    crate::keycode::last_shift()
+                } else {
+                    m.shift
+                },
+            });
+            let card = self.card.clone();
+            let ran = self.app.update(cx, |app, acx| {
+                let id = infiniterm_core::extracted_keys::command_for(&app.model.keymap, &chord)
+                    .map(String::from)?;
+                app.run_for_extracted(&card, &id);
+                // The canvas draws the other cards at the new size.
+                acx.notify();
+                Some(())
+            });
+            if ran.is_some() {
+                cx.notify();
+                cx.stop_propagation();
+                return;
+            }
         }
         let card = self.card.clone();
         let now = crate::now_ms();
@@ -338,6 +371,21 @@ fn card_point(p: Point<Pixels>) -> infiniterm_core::grid::Point {
 }
 
 impl AppView {
+    /// Runs a command with the window's card as the focused one, then puts the
+    /// canvas's selection back: `card.clear` and `terminal.visual` act on the
+    /// focused card, and the focus belongs to the canvas, which may be
+    /// somewhere else by now (#369).
+    pub fn run_for_extracted(&mut self, card: &str, command: &str) {
+        let before = self.model.selection.clone();
+        let sel = &mut self.model.selection;
+        sel.focused_id = Some(card.to_string());
+        sel.extra.clear();
+        sel.phantom = None;
+        sel.maximized = false;
+        self.run_command(command);
+        self.model.selection = before;
+    }
+
     /// The card's window closed (the red button, or Cmd+W in it): the card
     /// goes back to the canvas and its grid to its rect.
     pub fn extracted_closed(&mut self, card: &str, cx: &mut Context<Self>) {

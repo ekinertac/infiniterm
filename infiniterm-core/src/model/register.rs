@@ -3730,6 +3730,16 @@ mod tests {
         }
     }
 
+    // #369: a command the extracted window runs from a chord must exist, or
+    // the chord would silently do nothing there.
+    #[test]
+    fn every_command_an_extracted_window_runs_is_registered() {
+        let h = Harness::new();
+        for id in crate::extracted_keys::COMMANDS {
+            assert!(h.r.get(id).is_some(), "{id} is not a command");
+        }
+    }
+
     // #269: a binding with a `when` wins only where its clause holds, the last
     // matching one in the file wins, `command: null` unbinds a chord in a
     // context, and a key without cmd works where the file's reader allowed it.
