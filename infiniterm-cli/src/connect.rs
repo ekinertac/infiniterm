@@ -261,12 +261,24 @@ pub fn run(args: &[String]) -> ExitCode {
             }
         }
     }
-    if let Err(e) = remote::check(&host) {
-        eprintln!("ift: {e}");
-        if !p.install && e.contains("is not installed on the server") {
-            eprintln!("ift: `ift connect {} --install` puts them there", p.host);
+    match remote::check(&host) {
+        // Where `ift` really is on the host (the installer's `~/.local/bin` is
+        // not on a non-interactive ssh's PATH): the instance and every later
+        // call use that path, so a plain `ift connect host` works after an
+        // install (#397).
+        Ok(found) => {
+            if !found.is_empty() && found != host.ift {
+                host.ift = found.clone();
+                p.ift = Some(found);
+            }
         }
-        return ExitCode::from(1);
+        Err(e) => {
+            eprintln!("ift: {e}");
+            if !p.install && e.contains("is not installed on the server") {
+                eprintln!("ift: `ift connect {} --install` puts them there", p.host);
+            }
+            return ExitCode::from(1);
+        }
     }
     // A different version is worth a line, not a refusal: iftd's protocol
     // stays backwards compatible, so an older server still works.
