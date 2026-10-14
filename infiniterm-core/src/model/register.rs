@@ -1616,6 +1616,22 @@ mod tests {
         assert_eq!(h.m.cards.len(), before + 2);
     }
 
+    // #373: the editor's twin of `card.open.diff`: a card beside the focused
+    // one, an editor with its tree rooted at the focused card's directory.
+    #[test]
+    fn open_editor_here_makes_an_editor_on_the_cards_folder() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().cwd = "/tmp".into();
+        let before = h.m.cards.len();
+        h.run("card.open.editor");
+        assert_eq!(h.m.cards.len(), before + 1);
+        let c = h.focused();
+        assert_eq!(c.kind, CardKind::Editor);
+        assert_eq!(c.cwd, "/tmp");
+        assert_eq!(c.root.as_deref(), Some("/tmp"));
+    }
+
     // #90: `app.about` opens the About window. It has no buttons, so
     // closing it asks for nothing, not even an update check.
     #[test]
