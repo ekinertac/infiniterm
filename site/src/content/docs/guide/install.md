@@ -76,6 +76,24 @@ HISTFILE="${INFINITERM_HISTFILE:-$HOME/.zsh_history}"
 
 Outside infiniterm the variable is unset and your usual history file is used.
 
+That keeps each card's history in its own file, and zsh writes it when the shell exits. A card you leave open for days has not written yet, and `~/.zsh_history` (or a tool that reads it, such as mcfly) never sees what you typed in a card. To copy each command to your main history as you enter it, add this to `.zshrc` as well:
+
+```zsh
+autoload -Uz add-zsh-hook
+zmodload zsh/datetime
+_ift_copy_history() {
+  [[ -n $INFINITERM_HISTFILE ]] || return 0
+  local nl=$'\n' line=": ${EPOCHSECONDS}:0;${1%$'\n'}"
+  line=${line//$nl/\\$nl}
+  print -r -- $line >> ~/.zsh_history
+  [[ -n $MCFLY_HISTFILE ]] && print -r -- $line >> $MCFLY_HISTFILE
+  return 0
+}
+add-zsh-hook zshaddhistory _ift_copy_history
+```
+
+It does nothing outside infiniterm, because `INFINITERM_HISTFILE` is unset there. Delete the `MCFLY_HISTFILE` line if you do not use mcfly.
+
 ## Registering a licence
 
 Optional. The app never asks for the key and works the same without it; the key in your receipt email is your proof of purchase either way. To have the About window say who the Mac is licensed to:

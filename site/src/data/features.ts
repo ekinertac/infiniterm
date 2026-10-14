@@ -59,6 +59,7 @@ export const featureGroups: FeatureGroup[] = [
       { text: '`Cmd =` and `Cmd -` change the font size in every terminal at once.' },
       { text: 'The kitty keyboard protocol, so Shift+Enter is a line break in Claude Code and Pi.' },
       { text: 'Programs in a card can ask for macOS permissions (Photos, camera, folders).', href: 'guide/terminal/#privacy-prompts' },
+      { text: '`Cmd Shift O` takes a terminal card into a window of its own; the card keeps its place on the canvas.', href: 'guide/terminal/#a-terminal-in-its-own-window' },
     ],
   },
   {
