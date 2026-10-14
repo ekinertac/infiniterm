@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-14
 
+- Fixed: in the diff card, a long file name in the changed-files list no longer runs into the diff. It is cut from the front, so the end of the name stays.
 - Fixed: the + button in an editor or browser card's tab strip sat far to the right of the last tab. It now sits right beside it.
 - New: "Editor: open this card's folder" in the command palette opens an editor beside the focused card, with its file tree on the folder the card is in. It is the twin of "Diff: this card against git HEAD".
 
