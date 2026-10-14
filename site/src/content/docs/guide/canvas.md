@@ -32,6 +32,8 @@ Drag a card by its top edge or its label. The card stays put while an outline fo
 
 `Cmd Ctrl Alt` + arrow slides the card that way into the next gap, which closes the space a resize (`Cmd Alt S`) leaves. The card stops one gutter short of the next card in line, or on the next grid slot when nothing is there, and never overlaps. `Cmd Z` undoes it.
 
+`Cmd Ctrl Shift` + arrow pans the canvas that way by 120 screen pixels a press, at any zoom, and a held key repeats. The focus stays where it is, as with the mouse. The commands are `canvas.pan.left`, `.right`, `.up` and `.down`, for the palette, `ift run` and your own bindings.
+
 `Cmd Ctrl Enter` grows a card into the gap it sits in, up to the default size, from whichever corner fills that gap. It grows an empty slot the same way: arrow onto a free slot (it has the size of the card you came from), press `Cmd Ctrl Enter`, and the card you make there has the new size.
 
 `Cmd Z` and `Cmd Shift Z` undo and redo on the canvas: a move, swap, resize or a closed card. Undo never closes a card you opened. Inside an editor they are the buffer's.

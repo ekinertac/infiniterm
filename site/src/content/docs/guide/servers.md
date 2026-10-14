@@ -37,7 +37,7 @@ Next time, run step 3 again. It brings the same cards back.
 
 This Mac downloads the package for its own version from the GitHub release and checks its checksum on this Mac. It sends the package to the server through ssh. The server needs no internet, no `curl` and no Rust.
 
-- Root gets `/usr/local/bin`. Any other user gets `~/.local/bin`.
+- Root gets `/usr/local/bin`. Any other user gets `~/.local/bin`. `ift connect` looks in both places, so it finds `ift` even when `~/.local/bin` is not on the PATH of a non-interactive ssh login.
 - `--platform linux-x86_64` or `--platform linux-aarch64` skips asking the host which one it is.
 - `--from <package>` installs from a file you already have instead of downloading.
 - If the server's `ift` has a different version from your app, `ift connect` tells you. Run `--install` again to update it.

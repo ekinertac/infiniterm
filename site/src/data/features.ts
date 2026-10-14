@@ -35,6 +35,7 @@ export const featureGroups: FeatureGroup[] = [
       { text: 'Split a card to the right or below, grow it into a gap, or pick a size from a menu.' },
       { text: '`Cmd 1` on a fitted terminal card zooms to 150% at its bottom, and `Cmd Up` / `Cmd Down` pan inside it.', href: 'guide/canvas/#zooming-in-on-a-cards-bottom' },
       { text: '`Cmd Ctrl Alt` + arrow slides a card into the next gap; `Cmd Alt Shift` + arrow moves a whole selection one block.', href: 'guide/canvas/#moving-and-resizing' },
+      { text: '`Cmd Ctrl Shift` + arrow pans the canvas from the keyboard.', href: 'guide/canvas/#moving-and-resizing' },
       { text: 'Select several cards with a drag or `Cmd` + click, then move, close, fit or group them together.' },
       { text: '`Cmd Alt` + arrow moves to the neighbour; `Ctrl Tab` walks the cards you used, most recent first.' },
       { text: 'Right-click opens the native Mac menu on a terminal, a card, the canvas, a tab, an editor and a browser page, with each shortcut at the right edge.', href: 'guide/canvas/#the-right-click-menu' },
