@@ -892,7 +892,13 @@ impl AppView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .children(pwd.filter(|_| pwd_right).map(|p| div().child(p)))
+                    // The directory gives way first: it shrinks and is cut,
+                    // the build number and the other segments keep their size.
+                    .min_w_0()
+                    .children(
+                        pwd.filter(|_| pwd_right)
+                            .map(|p| div().min_w_0().truncate().child(p)),
+                    )
                     .children(
                         self.browser_lock_indicator()
                             .map(|label| div().text_color(chrome.warn).child(label)),
