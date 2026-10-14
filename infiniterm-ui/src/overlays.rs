@@ -835,6 +835,25 @@ impl AppView {
         if m.selection.maximized {
             left.push_str("   maximised");
         }
+        let pwd = m
+            .config
+            .ui
+            .status_bar_pwd
+            .then(|| m.focused())
+            .flatten()
+            .and_then(|c| {
+                infiniterm_core::card_label::status_bar_path(
+                    c.kind,
+                    &m.label_of(c),
+                    &c.cwd,
+                    &m.home,
+                )
+            });
+        let pwd_right =
+            m.config.ui.status_bar_pwd_side == infiniterm_core::config::StatusBarSide::Right;
+        if let Some(p) = pwd.as_deref().filter(|_| !pwd_right) {
+            left.push_str(&format!("   {p}"));
+        }
         let notice = m.notice.clone().unwrap_or_default();
         // Only while frames are drawn back to back; at rest, nothing
         // (issue #16: a rationed canvas read "6 fps" in the warn colour).
@@ -871,6 +890,7 @@ impl AppView {
                     .flex()
                     .items_center()
                     .gap_2()
+                    .children(pwd.filter(|_| pwd_right).map(|p| div().child(p)))
                     .children(
                         self.browser_lock_indicator()
                             .map(|label| div().text_color(chrome.warn).child(label)),

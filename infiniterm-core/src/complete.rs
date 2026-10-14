@@ -145,6 +145,7 @@ pub const SETTING_CHOICES: &[(&str, &[&str])] = &[
         &["top right", "top left", "bottom right", "bottom left"],
     ),
     ("ui.fullscreen", &["cover", "native"]),
+    ("ui.statusBarPwdSide", &["left", "right"]),
 ];
 
 impl SchemaProvider {

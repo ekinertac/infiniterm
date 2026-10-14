@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-14
+
+- New: `ui.statusBarPwd` (off by default) keeps the focused terminal card's directory in the status bar, home as `~`, also while a program runs and the card label shows the program instead. It is left out when the label already is the directory. `ui.statusBarPwdSide` puts it on the `"left"` (after the card label, the default) or the `"right"` of the bar.
+
 ## 0.5.12 (build 884), 2026-10-14
 
 ### Canvas

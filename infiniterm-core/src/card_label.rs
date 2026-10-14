@@ -54,6 +54,18 @@ pub fn tilde_path(path: &str, home: &str) -> String {
     }
 }
 
+/// The directory the status bar adds beside a terminal card's label
+/// (`ui.statusBarPwd`, #371), home as `~`. `None` when it would repeat the
+/// label (an idle card is already named for its directory), when there is
+/// no directory yet, or for any card that is not a terminal.
+pub fn status_bar_path(kind: CardKind, label: &str, cwd: &str, home: &str) -> Option<String> {
+    if kind != CardKind::Terminal || cwd.is_empty() {
+        return None;
+    }
+    let path = tilde_path(cwd, home);
+    (label != path).then_some(path)
+}
+
 /// `en.wikipedia.org` for a page there; the whole string when it is not a
 /// URL. The WHATWG `host` (with port, without credentials), found by hand:
 /// a string without `://` is not a URL with a host and comes back whole.
@@ -289,6 +301,22 @@ mod tests {
         assert_eq!(tilde_path("/Users/ekinertac/Code/api", HOME), "~/Code/api");
         assert_eq!(tilde_path(HOME, HOME), "~");
         assert_eq!(tilde_path("/etc/hosts", HOME), "/etc/hosts");
+    }
+
+    // #371: the path is added when the label hides it, never repeated.
+    #[test]
+    fn status_bar_path_shows_only_what_the_label_does_not() {
+        let cwd = "/Users/ekinertac/Code/api";
+        assert_eq!(
+            status_bar_path(CardKind::Terminal, "claude", cwd, HOME).as_deref(),
+            Some("~/Code/api")
+        );
+        assert_eq!(
+            status_bar_path(CardKind::Terminal, "~/Code/api", cwd, HOME),
+            None
+        );
+        assert_eq!(status_bar_path(CardKind::Terminal, "vim", "", HOME), None);
+        assert_eq!(status_bar_path(CardKind::Editor, "a.rs", cwd, HOME), None);
     }
 
     // A segment boundary, so a sibling with a longer name is not swallowed.
