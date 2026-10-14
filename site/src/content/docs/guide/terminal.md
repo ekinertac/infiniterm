@@ -1,6 +1,6 @@
 ---
 title: Terminal cards
-description: Font size, find, visual mode, selecting on the zsh command line, and what closing a card does to its program.
+description: Font size, find, visual mode, selecting on the zsh command line, a card in its own window, and what closing a card does to its program.
 ---
 
 A terminal card runs your login shell in the card's directory. Every key without Cmd goes to it untouched, so vim, tmux and readline keep working.
@@ -46,6 +46,12 @@ Closing a terminal card does not kill its program on the spot:
 - `Cmd Z` or `Cmd Shift T` reopen the card with its program still live and the screen redrawn from its scrollback, as long as it has not ended yet.
 
 This needs the default backend (`terminal.backend: "daemon"`). Under `pty` or `tmux` a closed card's program ends at once.
+
+## A terminal in its own window
+
+`Cmd Shift O` takes the focused terminal card into a window of its own. The card keeps its place on the canvas as an empty card that says "In its own window", and keys sent to it on the canvas do nothing while it is out. The window's terminal refits when you resize the window. Close the window (`Cmd W` or the red button) and the card gets its canvas size back.
+
+In the window, `Cmd =` and `Cmd -` change the font size, `Cmd K` clears, `Cmd Shift C` is visual mode, and copy, paste and `Cmd Left` / `Cmd Right` work as in a card. Find and the command palette are not there yet. Only terminal cards can go out for now.
 
 ## Settings worth knowing
 
