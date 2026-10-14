@@ -76,7 +76,7 @@ HISTFILE="${INFINITERM_HISTFILE:-$HOME/.zsh_history}"
 
 Outside infiniterm the variable is unset and your usual history file is used.
 
-That keeps each card's history in its own file, and zsh writes it when the shell exits. A card you leave open for days has not written yet, and `~/.zsh_history` (or a tool that reads it, such as mcfly) never sees what you typed in a card. To copy each command to your main history as you enter it, add this to `.zshrc` as well:
+That keeps each card's history in its own file, and zsh writes it when the shell exits. A card you leave open for days has not written yet, and `~/.zsh_history` (or a tool that reads it) never sees what you typed in a card. To copy each command to your main history as you enter it, add this to `.zshrc` as well:
 
 ```zsh
 autoload -Uz add-zsh-hook
@@ -86,13 +86,14 @@ _ift_copy_history() {
   local nl=$'\n' line=": ${EPOCHSECONDS}:0;${1%$'\n'}"
   line=${line//$nl/\\$nl}
   print -r -- $line >> ~/.zsh_history
-  [[ -n $MCFLY_HISTFILE ]] && print -r -- $line >> $MCFLY_HISTFILE
   return 0
 }
 add-zsh-hook zshaddhistory _ift_copy_history
 ```
 
-It does nothing outside infiniterm, because `INFINITERM_HISTFILE` is unset there. Delete the `MCFLY_HISTFILE` line if you do not use mcfly.
+It does nothing outside infiniterm, because `INFINITERM_HISTFILE` is unset there.
+
+mcfly keeps its own database and records commands with its own hook, so the hook above adds nothing for it. If you want mcfly's `Ctrl R` to read `~/.zsh_history` as well, set `export MCFLY_HISTFILE=~/.zsh_history`; to do that only inside infiniterm, guard it with `[[ -n $INFINITERM_HISTFILE ]]`.
 
 ## Registering a licence
 
