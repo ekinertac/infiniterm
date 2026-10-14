@@ -2112,6 +2112,41 @@ mod tests {
             .any(|e| matches!(e, Effect::AnimateFit(v) if v.scale == 1.)));
     }
 
+    // #398: the keyboard pans the view by a fixed number of SCREEN pixels, a
+    // repeat adds to where the last press is heading, and the focus stays.
+    #[test]
+    fn the_pan_keys_move_the_view_a_screen_step_and_chain() {
+        use crate::model::canvas_cmd::PAN_STEP_PX;
+        let mut h = Harness::new();
+        let focus = h.m.selection.focused_id.clone();
+        h.m.viewport = crate::viewport::Viewport {
+            x: 100.,
+            y: 50.,
+            scale: 0.5,
+        };
+        let step = PAN_STEP_PX / 0.5;
+        let effects = h.run("canvas.pan.right");
+        assert!(effects.iter().any(|e| matches!(
+            e, Effect::AnimatePan { x, y } if (*x - (100. + step)).abs() < 1e-9 && *y == 50.
+        )));
+        let effects = h.run("canvas.pan.right");
+        assert!(
+            effects.iter().any(|e| matches!(
+                e, Effect::AnimatePan { x, .. } if (*x - (100. + 2. * step)).abs() < 1e-9
+            )),
+            "a second press adds to the first's target, not to where the view is"
+        );
+        let effects = h.run("canvas.pan.up");
+        assert!(effects.iter().any(|e| matches!(
+            e, Effect::AnimatePan { x, y } if (*x - (100. + 2. * step)).abs() < 1e-9
+                && (*y - (50. - step)).abs() < 1e-9
+        )));
+        assert_eq!(
+            h.m.selection.focused_id, focus,
+            "panning does not move focus"
+        );
+    }
+
     // Cmd+3 with several cards selected fits exactly those cards; with one
     // it fits that card's block.
     #[test]

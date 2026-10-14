@@ -653,6 +653,9 @@ pub struct Model {
     /// The scale an in-flight zoom is heading for, set by the animator, so a
     /// held key ramps from the target rather than the passing scale.
     pub pending_scale: Option<f64>,
+    /// The same for a keyboard pan (`canvas.pan.*`, #398): the corner the
+    /// animation in flight is heading for.
+    pub pending_pan: Option<crate::grid::Point>,
     pub ui_scale: f64,
     pub usage: Usage,
     pub palette: PaletteState,
@@ -779,6 +782,7 @@ impl Model {
             framed_card: None,
             reading: None,
             pending_scale: None,
+            pending_pan: None,
             ui_scale: 1.,
             usage: Usage::default(),
             palette: PaletteState::default(),

@@ -162,6 +162,7 @@ impl AppView {
         self.animator
             .step(&mut self.model.viewport, self.model.view_size, now);
         self.model.pending_scale = self.animator.pending_scale();
+        self.model.pending_pan = self.animator.pending_pan();
         let mut seeded = self.seeded;
         self.model.seed_first_card(&mut seeded);
         self.seeded = seeded;

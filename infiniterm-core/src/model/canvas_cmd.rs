@@ -16,6 +16,26 @@ impl Model {
     /// The anchor is deliberately constant: pinning a visible card where it
     /// sat and centring an off-screen one made the same key behave two ways.
     /// Chains from the pending target so a held key ramps evenly.
+    /// Moves the view `dx`, `dy` SCREEN pixels (so a press goes as far on screen
+    /// at every zoom), animated like any viewport change (#398). A key that
+    /// repeats adds its step to where the last one is heading
+    /// (`pending_pan`). The focus stays where it is, as with the mouse. A hand
+    /// pan ends card zoom (`stop_framing`), as the others do.
+    pub fn pan_canvas(&mut self, dx: f64, dy: f64) {
+        self.stop_framing();
+        let scale = self.viewport.scale.max(MIN_SCALE);
+        let from = self.pending_pan.unwrap_or(Point {
+            x: self.viewport.x,
+            y: self.viewport.y,
+        });
+        let to = Point {
+            x: from.x + dx / scale,
+            y: from.y + dy / scale,
+        };
+        self.pending_pan = Some(to);
+        self.effects.push(Effect::AnimatePan { x: to.x, y: to.y });
+    }
+
     pub fn zoom_by(&mut self, factor: f64) {
         let anchor_world = match self.focused() {
             Some(c) => Point {
@@ -124,7 +144,21 @@ impl Model {
     }
 }
 
+/// How far one press of `canvas.pan.*` moves the view, in screen pixels:
+/// about six lines of terminal text, and a held key repeats.
+pub const PAN_STEP_PX: f64 = 120.;
+
 pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
+    for (id, label, dx, dy) in [
+        ("canvas.pan.left", "Canvas: pan left", -1., 0.),
+        ("canvas.pan.right", "Canvas: pan right", 1., 0.),
+        ("canvas.pan.up", "Canvas: pan up", 0., -1.),
+        ("canvas.pan.down", "Canvas: pan down", 0., 1.),
+    ] {
+        r.register(id, label, move |m| {
+            m.pan_canvas(dx * PAN_STEP_PX, dy * PAN_STEP_PX)
+        });
+    }
     // Centre on the active card if there is one, otherwise hold the point
     // you are already looking at; never reset to the origin.
     r.register("canvas.zoom.actual", "Canvas: actual size (100%)", |m| {
