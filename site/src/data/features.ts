@@ -88,7 +88,7 @@ export const featureGroups: FeatureGroup[] = [
   {
     title: 'Servers',
     items: [
-      { text: '`ift connect user@host` opens a second window whose terminal cards run on that server over ssh.', href: 'guide/ift-and-sessions/#servers' },
+      { text: '`ift connect user@host` opens a second window whose terminal cards run on that server over ssh.', href: 'guide/servers/' },
       { text: 'The shells stay on the server when the window closes; connecting again brings the same cards back.' },
       { text: '`--install` puts `ift` and `iftd` on a Linux server through the ssh connection, checksum checked.' },
       { text: 'Agent states and `ift` work inside a server\'s cards too.' },

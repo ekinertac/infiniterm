@@ -1139,7 +1139,9 @@ impl AppView {
             });
         }
         if let Some(text) = said {
-            self.model.notify(text);
+            // After the "checking for updates…" line, which a fast answer
+            // would otherwise wipe before it could be read.
+            self.model.notify_after_read(text);
             self.redraw = true;
         }
     }

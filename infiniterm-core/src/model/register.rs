@@ -3093,6 +3093,34 @@ mod tests {
         assert!(h.m.notice.is_none());
     }
 
+    // A long notice gets time to be read, and a quick follow-up does not wipe
+    // the line before it could be (#384).
+    #[test]
+    fn a_long_notice_stays_longer_and_a_quick_one_waits_its_turn() {
+        use crate::model::{notice_duration_ms, NOTICE_MIN_SHOW_MS};
+        assert_eq!(notice_duration_ms("copied"), NOTICE_MS);
+        let long = "infiniterm 0.5.12 (884) is ready: restart to install (Cmd+Ctrl+Shift+R)";
+        assert!(notice_duration_ms(long) > NOTICE_MS);
+        assert_eq!(notice_duration_ms(&"x".repeat(1000)), 12000.);
+
+        let mut h = Harness::new();
+        let t0 = h.m.now_ms;
+        h.m.tick(t0);
+        h.m.notify("checking for updates…");
+        h.m.tick(t0 + 100.);
+        h.m.notify_after_read("infiniterm is up to date");
+        assert_eq!(h.m.notice.as_deref(), Some("checking for updates…"));
+        h.m.tick(t0 + NOTICE_MIN_SHOW_MS - 1.);
+        assert_eq!(h.m.notice.as_deref(), Some("checking for updates…"));
+        assert!(!h.m.notice_expired(t0 + NOTICE_MIN_SHOW_MS - 1.));
+        assert!(h.m.notice_expired(t0 + NOTICE_MIN_SHOW_MS));
+        h.m.tick(t0 + NOTICE_MIN_SHOW_MS);
+        assert_eq!(h.m.notice.as_deref(), Some("infiniterm is up to date"));
+        // A plain notice is never held back: a refusal shows at once.
+        h.m.notify("nowhere to go");
+        assert_eq!(h.m.notice.as_deref(), Some("nowhere to go"));
+    }
+
     // "move card" in the palette, Enter, then the workspace: the card goes
     // there, into a free slot (never onto the card already there), you stay
     // where you were, and going there lands on it.
