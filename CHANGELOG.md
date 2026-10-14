@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-14
+
+- A longer message in the status bar stays longer: five seconds up to 40 characters, then a little more for each, at most twelve. "infiniterm 0.5.12 is ready: restart to install" no longer disappears before you can read it. The result of "Check for updates" also waits until "checking for updates…" has been on screen for a second and a half, so a quick answer does not wipe it.
+
 ## 0.5.12 (build 884), 2026-10-14
 
 ### Canvas

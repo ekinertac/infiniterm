@@ -529,8 +529,25 @@ pub enum WindowColorSave {
     Forget,
 }
 
-/// How long a notice stays up after the last one.
+/// How long a short notice stays up after the last one.
 pub const NOTICE_MS: f64 = 5000.;
+/// A notice longer than this many characters gets `NOTICE_MS_PER_CHAR` more
+/// for each one, up to `NOTICE_MAX_MS`: "infiniterm 0.5.12 (884) is ready:
+/// restart to install (Cmd+Ctrl+Shift+R)" is a sentence to read, and five
+/// seconds was too short for it (Ekin, 2026-10-14).
+const NOTICE_FREE_CHARS: usize = 40;
+const NOTICE_MS_PER_CHAR: f64 = 60.;
+const NOTICE_MAX_MS: f64 = 12000.;
+/// A result sent with `notify_after_read` waits this long behind the notice
+/// on screen: a quick result ("up to date") must not wipe the line before "checking for
+/// updates…" could be read. The newer one waits its turn.
+pub const NOTICE_MIN_SHOW_MS: f64 = 1500.;
+
+/// How long `text` stays in the status bar.
+pub fn notice_duration_ms(text: &str) -> f64 {
+    let extra = text.chars().count().saturating_sub(NOTICE_FREE_CHARS) as f64 * NOTICE_MS_PER_CHAR;
+    (NOTICE_MS + extra).min(NOTICE_MAX_MS)
+}
 
 /// How long a done card is looked at before it counts as seen: the
 /// switcher's dwell, so a card walked past is not a card read.
@@ -651,6 +668,10 @@ pub struct Model {
     pub history: crate::omni::history::History,
     pub notice: Option<String>,
     notice_until: f64,
+    /// When the notice on screen first appeared, and the one waiting for
+    /// `NOTICE_MIN_SHOW_MS` to pass before it replaces it.
+    notice_since: f64,
+    notice_pending: Option<String>,
     /// Saved-layout state: nothing is saved until `loaded`; nothing is ever
     /// saved while `read_only` (the file was written by a newer build).
     pub loaded: bool,
@@ -769,6 +790,8 @@ impl Model {
             history: crate::omni::history::History::default(),
             notice: None,
             notice_until: 0.,
+            notice_since: 0.,
+            notice_pending: None,
             loaded: false,
             first_run: false,
             read_only: false,
@@ -809,6 +832,11 @@ impl Model {
         self.end_parked();
         self.sync_covers();
         self.close_when_saved();
+        if self.pending_notice_due(now_ms) {
+            if let Some(text) = self.notice_pending.take() {
+                self.show_notice(text);
+            }
+        }
         if self.notice.is_some() && now_ms >= self.notice_until {
             self.notice = None;
         }
@@ -822,7 +850,19 @@ impl Model {
     /// The notice's time is up: the next tick clears it, so a frame is due.
     /// A notice on screen needs no other frame; it does not move.
     pub fn notice_expired(&self, now_ms: f64) -> bool {
-        self.notice.is_some() && now_ms >= self.notice_until
+        (self.notice.is_some() && now_ms >= self.notice_until) || self.pending_notice_due(now_ms)
+    }
+
+    fn pending_notice_due(&self, now_ms: f64) -> bool {
+        self.notice_pending.is_some() && now_ms >= self.notice_since + NOTICE_MIN_SHOW_MS
+    }
+
+    fn show_notice(&mut self, text: String) {
+        if self.notice.as_deref() != Some(text.as_str()) {
+            self.notice_since = self.now_ms;
+        }
+        self.notice_until = self.now_ms + notice_duration_ms(&text);
+        self.notice = Some(text);
     }
 
     pub fn take_effects(&mut self) -> Vec<Effect> {
@@ -834,8 +874,23 @@ impl Model {
     /// indistinguishable from an unbound key. The timer restarts, so holding
     /// a key leaves the notice up throughout.
     pub fn notify(&mut self, text: impl Into<String>) {
-        self.notice = Some(text.into());
-        self.notice_until = self.now_ms + NOTICE_MS;
+        self.notice_pending = None;
+        self.show_notice(text.into());
+    }
+
+    /// Like `notify`, but a notice younger than `NOTICE_MIN_SHOW_MS` is not
+    /// wiped: this one waits its turn. For a result that follows a progress
+    /// line ("checking for updates…" then "up to date"), which a quick
+    /// answer erased before it could be read. A refusal after a keypress
+    /// must NOT wait, so `notify` stays immediate.
+    pub fn notify_after_read(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        let young = self.notice.is_some() && self.now_ms < self.notice_since + NOTICE_MIN_SHOW_MS;
+        if young && self.notice.as_deref() != Some(text.as_str()) {
+            self.notice_pending = Some(text);
+        } else {
+            self.notify(text);
+        }
     }
 
     /// Arms a move animation for `ids`, BEFORE their rects change.
