@@ -26,6 +26,10 @@ pub const TAB_STRIP_LABEL_PAD_RATIO: f64 = 0.6;
 /// The close button's band at a tab's right edge.
 pub const TAB_STRIP_CLOSE_WIDTH_RATIO: f64 = 1.5;
 pub const TAB_STRIP_BORDER_PX: f64 = 1.;
+/// The "+" button's slot after the last tab, in font sizes: wide enough to
+/// click, narrow enough that the glyph sits beside the tabs. It took a whole
+/// tab's width (9) and floated about four sizes away from them (#375).
+pub const TAB_STRIP_PLUS_WIDTH_RATIO: f64 = 2.5;
 
 /// The strip's colours, mirrored from the chrome each frame.
 #[derive(Clone, Debug, PartialEq)]
@@ -74,11 +78,10 @@ pub fn strip_hit(local: Point, font_px: f64, ui_scale: f32, tab_count: usize) ->
     let unit = font_px * ui_scale as f64;
     let tab_w = TAB_STRIP_TAB_WIDTH_RATIO * unit;
     let index = (local.x / tab_w).floor().max(0.) as usize;
-    if index == tab_count {
-        return Some(TabClick::New);
-    }
-    if index > tab_count {
-        return None;
+    if index >= tab_count {
+        let from_plus = local.x - tab_count as f64 * tab_w;
+        return (from_plus >= 0. && from_plus < TAB_STRIP_PLUS_WIDTH_RATIO * unit)
+            .then_some(TabClick::New);
     }
     let x_in_tab = local.x - (index as f64) * tab_w;
     if x_in_tab >= close_band_left_ratio() * unit {
@@ -155,9 +158,10 @@ pub fn paint_strip(
             crate::text::paint_in(window, cx, &close_line, close_bounds, px(0.));
         }
         let plus = crate::text::shape(window, "+", strip_font, &style.regular, style.text_muted);
+        let plus_w = px((TAB_STRIP_PLUS_WIDTH_RATIO * unit) as f32);
         let plus_bounds = Bounds::new(
             point(
-                strip.origin.x + tab_w * (labels.len() as f32) + tab_w / 2. - plus.width / 2.,
+                strip.origin.x + tab_w * (labels.len() as f32) + plus_w / 2. - plus.width / 2.,
                 strip.origin.y,
             ),
             size(plus.width, strip_h),
@@ -199,7 +203,7 @@ mod tests {
 
     // Hit-test geometry in world units at a 10 px font and ui_scale 1: a
     // tab is 90 wide, its last 15 the close band, the strip 19 tall, the
-    // band after the last tab is "+".
+    // 25 after the last tab is "+".
     #[test]
     fn a_click_lands_on_a_tab_its_close_or_the_plus() {
         let at = |x: f64, y: f64| Point { x, y };
@@ -215,7 +219,12 @@ mod tests {
             strip_hit(at(100., 10.), 10., 1., 2),
             Some(TabClick::Switch(1))
         );
-        assert_eq!(strip_hit(at(200., 10.), 10., 1., 2), Some(TabClick::New));
+        assert_eq!(strip_hit(at(190., 10.), 10., 1., 2), Some(TabClick::New));
+        assert_eq!(
+            strip_hit(at(210., 10.), 10., 1., 2),
+            None,
+            "past the plus's own slot, 25 wide after the last tab (#375)"
+        );
         assert_eq!(strip_hit(at(400., 10.), 10., 1., 2), None, "past the plus");
         assert_eq!(strip_hit(at(10., 25.), 10., 1., 2), None, "below the strip");
         // Twice the interface scale: everything twice as big.
