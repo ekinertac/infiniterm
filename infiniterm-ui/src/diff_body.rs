@@ -435,6 +435,16 @@ impl DiffBody {
                 };
                 name = crate::text::shape(window, &shown, font_size, &f, color);
             }
+            // A name with no folder left, or `…/name` still too wide, ran
+            // over the diff pane (#372): cut it from the front, so the
+            // extension stays.
+            if name.width > avail {
+                let room = f32::from(avail.max(px(0.)));
+                shown = crate::text::elide_start(&shown, room, |t| {
+                    f32::from(crate::text::shape(window, t, font_size, &f, color).width)
+                });
+                name = crate::text::shape(window, &shown, font_size, &f, color);
+            }
             let _ = name.paint(point(area.origin.x + pad, y), line_h, window, cx);
             let _ = c.paint(
                 point(area.origin.x + area.size.width - pad - c.width, y),

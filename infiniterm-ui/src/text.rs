@@ -76,6 +76,35 @@ pub fn elide(text: &str, room: f32, measure: impl Fn(&str) -> f32) -> String {
     cut(lo)
 }
 
+/// Shortens `text` from the START until `measure` says it fits `room`, with an
+/// ellipsis where it was cut, so the end survives: a file name keeps its
+/// extension. Returns `text` unchanged when it already fits, and nothing when
+/// not even the ellipsis and one character fit.
+pub fn elide_start(text: &str, room: f32, measure: impl Fn(&str) -> f32) -> String {
+    if measure(text) <= room || text.is_empty() {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let keep = |n: usize| -> String {
+        let mut s = String::from(ELLIPSIS);
+        s.extend(chars[chars.len() - n..].iter());
+        s
+    };
+    if measure(&keep(0)) > room {
+        return String::new();
+    }
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if measure(&keep(mid)) <= room {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    keep(lo)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,6 +113,16 @@ mod tests {
     // test is the arithmetic a reader can do.
     fn measure(s: &str) -> f32 {
         s.chars().count() as f32 * 10.
+    }
+
+    #[test]
+    fn elide_start_keeps_the_end() {
+        assert_eq!(elide_start("scan", 100., measure), "scan");
+        assert_eq!(
+            elide_start("long_file_name.rs", 70., measure),
+            "\u{2026}ame.rs"
+        );
+        assert_eq!(elide_start("scan", 5., measure), "");
     }
 
     #[test]
