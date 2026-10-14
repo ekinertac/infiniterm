@@ -92,6 +92,8 @@ All 500-odd schemes from iTerm2-Color-Schemes ship with the app; Violite is the 
 
 "Window: change the title bar and Dock colour" in the palette tints the title bar and the workspace tabs, and badges the Dock icon. Pick a named colour (each one shows as you move through the list, `Escape` puts it back) or "Custom hex colour…" for a code like `3b82f6`. The choice is saved as `ui.windowColor`, a name or a hex code, empty for none. In an `ift connect` window the same command sets that server's colour instead, and "Default: from the host name" goes back to the automatic one.
 
+`ui.statusBarPwd` (off by default) shows the focused terminal card's folder in the status bar, with your home folder as `~`. It is left out when the card's label already is the path, and a long path is cut so the build number stays. `ui.statusBarPwdSide` puts it on the `"left"` (default) or the `"right"`.
+
 ## The interface font
 
 The workspace tabs, card labels, status bar, palette and dialogs use the macOS system font. `ui.fontFamily` changes it (a font name, for example `"Menlo"` to bring back the monospace look), `ui.fontSize` sets its size, and `ui.fontWeight` and `ui.fontWeightBold` set the normal and bold weights. Terminal, editor and document text keep their own settings (`terminal.fontFamily` and the rest), and `Cmd =` and `Cmd -` still change only the terminal. A change applies as you save.

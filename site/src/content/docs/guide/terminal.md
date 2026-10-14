@@ -3,7 +3,7 @@ title: Terminal cards
 description: Font size, find, visual mode, selecting on the zsh command line, a card in its own window, and what closing a card does to its program.
 ---
 
-A terminal card runs your login shell in the card's directory. Every key without Cmd goes to it untouched, so vim, tmux and readline keep working.
+A terminal card runs your login shell in the card's directory (zsh gets the most, see [Which shell](#which-shell)). Every key without Cmd goes to it untouched, so vim, tmux and readline keep working.
 
 ## Font size
 
@@ -52,6 +52,12 @@ This needs the default backend (`terminal.backend: "daemon"`). Under `pty` or `t
 `Cmd Shift O` takes the focused terminal card into a window of its own. The card keeps its place on the canvas as an empty card that says "In its own window", and keys sent to it on the canvas do nothing while it is out. The window's terminal refits when you resize the window. Close the window (`Cmd W` or the red button) and the card gets its canvas size back.
 
 In the window, `Cmd =` and `Cmd -` change the font size, `Cmd K` clears, `Cmd Shift C` is visual mode, and copy, paste and `Cmd Left` / `Cmd Right` work as in a card. Find and the command palette are not there yet. Only terminal cards can go out for now.
+
+## Which shell
+
+A card starts the shell in `$SHELL`. Only zsh gets the shell integration: the state colours for plain commands, one history file per card, and the Shift and arrow selection on the command line. Another shell runs as a plain terminal. Agent hooks still report from it, because they do not depend on the shell.
+
+If `$SHELL` is bash and you want zsh, run `chsh -s /bin/zsh` and log in again. Or set `"terminal.shell": "/bin/zsh"` in `settings.json`; that applies to new cards only. Support for bash, fish and nushell is planned.
 
 ## Settings worth knowing
 

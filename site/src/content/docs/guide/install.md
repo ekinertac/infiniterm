@@ -68,6 +68,8 @@ Other commands need no setup: a zsh started in a card reports each command's sta
 
 ## Shell history per card
 
+This is for zsh. Other shells keep their usual history, see [Which shell](../terminal/#which-shell).
+
 Each card gets its own zsh history file, so a new card does not open with every other card's past, and after a reboot a card that ran Claude has `claude --resume <id>` as its last history entry. macOS sets `HISTFILE` before your `.zshrc` runs, so add one line to `.zshrc`:
 
 ```zsh
