@@ -9,6 +9,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-10-14
 
 - New: `ui.statusBarPwd` (off by default) keeps the focused terminal card's directory in the status bar, home as `~`, also while a program runs and the card label shows the program instead. It is left out when the label already is the directory. `ui.statusBarPwdSide` puts it on the `"left"` (after the card label, the default) or the `"right"` of the bar.
+- Fixed: the editor's bottom bar (file path, line and column) is set in the editor's own font and cell width, so its letters are spaced like the text above it instead of spread apart (#384).
+- A longer message in the status bar stays longer: five seconds up to 40 characters, then a little more for each, at most twelve. "infiniterm 0.5.12 is ready: restart to install" no longer disappears before you can read it. The result of "Check for updates" also waits until "checking for updates…" has been on screen for a second and a half, so a quick answer does not wipe it.
 
 ## 0.5.12 (build 884), 2026-10-14
 

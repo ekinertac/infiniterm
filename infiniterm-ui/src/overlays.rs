@@ -883,7 +883,9 @@ impl AppView {
             .font_weight(chrome.typography.regular.weight)
             .text_size(size)
             .text_color(chrome.text_muted)
-            .child(div().child(left))
+            // A long directory (`ui.statusBarPwd`, #371) is cut with an
+            // ellipsis rather than pushed over the notice.
+            .child(div().min_w_0().truncate().child(left))
             .child(div().text_color(chrome.text).child(notice))
             .child(
                 div()
