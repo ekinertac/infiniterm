@@ -89,20 +89,7 @@ A session has one client at a time. Attaching takes it from the app: the card sh
 
 ## Servers
 
-```sh
-ift connect me@server             # a second infiniterm for that server
-ift connect me@server --check     # only test the host
-ift connect me@server --install   # first put ift and iftd on a Linux host
-ift connect me@server --name prod --color 3b82f6
-```
-
-`ift connect` opens a second infiniterm with its own window, Dock icon and canvas. Its terminal cards run on the server over ssh, in the server's home folder. The shells live in `iftd` on the server, so closing the window leaves them running, and connecting again brings the same cards back. Each server has its own colour (a tinted title bar, a chip with its name, a badge on the Dock icon), its own settings and no browser cards. A new server starts with the default settings, not a copy of yours. A server you connected with an earlier version keeps the copy it got then; delete `~/.infiniterm/remotes/<host>/config` to start it from the defaults.
-
-It needs key login (ssh runs without a password prompt) and `ift` and `iftd` on the server. `--install` puts them there on Linux, x86_64 or aarch64: this Mac downloads the package for its own version from the GitHub release, checks its checksum and sends it through ssh, so the server needs no internet. Root gets `/usr/local/bin`, any other user `~/.local/bin`. `--from <package>` installs from a file instead. A server that is a Mac uses the app already installed there. Without `--install`, `ift connect` says what is missing, and it tells you when the server's `ift` is a different version from yours.
-
-Agent states and `ift` work inside a server's cards too. One extra ssh connection carries them: a Claude or Codex session on the server shows working, waiting and done on its card, and `ift ls`, `ift send` and the rest reach the window from a server shell. Run `ift install-claude-hooks` (or `install-codex-hooks`) on the server once so the agent there calls the hook.
-
-Not supported: editor and diff cards on the server's files, and Windows servers.
+`ift connect me@server` opens a second window whose terminal cards run on that server. Installing `ift` there, colours, agents and troubleshooting have a page of their own: [Servers](../servers/).
 
 ## tmux
 
