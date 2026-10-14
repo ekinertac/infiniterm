@@ -835,6 +835,25 @@ impl AppView {
         if m.selection.maximized {
             left.push_str("   maximised");
         }
+        let pwd = m
+            .config
+            .ui
+            .status_bar_pwd
+            .then(|| m.focused())
+            .flatten()
+            .and_then(|c| {
+                infiniterm_core::card_label::status_bar_path(
+                    c.kind,
+                    &m.label_of(c),
+                    &c.cwd,
+                    &m.home,
+                )
+            });
+        let pwd_right =
+            m.config.ui.status_bar_pwd_side == infiniterm_core::config::StatusBarSide::Right;
+        if let Some(p) = pwd.as_deref().filter(|_| !pwd_right) {
+            left.push_str(&format!("   {p}"));
+        }
         let notice = m.notice.clone().unwrap_or_default();
         // Only while frames are drawn back to back; at rest, nothing
         // (issue #16: a rationed canvas read "6 fps" in the warn colour).
@@ -864,13 +883,22 @@ impl AppView {
             .font_weight(chrome.typography.regular.weight)
             .text_size(size)
             .text_color(chrome.text_muted)
-            .child(div().child(left))
+            // A long directory (`ui.statusBarPwd`, #371) is cut with an
+            // ellipsis rather than pushed over the notice.
+            .child(div().min_w_0().truncate().child(left))
             .child(div().text_color(chrome.text).child(notice))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
+                    // The directory gives way first: it shrinks and is cut,
+                    // the build number and the other segments keep their size.
+                    .min_w_0()
+                    .children(
+                        pwd.filter(|_| pwd_right)
+                            .map(|p| div().min_w_0().truncate().child(p)),
+                    )
                     .children(
                         self.browser_lock_indicator()
                             .map(|label| div().text_color(chrome.warn).child(label)),

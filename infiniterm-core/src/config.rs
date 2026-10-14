@@ -332,6 +332,12 @@ pub struct Ui {
     /// of it is to be there when something stutters; it holds a permanent
     /// frame loop while on.
     pub show_fps: bool,
+    /// The focused terminal card's directory in the status bar at all times
+    /// (#371): the card label says the process while one runs, so the path
+    /// is otherwise hidden exactly when a program is going.
+    pub status_bar_pwd: bool,
+    /// Which end of the status bar `status_bar_pwd` writes to.
+    pub status_bar_pwd_side: StatusBarSide,
     /// What the green button and `app.fullscreen` do: macOS's own full
     /// screen, or the window over the whole screen, notch strip
     /// included (`fullscreen.rs`).
@@ -345,6 +351,14 @@ pub enum FullscreenMode {
     Native,
     /// The window covers the whole screen, beside the notch too.
     Cover,
+}
+
+/// An end of the status bar (`ui.statusBarPwdSide`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StatusBarSide {
+    Left,
+    Right,
 }
 
 /// Page zoom limits for browser cards, the range Safari allows.
@@ -453,6 +467,8 @@ pub fn default_config() -> Config {
             // A development number; the release does not show it by
             // default (issue #16).
             show_fps: false,
+            status_bar_pwd: false,
+            status_bar_pwd_side: StatusBarSide::Left,
             // Native full screen on a notched MacBook leaves the strip
             // beside the camera black; cover puts the title bar there.
             fullscreen: FullscreenMode::Cover,
@@ -784,6 +800,15 @@ pub fn merge_config(raw: &Value) -> Config {
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),
             animations: bool_(u.get("animations"), d.ui.animations),
             show_fps: bool_(u.get("showFps"), d.ui.show_fps),
+            status_bar_pwd: bool_(u.get("statusBarPwd"), d.ui.status_bar_pwd),
+            status_bar_pwd_side: one(
+                u.get("statusBarPwdSide"),
+                d.ui.status_bar_pwd_side,
+                &[
+                    ("left", StatusBarSide::Left),
+                    ("right", StatusBarSide::Right),
+                ],
+            ),
             fullscreen: one(
                 u.get("fullscreen"),
                 d.ui.fullscreen,
@@ -922,6 +947,22 @@ mod tests {
         assert_eq!(
             m(json!({"ui": {"fullscreen": "sideways"}})).ui.fullscreen,
             FullscreenMode::Cover
+        );
+    }
+
+    #[test]
+    fn status_bar_pwd_is_off_and_left_by_default_and_side_rejects_nonsense() {
+        let d = default_config();
+        assert!(!d.ui.status_bar_pwd);
+        assert_eq!(d.ui.status_bar_pwd_side, StatusBarSide::Left);
+        let c = m(json!({"ui.statusBarPwd": true, "ui.statusBarPwdSide": "right"}));
+        assert!(c.ui.status_bar_pwd);
+        assert_eq!(c.ui.status_bar_pwd_side, StatusBarSide::Right);
+        assert_eq!(
+            m(json!({"ui.statusBarPwdSide": "middle"}))
+                .ui
+                .status_bar_pwd_side,
+            StatusBarSide::Left
         );
     }
 

@@ -519,6 +519,21 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.statusBarPwd",
+        &[
+            "Show the focused terminal card's directory in the status bar at all times.",
+            "The card label shows the running program instead of the directory while one",
+            "runs; this keeps the path visible then too. Home is written as ~.",
+        ],
+    ),
+    (
+        "ui.statusBarPwdSide",
+        &[
+            "Which end of the status bar the directory goes on: \"left\" (after the card",
+            "label) or \"right\". Only used when ui.statusBarPwd is on.",
+        ],
+    ),
+    (
         "ui.fullscreen",
         &[
             "What the green button and Cmd+Ctrl+F do. \"cover\" makes the window cover the",
