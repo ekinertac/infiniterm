@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-14
+
+- Fixed: the editor's bottom bar (file path, line and column) is set in the editor's own font and cell width, so its letters are spaced like the text above it instead of spread apart (#384).
+
 ## 0.5.12 (build 884), 2026-10-14
 
 ### Canvas
