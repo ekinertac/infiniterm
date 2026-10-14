@@ -138,6 +138,16 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "canvas.zoom.actual",
         "actual size, as in every browser and editor",
     ),
+    // Pan the view without the mouse (#398). The Shift variant of the slide
+    // chord above and of the focus-move chord, so the family reads together.
+    (
+        "cmd+ctrl+shift+arrowleft",
+        "canvas.pan.left",
+        "pan the canvas by keyboard; the focus stays where it is",
+    ),
+    ("cmd+ctrl+shift+arrowright", "canvas.pan.right", ""),
+    ("cmd+ctrl+shift+arrowup", "canvas.pan.up", ""),
+    ("cmd+ctrl+shift+arrowdown", "canvas.pan.down", ""),
     ("cmd+1", "canvas.zoom.fitCard", ""),
     ("cmd+2", "canvas.zoom.fitAll", ""),
     // The terminal's font size, iTerm2's and every Mac terminal's keys

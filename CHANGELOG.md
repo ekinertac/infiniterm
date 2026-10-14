@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-15
+
+- New: Cmd+Ctrl+Shift+Arrow pans the canvas, so you can move the view without the mouse. Each press moves it 120 screen pixels at any zoom, a held key repeats, and the focus stays on the card it was on. The commands are `Canvas: pan left / right / up / down`, in the palette and rebindable.
+
 ### 2026-10-14
 
 - Fixed: `ift connect <host>` found no `ift` on a server where it was installed. The installer puts it in `~/.local/bin` for a user other than root, and the check looked only on the PATH of a non-interactive ssh, which usually lacks that folder. It now also looks in `~/.local/bin` and `/usr/local/bin` and uses the path it finds.
