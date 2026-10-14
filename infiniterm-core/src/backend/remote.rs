@@ -152,32 +152,46 @@ pub fn list_sessions(host: &RemoteHost) -> std::io::Result<Vec<String>> {
     Ok(parse_sessions(&String::from_utf8_lossy(&out.stdout)))
 }
 
-/// The script `check` runs on the server: `ift` is there, `iftd` is beside it
-/// or on the PATH, and `ift sessions` works (so its data directory does). Each
-/// failure says what is missing on stderr and uses its own exit status.
+/// Where `ift` is looked for beyond the PATH. A non-interactive ssh has a
+/// short PATH, and the installer puts `ift` in `~/.local/bin` for anyone but
+/// root (`install.rs`), so a plain `ift` was "not installed" on a server it was
+/// installed on (#397).
+pub const INSTALL_DIRS: [&str; 2] = ["$HOME/.local/bin", "/usr/local/bin"];
+
+/// The script `check` runs on the server: `ift` is there (on the PATH or in
+/// `INSTALL_DIRS`, for a bare name), `iftd` is beside it or on the PATH, and
+/// `ift sessions` works (so its data directory does). It prints the full path
+/// of the `ift` it found. Each failure says what is missing on stderr and uses
+/// its own exit status.
 pub fn check_command(ift: &str) -> String {
+    let dirs = INSTALL_DIRS.join(" ");
     let script = format!(
         concat!(
             "ift={ift}; ",
-            "p=$(command -v \"$ift\") || {{ echo 'ift is not installed on the server' >&2; exit 11; }}; ",
+            "p=$(command -v \"$ift\"); ",
+            "if [ -z \"$p\" ]; then case \"$ift\" in */*) ;; *) ",
+            "for d in {dirs}; do [ -x \"$d/$ift\" ] && p=\"$d/$ift\" && break; done;; esac; fi; ",
+            "[ -n \"$p\" ] || {{ echo 'ift is not installed on the server' >&2; exit 11; }}; ",
             "d=$(dirname \"$p\"); ",
             "[ -x \"$d/iftd\" ] || command -v iftd >/dev/null || ",
             "{{ echo 'iftd is not installed on the server' >&2; exit 12; }}; ",
-            "\"$ift\" sessions >/dev/null"
+            "\"$p\" sessions >/dev/null && printf '%s\\n' \"$p\""
         ),
-        ift = shell_quote(ift)
+        ift = shell_quote(ift),
+        dirs = dirs
     );
     format!("sh -c {}", shell_quote(&script))
 }
 
 /// Can this host run infiniterm's server half: ssh works without a prompt,
-/// `ift` and `iftd` are installed, and the sessions folder answers. The error
+/// `ift` and `iftd` are installed, and the sessions folder answers. Returns the
+/// full path of the `ift` there, which the caller uses from then on; the error
 /// is a sentence for a person.
-pub fn check(host: &RemoteHost) -> Result<(), String> {
+pub fn check(host: &RemoteHost) -> Result<String, String> {
     let out = run_on(host, &check_command(&host.ift))
         .map_err(|e| format!("could not run {}: {e}", host.ssh))?;
     if out.status.success() {
-        return Ok(());
+        return Ok(String::from_utf8_lossy(&out.stdout).trim().to_string());
     }
     let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
     Err(match out.status.code() {
@@ -467,6 +481,72 @@ mod tests {
             cmd.contains("'\\''/opt/my ift/ift'\\''"),
             "the path is quoted inside the script: {cmd}"
         );
+    }
+
+    // #397: run the script itself, on a short PATH like a non-interactive ssh
+    // has, with `ift` only in ~/.local/bin.
+    fn run_check(home: &std::path::Path, ift: &str) -> std::process::Output {
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(check_command(ift))
+            .env_clear()
+            .env("HOME", home)
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap()
+    }
+
+    // A fresh HOME for one test, named so parallel tests do not share one.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ift-397-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn stub(dir: &std::path::Path, name: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let f = dir.join(name);
+        std::fs::write(&f, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn the_check_finds_ift_in_the_install_folder_and_says_where() {
+        let home = scratch("finds");
+        let bin = home.join(".local/bin");
+        stub(&bin, "ift");
+        stub(&bin, "iftd");
+        let out = run_check(&home, "ift");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            bin.join("ift").to_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn the_check_still_says_not_installed_when_it_is_nowhere() {
+        let home = scratch("nowhere");
+        let out = run_check(&home, "ift");
+        assert_eq!(out.status.code(), Some(11));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("ift is not installed"));
+    }
+
+    // A path the user gave is taken as it is: no search for another `ift`.
+    #[test]
+    fn a_given_path_is_not_searched_for_elsewhere() {
+        let home = scratch("given");
+        let bin = home.join(".local/bin");
+        stub(&bin, "ift");
+        stub(&bin, "iftd");
+        let out = run_check(&home, "/nowhere/ift");
+        assert_eq!(out.status.code(), Some(11));
     }
 
     #[test]
