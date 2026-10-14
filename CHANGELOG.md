@@ -6,41 +6,49 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-14
+## 0.5.12 (build 881), 2026-10-14
 
-- Fixed: in the diff card, a long file name in the changed-files list no longer runs into the diff. It is cut from the front, so the end of the name stays.
-- Fixed: the + button in an editor or browser card's tab strip sat far to the right of the last tab. It now sits right beside it.
-- New: "Editor: open this card's folder" in the command palette opens an editor beside the focused card, with its file tree on the folder the card is in. It is the twin of "Diff: this card against git HEAD".
-
-### 2026-10-11
+### Canvas
 
 - New: Cmd+Shift+O takes the focused terminal card into a window of its own. The card keeps its place on the canvas as an empty card with "In its own window" on it. The window's terminal refits when you resize it, and the card gets its canvas size back when you close the window (Cmd+W or the red button). Keys to the card on the canvas do nothing while it is out. In the window Cmd+= and Cmd+- change the font size, Cmd+K clears, Cmd+Shift+C is visual mode, and copy, paste and Cmd+Left / Cmd+Right work as in a card. Find and the other app shortcuts are not there yet. Only terminal cards for now.
-
-### 2026-10-10
-
-- New: Antigravity CLI (`agy`) cards show their state. Run `ift install-antigravity-hooks` once, then start a new `agy` session: the card is violet while a turn runs, green when it finishes, red when it ends in an error. Antigravity has no event for a permission prompt, so the card cannot turn yellow, and a turn waiting for your approval shows violet. A lost session offers `agy --conversation <id>` to resume it.
-- Fixed: Cursor cards never showed their state. The adapter that `ift install-cursor-hooks` writes dropped every event it was sent (it read the hook's input from the wrong place). Run `ift install-cursor-hooks` again to replace the script.
-- The editor completes words while you type. Two letters open a list of words from the file, nearest to the caret first, and from the card's other tabs, marked with the tab's name. In a source file, words inside comments and strings are left out. Tab takes the top row; Enter takes a row only after you moved it with Up or Down, so a word you typed is never replaced by Enter. Letters in order match from three letters (`gtl` finds `getTotalLength`). Turn it off with `editor.completeWords`.
-- Fixed: the letter under a block cursor can be read. A theme whose cursor colour equals its text colour hid it, in terminals and in editors. The letter is now drawn in the theme's cursor text colour, or black or white when that does not contrast with the cursor. New settings `terminal.cursorColor` and `editor.cursorColor` (a hex colour, empty follows the theme) set the cursor's colour; the letter under it follows.
 - The right-click menu of a selection of several cards offers what acts on all of them: Group, Protect, Clear State Colour, Fit Selection, Move to Workspace and Close. Rename, Split and Size, which are for one card, are left out. The menu is the same whichever card of the selection you click.
 - New: `Group: move to workspace…` (command palette) sends the focused card's whole group to another workspace or a new one, with its frame, name, and its cards in the same arrangement and sizes. It lands in the first free block of the destination, and you stay where you are. The group's own right-click menu is not built yet.
+- Fixed: a right-click on one of several selected cards keeps the selection, as in Finder, and opens its menu with the selection still there. A right-click on a card outside the selection selects that card alone, as before. The menu's items for several cards come next.
+- Renamed and switchable: the zoom Cmd+1 does on an already fitted terminal card is now "zoom in on the focused card's bottom", not "reading mode". The setting is `ui.cardZoom` (the old `ui.readZoom` still works); 0 turns it off, so a second Cmd+1 does nothing new. The palette commands are `Canvas: zoom in on the focused card's bottom` and the two pan commands, and the status bar says "zoomed".
 
-### 2026-10-09
+### Terminal
 
-- New: `ift terminal <dir>...` opens a terminal card whose shell starts in each folder, on the workspace on screen, the last one focused and the app brought forward. It starts infiniterm first when it is not running. (A Finder right-click item for it is built but does not show up yet.)
+- New: `ift terminal <dir>...` opens a terminal card whose shell starts in each folder, on the workspace on screen, the last one focused and the app brought forward. It starts infiniterm first when it is not running.
 - Every new terminal card sets `FORCE_HYPERLINK=1`, so Claude Code (and other tools that decide by terminal name) print links as real hyperlinks: a markdown link in its reply is clickable text, underlined, instead of `text (url)`. A card that is already open keeps its old environment; open a new one. To turn it off, set `"terminal.env": ["FORCE_HYPERLINK=0"]`.
 - Link feedback is the same for every kind of link: holding Cmd over a link in a terminal draws a full-strength double underline over a faint tint and turns the pointer to a hand. A link a program marked itself (OSC 8) has a thin dim underline at rest, so hovering visibly changes it.
 - A link a program marked itself (OSC 8) is underlined at rest, so text that is a link and does not look like one is not just text. Links found by pattern (URLs, paths, `#349`) still show only under Cmd+hover.
 - Terminal hyperlinks (OSC 8) work: text a program marks as a link, such as `ls --hyperlink`, `rg --hyperlink-format`, `gcc` or an agent's markdown link `[#432](https://...)`, opens its address on Cmd+click, with the Cmd+hover underline, whatever the visible text says. Only `http` and `https` addresses open: `file:` and an application's own scheme are ignored, since the text of a link can lie.
 - Issue and pull request numbers in terminal output are links. In a card whose directory is a GitHub checkout, `#349` opens `github.com/<owner>/<repo>/issues/349` on Cmd+click (GitHub redirects to the pull request when it is one), and `owner/repo#349` works in any card. A bare number needs a space, bracket or quote before it and no letter after it, so `#!/bin/sh` and `a#1` are not links; a colour like `#123` is one, which shows only as an underline under Cmd. The repository is read from `.git/config` (a worktree too), `origin` first.
-- Fixed: a right-click on one of several selected cards keeps the selection, as in Finder, and opens its menu with the selection still there. A right-click on a card outside the selection selects that card alone, as before. The menu's items for several cards come next.
-- Renamed and switchable: the zoom Cmd+1 does on an already fitted terminal card is now "zoom in on the focused card's bottom", not "reading mode". The setting is `ui.cardZoom` (the old `ui.readZoom` still works); 0 turns it off, so a second Cmd+1 does nothing new. The palette commands are `Canvas: zoom in on the focused card's bottom` and the two pan commands, and the status bar says "zoomed".
-- Fixed: the command palette (Cmd+Shift+P) opens from a locked editor or browser card. The lock swallowed the chord.
-- Fixed: card labels, group names and the selection hints are drawn in the regular UI weight again. Since the interface font settings in 0.5.11 they were bold, and `ui.fontWeight` did not change them; they follow `ui.fontWeight` now.
+- Fixed: the letter under a block cursor can be read. A theme whose cursor colour equals its text colour hid it, in terminals and in editors. The letter is now drawn in the theme's cursor text colour, or black or white when that does not contrast with the cursor. New settings `terminal.cursorColor` and `editor.cursorColor` (a hex colour, empty follows the theme) set the cursor's colour; the letter under it follows.
 - New setting `ui.minTextPx` (default 7; it applies only with `ui.textAsBars` on): how big a glyph must be, in device pixels, before text is drawn instead of bars. At 7 a 19 px terminal font turns to bars below 37% zoom, so a canvas of twenty cards zoomed out to 34% is bars however high `ui.glyphBudget` is; set 4 to draw the text down to about 21%. `ui.textAsBars` is off by default: cards draw their text at every zoom and however many are on screen, because after the faster drawing the bars bought nothing (18 cards printing at once while zooming: about 45 frames a second with text). Turn it on to get the old bars on a slow Mac.
-- New: `Browser: open DevTools` in the command palette opens Chromium's DevTools for the page in a card beside it: Elements, Console, Network and the rest. It works through a debugging port that opens on a random loopback port at each launch; only the DevTools page the app opens may connect to it, a web page cannot. The port is on by default. A program running on this Mac can still attach to it, so `browser.devtools` turns the feature off; restart the app after changing it. There is no key for it yet.
 - Terminal text is about five times cheaper to draw. Profiling 13 busy cards showed 90% of a glyph's cost was gpui ordering each one against everything drawn before it; a card's rows now share one order. A frame of those cards went from 17.5 ms to 4 ms, so zooming and panning over many cards of text is smooth. With that, `ui.glyphBudget` (the text-to-bars limit) now defaults to 150000 cells, about eleven full cards, instead of 30000.
 - New setting `ui.glyphBudget` (default 150000; it applies only with `ui.textAsBars` on): how many terminal cells may be on screen before every card turns to bars. Cards turn to bars when a frame would paint too much text, not at a fixed zoom, so a wall of cards can be bars at 50% while one card reads at 30%. Raise it to read more cards at a smaller zoom; each cell costs at most 50 nanoseconds a frame.
+
+### Editor
+
+- Fixed: in the diff card, a long file name in the changed-files list no longer runs into the diff. It is cut from the front, so the end of the name stays.
+- Fixed: the + button in an editor or browser card's tab strip sat far to the right of the last tab. It now sits right beside it.
+- New: "Editor: open this card's folder" in the command palette opens an editor beside the focused card, with its file tree on the folder the card is in. It is the twin of "Diff: this card against git HEAD".
+- The editor completes words while you type. Two letters open a list of words from the file, nearest to the caret first, and from the card's other tabs, marked with the tab's name. In a source file, words inside comments and strings are left out. Tab takes the top row; Enter takes a row only after you moved it with Up or Down, so a word you typed is never replaced by Enter. Letters in order match from three letters (`gtl` finds `getTotalLength`). Turn it off with `editor.completeWords`.
+
+### Agents
+
+- New: Antigravity CLI (`agy`) cards show their state. Run `ift install-antigravity-hooks` once, then start a new `agy` session: the card is violet while a turn runs, green when it finishes, red when it ends in an error. Antigravity has no event for a permission prompt, so the card cannot turn yellow, and a turn waiting for your approval shows violet. A lost session offers `agy --conversation <id>` to resume it.
+- Fixed: Cursor cards never showed their state. The adapter that `ift install-cursor-hooks` writes dropped every event it was sent (it read the hook's input from the wrong place). Run `ift install-cursor-hooks` again to replace the script.
+
+### Browser
+
+- New: `Browser: open DevTools` in the command palette opens Chromium's DevTools for the page in a card beside it: Elements, Console, Network and the rest. It works through a debugging port that opens on a random loopback port at each launch; only the DevTools page the app opens may connect to it, a web page cannot. The port is on by default. A program running on this Mac can still attach to it, so `browser.devtools` turns the feature off; restart the app after changing it. There is no key for it yet.
+
+### Interface
+
+- Fixed: the command palette (Cmd+Shift+P) opens from a locked editor or browser card. The lock swallowed the chord.
+- Fixed: card labels, group names and the selection hints are drawn in the regular UI weight again. Since the interface font settings in 0.5.11 they were bold, and `ui.fontWeight` did not change them; they follow `ui.fontWeight` now.
 
 ## 0.5.11 (build 801), 2026-10-09
 
