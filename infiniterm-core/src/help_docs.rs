@@ -54,16 +54,20 @@ const GUIDE: &[(&str, &str)] = &[
         include_str!("../../site/src/content/docs/guide/ift-and-sessions.md"),
     ),
     (
-        "07 Configuration.md",
+        "07 Servers.md",
+        include_str!("../../site/src/content/docs/guide/servers.md"),
+    ),
+    (
+        "08 Configuration.md",
         include_str!("../../site/src/content/docs/guide/configuration.md"),
     ),
 ];
 
 /// The generated reference pages, by their file in `site_reference`.
 const REFERENCE: &[(&str, &str)] = &[
-    ("keys.md", "08 Keys.md"),
-    ("commands.md", "09 Commands.md"),
-    ("settings.md", "10 Settings.md"),
+    ("keys.md", "09 Keys.md"),
+    ("commands.md", "10 Commands.md"),
+    ("settings.md", "11 Settings.md"),
 ];
 
 /// The page `help.docs` opens first.
@@ -162,7 +166,7 @@ mod tests {
     fn the_files_are_the_guide_then_the_reference_in_order() {
         let names: Vec<String> = files().into_iter().map(|(n, _)| n).collect();
         assert_eq!(names.first().map(String::as_str), Some(FIRST_PAGE));
-        assert_eq!(names.last().map(String::as_str), Some("10 Settings.md"));
+        assert_eq!(names.last().map(String::as_str), Some("11 Settings.md"));
         assert_eq!(names.len(), GUIDE.len() + REFERENCE.len());
         let mut sorted = names.clone();
         sorted.sort();
