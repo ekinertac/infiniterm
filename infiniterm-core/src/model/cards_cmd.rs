@@ -1839,6 +1839,16 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.open_in_card(plan, Some(&id));
         })
     });
+    // The diff's twin (#373): an editor card on the folder this card is in,
+    // its tree rooted there, the plan `ift <dir>` makes.
+    r.register("card.open.editor", "Editor: open this card's folder", |m| {
+        m.with_active_card(|m, id| {
+            let Some(card) = m.card(&id).cloned() else {
+                return;
+            };
+            m.open_in_card(open_plan(&card.cwd, PathKind::Directory, None), Some(&id));
+        })
+    });
     r.register("editor.blame", "Diff: show or hide git blame", |m| {
         m.with_active_card(|m, id| match m.card(&id).map(|c| c.kind) {
             Some(CardKind::Diff) => m.effects.push(Effect::Editor {
