@@ -6,7 +6,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-## 0.5.12 (build 881), 2026-10-14
+## 0.5.12 (build 884), 2026-10-14
 
 ### Canvas
 
