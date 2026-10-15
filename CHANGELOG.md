@@ -6,17 +6,25 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-15
+## 0.5.13 (build 907), 2026-10-15
 
-- New: the first time you open a new version after an update, the changelog appears in an overlay, newest release first. Escape or the × in its corner closes it; the arrows, Page Up/Down, Home, End and the wheel scroll it. Another key, or a click outside it, only makes it flash, so nothing you type goes anywhere by mistake. It does not show on a first install. `ui.showWhatsNew` (on by default) turns it off, and `Help: show what's new` opens it any time.
+### Canvas
+
 - New: Cmd+Ctrl+Shift+Arrow pans the canvas, so you can move the view without the mouse. Each press moves it 120 screen pixels at any zoom, a held key repeats, and the focus stays on the card it was on. The commands are `Canvas: pan left / right / up / down`, in the palette and rebindable.
 
-### 2026-10-14
+### Interface
+
+- New: the first time you open a new version after an update, the changelog appears in an overlay, newest release first. Escape or the × in its corner closes it; the arrows, Page Up/Down, Home, End and the wheel scroll it. Another key, or a click outside it, only makes it flash, so nothing you type goes anywhere by mistake. It does not show on a first install. `ui.showWhatsNew` (on by default) turns it off, and `Help: show what's new` opens it any time.
+- New: `ui.statusBarPwd` (off by default) keeps the focused terminal card's directory in the status bar, home as `~`, also while a program runs and the card label shows the program instead. It is left out when the label already is the directory. `ui.statusBarPwdSide` puts it on the `"left"` (after the card label, the default) or the `"right"` of the bar.
+- A longer message in the status bar stays longer: five seconds up to 40 characters, then a little more for each, at most twelve. "infiniterm 0.5.12 is ready: restart to install" no longer disappears before you can read it. The result of "Check for updates" also waits until "checking for updates…" has been on screen for a second and a half, so a quick answer does not wipe it.
+
+### Editor
+
+- Fixed: the editor's bottom bar (file path, line and column) is set in the editor's own font and cell width, so its letters are spaced like the text above it instead of spread apart (#384).
+
+### Remote
 
 - Fixed: `ift connect <host>` found no `ift` on a server where it was installed. The installer puts it in `~/.local/bin` for a user other than root, and the check looked only on the PATH of a non-interactive ssh, which usually lacks that folder. It now also looks in `~/.local/bin` and `/usr/local/bin` and uses the path it finds.
-- New: `ui.statusBarPwd` (off by default) keeps the focused terminal card's directory in the status bar, home as `~`, also while a program runs and the card label shows the program instead. It is left out when the label already is the directory. `ui.statusBarPwdSide` puts it on the `"left"` (after the card label, the default) or the `"right"` of the bar.
-- Fixed: the editor's bottom bar (file path, line and column) is set in the editor's own font and cell width, so its letters are spaced like the text above it instead of spread apart (#384).
-- A longer message in the status bar stays longer: five seconds up to 40 characters, then a little more for each, at most twelve. "infiniterm 0.5.12 is ready: restart to install" no longer disappears before you can read it. The result of "Check for updates" also waits until "checking for updates…" has been on screen for a second and a half, so a quick answer does not wipe it.
 
 ## 0.5.12 (build 884), 2026-10-14
 
