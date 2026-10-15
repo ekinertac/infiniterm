@@ -11,7 +11,7 @@ Written 2026-10-01. The goal for the first month is users and feedback, not sale
 
 ## How we know it worked
 
-- **Active Macs.** Every running copy fetches `latest.json` at launch and every six hours, 4 to 5 times a day, and GitHub counts the downloads. 50 to 100 active Macs is roughly 250 to 450 fetches a day. `tools/usage-stats.sh` prints it. No telemetry is added for this; the count is what the update check already does.
+- **Active Macs.** Every running copy fetches `latest.json` at launch and every hour (every six hours before 0.5.14), and GitHub counts the downloads. `tools/usage-stats.py` divides the count by 24 fetches a Mac a day, so it reads low while older builds are still in use. It prints the estimate. No telemetry is added for this; the count is what the update check already does.
 - **Feedback.** 10 or more issues opened by someone other than Ekin within the month.
 - Stars, upvotes and followers are noted but not the goal.
 
