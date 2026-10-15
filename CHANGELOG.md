@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-16
+
+- A card on a remote instance (`ift connect`) now loads the server's own `.zshrc`, so your prompt and aliases appear as they do over plain ssh. Before, the shell was started with a `ZDOTDIR` that pointed at a folder on your Mac, which does not exist on the server, and zsh started bare. Remote cards do not get the command marks (long commands colouring the card) or Shift-select on the command line yet.
+
 ### 2026-10-15
 
 - The app looks for a new version every hour instead of every six, so a release no longer waits most of a working day to show up. It still checks at launch, and `App: check for updates` looks at once.
