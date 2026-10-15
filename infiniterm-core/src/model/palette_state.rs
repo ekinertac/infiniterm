@@ -179,6 +179,7 @@ impl Model {
         self.palette_open()
             || self.prompt.is_open()
             || self.shortcuts_open
+            || self.whats_new_open
             || self.omni.open
             || self.switcher.is_some()
     }

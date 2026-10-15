@@ -1064,6 +1064,8 @@ impl AppView {
                 self.prompt_key(k, cx);
             } else if self.model.shortcuts_open {
                 self.shortcuts_key(k, cx);
+            } else if self.model.whats_new_open {
+                self.whats_new_key(k, cx);
             }
             return true;
         }
@@ -1097,6 +1099,9 @@ impl AppView {
         }
         if self.model.shortcuts_open {
             return self.shortcuts_key(k, cx);
+        }
+        if self.model.whats_new_open {
+            return self.whats_new_key(k, cx);
         }
         if let Some(id) = self.model.selection.focused_id.clone() {
             // A masked card takes no keys: Enter or Escape lifts the mask,

@@ -116,6 +116,8 @@ impl Model {
             "omnibox"
         } else if self.shortcuts_open {
             "shortcuts"
+        } else if self.whats_new_open {
+            "whatsNew"
         } else if self.find.open {
             "find"
         } else if self.switcher.is_some() {

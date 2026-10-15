@@ -446,6 +446,7 @@ impl Render for AppView {
         let prompt = self.model.prompt.is_open().then(|| self.render_prompt(cx));
         let shortcuts = self.model.shortcuts_open.then(|| self.render_shortcuts(cx));
         let omnibox = self.model.omni.open.then(|| self.render_omnibox(cx));
+        let whats_new = self.model.whats_new_open.then(|| self.render_whats_new(cx));
         let find_bar = self.model.find.open.then(|| self.render_find_bar(cx));
         let keycast = self
             .keycasts_alive(crate::now_ms())
@@ -616,6 +617,7 @@ impl Render for AppView {
                     .children(prompt)
                     .children(shortcuts)
                     .children(omnibox)
+                    .children(whats_new)
                     .children(find_bar)
                     .children(keycast)
                     .children(switcher),

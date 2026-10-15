@@ -51,6 +51,7 @@ mod terminals;
 mod text;
 mod transcript_body;
 mod updater;
+mod whats_new;
 mod window_state;
 
 use animator::Animator;
@@ -272,6 +273,9 @@ pub struct AppView {
     /// `ift read` requests the poll timer answers once the output is parsed.
     pub read_requests: Vec<crate::terminals::ReadRequest>,
     pub shortcuts_scroll: gpui::ScrollHandle,
+    /// The "what's new" sheet's page, alive while the sheet is open
+    /// (`whats_new.rs`, #402).
+    pub whats_new_body: Option<page_body::PageBody>,
     /// The omnibox's text, opened selected so typing replaces a prefilled
     /// address the way it does in a browser.
     pub omni_field: field::Field,

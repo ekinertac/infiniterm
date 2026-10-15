@@ -2,7 +2,7 @@
 //! palette, the shortcuts panel, the settings pair, the theme picker,
 //! reload. Port of `commands/canvas.ts`.
 use super::palette_state::Source;
-use super::{ConfigPair, Effect, Model};
+use super::{ConfigPair, Effect, Model, WHATS_NEW_FLASH_MS};
 use crate::chrome::{clamp_ui_scale, UI_SCALE_STEP};
 use crate::config::TerminalBackend;
 use crate::config_files::{config_path, ConfigFile};
@@ -34,6 +34,30 @@ impl Model {
         };
         self.pending_pan = Some(to);
         self.effects.push(Effect::AnimatePan { x: to.x, y: to.y });
+    }
+
+    pub fn open_whats_new(&mut self) {
+        self.whats_new_open = true;
+        self.whats_new_flash_until = 0.;
+    }
+
+    pub fn close_whats_new(&mut self) {
+        self.whats_new_open = false;
+    }
+
+    /// A key was typed into the sheet: it flashes, and nothing else happens.
+    pub fn flash_whats_new(&mut self) {
+        self.whats_new_flash_until = self.now_ms + WHATS_NEW_FLASH_MS;
+    }
+
+    /// A frame is due while the sheet flashes and once more when it stops, so
+    /// the border goes back to its colour.
+    pub fn whats_new_wants_frame(&self, now_ms: f64) -> bool {
+        self.whats_new_open && now_ms < self.whats_new_flash_until + 100.
+    }
+
+    pub fn whats_new_flashing(&self, now_ms: f64) -> bool {
+        self.whats_new_open && now_ms < self.whats_new_flash_until
     }
 
     pub fn zoom_by(&mut self, factor: f64) {
@@ -313,6 +337,11 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         if let Some(id) = m.open_welcome(from.as_deref()) {
             m.set_focus(Some(&id));
         }
+    });
+    // The overlay the first launch after an update shows, reachable any time
+    // (#402). Esc or its X closes it; a key typed into it flashes it.
+    r.register("help.whatsNew", "Help: show what's new", |m| {
+        m.open_whats_new()
     });
     r.register("help.changelog", "Help: open the changelog", |m| {
         let from = m.focused().map(|c| c.id.clone());

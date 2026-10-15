@@ -75,6 +75,7 @@ impl AppView {
             pick_request: None,
             read_requests: vec![],
             shortcuts_scroll: gpui::ScrollHandle::new(),
+            whats_new_body: None,
             omni_field: crate::field::Field::default(),
             find_field: crate::field::Field::default(),
             redraw: false,
@@ -576,6 +577,8 @@ impl AppView {
                 .any(|d| crate::body::CardBody::wants_frame(d, now))
         {
             "body"
+        } else if self.model.whats_new_wants_frame(now) {
+            "whats-new"
         } else if self.model.notice_expired(now) {
             "notice"
         } else if self.model.done_seen_due(now) {
@@ -612,6 +615,7 @@ impl AppView {
                 let due = !self.far() || now - self.last_paint_ms >= crate::chrome::FAR_REFRESH_MS;
                 (content && due)
                     || self.model.notice_expired(now)
+                    || self.model.whats_new_wants_frame(now)
                     || self.model.done_seen_due(now)
                     || self.frame_rate.expired(now)
                     || self
@@ -924,6 +928,31 @@ pub fn startup(app: &mut AppView) {
             .and_then(|()| std::fs::write(&path, infiniterm_core::changelog::text()));
         if let Err(e) = written {
             eprintln!("[infiniterm/warn] could not write {}: {e}", path.display());
+        }
+        // The first launch after an update shows what changed (#402): the
+        // overlay's file is this build's released changelog, and it opens
+        // when the version last run is older than this one. A first install,
+        // a scratch data dir and a remote window have no stored version, or
+        // none worth showing, and only record it.
+        let whats_new = infiniterm_core::changelog::whats_new_path();
+        let written = whats_new
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&whats_new, infiniterm_core::changelog::released_text()));
+        if let Err(e) = written {
+            eprintln!(
+                "[infiniterm/warn] could not write {}: {e}",
+                whats_new.display()
+            );
+        }
+        let running = env!("CARGO_PKG_VERSION");
+        let updated = infiniterm_core::changelog::read_last_version()
+            .is_some_and(|stored| infiniterm_core::changelog::version_newer(&stored, running));
+        if updated && app.model.config.ui.show_whats_new && app.model.remote.is_none() {
+            app.model.open_whats_new();
+        }
+        if let Err(e) = infiniterm_core::changelog::write_last_version(running) {
+            eprintln!("[infiniterm/warn] could not record the version: {e}");
         }
         // The in-app docs (`help.docs`), the same pages as infiniterm.app,
         // rewritten every launch so they match this build.

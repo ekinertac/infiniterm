@@ -85,7 +85,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ),
     (
         "overlay",
-        "what is open over the canvas: none, palette, prompt, omnibox, shortcuts, find or switcher",
+        "what is open over the canvas: none, palette, prompt, omnibox, shortcuts, whatsNew, find or switcher",
     ),
     (
         "phantomFocus",
