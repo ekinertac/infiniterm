@@ -114,6 +114,7 @@ export const featureGroups: FeatureGroup[] = [
   {
     title: 'The app',
     items: [
+      { text: 'After an update, the first launch shows what changed in an overlay, newest release first.', href: 'guide/install/#whats-new-after-an-update' },
       { text: 'Native, in Rust. No Electron, no account, no telemetry.', href: 'guide/configuration/#what-the-app-touches' },
       { text: 'Signed and notarized, and it updates itself; the update check is a plain GET.' },
       { text: 'Install with one `curl` line, Homebrew or a DMG.', href: 'guide/install/' },
