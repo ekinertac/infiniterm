@@ -486,7 +486,7 @@ mod tests {
     fn a_command_that_asks_for_more_ends_its_label_with_an_ellipsis() {
         // Information to read, not an answer to give, and a save that asks only
         // for a file that has no name yet.
-        const NO_ELLIPSIS: &[&str] = &["app.about", "app.shortcuts", "card.save"];
+        const NO_ELLIPSIS: &[&str] = &["app.about", "app.shortcuts", "card.save", "help.whatsNew"];
         // Ask only with state the probe does not build (a group, a snippet
         // folder), so they are named here.
         const ALSO_ASK: &[&str] = &[
@@ -2110,6 +2110,27 @@ mod tests {
         assert!(effects
             .iter()
             .any(|e| matches!(e, Effect::AnimateFit(v) if v.scale == 1.)));
+    }
+
+    // #402: the "what's new" sheet is modal, flashes when a key is typed into
+    // it for WHATS_NEW_FLASH_MS, and closes without touching anything else.
+    #[test]
+    fn the_whats_new_sheet_is_modal_flashes_and_closes() {
+        use crate::model::WHATS_NEW_FLASH_MS;
+        let mut h = Harness::new();
+        let focus = h.m.selection.focused_id.clone();
+        assert!(!h.m.modal_open());
+        h.run("help.whatsNew");
+        assert!(h.m.whats_new_open && h.m.modal_open() && h.m.overlay_open());
+        assert_eq!(h.m.key_context().overlay, "whatsNew");
+        let t = h.m.now_ms;
+        assert!(!h.m.whats_new_flashing(t));
+        h.m.flash_whats_new();
+        assert!(h.m.whats_new_flashing(t + WHATS_NEW_FLASH_MS - 1.));
+        assert!(!h.m.whats_new_flashing(t + WHATS_NEW_FLASH_MS));
+        h.m.close_whats_new();
+        assert!(!h.m.modal_open() && !h.m.whats_new_flashing(t));
+        assert_eq!(h.m.selection.focused_id, focus);
     }
 
     // #398: the keyboard pans the view by a fixed number of SCREEN pixels, a

@@ -57,6 +57,7 @@ impl AppView {
         self.reconcile_diffs(window);
         self.reconcile_transcripts(window);
         self.reconcile_pages(window);
+        self.reconcile_whats_new(window);
         let metrics = self.metrics(window);
         let cfg = self.model.config.clone();
         let chrome = EditorChrome {

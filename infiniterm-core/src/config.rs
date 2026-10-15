@@ -332,6 +332,10 @@ pub struct Ui {
     /// of it is to be there when something stutters; it holds a permanent
     /// frame loop while on.
     pub show_fps: bool,
+    /// The changelog in an overlay on the first launch after an update
+    /// (#402). On by default; off shows nothing, and the version is still
+    /// recorded.
+    pub show_whats_new: bool,
     /// The focused terminal card's directory in the status bar at all times
     /// (#371): the card label says the process while one runs, so the path
     /// is otherwise hidden exactly when a program is going.
@@ -467,6 +471,7 @@ pub fn default_config() -> Config {
             // A development number; the release does not show it by
             // default (issue #16).
             show_fps: false,
+            show_whats_new: true,
             status_bar_pwd: false,
             status_bar_pwd_side: StatusBarSide::Left,
             // Native full screen on a notched MacBook leaves the strip
@@ -800,6 +805,7 @@ pub fn merge_config(raw: &Value) -> Config {
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),
             animations: bool_(u.get("animations"), d.ui.animations),
             show_fps: bool_(u.get("showFps"), d.ui.show_fps),
+            show_whats_new: bool_(u.get("showWhatsNew"), d.ui.show_whats_new),
             status_bar_pwd: bool_(u.get("statusBarPwd"), d.ui.status_bar_pwd),
             status_bar_pwd_side: one(
                 u.get("statusBarPwdSide"),
@@ -948,6 +954,12 @@ mod tests {
             m(json!({"ui": {"fullscreen": "sideways"}})).ui.fullscreen,
             FullscreenMode::Cover
         );
+    }
+
+    #[test]
+    fn the_whats_new_overlay_is_on_by_default_and_can_be_turned_off() {
+        assert!(default_config().ui.show_whats_new);
+        assert!(!m(json!({"ui.showWhatsNew": false})).ui.show_whats_new);
     }
 
     #[test]

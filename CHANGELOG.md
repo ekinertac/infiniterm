@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-15
 
+- New: the first time you open a new version after an update, the changelog appears in an overlay, newest release first. Escape or the × in its corner closes it; the arrows, Page Up/Down, Home, End and the wheel scroll it. Another key, or a click outside it, only makes it flash, so nothing you type goes anywhere by mistake. It does not show on a first install. `ui.showWhatsNew` (on by default) turns it off, and `Help: show what's new` opens it any time.
 - New: Cmd+Ctrl+Shift+Arrow pans the canvas, so you can move the view without the mouse. Each press moves it 120 screen pixels at any zoom, a held key repeats, and the focus stays on the card it was on. The commands are `Canvas: pan left / right / up / down`, in the palette and rebindable.
 
 ### 2026-10-14

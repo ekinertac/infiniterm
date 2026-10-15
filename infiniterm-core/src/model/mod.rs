@@ -529,6 +529,9 @@ pub enum WindowColorSave {
     Forget,
 }
 
+/// How long the "what's new" sheet flashes when a key is typed into it.
+pub const WHATS_NEW_FLASH_MS: f64 = 450.;
+
 /// How long a short notice stays up after the last one.
 pub const NOTICE_MS: f64 = 5000.;
 /// A notice longer than this many characters gets `NOTICE_MS_PER_CHAR` more
@@ -661,6 +664,10 @@ pub struct Model {
     pub palette: PaletteState,
     pub prompt: crate::prompt::Prompt<Pending>,
     pub shortcuts_open: bool,
+    /// The "what's new" overlay (#402) is up, and until when it is flashing
+    /// because a key was typed into it (`whats_new_flash_until`, ms).
+    pub whats_new_open: bool,
+    pub whats_new_flash_until: f64,
     /// Set when this instance runs its cards on a host (`ift connect`, #118):
     /// what the window shows, and the reason browser cards are refused.
     pub remote: Option<crate::remote_identity::RemoteIdentity>,
@@ -788,6 +795,8 @@ impl Model {
             palette: PaletteState::default(),
             prompt: crate::prompt::Prompt::default(),
             shortcuts_open: false,
+            whats_new_open: false,
+            whats_new_flash_until: 0.,
             remote: None,
             omni: omni_cmd::OmniState::default(),
             find: find_cmd::FindState::default(),

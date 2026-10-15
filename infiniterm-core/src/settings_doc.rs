@@ -519,6 +519,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.showWhatsNew",
+        &[
+            "Show the changelog in an overlay the first time you open a new version",
+            "after an update. Escape or the X in its corner closes it. \"Help: show",
+            "what's new\" opens it any time.",
+        ],
+    ),
+    (
         "ui.statusBarPwd",
         &[
             "Show the focused terminal card's directory in the status bar at all times.",
