@@ -3,7 +3,7 @@
 
 The app has no telemetry and the site says so. What exists anyway: every
 installed copy fetches `latest.json` from the newest release at launch and
-every six hours (infiniterm-ui/src/updater.rs), and GitHub counts each
+every hour (infiniterm-ui/src/updater.rs; every six hours before 0.5.14), and GitHub counts each
 download of each release asset. So the newest release's `latest.json`
 count, divided by the days it has been the newest and by the fetches one
 Mac makes a day, estimates the Macs running it. The zip counts updates
@@ -27,9 +27,11 @@ import sys
 from datetime import datetime, timezone
 
 REPO = "ekinertac/infiniterm"
-# At launch plus every six hours: four a day for a Mac that stays up, more
-# for one relaunched. Four keeps the estimate on the low side.
-FETCHES_PER_MAC_PER_DAY = 4
+# At launch plus every hour (`CHECK_EVERY_MS`): 24 a day for a Mac that stays
+# up, fewer for a laptop that sleeps, more for one relaunched. Builds before
+# 0.5.14 fetched every six hours, so while they are still in use the count
+# mixes both and the estimate is low. 24 keeps it on the low side.
+FETCHES_PER_MAC_PER_DAY = 24
 
 
 def releases():

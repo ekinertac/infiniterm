@@ -38,10 +38,12 @@ pub const DOWNLOAD_PREFIXES: [&str; 2] = [
     "https://github.com/ekinertac/infiniterm-releases/releases/download/",
 ];
 
-/// How often a running app looks again after the check at launch. Six
-/// hours: a friend who leaves it open all week still hears about a fix the
-/// same day, and GitHub sees four requests a day per Mac.
-pub const CHECK_EVERY_MS: f64 = 6. * 60. * 60. * 1000.;
+/// How often a running app looks again after the check at launch. One hour
+/// (Ekin, 2026-10-15: six hours let a release go unseen for most of a
+/// working day). `latest.json` is a small file on GitHub's CDN, so GitHub
+/// sees up to 24 requests a day per Mac. `tools/usage-stats.py` divides by
+/// this number of fetches, so it changes together with this.
+pub const CHECK_EVERY_MS: f64 = 60. * 60. * 1000.;
 
 /// What a downloaded app must satisfy before it replaces this one: signed
 /// by Apple's chain, leaf certificate of Ekin's team. The same team id
@@ -143,6 +145,14 @@ pub fn swap_script(pid: u32, bundle: &str, staged: &str, aside: &str) -> String 
 
 #[cfg(test)]
 mod tests {
+    // The usage estimate (tools/usage-stats.py) assumes this many fetches a
+    // day per Mac that stays up; change them together.
+    #[test]
+    fn the_check_interval_is_an_hour() {
+        assert_eq!(CHECK_EVERY_MS, 3_600_000.);
+        assert_eq!(24. * 3_600_000. / CHECK_EVERY_MS, 24.);
+    }
+
     use super::*;
 
     const GOOD: &str = r#"{

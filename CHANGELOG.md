@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-15
+
+- The app looks for a new version every hour instead of every six, so a release no longer waits most of a working day to show up. It still checks at launch, and `App: check for updates` looks at once.
+
 ## 0.5.13 (build 907), 2026-10-15
 
 ### Canvas
