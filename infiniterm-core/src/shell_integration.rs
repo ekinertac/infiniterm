@@ -32,6 +32,15 @@ pub fn is_zsh(shell: &str) -> bool {
     Path::new(shell.trim()).file_name().and_then(|n| n.to_str()) == Some("zsh")
 }
 
+/// Whether a card's shell should be started with the integration. Not a card
+/// made to run one program (no prompt to mark), and not a card of a remote
+/// instance: its shell runs on the server, where `dir` (a path on this Mac)
+/// does not exist, so a ZDOTDIR pointing at it made zsh skip the server's own
+/// dotfiles and start bare (#408).
+pub fn applies(runs_program: bool, remote: bool, installed: bool) -> bool {
+    !runs_program && !remote && installed
+}
+
 /// The variables that load the integration into a card's zsh: ZDOTDIR at
 /// `dir`, and the user's own ZDOTDIR (`original`, the app's environment)
 /// handed over so the shim can put it back. Empty for any other shell.
@@ -61,6 +70,14 @@ mod tests {
         let e = zsh_env("/bin/zsh", d, Some("/home/me/zd".into()));
         assert_eq!(e[0], ("ZDOTDIR".into(), "/x".into()));
         assert_eq!(e[1], ("INFINITERM_ZDOTDIR".into(), "/home/me/zd".into()));
+    }
+
+    #[test]
+    fn a_remote_instance_or_a_program_card_gets_no_integration() {
+        assert!(applies(false, false, true));
+        assert!(!applies(false, true, true), "the shim is on this Mac only");
+        assert!(!applies(true, false, true));
+        assert!(!applies(false, false, false));
     }
 
     /// A real interactive zsh: the user's .zshenv and .zshrc still load,
