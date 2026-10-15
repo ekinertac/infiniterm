@@ -113,6 +113,12 @@ The app checks for a new build at launch and every six hours. A newer build is d
 
 The check is a plain GET of `latest.json` with nothing about you in it.
 
+### What's new after an update
+
+The first time you open a newer version after an update, the changelog appears in a sheet over the canvas, newest release first, without the days not yet released. `Escape` or the × in its top right corner closes it. The arrows, `Page Up`, `Page Down`, `Home`, `End` and the wheel scroll it. Any other key, or a click outside, only makes the sheet flash: nothing is typed anywhere. It does not appear on a first install.
+
+"Help: show what's new" in the palette opens it at any time. To stop it opening by itself, set `"ui.showWhatsNew": false`. The app keeps the version it last ran in `last_version` in its data folder.
+
 ## Your first minute
 
 - `Cmd T` opens a terminal card. `Cmd W` closes it.
@@ -120,6 +126,6 @@ The check is a plain GET of `latest.json` with nothing about you in it.
 - A first launch opens a "Start here" page and nothing else: `Cmd T` makes the first terminal beside it, and `Cmd Alt ←` comes back to it. "Help: open the welcome card" opens it again later.
 - `Cmd /` lists every shortcut, searchable.
 - "Help: open the docs" in the palette opens these pages inside the app, as a card with the page list beside it.
-- "Help: open the changelog" in the palette shows what changed in each release, newest first, as a page card beside the one you are on. After an update, that is where to see what is new.
+- "Help: open the changelog" in the palette shows what changed in each release, newest first, as a page card beside the one you are on. It is the same text as the what's-new sheet, in a card you can keep.
 - `Cmd` + scroll zooms, `Cmd` + drag pans. Bare scroll and drag belong to the card under the pointer.
 - `Cmd 2` fits every card in the window, `Cmd 1` fits the focused one.
