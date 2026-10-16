@@ -6,6 +6,11 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-17
+
+- Fixed: closing the right-click menu on a card's frame or label no longer leaves the card following the pointer, as if you were dragging it. A right-click now only focuses the card and opens the menu.
+- New: double-click a workspace's name in the title bar to rename it.
+
 ### 2026-10-15
 
 - New setting `ui.panStep` (default 120, from 20 to 1000): how many screen pixels one press of Cmd+Ctrl+Shift+Arrow moves the canvas. A smaller number is a slower pan.

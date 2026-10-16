@@ -715,9 +715,16 @@ impl AppView {
                 )
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                    cx.listener(move |this, e: &MouseDownEvent, _, cx| {
                         this.model.show_workspace(&id);
                         this.perform_effects();
+                        // A double-click on the name renames it (#413), the
+                        // way a double-click on a card's label fits the card.
+                        // The first click already made this workspace the
+                        // active one, which is what the command renames.
+                        if e.click_count >= 2 {
+                            this.run_command("workspace.rename");
+                        }
                         cx.notify();
                     }),
                 )
