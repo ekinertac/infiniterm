@@ -2137,7 +2137,6 @@ mod tests {
     // repeat adds to where the last press is heading, and the focus stays.
     #[test]
     fn the_pan_keys_move_the_view_a_screen_step_and_chain() {
-        use crate::model::canvas_cmd::PAN_STEP_PX;
         let mut h = Harness::new();
         let focus = h.m.selection.focused_id.clone();
         h.m.viewport = crate::viewport::Viewport {
@@ -2145,7 +2144,7 @@ mod tests {
             y: 50.,
             scale: 0.5,
         };
-        let step = PAN_STEP_PX / 0.5;
+        let step = h.m.config.ui.pan_step / 0.5;
         let effects = h.run("canvas.pan.right");
         assert!(effects.iter().any(|e| matches!(
             e, Effect::AnimatePan { x, y } if (*x - (100. + step)).abs() < 1e-9 && *y == 50.
@@ -2166,6 +2165,22 @@ mod tests {
             h.m.selection.focused_id, focus,
             "panning does not move focus"
         );
+    }
+
+    // `ui.panStep` is the step a press moves, in screen pixels at any zoom.
+    #[test]
+    fn the_pan_step_setting_sets_how_far_a_press_goes() {
+        let mut h = Harness::new();
+        h.m.config.ui.pan_step = 300.;
+        h.m.viewport = crate::viewport::Viewport {
+            x: 0.,
+            y: 0.,
+            scale: 1.,
+        };
+        let effects = h.run("canvas.pan.down");
+        assert!(effects.iter().any(
+            |e| matches!(e, Effect::AnimatePan { x, y } if *x == 0. && (*y - 300.).abs() < 1e-9)
+        ));
     }
 
     // Cmd+3 with several cards selected fits exactly those cards; with one

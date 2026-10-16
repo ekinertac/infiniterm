@@ -504,6 +504,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["Screen pixels. The status bar is always at arm's length."],
     ),
     (
+        "ui.panStep",
+        &[
+            "How far one press of Cmd+Ctrl+Shift+Arrow moves the canvas, in screen",
+            "pixels (20 to 1000). A held key repeats, so a smaller step is a slower pan.",
+        ],
+    ),
+    (
         "ui.animations",
         &[
             "Zooming, panning and card swaps animate rather than jumping. The system",

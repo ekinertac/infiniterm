@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-15
 
+- New setting `ui.panStep` (default 120, from 20 to 1000): how many screen pixels one press of Cmd+Ctrl+Shift+Arrow moves the canvas. A smaller number is a slower pan.
 - The app looks for a new version every hour instead of every six, so a release no longer waits most of a working day to show up. It still checks at launch, and `App: check for updates` looks at once.
 
 ## 0.5.13 (build 907), 2026-10-15

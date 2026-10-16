@@ -326,6 +326,9 @@ pub struct Ui {
     pub hide_label_when_maximised: bool,
     pub group_label_size: f64,
     pub status_bar_size: f64,
+    /// How far one press of `canvas.pan.*` moves the view, in screen pixels
+    /// (#398). A screen distance, so a press goes as far at every zoom.
+    pub pan_step: f64,
     /// Whether the canvas animates at all. Reduced motion still wins.
     pub animations: bool,
     /// The frame counter in the status bar. On by default because the point
@@ -364,6 +367,12 @@ pub enum StatusBarSide {
     Left,
     Right,
 }
+
+/// `ui.panStep`: the default, and the range it is held to so a typo cannot
+/// freeze the view (a press that moves nothing) or throw it off the canvas.
+pub const DEFAULT_PAN_STEP: f64 = 120.;
+pub const MIN_PAN_STEP: f64 = 20.;
+pub const MAX_PAN_STEP: f64 = 1000.;
 
 /// Page zoom limits for browser cards, the range Safari allows.
 pub const BROWSER_ZOOM_MIN: f64 = 0.3;
@@ -467,6 +476,7 @@ pub fn default_config() -> Config {
             hide_label_when_maximised: false,
             group_label_size: 15.,
             status_bar_size: 11.,
+            pan_step: DEFAULT_PAN_STEP,
             animations: true,
             // A development number; the release does not show it by
             // default (issue #16).
@@ -803,6 +813,7 @@ pub fn merge_config(raw: &Value) -> Config {
             ),
             group_label_size: num(u.get("groupLabelSize"), d.ui.group_label_size, 6., 64.),
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),
+            pan_step: num(u.get("panStep"), d.ui.pan_step, MIN_PAN_STEP, MAX_PAN_STEP),
             animations: bool_(u.get("animations"), d.ui.animations),
             show_fps: bool_(u.get("showFps"), d.ui.show_fps),
             show_whats_new: bool_(u.get("showWhatsNew"), d.ui.show_whats_new),
@@ -953,6 +964,18 @@ mod tests {
         assert_eq!(
             m(json!({"ui": {"fullscreen": "sideways"}})).ui.fullscreen,
             FullscreenMode::Cover
+        );
+    }
+
+    #[test]
+    fn the_pan_step_has_a_default_and_is_held_to_a_range() {
+        assert_eq!(default_config().ui.pan_step, DEFAULT_PAN_STEP);
+        assert_eq!(m(json!({"ui.panStep": 300})).ui.pan_step, 300.);
+        assert_eq!(m(json!({"ui.panStep": 1})).ui.pan_step, MIN_PAN_STEP);
+        assert_eq!(m(json!({"ui.panStep": 99999})).ui.pan_step, MAX_PAN_STEP);
+        assert_eq!(
+            m(json!({"ui.panStep": "far"})).ui.pan_step,
+            DEFAULT_PAN_STEP
         );
     }
 

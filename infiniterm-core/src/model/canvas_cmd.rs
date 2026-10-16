@@ -168,10 +168,6 @@ impl Model {
     }
 }
 
-/// How far one press of `canvas.pan.*` moves the view, in screen pixels:
-/// about six lines of terminal text, and a held key repeats.
-pub const PAN_STEP_PX: f64 = 120.;
-
 pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     for (id, label, dx, dy) in [
         ("canvas.pan.left", "Canvas: pan left", -1., 0.),
@@ -180,7 +176,8 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         ("canvas.pan.down", "Canvas: pan down", 0., 1.),
     ] {
         r.register(id, label, move |m| {
-            m.pan_canvas(dx * PAN_STEP_PX, dy * PAN_STEP_PX)
+            let step = m.config.ui.pan_step;
+            m.pan_canvas(dx * step, dy * step)
         });
     }
     // Centre on the active card if there is one, otherwise hold the point
