@@ -49,6 +49,7 @@ mod tab_strip;
 mod terminal_body;
 mod terminals;
 mod text;
+mod title_drag;
 mod transcript_body;
 mod updater;
 mod whats_new;
@@ -543,6 +544,7 @@ fn main() {
                 // gpui's view never answers middle-button drags; now that the
                 // window (and so its view class) exists, teach it to.
                 middle_drag::install();
+                title_drag::install();
                 fullscreen::install();
                 // The idle wake-up: every 16 ms, drain what the backend's
                 // threads sent and draw a frame if anything needs one. A

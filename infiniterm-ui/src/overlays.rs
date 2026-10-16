@@ -716,6 +716,9 @@ impl AppView {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                        // The bar behind a tab would start a window drag; the
+                        // tab's own drag is the one wanted here (#414).
+                        cx.stop_propagation();
                         this.model.show_workspace(&id);
                         this.perform_effects();
                         // A double-click on the name renames it (#413), the
@@ -764,6 +767,7 @@ impl AppView {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
                         this.run_command("workspace.new");
                         cx.notify();
                     }),
@@ -807,6 +811,16 @@ impl AppView {
             .border_color(chrome.bar_border)
             .font_family(chrome.typography.family.clone())
             .font_weight(chrome.typography.regular.weight)
+            // A press that reaches the bar itself (not a tab or the "+", which
+            // stop it) drags the window; a double-click does the system's
+            // title bar action. `title_drag.rs` says why this is by hand.
+            .on_mouse_down(MouseButton::Left, |e: &MouseDownEvent, window, _| {
+                if e.click_count >= 2 {
+                    window.titlebar_double_click();
+                } else {
+                    crate::title_drag::begin();
+                }
+            })
             .child(tabs)
             .children(chip)
     }
