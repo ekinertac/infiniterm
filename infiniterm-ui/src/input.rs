@@ -19,7 +19,7 @@ use infiniterm_core::keymap::{chord_for, KeyPress};
 use infiniterm_core::model::focus_cmd::BareKey;
 use infiniterm_core::model::register::{handle_chord, resolve_chord};
 use infiniterm_core::momentum::{velocity_from, Sample, VELOCITY_SAMPLE_MS};
-use infiniterm_core::pan_mode::starts_pan;
+use infiniterm_core::pan_mode::{starts_card_gesture, starts_pan};
 use infiniterm_core::resize::{apply_resize, Edge};
 use infiniterm_core::viewport::{anchored_viewport, world_pos_of, MAX_SCALE, MIN_SCALE};
 
@@ -213,6 +213,9 @@ impl AppView {
                     .map(|c| c.id.clone());
                 let Some(first) = first else { return };
                 self.model.set_focus(Some(&first));
+                if !starts_card_gesture(button) {
+                    return;
+                }
                 let start_rects = self
                     .model
                     .cards
@@ -267,6 +270,11 @@ impl AppView {
                     return;
                 }
                 self.model.set_focus(Some(&id));
+                // A right press only focuses: its menu takes the mouse-up, so a
+                // gesture started here would never end (#412).
+                if !starts_card_gesture(button) {
+                    return;
+                }
                 // A double-click on the frame fits the card, which is Cmd+1
                 // for the mouse. The frame and not the body: a double-click
                 // in the body belongs to the program (a word selection in a

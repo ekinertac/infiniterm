@@ -6,6 +6,14 @@ pub fn starts_pan(button: u8, cmd_held: bool) -> bool {
     button == MIDDLE_BUTTON || (button == 0 && cmd_held)
 }
 
+/// Whether a press on a card's frame or label begins a move or a resize. Only
+/// the left button does. A right press opens the native menu, which takes the
+/// mouse-up with it, so a gesture begun by it never ended and the card
+/// followed the pointer after the menu closed (#412).
+pub fn starts_card_gesture(button: u8) -> bool {
+    button == 0
+}
+
 /// The right button while the left is held on empty canvas fits everything
 /// (Cmd+2 for the mouse, a pinch-out in two fingers). Ekin found it by
 /// accident: a left click then a right click on bare canvas counted as a
@@ -27,6 +35,13 @@ pub fn double_click_fits(click_count: usize, drawn_as_bars: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_left_press_starts_a_card_gesture() {
+        assert!(starts_card_gesture(0));
+        assert!(!starts_card_gesture(1), "middle pans the canvas instead");
+        assert!(!starts_card_gesture(2), "right opens the menu (#412)");
+    }
+
     use super::*;
     #[test]
     fn a_double_click_fits_only_a_card_drawn_as_bars() {
