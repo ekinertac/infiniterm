@@ -863,6 +863,9 @@ fn startup_terminal() -> (infiniterm_core::config::TerminalBackend, usize) {
 /// canvas as it is now (#423). A failure is said and costs nothing else: the
 /// app runs without joining.
 fn start_join(app: &mut AppView) {
+    if !app.model.config.join.enabled {
+        return;
+    }
     let Some((relay, write)) = app.backend.pty.join_parts() else {
         return;
     };
