@@ -117,9 +117,12 @@ impl AppView {
                     }
                 }
             }
+            // The frame and the label open the same menu as the body: a card
+            // is a card, and a label or border click is hard to discover.
             Hit::CardEdge { id, .. } => {
+                let kind = self.model.card(&id).map(|c| c.kind);
                 self.focus_for_menu(&id);
-                Area::Frame
+                kind.map_or(Area::Frame, infiniterm_core::context_menu::card_area)
             }
             Hit::GroupTab(_) => return,
             Hit::Nothing => Area::Canvas,

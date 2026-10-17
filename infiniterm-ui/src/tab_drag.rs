@@ -17,6 +17,8 @@ use gpui::{
 #[derive(Clone)]
 pub struct DraggedTab {
     pub id: String,
+    /// Its place in the tab row when the drag began, for the drop line's side.
+    pub from: usize,
     pub name: String,
     pub font_family: SharedString,
     pub font_weight: FontWeight,
