@@ -21,6 +21,7 @@ use std::sync::mpsc::Receiver;
 pub mod daemon;
 pub mod local_pty;
 pub mod join;
+pub mod join_client;
 pub mod relay;
 pub mod remote;
 pub mod session_protocol;

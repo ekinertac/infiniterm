@@ -380,7 +380,19 @@ pub fn connect(
 /// `ift proxy join session <id>`, with the host's answer line read and checked
 /// before anything else, so the caller's next read is the host's `Hello`.
 pub fn connect_join(host: &RemoteHost, id: &str) -> Result<(UnixStream, SshStderr), String> {
-    let (mut stream, stderr) = connect_command(host, join_command(&host.ift, id))
+    connect_join_with(host, join_command(&host.ift, id))
+}
+
+/// Joins the host's canvas: its layout and agent states (#423).
+pub fn connect_join_canvas(host: &RemoteHost) -> Result<(UnixStream, SshStderr), String> {
+    connect_join_with(host, join_canvas_command(&host.ift))
+}
+
+fn connect_join_with(
+    host: &RemoteHost,
+    command: String,
+) -> Result<(UnixStream, SshStderr), String> {
+    let (mut stream, stderr) = connect_command(host, command)
         .map_err(|e| format!("could not run {}: {e}", host.ssh))?;
     let line = read_line(&mut stream, JOIN_ANSWER_WAIT)?;
     match check_join_answer(&line) {
