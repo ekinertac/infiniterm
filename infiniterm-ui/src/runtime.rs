@@ -905,7 +905,10 @@ fn startup_terminal() -> (infiniterm_core::config::TerminalBackend, usize) {
 /// canvas as it is now (#423). A failure is said and costs nothing else: the
 /// app runs without joining.
 fn start_join(app: &mut AppView) {
-    if !app.model.config.join.enabled {
+    // A viewer is a window onto the host's canvas, never a host: it would
+    // relay sessions that are not its own (found in the #423 drive, which
+    // showed a viewer binding its own j.sock).
+    if !app.model.config.join.enabled || app.viewer {
         return;
     }
     let Some((relay, write)) = app.backend.pty.join_parts() else {
