@@ -642,8 +642,38 @@ impl Model {
     }
 }
 
+impl Model {
+    /// Selects every card of the workspace (Cmd+A, #419), the focused one
+    /// staying the active one, as after a rectangle or a Shift+arrow. A locked
+    /// editor or browser never gets here: its Cmd+A is the file's or the
+    /// page's. The others, in reading order, are the extras.
+    pub fn select_all_cards(&mut self) {
+        let here = self.here();
+        let rects: Vec<Rect> = here.iter().map(|c| c.rect).collect();
+        let ids: Vec<String> = crate::workspaces::reading_order(&rects)
+            .into_iter()
+            .map(|i| here[i].id.clone())
+            .collect();
+        let Some(first) = ids.first().cloned() else {
+            return;
+        };
+        let focus = self
+            .selection
+            .focused_id
+            .clone()
+            .filter(|f| ids.contains(f))
+            .unwrap_or(first);
+        let extra: Vec<String> = ids.into_iter().filter(|id| *id != focus).collect();
+        self.selection.phantom = None;
+        self.focus_extended(&focus, extra);
+    }
+}
+
 pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     use super::cards_cmd::dir_name;
+    r.register("focus.selectAll", "Focus: select every card", |m| {
+        m.select_all_cards()
+    });
     // Ctrl+Tab: the cards you have actually worked in, most recent first,
     // committed when Ctrl comes up (the ui watches the modifier, keycode.rs).
     for (id, label, delta) in [

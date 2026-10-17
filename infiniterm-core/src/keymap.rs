@@ -148,6 +148,14 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
     ("cmd+ctrl+shift+arrowright", "canvas.pan.right", ""),
     ("cmd+ctrl+shift+arrowup", "canvas.pan.up", ""),
     ("cmd+ctrl+shift+arrowdown", "canvas.pan.down", ""),
+    // Every card of the workspace (#419). A locked editor or browser keeps its
+    // own Cmd+A (the file's or the page's select all): a locked card falls
+    // through to the body for a chord its table does not claim.
+    (
+        "cmd+a",
+        "focus.selectAll",
+        "select every card; a locked editor or browser still selects its text",
+    ),
     ("cmd+1", "canvas.zoom.fitCard", ""),
     ("cmd+2", "canvas.zoom.fitAll", ""),
     // The terminal's font size, iTerm2's and every Mac terminal's keys
