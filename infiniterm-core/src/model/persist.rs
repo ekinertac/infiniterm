@@ -231,6 +231,36 @@ impl Model {
         Ok(())
     }
 
+    /// The host's live agent states, for a viewer (#423): `{"<card id>":
+    /// "working", ...}`. The layout leaves them out on purpose, so they come
+    /// on their own. A card the host did not mention has no state; a state
+    /// word this build does not know is no state either.
+    pub fn apply_agent_states(&mut self, text: &str) {
+        let Ok(map) = serde_json::from_str::<std::collections::HashMap<String, String>>(text)
+        else {
+            return;
+        };
+        for card in &mut self.cards {
+            card.agent = map
+                .get(&card.id)
+                .map_or(crate::agent_state::AgentState::None, |n| {
+                    crate::agent_state::AgentState::from_name(n)
+                });
+        }
+    }
+
+    /// The states a viewer is sent, as `apply_agent_states` reads them. Only
+    /// cards with a state, so a quiet canvas is `{}`.
+    pub fn agent_states_text(&self) -> String {
+        let map: std::collections::BTreeMap<&str, &str> = self
+            .cards
+            .iter()
+            .filter(|c| c.agent != crate::agent_state::AgentState::None)
+            .map(|c| (c.id.as_str(), c.agent.name()))
+            .collect();
+        serde_json::to_string(&map).unwrap_or_else(|_| "{}".into())
+    }
+
     /// The file's text, or nothing while saving is not allowed.
     pub fn save_text(&mut self) -> Option<String> {
         if !self.loaded || self.read_only {
@@ -507,6 +537,31 @@ mod snapshot_tests {
         assert_eq!(viewer.viewport, own, "the host's pan does not move the viewer");
         assert_eq!(viewer.workspaces[0].viewport.x, 123.);
         assert_eq!(viewer.selection.focused_id, Some(b));
+    }
+
+    #[test]
+    fn the_hosts_agent_colours_reach_the_viewer_and_unknown_words_are_no_state() {
+        use crate::agent_state::AgentState;
+        let mut host = host_model();
+        let a = add(&mut host, rect(0., 0.));
+        let b = add(&mut host, rect(900., 0.));
+        host.card_mut(&a).unwrap().agent = AgentState::Waiting;
+        host.card_mut(&b).unwrap().agent = AgentState::Done;
+        let mut viewer = Model::new();
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+
+        viewer.apply_agent_states(&host.agent_states_text());
+        assert_eq!(viewer.card(&a).unwrap().agent, AgentState::Waiting);
+        assert_eq!(viewer.card(&b).unwrap().agent, AgentState::Done);
+
+        // A newer host's new word, and a card it stopped mentioning.
+        viewer.apply_agent_states(&format!("{{\"{a}\":\"brand-new\"}}"));
+        assert_eq!(viewer.card(&a).unwrap().agent, AgentState::None);
+        assert_eq!(viewer.card(&b).unwrap().agent, AgentState::None);
+        // Garbage changes nothing.
+        viewer.card_mut(&a).unwrap().agent = AgentState::Working;
+        viewer.apply_agent_states("not json");
+        assert_eq!(viewer.card(&a).unwrap().agent, AgentState::Working);
     }
 
     #[test]
