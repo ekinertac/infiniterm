@@ -2007,6 +2007,36 @@ mod tests {
         assert_eq!(h.m.config.terminal.font_size, 18.);
     }
 
+    // theme.json follows the same rule (#425): a bad edit warns and the theme
+    // in force stays; an emptied file is the empty theme.
+    #[test]
+    fn a_broken_theme_file_keeps_the_last_good_theme() {
+        use crate::theme_file::{BorderSpec, ColorSpec};
+        let mut h = Harness::new();
+        h.m.apply_theme_file_text(
+            r#"{"titlebar.background": "canvas", "titlebar.border": "none"}"#,
+        );
+        assert_eq!(
+            h.m.chrome_theme.titlebar.background,
+            Some(ColorSpec::Canvas)
+        );
+        assert_eq!(h.m.chrome_theme.titlebar.border, Some(BorderSpec::None));
+        h.m.effects.clear();
+        h.m.apply_theme_file_text(r#"{"titlebar.background": "canvas",, }"#);
+        assert_eq!(
+            h.m.chrome_theme.titlebar.background,
+            Some(ColorSpec::Canvas),
+            "the last good theme stays"
+        );
+        assert!(h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::Warn(w) if w.contains("theme.json not applied"))));
+        h.m.apply_theme_file_text("");
+        assert_eq!(h.m.chrome_theme, Default::default());
+    }
+
     // The file is checked before it is applied, and a file with an error is not
     // accepted: the settings in force stay and the notice says what is wrong.
     #[test]
