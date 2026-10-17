@@ -58,11 +58,13 @@ impl Relay {
     /// the first thing a viewer reads: its grid must be the host's columns
     /// and rows, since the shell wraps to those.
     pub fn open(&mut self, id: &str, hello: Frame) {
-        self.sessions.entry(id.to_string()).or_insert_with(|| Session {
-            ring: Ring::new(RING_BYTES),
-            viewers: Vec::new(),
-            hello,
-        });
+        self.sessions
+            .entry(id.to_string())
+            .or_insert_with(|| Session {
+                ring: Ring::new(RING_BYTES),
+                viewers: Vec::new(),
+                hello,
+            });
     }
 
     /// The host's size changed (its own window resized the pty). Viewers that
@@ -97,10 +99,11 @@ impl Relay {
             return;
         };
         s.ring.push(bytes);
-        s.viewers.retain(|tx| match tx.try_send(Frame::Data(bytes.to_vec())) {
-            Ok(()) => true,
-            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => false,
-        });
+        s.viewers
+            .retain(|tx| match tx.try_send(Frame::Data(bytes.to_vec())) {
+                Ok(()) => true,
+                Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => false,
+            });
     }
 
     /// A viewer joins. It gets the host's hello, the ring as replay frames,
@@ -111,7 +114,11 @@ impl Relay {
         let (tx, rx) = sync_channel(VIEWER_QUEUE);
         let replay = s.ring.replay();
         let mut frames = vec![s.hello.clone()];
-        frames.extend(replay.chunks(REPLAY_CHUNK.min(MAX_PAYLOAD)).map(|c| Frame::Replay(c.to_vec())));
+        frames.extend(
+            replay
+                .chunks(REPLAY_CHUNK.min(MAX_PAYLOAD))
+                .map(|c| Frame::Replay(c.to_vec())),
+        );
         frames.push(Frame::ReplayEnd);
         for f in frames {
             // A queue this new has room for a replay of a full ring; if it
@@ -151,7 +158,11 @@ mod tests {
     use crate::backend::session_protocol::PREAMBLE_BYTES;
 
     fn hello() -> Frame {
-        Frame::Hello { pid: 42, cols: 80, rows: 24 }
+        Frame::Hello {
+            pid: 42,
+            cols: 80,
+            rows: 24,
+        }
     }
 
     fn drain(rx: &Receiver<Frame>) -> Vec<Frame> {
@@ -253,7 +264,14 @@ mod tests {
         r.open("s", hello());
         r.resize("s", 120, 40);
         let rx = r.subscribe("s").unwrap();
-        assert_eq!(drain(&rx)[0], Frame::Hello { pid: 42, cols: 120, rows: 40 });
+        assert_eq!(
+            drain(&rx)[0],
+            Frame::Hello {
+                pid: 42,
+                cols: 120,
+                rows: 40
+            }
+        );
     }
 
     #[test]
@@ -263,7 +281,13 @@ mod tests {
         let rx = r.subscribe("s").unwrap();
         drain(&rx);
         r.resize("s", 100, 30);
-        assert_eq!(drain(&rx), vec![Frame::Resize { cols: 100, rows: 30 }]);
+        assert_eq!(
+            drain(&rx),
+            vec![Frame::Resize {
+                cols: 100,
+                rows: 30
+            }]
+        );
     }
 
     #[test]
@@ -276,8 +300,8 @@ mod tests {
         assert!(drain(&early).is_empty(), "seed is not live output");
         let late = r.subscribe("s").unwrap();
         let frames = drain(&late);
-        assert!(frames.iter().any(
-            |f| matches!(f, Frame::Replay(b) if b.ends_with(b"from the daemon ring"))
-        ));
+        assert!(frames
+            .iter()
+            .any(|f| matches!(f, Frame::Replay(b) if b.ends_with(b"from the daemon ring"))));
     }
 }

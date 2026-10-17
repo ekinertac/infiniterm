@@ -74,6 +74,7 @@ impl AppView {
             shortcuts_index: 0,
             pick_request: None,
             join: None,
+            last_agents: String::new(),
             read_requests: vec![],
             shortcuts_scroll: gpui::ScrollHandle::new(),
             whats_new_body: None,
@@ -822,6 +823,18 @@ impl AppView {
             if let Some(hub) = &self.join {
                 hub.publish_layout(&text);
             }
+        }
+    }
+
+    /// The host sends viewers the agent states when they change (#423).
+    pub fn publish_agents(&mut self) {
+        let Some(hub) = &self.join else {
+            return;
+        };
+        let text = self.model.agent_states_text();
+        if text != self.last_agents {
+            hub.publish_agents(&text);
+            self.last_agents = text;
         }
     }
 

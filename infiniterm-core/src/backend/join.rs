@@ -4,8 +4,12 @@
 //! local socket that nothing else can open):
 //!
 //! - `canvas`: the host's layout, whole snapshots (the exact JSON the save
-//!   file holds), the latest one at once and every later one as it is saved.
-//!   Each is a 4-byte big-endian length and the UTF-8 text.
+//!   file holds), and the agent states, which the save file leaves out on
+//!   purpose (a saved state would claim a long-dead agent is working). The
+//!   latest of each at once, then every later one as it changes. Each message
+//!   is a 4-byte big-endian length of the text, one kind byte (`L` layout,
+//!   `A` agent states, a JSON object of card id to state name) and the UTF-8
+//!   text. A kind a viewer does not know is skipped by it.
 //! - `session <id>`: one terminal card's output, in the same frames the app
 //!   reads from `iftd` (`session_protocol::Frame`): the host's hello (its
 //!   columns and rows), the replay, then live output, from `Relay`. What a
@@ -58,11 +62,43 @@ const WRITER_POLL: Duration = Duration::from_millis(200);
 /// gets the latest.
 const CANVAS_QUEUE: usize = 4;
 
+/// A canvas message's kinds: see the module header.
+pub const KIND_LAYOUT: u8 = b'L';
+pub const KIND_AGENTS: u8 = b'A';
+
 #[derive(Default)]
 struct Canvas {
-    latest: Option<String>,
-    clients: Vec<SyncSender<String>>,
+    latest_layout: Option<String>,
+    latest_agents: Option<String>,
+    clients: Vec<SyncSender<(u8, String)>>,
 }
+
+/// The next canvas message from the host: its kind and text. `None` at the
+/// end of the stream. A viewer's reader; the proxy's bytes arrive here.
+pub fn read_canvas_message(r: &mut impl Read) -> std::io::Result<Option<(u8, String)>> {
+    let mut len = [0u8; 4];
+    match r.read_exact(&mut len) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let len = u32::from_be_bytes(len) as usize;
+    if len > MAX_CANVAS_MESSAGE {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "a canvas message over the size limit",
+        ));
+    }
+    let mut kind = [0u8; 1];
+    r.read_exact(&mut kind)?;
+    let mut body = vec![0u8; len];
+    r.read_exact(&mut body)?;
+    Ok(Some((kind[0], String::from_utf8_lossy(&body).into_owned())))
+}
+
+/// A layout is the whole canvas; 64 MiB is far past any real one and keeps a
+/// corrupt length from allocating the machine.
+const MAX_CANVAS_MESSAGE: usize = 64 * 1024 * 1024;
 
 /// How a session's keys reach the host's own connection to `iftd`.
 pub type WriteSession = Arc<dyn Fn(&str, &[u8]) + Send + Sync>;
@@ -88,8 +124,18 @@ impl JoinHub {
     /// dropped here, not waited for.
     pub fn publish_layout(&self, text: &str) {
         let mut c = self.canvas.lock().unwrap();
-        c.latest = Some(text.to_string());
-        c.clients.retain(|tx| tx.try_send(text.to_string()).is_ok());
+        c.latest_layout = Some(text.to_string());
+        c.clients
+            .retain(|tx| tx.try_send((KIND_LAYOUT, text.to_string())).is_ok());
+    }
+
+    /// The agent states changed: `{"<card id>": "working", ...}`. Sent as it
+    /// is; the viewer applies what it knows.
+    pub fn publish_agents(&self, text: &str) {
+        let mut c = self.canvas.lock().unwrap();
+        c.latest_agents = Some(text.to_string());
+        c.clients
+            .retain(|tx| tx.try_send((KIND_AGENTS, text.to_string())).is_ok());
     }
 
     /// Binds `socket` (0600) and serves it on a thread of its own. The path
@@ -144,7 +190,14 @@ impl JoinHub {
             let mut c = self.canvas.lock().unwrap();
             let (tx, rx) = sync_channel(CANVAS_QUEUE);
             c.clients.push(tx);
-            (c.latest.clone(), rx)
+            let latest: Vec<(u8, String)> = [
+                (KIND_LAYOUT, c.latest_layout.clone()),
+                (KIND_AGENTS, c.latest_agents.clone()),
+            ]
+            .into_iter()
+            .filter_map(|(k, t)| t.map(|t| (k, t)))
+            .collect();
+            (latest, rx)
         };
         if writeln!(out, "ift-join {MAJOR} ok").is_err() {
             return;
@@ -156,20 +209,21 @@ impl JoinHub {
         let closed = Arc::new(AtomicBool::new(false));
         let writer_closed = closed.clone();
         std::thread::spawn(move || {
-            let send = |w: &mut UnixStream, text: &str| -> bool {
+            let send = |w: &mut UnixStream, kind: u8, text: &str| -> bool {
                 let bytes = text.as_bytes();
                 w.write_all(&(bytes.len() as u32).to_be_bytes()).is_ok()
+                    && w.write_all(&[kind]).is_ok()
                     && w.write_all(bytes).is_ok()
             };
-            if let Some(text) = latest {
-                if !send(&mut w, &text) {
+            for (kind, text) in latest {
+                if !send(&mut w, kind, &text) {
                     return;
                 }
             }
             while !writer_closed.load(Ordering::Relaxed) {
                 match rx.recv_timeout(WRITER_POLL) {
-                    Ok(text) => {
-                        if !send(&mut w, &text) {
+                    Ok((kind, text)) => {
+                        if !send(&mut w, kind, &text) {
                             break;
                         }
                     }
@@ -272,7 +326,9 @@ fn parse_hello(line: &str) -> Result<Topic, String> {
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
-        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 #[cfg(test)]
@@ -280,7 +336,10 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    fn hub() -> (JoinHub, Arc<Mutex<Relay>>, Arc<Mutex<Vec<(String, Vec<u8>)>>>) {
+    /// What the fake session writer was asked to write: (session, bytes).
+    type Written = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
+    fn hub() -> (JoinHub, Arc<Mutex<Relay>>, Written) {
         let relay = Arc::new(Mutex::new(Relay::new()));
         let written = Arc::new(Mutex::new(Vec::new()));
         let sink = written.clone();
@@ -322,7 +381,14 @@ mod tests {
         let (hub, relay, written) = hub();
         {
             let mut r = relay.lock().unwrap();
-            r.open("abc", Frame::Hello { pid: 7, cols: 90, rows: 30 });
+            r.open(
+                "abc",
+                Frame::Hello {
+                    pid: 7,
+                    cols: 90,
+                    rows: 30,
+                },
+            );
             r.publish("abc", b"old");
         }
         let path = socket("session");
@@ -330,23 +396,35 @@ mod tests {
         let (mut s, answer) = connect(&path, "ift-join 1 session abc");
         assert_eq!(answer, "ift-join 1 ok");
         let mut r = FrameReader::default();
-        assert_eq!(next_frame(&mut s, &mut r), Frame::Hello { pid: 7, cols: 90, rows: 30 });
+        assert_eq!(
+            next_frame(&mut s, &mut r),
+            Frame::Hello {
+                pid: 7,
+                cols: 90,
+                rows: 30
+            }
+        );
         assert!(matches!(next_frame(&mut s, &mut r), Frame::Replay(b) if b.ends_with(b"old")));
         assert_eq!(next_frame(&mut s, &mut r), Frame::ReplayEnd);
         relay.lock().unwrap().publish("abc", b"new");
         assert_eq!(next_frame(&mut s, &mut r), Frame::Data(b"new".to_vec()));
 
         // Keys go through; a resize and a kill do not.
-        s.write_all(&Frame::Resize { cols: 10, rows: 5 }.encode()).unwrap();
+        s.write_all(&Frame::Resize { cols: 10, rows: 5 }.encode())
+            .unwrap();
         s.write_all(&Frame::Kill.encode()).unwrap();
-        s.write_all(&Frame::Data(b"ls\n".to_vec()).encode()).unwrap();
+        s.write_all(&Frame::Data(b"ls\n".to_vec()).encode())
+            .unwrap();
         for _ in 0..50 {
             if !written.lock().unwrap().is_empty() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(*written.lock().unwrap(), vec![("abc".to_string(), b"ls\n".to_vec())]);
+        assert_eq!(
+            *written.lock().unwrap(),
+            vec![("abc".to_string(), b"ls\n".to_vec())]
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -363,14 +441,21 @@ mod tests {
     #[test]
     fn a_higher_major_is_refused_and_a_lower_one_is_served() {
         let (hub, relay, _w) = hub();
-        relay
-            .lock()
-            .unwrap()
-            .open("abc", Frame::Hello { pid: 1, cols: 80, rows: 24 });
+        relay.lock().unwrap().open(
+            "abc",
+            Frame::Hello {
+                pid: 1,
+                cols: 80,
+                rows: 24,
+            },
+        );
         let path = socket("major");
         hub.serve(&path).unwrap();
         let (_s, answer) = connect(&path, "ift-join 2 canvas");
-        assert!(answer.starts_with("ift-join 1 error this host speaks ift-join 1"), "{answer}");
+        assert!(
+            answer.starts_with("ift-join 1 error this host speaks ift-join 1"),
+            "{answer}"
+        );
         let (_s, answer) = connect(&path, "ift-join 0 session abc");
         assert_eq!(answer, "ift-join 1 ok");
         let _ = std::fs::remove_file(&path);
@@ -384,17 +469,39 @@ mod tests {
         hub.serve(&path).unwrap();
         let (mut s, answer) = connect(&path, "ift-join 1 canvas");
         assert_eq!(answer, "ift-join 1 ok");
-        let read_snapshot = |s: &mut UnixStream| -> String {
-            let mut len = [0u8; 4];
-            s.read_exact(&mut len).unwrap();
-            let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
-            s.read_exact(&mut body).unwrap();
-            String::from_utf8(body).unwrap()
-        };
-        assert_eq!(read_snapshot(&mut s), "{\"v\":1}");
+        let next = |s: &mut UnixStream| read_canvas_message(s).unwrap().unwrap();
+        assert_eq!(next(&mut s), (KIND_LAYOUT, "{\"v\":1}".to_string()));
         hub.publish_layout("{\"v\":2}");
-        assert_eq!(read_snapshot(&mut s), "{\"v\":2}");
+        assert_eq!(next(&mut s), (KIND_LAYOUT, "{\"v\":2}".to_string()));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn agent_states_ride_the_canvas_beside_the_layout_and_a_late_viewer_gets_both() {
+        let (hub, _relay, _w) = hub();
+        hub.publish_layout("{\"v\":1}");
+        hub.publish_agents("{\"c1\":\"working\"}");
+        let path = socket("agents");
+        hub.serve(&path).unwrap();
+        let (mut s, _) = connect(&path, "ift-join 1 canvas");
+        let first = read_canvas_message(&mut s).unwrap().unwrap();
+        let second = read_canvas_message(&mut s).unwrap().unwrap();
+        assert_eq!(first, (KIND_LAYOUT, "{\"v\":1}".to_string()));
+        assert_eq!(second, (KIND_AGENTS, "{\"c1\":\"working\"}".to_string()));
+        hub.publish_agents("{\"c1\":\"done\"}");
+        assert_eq!(
+            read_canvas_message(&mut s).unwrap().unwrap(),
+            (KIND_AGENTS, "{\"c1\":\"done\"}".to_string())
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_canvas_length_past_the_limit_is_an_error_not_an_allocation() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&u32::MAX.to_be_bytes());
+        let err = read_canvas_message(&mut bytes.as_slice()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]

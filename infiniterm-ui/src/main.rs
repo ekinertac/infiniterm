@@ -261,6 +261,8 @@ pub struct AppView {
     /// The socket viewers join through (`ift join`, #423); `None` when the
     /// backend is not the daemon or the socket could not be bound.
     pub join: Option<infiniterm_core::backend::join::JoinHub>,
+    /// The agent states last sent to viewers, so a change is sent once.
+    pub last_agents: String,
     /// A terminal's Paste from the right-click menu: the card to paste into,
     /// read from the clipboard in the poll task.
     pub paste_request: Option<String>,
@@ -561,6 +563,8 @@ fn main() {
                         .await;
                     let alive = poll.update(cx, |this, cx| {
                         this.drain_backend();
+                        // The host's agent states, for viewers (#423).
+                        this.publish_agents();
                         // The save debounce runs here, not in the frame: a
                         // layout change with nothing else moving must not
                         // hold the frame loop open for half a second.

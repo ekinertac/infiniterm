@@ -107,6 +107,20 @@ impl Model {
         self.dirty_layout = false;
     }
 
+    /// The agent states a viewer is sent (#423): `{"<card id>": "working",
+    /// ...}`, only cards that have one, so a quiet canvas is `{}`. The layout
+    /// leaves states out on purpose (a saved state would claim a long-dead
+    /// agent is working), so they travel on their own.
+    pub fn agent_states_text(&self) -> String {
+        let map: std::collections::BTreeMap<&str, &str> = self
+            .cards
+            .iter()
+            .filter(|c| c.agent != crate::agent_state::AgentState::None)
+            .map(|c| (c.id.as_str(), c.agent.name()))
+            .collect();
+        serde_json::to_string(&map).unwrap_or_else(|_| "{}".into())
+    }
+
     /// The file's text, or nothing while saving is not allowed.
     pub fn save_text(&mut self) -> Option<String> {
         if !self.loaded || self.read_only {
@@ -295,5 +309,57 @@ impl Model {
             let cwd = self.start_dir.clone();
             self.open_in_card(crate::ift::OpenPlan::Page { cwd, path }, after)
         })
+    }
+}
+
+#[cfg(test)]
+mod agent_states_text_tests {
+    use super::*;
+    use crate::agent_state::AgentState;
+    use crate::grid::Size;
+
+    #[test]
+    fn only_cards_with_a_state_are_listed_by_name() {
+        let mut m = Model::new();
+        m.view_size = Size { w: 1600., h: 1000. };
+        m.load_layout(None);
+        let ws = m.active_workspace.clone();
+        let quiet = m.add_card(
+            "/",
+            NewCard {
+                workspace_id: ws.clone(),
+                ..Default::default()
+            },
+        );
+        let busy = m.add_card(
+            "/",
+            NewCard {
+                workspace_id: ws.clone(),
+                ..Default::default()
+            },
+        );
+        let asking = m.add_card(
+            "/",
+            NewCard {
+                workspace_id: ws,
+                ..Default::default()
+            },
+        );
+        m.card_mut(&busy).unwrap().agent = AgentState::Working;
+        m.card_mut(&asking).unwrap().agent = AgentState::Waiting;
+        let v: serde_json::Value = serde_json::from_str(&m.agent_states_text()).unwrap();
+        assert_eq!(v[&busy], "working");
+        assert_eq!(v[&asking], "waiting");
+        assert!(
+            v.get(&quiet).is_none(),
+            "a card with no state is not listed"
+        );
+    }
+
+    #[test]
+    fn a_canvas_with_no_states_is_an_empty_object() {
+        let mut m = Model::new();
+        m.load_layout(None);
+        assert_eq!(m.agent_states_text(), "{}");
     }
 }

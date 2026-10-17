@@ -365,7 +365,18 @@ impl DaemonBackend {
         let tx = self.tx.clone();
         let panes = self.panes.clone();
         std::thread::spawn(move || {
-            run_reader(id, stream, reader, tx, panes, credit, &relay, &relay_session);
+            run_reader(
+                id,
+                stream,
+                reader,
+                tx,
+                panes,
+                credit,
+                Tap {
+                    relay: &relay,
+                    session: &relay_session,
+                },
+            );
             // The reader is gone (exit, detach or eviction): viewers of this
             // session end with it. A later adopt registers a new reader and
             // opens the relay again.
@@ -454,10 +465,7 @@ impl DaemonBackend {
                 return;
             };
             *p.size.lock().unwrap() = (cols, rows);
-            self.relay
-                .lock()
-                .unwrap()
-                .resize(&p.session_id, cols, rows);
+            self.relay.lock().unwrap().resize(&p.session_id, cols, rows);
             p.stream.clone()
         };
         let mut s = stream.lock().unwrap();
@@ -668,6 +676,14 @@ fn read_hello(
     }
 }
 
+/// Where a pane's session output is also sent: the viewers' relay and the
+/// session id it files the bytes under (#423). One argument for `run_reader`
+/// instead of two.
+struct Tap<'a> {
+    relay: &'a Arc<Mutex<Relay>>,
+    session: &'a str,
+}
+
 /// One per pane, for its whole life. Turns frames arriving on the socket
 /// into tagged `PaneEvent`s on the one shared channel, gated by `credit`
 /// exactly as `local_pty`'s reader gates its pty reads — see this module's
@@ -680,8 +696,7 @@ fn run_reader(
     tx: Sender<(PaneId, PaneEvent)>,
     panes: Arc<Mutex<HashMap<PaneId, Pane>>>,
     credit: Arc<Credit>,
-    relay: &Arc<Mutex<Relay>>,
-    session_id: &str,
+    tap: Tap<'_>,
 ) {
     let mut buf = vec![0u8; 8192];
     let mut exited = false;
@@ -690,21 +705,21 @@ fn run_reader(
             match reader.next() {
                 Ok(Some(Frame::Data(bytes))) => {
                     credit.sent(bytes.len());
-                    relay.lock().unwrap().publish(session_id, &bytes);
+                    tap.relay.lock().unwrap().publish(tap.session, &bytes);
                     if tx.send((id, PaneEvent::Output(bytes))).is_err() {
                         break 'outer;
                     }
                 }
                 Ok(Some(Frame::Replay(bytes))) => {
                     credit.sent(bytes.len());
-                    relay.lock().unwrap().seed(session_id, &bytes);
+                    tap.relay.lock().unwrap().seed(tap.session, &bytes);
                     if tx.send((id, PaneEvent::Replay(bytes))).is_err() {
                         break 'outer;
                     }
                 }
                 Ok(Some(Frame::ReplayEnd)) => nudge_resize(&panes, id),
                 Ok(Some(Frame::Exited(code))) => {
-                    relay.lock().unwrap().exited(session_id, code);
+                    tap.relay.lock().unwrap().exited(tap.session, code);
                     let _ = tx.send((id, PaneEvent::Exited { code }));
                     exited = true;
                     break 'outer;
