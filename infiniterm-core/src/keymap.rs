@@ -711,6 +711,7 @@ pub fn merge_keymap(defaults: &Keymap, overrides: &[(String, Option<String>)]) -
 
 const KEYMAP_HEADER: &[&str] = &[
     "Every key infiniterm binds, and what it runs.",
+    "Docs: https://infiniterm.app/reference/commands/",
     "",
     "THIS FILE IS REWRITTEN EVERY LAUNCH. Editing it does nothing.",
     "Put your changes in keybindings.json beside it. Copy a line across to rebind a",

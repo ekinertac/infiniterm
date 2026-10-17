@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-17
 
+- `settings.json` and `settings.default.json` now start with a link to the settings reference (infiniterm.app/reference/settings/), and `keybindings.json` and `keybindings.default.json` with a link to the commands reference (infiniterm.app/reference/commands/). A `settings.json` or `keybindings.json` you already have is not changed; the two default files pick the link up at the next launch.
 - Right-clicking a terminal's or an editor's frame or label chip opens the same menu as right-clicking its text (Copy, Paste and Find for a terminal; Save, Find and Transform for an editor), so where you click on a card no longer changes what you are offered. Diff, transcript, page and browser cards, and a selection of several cards, keep the generic card menu.
 - New: Cmd+A selects every card of the workspace (`Focus: select every card`). The card you were on stays the active one. In a locked editor or browser card Cmd+A still selects the file's text or the page.
 - The right-click menus on a card (a terminal's text, an editor's text, a card's frame or label) now end with the same rows in the same order: Split Right, Split Down, New, Group…, Size, Move to Workspace…, Canvas, Rename…, Protect, Mask (terminals), Clear State Colour, Close. The new Canvas submenu holds Fit Card, Fit Selection, Fit All Cards, Actual Size, Tidy into a Block and Select All Cards. The bare canvas menu gains Select All Cards, Undo Layout, Redo Layout and Reopen Closed Card.

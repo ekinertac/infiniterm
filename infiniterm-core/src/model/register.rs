@@ -3957,6 +3957,20 @@ mod tests {
         assert!(h.m.key_context().multi_selection);
     }
 
+    // Each of the four config files names its reference page at the top (#426).
+    #[test]
+    fn the_config_files_name_their_docs_page() {
+        let settings = "https://infiniterm.app/reference/settings/";
+        let commands = "https://infiniterm.app/reference/commands/";
+        let top = |text: &str| text.lines().take(6).collect::<Vec<_>>().join("\n");
+        assert!(top(settings_in::EMPTY_SETTINGS).contains(settings));
+        assert!(top(&crate::settings_doc::default_settings_text()).contains(settings));
+        assert!(top(settings_in::EMPTY_KEYBINDINGS).contains(commands));
+        let defaults =
+            crate::keymap::render_keybindings_default(&crate::keymap::default_keymap(), |_| None);
+        assert!(top(&defaults).contains(commands));
+    }
+
     // The examples in a new keybindings.json are commented lines that must
     // work when switched on: they parse with no error and every command in
     // them exists, so they cannot rot as commands are renamed.
