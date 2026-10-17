@@ -223,7 +223,9 @@ impl DaemonBackend {
         env: Vec<(String, String)>,
     ) -> anyhow::Result<PaneId> {
         if self.viewer {
-            anyhow::bail!("a viewer starts no shell here: a card made in a viewer is started by the host");
+            anyhow::bail!(
+                "a viewer starts no shell here: a card made in a viewer is started by the host"
+            );
         }
         if let Some(host) = &self.remote {
             return self.spawn_remote(host, &cwd.to_string_lossy(), cmd, env);

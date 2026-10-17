@@ -576,7 +576,8 @@ mod tests {
         // Noise first: a kind the host does not know, and an update that is
         // not one. Neither reaches the app.
         s.write_all(&encode_canvas_message(b'Z', "future")).unwrap();
-        s.write_all(&encode_canvas_message(KIND_UPDATE, "not json")).unwrap();
+        s.write_all(&encode_canvas_message(KIND_UPDATE, "not json"))
+            .unwrap();
         s.write_all(&encode_canvas_message(
             KIND_UPDATE,
             &encode_update(7, "{\"cards\":[]}"),

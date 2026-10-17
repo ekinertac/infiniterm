@@ -391,8 +391,8 @@ impl Model {
         if base != self.layout_rev || self.dirty_layout {
             return Ok(RemoteApply::Stale);
         }
-        let saved =
-            parse_layout(text).ok_or_else(|| "the viewer's canvas could not be read".to_string())?;
+        let saved = parse_layout(text)
+            .ok_or_else(|| "the viewer's canvas could not be read".to_string())?;
 
         // Closed in the viewer, closed here. An in-place editor (a cover) is
         // the host's own and lives as long as its `ift`.
@@ -753,7 +753,9 @@ mod snapshot_tests {
         use crate::saved_layout::CardKind;
         let (mut host, mut viewer, _a, _b, e) = host_and_viewer();
         // It is a card here: it moves like one.
-        let card = viewer.card(&e).expect("an editor slot is a card in a viewer");
+        let card = viewer
+            .card(&e)
+            .expect("an editor slot is a card in a viewer");
         assert_eq!(card.kind, CardKind::Editor);
         viewer.card_mut(&e).unwrap().rect = rect(50., 760.);
         // And it goes up with its path intact; the host moves it and keeps it.
@@ -772,7 +774,10 @@ mod snapshot_tests {
         let up = viewer.layout_snapshot();
         assert_eq!(host.apply_remote_layout(&up, 0), Ok(RemoteApply::Applied));
         assert!(host.card(&a).is_some());
-        assert!(host.card(&b).is_none(), "the host closed it by its own close");
+        assert!(
+            host.card(&b).is_none(),
+            "the host closed it by its own close"
+        );
         assert!(host.card(&e).is_none(), "a slot closes too");
     }
 
@@ -798,7 +803,10 @@ mod snapshot_tests {
         let new = host.card(&made).expect("a normal new card on the host");
         assert_eq!(new.kind, CardKind::Terminal);
         assert_eq!(new.rect, rect(1800., 0.));
-        assert!(new.session.is_none(), "the host's reconcile starts its shell");
+        assert!(
+            new.session.is_none(),
+            "the host's reconcile starts its shell"
+        );
         assert!(host.card(&phantom).is_none());
         // Its number is the host's: nobody else on the host has it.
         let same = host.cards.iter().filter(|c| c.number == new.number).count();
@@ -839,7 +847,11 @@ mod snapshot_tests {
         host.card_mut(&a).unwrap().rect = rect(7., 7.);
         host.dirty_layout = true;
         assert_eq!(host.apply_remote_layout(&up, 0), Ok(RemoteApply::Stale));
-        assert_eq!(host.card(&a).unwrap().rect, rect(7., 7.), "the host's change stands");
+        assert_eq!(
+            host.card(&a).unwrap().rect,
+            rect(7., 7.),
+            "the host's change stands"
+        );
         assert!(host.card(&b).is_some());
     }
 
@@ -864,8 +876,14 @@ mod snapshot_tests {
         let up = viewer.layout_snapshot();
         assert!(!host.dirty_layout);
         host.apply_remote_layout(&up, 0).unwrap();
-        assert!(host.dirty_layout, "the host's next save is the new revision");
-        assert!(viewer.save_text().is_none(), "a viewer writes nothing of its own");
+        assert!(
+            host.dirty_layout,
+            "the host's next save is the new revision"
+        );
+        assert!(
+            viewer.save_text().is_none(),
+            "a viewer writes nothing of its own"
+        );
     }
 
     #[test]

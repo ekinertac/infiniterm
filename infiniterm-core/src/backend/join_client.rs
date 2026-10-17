@@ -89,8 +89,13 @@ fn run_uplink(
         let next = edits.lock().unwrap().recv_timeout(UPLINK_POLL);
         match next {
             Ok(edit) => {
-                let message = encode_canvas_message(KIND_UPDATE, &encode_update(edit.base, &edit.layout));
-                if stream.write_all(&message).and_then(|_| stream.flush()).is_err() {
+                let message =
+                    encode_canvas_message(KIND_UPDATE, &encode_update(edit.base, &edit.layout));
+                if stream
+                    .write_all(&message)
+                    .and_then(|_| stream.flush())
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -258,7 +263,11 @@ mod tests {
         let (near, mut far) = std::os::unix::net::UnixStream::pair().unwrap();
         let (edits, stop) = (Arc::new(Mutex::new(rx)), ended.clone());
         let writer = std::thread::spawn(move || run_uplink(near, edits, stop));
-        tx.send(RemoteUpdate { base: 5, layout: "{\"a\":1}".into() }).unwrap();
+        tx.send(RemoteUpdate {
+            base: 5,
+            layout: "{\"a\":1}".into(),
+        })
+        .unwrap();
         far.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
         let (kind, text) = read_canvas_message(&mut far).unwrap().unwrap();
         assert_eq!(kind, KIND_UPDATE);
@@ -267,4 +276,3 @@ mod tests {
         writer.join().unwrap();
     }
 }
-
