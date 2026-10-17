@@ -129,6 +129,22 @@ struct Pane {
     /// it ever says `Hello`.
     pid: Option<u32>,
     credit: Arc<Credit>,
+    /// A viewer's pane (#423): keys only, see `may_send`.
+    viewer: bool,
+}
+
+/// A viewer's pane is a window onto the host's session, so it may carry keys
+/// and nothing else: no resize (the shell's size is the host's), no kill. The
+/// one gate every write to a pane goes through, so a new write site cannot
+/// forget it.
+fn may_send(viewer: bool, frame: &Frame) -> bool {
+    !viewer || matches!(frame, Frame::Data(_))
+}
+
+fn send(stream: &Arc<Mutex<UnixStream>>, viewer: bool, frame: &Frame) {
+    if may_send(viewer, frame) {
+        let _ = stream.lock().unwrap().write_all(&frame.encode());
+    }
 }
 
 pub struct DaemonBackend {
@@ -148,6 +164,11 @@ pub struct DaemonBackend {
     /// backend is the only client iftd sees, so it is the one place every
     /// session's bytes pass, and it fans them out from here.
     relay: Arc<Mutex<Relay>>,
+    /// Set for the window that `ift join` opens (#423): the sessions are the
+    /// host's, reached through the host app, and this backend never starts,
+    /// resizes or ends one of them. Every way a session could die or change
+    /// is a no-op here: kill, resize, spawn, the orphan sweep, the parked end.
+    viewer: bool,
 }
 
 impl DaemonBackend {
@@ -161,7 +182,19 @@ impl DaemonBackend {
             next_id: AtomicU32::new(1),
             remote: None,
             relay: Arc::new(Mutex::new(Relay::new())),
+            viewer: false,
         };
+        (backend, rx)
+    }
+
+    /// A backend for a viewer window (#423): its cards are cards of the app
+    /// running on `host`, joined through that app, never through `iftd`.
+    pub fn new_viewer(
+        host: super::remote::RemoteHost,
+        buffer_mib: usize,
+    ) -> (Self, Receiver<(PaneId, PaneEvent)>) {
+        let (mut backend, rx) = Self::new_remote(host, buffer_mib);
+        backend.viewer = true;
         (backend, rx)
     }
 
@@ -197,6 +230,9 @@ impl DaemonBackend {
         cmd: Option<&str>,
         env: Vec<(String, String)>,
     ) -> anyhow::Result<PaneId> {
+        if self.viewer {
+            anyhow::bail!("a viewer window cannot start a shell: its cards are the host's");
+        }
         if let Some(host) = &self.remote {
             return self.spawn_remote(host, &cwd.to_string_lossy(), cmd, env);
         }
@@ -249,6 +285,9 @@ impl DaemonBackend {
     /// never arrives; the caller spawns a fresh shell instead, same as a
     /// `local_pty` card that never had a session to come back to.
     pub fn adopt(&self, session_id: &str) -> Option<PaneId> {
+        if self.viewer {
+            return self.adopt_join(session_id);
+        }
         if let Some(host) = &self.remote {
             return self.adopt_remote(host, session_id);
         }
@@ -262,6 +301,30 @@ impl DaemonBackend {
             Some(pid),
             (cols, rows),
         ))
+    }
+
+    /// Joins one of the host's cards through the host app (#423), never
+    /// through its `iftd`, which serves one client and would drop the host's
+    /// own window. The pane has no local pid and no relay of its own.
+    fn adopt_join(&self, session_id: &str) -> Option<PaneId> {
+        let host = self.remote.as_ref()?;
+        let (mut stream, stderr) = match super::remote::connect_join(host, session_id) {
+            Ok(c) => c,
+            Err(why) => {
+                eprintln!("[infiniterm] could not join {session_id}: {why}");
+                return None;
+            }
+        };
+        match read_hello(&mut stream, REMOTE_HELLO_DEADLINE) {
+            Ok((_host_pid, cols, rows, reader)) => {
+                Some(self.register(session_id.to_string(), stream, reader, None, (cols, rows)))
+            }
+            Err(e) => {
+                let said = stderr.text();
+                eprintln!("[infiniterm] could not join {session_id}: {e} {said}");
+                None
+            }
+        }
     }
 
     /// A new shell on another machine: `ift proxy session --spawn` over ssh
@@ -359,6 +422,7 @@ impl DaemonBackend {
                 size: Mutex::new(size),
                 pid,
                 credit: credit.clone(),
+                viewer: self.viewer,
             },
         );
 
@@ -435,20 +499,19 @@ impl DaemonBackend {
     }
 
     pub fn write_now(&self, pane: PaneId, bytes: &[u8]) {
-        let stream = self
+        let found = self
             .panes
             .lock()
             .unwrap()
             .get(&pane)
-            .map(|p| p.stream.clone());
-        if let Some(stream) = stream {
-            let mut s = stream.lock().unwrap();
-            let _ = s.write_all(&Frame::Data(bytes.to_vec()).encode());
+            .map(|p| (p.stream.clone(), p.viewer));
+        if let Some((stream, viewer)) = found {
+            send(&stream, viewer, &Frame::Data(bytes.to_vec()));
         }
     }
 
     pub fn resize_now(&self, pane: PaneId, cols: u16, rows: u16) {
-        let stream = {
+        let (stream, viewer) = {
             let panes = self.panes.lock().unwrap();
             let Some(p) = panes.get(&pane) else {
                 return;
@@ -458,10 +521,9 @@ impl DaemonBackend {
                 .lock()
                 .unwrap()
                 .resize(&p.session_id, cols, rows);
-            p.stream.clone()
+            (p.stream.clone(), p.viewer)
         };
-        let mut s = stream.lock().unwrap();
-        let _ = s.write_all(&Frame::Resize { cols, rows }.encode());
+        send(&stream, viewer, &Frame::Resize { cols, rows });
     }
 
     pub fn kill_now(&self, pane: PaneId) {
@@ -469,15 +531,19 @@ impl DaemonBackend {
             let panes = self.panes.lock().unwrap();
             panes
                 .get(&pane)
-                .map(|p| (p.stream.clone(), p.credit.clone()))
+                .map(|p| (p.stream.clone(), p.credit.clone(), p.viewer))
         };
-        let Some((stream, credit)) = found else {
+        let Some((stream, credit, viewer)) = found else {
             return;
         };
-        {
-            let mut s = stream.lock().unwrap();
-            let _ = s.write_all(&Frame::Kill.encode());
+        if viewer {
+            // A card closed in a viewer lets go of the host's session; it
+            // never ends it. Detach, as `detach_now` does.
+            let _ = stream.lock().unwrap().shutdown(Shutdown::Both);
+            credit.close();
+            return;
         }
+        send(&stream, viewer, &Frame::Kill);
         // Frees a reader parked on credit, same reason and same call as
         // local_pty::kill_now: the pane is removed by the reader thread once
         // Exited (or EOF) actually arrives, not here, so PaneEvent::Exited
@@ -527,6 +593,11 @@ impl DaemonBackend {
     /// running. Same sweep as tmux's `kill_orphans`, on a directory only
     /// this backend writes to.
     pub fn kill_orphans(&self, claimed: &[String]) {
+        // A viewer owns no session: the ones in its data dir, if any, are not
+        // litter of its own, and the host's are the host's to sweep.
+        if self.viewer {
+            return;
+        }
         for id in Self::live_sessions(&self.sessions_dir) {
             if claimed.iter().any(|c| c == &id) {
                 continue;
@@ -786,11 +857,15 @@ fn nudge_resize(panes: &Arc<Mutex<HashMap<PaneId, Pane>>>, id: PaneId) {
         let panes = panes.lock().unwrap();
         panes
             .get(&id)
-            .map(|p| (p.stream.clone(), *p.size.lock().unwrap()))
+            .map(|p| (p.stream.clone(), *p.size.lock().unwrap(), p.viewer))
     };
-    let Some((stream, (cols, rows))) = found else {
+    let Some((stream, (cols, rows), viewer)) = found else {
         return;
     };
+    // A viewer never changes the host's pty size, not even to jog it.
+    if viewer {
+        return;
+    }
     // A pane is never actually 0 wide (Hello always carries iftd's real
     // initial size), but a bump that cannot go below 1 avoids ever asking
     // for a 0-column pty regardless.
@@ -957,5 +1032,124 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The viewer's promise (#423): it can type into the host's sessions and
+/// nothing else. Each test has a control that does the same to an ordinary
+/// backend, so a test that passes cannot be one that never reached the code.
+#[cfg(test)]
+mod viewer_tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+    use std::time::Duration;
+
+    fn frames_until_quiet(mut far: UnixStream, wait: Duration) -> Vec<Frame> {
+        far.set_read_timeout(Some(wait)).unwrap();
+        let mut reader = FrameReader::default();
+        let mut frames = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match far.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => reader.feed(&buf[..n]),
+            }
+            while let Ok(Some(f)) = reader.next() {
+                frames.push(f);
+            }
+        }
+        frames
+    }
+
+    fn pane_with_peer(backend: &DaemonBackend) -> (PaneId, UnixStream) {
+        let (near, far) = UnixStream::pair().unwrap();
+        let id = backend.register("s".into(), near, FrameReader::default(), None, (80, 24));
+        (id, far)
+    }
+
+    fn temp_sessions(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("vw-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_viewer_pane_sends_keys_and_nothing_else() {
+        let (backend, _rx) = DaemonBackend::new_viewer(super::super::remote::RemoteHost::new("h"), 1);
+        let (id, far) = pane_with_peer(&backend);
+        backend.write_now(id, b"k");
+        backend.resize_now(id, 100, 30);
+        backend.kill_now(id);
+        // kill_now on a viewer detaches, so the far end sees the end.
+        let frames = frames_until_quiet(far, Duration::from_secs(2));
+        assert_eq!(frames, vec![Frame::Data(b"k".to_vec())]);
+    }
+
+    #[test]
+    fn the_same_calls_on_an_ordinary_backend_do_send_resize_and_kill() {
+        let (backend, _rx) = DaemonBackend::new(temp_sessions("control-pane"), 1);
+        let (id, far) = pane_with_peer(&backend);
+        backend.write_now(id, b"k");
+        backend.resize_now(id, 100, 30);
+        backend.kill_now(id);
+        let frames = frames_until_quiet(far, Duration::from_millis(400));
+        assert_eq!(
+            frames,
+            vec![
+                Frame::Data(b"k".to_vec()),
+                Frame::Resize { cols: 100, rows: 30 },
+                Frame::Kill
+            ]
+        );
+    }
+
+    #[test]
+    fn a_viewer_never_starts_a_shell() {
+        let (backend, _rx) = DaemonBackend::new_viewer(super::super::remote::RemoteHost::new("h"), 1);
+        let err = backend
+            .spawn_now(Path::new("/"), None, vec![])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot start a shell"), "{err}");
+    }
+
+    fn orphan_sweep_reaches(backend: &DaemonBackend, dir: &Path) -> bool {
+        let listener = UnixListener::bind(dir.join("zz.sock")).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        backend.kill_orphans(&[]);
+        for _ in 0..20 {
+            if listener.accept().is_ok() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        false
+    }
+
+    #[test]
+    fn a_viewer_never_sweeps_sessions_at_launch() {
+        let dir = temp_sessions("viewer-sweep");
+        let (mut backend, _rx) = DaemonBackend::new(dir.clone(), 1);
+        backend.viewer = true;
+        assert!(!orphan_sweep_reaches(&backend, &dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_same_sweep_on_an_ordinary_backend_does_reach_a_session() {
+        let dir = temp_sessions("control-sweep");
+        let (backend, _rx) = DaemonBackend::new(dir.clone(), 1);
+        assert!(orphan_sweep_reaches(&backend, &dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_viewer_does_not_jog_the_hosts_size_after_a_replay() {
+        let (backend, _rx) = DaemonBackend::new_viewer(super::super::remote::RemoteHost::new("h"), 1);
+        let (id, far) = pane_with_peer(&backend);
+        nudge_resize(&backend.panes, id);
+        backend.detach_now(id);
+        assert!(frames_until_quiet(far, Duration::from_secs(2)).is_empty());
     }
 }

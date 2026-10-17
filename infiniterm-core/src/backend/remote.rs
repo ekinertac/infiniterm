@@ -246,6 +246,37 @@ pub fn remote_command(ift: &str, id: &str, spawn: Option<&SpawnSpec>) -> String 
 
 /// The argument list for the ssh child, after the program name.
 pub fn ssh_args(host: &RemoteHost, id: &str, spawn: Option<&SpawnSpec>) -> Vec<String> {
+    ssh_args_for(host, remote_command(&host.ift, id, spawn))
+}
+
+/// `ift proxy join session <id>`: the host app's join socket for one card
+/// (#423), quoted like `remote_command`.
+pub fn join_command(ift: &str, id: &str) -> String {
+    format!("{} proxy join session {}", shell_quote(ift), shell_quote(id))
+}
+
+/// `ift proxy join canvas`: the host's layout snapshots.
+pub fn join_canvas_command(ift: &str) -> String {
+    format!("{} proxy join canvas", shell_quote(ift))
+}
+
+/// What the host's join server says first, as one line: `ift-join <major> ok`
+/// or `ift-join <major> error <sentence>`. The sentence is the host's own,
+/// shown as it is: it already says what to do.
+pub fn check_join_answer(line: &str) -> Result<(), String> {
+    let line = line.trim_end();
+    let mut words = line.splitn(4, ' ');
+    match (words.next(), words.next(), words.next(), words.next()) {
+        (Some("ift-join"), Some(_), Some("ok"), None) => Ok(()),
+        (Some("ift-join"), Some(_), Some("error"), Some(why)) => Err(why.to_string()),
+        _ => Err(format!(
+            "the host did not answer as ift-join (is infiniterm running there, and is it a build with join?): {line:?}"
+        )),
+    }
+}
+
+/// The argument list for an ssh that runs `command` on the host.
+pub fn ssh_args_for(host: &RemoteHost, command: String) -> Vec<String> {
     let mut args: Vec<String> = [
         "-T",
         "-o",
@@ -261,7 +292,7 @@ pub fn ssh_args(host: &RemoteHost, id: &str, spawn: Option<&SpawnSpec>) -> Vec<S
     .collect();
     args.extend(host.ssh_args.iter().cloned());
     args.push(host.target.clone());
-    args.push(remote_command(&host.ift, id, spawn));
+    args.push(command);
     args
 }
 
@@ -342,8 +373,63 @@ pub fn connect(
     id: &str,
     spawn: Option<&SpawnSpec>,
 ) -> std::io::Result<(UnixStream, SshStderr)> {
+    connect_command(host, remote_command(&host.ift, id, spawn))
+}
+
+/// Joins one card of the host's running canvas (#423): the same splice, to
+/// `ift proxy join session <id>`, with the host's answer line read and checked
+/// before anything else, so the caller's next read is the host's `Hello`.
+pub fn connect_join(host: &RemoteHost, id: &str) -> Result<(UnixStream, SshStderr), String> {
+    let (mut stream, stderr) = connect_command(host, join_command(&host.ift, id))
+        .map_err(|e| format!("could not run {}: {e}", host.ssh))?;
+    let line = read_line(&mut stream, JOIN_ANSWER_WAIT)?;
+    match check_join_answer(&line) {
+        Ok(()) => Ok((stream, stderr)),
+        Err(why) => {
+            // ssh may have said why before the host closed.
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let said = stderr.text();
+            Err(if said.is_empty() {
+                why
+            } else {
+                format!("{why} ({said})")
+            })
+        }
+    }
+}
+
+/// How long a host gets to answer the handshake line.
+const JOIN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// One line, a byte at a time, so nothing after it is taken from the frames
+/// that follow. Bounded: a line over 256 bytes is not an answer.
+fn read_line(stream: &mut UnixStream, wait: std::time::Duration) -> Result<String, String> {
+    stream
+        .set_read_timeout(Some(wait))
+        .map_err(|e| e.to_string())?;
+    let mut line = Vec::new();
+    let mut b = [0u8; 1];
+    loop {
+        match stream.read(&mut b) {
+            Ok(0) => return Err("the host closed the connection before it answered".into()),
+            Ok(_) if b[0] == b'\n' => break,
+            Ok(_) if line.len() < 256 => line.push(b[0]),
+            Ok(_) => return Err("the host's answer was not a line".into()),
+            Err(e) => return Err(format!("the host did not answer: {e}")),
+        }
+    }
+    let _ = stream.set_read_timeout(None);
+    Ok(String::from_utf8_lossy(&line).into_owned())
+}
+
+/// Starts ssh with `command` on the host; the splice both `connect` and
+/// `connect_join` use.
+pub fn connect_command(
+    host: &RemoteHost,
+    command: String,
+) -> std::io::Result<(UnixStream, SshStderr)> {
     let mut child = Command::new(&host.ssh)
-        .args(ssh_args(host, id, spawn))
+        .args(ssh_args_for(host, command))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -426,6 +512,29 @@ mod tests {
             remote_command("/opt/ift", "abc", None),
             "/opt/ift proxy session abc"
         );
+    }
+
+    #[test]
+    fn a_join_runs_ift_proxy_join_with_every_value_quoted() {
+        assert_eq!(join_command("ift", "abc-1"), "ift proxy join session abc-1");
+        assert_eq!(
+            join_command("/opt/my ift", "a b"),
+            "'/opt/my ift' proxy join session 'a b'"
+        );
+        assert_eq!(join_canvas_command("ift"), "ift proxy join canvas");
+    }
+
+    #[test]
+    fn the_hosts_answer_is_ok_or_its_own_sentence() {
+        assert_eq!(check_join_answer("ift-join 1 ok"), Ok(()));
+        assert_eq!(check_join_answer("ift-join 0 ok\n"), Ok(()));
+        assert_eq!(
+            check_join_answer("ift-join 1 error no session x on this host"),
+            Err("no session x on this host".to_string())
+        );
+        let err = check_join_answer("bash: ift: command not found").unwrap_err();
+        assert!(err.contains("did not answer as ift-join"), "{err}");
+        assert!(check_join_answer("").is_err());
     }
 
     #[test]
