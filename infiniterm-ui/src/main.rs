@@ -258,6 +258,9 @@ pub struct AppView {
     /// "Open a file" asked for the open panel (`Effect::PickFile`); the idle
     /// timer, which has the app, shows it (#64). The card it opens beside.
     pub pick_request: Option<Option<String>>,
+    /// The socket viewers join through (`ift join`, #423); `None` when the
+    /// backend is not the daemon or the socket could not be bound.
+    pub join: Option<infiniterm_core::backend::join::JoinHub>,
     /// A terminal's Paste from the right-click menu: the card to paste into,
     /// read from the clipboard in the poll task.
     pub paste_request: Option<String>,

@@ -73,6 +73,7 @@ impl AppView {
             shortcuts_field: Default::default(),
             shortcuts_index: 0,
             pick_request: None,
+            join: None,
             read_requests: vec![],
             shortcuts_scroll: gpui::ScrollHandle::new(),
             whats_new_body: None,
@@ -816,6 +817,11 @@ impl AppView {
             if let Err(e) = infiniterm_core::layout_file::write_layout(&text) {
                 eprintln!("[infiniterm] could not save the layout: {e}");
             }
+            // The same text, to every viewer that joined (#423). The viewer
+            // keeps its own viewport and focus; nothing is stripped here.
+            if let Some(hub) = &self.join {
+                hub.publish_layout(&text);
+            }
         }
     }
 
@@ -851,6 +857,22 @@ fn startup_terminal() -> (infiniterm_core::config::TerminalBackend, usize) {
     let value = infiniterm_core::jsonc::parse_jsonc(&text).unwrap_or(serde_json::Value::Null);
     let terminal = infiniterm_core::config::merge_config(&value).terminal;
     (terminal.backend, terminal.session_buffer as usize)
+}
+
+/// Opens the socket `ift join` viewers reach through ssh, and gives them the
+/// canvas as it is now (#423). A failure is said and costs nothing else: the
+/// app runs without joining.
+fn start_join(app: &mut AppView) {
+    let Some((relay, write)) = app.backend.pty.join_parts() else {
+        return;
+    };
+    let hub = infiniterm_core::backend::join::JoinHub::new(relay, write);
+    match hub.serve(&infiniterm_core::paths::join_socket()) {
+        Ok(()) => app.join = Some(hub),
+        Err(e) => eprintln!("[infiniterm/warn] ift join is off: {e}"),
+    }
+    // Viewers that join before the first save still get a canvas.
+    app.write_layout();
 }
 
 pub fn startup(app: &mut AppView) {
@@ -1006,6 +1028,7 @@ pub fn startup(app: &mut AppView) {
         infiniterm_core::files::draft_prune(&keep);
     }
     start_updater(app);
+    start_join(app);
     app.perform_effects();
     if !app.backend.socket_ok {
         app.model

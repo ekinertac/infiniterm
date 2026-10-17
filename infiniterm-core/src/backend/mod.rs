@@ -153,6 +153,21 @@ impl Panes {
         !matches!(self, Panes::Tmux(_))
     }
 
+    /// What the join server (#423) needs from this backend: the relay and a
+    /// way to write a viewer's keys to a session. Only the daemon backend has
+    /// them; under local and tmux a card has no session a viewer could join.
+    pub fn join_parts(
+        &self,
+    ) -> Option<(
+        std::sync::Arc<std::sync::Mutex<relay::Relay>>,
+        join::WriteSession,
+    )> {
+        match self {
+            Panes::Daemon(b) => Some((b.relay(), b.session_writer())),
+            _ => None,
+        }
+    }
+
     /// This card's shell, as an opaque handle for the save file: a tmux
     /// window id (`@7`) or a daemon session id. Local shells have none:
     /// there is nothing to come back to.
