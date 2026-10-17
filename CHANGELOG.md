@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-17
 
+- Dragging a workspace tab shows a vertical line at the edge of the tab where it will sit when you let go, instead of filling the tab under the pointer: on the left edge when you drag left, on the right edge when you drag right.
 - Fixed: dragging a workspace tab to reorder it no longer moves the window. The bare part of the title bar still drags the window, and a double-click on it still zooms. One side effect: the system's Ctrl+Cmd+drag (move a window by any point) does not move this window.
 - Fixed: closing the right-click menu on a card's frame or label no longer leaves the card following the pointer, as if you were dragging it. A right-click now only focuses the card and opens the menu.
 - New: double-click a workspace's name in the title bar to rename it.
