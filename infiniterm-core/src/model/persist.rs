@@ -107,6 +107,130 @@ impl Model {
         self.dirty_layout = false;
     }
 
+    /// A viewer takes the host's canvas (#423, `ift join`): the same JSON the
+    /// host saves, applied IN PLACE. Cards keep their ids when nothing about
+    /// them changed, because the ui keeps a body (a terminal's grid) per card
+    /// id; rebuilding the cards on every snapshot would drop every grid.
+    ///
+    /// What is the host's follows the snapshot: which cards, groups and
+    /// workspaces exist, and their rects, titles, groups and sessions. What is
+    /// this viewer's stays: its viewport and zoom, its focus, its active
+    /// workspace, and each workspace's own viewport and focused card. A viewer
+    /// never saves (`read_only`), so nothing here can write the host's canvas
+    /// into a data dir of the viewer's.
+    ///
+    /// Refused, with a sentence, when the host's build is newer than this one.
+    pub fn apply_snapshot(&mut self, text: &str) -> Result<(), String> {
+        if is_newer_than_this_build(text) {
+            return Err(
+                "the host's infiniterm is newer than this one; update infiniterm on this Mac"
+                    .into(),
+            );
+        }
+        if !self.loaded {
+            self.load_layout(Some(text));
+            self.read_only = true;
+            self.layout_undo.clear();
+            return Ok(());
+        }
+        let saved = parse_layout(text).ok_or_else(|| "the host's canvas could not be read".to_string())?;
+        self.read_only = true;
+
+        let mine = std::mem::take(&mut self.workspaces);
+        self.workspaces = saved
+            .workspaces
+            .into_iter()
+            .map(|mut w| {
+                if let Some(own) = mine.iter().find(|o| o.id == w.id) {
+                    w.viewport = own.viewport;
+                    w.focused = own.focused.clone();
+                }
+                w
+            })
+            .collect();
+        self.groups = saved
+            .groups
+            .into_iter()
+            .map(|g| super::Group {
+                id: g.id,
+                name: g.name,
+            })
+            .collect();
+
+        let host_ids: Vec<String> = saved.cards.iter().map(|c| c.id.clone()).collect();
+        let gone: Vec<String> = self
+            .cards
+            .iter()
+            .filter(|c| !host_ids.contains(&c.id))
+            .map(|c| c.id.clone())
+            .collect();
+        for id in gone {
+            self.remove_card(&id);
+        }
+        for c in saved.cards {
+            if let Some(card) = self.card_mut(&c.id) {
+                card.workspace_id = c.workspace_id;
+                card.rect = c.rect;
+                card.z = c.z;
+                card.title = c.title;
+                card.cwd = c.cwd;
+                card.group_id = c.group_id;
+                card.soft_group_id = c.soft_group_id;
+                card.split_from = c.split_from;
+                card.number = c.number;
+                card.protected = c.protected;
+                card.session = c.session;
+                card.agent_session = c.agent_session;
+                card.agent_kind = c.agent_kind;
+                card.osc_title = c.agent_title;
+                continue;
+            }
+            let id = self.add_card(
+                &c.cwd,
+                NewCard {
+                    id: Some(c.id),
+                    rect: Some(c.rect),
+                    group_id: c.group_id,
+                    workspace_id: Some(c.workspace_id),
+                    soft_group_id: c.soft_group_id,
+                    split_from: c.split_from,
+                    kind: c.kind,
+                    path: c.path,
+                    root: c.root,
+                    explorer: c.explorer,
+                    url: c.url,
+                    sidebar: c.sidebar,
+                    sidebar_top: c.sidebar_top,
+                    zoom: c.zoom,
+                    ..Default::default()
+                },
+            );
+            if let Some(card) = self.card_mut(&id) {
+                card.title = c.title;
+                card.z = c.z;
+                card.number = c.number;
+                card.protected = c.protected;
+                card.session = c.session;
+                card.kitty_keys = c.kitty_keys;
+                card.agent_session = c.agent_session;
+                card.agent_kind = c.agent_kind;
+                card.osc_title = c.agent_title;
+                card.tabs = c.tabs;
+                card.active_tab = c.active_tab;
+            }
+        }
+        // The viewer's own focus survives unless its card went.
+        if let Some(id) = self.selection.focused_id.clone() {
+            if self.card(&id).is_none() {
+                self.selection.focused_id = None;
+            }
+        }
+        self.ensure_workspace();
+        self.dirty_layout = false;
+        self.layout_undo.clear();
+        Ok(())
+    }
+
     /// The file's text, or nothing while saving is not allowed.
     pub fn save_text(&mut self) -> Option<String> {
         if !self.loaded || self.read_only {
@@ -297,3 +421,101 @@ impl Model {
         })
     }
 }
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use crate::grid::{Rect, Size};
+
+    fn host_model() -> Model {
+        let mut m = Model::new();
+        m.view_size = Size { w: 1600., h: 1000. };
+        m.home = "/Users/me".into();
+        m.start_dir = "/Users/me".into();
+        m.load_layout(None);
+        m.first_run = false;
+        m
+    }
+
+    fn add(m: &mut Model, rect: Rect) -> String {
+        let ws = m.active_workspace.clone();
+        m.add_card(
+            "/Users/me",
+            NewCard {
+                rect: Some(rect),
+                workspace_id: ws,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn rect(x: f64, y: f64) -> Rect {
+        Rect { x, y, w: 800., h: 600. }
+    }
+
+    #[test]
+    fn the_first_snapshot_makes_the_hosts_cards_and_never_saves() {
+        let mut host = host_model();
+        let a = add(&mut host, rect(0., 0.));
+        let b = add(&mut host, rect(900., 0.));
+        let text = host.save_text().unwrap();
+
+        let mut viewer = Model::new();
+        viewer.apply_snapshot(&text).unwrap();
+        let ids: Vec<&str> = viewer.cards.iter().map(|c| c.id.as_str()).collect();
+        assert!(ids.contains(&a.as_str()) && ids.contains(&b.as_str()));
+        assert!(viewer.read_only);
+        assert!(viewer.save_text().is_none(), "a viewer never writes a canvas");
+    }
+
+    #[test]
+    fn a_later_snapshot_keeps_ids_and_follows_the_host() {
+        let mut host = host_model();
+        let a = add(&mut host, rect(0., 0.));
+        let b = add(&mut host, rect(900., 0.));
+        let mut viewer = Model::new();
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+
+        // The host moves a, closes b and opens c.
+        host.card_mut(&a).unwrap().rect = rect(50., 60.);
+        host.card_mut(&a).unwrap().title = "renamed".into();
+        host.remove_card(&b);
+        let c = add(&mut host, rect(900., 700.));
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+
+        assert_eq!(viewer.card(&a).unwrap().rect, rect(50., 60.));
+        assert_eq!(viewer.card(&a).unwrap().title, "renamed");
+        assert!(viewer.card(&b).is_none(), "a card the host closed goes");
+        assert!(viewer.card(&c).is_some(), "a card the host opened comes");
+    }
+
+    #[test]
+    fn the_viewer_keeps_its_own_viewport_and_focus() {
+        let mut host = host_model();
+        let a = add(&mut host, rect(0., 0.));
+        let b = add(&mut host, rect(900., 0.));
+        let mut viewer = Model::new();
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        viewer.selection.focused_id = Some(b.clone());
+        let own = viewer.viewport;
+        viewer.workspaces[0].viewport.x = 123.;
+
+        host.viewport.x = 5000.;
+        host.card_mut(&a).unwrap().rect = rect(10., 10.);
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+
+        assert_eq!(viewer.viewport, own, "the host's pan does not move the viewer");
+        assert_eq!(viewer.workspaces[0].viewport.x, 123.);
+        assert_eq!(viewer.selection.focused_id, Some(b));
+    }
+
+    #[test]
+    fn a_snapshot_from_a_newer_build_is_refused_with_a_sentence() {
+        let mut viewer = Model::new();
+        let err = viewer
+            .apply_snapshot("{\"version\": 999999, \"cards\": []}")
+            .unwrap_err();
+        assert!(err.contains("newer than this one"), "{err}");
+    }
+}
+
