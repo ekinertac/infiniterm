@@ -43,7 +43,17 @@ pub struct Config {
     pub canvas: Canvas,
     pub editor: Editor,
     pub browser: Browser,
+    pub join: Join,
     pub ui: Ui,
+}
+
+/// `ift join` (#423): whether this app opens the socket a viewer on another
+/// Mac reaches through ssh. On by default; the socket is owner-only, like the
+/// one `ift send` uses.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Join {
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -439,6 +449,7 @@ pub fn default_config() -> Config {
             cursor_color: String::new(),
             wrap: Wrap::Prose,
         },
+        join: Join { enabled: true },
         browser: Browser {
             zoom: 1.,
             search_engine: crate::omni::address::SEARCH_TEMPLATE.into(),
@@ -620,6 +631,7 @@ pub fn merge_config(raw: &Value) -> Config {
     let v = group(r, "canvas");
     let e = group(r, "editor");
     let b = group(r, "browser");
+    let j = group(r, "join");
 
     Config {
         theme: match r.get("theme").and_then(Value::as_str) {
@@ -707,6 +719,9 @@ pub fn merge_config(raw: &Value) -> Config {
                     ("never", Wrap::Never),
                 ],
             ),
+        },
+        join: Join {
+            enabled: bool_(j.get("enabled"), d.join.enabled),
         },
         browser: Browser {
             zoom: num(
@@ -880,6 +895,15 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn joining_is_on_unless_switched_off() {
+        assert!(default_config().join.enabled);
+        let c = merge_config(&serde_json::json!({"join.enabled": false}));
+        assert!(!c.join.enabled);
+        let nested = merge_config(&serde_json::json!({"join": {"enabled": false}}));
+        assert!(!nested.join.enabled);
+    }
 
     #[test]
     fn the_browser_group_carries_the_omnibox_settings() {
