@@ -412,22 +412,26 @@ impl DaemonBackend {
         self.relay.clone()
     }
 
-    /// Writes keys a viewer sent to the session they were typed for. The same
-    /// path as the host's own keys: one connection to iftd, whole frames
-    /// serialised by the pane's stream lock, so a host key and a viewer key
-    /// never interleave inside a frame. A session this backend does not hold
-    /// is ignored.
-    pub fn write_session_now(&self, session_id: &str, bytes: &[u8]) {
-        let pane = self
-            .panes
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|(_, p)| p.session_id == session_id)
-            .map(|(id, _)| *id);
-        if let Some(pane) = pane {
-            self.write_now(pane, bytes);
-        }
+    /// Writes keys a viewer sent to the session they were typed for, from any
+    /// thread. The same path as the host's own keys: one connection to iftd,
+    /// whole frames serialised by the pane's stream lock, so a host key and a
+    /// viewer key never interleave inside a frame. A session this backend does
+    /// not hold is ignored. Not through the app's poll, which would add up to
+    /// 16 ms to every viewer keystroke.
+    pub fn session_writer(&self) -> super::join::WriteSession {
+        let panes = self.panes.clone();
+        Arc::new(move |session_id: &str, bytes: &[u8]| {
+            let stream = panes
+                .lock()
+                .unwrap()
+                .values()
+                .find(|p| p.session_id == session_id)
+                .map(|p| p.stream.clone());
+            if let Some(stream) = stream {
+                let mut s = stream.lock().unwrap();
+                let _ = s.write_all(&Frame::Data(bytes.to_vec()).encode());
+            }
+        })
     }
 
     pub fn write_now(&self, pane: PaneId, bytes: &[u8]) {
