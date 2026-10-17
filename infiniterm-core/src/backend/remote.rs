@@ -177,7 +177,8 @@ pub fn list_sessions(host: &RemoteHost) -> std::io::Result<Vec<String>> {
 pub const INSTALL_DIRS: [&str; 3] = [
     "$HOME/.local/bin",
     "/usr/local/bin",
-    "/Applications/infiniterm.app/Contents/MacOS",
+    // Overridable so a test host can hide the app a developer's Mac has.
+    "${INFINITERM_APP_DIR:-/Applications/infiniterm.app/Contents/MacOS}",
 ];
 
 /// The script `check` runs on the server: `ift` is there (on the PATH or in
@@ -816,7 +817,10 @@ mod tests {
             .arg("-c")
             // Only the home-based folders: a Mac that has infiniterm installed
             // would otherwise find its own `ift` in the app folder.
-            .arg(check_command_in(ift, &["$HOME/.local/bin", "/usr/local/bin"]))
+            .arg(check_command_in(
+                ift,
+                &["$HOME/.local/bin", "/usr/local/bin"],
+            ))
             .env_clear()
             .env("HOME", home)
             .env("PATH", "/usr/bin:/bin")
