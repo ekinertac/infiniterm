@@ -77,6 +77,7 @@ Several cards can be selected at once, and close, split, fit and group then act 
 - Drag on empty canvas to draw a selection rectangle. Every card it touches is selected, and the card nearest where the drag started gets the focus. `Shift` + drag adds to the selection, and `Escape` during the drag puts the previous selection back. A click without a drag deselects.
 - `Cmd` + click a card to add it, or a selected card to take it out. On the one card you are in, `Cmd` + click still opens links.
 - `Shift` + click on a card's body, label or frame also adds it or takes it out.
+- `Cmd A` selects every card of the workspace ("Focus: select every card" in the palette). In a locked editor or browser card `Cmd A` stays the text's or the page's.
 - `Cmd Shift` + arrow extends the selection to the neighbour.
 - Dragging any selected card by its frame or label moves the whole selection.
 - `Cmd Alt Shift` + arrow moves the whole selection one block that way, as one piece: into free space, or trading places with the cards there. It refuses, with a notice, when that would split a card or land in another group. `Cmd Z` undoes it in one step.
@@ -89,7 +90,7 @@ A group is a named frame around a set of cards: `Cmd G` groups the focused card,
 
 A workspace is a separate canvas with a tab in the title bar. `Cmd Shift N` makes one, `Ctrl 1` to `Ctrl 9` jump to one, `Cmd Shift [` and `Cmd Shift ]` step. Each tab wears one dot per card, in the cards' reading order, lit in the card's state colour, so you can see from another workspace that something there wants you.
 
-Drag a tab onto another tab to put it in that place. From the keyboard, "Workspace: move this tab left" and "move this tab right" in the palette do the same. The order is saved, and `Ctrl 1` to `Ctrl 9` follow it.
+Drag a tab onto another tab to put it in that place: a vertical line shows where it will land, at the left edge of the tab you are over when you drag left and at its right edge when you drag right. Dragging a tab does not move the window. Double-click a tab's name to rename the workspace. Ctrl+Cmd+drag, the system's way to move a window by its body, no longer moves the main window. From the keyboard, "Workspace: move this tab left" and "move this tab right" in the palette do the same. The order is saved, and `Ctrl 1` to `Ctrl 9` follow it.
 
 With `"ui.workspaceIsolation": true`, `Ctrl Tab` walks only the current workspace's cards and the status bar counts only them; the palette still lists every card, so it stays the way across.
 
@@ -109,14 +110,16 @@ A page needs the keyboard for itself, so a browser card works like a locked edit
 
 Right-click opens the native macOS menu, with each command's shortcut at the right edge and the rows that cannot run now greyed. What it holds depends on where you click:
 
-- **A terminal**: Copy, Paste, Find…, Search the Web for Selection, Split Right and Down, New (Terminal, Editor, Browser…, Claude Code), Clear Buffer, Show Transcript, Rename…, Protect, Mask, Size, Move to Workspace… and Close.
-- **A card's frame or label**: Rename…, Group…, Protect, Clear State Colour, Size, Move to Workspace…, the splits, New and Close.
-- **Bare canvas**: New, Fit All Cards, Actual Size, Tidy into a Block, Command Palette…, Settings and Keyboard Shortcuts.
+- **A terminal**: Copy, Paste, Find…, Search the Web for Selection, Clear Buffer and Show Transcript, then the card rows below.
+- **An editor**: Save, Find…, Go to Line…, Transform (every text transform), Show File Tree and Blame, then the card rows below.
+- **A card's frame or label**: the card rows below. A click on a terminal's or an editor's frame or label opens the same menu as a click in its text.
+- **Bare canvas**: New, Select All Cards, Undo Layout, Redo Layout, Reopen Closed Card, Fit All Cards, Actual Size, Tidy into a Block, Command Palette…, Settings and Keyboard Shortcuts.
 - **A workspace tab** (the click does not switch to it): Rename…, New Workspace, Move Left, Move Right and Close Workspace.
-- **An editor**: Save, Find…, Go to Line…, Transform (every text transform), Show File Tree, Blame, Rename…, Size and Close.
 - **A file or folder in an editor's tree**: the row lights up while the menu is open. Open, Reveal in Finder, Copy Path and Copy Relative Path.
 - **A tab of an editor or browser card**: switches to that tab, then New Tab, Close Tab and Reopen Closed Tab. A browser tab also has Reload, Copy Address and Open in System Browser.
 - **A browser page**: Back and Forward when there is somewhere to go, Reload, Cut, Copy and Paste where they apply, and Open Page in System Browser. On a link: Copy Link Address, Open Link in New Tab, Open Link in New Card and Open Link in System Browser.
+
+The card rows end the menu of a terminal, an editor and a card's frame or label, in this order: Split Right, Split Down, New, Group…, Size, Move to Workspace…, Canvas (Fit Card, Fit Selection, Fit All Cards, Actual Size, Tidy into a Block, Select All Cards), Rename…, Protect, Mask (terminals only), Clear State Colour and Close.
 
 With several cards selected, a right-click on one of them keeps the selection and opens a menu for all of them: Group, Protect, Clear State Colour, Fit Selection, Move to Workspace… and Close. Rename, Split and Size are left out, since they are for one card. A right-click on a card outside the selection selects that card alone.
 
