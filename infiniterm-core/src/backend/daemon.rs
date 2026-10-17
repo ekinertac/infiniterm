@@ -311,7 +311,10 @@ impl DaemonBackend {
         let (mut stream, stderr) = match super::remote::connect_join(host, session_id) {
             Ok(c) => c,
             Err(why) => {
-                eprintln!("[infiniterm] could not join {session_id}: {why}");
+                eprintln!(
+                    "[infiniterm] could not join {session_id}: {}",
+                    why.message()
+                );
                 return None;
             }
         };

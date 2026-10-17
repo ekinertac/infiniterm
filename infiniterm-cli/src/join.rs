@@ -105,8 +105,14 @@ pub fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     }
+    // A host that cannot be joined is said so here, once, before a window
+    // opens: a viewer that cannot connect has nothing to show.
+    if let Err(why) = remote::probe_join(&host) {
+        eprintln!("ift: {}", why.message());
+        return ExitCode::from(1);
+    }
     if p.check_only {
-        println!("{}: ready (ift is installed)", p.host);
+        println!("{}: ready (infiniterm is running there and can be joined)", p.host);
         return ExitCode::SUCCESS;
     }
 

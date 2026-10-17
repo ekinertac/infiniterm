@@ -396,33 +396,120 @@ pub fn connect(
 /// Joins one card of the host's running canvas (#423): the same splice, to
 /// `ift proxy join session <id>`, with the host's answer line read and checked
 /// before anything else, so the caller's next read is the host's `Hello`.
-pub fn connect_join(host: &RemoteHost, id: &str) -> Result<(UnixStream, SshStderr), String> {
+pub fn connect_join(host: &RemoteHost, id: &str) -> Result<(UnixStream, SshStderr), JoinFailure> {
     connect_join_with(host, join_command(&host.ift, id))
 }
 
 /// Joins the host's canvas: its layout and agent states (#423).
-pub fn connect_join_canvas(host: &RemoteHost) -> Result<(UnixStream, SshStderr), String> {
+pub fn connect_join_canvas(host: &RemoteHost) -> Result<(UnixStream, SshStderr), JoinFailure> {
     connect_join_with(host, join_canvas_command(&host.ift))
+}
+
+/// Whether the host can be joined right now: one canvas handshake, closed at
+/// once. What `ift join` asks before it opens a window (#423).
+pub fn probe_join(host: &RemoteHost) -> Result<(), JoinFailure> {
+    connect_join_canvas(host).map(|_| ())
+}
+
+/// Why joining a host failed, and whether trying again can help (#423).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JoinFailure {
+    /// The connection itself failed (ssh down, a timeout, a reset): it can
+    /// work later, so the viewer tries again.
+    Retry(String),
+    /// The host answered, and waiting will not change what it said: an `ift`
+    /// too old to join, a version it refuses, no app running there, a login
+    /// that was refused. A person has to do something, so the viewer says so
+    /// once and does not retry.
+    Fatal(String),
+}
+
+impl JoinFailure {
+    pub fn message(&self) -> &str {
+        match self {
+            JoinFailure::Retry(m) | JoinFailure::Fatal(m) => m,
+        }
+    }
+}
+
+/// What came back where the host's answer line should be.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    /// A line.
+    Line(String),
+    /// The connection ended first (ssh exited, the remote command failed).
+    Closed,
+    /// Nothing within the wait.
+    TimedOut,
+    /// More than a line's worth of bytes with no line end.
+    Unreadable,
+}
+
+/// What ssh says when the CONNECTION is what failed, in the words OpenSSH
+/// uses. Matched in lower case anywhere in its stderr.
+const CONNECTION_WORDS: [&str; 11] = [
+    "connection refused",
+    "connection timed out",
+    "operation timed out",
+    "connection reset",
+    "connection closed",
+    "network is unreachable",
+    "no route to host",
+    "could not resolve hostname",
+    "broken pipe",
+    "host is down",
+    "kex_exchange_identification",
+];
+
+/// Decides whether a failed handshake is worth another try. Pure, so the rule
+/// is tested without ssh: only a real connection failure retries; anything the
+/// host itself said (or its ssh refused) is fatal, with a sentence.
+pub fn classify_join_failure(target: &str, answer: &Answer, stderr: &str) -> JoinFailure {
+    match answer {
+        Answer::Line(line) => match check_join_answer(line) {
+            // The host's own sentence, or the line it did say.
+            Err(why) if line.trim_start().starts_with("ift-join ") => JoinFailure::Fatal(why),
+            _ => JoinFailure::Fatal(format!(
+                "{target} has an ift that cannot be joined (it did not answer as ift-join); update infiniterm there"
+            )),
+        },
+        Answer::TimedOut => JoinFailure::Retry(format!("{target} did not answer in time")),
+        Answer::Unreadable => JoinFailure::Fatal(format!(
+            "{target} sent something that is not an answer; update infiniterm there"
+        )),
+        Answer::Closed => {
+            let said = stderr.trim();
+            let lower = said.to_lowercase();
+            if said.is_empty() {
+                JoinFailure::Retry(format!("{target} closed the connection before it answered"))
+            } else if CONNECTION_WORDS.iter().any(|w| lower.contains(w)) {
+                JoinFailure::Retry(said.lines().last().unwrap_or(said).to_string())
+            } else {
+                JoinFailure::Fatal(said.lines().last().unwrap_or(said).to_string())
+            }
+        }
+    }
 }
 
 fn connect_join_with(
     host: &RemoteHost,
     command: String,
-) -> Result<(UnixStream, SshStderr), String> {
-    let (mut stream, stderr) =
-        connect_command(host, command).map_err(|e| format!("could not run {}: {e}", host.ssh))?;
-    let line = read_line(&mut stream, JOIN_ANSWER_WAIT)?;
-    match check_join_answer(&line) {
-        Ok(()) => Ok((stream, stderr)),
-        Err(why) => {
-            // ssh may have said why before the host closed.
+) -> Result<(UnixStream, SshStderr), JoinFailure> {
+    let (mut stream, stderr) = connect_command(host, command)
+        .map_err(|e| JoinFailure::Fatal(format!("could not run {}: {e}", host.ssh)))?;
+    match read_line(&mut stream, JOIN_ANSWER_WAIT) {
+        Ok(line) => match check_join_answer(&line) {
+            Ok(()) => Ok((stream, stderr)),
+            Err(_) => Err(classify_join_failure(
+                &host.target,
+                &Answer::Line(line),
+                &stderr.text(),
+            )),
+        },
+        Err(answer) => {
+            // ssh may say why a moment after the stream ends.
             std::thread::sleep(std::time::Duration::from_millis(150));
-            let said = stderr.text();
-            Err(if said.is_empty() {
-                why
-            } else {
-                format!("{why} ({said})")
-            })
+            Err(classify_join_failure(&host.target, &answer, &stderr.text()))
         }
     }
 }
@@ -432,19 +519,25 @@ const JOIN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(20)
 
 /// One line, a byte at a time, so nothing after it is taken from the frames
 /// that follow. Bounded: a line over 256 bytes is not an answer.
-fn read_line(stream: &mut UnixStream, wait: std::time::Duration) -> Result<String, String> {
-    stream
-        .set_read_timeout(Some(wait))
-        .map_err(|e| e.to_string())?;
+fn read_line(stream: &mut UnixStream, wait: std::time::Duration) -> Result<String, Answer> {
+    stream.set_read_timeout(Some(wait)).map_err(|_| Answer::Closed)?;
     let mut line = Vec::new();
     let mut b = [0u8; 1];
     loop {
         match stream.read(&mut b) {
-            Ok(0) => return Err("the host closed the connection before it answered".into()),
+            Ok(0) => return Err(Answer::Closed),
             Ok(_) if b[0] == b'\n' => break,
             Ok(_) if line.len() < 256 => line.push(b[0]),
-            Ok(_) => return Err("the host's answer was not a line".into()),
-            Err(e) => return Err(format!("the host did not answer: {e}")),
+            Ok(_) => return Err(Answer::Unreadable),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err(Answer::TimedOut)
+            }
+            Err(_) => return Err(Answer::Closed),
         }
     }
     let _ = stream.set_read_timeout(None);
@@ -564,6 +657,53 @@ mod tests {
         let err = check_join_answer("bash: ift: command not found").unwrap_err();
         assert!(err.contains("did not answer as ift-join"), "{err}");
         assert!(check_join_answer("").is_err());
+    }
+
+    #[test]
+    fn only_a_real_connection_failure_is_worth_another_try() {
+        use Answer::*;
+        let t = "ekin-mini";
+        let retry = |a: &Answer, e: &str| matches!(classify_join_failure(t, a, e), JoinFailure::Retry(_));
+        // The connection failed: try again.
+        assert!(retry(&TimedOut, ""));
+        assert!(retry(&Closed, ""));
+        assert!(retry(&Closed, "ssh: connect to host ekin-mini port 22: Connection refused"));
+        assert!(retry(&Closed, "ssh: Could not resolve hostname ekin-mini: nodename nor servname"));
+        assert!(retry(&Closed, "Connection closed by 100.1.2.3 port 22"));
+        // The host (or its login) said no: a person has to act.
+        assert!(!retry(&Closed, "bash: ift: command not found"));
+        assert!(!retry(&Closed, "ekin@ekin-mini: Permission denied (publickey)."));
+        assert!(!retry(&Closed, "ift: no running infiniterm to join on this host (/x/j.sock): not found"));
+        assert!(!retry(&Unreadable, ""));
+    }
+
+    #[test]
+    fn a_host_that_cannot_be_joined_is_told_once_with_a_sentence() {
+        let t = "ekin-mini";
+        // An older ift: a shell error where the answer line should be.
+        let old = classify_join_failure(t, &Answer::Line("ift: unknown command join".into()), "");
+        assert_eq!(
+            old,
+            JoinFailure::Fatal(
+                "ekin-mini has an ift that cannot be joined (it did not answer as ift-join); update infiniterm there"
+                    .into()
+            )
+        );
+        // The host's own refusal is shown as it is.
+        let newer = classify_join_failure(
+            t,
+            &Answer::Line("ift-join 1 error this host speaks ift-join 1 and you asked for 2; update infiniterm on the host".into()),
+            "",
+        );
+        assert_eq!(
+            newer,
+            JoinFailure::Fatal(
+                "this host speaks ift-join 1 and you asked for 2; update infiniterm on the host".into()
+            )
+        );
+        // Of a failed connection, the last line ssh said.
+        let last = classify_join_failure(t, &Answer::Closed, "warning: x\nbash: ift: command not found");
+        assert_eq!(last, JoinFailure::Fatal("bash: ift: command not found".into()));
     }
 
     #[test]

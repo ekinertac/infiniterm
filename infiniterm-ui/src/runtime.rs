@@ -858,6 +858,10 @@ impl AppView {
                 }
                 CanvasEvent::Agents(text) => self.model.apply_agent_states(&text),
                 CanvasEvent::Status(text) => self.model.notify(&text),
+                CanvasEvent::Fatal(text) => {
+                    eprintln!("[infiniterm] {text}");
+                    self.model.notify(&text);
+                }
             }
         }
     }

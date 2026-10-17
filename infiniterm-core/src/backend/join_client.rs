@@ -14,7 +14,7 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 
 use super::join::{read_canvas_message, KIND_AGENTS, KIND_LAYOUT};
-use super::remote::{connect_join_canvas, RemoteHost};
+use super::remote::{connect_join_canvas, JoinFailure, RemoteHost};
 
 /// What the app is told about the host's canvas.
 #[derive(Debug, PartialEq, Eq)]
@@ -25,6 +25,10 @@ pub enum CanvasEvent {
     Agents(String),
     /// Something a person should read: connected, lost, refused.
     Status(String),
+    /// The host cannot be joined and waiting will not change that (an `ift`
+    /// too old, a version refused, no app there, a login refused). Said once;
+    /// the client has stopped.
+    Fatal(String),
 }
 
 /// How long to wait before joining again after the connection ended or could
@@ -81,7 +85,11 @@ pub fn run_canvas_client(host: RemoteHost, tx: Sender<CanvasEvent>) {
                     return;
                 }
             }
-            Err(why) => {
+            Err(JoinFailure::Fatal(why)) => {
+                let _ = tx.send(CanvasEvent::Fatal(why));
+                return;
+            }
+            Err(JoinFailure::Retry(why)) => {
                 if tx
                     .send(CanvasEvent::Status(format!("{}: {why}", host.target)))
                     .is_err()
