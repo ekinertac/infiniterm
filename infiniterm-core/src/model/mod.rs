@@ -691,6 +691,15 @@ pub struct Model {
     pub first_run: bool,
     pub read_only: bool,
     pub dirty_layout: bool,
+    /// A viewer's cards that are NOT terminals (#423, `ift join`): the host's
+    /// editor, diff, browser, transcript and page cards, whose files and pages
+    /// live on the host. They are never cards here (no body, no file read, no
+    /// page load: a viewer must not open a path on its own Mac and show it as
+    /// the host's), only a slot painted with "<kind> on <host>".
+    pub remote_cards: Vec<RemoteCard>,
+    /// A viewer has applied at least one host snapshot, so its viewport,
+    /// zoom, focus and workspace are its own from here on.
+    pub snapshot_seen: bool,
     pub config: Config,
     pub keymap: Keymap,
     /// Bindings with a `when` from keybindings.json (#269); the last one whose
@@ -742,6 +751,16 @@ pub struct Model {
 pub struct ConfigPair {
     pub ids: Vec<String>,
     pub return_to: Option<String>,
+}
+
+/// A host card a viewer shows as a slot only (`Model::remote_cards`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteCard {
+    pub id: String,
+    pub workspace_id: String,
+    pub rect: Rect,
+    pub title: String,
+    pub kind: crate::saved_layout::CardKind,
 }
 
 pub fn new_id() -> String {
@@ -809,6 +828,8 @@ impl Model {
             first_run: false,
             read_only: false,
             dirty_layout: false,
+            remote_cards: vec![],
+            snapshot_seen: false,
             config: default_config(),
             keymap: default_keymap(),
             conditional_keys: vec![],

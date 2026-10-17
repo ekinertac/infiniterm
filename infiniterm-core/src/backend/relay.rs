@@ -44,14 +44,32 @@ struct Session {
 }
 
 /// Every session the host is relaying, by its id (the daemon's session id).
-#[derive(Default)]
 pub struct Relay {
     sessions: HashMap<String, Session>,
+    /// Off when no join server runs (`join.enabled` is off, or this window is
+    /// a viewer): the tap then keeps nothing, so a host that never serves
+    /// viewers does not hold a 256 KiB ring per session for no one.
+    enabled: bool,
+}
+
+impl Default for Relay {
+    fn default() -> Relay {
+        Relay::new()
+    }
 }
 
 impl Relay {
     pub fn new() -> Relay {
-        Relay::default()
+        Relay {
+            sessions: HashMap::new(),
+            enabled: true,
+        }
+    }
+
+    /// Stops (or resumes) keeping what the tap is given. Output already kept
+    /// stays; nothing new is added while it is off.
+    pub fn set_enabled(&mut self, on: bool) {
+        self.enabled = on;
     }
 
     /// Starts relaying a session. `hello` is the host's pid and size for it,
@@ -86,6 +104,9 @@ impl Relay {
     /// for viewers that join later, sent to nobody now. Without this a viewer
     /// joining a session the host just adopted would see an empty screen.
     pub fn seed(&mut self, id: &str, bytes: &[u8]) {
+        if !self.enabled {
+            return;
+        }
         if let Some(s) = self.sessions.get_mut(id) {
             s.ring.push(bytes);
         }
@@ -95,6 +116,9 @@ impl Relay {
     /// viewers and sent to every live viewer. A viewer whose queue is full is
     /// dropped here, not waited for.
     pub fn publish(&mut self, id: &str, bytes: &[u8]) {
+        if !self.enabled {
+            return;
+        }
         let Some(s) = self.sessions.get_mut(id) else {
             return;
         };
@@ -303,5 +327,17 @@ mod tests {
         assert!(frames
             .iter()
             .any(|f| matches!(f, Frame::Replay(b) if b.ends_with(b"from the daemon ring"))));
+    }
+
+    #[test]
+    fn a_relay_that_is_off_keeps_nothing() {
+        let mut r = Relay::new();
+        r.open("s", hello());
+        r.set_enabled(false);
+        r.publish("s", b"never kept");
+        r.seed("s", b"nor this");
+        let rx = r.subscribe("s").unwrap();
+        // Hello and the end of an empty replay: no bytes anywhere.
+        assert_eq!(drain(&rx), vec![hello(), Frame::ReplayEnd]);
     }
 }

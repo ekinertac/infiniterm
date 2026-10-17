@@ -20,6 +20,7 @@ use std::sync::mpsc::Receiver;
 
 pub mod daemon;
 pub mod join;
+pub mod join_client;
 pub mod local_pty;
 pub mod relay;
 pub mod remote;
@@ -92,6 +93,14 @@ impl Panes {
         buffer_mib: usize,
     ) -> (Panes, Receiver<(PaneId, PaneEvent)>, Option<String>) {
         match backend {
+            // A viewer window (`ift join`, #423): the cards are the host
+            // app's, reached through it, never through its `iftd`. No
+            // forward: the host's hooks have nothing to say to this window.
+            _ if remote::join_from_env().is_some() => {
+                let host = remote::join_from_env().expect("checked by the guard");
+                let (backend, rx) = daemon::DaemonBackend::new_viewer(host, buffer_mib);
+                (Panes::Daemon(backend), rx, None)
+            }
             // A remote instance (`ift connect`) runs its cards on the host
             // `INFINITERM_REMOTE` names, whatever the setting says, and needs no
             // `iftd` on THIS Mac: the daemons are on the server.
@@ -151,6 +160,15 @@ impl Panes {
     /// as keystrokes. See `TerminalBody::replies` and tmux bug 9.
     pub fn we_are_the_terminal(&self) -> bool {
         !matches!(self, Panes::Tmux(_))
+    }
+
+    /// The host's columns and rows for a viewer's pane (#423); `None` for any
+    /// other pane, whose size is its card's.
+    pub fn viewer_pane_size(&self, pane: PaneId) -> Option<(u16, u16)> {
+        match self {
+            Panes::Daemon(b) => b.viewer_pane_size(pane),
+            _ => None,
+        }
     }
 
     /// What the join server (#423) needs from this backend: the relay and a

@@ -37,8 +37,10 @@ const LIGHTNESS: f64 = 0.55;
 impl RemoteIdentity {
     pub fn from_env() -> Option<RemoteIdentity> {
         let var = |k: &str| std::env::var(k).ok();
+        // A viewer (`ift join`) wears the host's name and colour the same way.
+        let target = var("INFINITERM_REMOTE").or_else(|| var("INFINITERM_JOIN"));
         let mut id = RemoteIdentity::from_vars(
-            var("INFINITERM_REMOTE").as_deref(),
+            target.as_deref(),
             var("INFINITERM_REMOTE_NAME").as_deref(),
             var("INFINITERM_REMOTE_COLOR").as_deref(),
         )?;
