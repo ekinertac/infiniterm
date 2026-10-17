@@ -92,9 +92,52 @@ pub fn reordered(order: &[String], id: &str, to: usize) -> Option<Vec<String>> {
     Some(next)
 }
 
+/// Which edge of the tab being hovered the dragged tab will sit against when
+/// dropped (#417). Dropping takes the hovered tab's place (`reordered`), so a
+/// tab dragged LEFT lands before it and one dragged RIGHT lands after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropSide {
+    Left,
+    Right,
+}
+
+/// The edge to draw the drop line on for a tab dragged from index `from` and
+/// held over the tab at `over`; `None` over the dragged tab itself, where
+/// nothing would move.
+pub fn drop_side(from: usize, over: usize) -> Option<DropSide> {
+    use std::cmp::Ordering;
+    match over.cmp(&from) {
+        Ordering::Less => Some(DropSide::Left),
+        Ordering::Greater => Some(DropSide::Right),
+        Ordering::Equal => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_drop_line_is_on_the_side_the_tab_will_land() {
+        assert_eq!(
+            drop_side(3, 1),
+            Some(DropSide::Left),
+            "dragged left: before"
+        );
+        assert_eq!(
+            drop_side(1, 3),
+            Some(DropSide::Right),
+            "dragged right: after"
+        );
+        assert_eq!(drop_side(2, 2), None, "over itself nothing moves");
+        // It agrees with what the drop does.
+        let order: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
+        let moved = reordered(&order, "d", 1).unwrap();
+        assert_eq!(moved, ["a", "d", "b", "c"], "d lands before b: left edge");
+        let moved = reordered(&order, "a", 2).unwrap();
+        assert_eq!(moved, ["b", "c", "a", "d"], "a lands after c: right edge");
+    }
+
     fn ids(s: &[&str]) -> Vec<String> {
         s.iter().map(|s| s.to_string()).collect()
     }

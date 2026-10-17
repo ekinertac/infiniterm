@@ -660,12 +660,19 @@ impl AppView {
                 .collect();
             let id = ws.id.clone();
             let menu_id = ws.id.clone();
+            let drop_line = chrome.text_bright;
             let mut tab = div()
                 .id(gpui::SharedString::from(format!("tab-{}", ws.id)))
                 .flex()
                 .items_center()
                 .gap_1()
-                .px_2()
+                // The side borders are always there (clear) so the drop line
+                // appears without moving the tabs: 2 px border + 6 px padding
+                // is the 8 px of `px_2`.
+                .border_l_2()
+                .border_r_2()
+                .border_color(gpui::transparent_black())
+                .px(px(6.))
                 .py_1()
                 .rounded_sm()
                 .text_size(px(tab_font_px))
@@ -688,6 +695,7 @@ impl AppView {
                 .on_drag(
                     crate::tab_drag::DraggedTab {
                         id: ws.id.clone(),
+                        from: index,
                         name: ws.name.clone(),
                         font_family: chrome.typography.family.clone().into(),
                         font_weight: chrome.typography.bold.weight,
@@ -697,8 +705,18 @@ impl AppView {
                     },
                     |dragged, _, _, cx| cx.new(|_| crate::tab_drag::TabGhost(dragged.clone())),
                 )
-                .drag_over::<crate::tab_drag::DraggedTab>(move |style, _, _, _| {
-                    style.bg(chosen_fill)
+                // A line at the edge where the dragged tab will sit after the
+                // drop, not a fill on the tab under it (#417).
+                .drag_over::<crate::tab_drag::DraggedTab>(move |style, dragged, _, _| {
+                    match infiniterm_core::workspaces::drop_side(dragged.from, index) {
+                        Some(infiniterm_core::workspaces::DropSide::Left) => {
+                            style.border_l_2().border_color(drop_line)
+                        }
+                        Some(infiniterm_core::workspaces::DropSide::Right) => {
+                            style.border_r_2().border_color(drop_line)
+                        }
+                        None => style,
+                    }
                 })
                 .on_drop(
                     cx.listener(move |this, dragged: &crate::tab_drag::DraggedTab, _, cx| {
