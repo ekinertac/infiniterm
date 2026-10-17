@@ -66,12 +66,26 @@ impl Relay {
     }
 
     /// The host's size changed (its own window resized the pty). Viewers that
-    /// join from now on are told this size.
-    pub fn set_size(&mut self, id: &str, cols: u16, rows: u16) {
+    /// join from now on are told this size in the hello, and the viewers
+    /// already joined get a `Resize` frame; they apply it to their grid and
+    /// never send one back.
+    pub fn resize(&mut self, id: &str, cols: u16, rows: u16) {
+        let Some(s) = self.sessions.get_mut(id) else {
+            return;
+        };
+        if let Frame::Hello { pid, .. } = s.hello {
+            s.hello = Frame::Hello { pid, cols, rows };
+        }
+        s.viewers
+            .retain(|tx| tx.try_send(Frame::Resize { cols, rows }).is_ok());
+    }
+
+    /// Bytes the host itself was replayed on attach (the daemon's ring): kept
+    /// for viewers that join later, sent to nobody now. Without this a viewer
+    /// joining a session the host just adopted would see an empty screen.
+    pub fn seed(&mut self, id: &str, bytes: &[u8]) {
         if let Some(s) = self.sessions.get_mut(id) {
-            if let Frame::Hello { pid, .. } = s.hello {
-                s.hello = Frame::Hello { pid, cols, rows };
-            }
+            s.ring.push(bytes);
         }
     }
 
@@ -237,8 +251,33 @@ mod tests {
     fn a_viewer_joining_after_a_resize_is_told_the_new_size() {
         let mut r = Relay::new();
         r.open("s", hello());
-        r.set_size("s", 120, 40);
+        r.resize("s", 120, 40);
         let rx = r.subscribe("s").unwrap();
         assert_eq!(drain(&rx)[0], Frame::Hello { pid: 42, cols: 120, rows: 40 });
+    }
+
+    #[test]
+    fn viewers_already_joined_are_told_when_the_host_resizes() {
+        let mut r = Relay::new();
+        r.open("s", hello());
+        let rx = r.subscribe("s").unwrap();
+        drain(&rx);
+        r.resize("s", 100, 30);
+        assert_eq!(drain(&rx), vec![Frame::Resize { cols: 100, rows: 30 }]);
+    }
+
+    #[test]
+    fn seeded_bytes_reach_a_later_viewer_but_no_live_one() {
+        let mut r = Relay::new();
+        r.open("s", hello());
+        let early = r.subscribe("s").unwrap();
+        drain(&early);
+        r.seed("s", b"from the daemon ring");
+        assert!(drain(&early).is_empty(), "seed is not live output");
+        let late = r.subscribe("s").unwrap();
+        let frames = drain(&late);
+        assert!(frames.iter().any(
+            |f| matches!(f, Frame::Replay(b) if b.ends_with(b"from the daemon ring"))
+        ));
     }
 }
