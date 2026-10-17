@@ -47,6 +47,9 @@ ift — drive infiniterm from a shell
                              below is taken as one); its directory must
                              exist
   ift -n <path>              a file in a card of its own, returning at once
+  ift -t <path> [card]       a file as a tab of an editor card: the card's
+                             number (2 or #2) or id, else the focused editor
+                             card, else a card of its own
   ift diff [path]            changes against git HEAD, as a card: a tree of the
                              changed files under path (the current directory
                              without one) and each file's diff
@@ -240,6 +243,13 @@ fn main() -> ExitCode {
             Some(p) => open_path(p, false),
             None => {
                 eprintln!("ift: -n takes a path");
+                ExitCode::from(2)
+            }
+        },
+        Some("-t") => match tab_args(&args) {
+            Some((path, card)) => open_tab(path, card),
+            None => {
+                eprintln!("ift: -t takes a path and optionally a card");
                 ExitCode::from(2)
             }
         },
@@ -513,6 +523,34 @@ fn send(cmd: &str, args: Vec<String>) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// `ift -t <path> [card]`: the path right after `-t` and the card after it.
+fn tab_args(args: &[String]) -> Option<(&str, Option<&str>)> {
+    let path = args.get(1).map(String::as_str).filter(|p| !p.is_empty())?;
+    Some((path, args.get(2).map(String::as_str).filter(|c| !c.is_empty())))
+}
+
+/// `ift -t`: the file is resolved here, where the working directory is, and
+/// the app puts it in a tab (#265). A directory is not a tab.
+fn open_tab(arg: &str, card: Option<&str>) -> ExitCode {
+    let (path, _line) = split_line(arg);
+    let full = match resolve(path) {
+        Ok(full) => full,
+        Err(e) => {
+            eprintln!("ift: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if full.is_dir() {
+        eprintln!("ift: -t takes a file, not a directory: {}", full.display());
+        return ExitCode::from(2);
+    }
+    let mut args = vec![full.to_string_lossy().into_owned()];
+    if let Some(card) = card {
+        args.push(card.to_string());
+    }
+    send("tab", args)
 }
 
 /// The path after `-n`. `args` already left the program name out, so it
@@ -955,6 +993,19 @@ fn install_extension(source: Option<&str>) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `ift -t <file> [card]`: the file right after `-t`, then the card.
+    #[test]
+    fn tab_takes_a_path_and_an_optional_card() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            tab_args(&a(&["-t", "src/main.rs", "#2"])),
+            Some(("src/main.rs", Some("#2")))
+        );
+        assert_eq!(tab_args(&a(&["-t", "a.rs"])), Some(("a.rs", None)));
+        assert_eq!(tab_args(&a(&["-t"])), None);
+        assert_eq!(tab_args(&a(&["-t", ""])), None);
+    }
 
     // `ift -n <file>`: the path is the argument right after `-n`.
     #[test]
