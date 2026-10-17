@@ -12,6 +12,7 @@ use crate::fonts::UiTypography;
 use gpui::{rgb, Hsla, Rgba};
 use infiniterm_core::config::Ui;
 use infiniterm_core::itermcolors::Theme;
+use infiniterm_core::theme_file::{BarTheme, BorderSpec, ColorSpec};
 
 /// A one-device-pixel line: the thinnest gpui draws crisply. Every card
 /// body's hairline dividers and 1px outlines share this so they read as one
@@ -388,6 +389,45 @@ pub fn with_alpha(c: Hsla, a: f32) -> Hsla {
     Hsla { a, ..c }
 }
 
+/// A bar's ground and edge once theme.json (#425) has had its say. `bg` is
+/// the colour the bar would wear without the file (the title bar's may be a
+/// window-colour tint); `border` is `None` when the file asks for none.
+pub struct BarStyle {
+    pub bg: Hsla,
+    pub border: Option<Hsla>,
+}
+
+impl Chrome {
+    /// A theme.json colour as a paint colour. Tokens are read from the live
+    /// chrome, so "canvas" follows the canvas rather than freezing it. An
+    /// unparseable hex cannot reach here (`theme_file::parse` checked it).
+    pub fn theme_color(&self, spec: &ColorSpec) -> Hsla {
+        match spec {
+            ColorSpec::Hex(s) => hex(s).unwrap_or(self.bar_bg),
+            ColorSpec::Canvas => self.canvas_bg,
+            ColorSpec::Card => self.card_bg,
+            ColorSpec::Bar => self.bar_bg,
+            ColorSpec::Transparent => with_alpha(self.canvas_bg, 0.),
+        }
+    }
+
+    /// `default_bg` and `bar_border` are what the bar wears with no theme
+    /// file. The file wins over a window-colour tint, for the ground only.
+    pub fn bar_style(&self, theme: &BarTheme, default_bg: Hsla) -> BarStyle {
+        BarStyle {
+            bg: theme
+                .background
+                .as_ref()
+                .map_or(default_bg, |c| self.theme_color(c)),
+            border: match &theme.border {
+                None => Some(self.bar_border),
+                Some(BorderSpec::None) => None,
+                Some(BorderSpec::Color(c)) => Some(self.theme_color(c)),
+            },
+        }
+    }
+}
+
 impl Chrome {
     /// The first paint's palette, before any theme is read: the literals the
     /// reference paints before its stylesheet exists.
@@ -606,5 +646,49 @@ mod tab_color_tests {
         assert_ne!(green.bar, chrome.bar_bg);
         assert_eq!(green.idle_text, chrome.text);
         assert_eq!(green.idle_faint, chrome.text_muted);
+    }
+
+    #[test]
+    fn no_theme_file_leaves_a_bar_as_it_was() {
+        let chrome = Chrome::default_chrome();
+        let s = chrome.bar_style(&BarTheme::default(), chrome.bar_bg);
+        assert_eq!(s.bg, chrome.bar_bg);
+        assert_eq!(s.border, Some(chrome.bar_border));
+    }
+
+    #[test]
+    fn the_flat_look_takes_the_canvas_and_drops_the_border() {
+        let chrome = Chrome::default_chrome();
+        let theme = BarTheme {
+            background: Some(ColorSpec::Canvas),
+            border: Some(BorderSpec::None),
+        };
+        let s = chrome.bar_style(&theme, chrome.bar_bg);
+        assert_eq!(s.bg, chrome.canvas_bg);
+        assert_eq!(s.border, None);
+    }
+
+    // The file wins over a window-colour tint, so a flat bar stays flat.
+    #[test]
+    fn a_themed_ground_beats_the_default_it_is_given() {
+        let chrome = Chrome::default_chrome();
+        let tinted = tint(chrome.bar_bg, (0x22, 0xaa, 0x44), 0.32);
+        let theme = BarTheme {
+            background: Some(ColorSpec::Hex("#102030".into())),
+            border: None,
+        };
+        let s = chrome.bar_style(&theme, tinted);
+        assert_eq!(s.bg, hex("#102030").unwrap());
+        let untouched = chrome.bar_style(&BarTheme::default(), tinted);
+        assert_eq!(untouched.bg, tinted);
+    }
+
+    #[test]
+    fn tokens_follow_the_live_chrome() {
+        let mut chrome = Chrome::default_chrome();
+        let before = chrome.theme_color(&ColorSpec::Card);
+        chrome.card_bg = hex("#ff0000").unwrap();
+        assert_ne!(chrome.theme_color(&ColorSpec::Card), before);
+        assert_eq!(chrome.theme_color(&ColorSpec::Transparent).a, 0.);
     }
 }
