@@ -106,6 +106,9 @@ pub struct TerminalBody {
     /// check in its reconcile. Once a second: a file read per displaced
     /// card, and a second's lag after Ctrl+\ is not felt.
     pub displaced: bool,
+    /// A viewer's card the host has not started a shell for yet shows a note
+    /// (#423); set once it is shown, cleared when the session arrives.
+    pub waiting_note: bool,
     pub readopt_due: f64,
     /// Bytes to write to the pty: the ui drains them after each event.
     pub outgoing: Vec<Vec<u8>>,
@@ -290,6 +293,7 @@ impl TerminalBody {
             autoscroll: 0.,
             drag_local: Point { x: 0., y: 0. },
             displaced: false,
+            waiting_note: false,
             readopt_due: 0.,
             outgoing: vec![],
             replies: vec![],

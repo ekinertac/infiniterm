@@ -43,8 +43,11 @@ use std::time::Duration;
 use super::relay::Relay;
 use super::session_protocol::{Frame, FrameReader};
 
-/// The version this host speaks. A higher one asked for is refused.
-pub const MAJOR: u32 = 1;
+/// The version this host speaks. A higher one asked for is refused. 2: a
+/// viewer can send its edits up (`KIND_UPDATE`); a host that speaks 1 refuses
+/// a viewer that asks for 2 with a sentence, so a viewer never believes it is
+/// in control of a host that would ignore it.
+pub const MAJOR: u32 = 2;
 
 /// The longest handshake line accepted: a topic is a word and a session id.
 const MAX_LINE: u64 = 256;
@@ -60,15 +63,52 @@ const WRITER_POLL: Duration = Duration::from_millis(200);
 /// Snapshots queued for one canvas viewer before it is dropped. Snapshots are
 /// whole, so a dropped viewer loses nothing but the wait: it reconnects and
 /// gets the latest.
-const CANVAS_QUEUE: usize = 4;
+const CANVAS_QUEUE: usize = 16;
 
 /// A canvas message's kinds: see the module header.
 pub const KIND_LAYOUT: u8 = b'L';
 pub const KIND_AGENTS: u8 = b'A';
+/// Host to viewer, right after every layout: the host's revision of it, as
+/// decimal text. A viewer's edit names the revision it was made on.
+pub const KIND_REVISION: u8 = b'V';
+/// Viewer to host: the canvas as the viewer now has it, `{"base": <revision>,
+/// "layout": "<the layout text>"}`. The host applies it in place unless the
+/// revision is stale (see `Model::apply_remote_layout`).
+pub const KIND_UPDATE: u8 = b'U';
+
+/// What a viewer sent up: the revision it edited, and the canvas it made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteUpdate {
+    pub base: u64,
+    pub layout: String,
+}
+
+/// A canvas message as bytes: the length of the text, the kind, the text.
+pub fn encode_canvas_message(kind: u8, text: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len() + 5);
+    out.extend_from_slice(&(text.len() as u32).to_be_bytes());
+    out.push(kind);
+    out.extend_from_slice(text.as_bytes());
+    out
+}
+
+/// The text of a `KIND_UPDATE` message: what `encode_canvas_message` carries.
+pub fn encode_update(base: u64, layout: &str) -> String {
+    serde_json::json!({ "base": base, "layout": layout }).to_string()
+}
+
+fn decode_update(text: &str) -> Option<RemoteUpdate> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    Some(RemoteUpdate {
+        base: v.get("base")?.as_u64()?,
+        layout: v.get("layout")?.as_str()?.to_string(),
+    })
+}
 
 #[derive(Default)]
 struct Canvas {
     latest_layout: Option<String>,
+    latest_rev: Option<u64>,
     latest_agents: Option<String>,
     clients: Vec<SyncSender<(u8, String)>>,
 }
@@ -108,25 +148,43 @@ pub struct JoinHub {
     relay: Arc<Mutex<Relay>>,
     write: WriteSession,
     canvas: Arc<Mutex<Canvas>>,
+    /// Where a viewer's edits go: the app takes the receiving end once
+    /// (`take_updates`) and applies them in its own poll, on its own thread.
+    updates_tx: std::sync::mpsc::Sender<RemoteUpdate>,
+    updates_rx: Arc<Mutex<Option<std::sync::mpsc::Receiver<RemoteUpdate>>>>,
 }
 
 impl JoinHub {
     pub fn new(relay: Arc<Mutex<Relay>>, write: WriteSession) -> JoinHub {
+        let (updates_tx, updates_rx) = std::sync::mpsc::channel();
         JoinHub {
             relay,
             write,
             canvas: Arc::new(Mutex::new(Canvas::default())),
+            updates_tx,
+            updates_rx: Arc::new(Mutex::new(Some(updates_rx))),
         }
+    }
+
+    /// The edits viewers send up, for the app to apply. Once: the second call
+    /// gets `None`.
+    pub fn take_updates(&self) -> Option<std::sync::mpsc::Receiver<RemoteUpdate>> {
+        self.updates_rx.lock().unwrap().take()
     }
 
     /// The host saved its layout: the snapshot every canvas viewer gets now
     /// and every later joiner gets first. A viewer too slow to keep up is
     /// dropped here, not waited for.
-    pub fn publish_layout(&self, text: &str) {
+    pub fn publish_layout(&self, text: &str, rev: u64) {
         let mut c = self.canvas.lock().unwrap();
         c.latest_layout = Some(text.to_string());
-        c.clients
-            .retain(|tx| tx.try_send((KIND_LAYOUT, text.to_string())).is_ok());
+        c.latest_rev = Some(rev);
+        // The layout, then its revision, in one pass under the lock: a viewer
+        // that gets one gets the other, and in this order.
+        c.clients.retain(|tx| {
+            tx.try_send((KIND_LAYOUT, text.to_string())).is_ok()
+                && tx.try_send((KIND_REVISION, rev.to_string())).is_ok()
+        });
     }
 
     /// The agent states changed: `{"<card id>": "working", ...}`. Sent as it
@@ -192,6 +250,7 @@ impl JoinHub {
             c.clients.push(tx);
             let latest: Vec<(u8, String)> = [
                 (KIND_LAYOUT, c.latest_layout.clone()),
+                (KIND_REVISION, c.latest_rev.map(|r| r.to_string())),
                 (KIND_AGENTS, c.latest_agents.clone()),
             ]
             .into_iter()
@@ -210,10 +269,7 @@ impl JoinHub {
         let writer_closed = closed.clone();
         std::thread::spawn(move || {
             let send = |w: &mut UnixStream, kind: u8, text: &str| -> bool {
-                let bytes = text.as_bytes();
-                w.write_all(&(bytes.len() as u32).to_be_bytes()).is_ok()
-                    && w.write_all(&[kind]).is_ok()
-                    && w.write_all(bytes).is_ok()
+                w.write_all(&encode_canvas_message(kind, text)).is_ok()
             };
             for (kind, text) in latest {
                 if !send(&mut w, kind, &text) {
@@ -233,10 +289,19 @@ impl JoinHub {
             }
             let _ = w.shutdown(Shutdown::Both);
         });
-        // Nothing meaningful comes back on this topic; reading until the
-        // viewer closes is how a closed connection is noticed.
-        let mut sink = [0u8; 256];
-        while matches!(input.read(&mut sink), Ok(n) if n > 0) {}
+        // What comes back: the viewer's edits, as whole canvases. Reading until
+        // the viewer closes is also how a closed connection is noticed.
+        loop {
+            match read_canvas_message(&mut input) {
+                Ok(Some((KIND_UPDATE, text))) => {
+                    if let Some(update) = decode_update(&text) {
+                        let _ = self.updates_tx.send(update);
+                    }
+                }
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => break,
+            }
+        }
         closed.store(true, Ordering::Relaxed);
         let _ = out.shutdown(Shutdown::Both);
     }
@@ -394,7 +459,7 @@ mod tests {
         let path = socket("session");
         hub.serve(&path).unwrap();
         let (mut s, answer) = connect(&path, "ift-join 1 session abc");
-        assert_eq!(answer, "ift-join 1 ok");
+        assert_eq!(answer, "ift-join 2 ok");
         let mut r = FrameReader::default();
         assert_eq!(
             next_frame(&mut s, &mut r),
@@ -434,7 +499,7 @@ mod tests {
         let path = socket("nosession");
         hub.serve(&path).unwrap();
         let (_s, answer) = connect(&path, "ift-join 1 session nope");
-        assert_eq!(answer, "ift-join 1 error no session nope on this host");
+        assert_eq!(answer, "ift-join 2 error no session nope on this host");
         let _ = std::fs::remove_file(&path);
     }
 
@@ -451,40 +516,43 @@ mod tests {
         );
         let path = socket("major");
         hub.serve(&path).unwrap();
-        let (_s, answer) = connect(&path, "ift-join 2 canvas");
+        let (_s, answer) = connect(&path, "ift-join 3 canvas");
         assert!(
-            answer.starts_with("ift-join 1 error this host speaks ift-join 1"),
+            answer.starts_with("ift-join 2 error this host speaks ift-join 2"),
             "{answer}"
         );
         let (_s, answer) = connect(&path, "ift-join 0 session abc");
-        assert_eq!(answer, "ift-join 1 ok");
+        assert_eq!(answer, "ift-join 2 ok");
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn a_canvas_viewer_gets_the_latest_snapshot_then_every_later_one() {
         let (hub, _relay, _w) = hub();
-        hub.publish_layout("{\"v\":1}");
+        hub.publish_layout("{\"v\":1}", 7);
         let path = socket("canvas");
         hub.serve(&path).unwrap();
-        let (mut s, answer) = connect(&path, "ift-join 1 canvas");
-        assert_eq!(answer, "ift-join 1 ok");
+        let (mut s, answer) = connect(&path, "ift-join 2 canvas");
+        assert_eq!(answer, "ift-join 2 ok");
         let next = |s: &mut UnixStream| read_canvas_message(s).unwrap().unwrap();
         assert_eq!(next(&mut s), (KIND_LAYOUT, "{\"v\":1}".to_string()));
-        hub.publish_layout("{\"v\":2}");
+        assert_eq!(next(&mut s), (KIND_REVISION, "7".to_string()));
+        hub.publish_layout("{\"v\":2}", 8);
         assert_eq!(next(&mut s), (KIND_LAYOUT, "{\"v\":2}".to_string()));
+        assert_eq!(next(&mut s), (KIND_REVISION, "8".to_string()));
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn agent_states_ride_the_canvas_beside_the_layout_and_a_late_viewer_gets_both() {
         let (hub, _relay, _w) = hub();
-        hub.publish_layout("{\"v\":1}");
+        hub.publish_layout("{\"v\":1}", 1);
         hub.publish_agents("{\"c1\":\"working\"}");
         let path = socket("agents");
         hub.serve(&path).unwrap();
-        let (mut s, _) = connect(&path, "ift-join 1 canvas");
+        let (mut s, _) = connect(&path, "ift-join 2 canvas");
         let first = read_canvas_message(&mut s).unwrap().unwrap();
+        let _revision = read_canvas_message(&mut s).unwrap().unwrap();
         let second = read_canvas_message(&mut s).unwrap().unwrap();
         assert_eq!(first, (KIND_LAYOUT, "{\"v\":1}".to_string()));
         assert_eq!(second, (KIND_AGENTS, "{\"c1\":\"working\"}".to_string()));
@@ -494,6 +562,51 @@ mod tests {
             (KIND_AGENTS, "{\"c1\":\"done\"}".to_string())
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_viewers_edit_reaches_the_host_with_the_revision_it_was_made_on() {
+        let (hub, _relay, _w) = hub();
+        let updates = hub.take_updates().expect("the app takes the receiver once");
+        assert!(hub.take_updates().is_none(), "only once");
+        let path = socket("update");
+        hub.serve(&path).unwrap();
+        let (mut s, answer) = connect(&path, "ift-join 2 canvas");
+        assert_eq!(answer, "ift-join 2 ok");
+        // Noise first: a kind the host does not know, and an update that is
+        // not one. Neither reaches the app.
+        s.write_all(&encode_canvas_message(b'Z', "future")).unwrap();
+        s.write_all(&encode_canvas_message(KIND_UPDATE, "not json"))
+            .unwrap();
+        s.write_all(&encode_canvas_message(
+            KIND_UPDATE,
+            &encode_update(7, "{\"cards\":[]}"),
+        ))
+        .unwrap();
+        let got = updates.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(
+            got,
+            RemoteUpdate {
+                base: 7,
+                layout: "{\"cards\":[]}".into()
+            }
+        );
+        assert!(updates.try_recv().is_err(), "the noise was dropped");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_update_survives_the_round_trip_through_its_text() {
+        let layout = "{\"cards\":[{\"id\":\"a \\\"q\\\"\"}]}";
+        assert_eq!(
+            decode_update(&encode_update(42, layout)),
+            Some(RemoteUpdate {
+                base: 42,
+                layout: layout.into()
+            })
+        );
+        assert_eq!(decode_update("{}"), None);
+        assert_eq!(decode_update("{\"base\": -1, \"layout\": \"x\"}"), None);
     }
 
     #[test]

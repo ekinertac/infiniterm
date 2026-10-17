@@ -199,8 +199,13 @@ impl AppView {
         self.reconcile_bodies(window);
         self.reconcile_terminals(window);
         self.reconcile_decoys(window);
-        self.reconcile_editors(window);
-        self.reconcile_browsers();
+        // A viewer builds no body for a card that is not a terminal: its file
+        // or page is on the host, and this Mac must not read a path of its own
+        // and show it as the host's (#423).
+        if !self.viewer {
+            self.reconcile_editors(window);
+            self.reconcile_browsers();
+        }
         let t0 = std::time::Instant::now();
         self.feed_terminals(now, cx);
         let t1 = std::time::Instant::now();
@@ -568,40 +573,6 @@ impl AppView {
                 b.set_crowded(crowded);
             }
         }
-        // A viewer's cards that are not terminals (#423): a slot that says
-        // where the card is, never a body (a viewer must not read a path on
-        // its own Mac and show it as the host's).
-        let host_name = self
-            .model
-            .remote
-            .as_ref()
-            .map_or_else(|| "the host".to_string(), |r| r.name.clone());
-        for rc in self
-            .model
-            .remote_cards
-            .iter()
-            .filter(|c| c.workspace_id == ws)
-        {
-            let b = at(rc.rect);
-            if !visible.intersects(&b) {
-                continue;
-            }
-            window.paint_quad(fill(b, chrome.card_bg));
-            window.paint_quad(
-                outline(b, chrome.card_border, BorderStyle::Solid)
-                    .border_widths(border_w)
-                    .corner_radii(radius),
-            );
-            paint_slot_text(
-                window,
-                cx,
-                b,
-                &format!("{} on {host_name}", rc.kind.as_str()),
-                px(EXTRACTED_TEXT_PT * vp.scale as f32),
-                &chrome.typography.regular,
-                chrome.card_fg,
-            );
-        }
         for card in &cards {
             let rect = self.drawn_rect(&card.id, card.rect, now);
             let b = at(rect);
@@ -640,6 +611,25 @@ impl AppView {
                     window.with_content_mask(Some(gpui::ContentMask { bounds: b }), |window| {
                         body.paint(b, vp.scale, focused, now, window, cx)
                     });
+                }
+                // A viewer's card that is not a terminal (#423) is a real card
+                // with no body (its file or page is on the host): its slot says
+                // where, and it moves, groups and closes like any card.
+                if self.viewer && card.kind != infiniterm_core::saved_layout::CardKind::Terminal {
+                    let host = self
+                        .model
+                        .remote
+                        .as_ref()
+                        .map_or("the host", |r| r.name.as_str());
+                    paint_slot_text(
+                        window,
+                        cx,
+                        b,
+                        &format!("{} on {host}", card.kind.as_str()),
+                        px(EXTRACTED_TEXT_PT * vp.scale as f32),
+                        &chrome.typography.regular,
+                        chrome.card_fg,
+                    );
                 }
             }
             // The focused card has no scrim of its own, so the away wash is

@@ -361,7 +361,7 @@ mod tests {
         use std::sync::{Arc, Mutex};
         let write: WriteSession = Arc::new(|_, _| {});
         let hub = JoinHub::new(Arc::new(Mutex::new(Relay::new())), write);
-        hub.publish_layout("{\"cards\":[]}");
+        hub.publish_layout("{\"cards\":[]}", 1);
         let socket = std::env::temp_dir().join(format!("ij-cli-{}.sock", std::process::id()));
         hub.serve(&socket).unwrap();
 
@@ -380,16 +380,23 @@ mod tests {
         let sink = Shared(out.clone());
         let sock = socket.clone();
         let handle = std::thread::spawn(move || join_over(&sock, "canvas", input_near, sink));
-        let wanted = b"ift-join 1 ok\n";
+        let wanted = b"ift-join 2 ok\n";
         for _ in 0..100 {
-            if out.lock().unwrap().ends_with(b"{\"cards\":[]}") {
+            // The layout, then its revision (`V`, "1").
+            if out.lock().unwrap().ends_with(b"V1") {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let got = out.lock().unwrap().clone();
         assert!(got.starts_with(wanted), "{:?}", String::from_utf8_lossy(&got));
-        assert!(got.ends_with(b"{\"cards\":[]}"));
+        let layout: &[u8] = b"{\"cards\":[]}";
+        assert!(
+            got.windows(layout.len()).any(|w| w == layout),
+            "the layout came through: {:?}",
+            String::from_utf8_lossy(&got)
+        );
+        assert!(got.ends_with(b"V1"), "and its revision after it");
         drop(input_far);
         let _ = handle.join();
         let _ = std::fs::remove_file(&socket);

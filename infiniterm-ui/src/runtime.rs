@@ -75,6 +75,8 @@ impl AppView {
             pick_request: None,
             join: None,
             last_agents: String::new(),
+            join_updates: None,
+            uplink: None,
             viewer: false,
             canvas_rx: None,
             read_requests: vec![],
@@ -816,16 +818,64 @@ impl AppView {
     }
 
     fn write_layout(&mut self) {
+        // A viewer saves nothing of its own: what it edited goes up to the
+        // host, which makes it so (#423).
+        if self.viewer {
+            self.send_up();
+            return;
+        }
         if let Some(text) = self.model.save_text() {
             if let Err(e) = infiniterm_core::layout_file::write_layout(&text) {
                 eprintln!("[infiniterm] could not save the layout: {e}");
             }
-            // The same text, to every viewer that joined (#423). The viewer
-            // keeps its own viewport and focus; nothing is stripped here.
+            // The same text, to every viewer that joined, with the revision
+            // it is. The viewer keeps its own viewport and focus; nothing is
+            // stripped here.
             if let Some(hub) = &self.join {
-                hub.publish_layout(&text);
+                self.model.layout_rev += 1;
+                hub.publish_layout(&text, self.model.layout_rev);
             }
         }
+    }
+
+    /// A viewer's canvas, to the host, on the revision it was edited on.
+    fn send_up(&mut self) {
+        // Nothing to say before the host's own canvas has arrived.
+        if !self.model.snapshot_seen {
+            return;
+        }
+        let Some(up) = &self.uplink else {
+            return;
+        };
+        let layout = self.model.layout_snapshot();
+        let _ = up.send(infiniterm_core::backend::join::RemoteUpdate {
+            base: self.model.layout_rev,
+            layout,
+        });
+    }
+
+    /// What the viewers sent up since the last tick (#423), applied to this
+    /// canvas in place. An edit made on an old canvas is dropped and the host
+    /// republishes its own, which is how that viewer finds out. True when the
+    /// canvas changed, so the next frame starts any shell it now needs.
+    pub fn apply_remote_updates(&mut self) -> bool {
+        use infiniterm_core::model::persist::RemoteApply;
+        let Some(rx) = &self.join_updates else {
+            return false;
+        };
+        let updates: Vec<_> = rx.try_iter().collect();
+        let mut changed = false;
+        for u in updates {
+            match self.model.apply_remote_layout(&u.layout, u.base) {
+                Ok(RemoteApply::Applied) => changed = true,
+                Ok(RemoteApply::Stale) => {
+                    self.write_layout();
+                    changed = true;
+                }
+                Err(why) => eprintln!("[infiniterm] a viewer's canvas was refused: {why}"),
+            }
+        }
+        changed
     }
 
     /// Immediately, for a quit: anything done in the last half second would
@@ -856,6 +906,7 @@ impl AppView {
                         self.model.notify(&why);
                     }
                 }
+                CanvasEvent::Revision(rev) => self.model.layout_rev = rev,
                 CanvasEvent::Agents(text) => self.model.apply_agent_states(&text),
                 CanvasEvent::Status(text) => self.model.notify(&text),
                 CanvasEvent::Fatal(text) => {
@@ -922,7 +973,10 @@ fn start_join(app: &mut AppView) {
     }
     let hub = infiniterm_core::backend::join::JoinHub::new(relay, write);
     match hub.serve(&infiniterm_core::paths::join_socket()) {
-        Ok(()) => app.join = Some(hub),
+        Ok(()) => {
+            app.join_updates = hub.take_updates();
+            app.join = Some(hub);
+        }
         Err(e) => eprintln!("[infiniterm/warn] ift join is off: {e}"),
     }
     // Viewers that join before the first save still get a canvas.
@@ -1073,9 +1127,11 @@ pub fn startup(app: &mut AppView) {
         app.model.first_run = false;
         app.model.read_only = true;
         let (tx, rx) = std::sync::mpsc::channel();
+        let (edit_tx, edit_rx) = std::sync::mpsc::channel();
         app.canvas_rx = Some(rx);
+        app.uplink = Some(edit_tx);
         std::thread::spawn(move || {
-            infiniterm_core::backend::join_client::run_canvas_client(host, tx)
+            infiniterm_core::backend::join_client::run_canvas_client(host, tx, edit_rx)
         });
     } else {
         app.model
