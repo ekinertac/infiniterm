@@ -382,14 +382,21 @@ mod tests {
         let handle = std::thread::spawn(move || join_over(&sock, "canvas", input_near, sink));
         let wanted = b"ift-join 2 ok\n";
         for _ in 0..100 {
-            if out.lock().unwrap().ends_with(b"{\"cards\":[]}") {
+            // The layout, then its revision (`V`, "1").
+            if out.lock().unwrap().ends_with(b"V1") {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let got = out.lock().unwrap().clone();
         assert!(got.starts_with(wanted), "{:?}", String::from_utf8_lossy(&got));
-        assert!(got.ends_with(b"{\"cards\":[]}"));
+        let layout: &[u8] = b"{\"cards\":[]}";
+        assert!(
+            got.windows(layout.len()).any(|w| w == layout),
+            "the layout came through: {:?}",
+            String::from_utf8_lossy(&got)
+        );
+        assert!(got.ends_with(b"V1"), "and its revision after it");
         drop(input_far);
         let _ = handle.join();
         let _ = std::fs::remove_file(&socket);
