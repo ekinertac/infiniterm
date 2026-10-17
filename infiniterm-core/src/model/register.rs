@@ -2133,6 +2133,28 @@ mod tests {
         assert_eq!(h.m.selection.focused_id, focus);
     }
 
+    // #419: Cmd+A selects every card of the workspace and keeps the focus where
+    // it was; a locked editor keeps Cmd+A for its text.
+    #[test]
+    fn cmd_a_selects_every_card_and_a_locked_editor_keeps_its_own() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        h.m.set_focus(Some(&ids[2]));
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+a"));
+        assert_eq!(h.m.selected_ids().len(), 4, "all four are selected");
+        assert_eq!(
+            h.m.selection.focused_id.as_deref(),
+            Some(ids[2].as_str()),
+            "the focus stays on the card it was on"
+        );
+        // A locked editor: Cmd+A is not ours.
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.cards[0].locked = true;
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        assert!(!handle_chord(&mut h.m, &h.r, "cmd+a"));
+    }
+
     // #398: the keyboard pans the view by a fixed number of SCREEN pixels, a
     // repeat adds to where the last press is heading, and the focus stays.
     #[test]

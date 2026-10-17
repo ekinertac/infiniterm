@@ -116,7 +116,59 @@ const SIZE: Def = Def::Submenu {
 /// A `show` clause: the row is for one card, not a selection of several.
 const ONE_CARD: &str = "!multiSelection";
 
-const TERMINAL: &[Def] = &[
+/// How to look at the canvas, in the menu of a card: the keys Cmd+1, Cmd+2, a
+/// selection's fit, Cmd+0, Tidy and Cmd+A. Fit Card is for one card, Fit
+/// Selection for several (#419).
+const CANVAS_SUB: Def = Def::Submenu {
+    title: "Canvas",
+    items: &[
+        full("canvas.zoom.fitCard", Some("Fit Card"), ONE_CARD, "", ""),
+        full(
+            "canvas.zoom.fitGroup",
+            Some("Fit Selection"),
+            "multiSelection",
+            "",
+            "",
+        ),
+        titled("canvas.zoom.fitAll", "Fit All Cards"),
+        titled("canvas.zoom.actual", "Actual Size"),
+        Def::Separator,
+        titled("canvas.tidy", "Tidy into a Block"),
+        titled("focus.selectAll", "Select All Cards"),
+    ],
+};
+
+/// What every card's menu ends with, in this order, whatever the card shows:
+/// make another card, change this one's place and size, look at the canvas,
+/// name and protect it, close it. The menus of a terminal's text, an
+/// editor's text and a card's frame differ only above it (#419); before, each
+/// had its own subset and the frame menu was the only one with Group.
+const CARD_SECTION: &[Def] = &[
+    Def::Separator,
+    full("card.split.right", Some("Split Right"), ONE_CARD, "", ""),
+    full("card.split.down", Some("Split Down"), ONE_CARD, "", ""),
+    NEW_CARD,
+    titled("group.new", "Group\u{2026}"),
+    Def::Separator,
+    SIZE,
+    titled("card.moveToWorkspace", "Move to Workspace\u{2026}"),
+    CANVAS_SUB,
+    Def::Separator,
+    full("card.rename", Some("Rename\u{2026}"), ONE_CARD, "", ""),
+    titled("card.protect", "Protect"),
+    full(
+        "card.mask",
+        Some("Mask"),
+        "terminalFocus && !multiSelection",
+        "",
+        "",
+    ),
+    titled("card.clearState", "Clear State Colour"),
+    Def::Separator,
+    titled("card.close", "Close"),
+];
+
+const TERMINAL_TOP: &[Def] = &[
     full(
         "terminal.copy",
         Some("Copy"),
@@ -126,7 +178,7 @@ const TERMINAL: &[Def] = &[
     ),
     full("terminal.paste", Some("Paste"), "", "", "cmd+v"),
     Def::Separator,
-    titled("card.find", "Find…"),
+    titled("card.find", "Find\u{2026}"),
     full(
         "terminal.searchSelection",
         Some("Search the Web for Selection"),
@@ -135,44 +187,12 @@ const TERMINAL: &[Def] = &[
         "",
     ),
     Def::Separator,
-    titled("card.split.right", "Split Right"),
-    titled("card.split.down", "Split Down"),
-    NEW_CARD,
-    Def::Separator,
     titled("card.clear", "Clear Buffer"),
     titled("card.transcript", "Show Transcript"),
-    Def::Separator,
-    titled("card.rename", "Rename…"),
-    titled("card.protect", "Protect"),
-    titled("card.mask", "Mask"),
-    SIZE,
-    titled("card.moveToWorkspace", "Move to Workspace…"),
-    Def::Separator,
-    titled("card.close", "Close"),
 ];
 
-const FRAME: &[Def] = &[
-    full("card.rename", Some("Rename…"), ONE_CARD, "", ""),
-    titled("group.new", "Group…"),
-    titled("card.protect", "Protect"),
-    titled("card.clearState", "Clear State Colour"),
-    Def::Separator,
-    full(
-        "canvas.zoom.fitGroup",
-        Some("Fit Selection"),
-        "multiSelection",
-        "",
-        "",
-    ),
-    SIZE,
-    titled("card.moveToWorkspace", "Move to Workspace…"),
-    Def::Separator,
-    full("card.split.right", Some("Split Right"), ONE_CARD, "", ""),
-    full("card.split.down", Some("Split Down"), ONE_CARD, "", ""),
-    NEW_CARD,
-    Def::Separator,
-    titled("card.close", "Close"),
-];
+/// A card's frame or label has nothing of its own above the card section.
+const FRAME_TOP: &[Def] = &[];
 
 const CANVAS: &[Def] = &[
     NEW_CARD,
@@ -180,8 +200,13 @@ const CANVAS: &[Def] = &[
     titled("canvas.zoom.fitAll", "Fit All Cards"),
     titled("canvas.zoom.actual", "Actual Size"),
     titled("canvas.tidy", "Tidy into a Block"),
+    titled("focus.selectAll", "Select All Cards"),
     Def::Separator,
-    titled("app.palette", "Command Palette…"),
+    titled("layout.undo", "Undo Layout"),
+    titled("layout.redo", "Redo Layout"),
+    titled("card.reopen", "Reopen Closed Card"),
+    Def::Separator,
+    titled("app.palette", "Command Palette\u{2026}"),
     titled("app.settings", "Settings"),
     titled("app.shortcuts", "Keyboard Shortcuts"),
 ];
@@ -196,10 +221,10 @@ const TAB: &[Def] = &[
     titled("workspace.close", "Close Workspace"),
 ];
 
-const EDITOR: &[Def] = &[
+const EDITOR_TOP: &[Def] = &[
     titled("card.save", "Save"),
-    titled("card.find", "Find…"),
-    titled("editor.goToLine", "Go to Line…"),
+    titled("card.find", "Find\u{2026}"),
+    titled("editor.goToLine", "Go to Line\u{2026}"),
     Def::Separator,
     Def::Submenu {
         title: "Transform",
@@ -228,11 +253,6 @@ const EDITOR: &[Def] = &[
     },
     titled("editor.explorer", "Show File Tree"),
     titled("editor.blame", "Blame"),
-    Def::Separator,
-    titled("card.rename", "Rename…"),
-    SIZE,
-    Def::Separator,
-    titled("card.close", "Close"),
 ];
 
 const TREE: &[Def] = &[
@@ -305,15 +325,15 @@ const TAB_STRIP: &[Def] = &[
     ),
 ];
 
-pub fn table(area: Area) -> &'static [Def] {
+pub fn table(area: Area) -> Vec<Def> {
     match area {
-        Area::Terminal => TERMINAL,
-        Area::Frame => FRAME,
-        Area::Canvas => CANVAS,
-        Area::Tab => TAB,
-        Area::Editor => EDITOR,
-        Area::Tree => TREE,
-        Area::TabStrip => TAB_STRIP,
+        Area::Terminal => [TERMINAL_TOP, CARD_SECTION].concat(),
+        Area::Frame => [FRAME_TOP, CARD_SECTION].concat(),
+        Area::Canvas => CANVAS.to_vec(),
+        Area::Tab => TAB.to_vec(),
+        Area::Editor => [EDITOR_TOP, CARD_SECTION].concat(),
+        Area::Tree => TREE.to_vec(),
+        Area::TabStrip => TAB_STRIP.to_vec(),
     }
 }
 
@@ -411,13 +431,13 @@ fn tidy(rows: Vec<Row>) -> Vec<Row> {
 
 /// The menu for `area`, as the app is now.
 pub fn rows(area: Area, src: &Source) -> Vec<Row> {
-    build(table(area), src)
+    build(&table(area), src)
 }
 
 /// Every command id a table names, submenus included: for the test that
 /// checks they are all registered.
 pub fn command_ids(area: Area) -> Vec<&'static str> {
-    fn walk(defs: &'static [Def], out: &mut Vec<&'static str>) {
+    fn walk(defs: &[Def], out: &mut Vec<&'static str>) {
         for d in defs {
             match d {
                 Def::Command(c) => out.push(c.id),
@@ -427,13 +447,13 @@ pub fn command_ids(area: Area) -> Vec<&'static str> {
         }
     }
     let mut out = vec![];
-    walk(table(area), &mut out);
+    walk(&table(area), &mut out);
     out
 }
 
 /// Every `show` and `enable` clause a table uses, to check they parse.
 pub fn clauses(area: Area) -> Vec<&'static str> {
-    fn walk(defs: &'static [Def], out: &mut Vec<&'static str>) {
+    fn walk(defs: &[Def], out: &mut Vec<&'static str>) {
         for d in defs {
             match d {
                 Def::Command(c) => {
@@ -445,7 +465,7 @@ pub fn clauses(area: Area) -> Vec<&'static str> {
         }
     }
     let mut out = vec![];
-    walk(table(area), &mut out);
+    walk(&table(area), &mut out);
     out
 }
 
@@ -591,6 +611,94 @@ mod tests {
         );
     }
 
+    // #419: a terminal's text, an editor's text and a card's frame end with the
+    // same section, so a row cannot be in one card menu and missing in another.
+    #[test]
+    fn the_card_menus_end_with_the_same_section() {
+        let c = ctx();
+        let from_split = |area: Area| -> Vec<Row> {
+            let rows = built(area, &c);
+            let at = rows
+                .iter()
+                .position(
+                    |r| matches!(r, Row::Item { command, .. } if command == "card.split.right"),
+                )
+                .expect("every card menu has Split Right");
+            rows[at..].to_vec()
+        };
+        let frame = from_split(Area::Frame);
+        assert_eq!(from_split(Area::Terminal), frame);
+        assert_eq!(from_split(Area::Editor), frame);
+        // And the section holds what was missing: Fit and Tidy and Select All
+        // in a Canvas submenu, Group, Move to Workspace and Protect.
+        let canvas = frame
+            .iter()
+            .find_map(|r| match r {
+                Row::Submenu { title, rows } if title == "Canvas" => Some(rows),
+                _ => None,
+            })
+            .expect("a Canvas submenu");
+        let ids: Vec<&str> = canvas
+            .iter()
+            .filter_map(|r| match r {
+                Row::Item { command, .. } => Some(command.as_str()),
+                _ => None,
+            })
+            .collect();
+        for want in [
+            "canvas.zoom.fitCard",
+            "canvas.zoom.fitAll",
+            "canvas.zoom.actual",
+            "canvas.tidy",
+            "focus.selectAll",
+        ] {
+            assert!(
+                ids.contains(&want),
+                "{want} is in the Canvas submenu: {ids:?}"
+            );
+        }
+        let top: Vec<&str> = frame
+            .iter()
+            .filter_map(|r| match r {
+                Row::Item { command, .. } => Some(command.as_str()),
+                _ => None,
+            })
+            .collect();
+        for want in [
+            "group.new",
+            "card.moveToWorkspace",
+            "card.protect",
+            "card.close",
+        ] {
+            assert!(top.contains(&want), "{want}: {top:?}");
+        }
+    }
+
+    // The bare canvas menu keeps the view rows at the top level and gains the
+    // layout's undo and redo and the closed card's return.
+    #[test]
+    fn the_canvas_menu_has_fit_tidy_select_all_and_the_undo_rows() {
+        let rows = built(Area::Canvas, &ctx());
+        let ids: Vec<String> = rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Item { command, .. } => Some(command.clone()),
+                _ => None,
+            })
+            .collect();
+        for want in [
+            "canvas.zoom.fitAll",
+            "canvas.zoom.actual",
+            "canvas.tidy",
+            "focus.selectAll",
+            "layout.undo",
+            "layout.redo",
+            "card.reopen",
+        ] {
+            assert!(ids.iter().any(|i| i == want), "{want}: {ids:?}");
+        }
+    }
+
     #[test]
     fn a_selection_of_several_cards_gets_the_rows_that_act_on_all_of_them() {
         let ids = |rows: &[Row]| -> Vec<String> {
@@ -620,6 +728,8 @@ mod tests {
             "card.split.right",
             "card.size",
             "card.maximize.toggle",
+            "card.mask",
+            "canvas.zoom.fitCard",
         ] {
             assert!(one.iter().any(|c| c == id), "{id} for one card");
             assert!(!many.iter().any(|c| c == id), "{id} hidden for several");
