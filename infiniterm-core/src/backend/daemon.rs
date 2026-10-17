@@ -29,6 +29,7 @@
 //!   closes a handle) is the entire feature this backend exists to add.
 
 use super::local_pty::HIGH_WATER;
+use super::relay::Relay;
 use super::session_protocol::{Frame, FrameReader};
 use super::{PaneEvent, PaneId};
 use std::collections::HashMap;
@@ -143,6 +144,10 @@ pub struct DaemonBackend {
     /// Set in a remote instance (#118): every spawn and adopt goes to this
     /// host over ssh and the sessions are listed by asking it.
     remote: Option<super::remote::RemoteHost>,
+    /// What viewers that joined this canvas (#423, `ift join`) are sent: this
+    /// backend is the only client iftd sees, so it is the one place every
+    /// session's bytes pass, and it fans them out from here.
+    relay: Arc<Mutex<Relay>>,
 }
 
 impl DaemonBackend {
@@ -155,6 +160,7 @@ impl DaemonBackend {
             tx,
             next_id: AtomicU32::new(1),
             remote: None,
+            relay: Arc::new(Mutex::new(Relay::new())),
         };
         (backend, rx)
     }
@@ -335,6 +341,16 @@ impl DaemonBackend {
             .try_clone()
             .expect("a freshly connected UnixStream always clones");
 
+        self.relay.lock().unwrap().open(
+            &session_id,
+            Frame::Hello {
+                pid: pid.unwrap_or(0),
+                cols: size.0,
+                rows: size.1,
+            },
+        );
+        let relay = self.relay.clone();
+        let relay_session = session_id.clone();
         self.panes.lock().unwrap().insert(
             id,
             Pane {
@@ -348,7 +364,24 @@ impl DaemonBackend {
 
         let tx = self.tx.clone();
         let panes = self.panes.clone();
-        std::thread::spawn(move || run_reader(id, stream, reader, tx, panes, credit));
+        std::thread::spawn(move || {
+            run_reader(
+                id,
+                stream,
+                reader,
+                tx,
+                panes,
+                credit,
+                Tap {
+                    relay: &relay,
+                    session: &relay_session,
+                },
+            );
+            // The reader is gone (exit, detach or eviction): viewers of this
+            // session end with it. A later adopt registers a new reader and
+            // opens the relay again.
+            relay.lock().unwrap().close(&relay_session);
+        });
 
         id
     }
@@ -385,6 +418,33 @@ impl DaemonBackend {
             .map(|p| p.session_id.clone())
     }
 
+    /// The viewers' relay, shared with the join server (#423).
+    pub fn relay(&self) -> Arc<Mutex<Relay>> {
+        self.relay.clone()
+    }
+
+    /// Writes keys a viewer sent to the session they were typed for, from any
+    /// thread. The same path as the host's own keys: one connection to iftd,
+    /// whole frames serialised by the pane's stream lock, so a host key and a
+    /// viewer key never interleave inside a frame. A session this backend does
+    /// not hold is ignored. Not through the app's poll, which would add up to
+    /// 16 ms to every viewer keystroke.
+    pub fn session_writer(&self) -> super::join::WriteSession {
+        let panes = self.panes.clone();
+        Arc::new(move |session_id: &str, bytes: &[u8]| {
+            let stream = panes
+                .lock()
+                .unwrap()
+                .values()
+                .find(|p| p.session_id == session_id)
+                .map(|p| p.stream.clone());
+            if let Some(stream) = stream {
+                let mut s = stream.lock().unwrap();
+                let _ = s.write_all(&Frame::Data(bytes.to_vec()).encode());
+            }
+        })
+    }
+
     pub fn write_now(&self, pane: PaneId, bytes: &[u8]) {
         let stream = self
             .panes
@@ -405,6 +465,7 @@ impl DaemonBackend {
                 return;
             };
             *p.size.lock().unwrap() = (cols, rows);
+            self.relay.lock().unwrap().resize(&p.session_id, cols, rows);
             p.stream.clone()
         };
         let mut s = stream.lock().unwrap();
@@ -615,6 +676,14 @@ fn read_hello(
     }
 }
 
+/// Where a pane's session output is also sent: the viewers' relay and the
+/// session id it files the bytes under (#423). One argument for `run_reader`
+/// instead of two.
+struct Tap<'a> {
+    relay: &'a Arc<Mutex<Relay>>,
+    session: &'a str,
+}
+
 /// One per pane, for its whole life. Turns frames arriving on the socket
 /// into tagged `PaneEvent`s on the one shared channel, gated by `credit`
 /// exactly as `local_pty`'s reader gates its pty reads — see this module's
@@ -627,6 +696,7 @@ fn run_reader(
     tx: Sender<(PaneId, PaneEvent)>,
     panes: Arc<Mutex<HashMap<PaneId, Pane>>>,
     credit: Arc<Credit>,
+    tap: Tap<'_>,
 ) {
     let mut buf = vec![0u8; 8192];
     let mut exited = false;
@@ -635,18 +705,21 @@ fn run_reader(
             match reader.next() {
                 Ok(Some(Frame::Data(bytes))) => {
                     credit.sent(bytes.len());
+                    tap.relay.lock().unwrap().publish(tap.session, &bytes);
                     if tx.send((id, PaneEvent::Output(bytes))).is_err() {
                         break 'outer;
                     }
                 }
                 Ok(Some(Frame::Replay(bytes))) => {
                     credit.sent(bytes.len());
+                    tap.relay.lock().unwrap().seed(tap.session, &bytes);
                     if tx.send((id, PaneEvent::Replay(bytes))).is_err() {
                         break 'outer;
                     }
                 }
                 Ok(Some(Frame::ReplayEnd)) => nudge_resize(&panes, id),
                 Ok(Some(Frame::Exited(code))) => {
+                    tap.relay.lock().unwrap().exited(tap.session, code);
                     let _ = tx.send((id, PaneEvent::Exited { code }));
                     exited = true;
                     break 'outer;
@@ -745,7 +818,7 @@ fn nudge_resize(panes: &Arc<Mutex<HashMap<PaneId, Pane>>>, id: PaneId) {
 /// Refuses a socket path before it is ever bound, rather than letting a
 /// too-long one reach `iftd` and fail there with an opaque exit code. See
 /// `SUN_PATH_MAX`'s own doc comment for why this exists at all.
-fn check_socket_path(socket: &Path) -> anyhow::Result<()> {
+pub fn check_socket_path(socket: &Path) -> anyhow::Result<()> {
     // +1: sockaddr_un.sun_path always carries a terminating NUL, which is
     // part of the 104-byte budget, not extra room beyond it.
     let len = socket.as_os_str().as_bytes().len() + 1;

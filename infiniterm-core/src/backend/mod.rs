@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
 pub mod daemon;
+pub mod join;
 pub mod local_pty;
+pub mod relay;
 pub mod remote;
 pub mod session_protocol;
 pub mod tmux;
@@ -149,6 +151,21 @@ impl Panes {
     /// as keystrokes. See `TerminalBody::replies` and tmux bug 9.
     pub fn we_are_the_terminal(&self) -> bool {
         !matches!(self, Panes::Tmux(_))
+    }
+
+    /// What the join server (#423) needs from this backend: the relay and a
+    /// way to write a viewer's keys to a session. Only the daemon backend has
+    /// them; under local and tmux a card has no session a viewer could join.
+    pub fn join_parts(
+        &self,
+    ) -> Option<(
+        std::sync::Arc<std::sync::Mutex<relay::Relay>>,
+        join::WriteSession,
+    )> {
+        match self {
+            Panes::Daemon(b) => Some((b.relay(), b.session_writer())),
+            _ => None,
+        }
     }
 
     /// This card's shell, as an opaque handle for the save file: a tmux

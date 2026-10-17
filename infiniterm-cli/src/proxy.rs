@@ -196,7 +196,65 @@ fn spawn_daemon(socket: &Path, s: &SpawnArgs) -> Result<(), String> {
     }
 }
 
+/// `ift proxy join canvas` or `ift proxy join session <id>`: the host app's
+/// join socket (`backend::join`) over stdin and stdout, for `ift join` (#423).
+/// Sends the versioned handshake line, then copies bytes both ways; the host's
+/// answer line comes back as the first bytes on stdout, for the viewer to
+/// check. The host never starts or ends anything for a viewer.
+fn run_join(args: &[String]) -> ExitCode {
+    let topic = match parse_join(args) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("ift: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let socket = paths::join_socket();
+    match join_over(&socket, &topic, std::io::stdin(), std::io::stdout().lock()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("ift: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// The topic the host's handshake line names: `canvas` or `session <id>`.
+fn parse_join(args: &[String]) -> Result<String, String> {
+    match args {
+        [t] if t == "canvas" => Ok("canvas".into()),
+        [t, id] if t == "session" && valid_id(id) => Ok(format!("session {id}")),
+        [t, id] if t == "session" => Err(format!("{id:?} is not a session id")),
+        _ => Err("usage: ift proxy join canvas | session <id>".into()),
+    }
+}
+
+/// Connects to the host's join socket, says what is wanted, and splices.
+fn join_over(
+    socket: &Path,
+    topic: &str,
+    input: impl Read + Send + 'static,
+    output: impl Write,
+) -> Result<(), String> {
+    let mut stream = UnixStream::connect(socket).map_err(|e| {
+        format!(
+            "no running infiniterm to join on this host ({}): {e}",
+            socket.display()
+        )
+    })?;
+    writeln!(
+        stream,
+        "ift-join {} {topic}",
+        infiniterm_core::backend::join::MAJOR
+    )
+    .map_err(|e| e.to_string())?;
+    splice(stream, input, output).map_err(|e| e.to_string())
+}
+
 pub fn run(args: &[String]) -> ExitCode {
+    if args.first().map(String::as_str) == Some("join") {
+        return run_join(&args[1..]);
+    }
     let parsed = match parse(args) {
         Ok(p) => p,
         Err(e) => {
@@ -284,6 +342,65 @@ mod tests {
                 buffer: Some("8".into()),
             })
         );
+    }
+
+    #[test]
+    fn join_names_the_canvas_or_one_session() {
+        assert_eq!(parse_join(&a(&["canvas"])).unwrap(), "canvas");
+        assert_eq!(parse_join(&a(&["session", "abc-1"])).unwrap(), "session abc-1");
+        assert!(parse_join(&a(&[])).is_err());
+        assert!(parse_join(&a(&["session"])).is_err());
+        assert!(parse_join(&a(&["session", "../x"])).is_err());
+        assert!(parse_join(&a(&["canvas", "extra"])).is_err());
+    }
+
+    #[test]
+    fn join_reaches_a_host_and_carries_its_snapshot() {
+        use infiniterm_core::backend::join::{JoinHub, WriteSession};
+        use infiniterm_core::backend::relay::Relay;
+        use std::sync::{Arc, Mutex};
+        let write: WriteSession = Arc::new(|_, _| {});
+        let hub = JoinHub::new(Arc::new(Mutex::new(Relay::new())), write);
+        hub.publish_layout("{\"cards\":[]}");
+        let socket = std::env::temp_dir().join(format!("ij-cli-{}.sock", std::process::id()));
+        hub.serve(&socket).unwrap();
+
+        let (input_far, input_near) = UnixStream::pair().unwrap();
+        let out = Arc::new(Mutex::new(Vec::new()));
+        struct Shared(Arc<Mutex<Vec<u8>>>);
+        impl Write for Shared {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let sink = Shared(out.clone());
+        let sock = socket.clone();
+        let handle = std::thread::spawn(move || join_over(&sock, "canvas", input_near, sink));
+        let wanted = b"ift-join 1 ok\n";
+        for _ in 0..100 {
+            if out.lock().unwrap().ends_with(b"{\"cards\":[]}") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let got = out.lock().unwrap().clone();
+        assert!(got.starts_with(wanted), "{:?}", String::from_utf8_lossy(&got));
+        assert!(got.ends_with(b"{\"cards\":[]}"));
+        drop(input_far);
+        let _ = handle.join();
+        let _ = std::fs::remove_file(&socket);
+    }
+
+    #[test]
+    fn joining_with_no_app_running_says_so() {
+        let socket = std::env::temp_dir().join("ij-cli-nobody.sock");
+        let _ = std::fs::remove_file(&socket);
+        let err = join_over(&socket, "canvas", std::io::empty(), Vec::new()).unwrap_err();
+        assert!(err.contains("no running infiniterm to join on this host"), "{err}");
     }
 
     #[test]

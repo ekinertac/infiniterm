@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-18
+
+- New: the app opens a socket that a window on another Mac can join through ssh, to show and drive this canvas (`ift join`, in a later release). It is owner-only and the setting `join.enabled` turns it off. Nothing is shown or sent unless something joins.
+
 ### 2026-10-17
 
 - New: `ift -t <path> [card]` opens a file as a tab of an editor card instead of a card of its own. `card` is a card's number (`2` or `#2`) or id; without one it uses the focused editor card, and when none is focused it opens a card of its own, as `ift <path>` does. A file already open in that card's tabs is switched to. A terminal is refused, with the reason.
