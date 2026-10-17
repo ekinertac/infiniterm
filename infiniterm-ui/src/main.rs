@@ -261,6 +261,13 @@ pub struct AppView {
     /// The socket viewers join through (`ift join`, #423); `None` when the
     /// backend is not the daemon or the socket could not be bound.
     pub join: Option<infiniterm_core::backend::join::JoinHub>,
+    /// The agent states last sent to viewers, so a change is sent once.
+    pub last_agents: String,
+    /// This window is a viewer (`ift join`, #423): the canvas is the host's,
+    /// nothing is saved, nothing is seeded, no session is started.
+    pub viewer: bool,
+    /// The host's canvas, as the client thread reads it.
+    pub canvas_rx: Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join_client::CanvasEvent>>,
     /// A terminal's Paste from the right-click menu: the card to paste into,
     /// read from the clipboard in the poll task.
     pub paste_request: Option<String>,
@@ -561,6 +568,10 @@ fn main() {
                         .await;
                     let alive = poll.update(cx, |this, cx| {
                         this.drain_backend();
+                        // The host's canvas, for a viewer; the host's agent
+                        // states, for viewers (#423).
+                        this.drain_canvas();
+                        this.publish_agents();
                         // The save debounce runs here, not in the frame: a
                         // layout change with nothing else moving must not
                         // hold the frame loop open for half a second.

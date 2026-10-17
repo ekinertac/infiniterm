@@ -225,7 +225,7 @@ impl AppView {
                 let adopt = card
                     .session
                     .clone()
-                    .filter(|s| self.live_sessions.iter().any(|live| live == s))
+                    .filter(|s| self.viewer || self.live_sessions.iter().any(|live| live == s))
                     .and_then(|s| self.backend.pty.adopt(&s));
                 if let Some(pane) = adopt {
                     body.pane = Some(pane);

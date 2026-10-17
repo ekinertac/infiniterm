@@ -163,9 +163,12 @@ impl AppView {
             .step(&mut self.model.viewport, self.model.view_size, now);
         self.model.pending_scale = self.animator.pending_scale();
         self.model.pending_pan = self.animator.pending_pan();
-        let mut seeded = self.seeded;
-        self.model.seed_first_card(&mut seeded);
-        self.seeded = seeded;
+        // A viewer's canvas is the host's: nothing is seeded onto it.
+        if !self.viewer {
+            let mut seeded = self.seeded;
+            self.model.seed_first_card(&mut seeded);
+            self.seeded = seeded;
+        }
         self.perform_effects();
         if std::mem::take(&mut self.show_character_palette) {
             window.show_character_palette();

@@ -74,6 +74,9 @@ impl AppView {
             shortcuts_index: 0,
             pick_request: None,
             join: None,
+            last_agents: String::new(),
+            viewer: false,
+            canvas_rx: None,
             read_requests: vec![],
             shortcuts_scroll: gpui::ScrollHandle::new(),
             whats_new_body: None,
@@ -837,7 +840,46 @@ impl AppView {
         }
     }
 
+    /// What the host's canvas said since the last tick (a viewer, #423): a
+    /// layout is applied in place, agent states on top of it, and a status
+    /// (joined, lost, refused) is shown as a notice.
+    pub fn drain_canvas(&mut self) {
+        use infiniterm_core::backend::join_client::CanvasEvent;
+        let Some(rx) = &self.canvas_rx else {
+            return;
+        };
+        let events: Vec<CanvasEvent> = rx.try_iter().collect();
+        for event in events {
+            match event {
+                CanvasEvent::Layout(text) => {
+                    if let Err(why) = self.model.apply_snapshot(&text) {
+                        self.model.notify(&why);
+                    }
+                }
+                CanvasEvent::Agents(text) => self.model.apply_agent_states(&text),
+                CanvasEvent::Status(text) => self.model.notify(&text),
+            }
+        }
+    }
+
+    /// The host sends viewers the agent states when they change (#423).
+    pub fn publish_agents(&mut self) {
+        let Some(hub) = &self.join else {
+            return;
+        };
+        let text = self.model.agent_states_text();
+        if text != self.last_agents {
+            hub.publish_agents(&text);
+            self.last_agents = text;
+        }
+    }
+
     pub fn maybe_sweep(&mut self, now: f64) {
+        // A viewer's states are the host's; a local sweep would end a working
+        // card the host still has working.
+        if self.viewer {
+            return;
+        }
         if now - self.last_sweep >= SWEEP_MS {
             self.last_sweep = now;
             self.model.sweep_stale();
@@ -1006,10 +1048,30 @@ pub fn startup(app: &mut AppView) {
         // The settings were applied before this, with the Mac's folder.
         app.model.start_dir = "~".into();
     }
-    app.live_sessions = app.backend.pty.live_sessions();
+    let join_host = infiniterm_core::backend::remote::join_from_env();
+    app.viewer = join_host.is_some();
+    // A viewer asks the host nothing at launch: the canvas arrives from the
+    // client thread, and every session on it is adoptable through the host.
+    app.live_sessions = if app.viewer {
+        vec![]
+    } else {
+        app.backend.pty.live_sessions()
+    };
     app.model.can_park = app.backend.pty.can_park();
-    app.model
-        .load_layout(infiniterm_core::layout_file::read_layout().as_deref());
+    if let Some(host) = join_host {
+        // An empty, read-only canvas; the first snapshot fills it in place.
+        app.model.load_layout(None);
+        app.model.first_run = false;
+        app.model.read_only = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.canvas_rx = Some(rx);
+        std::thread::spawn(move || {
+            infiniterm_core::backend::join_client::run_canvas_client(host, tx)
+        });
+    } else {
+        app.model
+            .load_layout(infiniterm_core::layout_file::read_layout().as_deref());
+    }
     // The omnibox ranks against this; a missing file is an empty history.
     app.model.history =
         infiniterm_core::omni::history::History::load(&infiniterm_core::paths::history_path());

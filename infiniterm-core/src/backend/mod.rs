@@ -93,6 +93,14 @@ impl Panes {
         buffer_mib: usize,
     ) -> (Panes, Receiver<(PaneId, PaneEvent)>, Option<String>) {
         match backend {
+            // A viewer window (`ift join`, #423): the cards are the host
+            // app's, reached through it, never through its `iftd`. No
+            // forward: the host's hooks have nothing to say to this window.
+            _ if remote::join_from_env().is_some() => {
+                let host = remote::join_from_env().expect("checked by the guard");
+                let (backend, rx) = daemon::DaemonBackend::new_viewer(host, buffer_mib);
+                (Panes::Daemon(backend), rx, None)
+            }
             // A remote instance (`ift connect`) runs its cards on the host
             // `INFINITERM_REMOTE` names, whatever the setting says, and needs no
             // `iftd` on THIS Mac: the daemons are on the server.

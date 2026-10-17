@@ -74,6 +74,19 @@ pub fn from_env() -> Option<RemoteHost> {
     )
 }
 
+/// The host a viewer window joins (`ift join`, #423): `INFINITERM_JOIN` is the
+/// ssh target, with the same optional `_ARGS`, `_IFT` and `_SSH` as a remote
+/// instance. Its cards are the host app's, never started here.
+pub fn join_from_env() -> Option<RemoteHost> {
+    let var = |k: &str| std::env::var(k).ok();
+    from_vars(
+        var("INFINITERM_JOIN").as_deref(),
+        var("INFINITERM_JOIN_ARGS").as_deref(),
+        var("INFINITERM_JOIN_IFT").as_deref(),
+        var("INFINITERM_JOIN_SSH").as_deref(),
+    )
+}
+
 /// `from_env` over explicit values, so the rules are tested without touching
 /// the process environment. An empty target is no remote at all.
 pub fn from_vars(
