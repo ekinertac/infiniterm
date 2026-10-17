@@ -80,6 +80,62 @@ impl Model {
         self.dirty_layout = true;
     }
 
+    /// Opens `path` as a tab of an editor card (`ift -t`, #265). `target` is a
+    /// card number or id; without one it is the focused editor card, and when
+    /// none is focused the file opens in a card of its own, as `ift <file>`
+    /// does. A file already open in that card's tabs is switched to, as the
+    /// file tree does. The card is focused and brought into view. Returns the
+    /// card's id.
+    pub fn open_file_tab(
+        &mut self,
+        path: &str,
+        target: Option<&str>,
+        from: Option<&str>,
+    ) -> Result<String, String> {
+        let is_editor = |m: &Model, id: &str| {
+            m.card(id)
+                .is_some_and(|c| c.kind == crate::saved_layout::CardKind::Editor)
+        };
+        let id = match target {
+            Some(t) => {
+                let id = self
+                    .resolve_card_ref(t)
+                    .ok_or_else(|| format!("no card {t}"))?;
+                if !is_editor(self, &id) {
+                    return Err(format!("card {t} is not an editor"));
+                }
+                id
+            }
+            None => match self
+                .selection
+                .focused_id
+                .clone()
+                .filter(|id| is_editor(self, id))
+            {
+                Some(id) => id,
+                None => {
+                    return self
+                        .open_in_card(
+                            crate::ift::open_plan(path, crate::ift::PathKind::File, None),
+                            from,
+                        )
+                        .ok_or_else(|| self.notice.clone().unwrap_or_default());
+                }
+            },
+        };
+        ensure_tabs(self, &id);
+        let at = self
+            .card(&id)
+            .and_then(|c| c.tabs.iter().position(|t| t == path));
+        match at {
+            Some(i) => self.browser_tab_jump(&id, i),
+            None => self.browser_tab_open(&id, Some(path)),
+        }
+        self.set_focus(Some(&id));
+        self.reveal_focused();
+        Ok(id)
+    }
+
     /// Closes the active tab. Closes the whole card instead when it was
     /// the last tab, `Cmd+W`'s rule.
     pub fn browser_tab_close(&mut self, card_id: &str) {

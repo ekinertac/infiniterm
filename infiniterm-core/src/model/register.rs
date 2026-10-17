@@ -2133,6 +2133,57 @@ mod tests {
         assert_eq!(h.m.selection.focused_id, focus);
     }
 
+    // #265: `ift -t <file> [card]` puts a file in a tab of an editor card: the
+    // focused one by default, a named one when given, a file already open is
+    // switched to, a terminal is refused, and with no editor focused it opens
+    // a card of its own.
+    #[test]
+    fn a_file_opens_as_a_tab_of_an_editor_card() {
+        let mut h = Harness::new();
+        // No editor focused: a card of its own, an editor.
+        let before = h.m.cards.len();
+        let first = h.m.open_file_tab("/tmp/a.rs", None, None).unwrap();
+        assert_eq!(h.m.cards.len(), before + 1);
+        assert_eq!(h.m.card(&first).unwrap().kind, CardKind::Editor);
+        // Now that editor is focused: the next file is a tab of it.
+        let second = h.m.open_file_tab("/tmp/b.rs", None, None).unwrap();
+        assert_eq!(second, first);
+        assert_eq!(h.m.cards.len(), before + 1, "no new card");
+        let tabs = h.m.card(&first).unwrap().tabs.clone();
+        assert!(tabs.contains(&"/tmp/a.rs".to_string()) && tabs.contains(&"/tmp/b.rs".to_string()));
+        assert_eq!(h.m.card(&first).unwrap().active_tab, tabs.len() - 1);
+        // A file already open is switched to, not opened twice.
+        h.m.open_file_tab("/tmp/a.rs", None, None).unwrap();
+        let after = h.m.card(&first).unwrap();
+        assert_eq!(after.tabs, tabs);
+        assert_eq!(after.tabs[after.active_tab], "/tmp/a.rs");
+        // A named card: by number, even when another card is focused.
+        let number = h.m.card(&first).unwrap().number;
+        h.run("card.new.terminal");
+        let named =
+            h.m.open_file_tab("/tmp/c.rs", Some(&format!("#{number}")), None)
+                .unwrap();
+        assert_eq!(named, first);
+        assert!(h
+            .m
+            .card(&first)
+            .unwrap()
+            .tabs
+            .contains(&"/tmp/c.rs".to_string()));
+        // A terminal is not an editor.
+        let term =
+            h.m.cards
+                .iter()
+                .find(|c| c.kind == CardKind::Terminal)
+                .unwrap()
+                .number;
+        let err =
+            h.m.open_file_tab("/tmp/d.rs", Some(&term.to_string()), None)
+                .unwrap_err();
+        assert!(err.contains("not an editor"), "{err}");
+        assert!(h.m.open_file_tab("/tmp/e.rs", Some("#999"), None).is_err());
+    }
+
     // #419: Cmd+A selects every card of the workspace and keeps the focus where
     // it was; a locked editor keeps Cmd+A for its text.
     #[test]

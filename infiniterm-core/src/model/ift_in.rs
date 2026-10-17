@@ -178,6 +178,19 @@ impl Model {
                     },
                 }
             }
+            // `ift -t <file> [card]`: the file as a tab of an editor card (#265).
+            "tab" => {
+                let path = req.args.first().map(String::as_str).unwrap_or("");
+                let target = req
+                    .args
+                    .get(1)
+                    .map(String::as_str)
+                    .filter(|t| !t.is_empty());
+                match self.open_file_tab(path, target, from.as_deref()) {
+                    Ok(id) => ok(id),
+                    Err(e) => err(&e),
+                }
+            }
             "diff" => {
                 let path = req.args.first().map(String::as_str).unwrap_or("");
                 let kind = kind_of(req.args.get(1).map(String::as_str).unwrap_or("directory"));
@@ -465,6 +478,30 @@ mod tests {
             .any(|e| matches!(e, Effect::WritePane(5, b) if b == b"/exit\r")));
         let r = ask(&mut m, "send", &[&a, "x"]);
         assert!(r.ok, "an id works too");
+    }
+
+    // #265: the `tab` verb opens a file as a tab of an editor card and says
+    // why it cannot.
+    #[test]
+    fn tab_opens_a_file_in_an_editor_card_and_says_why_it_cannot() {
+        let (mut m, a, _b) = two_cards();
+        let number = m.card(&a).unwrap().number;
+        // `a` is a terminal: refused by number.
+        let r = ask(&mut m, "tab", &["/tmp/x.rs", &number.to_string()]);
+        assert!(!r.ok && r.text.contains("not an editor"), "{}", r.text);
+        // With no editor focused, a card of its own; then a tab of it.
+        let r = ask(&mut m, "tab", &["/tmp/x.rs"]);
+        assert!(r.ok, "{}", r.text);
+        let editor = r.text.clone();
+        let r = ask(&mut m, "tab", &["/tmp/y.rs", ""]);
+        assert!(r.ok && r.text == editor, "{}", r.text);
+        assert!(m
+            .card(&editor)
+            .unwrap()
+            .tabs
+            .contains(&"/tmp/y.rs".to_string()));
+        let r = ask(&mut m, "tab", &["/tmp/z.rs", "999"]);
+        assert!(!r.ok && r.text.contains("no card 999"), "{}", r.text);
     }
 
     #[test]
