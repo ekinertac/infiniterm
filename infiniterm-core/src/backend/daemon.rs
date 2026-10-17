@@ -519,6 +519,26 @@ impl DaemonBackend {
         })
     }
 
+    /// The repaint jog for a viewer that just attached (#423): the same two
+    /// resizes `nudge_resize` sends after the host's own replay, so a program
+    /// that draws with relative cursor moves (Claude Code's input box)
+    /// redraws itself over the ring the viewer replayed. The viewer gets the
+    /// redraw as live output, which queues behind its replay.
+    pub fn session_nudger(&self) -> Arc<dyn Fn(&str) + Send + Sync> {
+        let panes = self.panes.clone();
+        Arc::new(move |session_id: &str| {
+            let id = panes
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(_, p)| p.session_id == session_id)
+                .map(|(id, _)| *id);
+            if let Some(id) = id {
+                nudge_resize(&panes, id);
+            }
+        })
+    }
+
     pub fn write_now(&self, pane: PaneId, bytes: &[u8]) {
         let found = self
             .panes

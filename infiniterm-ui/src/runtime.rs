@@ -649,8 +649,12 @@ impl AppView {
                 // fallback exists so a byte is never dropped, not because
                 // it is expected to run.
                 PaneEvent::Replay(bytes) => {
+                    let host_size = self.backend.pty.viewer_pane_size(pane);
                     let fed = match self.terminal_for_pane(pane) {
                         Some(body) => {
+                            if let Some((c, r)) = host_size {
+                                body.fit_host_cells(c as usize, r as usize);
+                            }
                             body.feed_replay(bytes);
                             true
                         }
@@ -965,7 +969,7 @@ fn start_join(app: &mut AppView) {
     // A viewer is a window onto the host's canvas, never a host: it would
     // relay sessions that are not its own (found in the #423 drive, which
     // showed a viewer binding its own j.sock).
-    let Some((relay, write)) = app.backend.pty.join_parts() else {
+    let Some((relay, write, nudge)) = app.backend.pty.join_parts() else {
         return;
     };
     if !app.model.config.join.enabled || app.viewer {
@@ -973,7 +977,7 @@ fn start_join(app: &mut AppView) {
         relay.lock().unwrap().set_enabled(false);
         return;
     }
-    let hub = infiniterm_core::backend::join::JoinHub::new(relay, write);
+    let hub = infiniterm_core::backend::join::JoinHub::new(relay, write).with_nudge(nudge);
     match hub.serve(&infiniterm_core::paths::join_socket()) {
         Ok(()) => {
             app.join_updates = hub.take_updates();
