@@ -154,6 +154,13 @@ pub fn sessions_dir() -> PathBuf {
     app_support_dir().join("s")
 }
 
+/// The socket `ift join` viewers reach through ssh (`backend::join`). Short
+/// on purpose: the data dir already takes about 70 of the 103 bytes a unix
+/// socket path may have.
+pub fn join_socket() -> PathBuf {
+    app_support_dir().join("j.sock")
+}
+
 /// Every command run, one line each, for `ift usage` (`usage_log.rs`).
 /// Local only, beside `agent.log`.
 pub fn usage_log_path() -> PathBuf {
