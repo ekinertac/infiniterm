@@ -156,6 +156,11 @@ impl AppView {
             body.scroll_multiplier = scroll_multiplier;
             // A padding change refits the grid through `refit_to` below.
             body.pad = padding;
+            // A viewer's card draws the host's grid, whatever its own size.
+            body.fixed_cells = body
+                .pane
+                .and_then(|p| self.backend.pty.viewer_pane_size(p))
+                .map(|(c, r)| (c as usize, r as usize));
             let metrics_changed = body.font_family != metrics.family
                 || body.weight != metrics.weight
                 || body.bold_weight != metrics.bold_weight

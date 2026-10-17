@@ -135,6 +135,11 @@ impl Model {
         }
         let saved = parse_layout(text).ok_or_else(|| "the host's canvas could not be read".to_string())?;
         self.read_only = true;
+        // The first canvas a viewer ever gets also sets where it looks; after
+        // that the viewport, zoom and focus are the viewer's own.
+        let first = self.cards.is_empty();
+        let (host_viewport, host_scale, host_focus) =
+            (saved.viewport, saved.ui_scale, saved.focused_id.clone());
 
         let mine = std::mem::take(&mut self.workspaces);
         self.workspaces = saved
@@ -218,6 +223,11 @@ impl Model {
                 card.tabs = c.tabs;
                 card.active_tab = c.active_tab;
             }
+        }
+        if first {
+            self.viewport = host_viewport;
+            self.ui_scale = host_scale;
+            self.selection.focused_id = host_focus;
         }
         // The viewer's own focus survives unless its card went.
         if let Some(id) = self.selection.focused_id.clone() {

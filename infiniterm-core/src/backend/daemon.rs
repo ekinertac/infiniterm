@@ -471,6 +471,19 @@ impl DaemonBackend {
             .map(|p| p.session_id.clone())
     }
 
+    /// The size the host's shell has, for a viewer's pane only: from the
+    /// host's hello and every later `Resize` it sent (#423).
+    pub fn viewer_pane_size(&self, pane: PaneId) -> Option<(u16, u16)> {
+        if !self.viewer {
+            return None;
+        }
+        self.panes
+            .lock()
+            .unwrap()
+            .get(&pane)
+            .map(|p| *p.size.lock().unwrap())
+    }
+
     /// The viewers' relay, shared with the join server (#423).
     pub fn relay(&self) -> Arc<Mutex<Relay>> {
         self.relay.clone()
@@ -780,12 +793,21 @@ fn run_reader(
                     exited = true;
                     break 'outer;
                 }
+                // The host's size changed (#423): only a viewer's pane is
+                // told, and only a viewer's pane keeps it.
+                Ok(Some(Frame::Resize { cols, rows })) => {
+                    if let Some(p) = panes.lock().unwrap().get(&id) {
+                        if p.viewer {
+                            *p.size.lock().unwrap() = (cols, rows);
+                        }
+                    }
+                }
                 // Hello only ever arrives once, consumed by read_hello
-                // before this thread starts; Resize and Kill only ever
-                // travel app-to-daemon. Neither is ours to act on, and
-                // dropping the connection over it would be the wrong
-                // failure mode for a frame that is merely misdirected.
-                Ok(Some(Frame::Hello { .. } | Frame::Resize { .. } | Frame::Kill)) => {}
+                // before this thread starts; Kill only ever travels
+                // app-to-daemon. Neither is ours to act on, and dropping
+                // the connection over it would be the wrong failure mode
+                // for a frame that is merely misdirected.
+                Ok(Some(Frame::Hello { .. } | Frame::Kill)) => {}
                 Ok(None) => break,
                 // The stream is not ours, or is no longer in step with us:
                 // terminal, per ProtoError's own doc comment.

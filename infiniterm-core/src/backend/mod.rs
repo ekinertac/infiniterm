@@ -154,6 +154,15 @@ impl Panes {
         !matches!(self, Panes::Tmux(_))
     }
 
+    /// The host's columns and rows for a viewer's pane (#423); `None` for any
+    /// other pane, whose size is its card's.
+    pub fn viewer_pane_size(&self, pane: PaneId) -> Option<(u16, u16)> {
+        match self {
+            Panes::Daemon(b) => b.viewer_pane_size(pane),
+            _ => None,
+        }
+    }
+
     /// What the join server (#423) needs from this backend: the relay and a
     /// way to write a viewer's keys to a session. Only the daemon backend has
     /// them; under local and tmux a card has no session a viewer could join.

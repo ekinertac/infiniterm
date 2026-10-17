@@ -177,6 +177,10 @@ pub struct TerminalBody {
     scale: f64,
     cols: usize,
     rows: usize,
+    /// A viewer's terminal (#423, `ift join`) is drawn at the HOST's columns
+    /// and rows, since the shell wraps to those; set each frame from the
+    /// pane, `None` everywhere else, where the card's size decides.
+    pub fixed_cells: Option<(usize, usize)>,
     /// Each row shaped ONCE, keyed by what it was shaped from, so a row
     /// that did not change is not shaped again. htop repaints every second;
     /// the other 39 rows of the other 24 cards do not.
@@ -313,6 +317,7 @@ impl TerminalBody {
             dragging: None,
             scale: 1.,
             cols,
+            fixed_cells: None,
             rows,
             shaped: vec![],
         }
@@ -426,12 +431,14 @@ impl TerminalBody {
     }
 
     fn refit(&mut self, world: Size) -> bool {
-        let (cols, rows) = Self::cells_for(
-            world,
-            self.cell_w,
-            self.font_px * self.line_height,
-            self.pad,
-        );
+        let (cols, rows) = self.fixed_cells.unwrap_or_else(|| {
+            Self::cells_for(
+                world,
+                self.cell_w,
+                self.font_px * self.line_height,
+                self.pad,
+            )
+        });
         if cols == self.cols && rows == self.rows {
             return false;
         }
