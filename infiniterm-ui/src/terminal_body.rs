@@ -426,6 +426,19 @@ impl TerminalBody {
         self.refit(world)
     }
 
+    /// A viewer's grid at the host's size (#423). The replay is the host's
+    /// bytes, written for the host's columns; parsed at the card's own size
+    /// first, a full-screen program's cursor moves land in the wrong rows and
+    /// the screen stays garbled until something redraws it.
+    pub fn fit_host_cells(&mut self, cols: usize, rows: usize) {
+        self.fixed_cells = Some((cols, rows));
+        if cols != self.cols || rows != self.rows {
+            self.cols = cols;
+            self.rows = rows;
+            self.grid.resize(cols, rows);
+        }
+    }
+
     /// A fresh screen for a replay that starts from the ring's beginning.
     pub fn reset_for_replay(&mut self) {
         self.grid.reset();

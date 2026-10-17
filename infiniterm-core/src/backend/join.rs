@@ -143,10 +143,15 @@ const MAX_CANVAS_MESSAGE: usize = 64 * 1024 * 1024;
 /// How a session's keys reach the host's own connection to `iftd`.
 pub type WriteSession = Arc<dyn Fn(&str, &[u8]) + Send + Sync>;
 
+/// Asks a session's program to repaint (the host's resize jog).
+pub type NudgeSession = Arc<dyn Fn(&str) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct JoinHub {
     relay: Arc<Mutex<Relay>>,
     write: WriteSession,
+    /// Run once a viewer has joined a session, after its replay is queued.
+    nudge: Option<NudgeSession>,
     canvas: Arc<Mutex<Canvas>>,
     /// Where a viewer's edits go: the app takes the receiving end once
     /// (`take_updates`) and applies them in its own poll, on its own thread.
@@ -160,10 +165,19 @@ impl JoinHub {
         JoinHub {
             relay,
             write,
+            nudge: None,
             canvas: Arc::new(Mutex::new(Canvas::default())),
             updates_tx,
             updates_rx: Arc::new(Mutex::new(Some(updates_rx))),
         }
+    }
+
+    /// A repaint request for each session a viewer joins. The ring a viewer
+    /// replays holds the program's old cursor moves; a program that draws
+    /// relative to them garbles until it repaints (#423, Claude Code cards).
+    pub fn with_nudge(mut self, nudge: NudgeSession) -> JoinHub {
+        self.nudge = Some(nudge);
+        self
     }
 
     /// The edits viewers send up, for the app to apply. Once: the second call
@@ -314,6 +328,10 @@ impl JoinHub {
         };
         if writeln!(out, "ift-join {MAJOR} ok").is_err() {
             return;
+        }
+        // After the replay is queued, so the redraw follows it.
+        if let Some(nudge) = &self.nudge {
+            nudge(id);
         }
         let Ok(mut w) = out.try_clone() else {
             return;
@@ -490,6 +508,31 @@ mod tests {
             *written.lock().unwrap(),
             vec![("abc".to_string(), b"ls\n".to_vec())]
         );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_viewer_joining_a_session_makes_the_host_ask_it_to_repaint() {
+        let (hub, relay, _w) = hub();
+        let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = asked.clone();
+        let hub = hub.with_nudge(Arc::new(move |id| {
+            sink.lock().unwrap().push(id.to_string())
+        }));
+        relay.lock().unwrap().open(
+            "abc",
+            Frame::Hello {
+                pid: 7,
+                cols: 90,
+                rows: 30,
+            },
+        );
+        let path = socket("nudge");
+        hub.serve(&path).unwrap();
+        let (_missing, _) = connect(&path, "ift-join 2 session nope");
+        let (_s, answer) = connect(&path, "ift-join 2 session abc");
+        assert_eq!(answer, "ift-join 2 ok");
+        assert_eq!(*asked.lock().unwrap(), vec!["abc".to_string()]);
         let _ = std::fs::remove_file(&path);
     }
 

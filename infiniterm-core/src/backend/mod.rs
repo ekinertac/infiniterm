@@ -179,9 +179,10 @@ impl Panes {
     ) -> Option<(
         std::sync::Arc<std::sync::Mutex<relay::Relay>>,
         join::WriteSession,
+        join::NudgeSession,
     )> {
         match self {
-            Panes::Daemon(b) => Some((b.relay(), b.session_writer())),
+            Panes::Daemon(b) => Some((b.relay(), b.session_writer(), b.session_nudger())),
             _ => None,
         }
     }
