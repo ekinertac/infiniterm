@@ -341,4 +341,3 @@ mod tests {
         assert_eq!(drain(&rx), vec![hello(), Frame::ReplayEnd]);
     }
 }
-

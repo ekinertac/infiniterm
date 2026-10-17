@@ -622,7 +622,10 @@ mod snapshot_tests {
         let mut viewer = Model::new();
         viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
 
-        assert!(viewer.card(&editor).is_none(), "no editor card, so no file is opened here");
+        assert!(
+            viewer.card(&editor).is_none(),
+            "no editor card, so no file is opened here"
+        );
         assert!(viewer.card(&term).is_some());
         assert_eq!(viewer.remote_cards.len(), 1);
         assert_eq!(viewer.remote_cards[0].id, editor);
@@ -656,11 +659,17 @@ mod snapshot_tests {
         host.viewport.x = 700.;
         let mut viewer = Model::new();
         viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
-        assert_eq!(viewer.viewport.x, 700., "the first snapshot sets where the viewer looks");
+        assert_eq!(
+            viewer.viewport.x, 700.,
+            "the first snapshot sets where the viewer looks"
+        );
         viewer.viewport.x = 5.;
         host.viewport.x = 900.;
         viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
-        assert_eq!(viewer.viewport.x, 5., "after that the view is the viewer's own");
+        assert_eq!(
+            viewer.viewport.x, 5.,
+            "after that the view is the viewer's own"
+        );
     }
 
     #[test]

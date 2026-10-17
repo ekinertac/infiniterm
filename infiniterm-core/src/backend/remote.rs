@@ -520,7 +520,9 @@ const JOIN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(20)
 /// One line, a byte at a time, so nothing after it is taken from the frames
 /// that follow. Bounded: a line over 256 bytes is not an answer.
 fn read_line(stream: &mut UnixStream, wait: std::time::Duration) -> Result<String, Answer> {
-    stream.set_read_timeout(Some(wait)).map_err(|_| Answer::Closed)?;
+    stream
+        .set_read_timeout(Some(wait))
+        .map_err(|_| Answer::Closed)?;
     let mut line = Vec::new();
     let mut b = [0u8; 1];
     loop {
@@ -663,17 +665,30 @@ mod tests {
     fn only_a_real_connection_failure_is_worth_another_try() {
         use Answer::*;
         let t = "ekin-mini";
-        let retry = |a: &Answer, e: &str| matches!(classify_join_failure(t, a, e), JoinFailure::Retry(_));
+        let retry =
+            |a: &Answer, e: &str| matches!(classify_join_failure(t, a, e), JoinFailure::Retry(_));
         // The connection failed: try again.
         assert!(retry(&TimedOut, ""));
         assert!(retry(&Closed, ""));
-        assert!(retry(&Closed, "ssh: connect to host ekin-mini port 22: Connection refused"));
-        assert!(retry(&Closed, "ssh: Could not resolve hostname ekin-mini: nodename nor servname"));
+        assert!(retry(
+            &Closed,
+            "ssh: connect to host ekin-mini port 22: Connection refused"
+        ));
+        assert!(retry(
+            &Closed,
+            "ssh: Could not resolve hostname ekin-mini: nodename nor servname"
+        ));
         assert!(retry(&Closed, "Connection closed by 100.1.2.3 port 22"));
         // The host (or its login) said no: a person has to act.
         assert!(!retry(&Closed, "bash: ift: command not found"));
-        assert!(!retry(&Closed, "ekin@ekin-mini: Permission denied (publickey)."));
-        assert!(!retry(&Closed, "ift: no running infiniterm to join on this host (/x/j.sock): not found"));
+        assert!(!retry(
+            &Closed,
+            "ekin@ekin-mini: Permission denied (publickey)."
+        ));
+        assert!(!retry(
+            &Closed,
+            "ift: no running infiniterm to join on this host (/x/j.sock): not found"
+        ));
         assert!(!retry(&Unreadable, ""));
     }
 
@@ -698,12 +713,20 @@ mod tests {
         assert_eq!(
             newer,
             JoinFailure::Fatal(
-                "this host speaks ift-join 1 and you asked for 2; update infiniterm on the host".into()
+                "this host speaks ift-join 1 and you asked for 2; update infiniterm on the host"
+                    .into()
             )
         );
         // Of a failed connection, the last line ssh said.
-        let last = classify_join_failure(t, &Answer::Closed, "warning: x\nbash: ift: command not found");
-        assert_eq!(last, JoinFailure::Fatal("bash: ift: command not found".into()));
+        let last = classify_join_failure(
+            t,
+            &Answer::Closed,
+            "warning: x\nbash: ift: command not found",
+        );
+        assert_eq!(
+            last,
+            JoinFailure::Fatal("bash: ift: command not found".into())
+        );
     }
 
     #[test]
