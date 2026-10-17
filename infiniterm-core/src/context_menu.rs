@@ -20,7 +20,10 @@ use crate::when::{Context, When};
 pub enum Area {
     /// The text of a terminal card.
     Terminal,
-    /// A card's frame or its label chip.
+    /// A card's frame or label chip when the card has no menu of its own
+    /// (a diff, a transcript, a page, a browser), and any card of a selection
+    /// of several. For a terminal or an editor the frame and label open the
+    /// card's own menu (`card_area`): a card is a card (Ekin, #421).
     Frame,
     /// Bare canvas.
     Canvas,
@@ -325,6 +328,18 @@ const TAB_STRIP: &[Def] = &[
     ),
 ];
 
+/// The menu a click on a card's frame or label chip opens: the same one its
+/// body opens, so where on the card you click does not change what you are
+/// offered. A kind with no menu of its own gets the generic one.
+pub fn card_area(kind: crate::saved_layout::CardKind) -> Area {
+    use crate::saved_layout::CardKind;
+    match kind {
+        CardKind::Terminal => Area::Terminal,
+        CardKind::Editor => Area::Editor,
+        _ => Area::Frame,
+    }
+}
+
 pub fn table(area: Area) -> Vec<Def> {
     match area {
         Area::Terminal => [TERMINAL_TOP, CARD_SECTION].concat(),
@@ -613,6 +628,23 @@ mod tests {
 
     // #419: a terminal's text, an editor's text and a card's frame end with the
     // same section, so a row cannot be in one card menu and missing in another.
+    // #421: a click on a terminal's or an editor's frame or label opens the
+    // card's own menu, not a different one.
+    #[test]
+    fn the_frame_of_a_terminal_or_an_editor_opens_that_cards_menu() {
+        use crate::saved_layout::CardKind;
+        assert_eq!(card_area(CardKind::Terminal), Area::Terminal);
+        assert_eq!(card_area(CardKind::Editor), Area::Editor);
+        for kind in [
+            CardKind::Browser,
+            CardKind::Diff,
+            CardKind::Transcript,
+            CardKind::Page,
+        ] {
+            assert_eq!(card_area(kind), Area::Frame, "{kind:?}");
+        }
+    }
+
     #[test]
     fn the_card_menus_end_with_the_same_section() {
         let c = ctx();
