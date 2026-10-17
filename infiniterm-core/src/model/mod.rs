@@ -700,6 +700,11 @@ pub struct Model {
     /// names, so the host can tell an edit made on an old canvas from one made
     /// on the current one.
     pub layout_rev: u64,
+    /// The last canvases the host published, by revision (#423). A viewer's
+    /// edit names the revision it was made on; the host works out WHAT the
+    /// viewer changed by comparing the edit with that canvas, and applies only
+    /// that to its current state.
+    pub published: std::collections::VecDeque<(u64, crate::saved_layout::SavedLayout)>,
     pub config: Config,
     pub keymap: Keymap,
     /// Bindings with a `when` from keybindings.json (#269); the last one whose
@@ -820,6 +825,7 @@ impl Model {
             dirty_layout: false,
             snapshot_seen: false,
             layout_rev: 0,
+            published: std::collections::VecDeque::new(),
             config: default_config(),
             keymap: default_keymap(),
             conditional_keys: vec![],

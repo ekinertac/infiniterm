@@ -169,7 +169,17 @@ pub fn list_sessions(host: &RemoteHost) -> std::io::Result<Vec<String>> {
 /// short PATH, and the installer puts `ift` in `~/.local/bin` for anyone but
 /// root (`install.rs`), so a plain `ift` was "not installed" on a server it was
 /// installed on (#397).
-pub const INSTALL_DIRS: [&str; 2] = ["$HOME/.local/bin", "/usr/local/bin"];
+///
+/// A Mac host's `ift` is inside the app (`/Applications/infiniterm.app`), where
+/// `iftd` sits beside it; a non-interactive ssh to a Mac has a PATH of
+/// `/usr/local/bin:/usr/bin:/bin`, so `ift join mini` said "command not found"
+/// on a Mac that runs infiniterm (found testing #432 over real ssh).
+pub const INSTALL_DIRS: [&str; 3] = [
+    "$HOME/.local/bin",
+    "/usr/local/bin",
+    // Overridable so a test host can hide the app a developer's Mac has.
+    "${INFINITERM_APP_DIR:-/Applications/infiniterm.app/Contents/MacOS}",
+];
 
 /// The script `check` runs on the server: `ift` is there (on the PATH or in
 /// `INSTALL_DIRS`, for a bare name), `iftd` is beside it or on the PATH, and
@@ -177,7 +187,13 @@ pub const INSTALL_DIRS: [&str; 2] = ["$HOME/.local/bin", "/usr/local/bin"];
 /// of the `ift` it found. Each failure says what is missing on stderr and uses
 /// its own exit status.
 pub fn check_command(ift: &str) -> String {
-    let dirs = INSTALL_DIRS.join(" ");
+    check_command_in(ift, &INSTALL_DIRS)
+}
+
+/// `check_command` over explicit folders, so a test can leave out the app
+/// folder, which exists on a Mac that has infiniterm installed.
+fn check_command_in(ift: &str, install_dirs: &[&str]) -> String {
+    let dirs = install_dirs.join(" ");
     let script = format!(
         concat!(
             "ift={ift}; ",
@@ -662,6 +678,16 @@ mod tests {
     }
 
     #[test]
+    fn the_host_check_looks_inside_the_app_for_a_mac_host() {
+        let script = check_command("ift");
+        assert!(
+            script.contains("/Applications/infiniterm.app/Contents/MacOS"),
+            "{script}"
+        );
+        assert!(script.contains("$HOME/.local/bin") && script.contains("/usr/local/bin"));
+    }
+
+    #[test]
     fn only_a_real_connection_failure_is_worth_another_try() {
         use Answer::*;
         let t = "ekin-mini";
@@ -789,7 +815,12 @@ mod tests {
     fn run_check(home: &std::path::Path, ift: &str) -> std::process::Output {
         std::process::Command::new("sh")
             .arg("-c")
-            .arg(check_command(ift))
+            // Only the home-based folders: a Mac that has infiniterm installed
+            // would otherwise find its own `ift` in the app folder.
+            .arg(check_command_in(
+                ift,
+                &["$HOME/.local/bin", "/usr/local/bin"],
+            ))
             .env_clear()
             .env("HOME", home)
             .env("PATH", "/usr/bin:/bin")

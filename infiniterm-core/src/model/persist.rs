@@ -10,12 +10,18 @@
 //! calls `save_text` when `dirty_layout` has been set and the window passed.
 use super::{Model, NewCard};
 
+/// How many published canvases the host remembers, for working out what a
+/// viewer's edit changed. A viewer that edits a canvas older than this many
+/// publishes ago is resynced instead.
+const PUBLISHED_KEPT: usize = 32;
+
 /// What `Model::apply_remote_layout` did with a viewer's edit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteApply {
     /// Made so; the app publishes the new canvas.
     Applied,
-    /// Made on an older canvas than the host's: dropped.
+    /// Made on a canvas the host no longer remembers: dropped, and the host
+    /// resyncs the viewer.
     Stale,
 }
 use crate::palette_usage::Usage;
@@ -368,114 +374,216 @@ impl Model {
         ))
     }
 
-    /// A viewer's edit, applied to this canvas in place (#423, `ift join`).
-    /// The viewer edited its own copy with the app's usual commands and sent
-    /// the result; this makes it so, through the host's own paths:
+    /// Records a canvas the host is about to publish and returns its revision
+    /// (#423). The host keeps the last few, so it can tell what a viewer
+    /// changed: the viewer names the revision it edited, and its edit is
+    /// compared with that canvas.
+    pub fn record_published(&mut self, text: &str) -> u64 {
+        self.layout_rev += 1;
+        if let Some(layout) = parse_layout(text) {
+            self.published.push_back((self.layout_rev, layout));
+            while self.published.len() > PUBLISHED_KEPT {
+                self.published.pop_front();
+            }
+        }
+        self.layout_rev
+    }
+
+    /// A viewer's edit, merged into this canvas (#423, `ift join`). The viewer
+    /// edited its own copy with the app's usual commands and sent the result
+    /// with the revision it started from. What it CHANGED is what is applied:
+    /// the edit is compared with the canvas the host published at that
+    /// revision, and only the differences are made, on top of the host's
+    /// CURRENT state, through the host's own paths:
     ///
-    /// - a card the viewer closed is closed by the host's normal close (so a
+    /// - a card the viewer closed is closed by the host's normal close (a
     ///   terminal parks and ends as it always does);
     /// - a terminal the viewer made becomes a normal new card (the host's
     ///   reconcile starts its shell, here, with this Mac's login);
-    /// - moves, resizes, titles, groups, workspaces and their order follow.
+    /// - a field the viewer changed (rect, title, group, workspace, ...) is set;
+    ///   the same for groups and workspaces (made, removed, renamed, ordered).
+    ///
+    /// A field the viewer did not touch is left as the host has it, so a busy
+    /// host (agents renaming cards, a user moving things) is never reverted by
+    /// a viewer's unrelated edit, and an edit is never refused for arriving
+    /// while the host has an unpublished change. Where both changed the same
+    /// field, the viewer's, the later writer, wins.
     ///
     /// What stays this host's: its viewport, zoom, focus, active workspace,
     /// each workspace's own viewport, and every card's session, agent state and
-    /// number (a number the viewer picked can collide with a host's).
-    ///
-    /// Last writer wins, with one guard: an edit made on a revision that is
-    /// not the current one, or while this host has a change it has not yet
-    /// published, is `Stale` and dropped, so a viewer cannot overwrite what the
-    /// host just did. The app republishes the host's canvas then, which is how
-    /// the viewer finds out.
+    /// number (a number the viewer picked can collide with a host's). The only
+    /// edit refused is one made on a revision the host no longer remembers:
+    /// `Stale`, and the app republishes its canvas so the viewer resyncs.
     pub fn apply_remote_layout(&mut self, text: &str, base: u64) -> Result<RemoteApply, String> {
-        if base != self.layout_rev || self.dirty_layout {
+        let Some(was) = self
+            .published
+            .iter()
+            .find(|(rev, _)| *rev == base)
+            .map(|(_, layout)| layout.clone())
+        else {
             return Ok(RemoteApply::Stale);
-        }
-        let saved = parse_layout(text)
+        };
+        let now = parse_layout(text)
             .ok_or_else(|| "the viewer's canvas could not be read".to_string())?;
+
+        let was_card = |id: &str| was.cards.iter().find(|c| c.id == id);
 
         // Closed in the viewer, closed here. An in-place editor (a cover) is
         // the host's own and lives as long as its `ift`.
-        let want: Vec<&str> = saved.cards.iter().map(|c| c.id.as_str()).collect();
-        let gone: Vec<String> = self
+        let closed: Vec<String> = was
             .cards
             .iter()
-            .filter(|c| !want.contains(&c.id.as_str()) && !self.covers.contains_key(&c.id))
+            .filter(|c| !now.cards.iter().any(|n| n.id == c.id))
             .map(|c| c.id.clone())
+            .filter(|id| self.card(id).is_some() && !self.covers.contains_key(id))
             .collect();
-        for id in gone {
+        for id in closed {
             self.close_card(&id, false);
         }
 
-        // Workspaces: the viewer's list and names and order; this host's own
-        // viewport and focus in each one it already had.
-        let mine = std::mem::take(&mut self.workspaces);
-        self.workspaces = saved
-            .workspaces
-            .into_iter()
-            .map(|mut w| {
-                if let Some(own) = mine.iter().find(|o| o.id == w.id) {
-                    w.viewport = own.viewport;
-                    w.focused = own.focused.clone();
+        for c in &now.cards {
+            match was_card(&c.id) {
+                // A card the viewer had and still has: only what it changed.
+                Some(b) => {
+                    if let Some(card) = self.card_mut(&c.id) {
+                        if c.rect != b.rect {
+                            card.rect = c.rect;
+                        }
+                        if c.z != b.z {
+                            card.z = c.z;
+                        }
+                        if c.title != b.title {
+                            card.title = c.title.clone();
+                        }
+                        if c.workspace_id != b.workspace_id {
+                            card.workspace_id = c.workspace_id.clone();
+                        }
+                        if c.group_id != b.group_id {
+                            card.group_id = c.group_id.clone();
+                        }
+                        if c.soft_group_id != b.soft_group_id {
+                            card.soft_group_id = c.soft_group_id.clone();
+                        }
+                        if c.split_from != b.split_from {
+                            card.split_from = c.split_from.clone();
+                        }
+                        if c.protected != b.protected {
+                            card.protected = c.protected;
+                        }
+                    }
                 }
-                w
-            })
-            .collect();
-        self.groups = saved
-            .groups
-            .into_iter()
-            .map(|g| super::Group {
-                id: g.id,
-                name: g.name,
-            })
-            .collect();
-
-        for c in saved.cards {
-            if let Some(card) = self.card_mut(&c.id) {
-                card.workspace_id = c.workspace_id;
-                card.rect = c.rect;
-                card.z = c.z;
-                card.title = c.title;
-                card.group_id = c.group_id;
-                card.soft_group_id = c.soft_group_id;
-                card.split_from = c.split_from;
-                card.protected = c.protected;
-                continue;
-            }
-            // A card this host does not have. Only a terminal can be made
-            // from a viewer: an editor, diff or browser card would name a
-            // file or page on the viewer's Mac.
-            if c.kind != crate::saved_layout::CardKind::Terminal {
-                continue;
-            }
-            // `~` and an empty folder are this host's own start directory; a
-            // folder the viewer named is tried as it is.
-            let cwd = if c.cwd.is_empty() || c.cwd.starts_with('~') {
-                self.start_dir.clone()
-            } else {
-                c.cwd.clone()
-            };
-            let id = self.add_card(
-                &cwd,
-                NewCard {
-                    id: Some(c.id),
-                    rect: Some(c.rect),
-                    group_id: c.group_id,
-                    workspace_id: Some(c.workspace_id),
-                    soft_group_id: c.soft_group_id,
-                    split_from: c.split_from,
-                    kind: c.kind,
-                    ..Default::default()
-                },
-            );
-            let number = self.take_number();
-            if let Some(card) = self.card_mut(&id) {
-                card.title = c.title;
-                card.z = c.z;
-                card.protected = c.protected;
-                card.number = number;
+                // A card the viewer made. Only a terminal can be made from a
+                // viewer: an editor, diff or browser card would name a file or
+                // page on the viewer's Mac.
+                None => {
+                    if self.card(&c.id).is_some()
+                        || c.kind != crate::saved_layout::CardKind::Terminal
+                    {
+                        continue;
+                    }
+                    // `~` and an empty folder are this host's own start
+                    // directory; a folder the viewer named is tried as it is.
+                    let cwd = if c.cwd.is_empty() || c.cwd.starts_with('~') {
+                        self.start_dir.clone()
+                    } else {
+                        c.cwd.clone()
+                    };
+                    let id = self.add_card(
+                        &cwd,
+                        NewCard {
+                            id: Some(c.id.clone()),
+                            rect: Some(c.rect),
+                            group_id: c.group_id.clone(),
+                            workspace_id: Some(c.workspace_id.clone()),
+                            soft_group_id: c.soft_group_id.clone(),
+                            split_from: c.split_from.clone(),
+                            kind: c.kind,
+                            ..Default::default()
+                        },
+                    );
+                    let number = self.take_number();
+                    if let Some(card) = self.card_mut(&id) {
+                        card.title = c.title.clone();
+                        card.z = c.z;
+                        card.protected = c.protected;
+                        card.number = number;
+                    }
+                }
             }
         }
+
+        // Groups: made, removed, renamed.
+        for g in &was.groups {
+            if !now.groups.iter().any(|n| n.id == g.id) {
+                self.groups.retain(|h| h.id != g.id);
+            }
+        }
+        for g in &now.groups {
+            match was.groups.iter().find(|b| b.id == g.id) {
+                Some(b) if b.name != g.name => {
+                    if let Some(h) = self.groups.iter_mut().find(|h| h.id == g.id) {
+                        h.name = g.name.clone();
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    if !self.groups.iter().any(|h| h.id == g.id) {
+                        self.groups.push(super::Group {
+                            id: g.id.clone(),
+                            name: g.name.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Workspaces: made, removed (unless a card of the host's is still in
+        // it), renamed, and put in the order the viewer put them.
+        for w in &was.workspaces {
+            if !now.workspaces.iter().any(|n| n.id == w.id) {
+                let occupied = self.cards.iter().any(|c| c.workspace_id == w.id);
+                if !occupied {
+                    self.workspaces.retain(|h| h.id != w.id);
+                }
+            }
+        }
+        for w in &now.workspaces {
+            match was.workspaces.iter().find(|b| b.id == w.id) {
+                Some(b) if b.name != w.name => {
+                    if let Some(h) = self.workspaces.iter_mut().find(|h| h.id == w.id) {
+                        h.name = w.name.clone();
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    if !self.workspaces.iter().any(|h| h.id == w.id) {
+                        self.workspaces.push(w.clone());
+                    }
+                }
+            }
+        }
+        let order_of = |ws: &[crate::workspaces::Workspace],
+                        keep: &[crate::workspaces::Workspace]|
+         -> Vec<String> {
+            ws.iter()
+                .filter(|w| keep.iter().any(|k| k.id == w.id))
+                .map(|w| w.id.clone())
+                .collect()
+        };
+        if order_of(&was.workspaces, &now.workspaces) != order_of(&now.workspaces, &was.workspaces)
+        {
+            let want: Vec<String> = now.workspaces.iter().map(|w| w.id.clone()).collect();
+            let mut mine = std::mem::take(&mut self.workspaces);
+            let mut ordered = Vec::with_capacity(mine.len());
+            for id in &want {
+                if let Some(at) = mine.iter().position(|w| &w.id == id) {
+                    ordered.push(mine.remove(at));
+                }
+            }
+            ordered.extend(mine);
+            self.workspaces = ordered;
+        }
+
         self.ensure_workspace();
         // Changed: the app publishes the new canvas with a new revision, to
         // every viewer, the sender included.
@@ -744,7 +852,12 @@ mod snapshot_tests {
         let b = add(&mut host, rect(900., 0.));
         let e = editor_card(&mut host, rect(0., 700.));
         let mut viewer = Model::new();
-        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        let text = host.save_text().unwrap();
+        // The host publishes it, and the viewer applies it: its edits name
+        // this revision.
+        let rev = host.record_published(&text);
+        viewer.apply_snapshot(&text).unwrap();
+        viewer.layout_rev = rev;
         (host, viewer, a, b, e)
     }
 
@@ -760,7 +873,10 @@ mod snapshot_tests {
         viewer.card_mut(&e).unwrap().rect = rect(50., 760.);
         // And it goes up with its path intact; the host moves it and keeps it.
         let up = viewer.layout_snapshot();
-        assert_eq!(host.apply_remote_layout(&up, 0), Ok(RemoteApply::Applied));
+        assert_eq!(
+            host.apply_remote_layout(&up, viewer.layout_rev),
+            Ok(RemoteApply::Applied)
+        );
         let on_host = host.card(&e).expect("the editor is still on the host");
         assert_eq!(on_host.rect, rect(50., 760.));
         assert_eq!(on_host.path.as_deref(), Some("/Users/me/notes.rs"));
@@ -772,7 +888,10 @@ mod snapshot_tests {
         viewer.close_card(&b, false);
         viewer.close_card(&e, false);
         let up = viewer.layout_snapshot();
-        assert_eq!(host.apply_remote_layout(&up, 0), Ok(RemoteApply::Applied));
+        assert_eq!(
+            host.apply_remote_layout(&up, viewer.layout_rev),
+            Ok(RemoteApply::Applied)
+        );
         assert!(host.card(&a).is_some());
         assert!(
             host.card(&b).is_none(),
@@ -799,7 +918,10 @@ mod snapshot_tests {
             },
         );
         let up = viewer.layout_snapshot();
-        assert_eq!(host.apply_remote_layout(&up, 0), Ok(RemoteApply::Applied));
+        assert_eq!(
+            host.apply_remote_layout(&up, viewer.layout_rev),
+            Ok(RemoteApply::Applied)
+        );
         let new = host.card(&made).expect("a normal new card on the host");
         assert_eq!(new.kind, CardKind::Terminal);
         assert_eq!(new.rect, rect(1800., 0.));
@@ -825,7 +947,10 @@ mod snapshot_tests {
         viewer.card_mut(&a).unwrap().group_id = Some("g1".into());
         viewer.card_mut(&b).unwrap().group_id = Some("g1".into());
         let up = viewer.layout_snapshot();
-        assert_eq!(host.apply_remote_layout(&up, 0), Ok(RemoteApply::Applied));
+        assert_eq!(
+            host.apply_remote_layout(&up, viewer.layout_rev),
+            Ok(RemoteApply::Applied)
+        );
         assert_eq!(host.card(&a).unwrap().rect, rect(25., 40.));
         assert_eq!(host.card(&a).unwrap().title, "build");
         assert_eq!(host.card(&a).unwrap().group_id.as_deref(), Some("g1"));
@@ -834,25 +959,74 @@ mod snapshot_tests {
     }
 
     #[test]
-    fn a_stale_edit_is_dropped_and_so_is_one_made_over_an_unpublished_host_change() {
+    fn a_busy_host_is_never_reverted_by_a_viewers_unrelated_edit() {
+        let (mut host, mut viewer, a, b, _e) = host_and_viewer();
+        // The host changes things the viewer never saw and has not published:
+        // an agent renames a card, the user moves another.
+        host.card_mut(&a).unwrap().title = "agent renamed me".into();
+        host.card_mut(&b).unwrap().rect = rect(333., 444.);
+        host.dirty_layout = true;
+        // Meanwhile the viewer only moves a third card.
+        let e = viewer
+            .cards
+            .iter()
+            .find(|c| c.kind != crate::saved_layout::CardKind::Terminal)
+            .map(|c| c.id.clone());
+        let moved = e.unwrap_or_else(|| a.clone());
+        viewer.card_mut(&moved).unwrap().rect = rect(70., 80.);
+        let up = viewer.layout_snapshot();
+        assert_eq!(
+            host.apply_remote_layout(&up, viewer.layout_rev),
+            Ok(RemoteApply::Applied),
+            "an edit is never refused for arriving over a host change"
+        );
+        assert_eq!(
+            host.card(&moved).unwrap().rect,
+            rect(70., 80.),
+            "the edit landed"
+        );
+        assert_eq!(
+            host.card(&b).unwrap().rect,
+            rect(333., 444.),
+            "the host's move stands"
+        );
+        if moved != a {
+            assert_eq!(
+                host.card(&a).unwrap().title,
+                "agent renamed me",
+                "so does its rename"
+            );
+        }
+    }
+
+    #[test]
+    fn where_both_changed_the_same_field_the_viewer_wins_and_the_rest_is_the_hosts() {
+        let (mut host, mut viewer, a, _b, _e) = host_and_viewer();
+        host.card_mut(&a).unwrap().rect = rect(1., 1.);
+        host.card_mut(&a).unwrap().title = "the host's title".into();
+        viewer.card_mut(&a).unwrap().rect = rect(2., 2.);
+        let up = viewer.layout_snapshot();
+        host.apply_remote_layout(&up, viewer.layout_rev).unwrap();
+        assert_eq!(
+            host.card(&a).unwrap().rect,
+            rect(2., 2.),
+            "the later writer wins a field"
+        );
+        assert_eq!(
+            host.card(&a).unwrap().title,
+            "the host's title",
+            "a field it did not touch stays"
+        );
+    }
+
+    #[test]
+    fn an_edit_made_on_a_canvas_the_host_no_longer_remembers_is_resynced() {
         let (mut host, mut viewer, a, b, _e) = host_and_viewer();
         viewer.close_card(&b, false);
         let up = viewer.layout_snapshot();
-        // Made on revision 0; the host has moved on to 3.
-        host.layout_rev = 3;
-        assert_eq!(host.apply_remote_layout(&up, 0), Ok(RemoteApply::Stale));
+        assert_eq!(host.apply_remote_layout(&up, 9999), Ok(RemoteApply::Stale));
         assert!(host.card(&b).is_some(), "nothing was closed");
-        // The right revision, but the host has a change it has not published.
-        host.layout_rev = 0;
-        host.card_mut(&a).unwrap().rect = rect(7., 7.);
-        host.dirty_layout = true;
-        assert_eq!(host.apply_remote_layout(&up, 0), Ok(RemoteApply::Stale));
-        assert_eq!(
-            host.card(&a).unwrap().rect,
-            rect(7., 7.),
-            "the host's change stands"
-        );
-        assert!(host.card(&b).is_some());
+        assert!(host.card(&a).is_some());
     }
 
     #[test]
@@ -864,7 +1038,7 @@ mod snapshot_tests {
         viewer.selection.focused_id = Some(a.clone());
         viewer.card_mut(&a).unwrap().rect = rect(5., 5.);
         let up = viewer.layout_snapshot();
-        host.apply_remote_layout(&up, 0).unwrap();
+        host.apply_remote_layout(&up, viewer.layout_rev).unwrap();
         assert_eq!(host.viewport.x, 321., "the viewer's pan is not the host's");
         assert_eq!(host.selection.focused_id, Some(b), "nor its focus");
     }
@@ -875,7 +1049,7 @@ mod snapshot_tests {
         viewer.card_mut(&a).unwrap().rect = rect(1., 1.);
         let up = viewer.layout_snapshot();
         assert!(!host.dirty_layout);
-        host.apply_remote_layout(&up, 0).unwrap();
+        host.apply_remote_layout(&up, viewer.layout_rev).unwrap();
         assert!(
             host.dirty_layout,
             "the host's next save is the new revision"

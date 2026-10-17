@@ -832,8 +832,10 @@ impl AppView {
             // it is. The viewer keeps its own viewport and focus; nothing is
             // stripped here.
             if let Some(hub) = &self.join {
-                self.model.layout_rev += 1;
-                hub.publish_layout(&text, self.model.layout_rev);
+                // Remembered by revision, so a viewer's edit can be compared
+                // with the canvas it started from and merged field by field.
+                let rev = self.model.record_published(&text);
+                hub.publish_layout(&text, rev);
             }
         }
     }
