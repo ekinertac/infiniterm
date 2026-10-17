@@ -9,11 +9,16 @@
 //! Called by the viewer's startup in the ui crate. Related: join.rs (the
 //! host's end and the message framing), remote.rs (`connect_join_canvas`).
 
-use std::io::Read;
-use std::sync::mpsc::Sender;
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::join::{read_canvas_message, KIND_AGENTS, KIND_LAYOUT};
+use super::join::{
+    encode_canvas_message, encode_update, read_canvas_message, RemoteUpdate, KIND_AGENTS,
+    KIND_LAYOUT, KIND_REVISION, KIND_UPDATE,
+};
 use super::remote::{connect_join_canvas, JoinFailure, RemoteHost};
 
 /// What the app is told about the host's canvas.
@@ -21,6 +26,9 @@ use super::remote::{connect_join_canvas, JoinFailure, RemoteHost};
 pub enum CanvasEvent {
     /// A whole layout snapshot (the host's save text).
     Layout(String),
+    /// The host's revision of the layout just before it: an edit sent up
+    /// names it, and the host drops an edit made on an older one.
+    Revision(u64),
     /// The agent states, `{"<card id>": "working", ...}`.
     Agents(String),
     /// Something a person should read: connected, lost, refused.
@@ -51,6 +59,10 @@ pub fn pump_canvas(stream: &mut impl Read, tx: &Sender<CanvasEvent>) -> Ended {
     loop {
         let event = match read_canvas_message(stream) {
             Ok(Some((KIND_LAYOUT, text))) => CanvasEvent::Layout(text),
+            Ok(Some((KIND_REVISION, text))) => match text.trim().parse() {
+                Ok(rev) => CanvasEvent::Revision(rev),
+                Err(_) => continue,
+            },
             Ok(Some((KIND_AGENTS, text))) => CanvasEvent::Agents(text),
             Ok(Some(_)) => continue,
             Ok(None) | Err(_) => return Ended::Stream,
@@ -61,8 +73,37 @@ pub fn pump_canvas(stream: &mut impl Read, tx: &Sender<CanvasEvent>) -> Ended {
     }
 }
 
-/// Joins the host's canvas for as long as the app listens.
-pub fn run_canvas_client(host: RemoteHost, tx: Sender<CanvasEvent>) {
+/// How often the uplink writer looks for an edit to send, and for the end of
+/// its connection.
+const UPLINK_POLL: Duration = Duration::from_millis(100);
+
+/// Sends the viewer's edits up one connection until it ends. The receiver is
+/// shared across reconnects, so an edit made while the connection was down is
+/// sent on the next one (and dropped by the host if it is stale by then).
+fn run_uplink(
+    mut stream: impl Write,
+    edits: Arc<Mutex<Receiver<RemoteUpdate>>>,
+    ended: Arc<AtomicBool>,
+) {
+    while !ended.load(Ordering::Relaxed) {
+        let next = edits.lock().unwrap().recv_timeout(UPLINK_POLL);
+        match next {
+            Ok(edit) => {
+                let message = encode_canvas_message(KIND_UPDATE, &encode_update(edit.base, &edit.layout));
+                if stream.write_all(&message).and_then(|_| stream.flush()).is_err() {
+                    return;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
+/// Joins the host's canvas for as long as the app listens, and sends the
+/// edits the app makes (`edits`) up to the host.
+pub fn run_canvas_client(host: RemoteHost, tx: Sender<CanvasEvent>, edits: Receiver<RemoteUpdate>) {
+    let edits = Arc::new(Mutex::new(edits));
     loop {
         match connect_join_canvas(&host) {
             Ok((mut stream, _stderr)) => {
@@ -72,7 +113,14 @@ pub fn run_canvas_client(host: RemoteHost, tx: Sender<CanvasEvent>) {
                 {
                     return;
                 }
-                if pump_canvas(&mut stream, &tx) == Ended::AppGone {
+                let ended = Arc::new(AtomicBool::new(false));
+                if let Ok(up) = stream.try_clone() {
+                    let (edits, ended) = (edits.clone(), ended.clone());
+                    std::thread::spawn(move || run_uplink(up, edits, ended));
+                }
+                let result = pump_canvas(&mut stream, &tx);
+                ended.store(true, Ordering::Relaxed);
+                if result == Ended::AppGone {
                     return;
                 }
                 if tx
@@ -120,19 +168,19 @@ mod tests {
     #[test]
     fn layouts_and_agent_states_become_events_and_unknown_kinds_are_skipped() {
         let hub = hub();
-        hub.publish_layout("{\"cards\":[]}");
+        hub.publish_layout("{\"cards\":[]}", 3);
         hub.publish_agents("{\"c\":\"waiting\"}");
         let path = std::env::temp_dir().join(format!("ij-client-{}.sock", std::process::id()));
         hub.serve(&path).unwrap();
         let mut s = UnixStream::connect(&path).unwrap();
-        writeln!(s, "ift-join 1 canvas").unwrap();
+        writeln!(s, "ift-join 2 canvas").unwrap();
         // The answer line, as connect_join_canvas would consume it.
         let mut b = [0u8; 1];
         let mut line = Vec::new();
         while std::io::Read::read(&mut s, &mut b).unwrap() == 1 && b[0] != b'\n' {
             line.push(b[0]);
         }
-        assert_eq!(line, b"ift-join 1 ok");
+        assert_eq!(line, b"ift-join 2 ok");
 
         let (tx, rx) = channel();
         let reader = std::thread::spawn(move || {
@@ -142,15 +190,17 @@ mod tests {
             rx.recv().unwrap(),
             CanvasEvent::Layout("{\"cards\":[]}".into())
         );
+        assert_eq!(rx.recv().unwrap(), CanvasEvent::Revision(3));
         assert_eq!(
             rx.recv().unwrap(),
             CanvasEvent::Agents("{\"c\":\"waiting\"}".into())
         );
-        hub.publish_layout("{\"cards\":[1]}");
+        hub.publish_layout("{\"cards\":[1]}", 4);
         assert_eq!(
             rx.recv().unwrap(),
             CanvasEvent::Layout("{\"cards\":[1]}".into())
         );
+        assert_eq!(rx.recv().unwrap(), CanvasEvent::Revision(4));
         drop(rx);
         // The reader ends when the app stops listening or the host closes.
         let _ = std::fs::remove_file(&path);
@@ -181,4 +231,40 @@ mod tests {
         drop(rx);
         assert_eq!(pump_canvas(&mut bytes.as_slice(), &tx), Ended::AppGone);
     }
+
+    #[test]
+    fn a_revision_follows_its_layout_as_an_event_and_garbage_is_skipped() {
+        let mut bytes = Vec::new();
+        for (kind, body) in [
+            (KIND_LAYOUT, "{}"),
+            (KIND_REVISION, "12"),
+            (KIND_REVISION, "not a number"),
+        ] {
+            bytes.extend(encode_canvas_message(kind, body));
+        }
+        let (tx, rx) = channel();
+        assert_eq!(pump_canvas(&mut bytes.as_slice(), &tx), Ended::Stream);
+        assert_eq!(rx.try_recv().unwrap(), CanvasEvent::Layout("{}".into()));
+        assert_eq!(rx.try_recv().unwrap(), CanvasEvent::Revision(12));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn the_uplink_writes_each_edit_as_an_update_message_the_host_reads() {
+        use crate::backend::join::read_canvas_message;
+        use std::sync::mpsc::channel as edit_channel;
+        let (tx, rx) = edit_channel();
+        let ended = Arc::new(AtomicBool::new(false));
+        let (near, mut far) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (edits, stop) = (Arc::new(Mutex::new(rx)), ended.clone());
+        let writer = std::thread::spawn(move || run_uplink(near, edits, stop));
+        tx.send(RemoteUpdate { base: 5, layout: "{\"a\":1}".into() }).unwrap();
+        far.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let (kind, text) = read_canvas_message(&mut far).unwrap().unwrap();
+        assert_eq!(kind, KIND_UPDATE);
+        assert_eq!(text, encode_update(5, "{\"a\":1}"));
+        ended.store(true, Ordering::Relaxed);
+        writer.join().unwrap();
+    }
 }
+

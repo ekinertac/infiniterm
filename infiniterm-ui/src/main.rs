@@ -263,6 +263,11 @@ pub struct AppView {
     pub join: Option<infiniterm_core::backend::join::JoinHub>,
     /// The agent states last sent to viewers, so a change is sent once.
     pub last_agents: String,
+    /// The edits viewers send up (host side, #423): applied in the poll.
+    pub join_updates:
+        Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join::RemoteUpdate>>,
+    /// A viewer's edits on their way up to the host (viewer side).
+    pub uplink: Option<std::sync::mpsc::Sender<infiniterm_core::backend::join::RemoteUpdate>>,
     /// This window is a viewer (`ift join`, #423): the canvas is the host's,
     /// nothing is saved, nothing is seeded, no session is started.
     pub viewer: bool,
@@ -573,6 +578,11 @@ fn main() {
                         // states, for viewers (#423).
                         this.drain_canvas();
                         this.publish_agents();
+                        // What viewers changed on this canvas (#423).
+                        if this.apply_remote_updates() {
+                            this.redraw = true;
+                            cx.notify();
+                        }
                         // The save debounce runs here, not in the frame: a
                         // layout change with nothing else moving must not
                         // hold the frame loop open for half a second.

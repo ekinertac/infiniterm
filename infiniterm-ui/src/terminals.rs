@@ -229,6 +229,12 @@ impl AppView {
                     .and_then(|s| self.backend.pty.adopt(&s));
                 if let Some(pane) = adopt {
                     body.pane = Some(pane);
+                    // The note a waiting viewer card showed goes before the
+                    // host's replay fills the screen.
+                    if body.waiting_note {
+                        body.reset_for_replay();
+                        body.waiting_note = false;
+                    }
                     // The program in an adopted session announced whether it
                     // speaks the kitty keyboard protocol at ITS startup,
                     // which is long out of the ring we are about to replay,
@@ -240,6 +246,17 @@ impl AppView {
                     self.backend.pty.resize_now(pane, body.cols(), body.rows());
                     if let Some(c) = self.model.card_mut(&card.id) {
                         c.pane_id = Some(pane);
+                    }
+                    continue;
+                }
+                // A viewer starts no shell of its own: a card made here is
+                // started by the HOST, which learns of it from the canvas the
+                // viewer sends up, and the host's next snapshot carries its
+                // session, which the adopt above takes (#423).
+                if self.viewer {
+                    if !body.waiting_note {
+                        body.waiting_note = true;
+                        body.feed(b"\x1b[2mstarting on the host...\x1b[0m");
                     }
                     continue;
                 }
