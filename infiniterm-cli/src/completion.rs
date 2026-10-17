@@ -70,6 +70,7 @@ _ift() {
     'sessions:session daemons still running, app or no app'
     'attach:connect a session'\''s shell to this terminal'
     'connect:open a second infiniterm for a host'
+    'join:a viewer window on the canvas running on a host'
     'terminal:a terminal card in each folder'
     'send:type into a card'\''s shell'
     'read:print what a card shows'
@@ -98,6 +99,7 @@ _ift() {
   fi
   case $words[2] in
     attach) (( CURRENT == 3 )) && _ift_sessions ;;
+    join) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_hosts' ;;
     connect) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_hosts' ;;
     send) (( CURRENT == 3 )) && _ift_cards ;;
     read) (( CURRENT == 3 )) && _ift_cards || _arguments '--lines[the last N lines only]:lines:' '--all[include the history]' ;;

@@ -26,6 +26,7 @@ mod cursor_hooks;
 mod completion;
 mod connect;
 mod install;
+mod join;
 mod licence_cmd;
 mod proxy;
 mod socket;
@@ -71,6 +72,8 @@ ift — drive infiniterm from a shell
                              Ctrl-\\ (0x1c) detaches, leaving it running
   ift --version              the version of this ift
   ift connect <[user@]host> [--name N] [--color RRGGBB] [--check] [--install]
+  ift join <[user@]host> [--name N] [--color RRGGBB] [--check]
+                             a viewer window on the canvas running on host
                              open a second infiniterm for a host: its own
                              window, Dock icon and canvas, with terminal cards
                              that run on that host over ssh (key login; ift
@@ -142,12 +145,13 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 25] = [
+pub const SUBCOMMANDS: [&str; 26] = [
     "diff",
     "ls",
     "sessions",
     "attach",
     "connect",
+    "join",
     "terminal",
     "send",
     "read",
@@ -198,6 +202,7 @@ fn main() -> ExitCode {
         Some("install") => install_self(),
         Some("licence") => licence_cmd::run(&args[1..]),
         Some("connect") => connect::run(&args[1..]),
+        Some("join") => join::run(&args[1..]),
         // Not `ift version`: any word that is not a verb is a file to open.
         Some("--version") | Some("-V") => {
             println!("ift {}", env!("CARGO_PKG_VERSION"));
