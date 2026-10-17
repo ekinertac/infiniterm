@@ -9,6 +9,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-10-18
 
 - New: the app opens a socket that a window on another Mac can join through ssh, to show and drive this canvas (`ift join`, in a later release). It is owner-only and the setting `join.enabled` turns it off. Nothing is shown or sent unless something joins.
+- New: `ift join <host>` opens a window on the canvas of the infiniterm already running on another Mac, over ssh with key login: its cards, labels and agent colours, a live terminal for each terminal card, and what you type goes to the host. Your zoom, position and focus are your own. Editor, diff, browser and page cards show as a slot that says "<kind> on <host>". Closing a card or quitting the viewer never ends anything on the host, and `ift join <host> --check` tests whether the host can be joined.
 
 ### 2026-10-17
 

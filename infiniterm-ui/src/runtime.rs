@@ -912,12 +912,14 @@ fn start_join(app: &mut AppView) {
     // A viewer is a window onto the host's canvas, never a host: it would
     // relay sessions that are not its own (found in the #423 drive, which
     // showed a viewer binding its own j.sock).
-    if !app.model.config.join.enabled || app.viewer {
-        return;
-    }
     let Some((relay, write)) = app.backend.pty.join_parts() else {
         return;
     };
+    if !app.model.config.join.enabled || app.viewer {
+        // No server, so nothing is kept for one.
+        relay.lock().unwrap().set_enabled(false);
+        return;
+    }
     let hub = infiniterm_core::backend::join::JoinHub::new(relay, write);
     match hub.serve(&infiniterm_core::paths::join_socket()) {
         Ok(()) => app.join = Some(hub),

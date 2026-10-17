@@ -127,20 +127,36 @@ impl Model {
                     .into(),
             );
         }
-        if !self.loaded {
-            self.load_layout(Some(text));
-            self.read_only = true;
-            self.layout_undo.clear();
-            return Ok(());
-        }
         let saved =
             parse_layout(text).ok_or_else(|| "the host's canvas could not be read".to_string())?;
         self.read_only = true;
+        self.loaded = true;
         // The first canvas a viewer ever gets also sets where it looks; after
-        // that the viewport, zoom and focus are the viewer's own.
-        let first = self.cards.is_empty();
-        let (host_viewport, host_scale, host_focus) =
-            (saved.viewport, saved.ui_scale, saved.focused_id.clone());
+        // that the viewport, zoom, focus and workspace are the viewer's own.
+        let first = !self.snapshot_seen;
+        self.snapshot_seen = true;
+        let (host_viewport, host_scale, host_focus, host_active) = (
+            saved.viewport,
+            saved.ui_scale,
+            saved.focused_id.clone(),
+            saved.active_workspace_id.clone(),
+        );
+        // Terminals are cards. Everything else is a slot that says where the
+        // real card is (`remote_cards`).
+        let (terminals, others): (Vec<_>, Vec<_>) = saved
+            .cards
+            .into_iter()
+            .partition(|c| c.kind == crate::saved_layout::CardKind::Terminal);
+        self.remote_cards = others
+            .into_iter()
+            .map(|c| super::RemoteCard {
+                id: c.id,
+                workspace_id: c.workspace_id,
+                rect: c.rect,
+                title: c.title,
+                kind: c.kind,
+            })
+            .collect();
 
         let mine = std::mem::take(&mut self.workspaces);
         self.workspaces = saved
@@ -163,7 +179,7 @@ impl Model {
             })
             .collect();
 
-        let host_ids: Vec<String> = saved.cards.iter().map(|c| c.id.clone()).collect();
+        let host_ids: Vec<String> = terminals.iter().map(|c| c.id.clone()).collect();
         let gone: Vec<String> = self
             .cards
             .iter()
@@ -173,7 +189,7 @@ impl Model {
         for id in gone {
             self.remove_card(&id);
         }
-        for c in saved.cards {
+        for c in terminals {
             if let Some(card) = self.card_mut(&c.id) {
                 card.workspace_id = c.workspace_id;
                 card.rect = c.rect;
@@ -226,6 +242,7 @@ impl Model {
             }
         }
         if first {
+            self.active_workspace = host_active;
             self.viewport = host_viewport;
             self.ui_scale = host_scale;
             self.selection.focused_id = host_focus;
@@ -584,6 +601,66 @@ mod snapshot_tests {
         viewer.card_mut(&a).unwrap().agent = AgentState::Working;
         viewer.apply_agent_states("not json");
         assert_eq!(viewer.card(&a).unwrap().agent, AgentState::Working);
+    }
+
+    #[test]
+    fn a_card_that_is_not_a_terminal_is_a_slot_never_a_card() {
+        use crate::saved_layout::CardKind;
+        let mut host = host_model();
+        let term = add(&mut host, rect(0., 0.));
+        let ws = host.active_workspace.clone();
+        let editor = host.add_card(
+            "/Users/me",
+            NewCard {
+                rect: Some(rect(900., 0.)),
+                workspace_id: ws,
+                kind: CardKind::Editor,
+                path: Some("/Users/me/secret.rs".into()),
+                ..Default::default()
+            },
+        );
+        let mut viewer = Model::new();
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+
+        assert!(viewer.card(&editor).is_none(), "no editor card, so no file is opened here");
+        assert!(viewer.card(&term).is_some());
+        assert_eq!(viewer.remote_cards.len(), 1);
+        assert_eq!(viewer.remote_cards[0].id, editor);
+        assert_eq!(viewer.remote_cards[0].kind, CardKind::Editor);
+        assert_eq!(viewer.remote_cards[0].rect, rect(900., 0.));
+
+        // The host moves it, then closes it.
+        host.card_mut(&editor).unwrap().rect = rect(950., 20.);
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        assert_eq!(viewer.remote_cards[0].rect, rect(950., 20.));
+        host.remove_card(&editor);
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        assert!(viewer.remote_cards.is_empty());
+    }
+
+    #[test]
+    fn a_host_with_no_terminals_still_sets_the_first_view_once() {
+        use crate::saved_layout::CardKind;
+        let mut host = host_model();
+        let ws = host.active_workspace.clone();
+        host.add_card(
+            "/Users/me",
+            NewCard {
+                rect: Some(rect(0., 0.)),
+                workspace_id: ws,
+                kind: CardKind::Page,
+                path: Some("/Users/me/x.md".into()),
+                ..Default::default()
+            },
+        );
+        host.viewport.x = 700.;
+        let mut viewer = Model::new();
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        assert_eq!(viewer.viewport.x, 700., "the first snapshot sets where the viewer looks");
+        viewer.viewport.x = 5.;
+        host.viewport.x = 900.;
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        assert_eq!(viewer.viewport.x, 5., "after that the view is the viewer's own");
     }
 
     #[test]
