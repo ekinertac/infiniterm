@@ -31,8 +31,10 @@ use std::net::Shutdown;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use super::relay::Relay;
 use super::session_protocol::{Frame, FrameReader};
@@ -42,6 +44,14 @@ pub const MAJOR: u32 = 1;
 
 /// The longest handshake line accepted: a topic is a word and a session id.
 const MAX_LINE: u64 = 256;
+
+/// How often a connection's writer checks that its reader is still there.
+/// A connection closes only when every copy of its socket is closed, and the
+/// writer thread holds one: so a writer parked on its queue after the viewer
+/// left would keep the viewer's ssh waiting forever (found when a test never
+/// ended: `shutdown` on macOS answers "not connected" once the peer has shut
+/// its write side, so it cannot be relied on to wake anything).
+const WRITER_POLL: Duration = Duration::from_millis(200);
 
 /// Snapshots queued for one canvas viewer before it is dropped. Snapshots are
 /// whole, so a dropped viewer loses nothing but the wait: it reconnects and
@@ -143,6 +153,8 @@ impl JoinHub {
         let Ok(mut w) = writer_out else {
             return;
         };
+        let closed = Arc::new(AtomicBool::new(false));
+        let writer_closed = closed.clone();
         std::thread::spawn(move || {
             let send = |w: &mut UnixStream, text: &str| -> bool {
                 let bytes = text.as_bytes();
@@ -154,9 +166,15 @@ impl JoinHub {
                     return;
                 }
             }
-            while let Ok(text) = rx.recv() {
-                if !send(&mut w, &text) {
-                    break;
+            while !writer_closed.load(Ordering::Relaxed) {
+                match rx.recv_timeout(WRITER_POLL) {
+                    Ok(text) => {
+                        if !send(&mut w, &text) {
+                            break;
+                        }
+                    }
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break,
                 }
             }
             let _ = w.shutdown(Shutdown::Both);
@@ -165,6 +183,7 @@ impl JoinHub {
         // viewer closes is how a closed connection is noticed.
         let mut sink = [0u8; 256];
         while matches!(input.read(&mut sink), Ok(n) if n > 0) {}
+        closed.store(true, Ordering::Relaxed);
         let _ = out.shutdown(Shutdown::Both);
     }
 
@@ -180,10 +199,18 @@ impl JoinHub {
         let Ok(mut w) = out.try_clone() else {
             return;
         };
+        let closed = Arc::new(AtomicBool::new(false));
+        let writer_closed = closed.clone();
         std::thread::spawn(move || {
-            while let Ok(frame) = rx.recv() {
-                if w.write_all(&frame.encode()).is_err() {
-                    break;
+            while !writer_closed.load(Ordering::Relaxed) {
+                match rx.recv_timeout(WRITER_POLL) {
+                    Ok(frame) => {
+                        if w.write_all(&frame.encode()).is_err() {
+                            break;
+                        }
+                    }
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break,
                 }
             }
             // The relay dropped this viewer (it stopped reading, or the
@@ -207,6 +234,7 @@ impl JoinHub {
                 }
             }
         }
+        closed.store(true, Ordering::Relaxed);
         let _ = out.shutdown(Shutdown::Both);
     }
 }
