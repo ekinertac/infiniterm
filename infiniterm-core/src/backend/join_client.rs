@@ -138,11 +138,11 @@ const STATUS_MAX: usize = 48;
 pub fn short_status(target: &str, why: &str) -> String {
     let lower = why.to_lowercase();
     let phrase = if lower.contains("no running infiniterm") {
-        "its infiniterm is not running; waiting"
+        "app not running; waiting"
     } else if CONNECTION_WORDS_SHORT.iter().any(|w| lower.contains(w)) {
-        "not reachable; trying again"
+        "not reachable; retrying"
     } else if lower.contains("permission denied") {
-        "login refused; trying again"
+        "login refused; retrying"
     } else {
         return cut(&format!("{target}: {}", why.trim()), STATUS_MAX);
     };
@@ -398,9 +398,8 @@ mod tests {
         });
         assert_eq!(connected, 2, "joined, lost, joined again: {seen:?}");
         assert!(
-            seen.iter().any(
-                |e| matches!(e, CanvasEvent::Status(s) if s.contains("infiniterm is not running"))
-            ),
+            seen.iter()
+                .any(|e| matches!(e, CanvasEvent::Status(s) if s.contains("app not running"))),
             "the viewer says the host's app is not running: {seen:?}"
         );
         assert!(
@@ -433,24 +432,31 @@ mod tests {
     #[test]
     fn a_failed_join_is_one_short_line_for_the_status_bar() {
         let long = "ift: no running infiniterm to join on this host (/Users/ekinertac/Library/Application Support/dev.ekinertac.infiniterm/j.sock): Connection refused (os error 61)";
+        // Whole, never cut, for a host name up to 20 characters.
         assert_eq!(
             short_status("ekin-mini", long),
-            "ekin-mini: its infiniterm is not running; waiting"
-                .chars()
-                .take(47)
-                .collect::<String>()
-                + "…"
+            "ekin-mini: app not running; waiting"
         );
+        let twenty = "a".repeat(20);
+        for why in [
+            long,
+            "ssh: connect to host h port 22: Operation timed out",
+            "Permission denied (publickey).",
+        ] {
+            let line = short_status(&twenty, why);
+            assert!(!line.ends_with('…'), "{line}");
+            assert!(line.chars().count() <= STATUS_MAX, "{line}");
+        }
         assert_eq!(
             short_status(
                 "mini",
                 "ssh: connect to host mini port 22: Operation timed out"
             ),
-            "mini: not reachable; trying again"
+            "mini: not reachable; retrying"
         );
         assert_eq!(
             short_status("mini", "Permission denied (publickey)."),
-            "mini: login refused; trying again"
+            "mini: login refused; retrying"
         );
         let odd = short_status("mini", &"x".repeat(200));
         assert_eq!(odd.chars().count(), STATUS_MAX);
