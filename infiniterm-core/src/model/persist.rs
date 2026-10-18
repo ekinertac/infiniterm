@@ -936,6 +936,73 @@ mod snapshot_tests {
     }
 
     #[test]
+    fn a_card_made_in_the_viewer_can_be_closed_there_afterwards() {
+        let (mut host, mut viewer, _a, _b, _e) = host_and_viewer();
+        // Made in the viewer (Cmd+D) and sent up on the revision it had.
+        let made = add(&mut viewer, rect(1800., 0.));
+        let up = viewer.layout_snapshot();
+        assert_eq!(
+            host.apply_remote_layout(&up, viewer.layout_rev),
+            Ok(RemoteApply::Applied)
+        );
+        // The host publishes its canvas; the viewer applies it and takes the
+        // revision, as `drain_canvas` does.
+        let text = host.save_text().unwrap();
+        let rev = host.record_published(&text);
+        viewer.apply_snapshot(&text).unwrap();
+        viewer.layout_rev = rev;
+        assert!(
+            viewer.card(&made).is_some(),
+            "the card is still the viewer's"
+        );
+        // Closed in the viewer (Cmd+W), sent up.
+        viewer.close_card(&made, false);
+        let up = viewer.layout_snapshot();
+        assert_eq!(
+            host.apply_remote_layout(&up, viewer.layout_rev),
+            Ok(RemoteApply::Applied)
+        );
+        assert!(host.card(&made).is_none(), "the host closed it too");
+    }
+
+    #[test]
+    fn an_edit_sent_before_a_snapshot_lands_survives_that_snapshot() {
+        let (mut host, mut viewer, a, b, _e) = host_and_viewer();
+        let base = viewer.layout_rev;
+        // The viewer closes a card and moves another; the 500 ms debounce has
+        // not fired when the host's next canvas (made before it heard of
+        // this) arrives. The app sends first, on the revision it edited.
+        viewer.close_card(&b, false);
+        viewer.card_mut(&a).unwrap().rect = rect(60., 70.);
+        let up = viewer.layout_snapshot();
+        // The host changed something else meanwhile and published it.
+        host.card_mut(&_e).unwrap().title = "agent".into();
+        let text = host.save_text().unwrap();
+        let rev = host.record_published(&text);
+        // The snapshot lands on the viewer: its edit is gone locally...
+        viewer.apply_snapshot(&text).unwrap();
+        viewer.layout_rev = rev;
+        assert!(viewer.card(&b).is_some());
+        // ...but the sent copy reaches the host, which applies it, and the
+        // canvas it publishes next has the edit.
+        assert_eq!(
+            host.apply_remote_layout(&up, base),
+            Ok(RemoteApply::Applied)
+        );
+        let text = host.save_text().unwrap();
+        let rev = host.record_published(&text);
+        viewer.apply_snapshot(&text).unwrap();
+        viewer.layout_rev = rev;
+        assert!(viewer.card(&b).is_none(), "closed, on both");
+        assert_eq!(viewer.card(&a).unwrap().rect, rect(60., 70.));
+        assert_eq!(
+            host.card(&_e).unwrap().title,
+            "agent",
+            "the host's change stands"
+        );
+    }
+
+    #[test]
     fn moved_renamed_and_grouped_in_the_viewer_is_so_on_the_host() {
         let (mut host, mut viewer, a, b, _e) = host_and_viewer();
         viewer.card_mut(&a).unwrap().rect = rect(25., 40.);

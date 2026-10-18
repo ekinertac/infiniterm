@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-18
 
+- Fixed: in a joined window, a change made just before the host's next update arrived (closing a card, sliding it) was undone and never reached the host. The window now sends it first.
+
 - New: the app opens a socket that a window on another Mac can join through ssh, to show and drive this canvas (`ift join`, in a later release). It is owner-only and the setting `join.enabled` turns it off. Nothing is shown or sent unless something joins.
 - New: `ift join <host>` opens a window on the canvas of the infiniterm already running on another Mac, over ssh with key login, with full control of it, as if you sat at that Mac. You see its cards, labels and agent colours and a live terminal for each terminal card, and what you do happens on the host: typing goes to the host's shell, closing a card closes it there, a new terminal (Cmd+T) starts a shell on the host, and moving, resizing, grouping, renaming and workspaces change the host's canvas. Your zoom, position and focus stay your own. Editor, diff, browser and page cards show as a card that says "<kind> on <host>" and move and close like any card. If you and the host change the canvas at the same moment, both changes stay; only when you both change the same thing on the same card does your change win. `ift join <host> --check` tests whether the host can be joined.
 

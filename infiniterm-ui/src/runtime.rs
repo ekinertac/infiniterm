@@ -908,6 +908,14 @@ impl AppView {
         for event in events {
             match event {
                 CanvasEvent::Layout(text) => {
+                    // An edit still waiting for its debounce would be
+                    // overwritten by this snapshot (a closed card comes
+                    // back, a move is undone) and the next send would carry
+                    // the host's own state. Send it first, on the revision
+                    // it was made on; the host's next canvas has it applied.
+                    if self.save_due.is_some() || self.model.dirty_layout {
+                        self.flush_save();
+                    }
                     if let Err(why) = self.model.apply_snapshot(&text) {
                         self.model.notify(&why);
                     }
