@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-18
 
+- A joined window (`ift join`) now uses the host's settings and keybindings: font, theme, cell size, keys and the rest, and a change in the host's file reaches the open window within a second. A host file with an error is not applied and the window keeps what it had, with the same notice. The window's host colour and chip, its frame, and a picture or folder that does not exist on your Mac stay your own. Changing a setting from the joined window is refused with a notice for now; change it on the host.
+
 - Fixed: in a joined window, a change made just before the host's next update arrived (closing a card, sliding it) was undone and never reached the host. The window now sends it first.
 
 - New: the app opens a socket that a window on another Mac can join through ssh, to show and drive this canvas (`ift join`, in a later release). It is owner-only and the setting `join.enabled` turns it off. Nothing is shown or sent unless something joins.

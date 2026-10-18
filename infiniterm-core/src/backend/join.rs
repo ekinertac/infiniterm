@@ -68,6 +68,11 @@ const CANVAS_QUEUE: usize = 16;
 /// A canvas message's kinds: see the module header.
 pub const KIND_LAYOUT: u8 = b'L';
 pub const KIND_AGENTS: u8 = b'A';
+/// Host to viewer (#433): the text of the host's `settings.json` and
+/// `keybindings.json`, as they are on disk. The viewer applies them in memory
+/// and never writes them. An older viewer skips both kinds.
+pub const KIND_SETTINGS: u8 = b'S';
+pub const KIND_KEYBINDINGS: u8 = b'K';
 /// Host to viewer, right after every layout: the host's revision of it, as
 /// decimal text. A viewer's edit names the revision it was made on.
 pub const KIND_REVISION: u8 = b'V';
@@ -110,6 +115,8 @@ struct Canvas {
     latest_layout: Option<String>,
     latest_rev: Option<u64>,
     latest_agents: Option<String>,
+    latest_settings: Option<String>,
+    latest_keybindings: Option<String>,
     clients: Vec<SyncSender<(u8, String)>>,
 }
 
@@ -210,6 +217,20 @@ impl JoinHub {
             .retain(|tx| tx.try_send((KIND_AGENTS, text.to_string())).is_ok());
     }
 
+    /// The host's `settings.json` (`KIND_SETTINGS`) or `keybindings.json`
+    /// (`KIND_KEYBINDINGS`) as it is now: kept for a viewer that joins later
+    /// and sent to the ones joined. Anything else is ignored.
+    pub fn publish_config(&self, kind: u8, text: &str) {
+        let mut c = self.canvas.lock().unwrap();
+        match kind {
+            KIND_SETTINGS => c.latest_settings = Some(text.to_string()),
+            KIND_KEYBINDINGS => c.latest_keybindings = Some(text.to_string()),
+            _ => return,
+        }
+        c.clients
+            .retain(|tx| tx.try_send((kind, text.to_string())).is_ok());
+    }
+
     /// Binds `socket` (0600) and serves it on a thread of its own. The path
     /// is checked first, so a data dir too long for a unix socket is said so
     /// rather than failing at bind.
@@ -262,7 +283,11 @@ impl JoinHub {
             let mut c = self.canvas.lock().unwrap();
             let (tx, rx) = sync_channel(CANVAS_QUEUE);
             c.clients.push(tx);
+            // The settings first, so the first layout is drawn in the host's
+            // font and theme.
             let latest: Vec<(u8, String)> = [
+                (KIND_SETTINGS, c.latest_settings.clone()),
+                (KIND_KEYBINDINGS, c.latest_keybindings.clone()),
                 (KIND_LAYOUT, c.latest_layout.clone()),
                 (KIND_REVISION, c.latest_rev.map(|r| r.to_string())),
                 (KIND_AGENTS, c.latest_agents.clone()),
@@ -603,6 +628,38 @@ mod tests {
         assert_eq!(
             read_canvas_message(&mut s).unwrap().unwrap(),
             (KIND_AGENTS, "{\"c1\":\"done\"}".to_string())
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_hosts_settings_and_keys_reach_a_late_viewer_first_and_every_change_after() {
+        let (hub, _relay, _w) = hub();
+        hub.publish_layout("{\"v\":1}", 1);
+        hub.publish_config(KIND_SETTINGS, "{\"terminal.fontSize\": 19}");
+        hub.publish_config(KIND_KEYBINDINGS, "{}");
+        // Not a config kind: ignored, not stored.
+        hub.publish_config(KIND_LAYOUT, "nope");
+        let path = socket("config");
+        hub.serve(&path).unwrap();
+        let (mut s, _) = connect(&path, "ift-join 2 canvas");
+        assert_eq!(
+            read_canvas_message(&mut s).unwrap().unwrap(),
+            (KIND_SETTINGS, "{\"terminal.fontSize\": 19}".to_string())
+        );
+        assert_eq!(
+            read_canvas_message(&mut s).unwrap().unwrap(),
+            (KIND_KEYBINDINGS, "{}".to_string())
+        );
+        assert_eq!(
+            read_canvas_message(&mut s).unwrap().unwrap(),
+            (KIND_LAYOUT, "{\"v\":1}".to_string())
+        );
+        let _revision = read_canvas_message(&mut s).unwrap().unwrap();
+        hub.publish_config(KIND_SETTINGS, "{\"terminal.fontSize\": 21}");
+        assert_eq!(
+            read_canvas_message(&mut s).unwrap().unwrap(),
+            (KIND_SETTINGS, "{\"terminal.fontSize\": 21}".to_string())
         );
         let _ = std::fs::remove_file(&path);
     }
