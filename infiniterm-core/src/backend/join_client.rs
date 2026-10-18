@@ -35,6 +35,9 @@ pub enum CanvasEvent {
     Settings(String),
     /// The text of the host's `keybindings.json` (#433).
     Keybindings(String),
+    /// The canvas connection is up (again): the host is reachable, so a card
+    /// that lost its own connection tries now (#442).
+    Connected,
     /// Something a person should read: connected, lost, refused.
     Status(String),
     /// The host cannot be joined and waiting will not change that (an `ift`
@@ -114,13 +117,43 @@ fn run_uplink(
 /// Joins the host's canvas for as long as the app listens, and sends the
 /// edits the app makes (`edits`) up to the host.
 pub fn run_canvas_client(host: RemoteHost, tx: Sender<CanvasEvent>, edits: Receiver<RemoteUpdate>) {
+    run_canvas_client_with(host, tx, edits, rejoin_wait)
+}
+
+/// The wait before the next try after `failures` tries in a row failed:
+/// `REJOIN_AFTER`, doubling, up to `REJOIN_LONGEST`. A host that is down is
+/// asked every half minute, not every three seconds, all night.
+fn rejoin_wait(failures: u32) -> Duration {
+    (REJOIN_AFTER * 2u32.pow(failures.min(4))).min(REJOIN_LONGEST)
+}
+
+const REJOIN_LONGEST: Duration = Duration::from_secs(30);
+
+/// `run_canvas_client` with the wait between tries given, for a test.
+///
+/// Once the canvas has been joined, a refusal is never final: the host's app
+/// quitting (an update, a restart) answers "no running infiniterm", and the
+/// viewer must be there when it comes back. Before the first join the same
+/// answer is final, because `ift join` has said it once and a window that
+/// never connected has nothing to show.
+fn run_canvas_client_with(
+    host: RemoteHost,
+    tx: Sender<CanvasEvent>,
+    edits: Receiver<RemoteUpdate>,
+    wait: impl Fn(u32) -> Duration,
+) {
     let edits = Arc::new(Mutex::new(edits));
+    let mut joined_once = false;
+    let mut failures = 0u32;
     loop {
         match connect_join_canvas(&host) {
             Ok((mut stream, _stderr)) => {
+                joined_once = true;
+                failures = 0;
                 if tx
                     .send(CanvasEvent::Status(format!("joined {}", host.target)))
                     .is_err()
+                    || tx.send(CanvasEvent::Connected).is_err()
                 {
                     return;
                 }
@@ -144,11 +177,12 @@ pub fn run_canvas_client(host: RemoteHost, tx: Sender<CanvasEvent>, edits: Recei
                     return;
                 }
             }
-            Err(JoinFailure::Fatal(why)) => {
+            Err(JoinFailure::Fatal(why)) if !joined_once => {
                 let _ = tx.send(CanvasEvent::Fatal(why));
                 return;
             }
-            Err(JoinFailure::Retry(why)) => {
+            Err(JoinFailure::Fatal(why) | JoinFailure::Retry(why)) => {
+                failures += 1;
                 if tx
                     .send(CanvasEvent::Status(format!("{}: {why}", host.target)))
                     .is_err()
@@ -157,7 +191,7 @@ pub fn run_canvas_client(host: RemoteHost, tx: Sender<CanvasEvent>, edits: Recei
                 }
             }
         }
-        std::thread::sleep(REJOIN_AFTER);
+        std::thread::sleep(wait(failures));
     }
 }
 
@@ -258,6 +292,105 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap(), CanvasEvent::Layout("{}".into()));
         assert_eq!(rx.try_recv().unwrap(), CanvasEvent::Revision(12));
         assert!(rx.try_recv().is_err());
+    }
+
+    /// A stand-in ssh that runs `case $n` arms, `n` being the try's number.
+    fn counting_ssh(name: &str, arms: &str) -> RemoteHost {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("jc-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("ssh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nn=$(cat '{c}' 2>/dev/null || echo 0); n=$((n+1)); echo $n > '{c}'\ncase $n in\n{arms}\nesac\n",
+                c = dir.join("count").display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut host = RemoteHost::new("h");
+        host.ssh = script.display().to_string();
+        host
+    }
+
+    fn events_until(
+        rx: &Receiver<CanvasEvent>,
+        mut stop: impl FnMut(&CanvasEvent) -> bool,
+    ) -> Vec<CanvasEvent> {
+        let mut seen = Vec::new();
+        while let Ok(e) = rx.recv_timeout(Duration::from_secs(10)) {
+            let done = stop(&e);
+            seen.push(e);
+            if done {
+                break;
+            }
+        }
+        seen
+    }
+
+    #[test]
+    fn a_host_app_that_quits_and_comes_back_is_joined_again() {
+        let host = counting_ssh(
+            "restart",
+            concat!(
+                "1) printf 'ift-join 2 ok\\n';;\n",
+                "2) echo 'ift: no running infiniterm to join on this host (x): No such file or directory' >&2; exit 1;;\n",
+                "*) printf 'ift-join 2 ok\\n'; sleep 3;;\n"
+            ),
+        );
+        let (tx, rx) = channel();
+        let (_edits_tx, edits) = channel();
+        std::thread::spawn(move || {
+            run_canvas_client_with(host, tx, edits, |_| Duration::from_millis(20))
+        });
+        let mut connected = 0;
+        let seen = events_until(&rx, |e| {
+            if *e == CanvasEvent::Connected {
+                connected += 1;
+            }
+            connected == 2
+        });
+        assert_eq!(connected, 2, "joined, lost, joined again: {seen:?}");
+        assert!(
+            seen.iter().any(
+                |e| matches!(e, CanvasEvent::Status(s) if s.contains("no running infiniterm"))
+            ),
+            "the viewer says the host's app is not running: {seen:?}"
+        );
+        assert!(
+            !seen.iter().any(|e| matches!(e, CanvasEvent::Fatal(_))),
+            "{seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_host_that_refuses_before_the_first_join_is_final() {
+        let host = counting_ssh(
+            "refused",
+            "*) echo 'ift: no running infiniterm to join on this host (x): No such file or directory' >&2; exit 1;;",
+        );
+        let (tx, rx) = channel();
+        let (_edits_tx, edits) = channel();
+        let worker = std::thread::spawn(move || {
+            run_canvas_client_with(host, tx, edits, |_| Duration::from_millis(20))
+        });
+        let seen = events_until(&rx, |e| matches!(e, CanvasEvent::Fatal(_)));
+        assert!(
+            matches!(seen.last(), Some(CanvasEvent::Fatal(_))),
+            "{seen:?}"
+        );
+        worker
+            .join()
+            .expect("the client stops after a final answer");
+    }
+
+    #[test]
+    fn a_host_that_stays_down_is_asked_less_and_less_often() {
+        assert_eq!(rejoin_wait(0), REJOIN_AFTER);
+        assert!(rejoin_wait(2) > rejoin_wait(1));
+        assert_eq!(rejoin_wait(50), REJOIN_LONGEST);
     }
 
     #[test]
