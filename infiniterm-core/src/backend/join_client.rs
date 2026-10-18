@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use super::join::{
     encode_canvas_message, encode_update, read_canvas_message, RemoteUpdate, KIND_AGENTS,
-    KIND_LAYOUT, KIND_REVISION, KIND_UPDATE,
+    KIND_KEYBINDINGS, KIND_LAYOUT, KIND_REVISION, KIND_SETTINGS, KIND_UPDATE,
 };
 use super::remote::{connect_join_canvas, JoinFailure, RemoteHost};
 
@@ -31,6 +31,10 @@ pub enum CanvasEvent {
     Revision(u64),
     /// The agent states, `{"<card id>": "working", ...}`.
     Agents(String),
+    /// The text of the host's `settings.json` (#433).
+    Settings(String),
+    /// The text of the host's `keybindings.json` (#433).
+    Keybindings(String),
     /// Something a person should read: connected, lost, refused.
     Status(String),
     /// The host cannot be joined and waiting will not change that (an `ift`
@@ -64,6 +68,8 @@ pub fn pump_canvas(stream: &mut impl Read, tx: &Sender<CanvasEvent>) -> Ended {
                 Err(_) => continue,
             },
             Ok(Some((KIND_AGENTS, text))) => CanvasEvent::Agents(text),
+            Ok(Some((KIND_SETTINGS, text))) => CanvasEvent::Settings(text),
+            Ok(Some((KIND_KEYBINDINGS, text))) => CanvasEvent::Keybindings(text),
             Ok(Some(_)) => continue,
             Ok(None) | Err(_) => return Ended::Stream,
         };
@@ -252,6 +258,23 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap(), CanvasEvent::Layout("{}".into()));
         assert_eq!(rx.try_recv().unwrap(), CanvasEvent::Revision(12));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn the_hosts_settings_and_keys_arrive_as_events() {
+        let mut bytes = Vec::new();
+        bytes.extend(encode_canvas_message(KIND_SETTINGS, "{\"a\":1}"));
+        bytes.extend(encode_canvas_message(KIND_KEYBINDINGS, "{}"));
+        let (tx, rx) = channel();
+        pump_canvas(&mut bytes.as_slice(), &tx);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            CanvasEvent::Settings("{\"a\":1}".into())
+        );
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            CanvasEvent::Keybindings("{}".into())
+        );
     }
 
     #[test]
