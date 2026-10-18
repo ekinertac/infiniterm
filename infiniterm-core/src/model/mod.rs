@@ -288,6 +288,10 @@ pub enum Effect {
         text: String,
     },
     ClearPane(PaneId),
+    /// `terminal.redraw` (#447): ask the program in this pane to repaint,
+    /// through `Panes::redraw`; the ui knows the card's size and, in a
+    /// viewer, joins the session again.
+    RedrawPane(PaneId),
     WritePane(PaneId, Vec<u8>),
     DraftDelete(String),
     /// These cards are about to move: their rects as they are now, so the

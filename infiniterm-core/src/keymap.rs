@@ -290,12 +290,14 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "card.sidebar.flip",
         "what split editors use to flip an arrangement",
     ),
-    // Reloads the interface, killing the shells first. Inert outside a
-    // development build: it is the browser reflex key.
+    // Asks the focused terminal's program to repaint (2026-10-19, #447). It
+    // was `app.reload`, a development-only command that killed every shell,
+    // so nobody used it; that command has no default key now. A locked
+    // browser keeps Cmd+R as the page's reload (`browser_keys`).
     (
         "cmd+r",
-        "app.reload",
-        "development builds only; the browser reflex key would cost every shell",
+        "terminal.redraw",
+        "the browser reflex key, for a terminal: a fresh screen from the program",
     ),
     ("cmd+shift+r", "card.rename", ""),
     // The macOS convention for preferences.

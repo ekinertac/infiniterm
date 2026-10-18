@@ -735,6 +735,17 @@ impl LostLink {
         }
     }
 
+    /// A viewer card asked for a redraw (`terminal.redraw`, #447): it let go
+    /// of its connection on purpose and joins again at once, so the note
+    /// says what is happening rather than that something was lost.
+    pub fn redraw(now: f64) -> LostLink {
+        LostLink {
+            next_at: now,
+            note: "redrawing from the host".into(),
+            ..LostLink::new(now)
+        }
+    }
+
     /// A try failed: say why and wait longer for the next one.
     pub fn failed(&mut self, now: f64, why: &str, fatal: bool) {
         self.in_flight = false;

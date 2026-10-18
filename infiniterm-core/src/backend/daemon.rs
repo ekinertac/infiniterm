@@ -31,7 +31,7 @@
 use super::local_pty::HIGH_WATER;
 use super::relay::Relay;
 use super::session_protocol::{Frame, FrameReader};
-use super::{PaneEvent, PaneId};
+use super::{PaneEvent, PaneId, Redraw};
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::Shutdown;
@@ -597,6 +597,22 @@ impl DaemonBackend {
                 nudge_resize(&panes, id);
             }
         })
+    }
+
+    /// `terminal.redraw` (#447): the repaint jog on this pane, the same two
+    /// resizes an attach sends. A viewer's pane has no say over the host's
+    /// size (the host ignores its `Resize` frames), so it lets go of its
+    /// connection instead and says so: the caller joins the session again,
+    /// which replays the ring and makes the host jog the program
+    /// (`session_nudger`). Does nothing for a pane that is gone.
+    pub fn redraw_now(&self, pane: PaneId) -> Redraw {
+        let viewer = self.panes.lock().unwrap().get(&pane).map(|p| p.viewer);
+        if viewer == Some(true) {
+            self.detach_now(pane);
+            return Redraw::Rejoin;
+        }
+        nudge_resize(&self.panes, pane);
+        Redraw::Asked
     }
 
     pub fn write_now(&self, pane: PaneId, bytes: &[u8]) {
@@ -1328,6 +1344,44 @@ mod viewer_tests {
                 Frame::Kill
             ]
         );
+    }
+
+    // `terminal.redraw` (#447): on a pane of our own it is the attach's
+    // jog, one column narrower and back, in that order.
+    #[test]
+    fn a_redraw_on_an_ordinary_pane_sends_the_two_resizes() {
+        let (backend, _rx) = DaemonBackend::new(temp_sessions("redraw-own"), 1);
+        let (id, far) = pane_with_peer(&backend);
+        assert_eq!(backend.redraw_now(id), Redraw::Asked);
+        backend.detach_now(id);
+        assert_eq!(
+            frames_until_quiet(far, Duration::from_secs(2)),
+            vec![
+                Frame::Resize { cols: 79, rows: 24 },
+                Frame::Resize { cols: 80, rows: 24 },
+            ]
+        );
+    }
+
+    // The host ignores a viewer's `Resize`, so a viewer's redraw sends none:
+    // it lets go of the connection and asks the caller to join again, which
+    // replays the ring and makes the host jog the program.
+    #[test]
+    fn a_redraw_in_a_viewer_lets_go_and_asks_to_join_again() {
+        let (backend, _rx) =
+            DaemonBackend::new_viewer(super::super::remote::RemoteHost::new("h"), 1);
+        let (id, far) = pane_with_peer(&backend);
+        assert_eq!(backend.redraw_now(id), Redraw::Rejoin);
+        assert!(
+            frames_until_quiet(far, Duration::from_secs(2)).is_empty(),
+            "no resize goes to the host, and no Kill"
+        );
+    }
+
+    #[test]
+    fn a_redraw_of_a_pane_that_is_gone_does_nothing() {
+        let (backend, _rx) = DaemonBackend::new(temp_sessions("redraw-gone"), 1);
+        assert_eq!(backend.redraw_now(999), Redraw::Asked);
     }
 
     #[test]
