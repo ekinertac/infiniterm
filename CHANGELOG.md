@@ -12,6 +12,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-18
 
+- A joined window's status bar message while the host is unreachable is now one short line ("ekin-mini: app not running; waiting") instead of ssh's whole sentence, which ran over the card's name. The full text goes to the log.
+
 - Fixed: quitting a joined window (`ift join`) no longer makes macOS report that infiniterm quit unexpectedly. The window has no browser cards, so it no longer starts the browser engine that crashed on the way out.
 
 - A joined window (`ift join`) now handles lost connections. A card whose connection to the host ends keeps its last screen, says so in a banner, and joins its session again by itself, waiting 2 s, then longer up to 30 s; when the connection to the canvas comes back, every such card tries at once. A key typed into it is refused with a notice instead of vanishing. A card whose session is gone on the host says so and disappears with the host's next update. If the host's infiniterm quits or restarts while you are joined, the window waits for it and joins again, asking less often the longer it is gone. The first join of the cards no longer holds the window while ssh connects.
