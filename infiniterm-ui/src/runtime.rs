@@ -78,6 +78,7 @@ impl AppView {
             join_updates: None,
             uplink: None,
             viewer: false,
+            viewer_poke: false,
             canvas_rx: None,
             read_requests: vec![],
             shortcuts_scroll: gpui::ScrollHandle::new(),
@@ -955,6 +956,10 @@ impl AppView {
                 }
                 CanvasEvent::Revision(rev) => self.model.layout_rev = rev,
                 CanvasEvent::Agents(text) => self.model.apply_agent_states(&text),
+                CanvasEvent::Connected => {
+                    self.viewer_poke = true;
+                    self.redraw = true;
+                }
                 CanvasEvent::Settings(text) => {
                     self.apply_settings_text(&text);
                     self.redraw = true;

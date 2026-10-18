@@ -171,6 +171,22 @@ impl Panes {
         }
     }
 
+    /// A viewer card's session joined again on a thread of its own (#442);
+    /// the answer comes from `take_reconnected`. Nothing for any other pane.
+    pub fn begin_reconnect(&self, session: &str) {
+        if let Panes::Daemon(b) = self {
+            b.begin_reconnect(session);
+        }
+    }
+
+    /// The reconnects that ended: a new pane, or why not (#442).
+    pub fn take_reconnected(&self) -> Vec<(String, Result<PaneId, remote::JoinFailure>)> {
+        match self {
+            Panes::Daemon(b) => b.take_reconnected(),
+            _ => Vec::new(),
+        }
+    }
+
     /// What the join server (#423) needs from this backend: the relay and a
     /// way to write a viewer's keys to a session. Only the daemon backend has
     /// them; under local and tmux a card has no session a viewer could join.

@@ -271,6 +271,9 @@ pub struct AppView {
     /// This window is a viewer (`ift join`, #423): the canvas is the host's,
     /// nothing is saved, nothing is seeded, no session is started.
     pub viewer: bool,
+    /// The canvas connection (re)joined: every viewer card without a live
+    /// connection tries again now (#442).
+    pub viewer_poke: bool,
     /// The host's canvas, as the client thread reads it.
     pub canvas_rx:
         Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join_client::CanvasEvent>>,

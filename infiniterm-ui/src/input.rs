@@ -1122,6 +1122,16 @@ impl AppView {
                 }
                 return true;
             }
+            // A joined card whose connection is down refuses the key in the
+            // open: the banner is on the card, and what was typed went
+            // nowhere (#442).
+            if self.viewer && self.model.card(&id).is_some_and(|c| c.displaced) {
+                self.model.notify(
+                    "not sent: this card lost its connection to the host and is joining again",
+                );
+                self.redraw = true;
+                return true;
+            }
             let action = match self.live_body(&id) {
                 Some(body) => body.key(k, now_ms(), cx),
                 None => crate::body::BodyAction::None,
