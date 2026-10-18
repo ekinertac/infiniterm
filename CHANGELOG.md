@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-18
 
+- `ift join` opens its window in front of the terminal you ran it from, instead of sometimes behind it.
+
 - Fixed: in a joined window, a change made just before the host's next update arrived (closing a card, sliding it) was undone and never reached the host. The window now sends it first.
 
 - New: the app opens a socket that a window on another Mac can join through ssh, to show and drive this canvas (`ift join`, in a later release). It is owner-only and the setting `join.enabled` turns it off. Nothing is shown or sent unless something joins.
