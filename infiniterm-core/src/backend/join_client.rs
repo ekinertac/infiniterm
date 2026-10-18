@@ -129,6 +129,47 @@ fn rejoin_wait(failures: u32) -> Duration {
 
 const REJOIN_LONGEST: Duration = Duration::from_secs(30);
 
+/// The longest a status line may be: the bar also holds the card's name, and
+/// the full ssh sentence ran over it (found on the real pair, #442).
+const STATUS_MAX: usize = 48;
+
+/// A failed join as one short line for the status bar. The known causes get
+/// a plain phrase; anything else is cut. Pure, so it is tested.
+pub fn short_status(target: &str, why: &str) -> String {
+    let lower = why.to_lowercase();
+    let phrase = if lower.contains("no running infiniterm") {
+        "its infiniterm is not running; waiting"
+    } else if CONNECTION_WORDS_SHORT.iter().any(|w| lower.contains(w)) {
+        "not reachable; trying again"
+    } else if lower.contains("permission denied") {
+        "login refused; trying again"
+    } else {
+        return cut(&format!("{target}: {}", why.trim()), STATUS_MAX);
+    };
+    cut(&format!("{target}: {phrase}"), STATUS_MAX)
+}
+
+/// What ssh and the OS say when the host cannot be reached.
+const CONNECTION_WORDS_SHORT: [&str; 8] = [
+    "timed out",
+    "refused",
+    "unreachable",
+    "no route",
+    "could not resolve",
+    "host is down",
+    "connection reset",
+    "connection closed",
+];
+
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
 /// `run_canvas_client` with the wait between tries given, for a test.
 ///
 /// Once the canvas has been joined, a refusal is never final: the host's app
@@ -183,8 +224,11 @@ fn run_canvas_client_with(
             }
             Err(JoinFailure::Fatal(why) | JoinFailure::Retry(why)) => {
                 failures += 1;
+                // The long text is for the log; the status bar gets a line
+                // that fits beside the card's name.
+                eprintln!("[infiniterm] {}: {why}", host.target);
                 if tx
-                    .send(CanvasEvent::Status(format!("{}: {why}", host.target)))
+                    .send(CanvasEvent::Status(short_status(&host.target, &why)))
                     .is_err()
                 {
                     return;
@@ -355,7 +399,7 @@ mod tests {
         assert_eq!(connected, 2, "joined, lost, joined again: {seen:?}");
         assert!(
             seen.iter().any(
-                |e| matches!(e, CanvasEvent::Status(s) if s.contains("no running infiniterm"))
+                |e| matches!(e, CanvasEvent::Status(s) if s.contains("infiniterm is not running"))
             ),
             "the viewer says the host's app is not running: {seen:?}"
         );
@@ -384,6 +428,33 @@ mod tests {
         worker
             .join()
             .expect("the client stops after a final answer");
+    }
+
+    #[test]
+    fn a_failed_join_is_one_short_line_for_the_status_bar() {
+        let long = "ift: no running infiniterm to join on this host (/Users/ekinertac/Library/Application Support/dev.ekinertac.infiniterm/j.sock): Connection refused (os error 61)";
+        assert_eq!(
+            short_status("ekin-mini", long),
+            "ekin-mini: its infiniterm is not running; waiting"
+                .chars()
+                .take(47)
+                .collect::<String>()
+                + "…"
+        );
+        assert_eq!(
+            short_status(
+                "mini",
+                "ssh: connect to host mini port 22: Operation timed out"
+            ),
+            "mini: not reachable; trying again"
+        );
+        assert_eq!(
+            short_status("mini", "Permission denied (publickey)."),
+            "mini: login refused; trying again"
+        );
+        let odd = short_status("mini", &"x".repeat(200));
+        assert_eq!(odd.chars().count(), STATUS_MAX);
+        assert!(odd.ends_with('…'));
     }
 
     #[test]
