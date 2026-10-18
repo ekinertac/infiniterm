@@ -86,13 +86,15 @@ impl AppView {
             .filter_map(|kv| kv.split_once('='))
             .map(|(k, v)| (k.trim().to_string(), v.to_string()))
             .collect();
-        let cards: Vec<_> = self
-            .model
-            .cards
-            .iter()
-            .filter(|c| c.kind == CardKind::Terminal)
-            .cloned()
-            .collect();
+        let terminal_cards = |model: &infiniterm_core::model::Model| -> Vec<_> {
+            model
+                .cards
+                .iter()
+                .filter(|c| c.kind == CardKind::Terminal)
+                .cloned()
+                .collect()
+        };
+        let mut cards = terminal_cards(&self.model);
         let maximized = self
             .model
             .selection
@@ -102,6 +104,7 @@ impl AppView {
         // A viewer's reconnects that ended (#442): the new connection takes
         // the card over, or the card says why not and waits longer.
         let poke_lost = std::mem::take(&mut self.viewer_poke);
+        let mut rejoined = false;
         for (session, result) in self.backend.pty.take_reconnected() {
             let now = crate::now_ms();
             let Some((card_id, kitty)) = cards
@@ -142,6 +145,7 @@ impl AppView {
                         c.pane_id = Some(pane);
                         c.displaced = false;
                     }
+                    rejoined = true;
                     self.model.log(format!(
                         "rejoined {} after the connection was lost",
                         &card_id[..8.min(card_id.len())]
@@ -160,6 +164,13 @@ impl AppView {
                     body.mark_dirty();
                 }
             }
+        }
+        // The loop below reads each card's `displaced` and `pane_id`: a card
+        // a reconnect just gave back must be read again, or this frame takes
+        // it for a lost one still, gives it a new banner and swallows its keys
+        // for good (found on the real pair, #442).
+        if rejoined {
+            cards = terminal_cards(&self.model);
         }
         for card in cards {
             // A card in its own window fills that window (#356 spike).

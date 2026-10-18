@@ -836,22 +836,32 @@ impl TerminalBody {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let size_px = px((ERROR_FONT_PX * scale) as f32);
-        if size_px < crate::chrome::legible_font_px(window.scale_factor()) {
-            return;
-        }
-        let pad = px((ERROR_PAD_PX * scale) as f32);
-        let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
-        window.paint_quad(fill(
-            Bounds::new(bounds.origin, size(bounds.size.width, line_h + pad * 2.)),
-            gpui::rgb(0x1a0f0f),
-        ));
-        let f = term_font(&self.font_family);
         let said = match &self.lost {
             Some(l) => l.note.as_str(),
             None => "attached from outside (ift attach); the card takes the shell back when that terminal detaches",
         };
-        let line = crate::text::shape(window, said, size_px, &f, gpui::rgb(0xfca5a5).into());
+        let mut size_px = px((ERROR_FONT_PX * scale) as f32);
+        // A lost connection is news: readable on screen at any zoom, as
+        // large as the card's width allows (a banner at the card's zoomed
+        // 12 px was a faint sliver on a canvas of 38 cards, #442).
+        let (back, fore) = if self.lost.is_some() {
+            let fits = bounds.size.width / (said.chars().count() as f32 * 0.62);
+            size_px = size_px.max(fits.min(px(14.)));
+            (0x7f1d1d, 0xfee2e2)
+        } else {
+            (0x1a0f0f, 0xfca5a5)
+        };
+        if size_px < crate::chrome::legible_font_px(window.scale_factor()) {
+            return;
+        }
+        let pad = (size_px * 0.5).max(px((ERROR_PAD_PX * scale) as f32));
+        let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
+        window.paint_quad(fill(
+            Bounds::new(bounds.origin, size(bounds.size.width, line_h + pad * 2.)),
+            gpui::rgb(back),
+        ));
+        let f = term_font(&self.font_family);
+        let line = crate::text::shape(window, said, size_px, &f, gpui::rgb(fore).into());
         let _ = line.paint(
             point(bounds.origin.x + pad, bounds.origin.y + pad),
             line_h,
