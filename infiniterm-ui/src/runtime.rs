@@ -338,6 +338,40 @@ impl AppView {
                         body.grid.clear();
                     }
                 }
+                Effect::RedrawPane(pane) => {
+                    let (cols, rows) = self
+                        .terminal_for_pane(pane)
+                        .map(|b| (b.cols(), b.rows()))
+                        .unwrap_or((0, 0));
+                    if self.backend.pty.redraw(pane, cols, rows)
+                        == infiniterm_core::backend::Redraw::Rejoin
+                    {
+                        // A viewer's card: its connection is gone on purpose.
+                        // The card is read as one waiting for a session (no
+                        // pane), the grid stays as it is until the new
+                        // join's replay resets it (`reconcile_terminals`).
+                        let id = self
+                            .model
+                            .cards
+                            .iter()
+                            .find(|c| c.pane_id == Some(pane))
+                            .map(|c| c.id.clone());
+                        if let Some(id) = id {
+                            if let Some(c) = self.model.card_mut(&id) {
+                                c.pane_id = None;
+                            }
+                            if let Some(body) = self.bodies.get_mut(&id).and_then(|b| {
+                                b.as_any_mut()
+                                    .downcast_mut::<crate::terminal_body::TerminalBody>()
+                            }) {
+                                body.pane = None;
+                                body.lost =
+                                    Some(crate::terminal_body::LostLink::redraw(crate::now_ms()));
+                                body.mark_dirty();
+                            }
+                        }
+                    }
+                }
                 Effect::WritePane(pane, bytes) => self.backend.pty.write(pane, &bytes),
                 Effect::DraftDelete(id) => {
                     let _ = infiniterm_core::files::draft_delete(&id);

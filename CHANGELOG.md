@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-19
+
+- New: Cmd+R redraws the focused terminal card (the palette's "Terminal: redraw", and Redraw in the card's right-click menu). It asks the program in the card to paint its screen again, which clears a scrambled Claude Code card without touching what is in the scrollback. In a joined window (`ift join`) the card joins its session again, which does the same. Cmd+R was the development-only reload, which does nothing in the app you installed; that command has no key now.
+
 ### 2026-10-18
 
 - Fixed: quitting a joined window (`ift join`) no longer makes macOS report that infiniterm quit unexpectedly. The window has no browser cards, so it no longer starts the browser engine that crashed on the way out.
