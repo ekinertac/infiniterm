@@ -143,11 +143,40 @@ pub fn run(args: &[String]) -> ExitCode {
     // A host that cannot be joined is said so here, once, before a window
     // opens: a viewer that cannot connect has nothing to show.
     if let Err(why) = remote::probe_join(&host) {
-        eprintln!("ift: {}", why.message());
-        return ExitCode::from(1);
+        // Nothing serves a canvas there (the app is closed): a viewer can
+        // still join, through `ift serve` (#438). `--check` only says so.
+        if !remote::is_no_host_running(&why) {
+            eprintln!("ift: {}", why.message());
+            return ExitCode::from(1);
+        }
+        if p.check_only {
+            println!(
+                "{}: ready (no infiniterm is running there; ift join would start `ift serve` for you)",
+                p.host
+            );
+            return ExitCode::SUCCESS;
+        }
+        eprintln!(
+            "ift: no infiniterm is running on {}; starting a canvas host there (ift serve)",
+            p.host
+        );
+        if let Err(e) = remote::start_serve(&host) {
+            eprintln!("ift: {e}");
+            return ExitCode::from(1);
+        }
+        if let Err(why) = remote::probe_join(&host) {
+            eprintln!("ift: {}", why.message());
+            return ExitCode::from(1);
+        }
     }
     if p.check_only {
         println!("{}: ready (infiniterm is running there and can be joined)", p.host);
+        return ExitCode::SUCCESS;
+    }
+    // Tests stop here: opening the window is `open -n`, which a test must not
+    // do (the app in viewer mode was run on screen, see the PRs).
+    if std::env::var_os("INFINITERM_JOIN_NO_WINDOW").is_some() {
+        println!("{}: ready (window not opened)", p.host);
         return ExitCode::SUCCESS;
     }
 

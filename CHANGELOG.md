@@ -10,10 +10,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 - Starting infiniterm while an `ift serve` is holding this Mac's canvas (see below) now takes over from it: the app asks it to save and stop, then opens with the same cards, their shells still running. Anyone joined to this Mac through `ift join` is connected to the app within seconds. If `ift serve` does not stop within 10 seconds, infiniterm says so in a dialog and does not start.
 - New: Cmd+R redraws the focused terminal card (the palette's "Terminal: redraw", and Redraw in the card's right-click menu). It asks the program in the card to paint its screen again, which clears a scrambled Claude Code card without touching what is in the scrollback. In a joined window (`ift join`) the card joins its session again, which does the same. Cmd+R was the development-only reload, which does nothing in the app you installed; that command has no key now.
-
-### 2026-10-19
-
-- New: `ift serve` holds this Mac's saved canvas and keeps its cards running for viewers (`ift join`) when the app is closed. `ift serve --detach` runs it in the background and returns once it answers; `ift serve --stop` saves the canvas and ends it, and the cards keep running. It refuses to start while the app, or another `ift serve`, is running here. Nothing starts it for you yet, and the app does not take over from it yet.
+- New: `ift serve` holds this Mac's saved canvas and keeps its cards running for viewers (`ift join`) when the app is closed. `ift serve --detach` runs it in the background and returns once it answers; `ift serve --stop` saves the canvas and ends it, and the cards keep running. It refuses to start while the app, or another `ift serve`, is running here. The app does not take over from it yet.
+- `ift join <host>` now works when the host's infiniterm is closed: it starts `ift serve` there and joins it, saying so first. The host's cards, which keep running when the app is closed, appear in the window. `ift join <host> --check` reports it and starts nothing. A host whose `ift` is too old to have `serve` is told to update it.
 
 ### 2026-10-18
 
