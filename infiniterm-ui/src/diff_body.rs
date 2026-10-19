@@ -781,13 +781,17 @@ impl CardBody for DiffBody {
         BodyAction::None
     }
 
-    fn wheel(&mut self, _local: Point, _dx: f64, dy: f64, _modifiers: &gpui::Modifiers) {
+    fn wheel(&mut self, _local: Point, _dx: f64, dy: f64, _modifiers: &gpui::Modifiers) -> bool {
+        let max = self.rows.len().saturating_sub(1);
+        if !infiniterm_core::pan_mode::can_scroll(self.scroll, max, dy) {
+            return false;
+        }
         let lines = self.wheel_carry.lines(dy, self.line_h());
         if lines != 0 {
-            let max = self.rows.len().saturating_sub(1) as i64;
-            self.scroll = (self.scroll as i64 - lines).clamp(0, max) as usize;
+            self.scroll = (self.scroll as i64 - lines).clamp(0, max as i64) as usize;
             self.dirty = true;
         }
+        true
     }
 
     fn wants_frame(&self, _now: f64) -> bool {

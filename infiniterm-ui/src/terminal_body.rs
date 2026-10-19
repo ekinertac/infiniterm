@@ -1427,8 +1427,14 @@ impl CardBody for TerminalBody {
 
     /// A bare scroll: the program's, when it asked for the mouse; arrow keys
     /// on the alternate screen (`less`); the scrollback otherwise. `dy` is in
-    /// card pixels, positive up.
-    fn wheel(&mut self, local: Point, _dx: f64, dy: f64, modifiers: &gpui::Modifiers) {
+    /// card pixels, positive up. Used unless the program does not own the
+    /// wheel and the view has nowhere to go that way (a fresh shell, the
+    /// oldest line, the bottom): then the canvas pans (#451).
+    fn wheel(&mut self, local: Point, _dx: f64, dy: f64, modifiers: &gpui::Modifiers) -> bool {
+        let owns = self.grid.wants_mouse() || self.grid.alternate_scroll();
+        if dy == 0. || !(owns || self.grid.can_scroll(dy > 0.)) {
+            return false;
+        }
         let lines = self
             .wheel_carry
             .lines(dy * self.scroll_multiplier, self.font_px * self.line_height)
@@ -1442,7 +1448,7 @@ impl CardBody for TerminalBody {
             );
         }
         if lines == 0 {
-            return;
+            return true;
         }
         if self.grid.wants_mouse() {
             let (col, row) = self.cell_at(local);
@@ -1472,6 +1478,7 @@ impl CardBody for TerminalBody {
             self.grid.scroll(lines);
             self.dirty = true;
         }
+        true
     }
 
     fn wants_frame(&self, now: f64) -> bool {
