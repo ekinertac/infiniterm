@@ -71,6 +71,40 @@ fn a_host_whose_ift_cannot_join_is_told_to_update_it() {
     assert!(out.stdout.is_empty());
 }
 
+/// `ift join --check` against an ssh that fails with `said` on stderr and
+/// exits 255, as OpenSSH does when it cannot connect or log in.
+fn check_against_failing_ssh(name: &str, said: &str) -> std::process::Output {
+    let work = Scratch::new(name);
+    let ssh = work.0.join("ssh");
+    std::fs::write(&ssh, format!("#!/bin/sh\necho '{said}' >&2\nexit 255\n")).unwrap();
+    Command::new("chmod").arg("+x").arg(&ssh).status().unwrap();
+    join(&ssh, &["test@server", "--check", "--ift", env!("CARGO_BIN_EXE_ift")])
+}
+
+#[test]
+fn an_unreachable_host_is_said_with_ssh_words_and_exit_one() {
+    let out = check_against_failing_ssh(
+        "j-down",
+        "ssh: connect to host server port 22: Operation timed out",
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("server") && err.contains("timed out"), "{err}");
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn a_refused_login_is_said_once_and_exit_one() {
+    let out = check_against_failing_ssh(
+        "j-login",
+        "test@server: Permission denied (publickey).",
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("Permission denied"), "{err}");
+    assert!(out.stdout.is_empty());
+}
+
 #[test]
 fn join_installs_nothing_and_says_where_that_lives() {
     let out = Command::new(env!("CARGO_BIN_EXE_ift"))

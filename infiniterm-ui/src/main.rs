@@ -94,6 +94,17 @@ fn statusbar_base_h(font_size: f32) -> f32 {
 }
 
 #[cfg(test)]
+mod cef_start_tests {
+    use super::starts_cef;
+
+    #[test]
+    fn a_joined_window_never_starts_cef_so_its_quit_never_shuts_it_down() {
+        assert!(!starts_cef(true));
+        assert!(starts_cef(false));
+    }
+}
+
+#[cfg(test)]
 mod chrome_height_tests {
     use super::{statusbar_base_h, titlebar_base_h, STATUSBAR_H, TITLEBAR_H};
 
@@ -271,6 +282,9 @@ pub struct AppView {
     /// This window is a viewer (`ift join`, #423): the canvas is the host's,
     /// nothing is saved, nothing is seeded, no session is started.
     pub viewer: bool,
+    /// The canvas connection (re)joined: every viewer card without a live
+    /// connection tries again now (#442).
+    pub viewer_poke: bool,
     /// The host's canvas, as the client thread reads it.
     pub canvas_rx:
         Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join_client::CanvasEvent>>,
@@ -400,6 +414,15 @@ fn system_reduces_motion() -> bool {
     }
 }
 
+/// Whether this process starts CEF. A joined window (`ift join`, #423, #444)
+/// has no browser cards (they are refused there and the host's show as
+/// "browser on <host>"), so it has nothing for CEF to do, and quitting it
+/// crashed inside CEF's shutdown (EXC_BREAKPOINT, three reports on the Air).
+/// The helper invocations are decided before this, in `early`.
+fn starts_cef(joined: bool) -> bool {
+    !joined
+}
+
 fn main() {
     // CEF first: a helper invocation runs and exits here; the browser
     // process loads the framework from the bundle and goes on. Outside a
@@ -419,10 +442,11 @@ fn main() {
             .status();
         std::process::exit(0);
     }
+    let joined = infiniterm_core::backend::remote::join_from_env().is_some();
     Application::new().run(move |cx: &mut App| {
         keycode::install();
         finder_service::register();
-        let cef_running = match cef.as_mut() {
+        let cef_running = match cef.as_mut().filter(|_| starts_cef(joined)) {
             Some(p) => {
                 infiniterm_browser::app_protocol::install();
                 let ok = p.start();

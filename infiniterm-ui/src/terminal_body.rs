@@ -106,6 +106,10 @@ pub struct TerminalBody {
     /// check in its reconcile. Once a second: a file read per displaced
     /// card, and a second's lag after Ctrl+\ is not felt.
     pub displaced: bool,
+    /// A viewer's card whose connection to the host's session ended (#442):
+    /// what it says, and when it joins again. `displaced` is set with it, so
+    /// the screen stays and keys are refused.
+    pub lost: Option<LostLink>,
     /// A viewer's card the host has not started a shell for yet shows a note
     /// (#423); set once it is shown, cleared when the session arrives.
     pub waiting_note: bool,
@@ -293,6 +297,7 @@ impl TerminalBody {
             autoscroll: 0.,
             drag_local: Point { x: 0., y: 0. },
             displaced: false,
+            lost: None,
             waiting_note: false,
             readopt_due: 0.,
             outgoing: vec![],
@@ -683,6 +688,93 @@ const AUTOSCROLL_MAX_LINES: f64 = 4.;
 /// How often a displaced card asks whether `ift attach` has let go.
 pub const READOPT_POLL_MS: f64 = 1000.;
 
+/// The wait before a viewer card's first try to join its session again, and
+/// the longest wait between tries: quick for a dropped ssh, gentle on a host
+/// that is down (every try is an ssh login).
+const REJOIN_FIRST_MS: f64 = 2000.;
+const REJOIN_LONGEST_MS: f64 = 30_000.;
+
+/// The wait after `tries` failed tries: doubling, up to the longest.
+pub fn rejoin_wait_ms(tries: u32) -> f64 {
+    (REJOIN_FIRST_MS * 2f64.powi(tries.min(10) as i32)).min(REJOIN_LONGEST_MS)
+}
+
+/// A viewer card that lost its session connection (#442).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LostLink {
+    /// When the next try may start, in ms.
+    pub next_at: f64,
+    pub tries: u32,
+    /// A try is running on its thread.
+    pub in_flight: bool,
+    /// What the card says: the last failure, or that it is joining again.
+    pub note: String,
+    /// The host answered and trying again will not change it (the session is
+    /// gone there, a login refused). No more tries until the canvas
+    /// reconnects.
+    pub fatal: bool,
+}
+
+impl LostLink {
+    pub fn new(now: f64) -> LostLink {
+        LostLink {
+            next_at: now + REJOIN_FIRST_MS,
+            tries: 0,
+            in_flight: false,
+            note: "the connection to the host was lost; joining again".into(),
+            fatal: false,
+        }
+    }
+
+    /// A card joining its session for the first time: the try is due now.
+    pub fn first(now: f64) -> LostLink {
+        LostLink {
+            next_at: now,
+            note: "joining the host's session".into(),
+            ..LostLink::new(now)
+        }
+    }
+
+    /// A viewer card asked for a redraw (`terminal.redraw`, #447): it let go
+    /// of its connection on purpose and joins again at once, so the note
+    /// says what is happening rather than that something was lost.
+    pub fn redraw(now: f64) -> LostLink {
+        LostLink {
+            next_at: now,
+            note: "redrawing from the host".into(),
+            ..LostLink::new(now)
+        }
+    }
+
+    /// A try failed: say why and wait longer for the next one.
+    pub fn failed(&mut self, now: f64, why: &str, fatal: bool) {
+        self.in_flight = false;
+        self.fatal = fatal;
+        self.tries += 1;
+        self.next_at = now + rejoin_wait_ms(self.tries);
+        self.note = if fatal {
+            why.to_string()
+        } else {
+            format!("the connection to the host was lost ({why}); joining again")
+        };
+    }
+
+    /// The canvas is back, so the host is reachable: try now, whatever was
+    /// decided before.
+    pub fn poke(&mut self, now: f64) {
+        self.fatal = false;
+        self.tries = 0;
+        if !self.in_flight {
+            self.next_at = now;
+        }
+    }
+
+    /// Whether to start a try at `now`.
+    pub fn due(&self, now: f64) -> bool {
+        !self.in_flight && !self.fatal && now >= self.next_at
+    }
+}
+
 impl TerminalBody {
     /// A key in visual mode: move, select, copy (staying in the mode) or
     /// leave on Escape.
@@ -755,24 +847,32 @@ impl TerminalBody {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let size_px = px((ERROR_FONT_PX * scale) as f32);
+        let said = match &self.lost {
+            Some(l) => l.note.as_str(),
+            None => "attached from outside (ift attach); the card takes the shell back when that terminal detaches",
+        };
+        let mut size_px = px((ERROR_FONT_PX * scale) as f32);
+        // A lost connection is news: readable on screen at any zoom, as
+        // large as the card's width allows (a banner at the card's zoomed
+        // 12 px was a faint sliver on a canvas of 38 cards, #442).
+        let (back, fore) = if self.lost.is_some() {
+            let fits = bounds.size.width / (said.chars().count() as f32 * 0.62);
+            size_px = size_px.max(fits.min(px(14.)));
+            (0x7f1d1d, 0xfee2e2)
+        } else {
+            (0x1a0f0f, 0xfca5a5)
+        };
         if size_px < crate::chrome::legible_font_px(window.scale_factor()) {
             return;
         }
-        let pad = px((ERROR_PAD_PX * scale) as f32);
+        let pad = (size_px * 0.5).max(px((ERROR_PAD_PX * scale) as f32));
         let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
         window.paint_quad(fill(
             Bounds::new(bounds.origin, size(bounds.size.width, line_h + pad * 2.)),
-            gpui::rgb(0x1a0f0f),
+            gpui::rgb(back),
         ));
         let f = term_font(&self.font_family);
-        let line = crate::text::shape(
-            window,
-            "attached from outside (ift attach); the card takes the shell back when that terminal detaches",
-            size_px,
-            &f,
-            gpui::rgb(0xfca5a5).into(),
-        );
+        let line = crate::text::shape(window, said, size_px, &f, gpui::rgb(fore).into());
         let _ = line.paint(
             point(bounds.origin.x + pad, bounds.origin.y + pad),
             line_h,
@@ -1677,6 +1777,41 @@ pub fn lost_session_tail(when: &str, resume: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lost_card_waits_longer_after_each_failure_up_to_a_cap() {
+        assert_eq!(rejoin_wait_ms(0), 2000.);
+        assert_eq!(rejoin_wait_ms(1), 4000.);
+        assert_eq!(rejoin_wait_ms(3), 16000.);
+        assert_eq!(rejoin_wait_ms(4), 30_000.);
+        assert_eq!(rejoin_wait_ms(500), 30_000.);
+    }
+
+    #[test]
+    fn a_lost_card_tries_when_due_says_why_it_failed_and_stops_on_a_final_answer() {
+        let mut l = LostLink::new(1000.);
+        assert!(!l.due(1500.), "not before the first wait");
+        assert!(l.due(3000.));
+        l.in_flight = true;
+        assert!(!l.due(9000.), "one try at a time");
+        l.failed(5000., "Connection refused", false);
+        assert!(l.note.contains("Connection refused"));
+        assert!(!l.due(5000.) && l.due(5000. + rejoin_wait_ms(1)));
+        // The host said the session is gone: no more tries on its own...
+        l.failed(6000., "no session s1 on this host", true);
+        assert_eq!(l.note, "no session s1 on this host");
+        assert!(!l.due(1e9));
+        // ...until the canvas connection comes back: then at once.
+        l.poke(7000.);
+        assert!(l.due(7000.) && l.tries == 0 && !l.fatal);
+    }
+
+    #[test]
+    fn a_card_joining_for_the_first_time_tries_at_once() {
+        let l = LostLink::first(500.);
+        assert!(l.due(500.));
+        assert!(l.note.contains("joining"));
+    }
 
     /// Every terminal font carries the bundled icon font behind it, whatever
     /// family the settings name, or a Mac without a Nerd Font draws boxes.

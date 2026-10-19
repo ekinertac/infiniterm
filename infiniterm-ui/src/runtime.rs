@@ -78,6 +78,7 @@ impl AppView {
             join_updates: None,
             uplink: None,
             viewer: false,
+            viewer_poke: false,
             canvas_rx: None,
             read_requests: vec![],
             shortcuts_scroll: gpui::ScrollHandle::new(),
@@ -337,6 +338,40 @@ impl AppView {
                         body.grid.clear();
                     }
                 }
+                Effect::RedrawPane(pane) => {
+                    let (cols, rows) = self
+                        .terminal_for_pane(pane)
+                        .map(|b| (b.cols(), b.rows()))
+                        .unwrap_or((0, 0));
+                    if self.backend.pty.redraw(pane, cols, rows)
+                        == infiniterm_core::backend::Redraw::Rejoin
+                    {
+                        // A viewer's card: its connection is gone on purpose.
+                        // The card is read as one waiting for a session (no
+                        // pane), the grid stays as it is until the new
+                        // join's replay resets it (`reconcile_terminals`).
+                        let id = self
+                            .model
+                            .cards
+                            .iter()
+                            .find(|c| c.pane_id == Some(pane))
+                            .map(|c| c.id.clone());
+                        if let Some(id) = id {
+                            if let Some(c) = self.model.card_mut(&id) {
+                                c.pane_id = None;
+                            }
+                            if let Some(body) = self.bodies.get_mut(&id).and_then(|b| {
+                                b.as_any_mut()
+                                    .downcast_mut::<crate::terminal_body::TerminalBody>()
+                            }) {
+                                body.pane = None;
+                                body.lost =
+                                    Some(crate::terminal_body::LostLink::redraw(crate::now_ms()));
+                                body.mark_dirty();
+                            }
+                        }
+                    }
+                }
                 Effect::WritePane(pane, bytes) => self.backend.pty.write(pane, &bytes),
                 Effect::DraftDelete(id) => {
                     let _ = infiniterm_core::files::draft_delete(&id);
@@ -395,6 +430,14 @@ impl AppView {
                         self.model.notify(format!("could not open {url}"));
                         eprintln!("[infiniterm] {e}");
                     }
+                }
+                // The settings in a joined window are the host's, shown
+                // read only for now: writing one here would put a file in the
+                // viewer's own folder that nothing reads.
+                Effect::SaveSetting { path, .. } if self.viewer => {
+                    self.model.notify(format!(
+                        "{path}: the settings in this window are the host's; change them on the host"
+                    ));
                 }
                 Effect::SaveSetting { path, value } => {
                     let existing = config_read(ConfigFile::Settings);
@@ -692,14 +735,30 @@ impl AppView {
             self.model.apply_pane_statuses(&statuses);
         }
         while let Ok(change) = self.backend.config_changes.try_recv() {
+            // A joined window runs on the HOST's files, which arrive on the
+            // canvas stream (#433); its own folder is empty and stays so.
+            if self.viewer {
+                continue;
+            }
             match change.file {
                 ConfigFile::Settings => {
-                    self.model.apply_settings_text(&change.contents);
-                    self.chrome.apply_ui_typography(&self.model.config.ui);
-                    self.animator.animations_on =
-                        self.model.config.ui.animations && !self.reduce_motion;
+                    self.apply_settings_text(&change.contents);
+                    if let Some(hub) = &self.join {
+                        hub.publish_config(
+                            infiniterm_core::backend::join::KIND_SETTINGS,
+                            &change.contents,
+                        );
+                    }
                 }
-                _ => self.model.apply_keymap_text(&change.contents),
+                _ => {
+                    self.model.apply_keymap_text(&change.contents);
+                    if let Some(hub) = &self.join {
+                        hub.publish_config(
+                            infiniterm_core::backend::join::KIND_KEYBINDINGS,
+                            &change.contents,
+                        );
+                    }
+                }
             }
             // An edit made outside the app arrives while the window idles:
             // without this the new settings were applied and never drawn
@@ -896,6 +955,15 @@ impl AppView {
         }
     }
 
+    /// A settings file's text applied to the model and the chrome that
+    /// follows it. The same for the app's own file and, in a joined window,
+    /// the host's.
+    fn apply_settings_text(&mut self, text: &str) {
+        self.model.apply_settings_text(text);
+        self.chrome.apply_ui_typography(&self.model.config.ui);
+        self.animator.animations_on = self.model.config.ui.animations && !self.reduce_motion;
+    }
+
     /// What the host's canvas said since the last tick (a viewer, #423): a
     /// layout is applied in place, agent states on top of it, and a status
     /// (joined, lost, refused) is shown as a notice.
@@ -922,6 +990,18 @@ impl AppView {
                 }
                 CanvasEvent::Revision(rev) => self.model.layout_rev = rev,
                 CanvasEvent::Agents(text) => self.model.apply_agent_states(&text),
+                CanvasEvent::Connected => {
+                    self.viewer_poke = true;
+                    self.redraw = true;
+                }
+                CanvasEvent::Settings(text) => {
+                    self.apply_settings_text(&text);
+                    self.redraw = true;
+                }
+                CanvasEvent::Keybindings(text) => {
+                    self.model.apply_keymap_text(&text);
+                    self.redraw = true;
+                }
                 CanvasEvent::Status(text) => self.model.notify(&text),
                 CanvasEvent::Fatal(text) => {
                     eprintln!("[infiniterm] {text}");
@@ -986,6 +1066,22 @@ fn start_join(app: &mut AppView) {
         return;
     }
     let hub = infiniterm_core::backend::join::JoinHub::new(relay, write).with_nudge(nudge);
+    // The host's files as they are now, for a viewer that joins before the
+    // first change (#433).
+    for (file, kind) in [
+        (
+            ConfigFile::Settings,
+            infiniterm_core::backend::join::KIND_SETTINGS,
+        ),
+        (
+            ConfigFile::Keybindings,
+            infiniterm_core::backend::join::KIND_KEYBINDINGS,
+        ),
+    ] {
+        if let Some(text) = config_read(file) {
+            hub.publish_config(kind, &text);
+        }
+    }
     match hub.serve(&infiniterm_core::paths::join_socket()) {
         Ok(()) => {
             app.join_updates = hub.take_updates();

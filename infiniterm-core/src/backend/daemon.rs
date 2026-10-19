@@ -31,7 +31,7 @@
 use super::local_pty::HIGH_WATER;
 use super::relay::Relay;
 use super::session_protocol::{Frame, FrameReader};
-use super::{PaneEvent, PaneId};
+use super::{PaneEvent, PaneId, Redraw};
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::Shutdown;
@@ -161,6 +161,20 @@ pub struct DaemonBackend {
     /// resizes or ends one of them. Every way a session could die or change
     /// is a no-op here: kill, resize, spawn, the orphan sweep, the parked end.
     viewer: bool,
+    /// Connections a viewer's reconnect threads finished and the app has not
+    /// taken yet (`take_reconnected`): the connecting waits on ssh, so it
+    /// happens on a thread, and the cheap `register` on the app's.
+    reconnected: Arc<Mutex<Vec<Reconnected>>>,
+}
+
+/// A viewer card's new connection to its session, or why there is none.
+pub type Reconnected = (String, Result<JoinedSession, super::remote::JoinFailure>);
+
+/// What a finished join of one session holds until it is registered.
+pub struct JoinedSession {
+    stream: UnixStream,
+    reader: FrameReader,
+    size: (u16, u16),
 }
 
 impl DaemonBackend {
@@ -175,8 +189,54 @@ impl DaemonBackend {
             remote: None,
             relay: Arc::new(Mutex::new(Relay::new())),
             viewer: false,
+            reconnected: Arc::new(Mutex::new(Vec::new())),
         };
         (backend, rx)
+    }
+
+    /// Joins a viewer card's session again (#442) on a thread of its own: an
+    /// unreachable host would otherwise hold a frame for the whole handshake.
+    /// The answer is waiting in `take_reconnected` when it ends. Not a viewer:
+    /// nothing happens.
+    pub fn begin_reconnect(&self, session_id: &str) {
+        let Some(host) = self.remote.clone().filter(|_| self.viewer) else {
+            return;
+        };
+        let (id, done) = (session_id.to_string(), self.reconnected.clone());
+        std::thread::spawn(move || {
+            let result =
+                super::remote::connect_join(&host, &id).and_then(|(mut stream, stderr)| {
+                    match read_hello(&mut stream, REMOTE_HELLO_DEADLINE) {
+                        Ok((_pid, cols, rows, reader)) => Ok(JoinedSession {
+                            stream,
+                            reader,
+                            size: (cols, rows),
+                        }),
+                        Err(e) => {
+                            let said = stderr.text();
+                            Err(super::remote::JoinFailure::Retry(if said.is_empty() {
+                                e.to_string()
+                            } else {
+                                said
+                            }))
+                        }
+                    }
+                });
+            done.lock().unwrap().push((id, result));
+        });
+    }
+
+    /// The reconnects that ended since the last call: a new pane for each
+    /// that worked, the failure for each that did not.
+    pub fn take_reconnected(&self) -> Vec<(String, Result<PaneId, super::remote::JoinFailure>)> {
+        let done: Vec<Reconnected> = std::mem::take(&mut *self.reconnected.lock().unwrap());
+        done.into_iter()
+            .map(|(id, result)| {
+                let pane =
+                    result.map(|j| self.register(id.clone(), j.stream, j.reader, None, j.size));
+                (id, pane)
+            })
+            .collect()
     }
 
     /// A backend for a viewer window (#423): its cards are cards of the app
@@ -537,6 +597,22 @@ impl DaemonBackend {
                 nudge_resize(&panes, id);
             }
         })
+    }
+
+    /// `terminal.redraw` (#447): the repaint jog on this pane, the same two
+    /// resizes an attach sends. A viewer's pane has no say over the host's
+    /// size (the host ignores its `Resize` frames), so it lets go of its
+    /// connection instead and says so: the caller joins the session again,
+    /// which replays the ring and makes the host jog the program
+    /// (`session_nudger`). Does nothing for a pane that is gone.
+    pub fn redraw_now(&self, pane: PaneId) -> Redraw {
+        let viewer = self.panes.lock().unwrap().get(&pane).map(|p| p.viewer);
+        if viewer == Some(true) {
+            self.detach_now(pane);
+            return Redraw::Rejoin;
+        }
+        nudge_resize(&self.panes, pane);
+        Redraw::Asked
     }
 
     pub fn write_now(&self, pane: PaneId, bytes: &[u8]) {
@@ -1128,6 +1204,95 @@ mod viewer_tests {
         dir
     }
 
+    /// A stand-in `ssh` that ignores its arguments and runs `body`.
+    fn stand_in(name: &str, body: &str) -> super::super::remote::RemoteHost {
+        use std::os::unix::fs::PermissionsExt;
+        let path = temp_sessions(name).join("ssh");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut host = super::super::remote::RemoteHost::new("h");
+        host.ssh = path.display().to_string();
+        host
+    }
+
+    fn reconnect_result(
+        backend: &DaemonBackend,
+    ) -> (String, Result<PaneId, super::super::remote::JoinFailure>) {
+        for _ in 0..200 {
+            let mut done = backend.take_reconnected();
+            if let Some(one) = done.pop() {
+                return one;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("the reconnect never ended");
+    }
+
+    #[test]
+    fn a_reconnect_to_a_host_that_refuses_the_connection_can_be_tried_again() {
+        use super::super::remote::JoinFailure;
+        let host = stand_in(
+            "refuse",
+            "echo 'ssh: connect to host h port 22: Connection refused' >&2; exit 255",
+        );
+        let (backend, _rx) = DaemonBackend::new_viewer(host, 1);
+        backend.begin_reconnect("s1");
+        let (id, result) = reconnect_result(&backend);
+        assert_eq!(id, "s1");
+        assert!(matches!(result, Err(JoinFailure::Retry(_))), "{result:?}");
+    }
+
+    #[test]
+    fn a_reconnect_to_a_session_the_host_no_longer_has_is_final() {
+        use super::super::remote::JoinFailure;
+        let host = stand_in("gone", "echo 'ift-join 2 error no session s1 on this host'");
+        let (backend, _rx) = DaemonBackend::new_viewer(host, 1);
+        backend.begin_reconnect("s1");
+        let (_, result) = reconnect_result(&backend);
+        match result {
+            Err(JoinFailure::Fatal(why)) => assert!(why.contains("no session s1"), "{why}"),
+            other => panic!("expected a final failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_reconnect_that_works_gives_a_pane_and_its_loss_is_told_as_detached() {
+        let dir = temp_sessions("drop");
+        let hello = Frame::Hello {
+            pid: 7,
+            cols: 100,
+            rows: 30,
+        }
+        .encode();
+        std::fs::write(dir.join("hello.bin"), hello).unwrap();
+        // The host answers, greets, and the connection drops: a killed ssh.
+        let host = stand_in(
+            "drop-ssh",
+            &format!(
+                "printf 'ift-join 2 ok\\n'; cat '{}'; sleep 0.3",
+                dir.join("hello.bin").display()
+            ),
+        );
+        let (backend, rx) = DaemonBackend::new_viewer(host, 1);
+        backend.begin_reconnect("s1");
+        let (_, result) = reconnect_result(&backend);
+        let pane = result.expect("joined");
+        assert_eq!(backend.viewer_pane_size(pane), Some((100, 30)));
+        // The end of the connection reaches the card as `Detached`, which is
+        // what makes it say so and join again.
+        let event = rx.recv_timeout(Duration::from_secs(5)).expect("an event");
+        assert_eq!(event.0, pane);
+        assert!(matches!(event.1, PaneEvent::Detached), "got another event");
+    }
+
+    #[test]
+    fn only_a_viewer_reconnects() {
+        let (backend, _rx) = DaemonBackend::new(temp_sessions("not-a-viewer"), 1);
+        backend.begin_reconnect("s1");
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(backend.take_reconnected().is_empty());
+    }
+
     #[test]
     fn a_viewer_pane_types_and_resizes_like_any_pane() {
         let (backend, _rx) =
@@ -1179,6 +1344,44 @@ mod viewer_tests {
                 Frame::Kill
             ]
         );
+    }
+
+    // `terminal.redraw` (#447): on a pane of our own it is the attach's
+    // jog, one column narrower and back, in that order.
+    #[test]
+    fn a_redraw_on_an_ordinary_pane_sends_the_two_resizes() {
+        let (backend, _rx) = DaemonBackend::new(temp_sessions("redraw-own"), 1);
+        let (id, far) = pane_with_peer(&backend);
+        assert_eq!(backend.redraw_now(id), Redraw::Asked);
+        backend.detach_now(id);
+        assert_eq!(
+            frames_until_quiet(far, Duration::from_secs(2)),
+            vec![
+                Frame::Resize { cols: 79, rows: 24 },
+                Frame::Resize { cols: 80, rows: 24 },
+            ]
+        );
+    }
+
+    // The host ignores a viewer's `Resize`, so a viewer's redraw sends none:
+    // it lets go of the connection and asks the caller to join again, which
+    // replays the ring and makes the host jog the program.
+    #[test]
+    fn a_redraw_in_a_viewer_lets_go_and_asks_to_join_again() {
+        let (backend, _rx) =
+            DaemonBackend::new_viewer(super::super::remote::RemoteHost::new("h"), 1);
+        let (id, far) = pane_with_peer(&backend);
+        assert_eq!(backend.redraw_now(id), Redraw::Rejoin);
+        assert!(
+            frames_until_quiet(far, Duration::from_secs(2)).is_empty(),
+            "no resize goes to the host, and no Kill"
+        );
+    }
+
+    #[test]
+    fn a_redraw_of_a_pane_that_is_gone_does_nothing() {
+        let (backend, _rx) = DaemonBackend::new(temp_sessions("redraw-gone"), 1);
+        assert_eq!(backend.redraw_now(999), Redraw::Asked);
     }
 
     #[test]

@@ -1489,6 +1489,20 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             })
         },
     );
+    // Cmd+R (#447; it was the development-only reload). A Claude card's
+    // screen can come out scrambled after a replay cut in the wrong place or
+    // a repaint that never came; this asks the program for a fresh one. It
+    // does not touch the grid: `card.clear` is the one that empties it.
+    r.register("terminal.redraw", "Terminal: redraw", |m| {
+        m.with_active_card(|m, id| {
+            let Some(card) = m.card(&id) else { return };
+            match (card.kind, card.pane_id) {
+                (CardKind::Terminal, Some(pane)) => m.effects.push(Effect::RedrawPane(pane)),
+                (CardKind::Terminal, None) => {}
+                _ => m.notify("redraw works on terminal cards"),
+            }
+        })
+    });
     r.register(
         "card.findSelection",
         "Find: use selection for find",
