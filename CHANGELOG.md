@@ -8,7 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-19
 
-- New: two fingers on the trackpad now pan the canvas. Over empty canvas, a card's frame or label, or a card with nothing to scroll the way you moved (a fresh terminal with no history, a page already at its end), the canvas follows your fingers, like in a map. Over a card that can scroll that way (a terminal with history, a long file, a page, a browser page) the card scrolls as before, and the whole gesture, momentum included, stays with what it started on. Cmd+scroll and the pinch still zoom. A mouse wheel pans over empty canvas the same way.
+- New: two fingers on the trackpad now pan the canvas. Over empty canvas, a card's frame or label, or a card with nothing to scroll the way you moved (a fresh terminal with no history, a page already at its end), the canvas follows your fingers, like in a map. Over a card that can scroll that way (a terminal with history, a long file, a page, a browser page) the card scrolls as before, and the whole gesture, momentum included, stays with what it started on. Cmd+scroll and the pinch still zoom. A mouse wheel pans over empty canvas the same way. The pan is the same one a Cmd+drag makes, so it is as smooth, and the canvas glides on after you lift your fingers with the same glide as after a drag.
 
 - Fixed: `ift join` to a host with no cards yet (a fresh Linux server with no shells) opened an empty window that said "the host's canvas could not be read". It now shows the empty canvas, and Cmd+T makes the first card on the host. Closing the last card in a joined window now closes it on the host too.
 
