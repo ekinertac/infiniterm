@@ -12,17 +12,14 @@
 use crate::{now_ms, AppView, Gesture, GestureKind, Pan, DRAG_SLOP, EDGE_HIT};
 use gpui::{
     KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ScrollDelta, ScrollWheelEvent, TouchPhase,
+    ScrollDelta, ScrollWheelEvent,
 };
 use infiniterm_core::grid::{snap, Point, Rect};
 use infiniterm_core::keymap::{chord_for, KeyPress};
 use infiniterm_core::model::focus_cmd::BareKey;
 use infiniterm_core::model::register::{handle_chord, resolve_chord};
 use infiniterm_core::momentum::{velocity_from, Sample, VELOCITY_SAMPLE_MS};
-use infiniterm_core::pan_mode::{
-    carried_target, pan_origin, route_wheel, starts_card_gesture, starts_pan, WheelRoute,
-    WheelTarget,
-};
+use infiniterm_core::pan_mode::{starts_card_gesture, starts_pan};
 use infiniterm_core::resize::{apply_resize, Edge};
 use infiniterm_core::viewport::{anchored_viewport, world_pos_of, MAX_SCALE, MIN_SCALE};
 
@@ -701,9 +698,7 @@ impl AppView {
     }
 
     /// Cmd+scroll (and a trackpad pinch, which arrives as ctrl) zooms about
-    /// the cursor: the world point under the pointer must not move. Two
-    /// fingers without a modifier scroll the card body under the pointer when
-    /// it can move that way and pan the canvas everywhere else (#451).
+    /// the cursor: the world point under the pointer must not move.
     pub fn wheel(&mut self, e: &ScrollWheelEvent) {
         let keylog = std::env::var_os("INFINITERM_KEYLOG").is_some();
         // An overlay's list scrolls itself, but the event still arrives at the
@@ -756,71 +751,13 @@ impl AppView {
             self.model.dirty_layout = true;
             return;
         }
-        // Two fingers (or a wheel) without a modifier: scroll the card body
-        // under the pointer when it can move that way, else pan the canvas,
-        // so every surface answers a trackpad (#451). A trackpad gesture
-        // keeps the target its first event chose, momentum included.
-        let precise = matches!(e.delta, ScrollDelta::Pixels(_));
-        let started = matches!(e.touch_phase, TouchPhase::Started);
-        let carried = carried_target(started, precise, self.wheel_target.as_ref());
-        let hit = self.hit(p);
-        let body_under = match &hit {
-            Hit::CardBody { id, .. } => Some(id.as_str()),
-            _ => None,
-        };
-        let route = route_wheel(carried.as_ref(), body_under);
-        let scale = self.model.viewport.scale;
-        let (bdx, bdy) = (dx / scale, dy / scale);
-        let target = match route {
-            WheelRoute::Body(id) => {
-                // The gesture's own card, wherever the pointer drifted to.
-                let local = self.local_in(&id, p).unwrap_or(Point { x: 0., y: 0. });
-                if let Some(body) = self.live_body(&id) {
-                    body.wheel(local, bdx, bdy, &e.modifiers);
-                }
-                self.flush_writes();
-                WheelTarget::Body(id)
+        if let Hit::CardBody { id, local } = self.hit(p) {
+            let scale = self.model.viewport.scale;
+            if let Some(body) = self.live_body(&id) {
+                body.wheel(local, dx / scale, dy / scale, &e.modifiers);
             }
-            WheelRoute::TryBody(id) => {
-                let local = match &hit {
-                    Hit::CardBody { local, .. } => *local,
-                    _ => Point { x: 0., y: 0. },
-                };
-                let used = self
-                    .live_body(&id)
-                    .map(|body| body.wheel(local, bdx, bdy, &e.modifiers))
-                    .unwrap_or(false);
-                self.flush_writes();
-                if used {
-                    WheelTarget::Body(id)
-                } else {
-                    self.wheel_pan(dx, dy);
-                    WheelTarget::Pan
-                }
-            }
-            WheelRoute::Pan => {
-                self.wheel_pan(dx, dy);
-                WheelTarget::Pan
-            }
-        };
-        // A mouse wheel has no gestures to tell apart: nothing to carry.
-        self.wheel_target = precise.then_some(target);
-    }
-
-    /// Two fingers over the canvas: it follows them, as a Cmd+drag pan does.
-    fn wheel_pan(&mut self, dx: f64, dy: f64) {
-        self.animator.cancel();
-        // One usage line per pan gesture, not per wheel event.
-        static LAST_PAN_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let now = now_ms() as u64;
-        let last = LAST_PAN_MS.swap(now, std::sync::atomic::Ordering::Relaxed);
-        if now.saturating_sub(last) > infiniterm_core::usage_log::ZOOM_GESTURE_GAP_MS {
-            self.note_use("mouse.canvas.scrollpan");
+            self.flush_writes();
         }
-        let vp = &mut self.model.viewport;
-        (vp.x, vp.y) = pan_origin(vp.x, vp.y, vp.scale, dx, dy);
-        self.model.stop_framing();
-        self.model.dirty_layout = true;
     }
 
     /// A key: a bare key to a mode that owns one, else a chord to the keymap,

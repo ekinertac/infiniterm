@@ -221,9 +221,6 @@ pub struct AppView {
     /// `app.emoji` asked; the next frame, which has the window, opens it.
     pub show_character_palette: bool,
     pub pan: Option<Pan>,
-    /// Where the scroll gesture in progress goes (#451): fixed at the first
-    /// event of a trackpad gesture so its momentum keeps the target.
-    pub wheel_target: Option<infiniterm_core::pan_mode::WheelTarget>,
     /// A rectangle being dragged on bare canvas to select cards (input.rs,
     /// `Model::marquee_select`).
     pub marquee: Option<Marquee>,

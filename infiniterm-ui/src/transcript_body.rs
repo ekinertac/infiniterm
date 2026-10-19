@@ -207,15 +207,6 @@ impl TranscriptBody {
         }
     }
 
-    /// The furthest the detail can scroll: its lines less the rows that show,
-    /// worked out as the painter does (`paint` clamps `detail_scroll` to it).
-    fn detail_max_scroll(&self) -> usize {
-        let (_, d_s) = self.detail_area(self.world);
-        let cols = (((d_s.w - PAD_X * 2.) / self.metrics.cell_w).floor()).max(4.) as usize;
-        let visible = ((d_s.h - PAD_Y * 2.) / self.line_h()).floor().max(1.) as usize;
-        self.detail_lines(cols).len().saturating_sub(visible)
-    }
-
     /// A turn's speaker and its colour: you, the agent, another session by
     /// its name, or the harness.
     fn who(&self, t: &Turn) -> (String, Hsla) {
@@ -478,25 +469,14 @@ impl CardBody for TranscriptBody {
         BodyAction::None
     }
 
-    /// Used when the pane under the pointer (the turn list or the detail) can
-    /// move the way the fingers did; else the canvas pans (#451).
-    fn wheel(&mut self, local: Point, _dx: f64, dy: f64, _modifiers: &gpui::Modifiers) -> bool {
+    fn wheel(&mut self, local: Point, _dx: f64, dy: f64, _modifiers: &gpui::Modifiers) {
+        let lines = self.wheel_carry.lines(dy, self.line_h());
+        if lines == 0 {
+            return;
+        }
         let (lo, ls) = self.list_area(self.world);
         let in_list =
             local.x >= lo.x && local.x < lo.x + ls.w && local.y >= lo.y && local.y < lo.y + ls.h;
-        let used = if in_list {
-            let max = self.turns.len().saturating_sub(1);
-            infiniterm_core::pan_mode::can_scroll(self.list_scroll, max, dy)
-        } else {
-            infiniterm_core::pan_mode::can_scroll(self.detail_scroll, self.detail_max_scroll(), dy)
-        };
-        if !used {
-            return false;
-        }
-        let lines = self.wheel_carry.lines(dy, self.line_h());
-        if lines == 0 {
-            return true;
-        }
         if in_list {
             let max = self.turns.len().saturating_sub(1) as i64;
             self.list_scroll = (self.list_scroll as i64 - lines).clamp(0, max) as usize;
@@ -504,7 +484,6 @@ impl CardBody for TranscriptBody {
             self.detail_scroll = (self.detail_scroll as i64 - lines).max(0) as usize;
         }
         self.dirty = true;
-        true
     }
 
     fn wants_frame(&self, _now: f64) -> bool {

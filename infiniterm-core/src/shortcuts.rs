@@ -198,11 +198,6 @@ pub const GESTURES: &[(&str, &str, &str)] = &[
         "mouse.canvas.zoom",
     ),
     ("Cmd drag", "Pan the canvas", "mouse.canvas.pan"),
-    (
-        "two fingers on empty canvas, a frame, or a card with nothing to scroll",
-        "Pan the canvas",
-        "mouse.canvas.scrollpan",
-    ),
     ("middle drag", "Pan the canvas", "mouse.canvas.pan"),
     (
         "drag the top edge or the label",

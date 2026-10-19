@@ -59,7 +59,6 @@ impl AppView {
             label_hits: Vec::new(),
             show_character_palette: false,
             pan: None,
-            wheel_target: None,
             left_on_canvas: false,
             middle_press: None,
             marquee: None,

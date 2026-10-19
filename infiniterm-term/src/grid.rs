@@ -707,18 +707,6 @@ impl Grid {
         self.term.scroll_display(Scroll::Bottom);
     }
 
-    /// Whether the view can move `up` into history, or down toward the
-    /// bottom. A trackpad gesture over a card that cannot scroll that way
-    /// pans the canvas instead (#451).
-    pub fn can_scroll(&self, up: bool) -> bool {
-        let offset = self.term.grid().display_offset();
-        if up {
-            offset < self.term.history_size()
-        } else {
-            offset > 0
-        }
-    }
-
     pub fn mode(&self) -> TermMode {
         *self.term.mode()
     }
@@ -1140,27 +1128,6 @@ mod tests {
         assert!(f.visual);
         g.visual_leave();
         assert_eq!(g.frame(&Palette::default_palette()).display_offset, 0);
-    }
-
-    // A card with no history leaves a trackpad gesture to the canvas; one
-    // with history takes it, up to the oldest line and back down (#451).
-    #[test]
-    fn the_view_can_scroll_only_where_there_is_history() {
-        let mut g = Grid::new(10, 2, 100);
-        g.advance(b"1\r\n2");
-        assert!(!g.can_scroll(true), "nothing above a fresh screen");
-        assert!(!g.can_scroll(false), "already at the bottom");
-        g.advance(b"\r\n3\r\n4\r\n5");
-        assert!(g.can_scroll(true), "lines have gone into history");
-        assert!(!g.can_scroll(false), "still at the bottom");
-        g.scroll(1);
-        assert!(
-            g.can_scroll(false),
-            "scrolled up, the way back down is open"
-        );
-        g.scroll(1000);
-        assert!(!g.can_scroll(true), "at the oldest line");
-        assert!(g.can_scroll(false));
     }
 
     fn fed(text: &str) -> Grid {

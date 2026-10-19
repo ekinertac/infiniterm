@@ -113,14 +113,8 @@ pub trait CardBody {
     fn mouse_move(&mut self, _local: Point, _modifiers: &gpui::Modifiers) {}
     /// The pointer moved off this body onto another card or empty canvas.
     fn mouse_leave(&mut self) {}
-    /// A bare scroll over the body: the terminal's scrollback, the page's
-    /// scroll. Returns whether the body USED the event: a body with nothing to
-    /// scroll the way the fingers moved (a fresh shell with no history, a
-    /// page already at its end) says no, and the canvas pans instead (#451).
-    /// `dy` is positive when the fingers move down, as gpui delivers it.
-    fn wheel(&mut self, _local: Point, _dx: f64, _dy: f64, _modifiers: &gpui::Modifiers) -> bool {
-        false
-    }
+    /// A bare scroll over the body: the terminal's scrollback, the page's scroll.
+    fn wheel(&mut self, _local: Point, _dx: f64, _dy: f64, _modifiers: &gpui::Modifiers) {}
     /// Whether the next frame would paint differently: output arrived, or a
     /// blink is due at `now`. Frames are painted only on demand.
     fn wants_frame(&self, _now: f64) -> bool {

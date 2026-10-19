@@ -457,11 +457,10 @@ impl CardBody for EditorTabs {
         }
     }
 
-    fn wheel(&mut self, local: Point, dx: f64, dy: f64, modifiers: &gpui::Modifiers) -> bool {
+    fn wheel(&mut self, local: Point, dx: f64, dy: f64, modifiers: &gpui::Modifiers) {
         let below = self.below_strip(local);
-        match self.active_body() {
-            Some(b) => b.wheel(below, dx, dy, modifiers),
-            None => false,
+        if let Some(b) = self.active_body() {
+            b.wheel(below, dx, dy, modifiers);
         }
     }
 
