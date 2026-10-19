@@ -1074,10 +1074,15 @@ mod tests {
         if Command::new("python3").arg("--version").output().is_err() {
             return None;
         }
+        // One folder per call. It was named from the lengths of the arguments,
+        // so two tests running in parallel whose inputs happened to be as long
+        // shared a folder, and one's cleanup or log overwrote the other's: the
+        // flaky failure of #452.
+        static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
             "ift-adapter-{}-{}",
             std::process::id(),
-            event_arg.len() + stdin.len()
+            CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("call.txt");
