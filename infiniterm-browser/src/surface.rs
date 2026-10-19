@@ -10,6 +10,17 @@ use crate::moat;
 use cef::*;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
+/// `[browser]` lines on stderr under INFINITERM_KEYLOG: the size handshake with
+/// CEF (what the card asked for, what CEF asked back, what it painted), which
+/// is how #479's "sometimes it works, sometimes not" was found. Read once.
+/// How many of CEF's recent size and scale asks are kept to explain a frame.
+const ASKED_KEPT: usize = 8;
+
+pub fn keylog() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("INFINITERM_KEYLOG").is_some())
+}
+
 /// A scale below this makes CEF's layout math degenerate; a card zoomed
 /// far out still asks for a real, paintable surface.
 const MIN_DEVICE_SCALE: f32 = 0.5;
@@ -79,6 +90,19 @@ pub struct Shared {
     /// `height` by one round trip after a resize, which is the whole point.
     pub reported_width: i32,
     pub reported_height: i32,
+    /// The device scale CEF last ASKED for in `screen_info` (0 before the
+    /// first ask), the scale of the frames it paints from then on.
+    pub reported_scale: f32,
+    /// The last few sizes (CSS pixels) and device scales CEF asked for, newest
+    /// last: a frame is laid out at one pair of them, whichever its own pixels
+    /// prove (`frame_fit::frame_layout_size`), not at the newest ask (#479).
+    pub asked: Vec<(i32, i32)>,
+    pub asked_scales: Vec<f32>,
+    /// The (width, height, scale) last DELIVERED to CEF with `was_resized`: a
+    /// size is only "sent" once the browser host existed to take it. Compared
+    /// against, instead of what the card last wanted, so a size asked for before
+    /// the host was there is not forgotten (#479).
+    pub sent: (i32, i32, f32),
     pub scale: f32,
     /// The last find's result: how many matches and which one is current.
     /// Chromium reports this several times per search as it walks the page,
@@ -111,13 +135,35 @@ wrap_render_handler! {
                 // What the frame CEF paints next is laid out at (see `Frame`).
                 s.reported_width = rect.width;
                 s.reported_height = rect.height;
+                let ask = (rect.width, rect.height);
+                if s.asked.last() != Some(&ask) {
+                    s.asked.push(ask);
+                    if s.asked.len() > ASKED_KEPT {
+                        s.asked.remove(0);
+                    }
+                }
+                if keylog() {
+                    eprintln!("[browser] view_rect asked -> {}x{}", rect.width, rect.height);
+                }
             }
         }
 
         fn screen_info(&self, _browser: Option<&mut Browser>, info: Option<&mut ScreenInfo>) -> ::std::os::raw::c_int {
             match info {
                 Some(info) => {
-                    info.device_scale_factor = self.handler.shared.borrow().scale;
+                    let mut s = self.handler.shared.borrow_mut();
+                    info.device_scale_factor = s.scale;
+                    s.reported_scale = s.scale;
+                    let scale = s.scale;
+                    if s.asked_scales.last() != Some(&scale) {
+                        s.asked_scales.push(scale);
+                        if s.asked_scales.len() > ASKED_KEPT {
+                            s.asked_scales.remove(0);
+                        }
+                    }
+                    if keylog() {
+                        eprintln!("[browser] screen_info asked -> scale {}", s.scale);
+                    }
                     1
                 }
                 None => 0,
@@ -139,13 +185,28 @@ wrap_render_handler! {
             let len = (width * height * 4) as usize;
             let bgra = unsafe { std::slice::from_raw_parts(buffer, len) }.to_vec();
             let mut shared = self.handler.shared.borrow_mut();
-            // Before CEF has asked for a view rect at all, the requested size
-            // is the best answer there is.
-            let (css_width, css_height) = if shared.reported_width > 0 && shared.reported_height > 0 {
-                (shared.reported_width, shared.reported_height)
-            } else {
+            // The layout size the pixels prove, not the newest size CEF asked
+            // for (see `frame_fit::frame_layout_size`: the race of #479).
+            // Before CEF has asked for anything, the requested size and scale
+            // are the best answer there is.
+            let fallback_scale = if shared.reported_scale > 0. { shared.reported_scale } else { shared.scale };
+            let (css_width, css_height) = if shared.asked.is_empty() {
                 (shared.width, shared.height)
+            } else {
+                crate::frame_fit::frame_layout_size(
+                    width as u32,
+                    height as u32,
+                    &shared.asked,
+                    &shared.asked_scales,
+                    fallback_scale,
+                )
             };
+            if keylog() {
+                eprintln!(
+                    "[browser] on_paint {width}x{height}px tagged css {css_width}x{css_height} (requested {}x{} @{}, reported scale {})",
+                    shared.width, shared.height, shared.scale, shared.reported_scale
+                );
+            }
             shared.frame = Some(Arc::new(Frame {
                 width: width as u32,
                 height: height as u32,
@@ -597,19 +658,42 @@ impl Surface {
     /// The layout size or the device scale changed: tell CEF, which asks
     /// `view_rect` and `screen_info` again and repaints.
     pub fn resize(&self, width: i32, height: i32, scale: f32) {
+        let (w, h) = (width.max(1), height.max(1));
         let changed = {
             let mut s = self.shared.borrow_mut();
-            let changed = s.width != width.max(1) || s.height != height.max(1) || s.scale != scale;
-            s.width = width.max(1);
-            s.height = height.max(1);
+            s.width = w;
+            s.height = h;
             s.scale = scale;
-            changed
+            // Against what CEF was last TOLD, not what the card last wanted:
+            // a size set while the browser host did not exist yet was never
+            // delivered, and comparing with the wanted size would call it
+            // unchanged from then on (#479).
+            s.sent != (w, h, scale)
         };
         if changed {
+            if keylog() {
+                eprintln!("[browser] resize -> css {w}x{h} @{scale}");
+            }
             if let Some(host) = self.host() {
                 host.notify_screen_info_changed();
                 host.was_resized();
+                self.shared.borrow_mut().sent = (w, h, scale);
             }
+        }
+    }
+
+    /// Ask CEF to paint again at the size the card wants now, when the newest
+    /// frame is of an older one and nothing more is coming (`frame_fit::needs_kick`,
+    /// #479): the size and scale are told again and the whole view invalidated.
+    pub fn kick(&self) {
+        if let Some(host) = self.host() {
+            if keylog() {
+                let s = self.shared.borrow();
+                eprintln!("[browser] kick: repaint at css {}x{} @{}", s.width, s.height, s.scale);
+            }
+            host.notify_screen_info_changed();
+            host.was_resized();
+            host.invalidate(PaintElementType::VIEW);
         }
     }
 

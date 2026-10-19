@@ -46,9 +46,139 @@ pub fn frame_draw_size(css_w: i32, css_h: i32, scale: f64, avail_w: f64, avail_h
     )
 }
 
+/// The layout size (CSS pixels) a painted frame was REALLY laid out at, found
+/// from its own pixels (#479, the race behind "sometimes it works").
+///
+/// A frame used to be labelled with the last size CEF had asked for in
+/// `view_rect`. That is not the size of the frame that arrives next: after a
+/// quick burst of resizes CEF asks for the newest size, then still delivers a
+/// frame it had already composited at an older one. Labelled with the new
+/// size, such a frame looked current: the ui stretched its pixels to fill the
+/// card, and CEF, believing it had painted the newest size, sent nothing
+/// after it, so the page stayed stretched. The pixels do not lie: the frame is
+/// laid out at the (size, device scale) pair, among those CEF asked for
+/// recently, whose product is its pixel size. `asked` and `scales` are what
+/// CEF asked (newest last); when no pair fits, the pixels over `fallback_scale`.
+pub fn frame_layout_size(
+    px_w: u32,
+    px_h: u32,
+    asked: &[(i32, i32)],
+    scales: &[f32],
+    fallback_scale: f32,
+) -> (i32, i32) {
+    let fits = |css: i32, scale: f32, px: u32| (css as f64 * scale as f64 - px as f64).abs() <= 1.;
+    // The newest scale first: the same pixels can be 1600 css at 1x or 800 css
+    // at 2x, and after a zoom the newest scale is the likelier one.
+    for &scale in scales.iter().rev() {
+        for &(w, h) in asked.iter().rev() {
+            if fits(w, scale, px_w) && fits(h, scale, px_h) {
+                return (w, h);
+            }
+        }
+    }
+    let scale = if fallback_scale > 0. { fallback_scale as f64 } else { 1. };
+    (
+        (px_w as f64 / scale).round() as i32,
+        (px_h as f64 / scale).round() as i32,
+    )
+}
+
+/// How long the card must have been quiet (no new frame, no new size wanted)
+/// before it asks CEF to paint again at the size it wants. A drag sends sizes
+/// every frame and CEF answers within a few frames; this is well past that.
+pub const KICK_AFTER_MS: f64 = 150.;
+/// The least time between two such requests for the same size.
+pub const KICK_EVERY_MS: f64 = 400.;
+/// Requests for one wanted size before giving up (a page that cannot be laid
+/// out at the size asked would otherwise be asked for ever).
+pub const MAX_KICKS: u32 = 5;
+
+/// Whether the card should tell CEF to paint again now (#479). The newest
+/// frame was laid out at `frame_css` and the card wants `wanted_css`: while they
+/// differ the page is drawn at an old size, and CEF will not send another frame
+/// on its own if it believes it already painted the newest size. `quiet_ms` is
+/// the time since a frame last arrived or the wanted size last changed,
+/// `since_kick_ms` the time since the last request, `kicks` how many were made
+/// for this wanted size. One CSS pixel of difference is rounding, not a stale
+/// frame.
+pub fn needs_kick(
+    frame_css: (i32, i32),
+    wanted_css: (i32, i32),
+    quiet_ms: f64,
+    since_kick_ms: f64,
+    kicks: u32,
+) -> bool {
+    is_stale(frame_css, wanted_css)
+        && kicks < MAX_KICKS
+        && quiet_ms >= KICK_AFTER_MS
+        && since_kick_ms >= KICK_EVERY_MS
+}
+
+/// The frame is not the size the card wants (more than rounding apart).
+pub fn is_stale(frame_css: (i32, i32), wanted_css: (i32, i32)) -> bool {
+    (frame_css.0 - wanted_css.0).abs() > 1 || (frame_css.1 - wanted_css.1).abs() > 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_is_laid_out_at_the_size_its_pixels_prove() {
+        // The race seen on the MacBook: CEF had asked for 1625 wide, the last
+        // ones before it were 1575 and 1550, and the frame that arrived was
+        // 1575 pixels wide. It must be labelled 1575, not the newest ask.
+        let asked = [(1550, 800), (1575, 800), (1625, 800)];
+        assert_eq!(frame_layout_size(1575, 800, &asked, &[1.], 1.), (1575, 800));
+        // The newest ask is the answer when the pixels say so.
+        assert_eq!(frame_layout_size(1625, 800, &asked, &[1.], 1.), (1625, 800));
+    }
+
+    #[test]
+    fn the_device_scale_is_part_of_the_proof() {
+        // 800 css at 2.0 is 1600 pixels; the same pixels are not 1600 css.
+        let asked = [(800, 600), (1600, 1200)];
+        assert_eq!(frame_layout_size(1600, 1200, &asked, &[2.], 2.), (800, 600));
+        // The scale changed in between: the older scale still explains an
+        // older frame.
+        assert_eq!(frame_layout_size(800, 600, &asked, &[1., 2.], 2.), (800, 600));
+        assert_eq!(frame_layout_size(1600, 1200, &asked, &[1., 2.], 2.), (800, 600));
+    }
+
+    #[test]
+    fn a_frame_no_ask_explains_falls_back_to_the_pixels_over_the_scale() {
+        assert_eq!(frame_layout_size(1000, 500, &[], &[], 2.), (500, 250));
+        assert_eq!(frame_layout_size(1000, 500, &[(333, 333)], &[1.], 0.), (1000, 500));
+    }
+
+    #[test]
+    fn rounding_of_one_pixel_still_matches() {
+        // 1475 css at 1.5 is 2212.5 pixels: CEF paints 2212 or 2213.
+        assert_eq!(frame_layout_size(2212, 1200, &[(1475, 800)], &[1.5], 1.5), (1475, 800));
+        assert_eq!(frame_layout_size(2213, 1200, &[(1475, 800)], &[1.5], 1.5), (1475, 800));
+    }
+
+    #[test]
+    fn a_stale_frame_asks_for_a_repaint_only_after_a_quiet_moment() {
+        let (frame, wanted) = ((1575, 800), (1625, 800));
+        // Still being dragged or a frame just came: wait.
+        assert!(!needs_kick(frame, wanted, 40., 1e9, 0));
+        // Quiet for long enough: ask.
+        assert!(needs_kick(frame, wanted, KICK_AFTER_MS, 1e9, 0));
+        // Just asked: do not ask again at once.
+        assert!(!needs_kick(frame, wanted, 1000., 100., 1));
+        assert!(needs_kick(frame, wanted, 1000., KICK_EVERY_MS, 1));
+        // Gave up after MAX_KICKS for this size.
+        assert!(!needs_kick(frame, wanted, 5000., 5000., MAX_KICKS));
+    }
+
+    #[test]
+    fn a_frame_at_the_wanted_size_never_asks() {
+        assert!(!needs_kick((1625, 800), (1625, 800), 5000., 5000., 0));
+        // One pixel of rounding is not stale.
+        assert!(!needs_kick((1624, 801), (1625, 800), 5000., 5000., 0));
+        assert!(is_stale((1623, 800), (1625, 800)));
+    }
 
     #[test]
     fn a_settled_card_is_filled_exactly() {

@@ -46,6 +46,24 @@ const STATUS_TEXT_PAD_PX: f64 = 12.;
 /// The placeholder text's line height, looser than its font size.
 const STATUS_LINE_HEIGHT_RATIO: f32 = 1.5;
 
+/// What the card knows about how current a tab's newest frame is: the layout
+/// size it wants, when a frame last arrived or that size last changed, and how
+/// often CEF has been asked to paint again for it (`frame_fit::needs_kick`).
+/// After a quick burst of resizes CEF can deliver a frame of an older size and
+/// then nothing: without asking, the page stays at that size (#479).
+#[derive(Default)]
+struct Repaint {
+    wanted_css: (i32, i32),
+    /// Frames taken so far, and how many `paint` has noticed.
+    frame_seq: u64,
+    seen_frame: u64,
+    /// When (ms) a frame last arrived or the wanted size last changed.
+    quiet_since: f64,
+    /// Requests made for the current wanted size, and when the last was.
+    kicks: u32,
+    last_kick_ms: f64,
+}
+
 /// One tab: everything that was a single field on `BrowserBody` before
 /// tabs existed, once per open page.
 pub struct Tab {
@@ -57,6 +75,8 @@ pub struct Tab {
     /// The layout size (CSS pixels) `texture` was painted at, so an old frame
     /// is drawn at its natural size while a resize repaints (#479).
     texture_css: (i32, i32),
+    /// How current `texture` is, and when to ask CEF for a fresh one (#479).
+    repaint: Repaint,
     /// The page title as last reported, so a change can be told from the
     /// same title arriving every frame. Not the card's title: that is a
     /// name somebody CHOSE, and a page must never overwrite it.
@@ -85,6 +105,7 @@ impl Tab {
             unavailable,
             texture: None,
             texture_css: (0, 0),
+            repaint: Repaint::default(),
             title: None,
             applied_zoom: None,
         }
@@ -366,6 +387,13 @@ impl BrowserBody {
                             1,
                         ))));
                         tab.texture_css = (frame.css_width, frame.css_height);
+                        tab.repaint.frame_seq += 1;
+                        if infiniterm_browser::surface::keylog() {
+                            eprintln!(
+                                "[browser] ui takes frame {}x{}px css {}x{}",
+                                frame.width, frame.height, frame.css_width, frame.css_height
+                            );
+                        }
                         self.dirty = true;
                     }
                 }
@@ -496,7 +524,7 @@ impl CardBody for BrowserBody {
         bounds: Bounds<Pixels>,
         scale: f64,
         focused: bool,
-        _now: f64,
+        now: f64,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -523,6 +551,37 @@ impl CardBody for BrowserBody {
         for tab in &self.tabs {
             if let Some(s) = &tab.surface {
                 s.resize(page_w, page_h, device);
+            }
+        }
+        // The visible tab's newest frame may be of an older size than the one
+        // wanted, and CEF may have nothing more to send (#479): after a quiet
+        // moment ask it to paint again, a few times at most per wanted size.
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            let wanted = (page_w, page_h);
+            let r = &mut tab.repaint;
+            if r.wanted_css != wanted {
+                r.wanted_css = wanted;
+                r.quiet_since = now;
+                r.kicks = 0;
+            }
+            if r.seen_frame != r.frame_seq {
+                r.seen_frame = r.frame_seq;
+                r.quiet_since = now;
+            }
+            if tab.texture.is_some()
+                && infiniterm_browser::frame_fit::needs_kick(
+                    tab.texture_css,
+                    wanted,
+                    now - r.quiet_since,
+                    now - r.last_kick_ms,
+                    r.kicks,
+                )
+            {
+                if let Some(s) = &tab.surface {
+                    s.kick();
+                }
+                r.kicks += 1;
+                r.last_kick_ms = now;
             }
         }
         // The strip is real space now, not an overlay: the page is laid out
@@ -572,6 +631,15 @@ impl CardBody for BrowserBody {
                 );
                 let fills = (draw_w - f32::from(page_bounds.size.width) as f64).abs() < 0.01
                     && (draw_h - f32::from(page_bounds.size.height) as f64).abs() < 0.01;
+                if infiniterm_browser::surface::keylog() && !fills {
+                    eprintln!(
+                        "[browser] draws old size {draw_w:.0}x{draw_h:.0} in page area {:.0}x{:.0} (css {}x{} zoom {scale:.2})",
+                        f32::from(page_bounds.size.width),
+                        f32::from(page_bounds.size.height),
+                        texture_css.0,
+                        texture_css.1
+                    );
+                }
                 if fills {
                     let _ = window.paint_image(page_bounds, page_corners, img.clone(), 0, false);
                 } else {
@@ -836,6 +904,13 @@ impl CardBody for BrowserBody {
                 .tabs
                 .iter()
                 .any(|t| t.surface.as_ref().is_some_and(|s| s.has_new_frame()))
+            // The visible page is of an older size and a repaint request is
+            // still to come: keep painting so `paint` can time it (#479).
+            || self.tabs.get(self.active).is_some_and(|t| {
+                t.texture.is_some()
+                    && t.repaint.kicks < infiniterm_browser::frame_fit::MAX_KICKS
+                    && infiniterm_browser::frame_fit::is_stale(t.texture_css, t.repaint.wanted_css)
+            })
     }
 
     fn captures_drag(&self) -> bool {
@@ -950,6 +1025,7 @@ mod tab_label_tests {
             unavailable: None,
             texture: None,
             texture_css: (0, 0),
+            repaint: Repaint::default(),
             title: None,
             applied_zoom: None,
         };
