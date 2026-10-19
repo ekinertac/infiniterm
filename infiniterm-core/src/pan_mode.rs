@@ -57,17 +57,32 @@ pub enum WheelRoute {
     TryBody(String),
 }
 
+/// The longest pause inside one scroll gesture. The OS sends a trackpad's
+/// events (and its momentum after the lift) every display refresh, 8 to 16 ms
+/// apart, so a pause longer than this is a NEW gesture. It matters for a
+/// device that sends pixel scrolls with no touch phase (a smooth-scrolling
+/// mouse with a vendor driver): nothing ever says `started` for it, so
+/// without this the target one burst chose (pan, over empty canvas) was kept
+/// for every later burst, over any card, and a terminal could not be scrolled
+/// with that mouse (#485). Long enough that a pause mid-gesture while the
+/// fingers rest does not re-decide on the same card, short enough that two
+/// flicks of a hand never share a target.
+pub const WHEEL_GESTURE_GAP_MS: f64 = 150.;
+
 /// The target a scroll event inherits. A trackpad gesture (`started` is the
 /// first event of the fingers' touch) carries nothing over from the last
-/// one; momentum events after the lift (`Moved`, no new `started`) keep it.
-/// A mouse wheel (`precise` false: lines, no phases) decides every notch on
-/// its own, since nothing tells its gestures apart.
+/// one; momentum events after the lift (`Moved`, no new `started`) keep it,
+/// as long as they follow without a pause (`gap_ms`, the time since the
+/// previous scroll event, at most `WHEEL_GESTURE_GAP_MS`). A mouse wheel
+/// (`precise` false: lines, no phases) decides every notch on its own, since
+/// nothing tells its gestures apart.
 pub fn carried_target(
     started: bool,
     precise: bool,
+    gap_ms: f64,
     last: Option<&WheelTarget>,
 ) -> Option<WheelTarget> {
-    if started || !precise {
+    if started || !precise || gap_ms > WHEEL_GESTURE_GAP_MS {
         None
     } else {
         last.cloned()
@@ -247,15 +262,54 @@ mod tests {
     fn a_new_gesture_forgets_the_last_target_and_momentum_keeps_it() {
         let body = WheelTarget::Body("c1".into());
         // The fingers touch down: the old target is gone.
-        assert_eq!(carried_target(true, true, Some(&body)), None);
-        // Moves and the momentum after the lift keep it.
-        assert_eq!(carried_target(false, true, Some(&body)), Some(body.clone()));
+        assert_eq!(carried_target(true, true, 8., Some(&body)), None);
+        // Moves and the momentum after the lift keep it (events 8 to 16 ms
+        // apart).
         assert_eq!(
-            carried_target(false, true, Some(&WheelTarget::Pan)),
+            carried_target(false, true, 8., Some(&body)),
+            Some(body.clone())
+        );
+        assert_eq!(
+            carried_target(false, true, 16., Some(&WheelTarget::Pan)),
             Some(WheelTarget::Pan)
         );
         // A mouse wheel has no phases: every notch decides again.
-        assert_eq!(carried_target(false, false, Some(&body)), None);
+        assert_eq!(carried_target(false, false, 8., Some(&body)), None);
+    }
+
+    #[test]
+    fn a_pause_longer_than_a_gesture_forgets_the_target() {
+        // A smooth mouse with a vendor driver sends pixel scrolls with no
+        // phase: nothing says `started`. The burst over empty canvas chose
+        // pan; 300 ms later a burst over a terminal must decide afresh
+        // (#485: it kept panning and the terminal could not be scrolled).
+        assert_eq!(
+            carried_target(false, true, 300., Some(&WheelTarget::Pan)),
+            None
+        );
+        assert_eq!(
+            carried_target(
+                false,
+                true,
+                WHEEL_GESTURE_GAP_MS + 1.,
+                Some(&WheelTarget::Body("c1".into()))
+            ),
+            None
+        );
+        // The pause itself is the limit, inclusive: events exactly that far
+        // apart still belong to one gesture.
+        assert_eq!(
+            carried_target(false, true, WHEEL_GESTURE_GAP_MS, Some(&WheelTarget::Pan)),
+            Some(WheelTarget::Pan)
+        );
+        // And the burst after the pause, over a card, is offered to the card.
+        let fresh = carried_target(false, true, 300., Some(&WheelTarget::Pan));
+        assert_eq!(
+            route_wheel(fresh.as_ref(), Some("c1")),
+            WheelRoute::TryBody("c1".into())
+        );
+        // Nothing remembered: nothing carried, however close the events.
+        assert_eq!(carried_target(false, true, 8., None), None);
     }
 
     #[test]
