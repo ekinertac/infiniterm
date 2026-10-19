@@ -1,0 +1,487 @@
+//! A canvas host with no window (#438): the same model, backend and join
+//! server the app runs, driven by one `tick` instead of gpui's frame and poll.
+//!
+//! Why it exists: a viewer (`ift join`) can only join a host that serves
+//! `j.sock`, and only the running app did. With the app closed, the cards still
+//! run (each is an `iftd` session), so `ift serve` runs this loop to hold the
+//! canvas and serve the viewers until the app starts again.
+//!
+//! The rule that keeps it honest: nothing here decides what a canvas edit, a
+//! hook, a parked card or an agent state MEANS. Every such step is the model's
+//! own function (`apply_pane_event`, `apply_hook`, `apply_remote_layout`,
+//! `record_published`, `save_text`, `sweep_stale`, `run_ift`, `tick`), so the
+//! app and the host cannot drift. What is written here is only the glue the app
+//! keeps in gpui land: which channel to drain, when to save, and starting or
+//! adopting a shell for a card that has none.
+//!
+//! What the app does on a tick that this does NOT (each has a reason; the PR
+//! that added this lists them too):
+//! - parse bytes into a terminal grid, so `ift read` has no screen to read and
+//!   the kitty keyboard flag and the program's window title are not learned
+//!   (a grid needs a font and a window; a viewer draws its own from the ring);
+//! - the effects that are about a window: animations, the palette and menus,
+//!   fullscreen, editors, browsers, pickers, the clipboard, the character
+//!   palette, updates and relaunching;
+//! - the agent log (`agent.log`), the usage log, drafts, the omnibox history,
+//!   what's-new, the welcome and docs files (writing them is the app's launch);
+//! - the dead-session scrollback from disk (`take_ring`) and the orphan sweep:
+//!   a host never kills a session the canvas file does not name;
+//! - the window frame, find, selection, focus trail seen-time and hover state.
+//!
+//! Called by `ift serve` (infiniterm-cli). Related: app.rs (`Backend`, the
+//! channels this drains), model/ (every rule), backend/join.rs (`JoinHub`),
+//! runtime.rs in the ui crate (the app's own tick, which this mirrors).
+
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
+
+use crate::app::Backend;
+use crate::backend::join::{JoinHub, RemoteUpdate, KIND_KEYBINDINGS, KIND_SETTINGS};
+use crate::backend::PaneEvent;
+use crate::commands::CommandRegistry;
+use crate::config::TerminalBackend;
+use crate::config_files::{config_read, ConfigFile};
+use crate::model::persist::RemoteApply;
+use crate::model::register::{describe_context, register_commands, run_with_effects};
+use crate::model::{Effect, Model};
+
+/// The save debounce, as the app's (`runtime.rs` `SAVE_DEBOUNCE_MS`): a burst
+/// of edits is one write.
+pub const SAVE_DEBOUNCE_MS: f64 = 500.;
+
+/// How often the stale-agent sweep runs, as the app's `SWEEP_MS`.
+const SWEEP_MS: f64 = 10_000.;
+
+/// How the canvas file is read and written.
+pub type ReadLayout = Box<dyn Fn() -> Option<String> + Send>;
+pub type WriteLayout = Box<dyn Fn(&str) -> Result<(), String> + Send>;
+
+/// Where the host reads and writes what is outside the model, so a test can
+/// point it at a temp folder.
+pub struct HostIo {
+    pub socket: PathBuf,
+    pub join_socket: PathBuf,
+    pub read_layout: ReadLayout,
+    pub write_layout: WriteLayout,
+    pub home: PathBuf,
+}
+
+impl HostIo {
+    /// The real paths: this data dir's sockets and canvas file.
+    pub fn real() -> HostIo {
+        HostIo {
+            socket: crate::paths::socket_path(),
+            join_socket: crate::paths::join_socket(),
+            read_layout: Box::new(crate::layout_file::read_layout),
+            write_layout: Box::new(crate::layout_file::write_layout),
+            home: crate::paths::home_dir(),
+        }
+    }
+}
+
+pub struct Host {
+    pub model: Model,
+    pub backend: Backend,
+    registry: CommandRegistry<Model>,
+    hub: JoinHub,
+    updates: Option<Receiver<RemoteUpdate>>,
+    io: HostIo,
+    /// Sessions the daemon lists as running and no pane holds yet.
+    live_sessions: Vec<String>,
+    save_due: Option<f64>,
+    last_agents: String,
+    last_sweep: f64,
+    /// The size each card's shell was last given, so a card resized in a
+    /// viewer (a move on the canvas) refits its pty.
+    sized: std::collections::HashMap<String, (u16, u16)>,
+}
+
+impl Host {
+    /// Loads the canvas, starts the backend and the join server. A socket
+    /// that cannot bind is an error here, unlike in the app: a host nobody can
+    /// join has no job.
+    pub fn start(io: HostIo) -> Result<Host, String> {
+        let mut registry = CommandRegistry::new(|line| eprintln!("[infiniterm] {line}"));
+        register_commands(&mut registry);
+        registry.set_context(describe_context);
+
+        let mut model = Model::new();
+        let home = io.home.to_string_lossy().into_owned();
+        model.home = home.clone();
+        model.start_dir = home;
+        model.tick(now_ms());
+
+        // A missing or empty file is the defaults the model starts with; the
+        // app writes its own on first launch, and a host with no app has
+        // none of them.
+        let settings = config_read(ConfigFile::Settings).unwrap_or_default();
+        let keys = config_read(ConfigFile::Keybindings).unwrap_or_default();
+        if !settings.trim().is_empty() {
+            model.apply_settings_text(&settings);
+        }
+        if !keys.trim().is_empty() {
+            model.apply_keymap_text(&keys);
+        }
+
+        // Always the daemon: the cards are its sessions, and the pty or tmux
+        // backends have none a viewer could join.
+        let buffer = model.config.terminal.session_buffer as usize;
+        let backend = Backend::start(&io.socket, TerminalBackend::Daemon, buffer);
+        if !backend.socket_ok {
+            return Err(format!("could not bind {}", io.socket.display()));
+        }
+        model.can_park = backend.pty.can_park();
+        let live_sessions = backend.pty.live_sessions();
+        model.load_layout((io.read_layout)().as_deref());
+        model.first_run = false;
+        // The zsh integration every new card's shell loads, as at the app's
+        // launch.
+        if let Err(e) = crate::shell_integration::install(&crate::paths::shell_integration_dir()) {
+            eprintln!("[infiniterm/warn] could not write the zsh integration: {e}");
+        }
+
+        let (relay, write, nudge) = backend
+            .pty
+            .join_parts()
+            .ok_or("the daemon backend is not available")?;
+        let hub = JoinHub::new(relay, write).with_nudge(nudge);
+        if !settings.trim().is_empty() {
+            hub.publish_config(KIND_SETTINGS, &settings);
+        }
+        if !keys.trim().is_empty() {
+            hub.publish_config(KIND_KEYBINDINGS, &keys);
+        }
+        hub.serve(&io.join_socket)
+            .map_err(|e| format!("could not serve {}: {e}", io.join_socket.display()))?;
+        let updates = hub.take_updates();
+
+        let mut host = Host {
+            model,
+            backend,
+            registry,
+            hub,
+            updates,
+            io,
+            live_sessions,
+            save_due: None,
+            last_agents: String::new(),
+            last_sweep: 0.,
+            sized: Default::default(),
+        };
+        // Viewers that join before the first change still get a canvas.
+        host.write_layout();
+        Ok(host)
+    }
+
+    /// One turn: what the app's 16 ms poll and frame do, without a window.
+    pub fn tick(&mut self, now: f64) {
+        self.drain_backend();
+        self.drain_config();
+        self.drain_hooks();
+        while let Ok(statuses) = self.backend.pane_status.try_recv() {
+            self.model.apply_pane_statuses(&statuses);
+        }
+        self.drain_cli();
+        self.model.tick(now);
+        self.perform_effects();
+        self.reconcile_terminals();
+        if self.apply_remote_updates() {
+            self.perform_effects();
+            self.reconcile_terminals();
+        }
+        self.publish_agents();
+        self.schedule_save(now);
+        if now - self.last_sweep >= SWEEP_MS {
+            self.last_sweep = now;
+            self.model.sweep_stale();
+        }
+    }
+
+    /// Saves now (a stop, a quit): anything in the last half second would
+    /// otherwise be lost.
+    pub fn flush(&mut self) {
+        self.save_due = None;
+        self.write_layout();
+    }
+
+    /// Leaves the sessions running and the join socket closed. The cards live
+    /// on in their `iftd`s for the app (or the next host) to adopt.
+    pub fn stop(&mut self) {
+        self.flush();
+        self.backend.pty.leave();
+        let _ = std::fs::remove_file(&self.io.join_socket);
+    }
+
+    fn drain_backend(&mut self) {
+        while let Ok((pane, event)) = self.backend.pane_events.try_recv() {
+            // The reader stalls at 256 KiB unacknowledged; with no grid to
+            // parse, the bytes count as consumed the moment they arrive.
+            match &event {
+                PaneEvent::Output(bytes) | PaneEvent::Replay(bytes) => {
+                    self.backend.pty.ack_now(pane, bytes.len());
+                }
+                _ => {}
+            }
+            self.model.apply_pane_event(pane, &event);
+        }
+    }
+
+    /// The settings and keys, applied as the app applies them, and sent on to
+    /// viewers (#433).
+    fn drain_config(&mut self) {
+        while let Ok(change) = self.backend.config_changes.try_recv() {
+            match change.file {
+                ConfigFile::Settings => {
+                    self.model.apply_settings_text(&change.contents);
+                    self.hub.publish_config(KIND_SETTINGS, &change.contents);
+                }
+                _ => {
+                    self.model.apply_keymap_text(&change.contents);
+                    self.hub.publish_config(KIND_KEYBINDINGS, &change.contents);
+                }
+            }
+        }
+    }
+
+    fn drain_hooks(&mut self) {
+        while let Ok(report) = self.backend.hook_reports.try_recv() {
+            self.model.apply_hook(&report);
+        }
+    }
+
+    /// `ift` verbs on the host's socket, answered by the model. `ift read`
+    /// needs a screen this host does not have and says so.
+    fn drain_cli(&mut self) {
+        while let Ok(req) = self.backend.cli_requests.try_recv() {
+            let commands: Vec<(String, String)> = self
+                .registry
+                .all()
+                .iter()
+                .map(|c| (c.id.clone(), c.label.clone()))
+                .collect();
+            let commands: Vec<(&str, &str)> = commands
+                .iter()
+                .map(|(i, l)| (i.as_str(), l.as_str()))
+                .collect();
+            let reply = self.model.run_ift(&req, &commands);
+            if !std::mem::take(&mut self.model.reply_deferred) {
+                self.backend.cli.reply(req.id, reply.ok, reply.text);
+            }
+        }
+    }
+
+    fn perform_effects(&mut self) {
+        for effect in self.model.take_effects() {
+            match effect {
+                Effect::KillPane(pane) => self.backend.pty.kill(pane),
+                // A parked card reopened: the session keeps running and is
+                // listed as live, so the card adopts it again.
+                Effect::ReleasePane(pane) => {
+                    let session = self.backend.pty.session_id(pane);
+                    if self.backend.pty.release(pane) {
+                        if let Some(s) = session {
+                            self.live_sessions.push(s);
+                        }
+                    }
+                }
+                Effect::KillAllPanes => self.backend.pty.kill_all(),
+                Effect::WritePane(pane, bytes) => self.backend.pty.write(pane, &bytes),
+                Effect::CliReply { id, ok, text } => self.backend.cli.reply(id, ok, text),
+                Effect::ReadCard { request_id, .. } => self.backend.cli.reply(
+                    request_id,
+                    false,
+                    "this host has no window: there is no screen to read".into(),
+                ),
+                Effect::RunCommand(id) => {
+                    run_with_effects(&mut self.model, &self.registry, &id);
+                }
+                Effect::Log(line) => eprintln!("[infiniterm] {line}"),
+                Effect::Warn(line) => eprintln!("[infiniterm/warn] {line}"),
+                // Everything else is about a window: see the module header.
+                _ => {}
+            }
+        }
+    }
+
+    /// A shell for every terminal card that has none: its own session back
+    /// when the daemon still has it, else a new one in the card's directory.
+    fn reconcile_terminals(&mut self) {
+        use crate::saved_layout::CardKind;
+        let shell = Some(self.model.config.terminal.shell.clone()).filter(|s| !s.is_empty());
+        let extra_env: Vec<(String, String)> = self
+            .model
+            .config
+            .terminal
+            .env
+            .iter()
+            .filter_map(|kv| kv.split_once('='))
+            .map(|(k, v)| (k.trim().to_string(), v.to_string()))
+            .collect();
+        let cards: Vec<_> = self
+            .model
+            .cards
+            .iter()
+            .filter(|c| c.kind == CardKind::Terminal && c.error.is_none())
+            .cloned()
+            .collect();
+        for card in cards {
+            let (cols, rows) = nominal_cells(card.rect.w, card.rect.h, &self.model.config.terminal);
+            if card.pane_id.is_none() {
+                let adopted = card
+                    .session
+                    .clone()
+                    .filter(|s| self.live_sessions.iter().any(|live| live == s))
+                    .and_then(|s| self.backend.pty.adopt(&s));
+                let pane = match adopted {
+                    Some(pane) => Ok(pane),
+                    None => {
+                        let history = crate::shell_history::history_file(&card.id);
+                        let _ = crate::shell_history::ensure_file(&history);
+                        let command = card.command.clone().or_else(|| shell.clone());
+                        let mut env = extra_env.clone();
+                        env.extend([
+                            ("INFINITERM_CARD_ID".to_string(), card.id.clone()),
+                            (
+                                "INFINITERM_HISTFILE".to_string(),
+                                history.to_string_lossy().to_string(),
+                            ),
+                        ]);
+                        // Command marks for a shell card, as the app does.
+                        let integration = crate::paths::shell_integration_dir();
+                        if card.command.is_none() && integration.join(".zshenv").exists() {
+                            let sh = shell
+                                .clone()
+                                .unwrap_or_else(crate::backend::local_pty::default_shell);
+                            env.extend(crate::shell_integration::zsh_env(
+                                &sh,
+                                &integration,
+                                std::env::var("ZDOTDIR").ok(),
+                            ));
+                        }
+                        self.backend
+                            .pty
+                            .spawn_now(Path::new(&card.cwd), command.as_deref(), env)
+                    }
+                };
+                match pane {
+                    Ok(pane) => {
+                        self.backend.pty.resize_now(pane, cols, rows);
+                        self.sized.insert(card.id.clone(), (cols, rows));
+                        if let Some(c) = self.model.card_mut(&card.id) {
+                            c.pane_id = Some(pane);
+                        }
+                    }
+                    Err(e) => {
+                        let text = format!("could not start a shell in {}: {e}", card.cwd);
+                        if let Some(c) = self.model.card_mut(&card.id) {
+                            c.error = Some(text);
+                        }
+                    }
+                }
+            } else if let Some(pane) = card.pane_id {
+                // A card resized in a viewer: its shell follows.
+                if self.sized.get(&card.id) != Some(&(cols, rows)) {
+                    self.backend.pty.resize_now(pane, cols, rows);
+                    self.sized.insert(card.id.clone(), (cols, rows));
+                }
+            }
+            // The session the backend calls this card's, learned a moment
+            // after the card was made. Saved, so the next start finds it.
+            if let Some(pane) = card.pane_id {
+                let session = self.backend.pty.session_id(pane);
+                if session.is_some() && card.session != session {
+                    if let Some(c) = self.model.card_mut(&card.id) {
+                        c.session = session;
+                        self.model.dirty_layout = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// What viewers changed on this canvas: the model's own merge. An edit on
+    /// a canvas it no longer remembers makes the host republish, which is how
+    /// that viewer finds out. True when the canvas changed.
+    fn apply_remote_updates(&mut self) -> bool {
+        let Some(rx) = &self.updates else {
+            return false;
+        };
+        let updates: Vec<_> = rx.try_iter().collect();
+        let mut changed = false;
+        for u in updates {
+            match self.model.apply_remote_layout(&u.layout, u.base) {
+                Ok(RemoteApply::Applied) => changed = true,
+                Ok(RemoteApply::Stale) => {
+                    self.write_layout();
+                    changed = true;
+                }
+                Err(why) => eprintln!("[infiniterm] a viewer's canvas was refused: {why}"),
+            }
+        }
+        changed
+    }
+
+    fn publish_agents(&mut self) {
+        let text = self.model.agent_states_text();
+        if text != self.last_agents {
+            self.hub.publish_agents(&text);
+            self.last_agents = text;
+        }
+    }
+
+    fn schedule_save(&mut self, now: f64) {
+        if self.model.dirty_layout && self.save_due.is_none() {
+            self.save_due = Some(now + SAVE_DEBOUNCE_MS);
+        }
+        if self.save_due.is_some_and(|due| now >= due) {
+            self.save_due = None;
+            self.write_layout();
+        }
+    }
+
+    /// The canvas to its file and to every viewer, with its revision.
+    fn write_layout(&mut self) {
+        if let Some(text) = self.model.save_text() {
+            if let Err(e) = (self.io.write_layout)(&text) {
+                eprintln!("[infiniterm] could not save the layout: {e}");
+            }
+            let rev = self.model.record_published(&text);
+            self.hub.publish_layout(&text, rev);
+        }
+    }
+}
+
+/// A card's columns and rows with no font to measure: the nominal cell is
+/// 0.6 of the font size wide (what a monospace face is) and the line height
+/// setting tall, less the padding. The app measures the real font; a viewer
+/// draws the host's cells, so a host started headless is a little off the
+/// app's grid until the app takes the cards back and refits them.
+pub fn nominal_cells(w: f64, h: f64, t: &crate::config::Terminal) -> (u16, u16) {
+    let cell_w = (t.font_size * 0.6).max(1.);
+    let cell_h = (t.font_size * t.line_height).max(1.);
+    let cols = ((w - 2. * t.padding) / cell_w).floor();
+    let rows = ((h - 2. * t.padding) / cell_h).floor();
+    (cols.clamp(20., 500.) as u16, rows.clamp(5., 200.) as u16)
+}
+
+fn now_ms() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64() * 1000.)
+        .unwrap_or(0.)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_card_with_no_font_to_measure_still_gets_a_sane_grid() {
+        let t = crate::config::default_config().terminal;
+        let (c, r) = nominal_cells(1725., 1000., &t);
+        assert!((20..=500).contains(&c) && (5..=200).contains(&r), "{c}x{r}");
+        // Tiny and huge cards are clamped, never zero and never absurd.
+        assert_eq!(nominal_cells(1., 1., &t), (20, 5));
+        assert_eq!(nominal_cells(1e6, 1e6, &t), (500, 200));
+    }
+}
