@@ -434,6 +434,29 @@ mod tests {
         );
     }
 
+    /// Waits until a script just written can be executed. A parallel test's
+    /// `fork` can hold a copy of this file's write descriptor for a moment, and
+    /// exec of a file open for writing fails with "Text file busy" (ETXTBSY):
+    /// the rare CI failure of `an_unreachable_host_is_not_a_question` (#457).
+    /// The warm-up run's own result does not matter.
+    fn settle(path: &std::path::Path) {
+        const ETXTBSY: i32 = 26;
+        for _ in 0..200 {
+            match std::process::Command::new(path)
+                .arg("--settle")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+            {
+                Err(e) if e.raw_os_error() == Some(ETXTBSY) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10))
+                }
+                _ => return,
+            }
+        }
+    }
+
     /// A uid no real user has, so the control folder of a test is its own.
     const TEST_UID: u32 = 4_000_000_001;
 
@@ -479,6 +502,7 @@ exit 255
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        settle(&script);
         let mut host = RemoteHost::new(&format!("test@mini-{name}"));
         host.ssh = script.display().to_string();
         let _ = std::fs::remove_file(control_path(&host.target, TEST_UID));
@@ -617,6 +641,8 @@ exit 255
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        settle(&helper);
+        settle(&script);
         let mut host = RemoteHost::new("test@mini-dialog");
         host.ssh = script.display().to_string();
         let control = control_path(&host.target, TEST_UID);
