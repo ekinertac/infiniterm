@@ -89,6 +89,23 @@ pub fn carried_target(
     }
 }
 
+/// Whether the scroll gesture an event belongs to comes from a trackpad.
+/// Only a trackpad opens a gesture with a `Started` touch phase; a mouse
+/// wheel, notched or smooth, never does (Ekin's mouse sends pixel deltas with
+/// no phase at all, #485). A mouse must not pan the canvas: it has no way to
+/// mean it, and an accidental pan is worse than none (Ekin, 2026-10-19, after
+/// 0.6.0). A gesture that begins without a `Started` event is therefore not a
+/// trackpad's; one that carries on keeps what its first event said.
+pub fn gesture_is_trackpad(started: bool, begins_here: bool, was: bool) -> bool {
+    if started {
+        true
+    } else if begins_here {
+        false
+    } else {
+        was
+    }
+}
+
 /// Whether a gesture's first event is too small to say what the fingers mean
 /// to do. A real trackpad often opens a gesture with an event that has no
 /// movement at all, or a sliver of sideways drift with no vertical part; a
@@ -220,6 +237,18 @@ mod tests {
         assert_eq!(pan_origin(100., 100., 1., 0., -30.), (100., 130.));
         // Fingers right: dx > 0, the content moves right, the origin left.
         assert_eq!(pan_origin(100., 100., 1., 20., 0.), (80., 100.));
+    }
+
+    #[test]
+    fn only_a_gesture_that_started_with_a_touch_is_a_trackpads() {
+        // The fingers touch down: a trackpad.
+        assert!(gesture_is_trackpad(true, true, false));
+        // A burst that begins with no touch phase: a mouse, even smooth.
+        assert!(!gesture_is_trackpad(false, true, true));
+        // The rest of a gesture keeps what its first event said, momentum
+        // after the lift included.
+        assert!(gesture_is_trackpad(false, false, true));
+        assert!(!gesture_is_trackpad(false, false, false));
     }
 
     #[test]
