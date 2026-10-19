@@ -54,6 +54,9 @@ pub struct Tab {
     /// Why there is no surface, for the card to say.
     pub unavailable: Option<String>,
     texture: Option<Arc<RenderImage>>,
+    /// The layout size (CSS pixels) `texture` was painted at, so an old frame
+    /// is drawn at its natural size while a resize repaints (#479).
+    texture_css: (i32, i32),
     /// The page title as last reported, so a change can be told from the
     /// same title arriving every frame. Not the card's title: that is a
     /// name somebody CHOSE, and a page must never overwrite it.
@@ -81,6 +84,7 @@ impl Tab {
             surface,
             unavailable,
             texture: None,
+            texture_css: (0, 0),
             title: None,
             applied_zoom: None,
         }
@@ -361,6 +365,7 @@ impl BrowserBody {
                             ImageFrame::new(img),
                             1,
                         ))));
+                        tab.texture_css = (frame.css_width, frame.css_height);
                         self.dirty = true;
                     }
                 }
@@ -542,6 +547,7 @@ impl CardBody for BrowserBody {
         );
         let radius = crate::chrome::card_radius(cx);
         window.paint_quad(fill(bounds, self.card_bg).corner_radii(radius));
+        let texture_css = self.active_tab().map(|t| t.texture_css).unwrap_or((0, 0));
         match self.active_tab().and_then(|t| t.texture.clone()) {
             Some(img) => {
                 // The page is the card's bottom edge (the strip covers the top).
@@ -551,7 +557,45 @@ impl CardBody for BrowserBody {
                     bottom_left: radius,
                     bottom_right: radius,
                 };
-                let _ = window.paint_image(page_bounds, page_corners, img.clone(), 0, false);
+                // The frame is drawn at the size it was LAID OUT at (times the
+                // canvas zoom), anchored top-left and clipped to the page area:
+                // while a resize waits for CEF's repaint the newest frame is
+                // the old size, and stretching it to the new bounds squashed
+                // the page (#479). A settled card, and a canvas zoom, give the
+                // page area back exactly (`frame_fit`).
+                let (draw_w, draw_h) = infiniterm_browser::frame_fit::frame_draw_size(
+                    texture_css.0,
+                    texture_css.1,
+                    scale,
+                    f32::from(page_bounds.size.width) as f64,
+                    f32::from(page_bounds.size.height) as f64,
+                );
+                let fills = (draw_w - f32::from(page_bounds.size.width) as f64).abs() < 0.01
+                    && (draw_h - f32::from(page_bounds.size.height) as f64).abs() < 0.01;
+                if fills {
+                    let _ = window.paint_image(page_bounds, page_corners, img.clone(), 0, false);
+                } else {
+                    // A transient frame of another size: square corners, the
+                    // card's own rounded quad is already painted under it.
+                    let drawn = Bounds::new(
+                        page_bounds.origin,
+                        size(px(draw_w as f32), px(draw_h as f32)),
+                    );
+                    window.with_content_mask(
+                        Some(gpui::ContentMask {
+                            bounds: page_bounds,
+                        }),
+                        |window| {
+                            let _ = window.paint_image(
+                                drawn,
+                                gpui::Corners::default(),
+                                img.clone(),
+                                0,
+                                false,
+                            );
+                        },
+                    );
+                }
                 // Only a DIFFERENT image is ever evicted: the same texture
                 // is repainted, unchanged, every frame nothing new has
                 // arrived, and dropping what this very call just referenced
@@ -905,6 +949,7 @@ mod tab_label_tests {
             surface: None,
             unavailable: None,
             texture: None,
+            texture_css: (0, 0),
             title: None,
             applied_zoom: None,
         };

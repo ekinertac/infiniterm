@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-19
 
+- Fixed: resizing a browser card no longer stretches the page. While the page repaints at the new size you see the page as it was, at its own size, with the card's background beside it, instead of the old picture squeezed or enlarged to the new card.
 - Fixed: the command palette lists only rows that really hold a word you type. A word of four letters or more used to match rows where the letters were scattered over a long label (`check` found "Canvas: tidy the cards into a block"); now the word must be in the row, as a run, as the initials of its words, or as two whole pieces that start words. Shorter queries (`rgs`, `ntc`) match as before, and the rows that hold the word come first.
 - Fixed: a long card label no longer runs past the edge of the command palette. It is cut with an ellipsis; when the letters you typed are in the cut part, the visible part moves to them.
 - Fixed: a card of a remote instance (`ift connect`) now loads the server's own `.zshrc`, so your prompt and aliases appear as they do over plain ssh. Before, the card's zsh was started with a `ZDOTDIR` that pointed at a folder on your Mac, which does not exist on the server, so it started bare. One thing you lose there: zsh's command marks, which colour a card after a long command, are only added to local cards; a remote card still takes its colours from the agent hooks on the server.

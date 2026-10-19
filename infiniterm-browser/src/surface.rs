@@ -30,6 +30,13 @@ pub struct Frame {
     pub width: u32,
     pub height: u32,
     pub bgra: Vec<u8>,
+    /// The size CEF laid the page out at (CSS pixels) when it painted this
+    /// frame: the last `view_rect` it asked for, NOT what the card wants
+    /// now. The pixels are that size times the device scale, so the ui can
+    /// draw an old frame at its natural size while a resize is still being
+    /// repainted instead of stretching it to the new card (#479).
+    pub css_width: i32,
+    pub css_height: i32,
 }
 
 /// A right-click, in page pixels (the same space `mouse_down` takes), and
@@ -67,6 +74,11 @@ pub struct Shared {
     /// The size the page lays out at, in CSS pixels.
     pub width: i32,
     pub height: i32,
+    /// The size CEF last ASKED for in `view_rect` (0 before the first ask):
+    /// what the next painted frame is laid out at. It trails `width` and
+    /// `height` by one round trip after a resize, which is the whole point.
+    pub reported_width: i32,
+    pub reported_height: i32,
     pub scale: f32,
     /// The last find's result: how many matches and which one is current.
     /// Chromium reports this several times per search as it walks the page,
@@ -93,9 +105,12 @@ wrap_render_handler! {
     impl RenderHandler {
         fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
             if let Some(rect) = rect {
-                let s = self.handler.shared.borrow();
+                let mut s = self.handler.shared.borrow_mut();
                 rect.width = s.width.max(1);
                 rect.height = s.height.max(1);
+                // What the frame CEF paints next is laid out at (see `Frame`).
+                s.reported_width = rect.width;
+                s.reported_height = rect.height;
             }
         }
 
@@ -124,7 +139,20 @@ wrap_render_handler! {
             let len = (width * height * 4) as usize;
             let bgra = unsafe { std::slice::from_raw_parts(buffer, len) }.to_vec();
             let mut shared = self.handler.shared.borrow_mut();
-            shared.frame = Some(Arc::new(Frame { width: width as u32, height: height as u32, bgra }));
+            // Before CEF has asked for a view rect at all, the requested size
+            // is the best answer there is.
+            let (css_width, css_height) = if shared.reported_width > 0 && shared.reported_height > 0 {
+                (shared.reported_width, shared.reported_height)
+            } else {
+                (shared.width, shared.height)
+            };
+            shared.frame = Some(Arc::new(Frame {
+                width: width as u32,
+                height: height as u32,
+                bgra,
+                css_width,
+                css_height,
+            }));
             shared.dirty = true;
             shared.paints += 1;
         }
