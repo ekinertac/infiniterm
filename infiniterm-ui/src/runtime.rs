@@ -60,8 +60,6 @@ impl AppView {
             show_character_palette: false,
             pan: None,
             wheel_target: None,
-            wheel_pan: infiniterm_core::pan_mode::PanSession::Idle,
-            wheel_pan_last: 0.,
             left_on_canvas: false,
             middle_press: None,
             marquee: None,

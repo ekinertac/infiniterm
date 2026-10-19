@@ -133,11 +133,6 @@ pub const SAVE_DEBOUNCE_MS: f64 = 500.;
 pub enum Pan {
     Pending(Point),
     Dragging(Point),
-    /// Two fingers on the trackpad: the same session as a drag (frames are
-    /// asked for while it lasts, the release flings), but the point is a
-    /// virtual one that the fingers' deltas advance, never the pointer, so a
-    /// stray mouse move cannot move the canvas (#451).
-    Scrolling(Point),
 }
 
 pub enum GestureKind {
@@ -229,10 +224,6 @@ pub struct AppView {
     /// Where the scroll gesture in progress goes (#451): fixed at the first
     /// event of a trackpad gesture so its momentum keeps the target.
     pub wheel_target: Option<infiniterm_core::pan_mode::WheelTarget>,
-    /// Where a two-finger pan is in its life, and when its last event came
-    /// (`pan_mode::pan_step`); the session itself is `pan` = `Pan::Scrolling`.
-    pub wheel_pan: infiniterm_core::pan_mode::PanSession,
-    pub wheel_pan_last: f64,
     /// A rectangle being dragged on bare canvas to select cards (input.rs,
     /// `Model::marquee_select`).
     pub marquee: Option<Marquee>,
@@ -649,9 +640,6 @@ fn main() {
                         .await;
                     let alive = poll.update(cx, |this, cx| {
                         this.drain_backend();
-                        // Two fingers that went quiet without a lift (a
-                        // cancelled gesture): end the pan session here.
-                        this.end_stale_scrolling(now_ms());
                         // The host's canvas, for a viewer; the host's agent
                         // states, for viewers (#423).
                         this.drain_canvas();
