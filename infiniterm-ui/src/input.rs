@@ -20,8 +20,8 @@ use infiniterm_core::model::focus_cmd::BareKey;
 use infiniterm_core::model::register::{handle_chord, resolve_chord};
 use infiniterm_core::momentum::{velocity_from, Sample, VELOCITY_SAMPLE_MS};
 use infiniterm_core::pan_mode::{
-    carried_target, pan_origin, pan_session_stale, pan_step, route_wheel, starts_card_gesture,
-    starts_pan, PanSession, PanStep, WheelRoute, WheelTarget,
+    carried_target, defers_target, pan_origin, pan_session_stale, pan_step, route_wheel,
+    starts_card_gesture, starts_pan, PanSession, PanStep, WheelRoute, WheelTarget,
 };
 use infiniterm_core::resize::{apply_resize, Edge};
 use infiniterm_core::viewport::{anchored_viewport, world_pos_of, MAX_SCALE, MIN_SCALE};
@@ -779,6 +779,19 @@ impl AppView {
         let started = matches!(e.touch_phase, TouchPhase::Started);
         let carried = carried_target(started, precise, self.wheel_target.as_ref());
         let ended = matches!(e.touch_phase, TouchPhase::Ended);
+        // A gesture's first event often has no movement (or a sliver of
+        // sideways drift): a terminal reads that as "nothing to scroll" and
+        // the whole gesture would pan the canvas, so a card with history
+        // could not be scrolled. Such an event decides nothing; the first one
+        // with real movement does, by the same rule.
+        if carried.is_none() && precise && !ended && defers_target(dx, dy) {
+            // The skipped event still starts a gesture: the next one must not
+            // inherit the last gesture's target.
+            if started {
+                self.wheel_target = None;
+            }
+            return;
+        }
         // What is under the pointer matters only to a gesture's FIRST event:
         // the rest keep its target, so they skip the hit test.
         let hit = carried.is_none().then(|| self.hit(p));

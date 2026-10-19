@@ -74,6 +74,17 @@ pub fn carried_target(
     }
 }
 
+/// Whether a gesture's first event is too small to say what the fingers mean
+/// to do. A real trackpad often opens a gesture with an event that has no
+/// movement at all, or a sliver of sideways drift with no vertical part; a
+/// terminal reads that as "nothing to scroll that way" and the whole gesture
+/// would pan the canvas (the bug of build 998: a terminal with history could
+/// not be scrolled). Such an event decides nothing: the first event with real
+/// movement chooses, with the same rule as before.
+pub fn defers_target(dx: f64, dy: f64) -> bool {
+    dy.abs() < 1. && dx.abs() < 3.
+}
+
 /// Where a scroll event goes, given the target it carries and the card body
 /// under the pointer (`None` over bare canvas, a frame, a label or a gap).
 pub fn route_wheel(carried: Option<&WheelTarget>, body_under: Option<&str>) -> WheelRoute {
@@ -194,6 +205,20 @@ mod tests {
         assert_eq!(pan_origin(100., 100., 1., 0., -30.), (100., 130.));
         // Fingers right: dx > 0, the content moves right, the origin left.
         assert_eq!(pan_origin(100., 100., 1., 20., 0.), (80., 100.));
+    }
+
+    #[test]
+    fn the_first_event_of_a_gesture_decides_nothing_until_it_moves() {
+        // A real trackpad opens with an event with no movement, or a sliver
+        // of sideways drift: it must not pick pan for the whole gesture.
+        assert!(defers_target(0., 0.));
+        assert!(defers_target(2., 0.));
+        assert!(defers_target(-2.9, 0.5));
+        // Vertical movement, or a real sideways swipe, decides.
+        assert!(!defers_target(0., 1.));
+        assert!(!defers_target(0., -8.));
+        assert!(!defers_target(3., 0.));
+        assert!(!defers_target(-12., 0.));
     }
 
     #[test]
