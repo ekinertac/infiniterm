@@ -45,6 +45,37 @@ use crate::model::persist::RemoteApply;
 use crate::model::register::{describe_context, register_commands, run_with_effects};
 use crate::model::{Effect, Model};
 
+/// Where a running `ift serve` writes its pid, beside the canvas file.
+pub fn serve_pid_file() -> PathBuf {
+    crate::paths::socket_path().with_file_name("serve.pid")
+}
+
+/// Whether a process's command line is `ift serve ...`: the first word's file
+/// name is `ift` and the next word is `serve`. Pure, so a stale pid file that
+/// now names an unrelated process is told apart in a test.
+pub fn is_serve_command(command: &str) -> bool {
+    let mut words = command.split_whitespace();
+    let program = words.next().unwrap_or("");
+    let name = program.rsplit('/').next().unwrap_or("");
+    name == "ift" && words.next() == Some("serve")
+}
+
+/// The pid in `pid_file`, when that process is really an `ift serve`. A pid
+/// file outlives a crash, and the number may belong to anything by now: nobody
+/// is signalled on its say-so alone.
+pub fn live_serve(pid_file: &Path) -> Option<u32> {
+    let pid: u32 = std::fs::read_to_string(pid_file)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let out = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "command="])
+        .output()
+        .ok()?;
+    is_serve_command(&String::from_utf8_lossy(&out.stdout)).then_some(pid)
+}
+
 /// The save debounce, as the app's (`runtime.rs` `SAVE_DEBOUNCE_MS`): a burst
 /// of edits is one write.
 pub const SAVE_DEBOUNCE_MS: f64 = 500.;
@@ -210,6 +241,8 @@ impl Host {
         self.flush();
         self.backend.pty.leave();
         let _ = std::fs::remove_file(&self.io.join_socket);
+        // The hook socket too, so the app that takes over binds it at once.
+        let _ = std::fs::remove_file(&self.io.socket);
     }
 
     fn drain_backend(&mut self) {
@@ -474,6 +507,38 @@ fn now_ms() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_ift_serve_command_line_is_a_serve() {
+        assert!(is_serve_command(
+            "/Applications/infiniterm.app/Contents/MacOS/ift serve"
+        ));
+        assert!(is_serve_command("ift serve --detach"));
+        assert!(!is_serve_command("/usr/bin/ssh host ift serve"));
+        assert!(!is_serve_command(
+            "/Applications/infiniterm.app/Contents/MacOS/ift sessions"
+        ));
+        assert!(!is_serve_command(
+            "/Applications/infiniterm.app/Contents/MacOS/infiniterm"
+        ));
+        assert!(!is_serve_command(""));
+    }
+
+    #[test]
+    fn a_stale_pid_file_never_names_a_process_to_signal() {
+        let dir = std::env::temp_dir().join(format!("hl-pid-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("serve.pid");
+        // This very test process is a live pid and not an `ift serve`.
+        std::fs::write(&file, std::process::id().to_string()).unwrap();
+        assert_eq!(live_serve(&file), None);
+        std::fs::write(&file, "not a number").unwrap();
+        assert_eq!(live_serve(&file), None);
+        std::fs::write(&file, "4000000000").unwrap(); // no such process
+        assert_eq!(live_serve(&file), None);
+        assert_eq!(live_serve(&dir.join("missing")), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn a_card_with_no_font_to_measure_still_gets_a_sane_grid() {

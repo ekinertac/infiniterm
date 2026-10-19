@@ -10,6 +10,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 - New: Cmd+R redraws the focused terminal card (the palette's "Terminal: redraw", and Redraw in the card's right-click menu). It asks the program in the card to paint its screen again, which clears a scrambled Claude Code card without touching what is in the scrollback. In a joined window (`ift join`) the card joins its session again, which does the same. Cmd+R was the development-only reload, which does nothing in the app you installed; that command has no key now.
 
+### 2026-10-19
+
+- New: `ift serve` holds this Mac's saved canvas and keeps its cards running for viewers (`ift join`) when the app is closed. `ift serve --detach` runs it in the background and returns once it answers; `ift serve --stop` saves the canvas and ends it, and the cards keep running. It refuses to start while the app, or another `ift serve`, is running here. Nothing starts it for you yet, and the app does not take over from it yet.
+
 ### 2026-10-18
 
 - `ift join` now asks the usual ssh questions once, in the terminal you ran it from, when the host was never connected to from this Mac or no key is set up: the fingerprint and the password prompt are ssh's own, and afterwards the window's connections need no prompt. A host key that has changed is never a question: `ift join` says so, with the new fingerprint, and does not connect. Run from somewhere with no terminal, it says what to do instead. A host that only takes a password is asked for it once, and the window's connections then share that one login (they would need the password 37 times otherwise); quitting the window ends the shared login, and one left by a crash ends itself after 10 minutes. A host with a key keeps one login per card. Run with no terminal (from a launcher or a script), `ift join` shows ssh's questions as macOS dialogs instead: the fingerprint as Yes or No (No is the default), and the password in a hidden field that goes to ssh and nowhere else.
