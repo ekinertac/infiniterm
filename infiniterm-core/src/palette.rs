@@ -107,20 +107,16 @@ pub struct FittedLabel {
     pub matches: Vec<usize>,
 }
 
-/// How much of the label before the first match stays when the match lies
-/// past the cut and the window moves to it.
-const CONTEXT_CHARS: usize = 8;
 const ELLIPSIS: char = '\u{2026}';
 
 /// Cuts a row's label to `room` (whatever `measure` counts in) with an
 /// ellipsis, whatever its length (#492: a card's label can be a whole
 /// sentence, an agent's title, and it ran past the palette's edge). A label
-/// that fits is returned as it is. Otherwise it is cut at the end; but when
-/// the first matched letter would fall in the cut part the window moves to
-/// it (`…` before, some context, the match, `…` after if more follows), so
-/// the thing the user typed is on screen. The highlights follow the text:
-/// those outside the window are dropped, the rest are shifted.
-/// Empty text when not even the ellipsis fits.
+/// that fits is returned as it is. Otherwise it is cut at the RIGHT end only,
+/// with `…` last, and the highlights beyond the cut are dropped (Ekin,
+/// 2026-10-19: a window that moved to the match cut the label from both ends
+/// and read badly; the start of a label names the row). Empty text when not
+/// even the ellipsis fits.
 pub fn fit_label(
     label: &str,
     matches: &[usize],
@@ -142,8 +138,6 @@ pub fn fit_label(
         at += c.len_utf16();
     }
     offsets.push(at);
-    let char_of = |unit: usize| offsets.partition_point(|&o| o <= unit).saturating_sub(1);
-    let first = matches.iter().map(|&m| char_of(m)).min();
     let from = |s: usize, e: usize| -> String {
         let mut text = String::new();
         if s > 0 {
@@ -179,42 +173,15 @@ pub fn fit_label(
                 .collect(),
         }
     };
-    // The end cut first: it keeps the label's start, which names the row.
-    if let Some(e) = widest(0, 0) {
-        if first.is_none_or(|f| f < e) {
-            return shown(0, e);
-        }
-    } else {
-        return FittedLabel {
+    // Cut at the right end only: it keeps the label's start, which names the
+    // row. A match past the cut is simply not shown.
+    match widest(0, 0) {
+        Some(e) => shown(0, e),
+        None => FittedLabel {
             text: String::new(),
             matches: vec![],
-        };
+        },
     }
-    // The first match is in the cut part: move the window to it.
-    let first = first.unwrap_or(0);
-    for context in [CONTEXT_CHARS, 0] {
-        let s = first.saturating_sub(context);
-        if let Some(e) = widest(s, first + 1) {
-            // The window reached the label's end with room to spare: take
-            // more of what comes before it instead of leaving the row empty.
-            if e == chars.len() {
-                let (mut lo, mut hi) = (0usize, s);
-                while lo < hi {
-                    let mid = (lo + hi) / 2;
-                    if measure(&from(mid, e)) <= room {
-                        hi = mid;
-                    } else {
-                        lo = mid + 1;
-                    }
-                }
-                return shown(lo, e);
-            }
-            return shown(s, e);
-        }
-    }
-    // Not even the match fits beside an ellipsis: the end cut, unmatched.
-    let e = widest(0, 0).unwrap_or(0);
-    shown(0, e)
 }
 
 pub fn step_index(index: usize, count: usize, step: isize) -> usize {
@@ -363,36 +330,20 @@ mod tests {
     }
 
     #[test]
-    fn a_match_past_the_cut_moves_the_window_to_it() {
+    fn a_match_past_the_cut_is_not_shown_and_the_label_still_starts_at_its_start() {
         // `check` inside `unchecked` at the end of 200 characters, the
-        // screenshot of #492.
+        // screenshot of #492: the cut is at the right end only.
         let label = long_label();
         let at = label.find("unchecked").unwrap() + 2;
         let matches: Vec<usize> = (at..at + 5).collect();
         let f = fit_label(&label, &matches, 300., ten);
-        assert!(f.text.chars().count() <= 30, "{:?}", f.text);
-        assert!(f.text.starts_with('\u{2026}'), "{:?}", f.text);
-        assert_eq!(f.matches.len(), 5);
-        let shown: String = f.matches.iter().map(|&m| utf16_of(&f.text, m)).collect();
-        assert_eq!(shown, "check");
+        assert!(f.text.starts_with("sentence."), "{:?}", f.text);
+        assert!(f.text.ends_with('\u{2026}'), "{:?}", f.text);
+        assert!(f.matches.is_empty(), "the match is past the cut");
     }
 
     #[test]
-    fn a_window_at_the_end_of_the_label_uses_the_room() {
-        // The match is near the end: the window must not stop at a few
-        // characters of context while the row has room for thirty.
-        let label = long_label();
-        let at = label.find("unchecked").unwrap() + 2;
-        let matches: Vec<usize> = (at..at + 5).collect();
-        let f = fit_label(&label, &matches, 300., ten);
-        assert!(f.text.chars().count() >= 29, "{:?}", f.text);
-        assert!(ten(&f.text) <= 300.);
-        let shown: String = f.matches.iter().map(|&m| utf16_of(&f.text, m)).collect();
-        assert_eq!(shown, "check");
-    }
-
-    #[test]
-    fn a_label_of_two_hundred_characters_fits_every_width() {
+    fn a_label_of_two_hundred_characters_fits_every_width_and_is_cut_at_the_right() {
         let label = long_label();
         let at = label.find("unchecked").unwrap() + 2;
         let tail: Vec<usize> = (at..at + 5).collect();
@@ -400,15 +351,14 @@ mod tests {
             for matches in [vec![], vec![0, 1], tail.clone()] {
                 let f = fit_label(&label, &matches, room, ten);
                 assert!(ten(&f.text) <= room, "room {room}: {:?}", f.text);
-                // Every highlight points at the same letter it did before.
-                for (&shown, &was) in f.matches.iter().zip(
-                    matches
-                        .iter()
-                        .filter(|m| f.matches.len() == matches.len() || **m < 2 || **m >= at),
-                ) {
+                // Never cut at the start: what is shown begins the label.
+                let body = f.text.trim_end_matches('\u{2026}');
+                assert!(label.starts_with(body), "room {room}: {:?}", f.text);
+                // Every highlight still points at the same letter.
+                for &shown in &f.matches {
                     assert_eq!(
                         utf16_of(&f.text, shown),
-                        label.chars().nth(was).unwrap(),
+                        label.chars().nth(shown).unwrap(),
                         "room {room}"
                     );
                 }
@@ -426,8 +376,8 @@ mod tests {
     #[test]
     fn offsets_follow_utf16_through_the_cut() {
         // A crab is two UTF-16 units; the highlight must keep pointing at the z.
-        let label = format!("🦀 {} zoom", "x".repeat(150));
-        let at = label.encode_utf16().count() - 4;
+        let label = format!("🦀 zoom {}", "x".repeat(150));
+        let at = 3;
         let f = fit_label(&label, &[at], 300., ten);
         assert!(ten(&f.text) <= 300.);
         assert_eq!(f.matches.len(), 1);
