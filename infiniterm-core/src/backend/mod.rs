@@ -25,6 +25,7 @@ pub mod local_pty;
 pub mod relay;
 pub mod remote;
 pub mod session_protocol;
+pub mod ssh_login;
 pub mod tmux;
 pub mod tmux_protocol;
 
