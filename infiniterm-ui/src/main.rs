@@ -715,6 +715,18 @@ fn main() {
                 // second of moves; the window's frame goes with it.
                 let quitting = view.clone();
                 cx.on_app_quit(move |cx| {
+                    // A joined window ends the shared ssh connection a
+                    // password host got (#450), so a normal quit leaves
+                    // nothing running; a crash leaves it its 10 minutes.
+                    if let Some(host) = infiniterm_core::backend::remote::join_from_env() {
+                        use std::os::unix::fs::MetadataExt;
+                        let uid = std::fs::metadata(infiniterm_core::paths::home_dir())
+                            .map(|m| m.uid())
+                            .unwrap_or(0);
+                        let control =
+                            infiniterm_core::backend::ssh_login::control_path(&host.target, uid);
+                        infiniterm_core::backend::ssh_login::stop_master(&host, &control);
+                    }
                     quitting.update(cx, |this, _| {
                         this.flush_save();
                         // The shells: local ones die with us, tmux windows
