@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-19
+
+- Fixed: resizing a browser card no longer stretches the page. While the page repaints at the new size you see the page as it was, at its own size, with the card's background beside it, instead of the old picture squeezed or enlarged to the new card.
+
 ## 0.6.1 (build 1021), 2026-10-19
 
 ### Canvas
