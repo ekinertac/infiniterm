@@ -6,7 +6,9 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-19
+## 0.6.1 (build 1021), 2026-10-19
+
+### Canvas
 
 - Changed: a mouse wheel no longer pans the canvas. Over empty canvas, or over a card with nothing to scroll, it does nothing now; the trackpad's two-finger pan is unchanged. Only a trackpad opens a scroll gesture with a touch, which is how the app tells the two apart.
 - Fixed: scrolling a terminal with a mouse wheel panned the canvas instead (0.6.0). A mouse that sends smooth scrolling with no touch phase kept the choice its last scroll over empty canvas made; a pause of a moment between scrolls now starts afresh, so the card under the pointer gets the wheel again.
