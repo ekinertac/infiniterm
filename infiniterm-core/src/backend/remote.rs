@@ -427,6 +427,33 @@ pub fn probe_join(host: &RemoteHost) -> Result<(), JoinFailure> {
     connect_join_canvas(host).map(|_| ())
 }
 
+/// Whether a failed join means "nothing is serving a canvas there": the
+/// host's `ift proxy join` found no `j.sock` (the app is not running, and no
+/// `ift serve` either). The one failure `ift join` answers by starting a
+/// canvas host itself (#438); every other refusal stays what it was.
+pub fn is_no_host_running(why: &JoinFailure) -> bool {
+    let said = why.message().to_lowercase();
+    said.contains("no running infiniterm to join")
+}
+
+/// Starts `ift serve --detach` on the host (#438): a canvas host with no
+/// window, so a viewer can join a Mac whose app is closed. Returns once it
+/// answers there. The error is a sentence for a person, naming what to check:
+/// an `ift` too old to have `serve` treats the word as a file to open.
+pub fn start_serve(host: &RemoteHost) -> Result<(), String> {
+    let command = format!("{} serve --detach", shell_quote(&host.ift));
+    let out = run_on(host, &command).map_err(|e| format!("could not run {}: {e}", host.ssh))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    Err(format!(
+        "could not start a canvas host on {} (needs an infiniterm with `ift serve`; update it there if it is older): {}",
+        host.target,
+        said.lines().last().unwrap_or("it failed")
+    ))
+}
+
 /// Why joining a host failed, and whether trying again can help (#423).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JoinFailure {
