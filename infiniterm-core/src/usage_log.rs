@@ -24,10 +24,6 @@ pub const MOUSE_GESTURES: &[(&str, &str)] = &[
     ("mouse.group.drag", "Mouse: drag a group by its tab"),
     ("mouse.card.resize", "Mouse: resize a card by its edge"),
     ("mouse.canvas.pan", "Mouse: pan the canvas by dragging"),
-    (
-        "mouse.canvas.scrollpan",
-        "Mouse: pan the canvas with two fingers on the trackpad",
-    ),
     ("mouse.marquee", "Mouse: drag a rectangle to select cards"),
     (
         "mouse.selection.drag",
@@ -40,6 +36,14 @@ pub const MOUSE_GESTURES: &[(&str, &str)] = &[
     (
         "mouse.canvas.zoom",
         "Mouse: zoom with Cmd+scroll or a pinch",
+    ),
+    (
+        "mouse.focus.scroll",
+        "Mouse: Cmd+Alt + two fingers moves the focus",
+    ),
+    (
+        "mouse.workspace.scroll",
+        "Mouse: Cmd+Shift + two fingers sideways switches workspace",
     ),
     (
         "mouse.fitCard.doubleclick",

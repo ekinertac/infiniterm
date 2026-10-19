@@ -336,17 +336,11 @@ impl CardBody for PageBody {
         }
     }
 
-    fn wheel(&mut self, _local: Point, _dx: f64, dy: f64, _modifiers: &gpui::Modifiers) -> bool {
-        self.relayout();
-        let max = self.lines.len().saturating_sub(self.visible());
-        if !infiniterm_core::pan_mode::can_scroll(self.scroll, max, dy) {
-            return false;
-        }
+    fn wheel(&mut self, _local: Point, _dx: f64, dy: f64, _modifiers: &gpui::Modifiers) {
         let lines = self.wheel_carry.lines(dy, self.line_h());
         if lines != 0 {
             self.scroll_by(-(lines as isize));
         }
-        true
     }
 
     fn wants_frame(&self, _now: f64) -> bool {

@@ -873,26 +873,19 @@ impl CardBody for BrowserBody {
         }
     }
 
-    /// A page scrolls itself and CEF does not say whether it could, so a page
-    /// always uses the wheel; over the tab strip there is no page, and the
-    /// canvas pans (#451).
-    fn wheel(&mut self, local: Point, dx: f64, dy: f64, modifiers: &gpui::Modifiers) -> bool {
+    fn wheel(&mut self, local: Point, dx: f64, dy: f64, modifiers: &gpui::Modifiers) {
         let strip_h = strip_world_h(self.style.font_px, self.ui_scale);
         if local.y < strip_h {
-            return false;
+            return;
         }
-        match self.active_surface() {
-            Some(surface) => {
-                surface.wheel(
-                    local.x as f32,
-                    (local.y - strip_h) as f32,
-                    Self::mods(modifiers),
-                    dx as f32,
-                    dy as f32,
-                );
-                true
-            }
-            None => false,
+        if let Some(surface) = self.active_surface() {
+            surface.wheel(
+                local.x as f32,
+                (local.y - strip_h) as f32,
+                Self::mods(modifiers),
+                dx as f32,
+                dy as f32,
+            );
         }
     }
 
