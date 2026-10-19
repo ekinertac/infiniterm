@@ -6,7 +6,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-## 0.6.0 (build 1011), 2026-10-19
+## 0.6.0 (build 1015), 2026-10-19
 
 ### Join another Mac's canvas
 
