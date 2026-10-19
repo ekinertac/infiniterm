@@ -26,8 +26,8 @@ pub enum RemoteApply {
 }
 use crate::palette_usage::Usage;
 use crate::saved_layout::{
-    is_newer_than_this_build, layout_text, parse_layout, parse_saved_usage, serialise_layout,
-    SavedCard, SavedGroup,
+    is_newer_than_this_build, layout_text, parse_layout, parse_layout_allowing_empty,
+    parse_saved_usage, serialise_layout, SavedCard, SavedGroup,
 };
 
 impl Model {
@@ -142,8 +142,8 @@ impl Model {
                     .into(),
             );
         }
-        let saved =
-            parse_layout(text).ok_or_else(|| "the host's canvas could not be read".to_string())?;
+        let saved = parse_layout_allowing_empty(text)
+            .ok_or_else(|| "the host's canvas could not be read".to_string())?;
         self.read_only = true;
         self.loaded = true;
         // The first canvas a viewer ever gets also sets where it looks; after
@@ -380,7 +380,7 @@ impl Model {
     /// compared with that canvas.
     pub fn record_published(&mut self, text: &str) -> u64 {
         self.layout_rev += 1;
-        if let Some(layout) = parse_layout(text) {
+        if let Some(layout) = parse_layout_allowing_empty(text) {
             self.published.push_back((self.layout_rev, layout));
             while self.published.len() > PUBLISHED_KEPT {
                 self.published.pop_front();
@@ -423,7 +423,7 @@ impl Model {
         else {
             return Ok(RemoteApply::Stale);
         };
-        let now = parse_layout(text)
+        let now = parse_layout_allowing_empty(text)
             .ok_or_else(|| "the viewer's canvas could not be read".to_string())?;
 
         let was_card = |id: &str| was.cards.iter().find(|c| c.id == id);
@@ -933,6 +933,44 @@ mod snapshot_tests {
         // Its number is the host's: nobody else on the host has it.
         let same = host.cards.iter().filter(|c| c.number == new.number).count();
         assert_eq!(same, 1, "number {} is unique on the host", new.number);
+    }
+
+    #[test]
+    fn a_host_with_no_cards_is_a_canvas_a_viewer_can_join_and_make_its_first_card_on() {
+        // A fresh Linux server: no shells, so no cards; the canvas is real.
+        let mut host = host_model();
+        let text = host.save_text().expect("an empty canvas still saves");
+        let rev = host.record_published(&text);
+        let mut viewer = Model::new();
+        viewer
+            .apply_snapshot(&text)
+            .expect("a viewer reads a canvas with no cards");
+        viewer.layout_rev = rev;
+        assert!(viewer.cards.is_empty());
+        // Cmd+T in the empty viewer, sent up: the host makes the first card.
+        let first = add(&mut viewer, rect(25., 25.));
+        let up = viewer.layout_snapshot();
+        assert_eq!(
+            host.apply_remote_layout(&up, viewer.layout_rev),
+            Ok(RemoteApply::Applied),
+            "an edit on an empty canvas is not stale"
+        );
+        assert!(host.card(&first).is_some(), "the host has the card");
+        // And closing the last card sends a canvas with none, which is read.
+        let text = host.save_text().unwrap();
+        let rev = host.record_published(&text);
+        viewer.apply_snapshot(&text).unwrap();
+        viewer.layout_rev = rev;
+        viewer.close_card(&first, false);
+        let up = viewer.layout_snapshot();
+        assert_eq!(
+            host.apply_remote_layout(&up, viewer.layout_rev),
+            Ok(RemoteApply::Applied)
+        );
+        assert!(
+            host.card(&first).is_none(),
+            "the last card closed on the host"
+        );
     }
 
     #[test]

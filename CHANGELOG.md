@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-19
 
+- Fixed: `ift join` to a host with no cards yet (a fresh Linux server with no shells) opened an empty window that said "the host's canvas could not be read". It now shows the empty canvas, and Cmd+T makes the first card on the host. Closing the last card in a joined window now closes it on the host too.
+
 - Fixed: a joined window that is behind other windows now rejoins a card whose connection was lost (for example when the host's app took over from `ift serve`) by itself, without being brought to the front first.
 
 - `ift join` works on a Linux server that runs infiniterm's sessions but never had the app: with no saved canvas, `ift serve` builds one with a card for every shell already running there (in the folder it was started in), and a viewer can type in them and add or close cards. The same holds for a Mac that never saved a canvas.
