@@ -12,6 +12,6 @@ Before a pull request:
 3. The commit message says why the change is needed, not what the diff already shows.
 4. Anything a user can see gets a line in `CHANGELOG.md` under `## Unreleased`, in today's section.
 
-`CLAUDE.md` is the long version: where things are, the rules the code follows and why, and the traps already hit. Building needs Rust, the CEF binary distribution and a checkout of cef-rs; the README's "Building from source" has the steps.
+`CLAUDE.md` is the short version: where things are and the rules the code follows. The long reasoning, the decisions with their history and the traps already hit are in `docs/agent/`, one file per area. Building needs Rust, the CEF binary distribution and a checkout of cef-rs; the README's "Building from source" has the steps.
 
 Security issues: report them privately from the repo's Security tab ("Report a vulnerability") rather than as an issue.
