@@ -135,7 +135,11 @@ fn make_control_dir(path: &std::path::Path) -> std::io::Result<()> {
 /// One ordinary ssh with the caller's terminal that also becomes the shared
 /// connection: ssh asks what it needs (the fingerprint, the password, once),
 /// runs `true`, and stays on as the master for later connections.
-fn ask_master(host: &RemoteHost, control: &std::path::Path) -> std::io::Result<bool> {
+fn ask_master(
+    host: &RemoteHost,
+    control: &std::path::Path,
+    askpass: Option<&std::path::Path>,
+) -> std::io::Result<bool> {
     make_control_dir(control)?;
     let mut args = vec![
         "-o".to_string(),
@@ -149,13 +153,113 @@ fn ask_master(host: &RemoteHost, control: &std::path::Path) -> std::io::Result<b
     args.extend(host.ssh_args.iter().cloned());
     args.push(host.target.clone());
     args.push("true".into());
-    Ok(Command::new(&host.ssh)
+    let mut command = Command::new(&host.ssh);
+    command.args(args);
+    match askpass {
+        // No terminal: ssh runs the helper for each question (the
+        // fingerprint, the password) and reads the answer from its output.
+        Some(helper) => {
+            command
+                .env("SSH_ASKPASS", helper)
+                .env("SSH_ASKPASS_REQUIRE", "force")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit());
+        }
+        None => {
+            command
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit());
+        }
+    }
+    Ok(command.status()?.success())
+}
+
+/// What an ssh question wants back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptKind {
+    /// "Are you sure you want to continue connecting (yes/no/[fingerprint])?"
+    Confirm,
+    /// A password or a key's passphrase: typed, never shown.
+    Secret,
+}
+
+/// ssh passes the question as the helper's one argument.
+pub fn prompt_kind(prompt: &str) -> PromptKind {
+    if prompt.contains("(yes/no") {
+        PromptKind::Confirm
+    } else {
+        PromptKind::Secret
+    }
+}
+
+/// The `osascript` arguments that show `prompt`. The prompt is the LAST
+/// argument, read inside the script as `item 1 of argv`, never spliced into
+/// the script's text: a host name or a banner cannot become script.
+pub fn dialog_args(kind: PromptKind) -> Vec<String> {
+    let body = match kind {
+        PromptKind::Secret => {
+            "set r to display dialog (item 1 of argv) default answer \"\" with hidden answer with title \"infiniterm: ssh\" buttons {\"Cancel\", \"OK\"} default button \"OK\"\nreturn text returned of r"
+        }
+        PromptKind::Confirm => {
+            "set r to display dialog (item 1 of argv) with title \"infiniterm: ssh\" buttons {\"No\", \"Yes\"} default button \"No\"\nreturn button returned of r"
+        }
+    };
+    let mut args = vec!["-e".to_string(), "on run argv".to_string()];
+    for line in body.lines() {
+        args.push("-e".into());
+        args.push(line.to_string());
+    }
+    args.push("-e".into());
+    args.push("end run".into());
+    args.push("--".into());
+    args
+}
+
+/// The helper `ift askpass <question>`: shows the question in a dialog and
+/// returns the answer for ssh. A password goes from the dialog to ssh and
+/// nowhere else: not to a file, not to the log. `Err` when the dialog was
+/// cancelled, which ssh reads as a failed login.
+pub fn run_askpass(prompt: &str) -> Result<String, String> {
+    let kind = prompt_kind(prompt);
+    let mut args = dialog_args(kind);
+    args.push(prompt.to_string());
+    let out = Command::new("osascript")
         .args(args)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()?
-        .success())
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| format!("could not show the dialog: {e}"))?;
+    if !out.status.success() {
+        return Err("cancelled".into());
+    }
+    let said = String::from_utf8_lossy(&out.stdout)
+        .trim_end_matches('\n')
+        .to_string();
+    Ok(match kind {
+        PromptKind::Confirm => said.to_lowercase(),
+        PromptKind::Secret => said,
+    })
+}
+
+/// A script ssh can run as `SSH_ASKPASS` (it is executed with the question as
+/// its only argument): `ift askpass "$@"`. It holds the path of `ift`, no
+/// secret. Owner-only, beside the control socket.
+pub fn write_askpass_helper(
+    ift: &std::path::Path,
+    control_dir_of: &std::path::Path,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    make_control_dir(control_dir_of)?;
+    let path = control_dir_of
+        .parent()
+        .expect("a control path has a folder")
+        .join("askpass.sh");
+    let quoted = crate::drop::shell_quote(&ift.display().to_string());
+    std::fs::write(&path, format!("#!/bin/sh\nexec {quoted} askpass \"$@\"\n"))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
+    Ok(path)
 }
 
 /// What the login step left behind.
@@ -200,7 +304,12 @@ pub fn stop_master(host: &RemoteHost, control: &std::path::Path) {
 /// the same question that asks for it also leaves the shared connection
 /// (`Login::Shared`). A host with keys never gets one: a shared connection
 /// stalls every card behind a flooding one (measured, 2026-10-18).
-pub fn login_step(host: &mut RemoteHost, terminal: bool, uid: u32) -> Result<Login, String> {
+pub fn login_step(
+    host: &mut RemoteHost,
+    terminal: bool,
+    uid: u32,
+    askpass: Option<&std::path::Path>,
+) -> Result<Login, String> {
     let target = host.target.clone();
     let target = &target;
     let first = probe(host).map_err(|e| format!("could not run {}: {e}", host.ssh))?;
@@ -216,7 +325,8 @@ pub fn login_step(host: &mut RemoteHost, terminal: bool, uid: u32) -> Result<Log
             said.lines().last().unwrap_or("ssh failed")
         )),
         need @ (SshProblem::UnknownHost | SshProblem::NeedsLogin) => {
-            if !terminal {
+            // No terminal and no helper: the way out is a sentence.
+            if !terminal && askpass.is_none() {
                 return Err(match need {
                     SshProblem::UnknownHost => format!(
                         "{target} has not been connected to from this Mac. Run `ssh {target}` once in a terminal, answer its question, then join again"
@@ -229,7 +339,9 @@ pub fn login_step(host: &mut RemoteHost, terminal: bool, uid: u32) -> Result<Log
             }
             eprintln!("ift: {target} needs a login first; ssh will ask.");
             let control = control_path(target, uid);
-            let done = ask_master(host, &control)
+            // With a terminal ssh asks there; without one it asks through
+            // the helper's dialogs.
+            let done = ask_master(host, &control, if terminal { None } else { askpass })
                 .map_err(|e| format!("could not run {}: {e}", host.ssh))?;
             if !done {
                 return Err(format!("{target}: the login did not finish"));
@@ -377,13 +489,13 @@ exit 255
     fn a_host_that_works_without_a_question_is_never_asked() {
         let (mut host, marker) = stand_in("quiet", "", true, true);
         std::fs::write(&marker, "").unwrap(); // the probe will pass
-        assert_eq!(login_step(&mut host, true, TEST_UID), Ok(Login::Keys));
+        assert_eq!(login_step(&mut host, true, TEST_UID, None), Ok(Login::Keys));
     }
 
     #[test]
     fn a_host_never_seen_is_asked_once_in_the_terminal_and_then_works_with_keys() {
         let (mut host, marker) = stand_in("unknown", "Host key verification failed.", true, true);
-        assert_eq!(login_step(&mut host, true, TEST_UID), Ok(Login::Keys));
+        assert_eq!(login_step(&mut host, true, TEST_UID, None), Ok(Login::Keys));
         assert!(marker.exists(), "the interactive ssh ran");
         // A host with keys gets no shared connection: it was stopped.
         assert!(marker.parent().unwrap().join("exited").exists());
@@ -398,7 +510,7 @@ exit 255
             true,
             false,
         );
-        let got = login_step(&mut host, true, TEST_UID).unwrap();
+        let got = login_step(&mut host, true, TEST_UID, None).unwrap();
         let control = control_path(&host.target, TEST_UID);
         assert_eq!(got, Login::Shared(control.clone()));
         assert!(marker.exists());
@@ -433,6 +545,89 @@ exit 255
     }
 
     #[test]
+    fn a_question_is_a_confirm_or_a_secret_and_never_becomes_script_text() {
+        assert_eq!(
+            prompt_kind("The authenticity of host 'h' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])?"),
+            PromptKind::Confirm
+        );
+        assert_eq!(prompt_kind("test@mini's password: "), PromptKind::Secret);
+        assert_eq!(
+            prompt_kind("Enter passphrase for key '/Users/me/.ssh/id_ed25519': "),
+            PromptKind::Secret
+        );
+        for kind in [PromptKind::Confirm, PromptKind::Secret] {
+            let args = dialog_args(kind);
+            assert_eq!(args.last().map(String::as_str), Some("--"));
+            assert!(args.iter().any(|a| a.contains("item 1 of argv")));
+            // The question is appended after "--" by the caller, so even a
+            // question holding quotes and `end run` is only a string.
+        }
+        assert!(dialog_args(PromptKind::Secret)
+            .iter()
+            .any(|a| a.contains("hidden answer")));
+    }
+
+    #[test]
+    fn the_askpass_helper_runs_ift_askpass_and_holds_no_secret() {
+        use std::os::unix::fs::PermissionsExt;
+        let control = control_path("helper-test", 4_000_000_003);
+        let ift = std::path::Path::new("/Applications/my apps/infiniterm.app/ift");
+        let path = write_askpass_helper(ift, &control).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("askpass \"$@\""), "{text}");
+        assert!(
+            text.contains("'/Applications/my apps/infiniterm.app/ift'"),
+            "{text}"
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let _ = std::fs::remove_dir_all("/tmp/iftc-4000000003");
+    }
+
+    #[test]
+    fn without_a_terminal_the_helpers_dialogs_answer_ssh_and_a_password_host_is_shared() {
+        let dir = std::env::temp_dir().join(format!("sl-{}-dialog", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // The helper "types" the password; the stand-in ssh accepts only it.
+        let helper = dir.join("askpass");
+        std::fs::write(&helper, "#!/bin/sh\necho hunter2\n").unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let script = dir.join("ssh");
+        std::fs::write(
+            &script,
+            format!(
+                r#"#!/bin/sh
+case "$*" in
+*" -M "*)
+  [ "$SSH_ASKPASS_REQUIRE" = force ] || exit 1
+  ans=$("$SSH_ASKPASS" "test@mini's password: ")
+  [ "$ans" = hunter2 ] || exit 1
+  cp=$(echo "$*" | sed -n 's/.*ControlPath=\([^ ]*\).*/\1/p')
+  touch '{d}/asked'; touch "$cp"; exit 0;;
+*BatchMode=yes*ControlPath=*) [ -e '{d}/asked' ] && exit 0;;
+esac
+echo 'test@mini: Permission denied (password).' >&2
+exit 255
+"#,
+                d = dir.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut host = RemoteHost::new("test@mini-dialog");
+        host.ssh = script.display().to_string();
+        let control = control_path(&host.target, TEST_UID);
+        let _ = std::fs::remove_file(&control);
+        let got = login_step(&mut host, false, TEST_UID, Some(&helper)).unwrap();
+        assert_eq!(got, Login::Shared(control.clone()));
+        assert!(dir.join("asked").exists());
+        let _ = std::fs::remove_file(control);
+    }
+
+    #[test]
     fn stopping_a_connection_that_is_not_there_does_nothing() {
         let (host, marker) = stand_in("nomaster", "", true, true);
         stop_master(&host, &control_path(&host.target, TEST_UID));
@@ -442,7 +637,7 @@ exit 255
     #[test]
     fn without_a_terminal_a_host_never_seen_says_what_to_do_and_asks_nothing() {
         let (mut host, marker) = stand_in("noterm", "Host key verification failed.", true, true);
-        let err = login_step(&mut host, false, TEST_UID).unwrap_err();
+        let err = login_step(&mut host, false, TEST_UID, None).unwrap_err();
         assert!(
             err.contains("ssh test@mini") && err.contains("join again"),
             "{err}"
@@ -453,7 +648,7 @@ exit 255
     #[test]
     fn a_changed_key_is_an_error_and_nothing_is_asked() {
         let (mut host, marker) = stand_in("changed", CHANGED, true, true);
-        let err = login_step(&mut host, true, TEST_UID).unwrap_err();
+        let err = login_step(&mut host, true, TEST_UID, None).unwrap_err();
         assert!(
             err.contains("has changed") && err.contains("SHA256:abc123DEF456"),
             "{err}"
@@ -469,7 +664,7 @@ exit 255
             false,
             false,
         );
-        let err = login_step(&mut host, true, TEST_UID).unwrap_err();
+        let err = login_step(&mut host, true, TEST_UID, None).unwrap_err();
         assert!(err.contains("did not finish"), "{err}");
     }
 
@@ -481,7 +676,7 @@ exit 255
             true,
             true,
         );
-        let err = login_step(&mut host, true, TEST_UID).unwrap_err();
+        let err = login_step(&mut host, true, TEST_UID, None).unwrap_err();
         assert!(err.contains("timed out"), "{err}");
         assert!(!marker.exists());
     }

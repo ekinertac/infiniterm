@@ -211,6 +211,19 @@ fn main() -> ExitCode {
         // Plumbing for the remote instances, called over ssh by the app, so it
         // is in neither USAGE nor the completion (like dev-run).
         Some("proxy") => proxy::run(&args[1..]),
+        // Run by ssh as SSH_ASKPASS for `ift join` with no terminal (#450):
+        // the question is the one argument, the answer goes to stdout, for ssh
+        // alone. Plumbing, so in neither USAGE nor the completion.
+        Some("askpass") => match args.get(1) {
+            Some(prompt) => match infiniterm_core::backend::ssh_login::run_askpass(prompt) {
+                Ok(answer) => {
+                    println!("{answer}");
+                    ExitCode::SUCCESS
+                }
+                Err(_) => ExitCode::from(1),
+            },
+            None => ExitCode::from(2),
+        },
         Some("completion") => match args.get(1).map(String::as_str) {
             Some("zsh") => {
                 print!("{}", completion::ZSH);
