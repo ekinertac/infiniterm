@@ -12,9 +12,12 @@
 //! still zooms). Nothing here knows gpui; the tests are tables.
 //!
 //! Rules that are not obvious:
-//! - A swipe's movement is ACCUMULATED and one focus step is taken per
-//!   `STEP_PX` of it, so a flick walks a few cards and a slow swipe one at a
-//!   time. A notched wheel's notch (`lines`) is one step.
+//! - A swipe's movement is ACCUMULATED and the focus moves ONE card per swipe
+//!   (Ekin, 2026-10-20: "Cmd+Alt+two fingers should switch one card per
+//!   swipe"): the step comes once `STEP_PX` of movement has gathered, and the
+//!   rest of the gesture, a long swipe or a flick, does nothing more. A notched
+//!   wheel's notch (`lines`) counts as `STEP_PX`, and a burst of notches less
+//!   than `GESTURE_GAP_MS` apart is one swipe.
 //! - The OS keeps sending momentum events after the fingers lift (phase
 //!   `Moved`, no new `Started`, after an `Ended`). They are IGNORED, or one flick
 //!   would keep walking through the canvas. A device with no phases (a mouse)
@@ -32,12 +35,10 @@
 //! `usage_log::MOUSE_GESTURES` (the gesture ids `mouse.focus.scroll` and
 //! `mouse.workspace.scroll`).
 
-/// Pixels of swipe for one focus step: a flick of about 200 px walks three
-/// cards, a slow swipe of 60 px one.
+/// Pixels of swipe that take a gesture's one focus step: enough that a touch
+/// of the fingers does not move the focus, little enough that a short swipe
+/// does.
 pub const STEP_PX: f64 = 60.;
-/// Steps taken from one event at most: a huge single delta must not run
-/// across the whole canvas.
-pub const MAX_STEPS_PER_EVENT: usize = 4;
 /// Pixels of clearly horizontal swipe that switch a workspace.
 pub const WORKSPACE_PX: f64 = 120.;
 /// The least time between two workspace switches.
@@ -161,6 +162,8 @@ pub struct NavState {
     lifted: bool,
     /// A workspace switch happened in this gesture.
     switched: bool,
+    /// The focus already moved in this gesture: one card per swipe.
+    stepped: bool,
     /// When the last workspace switch happened (none yet: a first swipe is
     /// never "too soon").
     last_switch_ms: Option<f64>,
@@ -175,6 +178,7 @@ impl NavState {
         self.ay = 0.;
         self.lifted = false;
         self.switched = false;
+        self.stepped = false;
         self.noted = false;
     }
 
@@ -214,37 +218,29 @@ impl NavState {
         } else {
             (ev.dx, ev.dy)
         };
+        // One card per swipe: once the focus has moved, the rest of the
+        // gesture (a long swipe, a flick) does nothing more.
+        if self.stepped {
+            return Vec::new();
+        }
         self.ax += dx;
         self.ay += dy;
-        let mut out = Vec::new();
-        for _ in 0..MAX_STEPS_PER_EVENT {
-            let (x, y) = (self.ax.abs(), self.ay.abs());
-            if x.max(y) < STEP_PX {
-                break;
-            }
-            let dir = if x >= y {
-                let s = self.ax.signum();
-                self.ax -= STEP_PX * s;
-                self.ay = 0.;
-                focus_dir(true, s)
-            } else {
-                let s = self.ay.signum();
-                self.ay -= STEP_PX * s;
-                self.ax = 0.;
-                focus_dir(false, s)
-            };
-            let first = self.first();
-            out.push(NavOut {
-                action: NavAction::Focus(dir),
-                first_of_gesture: first,
-            });
+        let (x, y) = (self.ax.abs(), self.ay.abs());
+        if x.max(y) < STEP_PX {
+            return Vec::new();
         }
-        // What is left of a runaway delta is dropped, not carried.
-        if self.ax.abs().max(self.ay.abs()) >= STEP_PX {
-            self.ax = 0.;
-            self.ay = 0.;
-        }
-        out
+        // The axis with more movement decides the direction.
+        let dir = if x >= y {
+            focus_dir(true, self.ax.signum())
+        } else {
+            focus_dir(false, self.ay.signum())
+        };
+        self.stepped = true;
+        let first = self.first();
+        vec![NavOut {
+            action: NavAction::Focus(dir),
+            first_of_gesture: first,
+        }]
     }
 
     fn workspace(&mut self, ev: ScrollEv) -> Vec<NavOut> {
@@ -336,29 +332,50 @@ mod tests {
     }
 
     #[test]
-    fn a_slow_swipe_takes_one_step_per_sixty_pixels() {
+    fn a_swipe_moves_one_card_however_long_it_is() {
         let mut s = NavState::default();
         assert!(s.step(ev(0., 0., Phase::Started, 1000.)).is_empty());
         let mut steps = Vec::new();
-        for i in 0..12 {
+        for i in 0..40 {
             steps.extend(s.step(ev(-10., 0., Phase::Moved, 1010. + i as f64 * 8.)));
         }
-        // 120 px to the left: two steps to the right.
-        assert_eq!(actions(&steps), vec![f(Right), f(Right)]);
+        // 400 px to the left: one card to the right, not six.
+        assert_eq!(actions(&steps), vec![f(Right)]);
     }
 
     #[test]
-    fn a_flick_takes_a_few_steps_and_a_huge_delta_is_capped() {
+    fn a_flick_and_a_huge_delta_still_move_one_card() {
         let mut s = NavState::default();
         s.step(ev(0., 0., Phase::Started, 0.));
         let out = s.step(ev(0., 200., Phase::Moved, 8.));
-        assert_eq!(actions(&out), vec![f(Up), f(Up), f(Up)]);
+        assert_eq!(actions(&out), vec![f(Up)]);
         let mut s = NavState::default();
         s.step(ev(0., 0., Phase::Started, 0.));
         let out = s.step(ev(0., -5000., Phase::Moved, 8.));
-        assert_eq!(out.len(), MAX_STEPS_PER_EVENT);
-        // The rest of the runaway delta is dropped, not carried.
-        assert!(s.step(ev(0., -10., Phase::Moved, 16.)).is_empty());
+        assert_eq!(actions(&out), vec![f(Down)]);
+        // The rest of the gesture does nothing, whichever way it goes.
+        assert!(s.step(ev(0., -500., Phase::Moved, 16.)).is_empty());
+        assert!(s.step(ev(0., 500., Phase::Moved, 24.)).is_empty());
+    }
+
+    #[test]
+    fn less_than_a_step_moves_nothing_and_the_next_swipe_moves_again() {
+        let mut s = NavState::default();
+        s.step(ev(0., 0., Phase::Started, 0.));
+        assert!(s.step(ev(0., 40., Phase::Moved, 8.)).is_empty());
+        s.step(ev(0., 0., Phase::Ended, 16.));
+        // A second swipe, a new touch: one more card.
+        s.step(ev(0., 0., Phase::Started, 600.));
+        assert_eq!(
+            actions(&s.step(ev(0., 80., Phase::Moved, 608.))),
+            vec![f(Up)]
+        );
+        s.step(ev(0., 0., Phase::Ended, 700.));
+        s.step(ev(0., 0., Phase::Started, 1300.));
+        assert_eq!(
+            actions(&s.step(ev(0., 80., Phase::Moved, 1308.))),
+            vec![f(Up)]
+        );
     }
 
     #[test]
@@ -415,19 +432,19 @@ mod tests {
     }
 
     #[test]
-    fn a_wheel_with_no_phases_steps_once_per_notch() {
+    fn a_burst_of_wheel_notches_is_one_swipe_and_a_later_notch_another() {
         let mut s = NavState::default();
         let notch = |dy: f64, now: f64| ScrollEv {
             lines: true,
             ..ev(0., dy, Phase::Moved, now)
         };
-        // Three notches down, 40 ms apart: three steps.
+        // Three notches down, 40 ms apart, no phases: one swipe, one card.
         let mut steps = Vec::new();
         for i in 0..3 {
             steps.extend(s.step(notch(-1., 1000. + i as f64 * 40.)));
         }
-        assert_eq!(actions(&steps), vec![f(Down), f(Down), f(Down)]);
-        // A notch after a long pause is a new gesture and still a step.
+        assert_eq!(actions(&steps), vec![f(Down)]);
+        // A notch after a long pause is a new swipe and moves one card.
         assert_eq!(actions(&s.step(notch(1., 3000.))), vec![f(Up)]);
     }
 
@@ -436,11 +453,9 @@ mod tests {
         let mut s = NavState::default();
         s.step(ev(0., 0., Phase::Started, 0.));
         let a = s.step(ev(-200., 0., Phase::Moved, 8.));
-        assert_eq!(a.len(), 3);
+        assert_eq!(a.len(), 1);
         assert!(a[0].first_of_gesture);
-        assert!(!a[1].first_of_gesture && !a[2].first_of_gesture);
-        let b = s.step(ev(-70., 0., Phase::Moved, 16.));
-        assert!(!b[0].first_of_gesture);
+        assert!(s.step(ev(-70., 0., Phase::Moved, 16.)).is_empty());
         // The next gesture is counted again.
         s.step(ev(0., 0., Phase::Started, 600.));
         assert!(s.step(ev(-70., 0., Phase::Moved, 608.))[0].first_of_gesture);
