@@ -6,17 +6,25 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-20
+## 0.6.2 (build 1049), 2026-10-20
+
+### Canvas
 
 - Removed: two-finger panning with the trackpad is gone again (0.6.0 and 0.6.1 had it). Scrolling is only for cards: a scroll goes to the card under the pointer, and over empty canvas it does nothing, for a trackpad and a mouse wheel alike.
 - New: Cmd+Alt + two fingers (or Cmd+Alt + the wheel) moves the focus like Cmd+Alt+arrows, one card for each swipe. Cmd+Shift + two fingers sideways switches to the next or previous workspace, one switch a swipe. Cmd+scroll and the pinch still zoom, and so does a vertical Cmd+Shift scroll. The momentum after you lift your fingers does not keep moving.
 
-### 2026-10-19
+### Browser
 
 - Fixed: after a quick resize (dragging a browser card's edge, or several size steps in a row) the page could stay stretched, or at its old size, until something else made it repaint; it was a coin toss, which is why it seemed to work sometimes. The card now works out what size the page was painted at from its own pixels, and when the page is still at an old size after a moment it asks the browser to paint again at the new one.
 - Fixed: resizing a browser card no longer stretches the page. While the page repaints at the new size you see the page as it was, at its own size, with the card's background beside it, instead of the old picture squeezed or enlarged to the new card.
+
+### Command palette
+
 - Fixed: the command palette lists only rows that really hold a word you type. A word of four letters or more used to match rows where the letters were scattered over a long label (`check` found "Canvas: tidy the cards into a block"); now the word must be in the row, as a run, as the initials of its words, or as two whole pieces that start words. Shorter queries (`rgs`, `ntc`) match as before, and the rows that hold the word come first.
 - Fixed: a long card label no longer runs past the edge of the command palette. It is cut at its right end with an ellipsis, so the row always starts where the label starts.
+
+### Remote servers
+
 - Fixed: a card of a remote instance (`ift connect`) now loads the server's own `.zshrc`, so your prompt and aliases appear as they do over plain ssh. Before, the card's zsh was started with a `ZDOTDIR` that pointed at a folder on your Mac, which does not exist on the server, so it started bare. One thing you lose there: zsh's command marks, which colour a card after a long command, are only added to local cards; a remote card still takes its colours from the agent hooks on the server.
 
 ## 0.6.1 (build 1021), 2026-10-19
