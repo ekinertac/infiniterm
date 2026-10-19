@@ -76,6 +76,39 @@ pub fn live_serve(pid_file: &Path) -> Option<u32> {
     is_serve_command(&String::from_utf8_lossy(&out.stdout)).then_some(pid)
 }
 
+/// What `stop_running_serve` found.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ServeStop {
+    /// No `ift serve` here (or a stale pid file): nothing to do.
+    NotRunning,
+    /// It flushed the canvas and exited.
+    Stopped,
+    /// It was asked and is still there after the wait; carries its pid.
+    Stuck(u32),
+}
+
+/// What the app does first at its launch (#438): ask a running `ift serve` of
+/// this data dir to save the canvas and exit, and wait for it, so the app
+/// loads that canvas, binds the sockets and adopts the sessions. Only a pid
+/// that `live_serve` confirms is signalled. The viewers see their connection
+/// end and join the app by themselves (#442).
+pub fn stop_running_serve(pid_file: &Path, wait: std::time::Duration) -> ServeStop {
+    let Some(pid) = live_serve(pid_file) else {
+        return ServeStop::NotRunning;
+    };
+    let _ = std::process::Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status();
+    let deadline = std::time::Instant::now() + wait;
+    while std::time::Instant::now() < deadline {
+        if live_serve(pid_file) != Some(pid) {
+            return ServeStop::Stopped;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    ServeStop::Stuck(pid)
+}
+
 /// The save debounce, as the app's (`runtime.rs` `SAVE_DEBOUNCE_MS`): a burst
 /// of edits is one write.
 pub const SAVE_DEBOUNCE_MS: f64 = 500.;
