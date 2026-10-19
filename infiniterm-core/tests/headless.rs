@@ -12,7 +12,7 @@ use infiniterm_core::backend::join::{
     KIND_UPDATE,
 };
 use infiniterm_core::headless::{Host, HostIo};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -45,28 +45,65 @@ fn tick_until(host: &mut Host, mut pred: impl FnMut(&mut Host) -> bool) -> bool 
     false
 }
 
-fn canvas(path: &std::path::Path) -> UnixStream {
+/// A viewer's canvas connection: what it writes up, and the messages a thread
+/// reads down, so the test can tick the host between looks.
+struct Viewer {
+    up: UnixStream,
+    down: std::sync::mpsc::Receiver<(u8, String)>,
+}
+
+impl Viewer {
+    fn send(&mut self, bytes: &[u8]) {
+        self.up.write_all(bytes).unwrap();
+    }
+}
+
+fn canvas(path: &std::path::Path) -> Viewer {
     let mut s = UnixStream::connect(path).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     writeln!(s, "ift-join 2 canvas").unwrap();
-    let mut line = String::new();
-    BufReader::new(s.try_clone().unwrap())
-        .read_line(&mut line)
-        .unwrap();
-    assert_eq!(line.trim(), "ift-join 2 ok");
-    s
+    // The answer line byte by byte: a buffered reader would take the first
+    // canvas messages that follow it into a buffer that is then dropped (the
+    // rare CI failure of this test, at the read that never got its message).
+    let mut line = Vec::new();
+    let mut b = [0u8; 1];
+    while s.read(&mut b).unwrap() == 1 && b[0] != b'\n' {
+        line.push(b[0]);
+    }
+    assert_eq!(String::from_utf8_lossy(&line), "ift-join 2 ok");
+    let (tx, down) = std::sync::mpsc::channel();
+    let mut reader = s.try_clone().unwrap();
+    reader.set_read_timeout(None).unwrap();
+    std::thread::spawn(move || {
+        while let Ok(Some(message)) = read_canvas_message(&mut reader) {
+            if tx.send(message).is_err() {
+                return;
+            }
+        }
+    });
+    Viewer { up: s, down }
 }
 
-/// The next layout and its revision from a canvas stream.
-fn next_layout(s: &mut UnixStream) -> (String, u64) {
+/// The next layout and its revision, ticking the host while waiting: it only
+/// publishes when ticked, and this test is the only thing ticking it.
+fn next_layout(host: &mut Host, viewer: &mut Viewer) -> (String, u64) {
+    let deadline = Instant::now() + Duration::from_secs(10);
     let mut layout = None;
-    loop {
-        match read_canvas_message(s).unwrap().unwrap() {
-            (KIND_LAYOUT, text) => layout = Some(text),
-            (KIND_REVISION, text) => return (layout.take().unwrap(), text.trim().parse().unwrap()),
-            _ => {}
+    let mut now = 2_000_000.;
+    while Instant::now() < deadline {
+        host.tick(now);
+        now += 50.;
+        while let Ok(message) = viewer.down.recv_timeout(Duration::from_millis(50)) {
+            match message {
+                (KIND_LAYOUT, text) => layout = Some(text),
+                (KIND_REVISION, text) => {
+                    return (layout.take().unwrap(), text.trim().parse().unwrap())
+                }
+                _ => {}
+            }
         }
     }
+    panic!("no layout arrived within 10 s");
 }
 
 #[test]
@@ -120,7 +157,7 @@ fn a_host_with_no_window_holds_the_canvas_serves_a_viewer_and_hands_the_cards_on
     //    card) is applied by the host, which starts a shell for it.
     let mut viewer = canvas(&dir.join("j.sock"));
     let (layout, rev) = loop {
-        let got = next_layout(&mut viewer);
+        let got = next_layout(&mut host, &mut viewer);
         if got.0.contains(&first) {
             break got;
         }
@@ -132,12 +169,10 @@ fn a_host_with_no_window_holds_the_canvas_serves_a_viewer_and_hands_the_cards_on
     made["session"] = serde_json::Value::Null;
     made["rect"]["x"] = (made["rect"]["x"].as_f64().unwrap() + 2000.).into();
     edited["cards"].as_array_mut().unwrap().push(made);
-    viewer
-        .write_all(&encode_canvas_message(
-            KIND_UPDATE,
-            &encode_update(rev, &edited.to_string()),
-        ))
-        .unwrap();
+    viewer.send(&encode_canvas_message(
+        KIND_UPDATE,
+        &encode_update(rev, &edited.to_string()),
+    ));
     assert!(
         tick_until(&mut host, |h| h
             .model
@@ -182,18 +217,16 @@ fn a_host_with_no_window_holds_the_canvas_serves_a_viewer_and_hands_the_cards_on
 
     // 4. A viewer's close reaches the host through the model's own close.
     let mut viewer = canvas(&dir.join("j.sock"));
-    let (layout, rev) = next_layout(&mut viewer);
+    let (layout, rev) = next_layout(&mut again, &mut viewer);
     let mut edited: serde_json::Value = serde_json::from_str(&layout).unwrap();
     edited["cards"]
         .as_array_mut()
         .unwrap()
         .retain(|c| c["id"] != "viewer-made-card");
-    viewer
-        .write_all(&encode_canvas_message(
-            KIND_UPDATE,
-            &encode_update(rev, &edited.to_string()),
-        ))
-        .unwrap();
+    viewer.send(&encode_canvas_message(
+        KIND_UPDATE,
+        &encode_update(rev, &edited.to_string()),
+    ));
     assert!(
         tick_until(&mut again, |h| h.model.card("viewer-made-card").is_none()),
         "the host closed the card the viewer closed"

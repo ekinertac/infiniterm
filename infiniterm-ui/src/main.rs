@@ -640,6 +640,12 @@ fn main() {
                         // The host's canvas, for a viewer; the host's agent
                         // states, for viewers (#423).
                         this.drain_canvas();
+                        // A viewer's cards that lost their session rejoin
+                        // here too, not only in the frame: a window behind
+                        // others draws no frames (#442).
+                        if this.drive_viewer_links() {
+                            cx.notify();
+                        }
                         this.publish_agents();
                         // What viewers changed on this canvas (#423).
                         if this.apply_remote_updates() {
