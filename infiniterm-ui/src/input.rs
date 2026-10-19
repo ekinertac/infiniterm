@@ -777,7 +777,13 @@ impl AppView {
         // keeps the target its first event chose, momentum included.
         let precise = matches!(e.delta, ScrollDelta::Pixels(_));
         let started = matches!(e.touch_phase, TouchPhase::Started);
-        let carried = carried_target(started, precise, self.wheel_target.as_ref());
+        // The time since the previous scroll event: a pause longer than a
+        // gesture can be starts a new one, whatever the device says (a mouse
+        // with a vendor driver sends pixels with no phase, #485).
+        let now = now_ms();
+        let gap = now - self.wheel_last_ms;
+        self.wheel_last_ms = now;
+        let carried = carried_target(started, precise, gap, self.wheel_target.as_ref());
         let ended = matches!(e.touch_phase, TouchPhase::Ended);
         // A gesture's first event often has no movement (or a sliver of
         // sideways drift): a terminal reads that as "nothing to scroll" and

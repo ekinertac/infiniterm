@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-19
+
+- Fixed: scrolling a terminal with a mouse wheel panned the canvas instead (0.6.0). A mouse that sends smooth scrolling with no touch phase kept the choice its last scroll over empty canvas made; a pause of a moment between scrolls now starts afresh, so the card under the pointer gets the wheel again.
+
 ## 0.6.0 (build 1015), 2026-10-19
 
 ### Join another Mac's canvas
