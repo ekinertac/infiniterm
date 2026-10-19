@@ -12,6 +12,8 @@ ift                    # launch infiniterm, or focus it if running
 ift ~/Code/project     # an editor card with a file tree rooted there
 ift src/main.rs        # edit the file over this terminal card, like vim
 ift -n src/main.rs     # the file in a card of its own, returning at once
+ift -t src/main.rs     # the file as a tab of an editor card
+ift -t src/main.rs 2   # ...of card 2 (a number like 2 or #2, or an id)
 ift src/main.rs:42     # ...at line 42 (file:42:7 for a column)
 ift terminal ~/a ~/b   # a terminal card per folder, its shell starting there
 ift diff               # changes against git HEAD, as a card
@@ -21,6 +23,8 @@ ift diff src/          # only under a path
 Run inside a terminal card, `ift <file>` lays an editor over that card and waits until you close it, so `EDITOR=ift` works for `git commit`. A file that does not exist yet opens empty and the first save creates it, so any word that is not one of `ift`'s commands is taken as a file name. See [Editor cards](../editor/).
 
 `ift terminal <folder>...` makes a terminal card for each folder on the workspace you are looking at and focuses the last one. It starts infiniterm first when it is not running.
+
+`ift -t <path> [card]` adds the file as a tab of an editor card. Without a card it uses the focused editor card, and opens a card of its own when the focus is not on one. A file that is already open is switched to, not opened twice. A terminal, an unknown card and a directory are refused, and the message says why.
 
 A path beats a verb: a directory called `ls` in front of you opens the directory.
 
@@ -89,7 +93,7 @@ A session has one client at a time. Attaching takes it from the app: the card sh
 
 ## Servers
 
-`ift connect me@server` opens a second window whose terminal cards run on that server. Installing `ift` there, colours, agents and troubleshooting have a page of their own: [Servers](../servers/).
+`ift connect me@server` opens a second window whose terminal cards run on that server. Installing `ift` there, colours, agents and troubleshooting have a page of their own: [Servers](../servers/). `ift join <host>` opens a window on another Mac's running canvas instead, described there too.
 
 ## tmux
 
