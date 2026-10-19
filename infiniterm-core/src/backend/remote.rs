@@ -496,7 +496,16 @@ pub fn classify_join_failure(target: &str, answer: &Answer, stderr: &str) -> Joi
         Answer::Closed => {
             let said = stderr.trim();
             let lower = said.to_lowercase();
-            if said.is_empty() {
+            if let super::ssh_login::SshProblem::ChangedKey(fingerprint) =
+                super::ssh_login::classify(said)
+            {
+                // Final, and with the fingerprint: ssh's last line alone is
+                // "Host key verification failed." (#450).
+                JoinFailure::Fatal(super::ssh_login::changed_key_sentence(
+                    target,
+                    fingerprint.as_deref(),
+                ))
+            } else if said.is_empty() {
                 JoinFailure::Retry(format!("{target} closed the connection before it answered"))
             } else if CONNECTION_WORDS.iter().any(|w| lower.contains(w)) {
                 JoinFailure::Retry(said.lines().last().unwrap_or(said).to_string())
@@ -716,6 +725,17 @@ mod tests {
             "ift: no running infiniterm to join on this host (/x/j.sock): not found"
         ));
         assert!(!retry(&Unreadable, ""));
+    }
+
+    #[test]
+    fn a_changed_host_key_is_final_and_names_the_fingerprint() {
+        let said = "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nThe fingerprint for the ED25519 key sent by the remote host is\nSHA256:zzz999.\nHost key verification failed.";
+        match classify_join_failure("mini", &Answer::Closed, said) {
+            JoinFailure::Fatal(m) => {
+                assert!(m.contains("mini") && m.contains("SHA256:zzz999"), "{m}")
+            }
+            other => panic!("a changed key must be final, got {other:?}"),
+        }
     }
 
     #[test]

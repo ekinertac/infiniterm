@@ -93,6 +93,16 @@ pub fn run(args: &[String]) -> ExitCode {
         std::env::var("INFINITERM_JOIN_SSH").ok().as_deref(),
     )
     .expect("a parsed host is never empty");
+    // The one place ssh may ask a question (#450): a host never seen, or with
+    // no key set up. Everything after it runs without a prompt.
+    {
+        use std::io::IsTerminal;
+        let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+        if let Err(why) = infiniterm_core::backend::ssh_login::login_step(&host, terminal) {
+            eprintln!("ift: {why}");
+            return ExitCode::from(1);
+        }
+    }
     match remote::check(&host) {
         Ok(found) => {
             if !found.is_empty() && found != host.ift {

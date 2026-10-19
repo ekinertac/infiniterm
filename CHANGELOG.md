@@ -12,6 +12,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-18
 
+- `ift join` now asks the usual ssh questions once, in the terminal you ran it from, when the host was never connected to from this Mac or no key is set up: the fingerprint and the password prompt are ssh's own, and afterwards the window's connections need no prompt. A host key that has changed is never a question: `ift join` says so, with the new fingerprint, and does not connect. Run from somewhere with no terminal, it says what to do instead. A password-only host still needs a key for now.
+
 - `ift join` opens its window in front of the terminal you ran it from, instead of sometimes behind it.
 - A joined window's status bar message while the host is unreachable is now one short line ("ekin-mini: app not running; waiting") instead of ssh's whole sentence, which ran over the card's name. The full text goes to the log.
 
