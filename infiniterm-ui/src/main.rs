@@ -232,12 +232,6 @@ pub struct AppView {
     /// When the last scroll event came (ms): a pause longer than a gesture
     /// can be forgets `wheel_target` (`pan_mode::WHEEL_GESTURE_GAP_MS`, #485).
     pub wheel_last_ms: f64,
-    /// Whether the scroll gesture in progress began with a trackpad touch
-    /// (`pan_mode::gesture_is_trackpad`): only a trackpad pans the canvas.
-    pub wheel_trackpad: bool,
-    /// The last scroll event decided nothing (it was too small, `defers_target`):
-    /// the next one is the same gesture's first real event, not a new beginning.
-    pub wheel_deferred: bool,
     /// Where a two-finger pan is in its life, and when its last event came
     /// (`pan_mode::pan_step`); the session itself is `pan` = `Pan::Scrolling`.
     pub wheel_pan: infiniterm_core::pan_mode::PanSession,

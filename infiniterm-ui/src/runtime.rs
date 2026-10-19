@@ -61,8 +61,6 @@ impl AppView {
             pan: None,
             wheel_target: None,
             wheel_last_ms: 0.,
-            wheel_trackpad: false,
-            wheel_deferred: false,
             wheel_pan: infiniterm_core::pan_mode::PanSession::Idle,
             wheel_pan_last: 0.,
             left_on_canvas: false,

@@ -20,9 +20,8 @@ use infiniterm_core::model::focus_cmd::BareKey;
 use infiniterm_core::model::register::{handle_chord, resolve_chord};
 use infiniterm_core::momentum::{velocity_from, Sample, VELOCITY_SAMPLE_MS};
 use infiniterm_core::pan_mode::{
-    carried_target, defers_target, gesture_is_trackpad, pan_origin, pan_session_stale, pan_step,
-    route_wheel, starts_card_gesture, starts_pan, PanSession, PanStep, WheelRoute, WheelTarget,
-    WHEEL_GESTURE_GAP_MS,
+    carried_target, defers_target, pan_origin, pan_session_stale, pan_step, route_wheel,
+    starts_card_gesture, starts_pan, PanSession, PanStep, WheelRoute, WheelTarget,
 };
 use infiniterm_core::resize::{apply_resize, Edge};
 use infiniterm_core::viewport::{anchored_viewport, world_pos_of, MAX_SCALE, MIN_SCALE};
@@ -785,11 +784,6 @@ impl AppView {
         let gap = now - self.wheel_last_ms;
         self.wheel_last_ms = now;
         let carried = carried_target(started, precise, gap, self.wheel_target.as_ref());
-        // Only a gesture that began with a trackpad touch may pan the canvas;
-        // a mouse wheel scrolls the card under it or does nothing.
-        let begins = carried.is_none() && !(self.wheel_deferred && gap <= WHEEL_GESTURE_GAP_MS);
-        self.wheel_trackpad = gesture_is_trackpad(started, begins, self.wheel_trackpad);
-        self.wheel_deferred = false;
         let ended = matches!(e.touch_phase, TouchPhase::Ended);
         // A gesture's first event often has no movement (or a sliver of
         // sideways drift): a terminal reads that as "nothing to scroll" and
@@ -802,7 +796,6 @@ impl AppView {
             if started {
                 self.wheel_target = None;
             }
-            self.wheel_deferred = true;
             return;
         }
         // What is under the pointer matters only to a gesture's FIRST event:
@@ -838,17 +831,12 @@ impl AppView {
                 if used {
                     WheelTarget::Body(id)
                 } else {
-                    if self.wheel_trackpad {
-                        self.wheel_pan(p, dx, dy, precise, started, ended);
-                    }
+                    self.wheel_pan(p, dx, dy, precise, started, ended);
                     WheelTarget::Pan
                 }
             }
             WheelRoute::Pan => {
-                // A mouse wheel does nothing here: only a trackpad pans.
-                if self.wheel_trackpad {
-                    self.wheel_pan(p, dx, dy, precise, started, ended);
-                }
+                self.wheel_pan(p, dx, dy, precise, started, ended);
                 WheelTarget::Pan
             }
         };
