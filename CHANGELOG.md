@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-19
 
+- Fixed: after a quick resize (dragging a browser card's edge, or several size steps in a row) the page could stay stretched, or at its old size, until something else made it repaint; it was a coin toss, which is why it seemed to work sometimes. The card now works out what size the page was painted at from its own pixels, and when the page is still at an old size after a moment it asks the browser to paint again at the new one.
 - Fixed: resizing a browser card no longer stretches the page. While the page repaints at the new size you see the page as it was, at its own size, with the card's background beside it, instead of the old picture squeezed or enlarged to the new card.
 - Fixed: the command palette lists only rows that really hold a word you type. A word of four letters or more used to match rows where the letters were scattered over a long label (`check` found "Canvas: tidy the cards into a block"); now the word must be in the row, as a run, as the initials of its words, or as two whole pieces that start words. Shorter queries (`rgs`, `ntc`) match as before, and the rows that hold the word come first.
 - Fixed: a long card label no longer runs past the edge of the command palette. It is cut at its right end with an ellipsis, so the row always starts where the label starts.
