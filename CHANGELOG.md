@@ -6,6 +6,11 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-19
+
+- Fixed: the command palette lists only rows that really hold a word you type. A word of four letters or more used to match rows where the letters were scattered over a long label (`check` found "Canvas: tidy the cards into a block"); now the word must be in the row, as a run, as the initials of its words, or as two whole pieces that start words. Shorter queries (`rgs`, `ntc`) match as before, and the rows that hold the word come first.
+- Fixed: a long card label no longer runs past the edge of the command palette. It is cut with an ellipsis; when the letters you typed are in the cut part, the visible part moves to them.
+
 ## 0.6.1 (build 1021), 2026-10-19
 
 ### Canvas
