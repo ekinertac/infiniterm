@@ -98,9 +98,24 @@ pub fn run(args: &[String]) -> ExitCode {
     {
         use std::io::IsTerminal;
         let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
-        if let Err(why) = infiniterm_core::backend::ssh_login::login_step(&host, terminal) {
-            eprintln!("ift: {why}");
-            return ExitCode::from(1);
+        use infiniterm_core::backend::ssh_login::{login_step, Login};
+        use std::os::unix::fs::MetadataExt;
+        let uid = std::fs::metadata(paths::home_dir()).map(|m| m.uid()).unwrap_or(0);
+        match login_step(&mut host, terminal, uid) {
+            Ok(Login::Keys) => {}
+            // A password host: the viewer's ssh must name the shared
+            // connection too, and the window stops it when it quits.
+            Ok(Login::Shared(control)) => {
+                let arg = format!("-o ControlPath={}", control.display());
+                p.ssh_args = Some(match p.ssh_args.take() {
+                    Some(a) => format!("{a} {arg}"),
+                    None => arg,
+                });
+            }
+            Err(why) => {
+                eprintln!("ift: {why}");
+                return ExitCode::from(1);
+            }
         }
     }
     match remote::check(&host) {
