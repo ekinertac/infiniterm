@@ -229,9 +229,6 @@ pub struct AppView {
     /// Where the scroll gesture in progress goes (#451): fixed at the first
     /// event of a trackpad gesture so its momentum keeps the target.
     pub wheel_target: Option<infiniterm_core::pan_mode::WheelTarget>,
-    /// When the last scroll event came (ms): a pause longer than a gesture
-    /// can be forgets `wheel_target` (`pan_mode::WHEEL_GESTURE_GAP_MS`, #485).
-    pub wheel_last_ms: f64,
     /// Where a two-finger pan is in its life, and when its last event came
     /// (`pan_mode::pan_step`); the session itself is `pan` = `Pan::Scrolling`.
     pub wheel_pan: infiniterm_core::pan_mode::PanSession,
