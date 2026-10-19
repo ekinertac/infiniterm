@@ -93,6 +93,88 @@ pub fn pan_origin(x: f64, y: f64, scale: f64, dx: f64, dy: f64) -> (f64, f64) {
     (x - dx / scale, y - dy / scale)
 }
 
+/// Where a two-finger pan is in its life. A trackpad gesture is a SESSION, the
+/// way a Cmd+drag is: it starts when the fingers touch, follows them, and
+/// ends when they lift, with the app's own fling (`momentum::velocity_from`
+/// and the animator) instead of the OS's. Why not the OS's momentum: macOS
+/// sends it as more scroll events, one per display refresh, each handled
+/// alone with nothing asking for a frame (it was laggy on the MacBook, while
+/// the drag, whose session keeps `needs_frame` true, was not), and a second
+/// fling of ours on top would stack with it.
+///
+/// What gpui reports (gpui 0.2 `platform/mac/events.rs`): the event's `phase`
+/// maps Began and MayBegin to Started, Ended to Ended, and everything else to
+/// Moved. The OS's momentum events have no finger phase (their own
+/// `momentumPhase` is not exposed), so they arrive as `Moved` events AFTER an
+/// `Ended`, with no new `Started`. That is how they are told apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanSession {
+    /// No two-finger pan going.
+    #[default]
+    Idle,
+    /// The fingers are down and the canvas follows them.
+    Active,
+    /// The fingers lifted: what still arrives is the OS's momentum, ignored.
+    Momentum,
+}
+
+/// What one scroll event does to a pan session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanStep {
+    /// Start a session at this event, and move by its delta.
+    Begin,
+    /// Move by the delta.
+    Advance,
+    /// The fingers lifted: fling and end the session. The delta (an Ended
+    /// event carries none, or a last one) is applied first.
+    Finish,
+    /// Nothing: the OS's momentum after the lift, or an Ended with nothing
+    /// going.
+    Ignore,
+    /// A mouse wheel, or a device with no phases: move by the delta alone,
+    /// with no session.
+    Single,
+}
+
+/// One scroll event routed to PAN: the session's next state and what to do.
+/// `precise` is a pixel delta (a trackpad); a mouse wheel's line deltas have
+/// no phases to tell gestures apart, so every notch is a step of its own.
+pub fn pan_step(
+    state: PanSession,
+    started: bool,
+    ended: bool,
+    precise: bool,
+) -> (PanSession, PanStep) {
+    if !precise {
+        return (PanSession::Idle, PanStep::Single);
+    }
+    match (state, started, ended) {
+        // The fingers touch (MayBegin then Began both say Started: the
+        // second continues the session the first began).
+        (PanSession::Active, true, _) => (PanSession::Active, PanStep::Advance),
+        (_, true, _) => (PanSession::Active, PanStep::Begin),
+        (PanSession::Active, false, true) => (PanSession::Momentum, PanStep::Finish),
+        // An Ended nothing was going for (the gesture went to a card).
+        (_, false, true) => (state, PanStep::Ignore),
+        (PanSession::Active, false, false) => (PanSession::Active, PanStep::Advance),
+        (PanSession::Momentum, false, false) => (PanSession::Momentum, PanStep::Ignore),
+        // Moved with no Started before it and no lift: a device that sends
+        // pixels without phases. Step it like a wheel.
+        (PanSession::Idle, false, false) => (PanSession::Idle, PanStep::Single),
+    }
+}
+
+/// How long a session may go without a scroll event before it is ended as if
+/// the fingers had lifted: macOS can cancel a gesture (a `Cancelled` phase
+/// gpui reports as Moved) and then no Ended ever comes, which would hold the
+/// frame loop open for good.
+pub const PAN_SESSION_IDLE_MS: f64 = 120.;
+
+/// Whether a session whose last event was at `last_ms` has gone quiet.
+pub fn pan_session_stale(state: PanSession, last_ms: f64, now_ms: f64) -> bool {
+    state == PanSession::Active && now_ms - last_ms > PAN_SESSION_IDLE_MS
+}
+
 /// Whether a list scrolled to `pos` (0 to `max`, the last position it can
 /// reach) can move the way a scroll delta asks: fingers down (`delta` > 0)
 /// reveal what is above (`pos` falls), fingers up reveal what is below
@@ -227,5 +309,111 @@ mod tests {
     fn right_never_pans() {
         assert!(!starts_pan(2, true));
         assert!(!starts_pan(2, false));
+    }
+
+    /// A trackpad flick as gpui reports it: Started, Moved..., Ended, then the
+    /// OS's momentum as Moved with no new Started.
+    fn run(events: &[(bool, bool)]) -> Vec<PanStep> {
+        let mut state = PanSession::Idle;
+        events
+            .iter()
+            .map(|&(started, ended)| {
+                let (next, step) = pan_step(state, started, ended, true);
+                state = next;
+                step
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_flick_is_one_session_and_the_os_momentum_after_it_is_ignored() {
+        use PanStep::*;
+        let steps = run(&[
+            (true, false),  // fingers down
+            (false, false), // moving
+            (false, false),
+            (false, true),  // fingers lift
+            (false, false), // the OS's momentum: Moved, no Started
+            (false, false),
+            (false, false),
+        ]);
+        assert_eq!(
+            steps,
+            vec![Begin, Advance, Advance, Finish, Ignore, Ignore, Ignore],
+            "one fling of ours, never a second from the OS's momentum"
+        );
+    }
+
+    #[test]
+    fn a_new_touch_after_momentum_starts_a_new_session() {
+        use PanStep::*;
+        let steps = run(&[
+            (true, false),
+            (false, true),
+            (false, false), // momentum
+            (true, false),  // fingers touch again
+            (false, false),
+            (false, true),
+        ]);
+        assert_eq!(steps, vec![Begin, Finish, Ignore, Begin, Advance, Finish]);
+    }
+
+    #[test]
+    fn maybegin_then_began_is_one_start() {
+        use PanStep::*;
+        // gpui reports MayBegin and Began both as Started.
+        assert_eq!(
+            run(&[(true, false), (true, false), (false, false)]),
+            vec![Begin, Advance, Advance]
+        );
+    }
+
+    #[test]
+    fn an_ended_with_nothing_going_does_nothing() {
+        // The gesture went to a card, or the lift of an already finished one.
+        assert_eq!(run(&[(false, true)]), vec![PanStep::Ignore]);
+        let (state, step) = pan_step(PanSession::Momentum, false, true, true);
+        assert_eq!((state, step), (PanSession::Momentum, PanStep::Ignore));
+    }
+
+    #[test]
+    fn a_mouse_wheel_has_no_session_and_never_leaves_idle() {
+        for state in [PanSession::Idle, PanSession::Active, PanSession::Momentum] {
+            let (next, step) = pan_step(state, false, false, false);
+            assert_eq!((next, step), (PanSession::Idle, PanStep::Single));
+        }
+        // Pixel deltas with no phases at all (a device that sends none): each
+        // event is a step of its own.
+        let (next, step) = pan_step(PanSession::Idle, false, false, true);
+        assert_eq!((next, step), (PanSession::Idle, PanStep::Single));
+    }
+
+    #[test]
+    fn a_gesture_macos_cancelled_ends_by_going_quiet() {
+        assert!(!pan_session_stale(
+            PanSession::Active,
+            1000.,
+            1000. + PAN_SESSION_IDLE_MS
+        ));
+        assert!(pan_session_stale(
+            PanSession::Active,
+            1000.,
+            1000. + PAN_SESSION_IDLE_MS + 1.
+        ));
+        // Only an active session can be stale.
+        assert!(!pan_session_stale(PanSession::Momentum, 0., 10_000.));
+        assert!(!pan_session_stale(PanSession::Idle, 0., 10_000.));
+    }
+
+    #[test]
+    fn two_fingers_move_the_canvas_the_way_a_drag_does() {
+        // drag_pan: viewport -= (pointer delta) / scale. A virtual point that
+        // advances by the fingers' delta, fed to the same code, must give the
+        // same origin as `pan_origin` (natural direction: fingers down, the
+        // origin goes up).
+        let (x, y) = pan_origin(100., 100., 2., 10., -20.);
+        assert_eq!((x, y), (95., 110.));
+        let drag = (100. - 10. / 2., 100. - (-20.) / 2.);
+        assert_eq!((x, y), drag);
     }
 }
