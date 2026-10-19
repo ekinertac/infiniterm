@@ -1030,6 +1030,25 @@ impl EditorBody {
         digits as f64 * self.metrics.cell_w + GUTTER_EXTRA_PAD_PX
     }
 
+    /// Whether the text can scroll sideways the way `dx` asks (fingers right
+    /// bring the left edge back, fingers left reveal what runs off the right).
+    /// Only unwrapped text scrolls sideways. To the right the answer is "some
+    /// visible line is wider than the text area"; shortcut: tabs count as one
+    /// column, so a line of tabs may be judged narrower than it draws.
+    fn can_scroll_x(&self, dx: f64) -> bool {
+        if self.wrap || dx.abs() <= WHEEL_HORIZONTAL_THRESHOLD {
+            return false;
+        }
+        if dx > 0. {
+            return self.scroll_x > 0.;
+        }
+        let area = self.cols_visible(self.world) as f64 * self.metrics.cell_w;
+        let last = (self.scroll_line + self.rows_visible).min(self.buffer.line_count());
+        (self.scroll_line..last).any(|n| {
+            self.buffer.line(n).chars().count() as f64 * self.metrics.cell_w > self.scroll_x + area
+        })
+    }
+
     fn panel_h(&self) -> f64 {
         match &self.search {
             None => 0.,
@@ -3224,10 +3243,17 @@ impl CardBody for EditorBody {
         }
     }
 
-    fn wheel(&mut self, _local: Point, dx: f64, dy: f64, _modifiers: &gpui::Modifiers) {
+    /// Used when the text can move the way the fingers did, up or down by
+    /// line or sideways when lines do not wrap; else the canvas pans (#451).
+    fn wheel(&mut self, _local: Point, dx: f64, dy: f64, _modifiers: &gpui::Modifiers) -> bool {
+        let max = self.buffer.line_count().saturating_sub(1);
+        let used = infiniterm_core::pan_mode::can_scroll(self.scroll_line, max, dy)
+            || self.can_scroll_x(dx);
+        if !used {
+            return false;
+        }
         let lines = self.wheel_carry.lines(dy, self.line_h());
         if lines != 0 {
-            let max = self.buffer.line_count().saturating_sub(1);
             self.scroll_line = (self.scroll_line as i64 - lines).clamp(0, max as i64) as usize;
             self.dirty = true;
         }
@@ -3235,6 +3261,7 @@ impl CardBody for EditorBody {
             self.scroll_x = (self.scroll_x - dx).max(0.);
             self.dirty = true;
         }
+        true
     }
 
     fn wants_frame(&self, now: f64) -> bool {
