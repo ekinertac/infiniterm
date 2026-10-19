@@ -198,6 +198,12 @@ impl Host {
         let live_sessions = backend.pty.live_sessions();
         model.load_layout((io.read_layout)().as_deref());
         model.first_run = false;
+        // No canvas yet (a Linux host has never had an app; a Mac may never
+        // have saved one) but shells are running: each becomes a card, so a
+        // viewer sees what is there instead of an empty canvas.
+        if model.cards.is_empty() {
+            seed_from_sessions(&mut model, &live_sessions);
+        }
         // The zsh integration every new card's shell loads, as at the app's
         // launch.
         if let Err(e) = crate::shell_integration::install(&crate::paths::shell_integration_dir()) {
@@ -515,6 +521,51 @@ impl Host {
             self.hub.publish_layout(&text, rev);
         }
     }
+}
+
+/// One card for every running session, oldest first, each in the folder its
+/// daemon was started in (its meta file), else the host's home. The card keeps
+/// the session id, so the first tick adopts the shell instead of starting one.
+/// Cards are laid out by the model's own placement (the block grid).
+pub fn seed_from_sessions(model: &mut Model, sessions: &[String]) {
+    let dir = crate::paths::sessions_dir();
+    let mut found: Vec<(String, String, String)> = sessions
+        .iter()
+        .map(|id| {
+            let (cwd, started) = read_meta(&dir, id);
+            (started, id.clone(), cwd)
+        })
+        .collect();
+    found.sort();
+    for (_, id, cwd) in found {
+        let cwd = if cwd.is_empty() || !Path::new(&cwd).is_dir() {
+            model.home.clone()
+        } else {
+            cwd
+        };
+        let ws = model.active_workspace.clone().unwrap_or_default();
+        let card = model.add_card(
+            &cwd,
+            crate::model::NewCard {
+                avoid: model.other_frames(None, &ws),
+                workspace_id: Some(ws),
+                ..Default::default()
+            },
+        );
+        if let Some(c) = model.card_mut(&card) {
+            c.session = Some(id);
+        }
+    }
+    model.dirty_layout = true;
+}
+
+/// The folder and start time in a session's meta file; empty when it cannot
+/// be read (a daemon that has not written it yet).
+fn read_meta(dir: &Path, id: &str) -> (String, String) {
+    let text = std::fs::read_to_string(dir.join(format!("{id}.meta"))).unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    let get = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    (get("cwd"), get("started"))
 }
 
 /// A card's columns and rows with no font to measure: the nominal cell is
