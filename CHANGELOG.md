@@ -12,6 +12,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-18
 
+- `ift join` opens its window in front of the terminal you ran it from, instead of sometimes behind it.
 - A joined window's status bar message while the host is unreachable is now one short line ("ekin-mini: app not running; waiting") instead of ssh's whole sentence, which ran over the card's name. The full text goes to the log.
 
 - Fixed: quitting a joined window (`ift join`) no longer makes macOS report that infiniterm quit unexpectedly. The window has no browser cards, so it no longer starts the browser engine that crashed on the way out.

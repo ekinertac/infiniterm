@@ -581,6 +581,13 @@ fn main() {
                     app
                 });
                 window.focus(&view.read(cx).focus.clone());
+                // A joined window opens from `ift join`, run in another app's
+                // window (a terminal): without this it can open behind it.
+                // The app-wide `cx.activate` below does not always win over
+                // the app that launched us; making this window key does.
+                if infiniterm_core::backend::remote::join_from_env().is_some() {
+                    window.activate_window();
+                }
                 // gpui's view never answers middle-button drags; now that the
                 // window (and so its view class) exists, teach it to.
                 middle_drag::install();
