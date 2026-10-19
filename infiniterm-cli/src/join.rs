@@ -101,7 +101,17 @@ pub fn run(args: &[String]) -> ExitCode {
         use infiniterm_core::backend::ssh_login::{login_step, Login};
         use std::os::unix::fs::MetadataExt;
         let uid = std::fs::metadata(paths::home_dir()).map(|m| m.uid()).unwrap_or(0);
-        match login_step(&mut host, terminal, uid) {
+        // No terminal (a script, a launcher): ssh's questions come up as
+        // dialogs through `ift askpass`, run by ssh as SSH_ASKPASS.
+        let helper = if terminal {
+            None
+        } else {
+            std::env::current_exe().ok().and_then(|ift| {
+                let control = infiniterm_core::backend::ssh_login::control_path(&host.target, uid);
+                infiniterm_core::backend::ssh_login::write_askpass_helper(&ift, &control).ok()
+            })
+        };
+        match login_step(&mut host, terminal, uid, helper.as_deref()) {
             Ok(Login::Keys) => {}
             // A password host: the viewer's ssh must name the shared
             // connection too, and the window stops it when it quits.
