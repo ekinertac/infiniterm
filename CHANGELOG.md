@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-19
+
+- Fixed: a card of a remote instance (`ift connect`) now loads the server's own `.zshrc`, so your prompt and aliases appear as they do over plain ssh. Before, the card's zsh was started with a `ZDOTDIR` that pointed at a folder on your Mac, which does not exist on the server, so it started bare. One thing you lose there: zsh's command marks, which colour a card after a long command, are only added to local cards; a remote card still takes its colours from the agent hooks on the server.
+
 ## 0.6.1 (build 1021), 2026-10-19
 
 ### Canvas

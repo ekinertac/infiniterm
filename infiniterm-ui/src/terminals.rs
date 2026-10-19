@@ -459,9 +459,16 @@ impl AppView {
                 ]);
                 // A shell card's zsh loads our command marks, so a long
                 // command colours its card (program_state.rs). Not a card
-                // made to run one program: it has no prompt to mark.
+                // made to run one program: it has no prompt to mark. Not a
+                // remote instance's card either: its shell starts on the
+                // server, where this Mac's shim directory does not exist and
+                // a ZDOTDIR pointing at it hid the server's own .zshrc (#408).
                 let integration = infiniterm_core::paths::shell_integration_dir();
-                if card.command.is_none() && integration.join(".zshenv").exists() {
+                if infiniterm_core::shell_integration::applies(
+                    card.command.is_some(),
+                    self.model.remote.is_some(),
+                    integration.join(".zshenv").exists(),
+                ) {
                     let sh = shell
                         .clone()
                         .unwrap_or_else(infiniterm_core::backend::local_pty::default_shell);
