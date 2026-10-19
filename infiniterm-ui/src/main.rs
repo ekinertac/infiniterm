@@ -221,6 +221,9 @@ pub struct AppView {
     /// `app.emoji` asked; the next frame, which has the window, opens it.
     pub show_character_palette: bool,
     pub pan: Option<Pan>,
+    /// Cmd + scroll as navigation (`scroll_nav`): the swipe gathered so far,
+    /// whether the fingers lifted, the last workspace switch.
+    pub scroll_nav: infiniterm_core::scroll_nav::NavState,
     /// A rectangle being dragged on bare canvas to select cards (input.rs,
     /// `Model::marquee_select`).
     pub marquee: Option<Marquee>,

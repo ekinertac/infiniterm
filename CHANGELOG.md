@@ -6,6 +6,11 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-20
+
+- Removed: two-finger panning with the trackpad is gone again (0.6.0 and 0.6.1 had it). Scrolling is only for cards: a scroll goes to the card under the pointer, and over empty canvas it does nothing, for a trackpad and a mouse wheel alike.
+- New: Cmd+Alt + two fingers (or Cmd+Alt + the wheel) moves the focus like Cmd+Alt+arrows, one card for each stretch of swipe. Cmd+Shift + two fingers sideways switches to the next or previous workspace, one switch a swipe. Cmd+scroll and the pinch still zoom, and so does a vertical Cmd+Shift scroll. The momentum after you lift your fingers does not keep moving.
+
 ### 2026-10-19
 
 - Fixed: after a quick resize (dragging a browser card's edge, or several size steps in a row) the page could stay stretched, or at its old size, until something else made it repaint; it was a coin toss, which is why it seemed to work sometimes. The card now works out what size the page was painted at from its own pixels, and when the page is still at an old size after a moment it asks the browser to paint again at the new one.

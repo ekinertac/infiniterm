@@ -99,6 +99,7 @@ pub mod reading;
 pub mod saved_layout;
 pub mod schema;
 pub mod schema_store;
+pub mod scroll_nav;
 pub mod scrollbar;
 pub mod settings_doc;
 pub mod shell_history;
