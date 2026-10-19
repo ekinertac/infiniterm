@@ -29,6 +29,7 @@ mod install;
 mod join;
 mod licence_cmd;
 mod proxy;
+mod serve;
 mod socket;
 
 use std::path::{Path, PathBuf};
@@ -72,6 +73,12 @@ ift — drive infiniterm from a shell
                              Ctrl-\\ (0x1c) detaches, leaving it running
   ift --version              the version of this ift
   ift connect <[user@]host> [--name N] [--color RRGGBB] [--check] [--install]
+  ift serve [--detach|--stop]
+                             hold this Mac's saved canvas and its cards for
+                             viewers (ift join) with the app closed; --detach
+                             runs it in the background, --stop ends it (the
+                             cards keep running; the app takes over at its
+                             next launch)
   ift join <[user@]host> [--name N] [--color RRGGBB] [--check]
                              a viewer window on the canvas running on host
                              open a second infiniterm for a host: its own
@@ -145,12 +152,13 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 26] = [
+pub const SUBCOMMANDS: [&str; 27] = [
     "diff",
     "ls",
     "sessions",
     "attach",
     "connect",
+    "serve",
     "join",
     "terminal",
     "send",
@@ -203,6 +211,7 @@ fn main() -> ExitCode {
         Some("licence") => licence_cmd::run(&args[1..]),
         Some("connect") => connect::run(&args[1..]),
         Some("join") => join::run(&args[1..]),
+        Some("serve") => serve::run(&args[1..]),
         // Not `ift version`: any word that is not a verb is a file to open.
         Some("--version") | Some("-V") => {
             println!("ift {}", env!("CARGO_PKG_VERSION"));
