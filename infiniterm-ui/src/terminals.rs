@@ -65,27 +65,17 @@ impl AppView {
     /// Every terminal card gets a body and a shell once; closed cards lose
     /// theirs (the model already killed the shell). Rect and metric changes
     /// re-count the grid.
-    pub fn reconcile_terminals(&mut self, window: &Window) {
-        let ids: Vec<String> = self.model.cards.iter().map(|c| c.id.clone()).collect();
-        self.bodies.retain(|id, _| ids.contains(id));
-        let metrics = self.metrics(window);
-        let scrollback = self.model.config.terminal.scrollback as usize;
-        let shell = Some(self.model.config.terminal.shell.clone()).filter(|s| !s.is_empty());
-        let palette = self.palette.clone();
-        let blink = self.model.config.terminal.cursor_blink;
-        let inactive_dim = self.model.config.ui.inactive_dim;
-        let copy_on_select = self.model.config.terminal.copy_on_select;
-        let scroll_multiplier = self.model.config.terminal.scroll_multiplier;
-        let padding = self.model.config.terminal.padding;
-        let extra_env: Vec<(String, String)> = self
-            .model
-            .config
-            .terminal
-            .env
-            .iter()
-            .filter_map(|kv| kv.split_once('='))
-            .map(|(k, v)| (k.trim().to_string(), v.to_string()))
-            .collect();
+    /// A viewer's cards and their connections to the host's sessions (#442):
+    /// the reconnects that ended take their card over (or the card says why
+    /// not and waits longer), and every card with no live connection starts
+    /// its next try when it is due. Run from the 16 ms poll AND the frame:
+    /// the frame alone never ran in a window behind others, which drew
+    /// nothing, so a card the host's app had taken over stayed lost until the
+    /// window was brought forward. True when a card got its session back.
+    pub fn drive_viewer_links(&mut self) -> bool {
+        if !self.viewer {
+            return false;
+        }
         let terminal_cards = |model: &infiniterm_core::model::Model| -> Vec<_> {
             model
                 .cards
@@ -95,14 +85,6 @@ impl AppView {
                 .collect()
         };
         let mut cards = terminal_cards(&self.model);
-        let maximized = self
-            .model
-            .selection
-            .maximized
-            .then(|| self.model.selection.focused_id.clone())
-            .flatten();
-        // A viewer's reconnects that ended (#442): the new connection takes
-        // the card over, or the card says why not and waits longer.
         let poke_lost = std::mem::take(&mut self.viewer_poke);
         let mut rejoined = false;
         for (session, result) in self.backend.pty.take_reconnected() {
@@ -146,6 +128,7 @@ impl AppView {
                         c.displaced = false;
                     }
                     rejoined = true;
+                    self.redraw = true;
                     self.model.log(format!(
                         "rejoined {} after the connection was lost",
                         &card_id[..8.min(card_id.len())]
@@ -166,12 +149,101 @@ impl AppView {
             }
         }
         // The loop below reads each card's `displaced` and `pane_id`: a card
-        // a reconnect just gave back must be read again, or this frame takes
-        // it for a lost one still, gives it a new banner and swallows its keys
-        // for good (found on the real pair, #442).
+        // a reconnect just gave back must be read again, or it is taken for a
+        // lost one still, given a new banner and its keys swallowed for good
+        // (found on the real pair, #442).
         if rejoined {
             cards = terminal_cards(&self.model);
         }
+        for card in cards {
+            if card.session.is_none() || !(card.displaced || card.pane_id.is_none()) {
+                continue;
+            }
+            let Some(body) = self
+                .bodies
+                .get_mut(&card.id)
+                .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
+            else {
+                continue;
+            };
+            // The first join of a card is the same thing, on the same path:
+            // a blocking adopt held the frame for the whole handshake, 38 of
+            // them in a row, and a failed one was retried every frame.
+            let now = crate::now_ms();
+            if !card.displaced {
+                if let Some(c) = self.model.card_mut(&card.id) {
+                    c.displaced = true;
+                }
+            }
+            if !body.displaced {
+                body.displaced = true;
+                body.mark_dirty();
+            }
+            let first = !card.displaced && body.lost.is_none();
+            let lost = body.lost.get_or_insert_with(|| {
+                if first {
+                    LostLink::first(now)
+                } else {
+                    LostLink::new(now)
+                }
+            });
+            if poke_lost {
+                lost.poke(now);
+            }
+            if let Some(session) = card.session.as_deref() {
+                if lost.due(now) {
+                    lost.in_flight = true;
+                    self.backend.pty.begin_reconnect(session);
+                }
+            }
+            // Asked about again soon: while a try runs, to take its answer;
+            // otherwise when the next one is due.
+            body.readopt_due = if lost.in_flight {
+                now + 250.
+            } else {
+                lost.next_at.max(now + 250.)
+            };
+        }
+        rejoined
+    }
+
+    pub fn reconcile_terminals(&mut self, window: &Window) {
+        // Before the cards are read below, so a card rejoined here is seen as
+        // live by this frame.
+        self.drive_viewer_links();
+        let ids: Vec<String> = self.model.cards.iter().map(|c| c.id.clone()).collect();
+        self.bodies.retain(|id, _| ids.contains(id));
+        let metrics = self.metrics(window);
+        let scrollback = self.model.config.terminal.scrollback as usize;
+        let shell = Some(self.model.config.terminal.shell.clone()).filter(|s| !s.is_empty());
+        let palette = self.palette.clone();
+        let blink = self.model.config.terminal.cursor_blink;
+        let inactive_dim = self.model.config.ui.inactive_dim;
+        let copy_on_select = self.model.config.terminal.copy_on_select;
+        let scroll_multiplier = self.model.config.terminal.scroll_multiplier;
+        let padding = self.model.config.terminal.padding;
+        let extra_env: Vec<(String, String)> = self
+            .model
+            .config
+            .terminal
+            .env
+            .iter()
+            .filter_map(|kv| kv.split_once('='))
+            .map(|(k, v)| (k.trim().to_string(), v.to_string()))
+            .collect();
+        let cards: Vec<_> = self
+            .model
+            .cards
+            .iter()
+            .filter(|c| c.kind == CardKind::Terminal)
+            .cloned()
+            .collect();
+        let maximized = self
+            .model
+            .selection
+            .maximized
+            .then(|| self.model.selection.focused_id.clone())
+            .flatten();
         for card in cards {
             // A card in its own window fills that window (#356 spike).
             let world = self
@@ -250,47 +322,11 @@ impl AppView {
             // meta whether that client is still there, and take the session
             // back the moment it is not. The replay that comes with an
             // adopt is what fills in whatever the card missed meanwhile.
-            // A viewer's card whose connection to the host's session ended
-            // (#442): it keeps its screen, says so, and joins again with a
-            // back-off, on a thread (the handshake waits on ssh).
-            // The first join of a card is the same thing, on the same path:
-            // a blocking adopt here held the frame for the whole handshake,
-            // 38 of them in a row, and a failed one was retried every frame.
+            // A viewer's card with no live connection to its session (lost,
+            // or not yet made) is driven by `drive_viewer_links`, which the
+            // poll runs too: a window that is not drawing runs no frame, and
+            // its cards must still rejoin (#442).
             if self.viewer && card.session.is_some() && (card.displaced || card.pane_id.is_none()) {
-                let now = crate::now_ms();
-                if !card.displaced {
-                    if let Some(c) = self.model.card_mut(&card.id) {
-                        c.displaced = true;
-                    }
-                }
-                if !body.displaced {
-                    body.displaced = true;
-                    body.mark_dirty();
-                }
-                let first = !card.displaced && body.lost.is_none();
-                let lost = body.lost.get_or_insert_with(|| {
-                    if first {
-                        LostLink::first(now)
-                    } else {
-                        LostLink::new(now)
-                    }
-                });
-                if poke_lost {
-                    lost.poke(now);
-                }
-                if let Some(session) = card.session.as_deref() {
-                    if lost.due(now) {
-                        lost.in_flight = true;
-                        self.backend.pty.begin_reconnect(session);
-                    }
-                }
-                // Asked about again soon: while a try runs, to take its
-                // answer; otherwise when the next one is due.
-                body.readopt_due = if lost.in_flight {
-                    now + 250.
-                } else {
-                    lost.next_at.max(now + 250.)
-                };
                 continue;
             }
             if card.displaced {
