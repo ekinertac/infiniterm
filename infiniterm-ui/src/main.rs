@@ -435,6 +435,38 @@ fn main() {
             None
         }
     };
+    // An `ift serve` of this data dir (a canvas host kept while the app was
+    // closed, #438) is asked to save and go first: the app takes over its
+    // canvas and its sessions, and viewers join the app (#442).
+    {
+        use infiniterm_core::headless::{serve_pid_file, stop_running_serve, ServeStop};
+        match stop_running_serve(&serve_pid_file(), std::time::Duration::from_secs(10)) {
+            ServeStop::NotRunning => {}
+            ServeStop::Stopped => eprintln!("[infiniterm] took over from ift serve"),
+            ServeStop::Stuck(pid) => {
+                // Said where the person is looking, not only in a log: the
+                // app is about to exit, and a launch that ends with no window
+                // and no word reads as a crash.
+                let text = format!(
+                    "`ift serve` (pid {pid}) is holding this canvas and did not stop in 10 seconds. infiniterm did not start. Stop it with `ift serve --stop`, or quit that process, and open infiniterm again."
+                );
+                eprintln!("[infiniterm] {text}");
+                let _ = std::process::Command::new("osascript")
+                    .args([
+                        "-e",
+                        "on run argv",
+                        "-e",
+                        "display dialog (item 1 of argv) with title \"infiniterm\" buttons {\"OK\"} default button \"OK\" with icon caution",
+                        "-e",
+                        "end run",
+                        "--",
+                        &text,
+                    ])
+                    .status();
+                std::process::exit(1);
+            }
+        }
+    }
     if runtime::another_instance_holds_the_socket() {
         eprintln!("[infiniterm] another infiniterm holds the socket; activating it");
         let _ = std::process::Command::new("open")

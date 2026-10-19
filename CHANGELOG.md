@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-19
 
+- Starting infiniterm while an `ift serve` is holding this Mac's canvas (see below) now takes over from it: the app asks it to save and stop, then opens with the same cards, their shells still running. Anyone joined to this Mac through `ift join` is connected to the app within seconds. If `ift serve` does not stop within 10 seconds, infiniterm says so in a dialog and does not start.
 - New: Cmd+R redraws the focused terminal card (the palette's "Terminal: redraw", and Redraw in the card's right-click menu). It asks the program in the card to paint its screen again, which clears a scrambled Claude Code card without touching what is in the scrollback. In a joined window (`ift join`) the card joins its session again, which does the same. Cmd+R was the development-only reload, which does nothing in the app you installed; that command has no key now.
 
 ### 2026-10-19
