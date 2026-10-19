@@ -89,6 +89,7 @@ export const featureGroups: FeatureGroup[] = [
   {
     title: 'Servers',
     items: [
+      { text: '`ift join host` opens a window on another Mac\'s running canvas with full control, even when its app is closed (`ift serve`).', href: 'guide/servers/#joining-a-canvas-that-already-exists' },
       { text: '`ift connect user@host` opens a second window whose terminal cards run on that server over ssh.', href: 'guide/servers/' },
       { text: 'The shells stay on the server when the window closes; connecting again brings the same cards back.' },
       { text: '`--install` puts `ift` and `iftd` on a Linux server through the ssh connection, checksum checked.' },

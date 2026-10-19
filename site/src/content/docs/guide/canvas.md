@@ -42,6 +42,7 @@ Canvas: tidy, in the palette, packs the cards back onto the grid in reading orde
 
 ## Zoom
 
+- Two fingers on the trackpad pan the canvas, like a map, over empty canvas, a card's frame or label, and a card with nothing to scroll the way you moved (a new terminal with no history, a page already at its end). Over a card that can scroll that way (a terminal with history, a long file, a page) the card scrolls, and the whole gesture, momentum included, stays with what it started on. A mouse wheel pans over empty canvas the same way.
 - `Cmd` + scroll, or a pinch on the trackpad, zooms around the pointer. The palette has zoom in and out too. (`Cmd =` and `Cmd -` change the terminal font size; see [Terminal cards](../terminal/).)
 - `Cmd 0` actual size, `Cmd 1` fit the focused card, `Cmd 2` fit everything.
 - `Cmd 3` fits the selected cards when several are selected. With one card it fits the card's group, or else the block of cards around it (every card within a gutter of the next).

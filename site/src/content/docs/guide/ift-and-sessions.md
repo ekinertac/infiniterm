@@ -93,7 +93,7 @@ A session has one client at a time. Attaching takes it from the app: the card sh
 
 ## Servers
 
-`ift connect me@server` opens a second window whose terminal cards run on that server. Installing `ift` there, colours, agents and troubleshooting have a page of their own: [Servers](../servers/).
+`ift connect me@server` opens a second window whose terminal cards run on that server. Installing `ift` there, colours, agents and troubleshooting have a page of their own: [Servers](../servers/). `ift join <host>` opens a window on another Mac's running canvas instead, described there too.
 
 ## tmux
 

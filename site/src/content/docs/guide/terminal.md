@@ -57,6 +57,10 @@ This needs the default backend (`terminal.backend: "daemon"`). Under `pty` or `t
 
 In the window, `Cmd =` and `Cmd -` change the font size, `Cmd K` clears, `Cmd Shift C` is visual mode, and copy, paste and `Cmd Left` / `Cmd Right` work as in a card. Find and the command palette are not there yet. Only terminal cards can go out for now.
 
+## Redraw
+
+`Cmd R` asks the program in the focused terminal card to paint its screen again. It clears a scrambled Claude Code card and leaves the scrollback alone. "Terminal: redraw" in the palette and Redraw in the card's right-click menu do the same. In a window opened with `ift join`, it makes the card join its session again, which has the same effect.
+
 ## Which shell
 
 A card starts the shell in `$SHELL`. Only zsh gets the shell integration: the state colours for plain commands, one history file per card, and the Shift and arrow selection on the command line. Another shell runs as a plain terminal. Agent hooks still report from it, because they do not depend on the shell.

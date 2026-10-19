@@ -1,6 +1,6 @@
 ---
 title: Servers
-description: Connect to a server with ift connect, install ift on it, and see its agents on a canvas of its own.
+description: Connect to a server with ift connect, install ift on it, and join another Mac's canvas with ift join.
 ---
 
 `ift connect` opens a second infiniterm for a server. It has its own window, its own Dock icon and its own canvas. Its terminal cards run on the server over ssh. Nothing from your own canvas moves there.
@@ -78,6 +78,24 @@ One extra ssh connection carries the hook messages back to the window. It also l
 | the server's `ift` is another version | Run `ift connect me@server --install` to match your app. |
 
 ssh runs in batch mode, so it never stops to ask for a password or a question.
+
+## Joining a canvas that already exists
+
+`ift connect` makes a new canvas that runs on a server. `ift join` is the other way round: it opens a window on the canvas of **another Mac's infiniterm** and gives you full control of it, as if you sat at that Mac.
+
+```sh
+ift join me@mac-mini            # the host: an ssh alias, user@IP or an IP
+ift join me@mac-mini --check    # only test whether the host can be joined
+```
+
+You see the host's cards, labels and agent colours, and a live terminal for each terminal card. What you do happens on the host: typing goes to the host's shell, closing a card closes it there, `Cmd T` starts a shell on the host, and moving, resizing, grouping, renaming and workspaces change the host's canvas. Your zoom, position and focus stay your own. Editor, diff, browser and page cards show as a card that says what it is and where, and they move and close like any card. If you and the host change the canvas at the same moment, both changes stay; your change wins only when you both change the same thing on the same card.
+
+- **Login.** Key login works without a prompt. The first time, ssh asks its usual questions in the terminal you ran `ift join` from: the host's fingerprint and, if there is no key, the password. Run from a launcher or a script, it shows the same questions as macOS dialogs. A host that only takes a password is asked once, and the window's connections share that one login. A host key that has changed is an error with the new fingerprint, never a question.
+- **The host's app can be closed.** `ift join` then starts `ift serve` on the host and tells you so. `ift serve` holds that Mac's saved canvas and keeps its cards running for viewers. `ift serve --detach` runs it in the background, and `ift serve --stop` saves the canvas and ends it; the cards keep running. When you start infiniterm on that Mac, the app takes over from `ift serve`, with the same cards and shells still running, and whoever is joined is connected to the app within seconds. A host whose `ift` is too old to have `serve` is told to update.
+- **Linux hosts.** A Linux server that runs infiniterm's sessions but never had the app shows one card for every shell already running. You can type in them, add cards (`Cmd T` makes a shell) and close them.
+- **Settings.** The window uses the host's settings and keybindings: font, theme, keys. A change in the host's file reaches the open window within a second. A host file with an error is not applied. Your host colour, chip and window frame stay your own. Changing a setting from the joined window is refused with a notice: change it on the host.
+- **Lost connections.** A card whose connection ends keeps its last screen and shows a banner, then joins its session again by itself, waiting 2 seconds and then longer, up to 30. A key typed into it meanwhile is refused with a notice. `Cmd R` makes a card join its session again at once. If the host's app quits or restarts, the window waits and joins again.
+- **Switching it off.** The host's join socket is owner-only. The setting `join.enabled` turns it off. Nothing is shown or sent unless something joins.
 
 ## Not built yet
 
