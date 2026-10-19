@@ -272,6 +272,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "join.enabled",
+        &[
+            "Open the socket that `ift join <host>` on another Mac reaches through ssh,",
+            "so it can show and drive this canvas. The socket is owner-only, like the one",
+            "`ift send` uses, and ssh is the only way in. Read at launch.",
+        ],
+    ),
+    (
         "browser.suggestions",
         &[
             "Ask Google to complete what you type in the omnibox.",

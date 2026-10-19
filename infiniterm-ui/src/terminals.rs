@@ -6,7 +6,7 @@
 //! whose rect or metrics changed re-counts its grid and tells the PTY.
 //! Port of `paneRegistry.ts`'s routing and `TerminalCard.svelte`'s start.
 use crate::fonts::weight_of;
-use crate::terminal_body::{Metrics, TerminalBody, READOPT_POLL_MS};
+use crate::terminal_body::{LostLink, Metrics, TerminalBody, READOPT_POLL_MS};
 use crate::AppView;
 use gpui::{font, px, TextRun, Window};
 use infiniterm_core::backend::Panes;
@@ -65,7 +65,152 @@ impl AppView {
     /// Every terminal card gets a body and a shell once; closed cards lose
     /// theirs (the model already killed the shell). Rect and metric changes
     /// re-count the grid.
+    /// A viewer's cards and their connections to the host's sessions (#442):
+    /// the reconnects that ended take their card over (or the card says why
+    /// not and waits longer), and every card with no live connection starts
+    /// its next try when it is due. Run from the 16 ms poll AND the frame:
+    /// the frame alone never ran in a window behind others, which drew
+    /// nothing, so a card the host's app had taken over stayed lost until the
+    /// window was brought forward. True when a card got its session back.
+    pub fn drive_viewer_links(&mut self) -> bool {
+        if !self.viewer {
+            return false;
+        }
+        let terminal_cards = |model: &infiniterm_core::model::Model| -> Vec<_> {
+            model
+                .cards
+                .iter()
+                .filter(|c| c.kind == CardKind::Terminal)
+                .cloned()
+                .collect()
+        };
+        let mut cards = terminal_cards(&self.model);
+        let poke_lost = std::mem::take(&mut self.viewer_poke);
+        let mut rejoined = false;
+        for (session, result) in self.backend.pty.take_reconnected() {
+            let now = crate::now_ms();
+            let Some((card_id, kitty)) = cards
+                .iter()
+                .find(|c| c.session.as_deref() == Some(session.as_str()))
+                .map(|c| (c.id.clone(), c.kitty_keys))
+            else {
+                // The card went while the try ran; the new connection has no
+                // card to feed.
+                if let Ok(pane) = result {
+                    self.backend.pty.release(pane);
+                }
+                continue;
+            };
+            let Some(body) = self
+                .bodies
+                .get_mut(&card_id)
+                .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
+            else {
+                continue;
+            };
+            match result {
+                Ok(pane) => {
+                    // The join replays the whole ring; onto the copy the
+                    // grid already holds it would show twice.
+                    body.reset_for_replay();
+                    body.pane = Some(pane);
+                    body.displaced = false;
+                    body.lost = None;
+                    body.waiting_note = false;
+                    body.mark_dirty();
+                    // As an adopt does: the program announced the kitty
+                    // keyboard protocol at its startup, long out of the ring.
+                    if kitty {
+                        body.assume_kitty_keys();
+                    }
+                    if let Some(c) = self.model.card_mut(&card_id) {
+                        c.pane_id = Some(pane);
+                        c.displaced = false;
+                    }
+                    rejoined = true;
+                    self.redraw = true;
+                    self.model.log(format!(
+                        "rejoined {} after the connection was lost",
+                        &card_id[..8.min(card_id.len())]
+                    ));
+                }
+                Err(failure) => {
+                    let fatal = matches!(
+                        failure,
+                        infiniterm_core::backend::remote::JoinFailure::Fatal(_)
+                    );
+                    body.lost.get_or_insert_with(|| LostLink::new(now)).failed(
+                        now,
+                        failure.message(),
+                        fatal,
+                    );
+                    body.mark_dirty();
+                }
+            }
+        }
+        // The loop below reads each card's `displaced` and `pane_id`: a card
+        // a reconnect just gave back must be read again, or it is taken for a
+        // lost one still, given a new banner and its keys swallowed for good
+        // (found on the real pair, #442).
+        if rejoined {
+            cards = terminal_cards(&self.model);
+        }
+        for card in cards {
+            if card.session.is_none() || !(card.displaced || card.pane_id.is_none()) {
+                continue;
+            }
+            let Some(body) = self
+                .bodies
+                .get_mut(&card.id)
+                .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
+            else {
+                continue;
+            };
+            // The first join of a card is the same thing, on the same path:
+            // a blocking adopt held the frame for the whole handshake, 38 of
+            // them in a row, and a failed one was retried every frame.
+            let now = crate::now_ms();
+            if !card.displaced {
+                if let Some(c) = self.model.card_mut(&card.id) {
+                    c.displaced = true;
+                }
+            }
+            if !body.displaced {
+                body.displaced = true;
+                body.mark_dirty();
+            }
+            let first = !card.displaced && body.lost.is_none();
+            let lost = body.lost.get_or_insert_with(|| {
+                if first {
+                    LostLink::first(now)
+                } else {
+                    LostLink::new(now)
+                }
+            });
+            if poke_lost {
+                lost.poke(now);
+            }
+            if let Some(session) = card.session.as_deref() {
+                if lost.due(now) {
+                    lost.in_flight = true;
+                    self.backend.pty.begin_reconnect(session);
+                }
+            }
+            // Asked about again soon: while a try runs, to take its answer;
+            // otherwise when the next one is due.
+            body.readopt_due = if lost.in_flight {
+                now + 250.
+            } else {
+                lost.next_at.max(now + 250.)
+            };
+        }
+        rejoined
+    }
+
     pub fn reconcile_terminals(&mut self, window: &Window) {
+        // Before the cards are read below, so a card rejoined here is seen as
+        // live by this frame.
+        self.drive_viewer_links();
         let ids: Vec<String> = self.model.cards.iter().map(|c| c.id.clone()).collect();
         self.bodies.retain(|id, _| ids.contains(id));
         let metrics = self.metrics(window);
@@ -156,6 +301,12 @@ impl AppView {
             body.scroll_multiplier = scroll_multiplier;
             // A padding change refits the grid through `refit_to` below.
             body.pad = padding;
+            // A viewer's card draws the host's grid, whatever its own size.
+            // Kept when the connection is lost (no pane to ask any more): the
+            // frozen screen must not reflow to this card's own size.
+            if let Some((c, r)) = body.pane.and_then(|p| self.backend.pty.viewer_pane_size(p)) {
+                body.fixed_cells = Some((c as usize, r as usize));
+            }
             let metrics_changed = body.font_family != metrics.family
                 || body.weight != metrics.weight
                 || body.bold_weight != metrics.bold_weight
@@ -171,6 +322,13 @@ impl AppView {
             // meta whether that client is still there, and take the session
             // back the moment it is not. The replay that comes with an
             // adopt is what fills in whatever the card missed meanwhile.
+            // A viewer's card with no live connection to its session (lost,
+            // or not yet made) is driven by `drive_viewer_links`, which the
+            // poll runs too: a window that is not drawing runs no frame, and
+            // its cards must still rejoin (#442).
+            if self.viewer && card.session.is_some() && (card.displaced || card.pane_id.is_none()) {
+                continue;
+            }
             if card.displaced {
                 let now = crate::now_ms();
                 if !body.displaced {
@@ -220,10 +378,16 @@ impl AppView {
                 let adopt = card
                     .session
                     .clone()
-                    .filter(|s| self.live_sessions.iter().any(|live| live == s))
+                    .filter(|s| self.viewer || self.live_sessions.iter().any(|live| live == s))
                     .and_then(|s| self.backend.pty.adopt(&s));
                 if let Some(pane) = adopt {
                     body.pane = Some(pane);
+                    // The note a waiting viewer card showed goes before the
+                    // host's replay fills the screen.
+                    if body.waiting_note {
+                        body.reset_for_replay();
+                        body.waiting_note = false;
+                    }
                     // The program in an adopted session announced whether it
                     // speaks the kitty keyboard protocol at ITS startup,
                     // which is long out of the ring we are about to replay,
@@ -235,6 +399,17 @@ impl AppView {
                     self.backend.pty.resize_now(pane, body.cols(), body.rows());
                     if let Some(c) = self.model.card_mut(&card.id) {
                         c.pane_id = Some(pane);
+                    }
+                    continue;
+                }
+                // A viewer starts no shell of its own: a card made here is
+                // started by the HOST, which learns of it from the canvas the
+                // viewer sends up, and the host's next snapshot carries its
+                // session, which the adopt above takes (#423).
+                if self.viewer {
+                    if !body.waiting_note {
+                        body.waiting_note = true;
+                        body.feed(b"\x1b[2mstarting on the host...\x1b[0m");
                     }
                     continue;
                 }

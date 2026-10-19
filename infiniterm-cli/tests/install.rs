@@ -23,7 +23,7 @@ fn bare_host(work: &Path) -> (PathBuf, PathBuf) {
     std::fs::write(
         &ssh,
         format!(
-            "#!/bin/sh\nfor last; do :; done\nHOME='{}' PATH=/usr/bin:/bin exec sh -c \"$last\"\n",
+            "#!/bin/sh\nfor last; do :; done\nHOME='{}' PATH=/usr/bin:/bin INFINITERM_APP_DIR=/nonexistent exec sh -c \"$last\"\n",
             home.display()
         ),
     )

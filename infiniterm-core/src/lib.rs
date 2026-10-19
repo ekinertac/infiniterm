@@ -76,6 +76,7 @@ pub mod fullscreen;
 pub mod fuzzy;
 pub mod git;
 pub mod git_repo;
+pub mod headless;
 pub mod hooks;
 pub mod ift;
 pub mod inspect;

@@ -3819,6 +3819,75 @@ mod tests {
         assert_eq!(h.m.card(&id).unwrap().tabs.len(), 2, "a tab instead");
     }
 
+    // Cmd+R redraws the focused terminal (#447). It was the development-only
+    // reload; a locked browser card keeps it as the page's reload.
+    #[test]
+    fn cmd_r_redraws_the_focused_terminal() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].pane_id = Some(7);
+        h.m.set_focus(Some(&id));
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+r").as_deref(),
+            Some("terminal.redraw")
+        );
+        h.m.take_effects();
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+r"));
+        assert!(
+            h.m.take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::RedrawPane(7))),
+            "the focused terminal's pane is asked to repaint"
+        );
+        // Not a reload any more, even in a development build.
+        h.m.dev_build = true;
+        h.m.take_effects();
+        handle_chord(&mut h.m, &h.r, "cmd+r");
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::KillAllPanes | Effect::Reload)));
+    }
+
+    #[test]
+    fn redraw_on_a_card_that_is_not_a_terminal_says_so() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.set_focus(Some(&id));
+        h.m.take_effects();
+        let effects = h.run("terminal.redraw");
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RedrawPane(_))));
+        assert!(
+            h.m.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("terminal cards")),
+            "a notice names what redraw works on"
+        );
+    }
+
+    #[test]
+    fn a_locked_browser_card_keeps_cmd_r_as_the_pages_reload() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].locked = true;
+        h.m.cards[0].pane_id = Some(7);
+        h.m.set_focus(Some(&id));
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+r").as_deref(),
+            Some("browser.reload")
+        );
+        h.m.take_effects();
+        handle_chord(&mut h.m, &h.r, "cmd+r");
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::RedrawPane(_))));
+    }
+
     // The keycast labels a chord with what `resolve_chord` says, so on a
     // locked card it must name the tab command, not the keymap's card one.
     #[test]

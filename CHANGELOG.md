@@ -6,6 +6,37 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-19
+
+- New: two fingers on the trackpad now pan the canvas. Over empty canvas, a card's frame or label, or a card with nothing to scroll the way you moved (a fresh terminal with no history, a page already at its end), the canvas follows your fingers, like in a map. Over a card that can scroll that way (a terminal with history, a long file, a page, a browser page) the card scrolls as before, and the whole gesture, momentum included, stays with what it started on. Cmd+scroll and the pinch still zoom. A mouse wheel pans over empty canvas the same way.
+
+- Fixed: `ift join` to a host with no cards yet (a fresh Linux server with no shells) opened an empty window that said "the host's canvas could not be read". It now shows the empty canvas, and Cmd+T makes the first card on the host. Closing the last card in a joined window now closes it on the host too.
+
+- Fixed: a joined window that is behind other windows now rejoins a card whose connection was lost (for example when the host's app took over from `ift serve`) by itself, without being brought to the front first.
+
+- `ift join` works on a Linux server that runs infiniterm's sessions but never had the app: with no saved canvas, `ift serve` builds one with a card for every shell already running there (in the folder it was started in), and a viewer can type in them and add or close cards. The same holds for a Mac that never saved a canvas.
+- Starting infiniterm while an `ift serve` is holding this Mac's canvas (see below) now takes over from it: the app asks it to save and stop, then opens with the same cards, their shells still running. Anyone joined to this Mac through `ift join` is connected to the app within seconds. If `ift serve` does not stop within 10 seconds, infiniterm says so in a dialog and does not start.
+- New: Cmd+R redraws the focused terminal card (the palette's "Terminal: redraw", and Redraw in the card's right-click menu). It asks the program in the card to paint its screen again, which clears a scrambled Claude Code card without touching what is in the scrollback. In a joined window (`ift join`) the card joins its session again, which does the same. Cmd+R was the development-only reload, which does nothing in the app you installed; that command has no key now.
+- New: `ift serve` holds this Mac's saved canvas and keeps its cards running for viewers (`ift join`) when the app is closed. `ift serve --detach` runs it in the background and returns once it answers; `ift serve --stop` saves the canvas and ends it, and the cards keep running. It refuses to start while the app, or another `ift serve`, is running here.- `ift join <host>` now works when the host's infiniterm is closed: it starts `ift serve` there and joins it, saying so first. The host's cards, which keep running when the app is closed, appear in the window. `ift join <host> --check` reports it and starts nothing. A host whose `ift` is too old to have `serve` is told to update it.
+
+### 2026-10-18
+
+- `ift join` now asks the usual ssh questions once, in the terminal you ran it from, when the host was never connected to from this Mac or no key is set up: the fingerprint and the password prompt are ssh's own, and afterwards the window's connections need no prompt. A host key that has changed is never a question: `ift join` says so, with the new fingerprint, and does not connect. Run from somewhere with no terminal, it says what to do instead. A host that only takes a password is asked for it once, and the window's connections then share that one login (they would need the password 37 times otherwise); quitting the window ends the shared login, and one left by a crash ends itself after 10 minutes. A host with a key keeps one login per card. Run with no terminal (from a launcher or a script), `ift join` shows ssh's questions as macOS dialogs instead: the fingerprint as Yes or No (No is the default), and the password in a hidden field that goes to ssh and nowhere else.
+
+- `ift join` opens its window in front of the terminal you ran it from, instead of sometimes behind it.
+- A joined window's status bar message while the host is unreachable is now one short line ("ekin-mini: app not running; waiting") instead of ssh's whole sentence, which ran over the card's name. The full text goes to the log.
+
+- Fixed: quitting a joined window (`ift join`) no longer makes macOS report that infiniterm quit unexpectedly. The window has no browser cards, so it no longer starts the browser engine that crashed on the way out.
+
+- A joined window (`ift join`) now handles lost connections. A card whose connection to the host ends keeps its last screen, says so in a banner, and joins its session again by itself, waiting 2 s, then longer up to 30 s; when the connection to the canvas comes back, every such card tries at once. A key typed into it is refused with a notice instead of vanishing. A card whose session is gone on the host says so and disappears with the host's next update. If the host's infiniterm quits or restarts while you are joined, the window waits for it and joins again, asking less often the longer it is gone. The first join of the cards no longer holds the window while ssh connects.
+
+- A joined window (`ift join`) now uses the host's settings and keybindings: font, theme, cell size, keys and the rest, and a change in the host's file reaches the open window within a second. A host file with an error is not applied and the window keeps what it had, with the same notice. The window's host colour and chip, its frame, and a picture or folder that does not exist on your Mac stay your own. Changing a setting from the joined window is refused with a notice for now; change it on the host.
+
+- Fixed: in a joined window, a change made just before the host's next update arrived (closing a card, sliding it) was undone and never reached the host. The window now sends it first.
+
+- New: the app opens a socket that a window on another Mac can join through ssh, to show and drive this canvas (`ift join`, in a later release). It is owner-only and the setting `join.enabled` turns it off. Nothing is shown or sent unless something joins.
+- New: `ift join <host>` opens a window on the canvas of the infiniterm already running on another Mac, over ssh with key login, with full control of it, as if you sat at that Mac. You see its cards, labels and agent colours and a live terminal for each terminal card, and what you do happens on the host: typing goes to the host's shell, closing a card closes it there, a new terminal (Cmd+T) starts a shell on the host, and moving, resizing, grouping, renaming and workspaces change the host's canvas. Your zoom, position and focus stay your own. Editor, diff, browser and page cards show as a card that says "<kind> on <host>" and move and close like any card. If you and the host change the canvas at the same moment, both changes stay; only when you both change the same thing on the same card does your change win. `ift join <host> --check` tests whether the host can be joined.
+
 ### 2026-10-17
 
 - New: `ift -t <path> [card]` opens a file as a tab of an editor card instead of a card of its own. `card` is a card's number (`2` or `#2`) or id; without one it uses the focused editor card, and when none is focused it opens a card of its own, as `ift <path>` does. A file already open in that card's tabs is switched to. A terminal is refused, with the reason.

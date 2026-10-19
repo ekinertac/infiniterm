@@ -14,7 +14,7 @@
 //! "Testing" section for why this one exists at all.
 
 use infiniterm_core::backend::daemon::DaemonBackend;
-use infiniterm_core::backend::PaneEvent;
+use infiniterm_core::backend::{PaneEvent, Redraw};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
@@ -269,6 +269,48 @@ fn adopting_a_session_makes_the_program_repaint() {
     );
 
     backend2.kill_now(pane2);
+}
+
+/// `terminal.redraw` (#447) is the same jog the adopt sends, on request: a
+/// program with a scrambled screen gets `SIGWINCH` and repaints it. Seen the
+/// way the adopt test sees it, a shell that reports the signal; the first
+/// `WINCHED` is the one the spawn's own sizing may cause, so the second
+/// one, after the call, is the proof.
+#[test]
+fn a_redraw_makes_the_program_repaint() {
+    ensure_iftd_on_path();
+    let dir = TempDir::new();
+    let (backend, rx) = DaemonBackend::new(dir.path().to_path_buf(), 4);
+    let pane = backend
+        .spawn_now(
+            Path::new("/tmp"),
+            Some("trap 'echo WINCHED' WINCH; echo armed; while :; do sleep 0.2; done"),
+            vec![],
+        )
+        .expect("iftd starts");
+    assert!(wait_for_event(
+        &rx,
+        pane,
+        |e| matches!(e, PaneEvent::Output(b) if String::from_utf8_lossy(b).contains("armed")),
+    )
+    .is_some());
+    // Whatever the start-up sizing sent has arrived and is out of the way.
+    while rx.try_recv().is_ok() {}
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    while rx.try_recv().is_ok() {}
+
+    assert_eq!(backend.redraw_now(pane), Redraw::Asked);
+    assert!(
+        wait_for_event(
+            &rx,
+            pane,
+            |e| matches!(e, PaneEvent::Output(b) if String::from_utf8_lossy(b).contains("WINCHED")),
+        )
+        .is_some(),
+        "the program was sent the resize jog and reported it"
+    );
+
+    backend.kill_now(pane);
 }
 
 // A reopened card takes its closed program back: `detach_now` lets go of

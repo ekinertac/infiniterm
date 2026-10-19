@@ -26,8 +26,10 @@ mod cursor_hooks;
 mod completion;
 mod connect;
 mod install;
+mod join;
 mod licence_cmd;
 mod proxy;
+mod serve;
 mod socket;
 
 use std::path::{Path, PathBuf};
@@ -71,6 +73,14 @@ ift — drive infiniterm from a shell
                              Ctrl-\\ (0x1c) detaches, leaving it running
   ift --version              the version of this ift
   ift connect <[user@]host> [--name N] [--color RRGGBB] [--check] [--install]
+  ift serve [--detach|--stop]
+                             hold this Mac's saved canvas and its cards for
+                             viewers (ift join) with the app closed; --detach
+                             runs it in the background, --stop ends it (the
+                             cards keep running; the app takes over at its
+                             next launch)
+  ift join <[user@]host> [--name N] [--color RRGGBB] [--check]
+                             a viewer window on the canvas running on host
                              open a second infiniterm for a host: its own
                              window, Dock icon and canvas, with terminal cards
                              that run on that host over ssh (key login; ift
@@ -142,12 +152,14 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 25] = [
+pub const SUBCOMMANDS: [&str; 27] = [
     "diff",
     "ls",
     "sessions",
     "attach",
     "connect",
+    "serve",
+    "join",
     "terminal",
     "send",
     "read",
@@ -198,6 +210,8 @@ fn main() -> ExitCode {
         Some("install") => install_self(),
         Some("licence") => licence_cmd::run(&args[1..]),
         Some("connect") => connect::run(&args[1..]),
+        Some("join") => join::run(&args[1..]),
+        Some("serve") => serve::run(&args[1..]),
         // Not `ift version`: any word that is not a verb is a file to open.
         Some("--version") | Some("-V") => {
             println!("ift {}", env!("CARGO_PKG_VERSION"));
@@ -206,6 +220,19 @@ fn main() -> ExitCode {
         // Plumbing for the remote instances, called over ssh by the app, so it
         // is in neither USAGE nor the completion (like dev-run).
         Some("proxy") => proxy::run(&args[1..]),
+        // Run by ssh as SSH_ASKPASS for `ift join` with no terminal (#450):
+        // the question is the one argument, the answer goes to stdout, for ssh
+        // alone. Plumbing, so in neither USAGE nor the completion.
+        Some("askpass") => match args.get(1) {
+            Some(prompt) => match infiniterm_core::backend::ssh_login::run_askpass(prompt) {
+                Ok(answer) => {
+                    println!("{answer}");
+                    ExitCode::SUCCESS
+                }
+                Err(_) => ExitCode::from(1),
+            },
+            None => ExitCode::from(2),
+        },
         Some("completion") => match args.get(1).map(String::as_str) {
             Some("zsh") => {
                 print!("{}", completion::ZSH);
@@ -1047,10 +1074,15 @@ mod tests {
         if Command::new("python3").arg("--version").output().is_err() {
             return None;
         }
+        // One folder per call. It was named from the lengths of the arguments,
+        // so two tests running in parallel whose inputs happened to be as long
+        // shared a folder, and one's cleanup or log overwrote the other's: the
+        // flaky failure of #452.
+        static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
             "ift-adapter-{}-{}",
             std::process::id(),
-            event_arg.len() + stdin.len()
+            CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("call.txt");

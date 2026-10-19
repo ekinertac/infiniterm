@@ -10,6 +10,28 @@
 //! and at 400%. Maximise paints the focused card alone, filling the view.
 use crate::{now_ms, AppView, SWAP_MS};
 
+/// Big text centred on a slot that stands for a card that is somewhere else:
+/// the card in its own window (#356), a host's card a viewer cannot show (#423).
+fn paint_slot_text(
+    window: &mut Window,
+    cx: &mut App,
+    b: Bounds<Pixels>,
+    text: &str,
+    fp: Pixels,
+    font: &gpui::Font,
+    color: gpui::Hsla,
+) {
+    let line = crate::text::shape(window, text, fp, font, color);
+    let tb = Bounds::new(
+        point(
+            b.origin.x + b.size.width / 2. - line.width / 2.,
+            b.origin.y + b.size.height / 2. - fp * 0.6,
+        ),
+        size(line.width, fp * 1.4),
+    );
+    crate::text::paint_in(window, cx, &line, tb, px(0.));
+}
+
 /// Font size, in world points, of the text on a card that is in its own window.
 const EXTRACTED_TEXT_PT: f32 = 36.;
 use gpui::{fill, outline, point, px, size, App, BorderStyle, Bounds, Pixels, Window};
@@ -163,9 +185,12 @@ impl AppView {
             .step(&mut self.model.viewport, self.model.view_size, now);
         self.model.pending_scale = self.animator.pending_scale();
         self.model.pending_pan = self.animator.pending_pan();
-        let mut seeded = self.seeded;
-        self.model.seed_first_card(&mut seeded);
-        self.seeded = seeded;
+        // A viewer's canvas is the host's: nothing is seeded onto it.
+        if !self.viewer {
+            let mut seeded = self.seeded;
+            self.model.seed_first_card(&mut seeded);
+            self.seeded = seeded;
+        }
         self.perform_effects();
         if std::mem::take(&mut self.show_character_palette) {
             window.show_character_palette();
@@ -174,8 +199,13 @@ impl AppView {
         self.reconcile_bodies(window);
         self.reconcile_terminals(window);
         self.reconcile_decoys(window);
-        self.reconcile_editors(window);
-        self.reconcile_browsers();
+        // A viewer builds no body for a card that is not a terminal: its file
+        // or page is on the host, and this Mac must not read a path of its own
+        // and show it as the host's (#423).
+        if !self.viewer {
+            self.reconcile_editors(window);
+            self.reconcile_browsers();
+        }
         let t0 = std::time::Instant::now();
         self.feed_terminals(now, cx);
         let t1 = std::time::Instant::now();
@@ -557,22 +587,15 @@ impl AppView {
                 window.paint_quad(fill(b, chrome.card_bg));
                 // Big and centred, scaled with the zoom like the card: it
                 // has to read across a fit-all canvas (#356 spike).
-                let fp = px(EXTRACTED_TEXT_PT * vp.scale as f32);
-                let line = crate::text::shape(
+                paint_slot_text(
                     window,
+                    cx,
+                    b,
                     "In its own window",
-                    fp,
+                    px(EXTRACTED_TEXT_PT * vp.scale as f32),
                     &chrome.typography.regular,
                     chrome.card_fg,
                 );
-                let tb = Bounds::new(
-                    point(
-                        b.origin.x + b.size.width / 2. - line.width / 2.,
-                        b.origin.y + b.size.height / 2. - fp * 0.6,
-                    ),
-                    size(line.width, fp * 1.4),
-                );
-                crate::text::paint_in(window, cx, &line, tb, px(0.));
             } else {
                 // A masked card shows its decoy in its place (decoys.rs).
                 let body = if card.masked {
@@ -588,6 +611,25 @@ impl AppView {
                     window.with_content_mask(Some(gpui::ContentMask { bounds: b }), |window| {
                         body.paint(b, vp.scale, focused, now, window, cx)
                     });
+                }
+                // A viewer's card that is not a terminal (#423) is a real card
+                // with no body (its file or page is on the host): its slot says
+                // where, and it moves, groups and closes like any card.
+                if self.viewer && card.kind != infiniterm_core::saved_layout::CardKind::Terminal {
+                    let host = self
+                        .model
+                        .remote
+                        .as_ref()
+                        .map_or("the host", |r| r.name.as_str());
+                    paint_slot_text(
+                        window,
+                        cx,
+                        b,
+                        &format!("{} on {host}", card.kind.as_str()),
+                        px(EXTRACTED_TEXT_PT * vp.scale as f32),
+                        &chrome.typography.regular,
+                        chrome.card_fg,
+                    );
                 }
             }
             // The focused card has no scrim of its own, so the away wash is
