@@ -13,6 +13,12 @@
 //!
 //! Refreshed by Cmd+K (the same three tree states as the editor) and when
 //! the shown file changes on disk, polled every two seconds.
+//!
+//! Keys (bare, only while the card is focused; Cmd chords belong to the
+//! canvas): in the diff pane Up/Down/PageUp/PageDown/Home/End move a line
+//! cursor (`infiniterm-editor::diff_cursor`, the view follows) and Left goes
+//! to the file list; in the list Up/Down choose, Enter or Right opens the
+//! file and goes to the diff. Escape from the list leaves it. #372.
 use crate::body::{BodyAction, CardBody};
 use crate::editor_body::EditorEvent;
 use crate::terminal_body::Metrics;
@@ -27,6 +33,7 @@ use infiniterm_core::git::BlameLine as GitBlame;
 use infiniterm_core::git::{git_blame, git_changes, git_show_head, ChangedFile};
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_editor::diff::{diff_rows, DiffRow};
+use infiniterm_editor::diff_cursor;
 use infiniterm_editor::highlight::{Highlighting, Span};
 use infiniterm_editor::language::Language;
 use std::collections::HashMap;
@@ -53,6 +60,11 @@ const DIFF_BAR_OFFSET_PX: f64 = 6.;
 const DIFF_BAR_WIDTH_PX: f64 = 3.;
 /// An added/removed line's background wash: a hint of colour, not a block.
 const DIFF_WASH_ALPHA: f32 = 0.18;
+/// The cursor row's band in the diff pane: over the add/remove wash, which
+/// has to show through, so a hint; stronger while the pane has the keys.
+const CURSOR_ROW_ALPHA: f32 = 0.16;
+/// The same band while the file list has the keys or the card is not focused.
+const CURSOR_ROW_IDLE_ALPHA: f32 = 0.07;
 /// An uncommitted blame line's colour already marks it; a committed one is
 /// dimmed so the code, not the attribution, reads first.
 const BLAME_DIM_ALPHA: f32 = 0.85;
@@ -81,6 +93,8 @@ pub struct DiffBody {
     disk_stamp: Option<u64>,
     last_disk_check: f64,
     scroll: usize,
+    /// The diff pane's line cursor, an index into `rows` (#372).
+    cursor: usize,
     rows_visible: usize,
     pub colors: EditorColors,
     pub rules: Vec<SyntaxRule>,
@@ -125,6 +139,7 @@ impl DiffBody {
             disk_stamp: None,
             last_disk_check: 0.,
             scroll: 0,
+            cursor: 0,
             rows_visible: 1,
             colors: EditorColors {
                 background: "#0e101a".into(),
@@ -209,6 +224,7 @@ impl DiffBody {
         self.current = current;
         self.shown = Some(rel.to_string());
         self.scroll = 0;
+        self.cursor = diff_cursor::first(&self.rows);
         self.version += 1;
         self.shaped.clear();
         eprintln!(
@@ -303,7 +319,12 @@ impl DiffBody {
         if let Some(f) = self.files.get(index) {
             let rel = f.path.clone();
             self.tree_cursor = index;
-            self.show(&rel);
+            // The file already on show keeps its cursor and scroll: Right
+            // from the list is "go back to where I was reading", and
+            // reloading would throw that place away.
+            if self.shown.as_deref() != Some(rel.as_str()) {
+                self.show(&rel);
+            }
             self.tree_focused = false;
         }
     }
@@ -313,11 +334,50 @@ impl DiffBody {
         match k.key.as_str() {
             "down" => self.tree_cursor = (self.tree_cursor + 1).min(last),
             "up" => self.tree_cursor = self.tree_cursor.saturating_sub(1),
-            "enter" => self.open_row(self.tree_cursor),
+            // Right is Enter's twin: the list lies left of the diff, so
+            // Right goes into it and Left (in the pane) comes back (#372).
+            "enter" | "right" => self.open_row(self.tree_cursor),
             "escape" => self.tree_focused = false,
             _ => return,
         }
         self.dirty = true;
+    }
+
+    /// `CardBody::key` without the `App`, which a test cannot build.
+    fn handle_key(&mut self, k: &Keystroke) -> BodyAction {
+        if k.modifiers.platform || k.modifiers.alt || k.modifiers.control {
+            return BodyAction::None;
+        }
+        if self.tree_focused {
+            self.key_tree(k);
+            return BodyAction::None;
+        }
+        let page = self.rows_visible as i64;
+        self.cursor = match k.key.as_str() {
+            "down" => diff_cursor::step(&self.rows, self.cursor, 1),
+            "up" => diff_cursor::step(&self.rows, self.cursor, -1),
+            "pagedown" => diff_cursor::step(&self.rows, self.cursor, page),
+            "pageup" => diff_cursor::step(&self.rows, self.cursor, -page),
+            "home" => diff_cursor::first(&self.rows),
+            "end" => diff_cursor::last(&self.rows),
+            // The list lies left of the diff (above it when the card is
+            // narrow); Left goes to it, as Right comes back. Cmd+K still
+            // cycles hidden / list / back (#372).
+            "left" if self.tree_shown => {
+                self.tree_focused = true;
+                self.dirty = true;
+                return BodyAction::None;
+            }
+            _ => return BodyAction::None,
+        };
+        self.scroll = diff_cursor::follow(self.scroll, self.cursor, self.rows_visible);
+        // Home still shows the top of the file, not the first row below a
+        // folded stretch.
+        if k.key == "home" {
+            self.scroll = 0;
+        }
+        self.dirty = true;
+        BodyAction::None
     }
 
     fn text_area(&self, world: Size) -> (Point, Size) {
@@ -389,6 +449,13 @@ impl DiffBody {
         } else {
             format!("{} changed  +{added} −{removed}", self.files.len())
         };
+        // The heading is a hand-painted label like the rows: in a narrow
+        // list it is cut at the pane's edge, not run into the diff.
+        let head = crate::text::elide(
+            &head,
+            f32::from((area.size.width - pad * 2.).max(px(0.))),
+            |t| f32::from(crate::text::shape(window, t, font_size, &f, dim).width),
+        );
         let l = crate::text::shape(window, &head, font_size, &f, dim);
         let _ = l.paint(point(area.origin.x + pad, y), line_h, window, cx);
         y += line_h;
@@ -548,6 +615,21 @@ impl CardBody for DiffBody {
         let mut span_i = 0;
         for (i, row) in rows.iter().enumerate() {
             let y = origin.y + line_h * i as f32;
+            // The cursor's band, under the text and over the wash.
+            if first + i == self.cursor && self.shown.is_some() {
+                let pane_has_keys = focused && !(self.tree_shown && self.tree_focused);
+                window.paint_quad(fill(
+                    Bounds::new(point(area.origin.x, y), size(area.size.width, line_h)),
+                    crate::chrome::with_alpha(
+                        hex(&self.colors.cursor),
+                        if pane_has_keys {
+                            CURSOR_ROW_ALPHA
+                        } else {
+                            CURSOR_ROW_IDLE_ALPHA
+                        },
+                    ),
+                ));
+            }
             // The wash and the change bar.
             match row {
                 DiffRow::Added { .. } => {
@@ -729,25 +811,7 @@ impl CardBody for DiffBody {
     }
 
     fn key(&mut self, k: &Keystroke, _now: f64, _cx: &mut App) -> BodyAction {
-        if k.modifiers.platform || k.modifiers.alt || k.modifiers.control {
-            return BodyAction::None;
-        }
-        if self.tree_focused {
-            self.key_tree(k);
-            return BodyAction::None;
-        }
-        let max = self.rows.len().saturating_sub(1);
-        match k.key.as_str() {
-            "down" => self.scroll = (self.scroll + 1).min(max),
-            "up" => self.scroll = self.scroll.saturating_sub(1),
-            "pagedown" => self.scroll = (self.scroll + self.rows_visible).min(max),
-            "pageup" => self.scroll = self.scroll.saturating_sub(self.rows_visible),
-            "home" => self.scroll = 0,
-            "end" => self.scroll = max.saturating_sub(self.rows_visible.saturating_sub(1)),
-            _ => return BodyAction::None,
-        }
-        self.dirty = true;
-        BodyAction::None
+        self.handle_key(k)
     }
 
     fn mouse_down(
@@ -777,6 +841,13 @@ impl CardBody for DiffBody {
             }
         }
         self.tree_focused = false;
+        // A click in the diff puts the cursor on that row, as in any editor.
+        let (origin, _) = self.text_area(self.world);
+        let row = ((local.y - origin.y - PAD_Y) / self.line_h()).floor();
+        if row >= 0. && !self.rows.is_empty() {
+            let at = (self.scroll + row as usize).min(self.rows.len() - 1);
+            self.cursor = diff_cursor::step(&self.rows, at, 0);
+        }
         self.dirty = true;
         BodyAction::None
     }
@@ -796,5 +867,104 @@ impl CardBody for DiffBody {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(name: &str) -> Keystroke {
+        Keystroke::parse(name).unwrap()
+    }
+
+    fn file(path: &str) -> ChangedFile {
+        ChangedFile {
+            path: path.into(),
+            status: "modified",
+            added: 1,
+            removed: 0,
+        }
+    }
+
+    /// A body with 100 numbered rows shown, a list of two files, 10 rows tall.
+    fn body() -> DiffBody {
+        let metrics = Metrics {
+            family: "Menlo".into(),
+            font_px: 13.,
+            line_height: 1.4,
+            cell_w: 8.,
+            weight: gpui::FontWeight::NORMAL,
+            bold_weight: gpui::FontWeight::BOLD,
+        };
+        let mut b = DiffBody::new("c1", "/", &metrics, Size { w: 600., h: 300. });
+        b.rows = (1..=100)
+            .map(|line| DiffRow::Context {
+                line,
+                text: String::new(),
+            })
+            .collect();
+        b.files = vec![file("a.rs"), file("b.rs")];
+        b.shown = Some("a.rs".into());
+        b.rows_visible = 10;
+        b.tree_shown = true;
+        b
+    }
+
+    fn press(b: &mut DiffBody, name: &str) {
+        b.handle_key(&key(name));
+    }
+
+    // The cursor is what moves, the view follows it: Down past the last
+    // visible row scrolls by one, and a key that stays inside the window
+    // does not scroll at all.
+    #[test]
+    fn the_cursor_moves_and_the_view_follows() {
+        let mut b = body();
+        for _ in 0..9 {
+            press(&mut b, "down");
+        }
+        assert_eq!((b.cursor, b.scroll), (9, 0), "last visible row");
+        press(&mut b, "down");
+        assert_eq!((b.cursor, b.scroll), (10, 1));
+        press(&mut b, "up");
+        assert_eq!((b.cursor, b.scroll), (9, 1), "up inside the window");
+        press(&mut b, "pagedown");
+        assert_eq!(b.cursor, 19);
+        press(&mut b, "end");
+        assert_eq!((b.cursor, b.scroll), (99, 90));
+        press(&mut b, "home");
+        assert_eq!((b.cursor, b.scroll), (0, 0));
+        press(&mut b, "pageup");
+        assert_eq!(b.cursor, 0, "clamped");
+    }
+
+    // Left in the diff goes to the list, Right (or Enter) opens the row and
+    // comes back; coming back to the file on show keeps the place.
+    #[test]
+    fn left_and_right_switch_between_the_diff_and_the_list() {
+        let mut b = body();
+        press(&mut b, "pagedown");
+        assert!(!b.tree_focused);
+        press(&mut b, "left");
+        assert!(b.tree_focused);
+        press(&mut b, "down");
+        assert_eq!(
+            b.cursor, 10,
+            "the diff's cursor stays put while in the list"
+        );
+        assert_eq!(b.tree_cursor, 1);
+        press(&mut b, "up");
+        press(&mut b, "right");
+        assert!(!b.tree_focused);
+        assert_eq!(b.cursor, 10, "same file: the place is kept");
+    }
+
+    #[test]
+    fn left_does_nothing_when_the_list_is_hidden() {
+        let mut b = body();
+        b.tree_shown = false;
+        press(&mut b, "left");
+        assert!(!b.tree_focused);
     }
 }

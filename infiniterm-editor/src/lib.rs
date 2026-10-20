@@ -4,6 +4,7 @@
 //! `infiniterm-ui/src/editor_body.rs` draws what these say.
 pub mod buffer;
 pub mod diff;
+pub mod diff_cursor;
 pub mod explorer;
 pub mod highlight;
 pub mod jumps;

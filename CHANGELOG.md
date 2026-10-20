@@ -6,6 +6,11 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-20
+
+- New: the diff pane of a diff card has a line cursor. Up, Down, Page Up, Page Down, Home and End move it, a click puts it on a row, and the view follows it. Left in the diff goes to the changed-files list (when it shows), and Right or Enter in the list opens the file and goes back to the diff, keeping your place if that file was already open. Cmd+K still works as before.
+- Fixed: the "N changed" heading of the changed-files list is cut at the edge of the list in a narrow card instead of running into the diff.
+
 ## 0.6.2 (build 1049), 2026-10-20
 
 ### Canvas
