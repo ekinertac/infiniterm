@@ -49,6 +49,10 @@ use infiniterm_editor::wrap::wrap_line;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+// The read-only diff mode (a diff card's body); a child so it can reach this
+// body's private state.
+mod diff;
+
 /// One row on screen: a line, or a piece of a wrapped one, as a char range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct VRow {
@@ -315,6 +319,10 @@ pub struct EditorBody {
     image_stale: bool,
     /// The card's size in world px, for hit tests between paints.
     world: Size,
+    /// `Some` for a diff card: this body is then read-only, holds the merged
+    /// text of HEAD and the working tree, and its tree is the changed files
+    /// (`diff.rs`). Every file-touching path below checks it.
+    diff: Option<diff::DiffView>,
 }
 
 fn hex(s: &str) -> Hsla {
@@ -403,6 +411,7 @@ impl EditorBody {
             image: None,
             image_stale: false,
             world,
+            diff: None,
         }
     }
 
@@ -511,7 +520,9 @@ impl EditorBody {
     /// Writes the buffer to `path`, which the card now carries. A picture
     /// has an empty buffer, and writing that would erase the file.
     pub fn save(&mut self, path: &str, now: f64) {
-        if self.image.is_some() {
+        // A diff's buffer is the merged text of two files: writing it to
+        // `path` would put the removed lines into the source.
+        if self.image.is_some() || self.diff.is_some() {
             return;
         }
         if self.path.as_deref() != Some(path) {
@@ -547,6 +558,12 @@ impl EditorBody {
 
     /// Housekeeping between frames: the draft, the disk poll.
     pub fn idle(&mut self, now: f64) {
+        // A diff has its own poll: the disk poll below would read `path` into
+        // the buffer, and the git gutter would diff the merged text.
+        if self.diff.is_some() {
+            self.diff_idle(now);
+            return;
+        }
         if self.draft_due.is_some_and(|due| now >= due) {
             self.draft_due = None;
             if self.is_dirty() {
@@ -583,7 +600,7 @@ impl EditorBody {
     /// settings.json while it may be open. A clean buffer takes the disk
     /// version silently; a dirty one is told once and keeps its changes.
     fn check_disk(&mut self, now: f64) {
-        let Some(path) = self.path.clone() else {
+        let Some(path) = self.path.clone().filter(|_| self.diff.is_none()) else {
             return;
         };
         let stamp = file_mtime(&path);
@@ -845,6 +862,10 @@ impl EditorBody {
     /// Enter on a file in the tree: always a tab (Ekin's rule), never a
     /// swap of this buffer, so nothing unsaved is ever in the way.
     fn open_from_tree(&mut self, path: String, _now: f64) -> BodyAction {
+        // A diff has one body and no tabs: the file's diff replaces the one on show.
+        if self.diff.is_some() {
+            return self.diff_open(&path);
+        }
         self.tree_focused = false;
         self.focus = Focus::Buffer;
         self.events.push(EditorEvent::OpenTab(path));
@@ -956,12 +977,17 @@ impl EditorBody {
         if self.across(local) >= self.sidebar_w - DIVIDER_GRAB {
             return None;
         }
-        let row = ((local.y - PAD_Y) / self.line_h()).floor();
+        let row = ((local.y - PAD_Y) / self.line_h()).floor() - self.tree_head_rows() as f64;
         if row < 0. {
             return None;
         }
         let index = row as usize + tree.scroll;
         (index < tree.rows().len()).then_some(index)
+    }
+
+    /// Rows above the tree's first: the changed-files list has a heading.
+    fn tree_head_rows(&self) -> usize {
+        usize::from(self.diff.is_some())
     }
 
     /// Lights a tree row (the one a menu is open on) or clears it.
@@ -1020,6 +1046,9 @@ impl EditorBody {
     // ----- geometry -----
 
     fn gutter_w(&self) -> f64 {
+        if let Some(d) = &self.diff {
+            return d.gutter_w(self.metrics.cell_w);
+        }
         let digits = self
             .buffer
             .line_count()
@@ -1079,7 +1108,10 @@ impl EditorBody {
             .sum();
         infiniterm_editor::status::Status {
             path: self.path.clone(),
-            line: self.buffer.line_of(cursor) + 1,
+            // A diff's buffer line is not the file's: say the file's.
+            line: self
+                .diff_status_line()
+                .unwrap_or(self.buffer.line_of(cursor) + 1),
             col: self.buffer.col_of(cursor) + 1,
             language: self.language,
             selected,
@@ -1722,7 +1754,7 @@ impl EditorBody {
                     // Text selected in the status bar is the copy, when there is some.
                     let t = self
                         .status_selection()
-                        .or_else(|| self.buffer.selected_text())
+                        .or_else(|| self.selected_for_copy())
                         .or_else(|| {
                             Some(self.buffer.line(self.buffer.line_of(self.buffer.cursor())))
                         });
@@ -1910,6 +1942,10 @@ impl EditorBody {
             }
         } else {
             match key {
+                // In a diff, Left at a line's first column goes to the list
+                // of changed files (`diff_left_to_list`), as Left did on the
+                // old diff card (#372); anywhere else it is the caret's.
+                "left" if self.diff_left_to_list(shift) => return,
                 "left" => self.buffer.for_each_cursor(|b| b.move_left(shift)),
                 "right" => self.buffer.for_each_cursor(|b| b.move_right(shift)),
                 "up" => self.move_visual(-1, shift),
@@ -1935,6 +1971,12 @@ impl EditorBody {
                     if !ro {
                         self.buffer.for_each_cursor(|b| b.delete_forward(now))
                     }
+                }
+                // On a diff's "N unchanged lines" line Enter opens (or folds)
+                // the stretch, as a click in its gutter does.
+                "enter" if self.diff_on_placeholder() => {
+                    let line = self.buffer.line_of(self.buffer.cursor());
+                    self.buffer.toggle_fold_line(line);
                 }
                 "enter" => {
                     if !ro {
@@ -1966,9 +2008,12 @@ impl EditorBody {
                 _ => {
                     if let Some(ch) = k.key_char.as_deref().filter(|c| !c.is_empty()) {
                         if ro {
-                            self.events.push(EditorEvent::Notice(
-                                "read-only: the defaults file is rewritten every launch".into(),
-                            ));
+                            self.events
+                                .push(EditorEvent::Notice(if self.diff.is_some() {
+                                    "a diff is read-only".into()
+                                } else {
+                                    "read-only: the defaults file is rewritten every launch".into()
+                                }));
                             return;
                         }
                         self.buffer.for_each_cursor(|b| {
@@ -2105,7 +2150,15 @@ impl EditorBody {
         let Some(tree) = self.tree.as_mut() else {
             return BodyAction::None;
         };
-        let action = tree.key(&k.key, &mut list_dir);
+        // In the list of changed files Right is Enter's twin, as it was on
+        // the old diff card (#372): the list lies left of the diff, so Right
+        // goes into it. A real tree's Right means "next row" on a file.
+        let key = if self.diff.is_some() && k.key == "right" {
+            "enter"
+        } else {
+            k.key.as_str()
+        };
+        let action = tree.key(key, &mut list_dir);
         self.dirty = true;
         match action {
             TreeAction::None => BodyAction::None,
@@ -2127,7 +2180,10 @@ impl EditorBody {
     /// not: it waits for Enter. Unsaved text is never swapped out from
     /// under the reader for a preview.
     fn preview_from_tree(&mut self, path: String, now: f64) {
-        if !Language::is_image(&path) || (self.is_dirty() && self.path.is_some()) {
+        if self.diff.is_some()
+            || !Language::is_image(&path)
+            || (self.is_dirty() && self.path.is_some())
+        {
             return;
         }
         self.load(&path, false, now);
@@ -2191,6 +2247,11 @@ impl EditorBody {
     // ----- paint -----
 
     fn spans_for(&mut self) -> &[Span] {
+        // A diff's spans were made per side when its file was loaded
+        // (`merged_spans`); parsing the woven text would colour wrongly.
+        if let Some(d) = &self.diff {
+            return d.spans();
+        }
         if (self.spans.0, self.spans.1) != (self.buffer.version, self.loads) {
             let spans = match self.language {
                 Some(l) => self.highlighting.spans(l, &self.buffer.text()),
@@ -2208,7 +2269,7 @@ impl EditorBody {
         self.git_head = self
             .path
             .as_deref()
-            .filter(|_| self.image.is_none())
+            .filter(|_| self.image.is_none() && self.diff.is_none())
             .and_then(|path| {
                 let repo = repo_of(std::path::Path::new(path)).ok()?;
                 let repo = repo.to_string_lossy();
@@ -2248,7 +2309,9 @@ impl EditorBody {
         let font_size = px((self.metrics.font_px * scale) as f32);
         let f = self.metrics.font();
         let rows = tree.rows();
-        let visible = ((f32::from(area.size.height) / f32::from(line_h)).floor() as usize).max(1);
+        let visible = ((f32::from(area.size.height) / f32::from(line_h)).floor() as usize)
+            .saturating_sub(self.tree_head_rows())
+            .max(1);
         // The cursor row stays in view.
         let scroll = if tree.cursor < tree.scroll {
             tree.cursor
@@ -2263,6 +2326,19 @@ impl EditorBody {
         let current = self.path.clone();
         let pad = px((PAD_X * scale) as f32);
         let mut y = area.origin.y + px((PAD_Y * scale) as f32);
+        // The changed-files list opens with its totals, in the gutter's
+        // colour, cut at the pane's edge rather than run into the diff.
+        if let Some(head) = self.diff_list_heading() {
+            let dim = hex(&self.colors.gutter);
+            let head = crate::text::elide(
+                &head,
+                f32::from((area.size.width - pad * 2.).max(px(0.))),
+                |t| f32::from(crate::text::shape(window, t, font_size, &f, dim).width),
+            );
+            let l = crate::text::shape(window, &head, font_size, &f, dim);
+            let _ = l.paint(point(area.origin.x + pad, y), line_h, window, cx);
+            y += line_h;
+        }
         for (i, row) in rows.iter().enumerate().skip(scroll).take(visible) {
             let is_cursor = i == tree.cursor;
             let row_b = Bounds::new(point(area.origin.x, y), size(area.size.width, line_h));
@@ -2293,6 +2369,12 @@ impl EditorBody {
                 && !(is_cursor && self.tree_focused && focused)
             {
                 color = hex(&self.colors.selection);
+            }
+            // A changed file: its name and counts, drawn by the diff mode.
+            if self.diff.is_some() {
+                self.paint_diff_list_row(i, area, y, pad, line_h, font_size, color, window, cx);
+                y += line_h;
+                continue;
             }
             let marker = if row.entry.is_dir {
                 if tree.is_expanded(&row.entry.path) {
@@ -2628,6 +2710,16 @@ impl CardBody for EditorBody {
             for (row_i, vrow) in vrows.iter().enumerate() {
                 let line_no = vrow.line;
                 let y = origin.y + line_h * row_i as f32;
+                // A diff's gutter is its own (two number columns, a sign,
+                // blame); it has no git marks of the ordinary kind.
+                if self.diff.is_some() {
+                    if vrow.a == 0 {
+                        self.paint_diff_gutter(
+                            line_no, origin, y, gutter_w, scale, legible, window, cx,
+                        );
+                    }
+                    continue;
+                }
                 if legible && vrow.a == 0 {
                     let num = (line_no + 1).to_string();
                     let l = crate::text::shape(window, &num, font_size, &base, gutter_fg);
@@ -2689,6 +2781,18 @@ impl CardBody for EditorBody {
                     let row_start = line_start + vrow.a;
                     let row_end = line_start + vrow.b;
                     let row_len = vrow.b - vrow.a;
+                    // A diff's wash (or the rules round an "N unchanged lines"
+                    // line) goes first, under everything else.
+                    if self.diff.is_some() {
+                        self.paint_diff_back(
+                            line_no,
+                            origin.x + gutter_w,
+                            y,
+                            area.size.width,
+                            line_h,
+                            window,
+                        );
+                    }
                     // The active line wash, gutter, selection, matches, then the text.
                     if self.highlight_line
                         && line_no == cursor_line
@@ -2867,6 +2971,17 @@ impl CardBody for EditorBody {
                         }
                         if pos < line_text.len() {
                             push(&mut runs, line_text.len() - pos, fg, false);
+                        }
+                        // A diff's "N unchanged lines" is not code: the gutter's colour.
+                        if self.diff_is_placeholder(line_no) {
+                            runs = vec![TextRun {
+                                len: line_text.len(),
+                                font: base.clone(),
+                                color: gutter_fg,
+                                background_color: None,
+                                underline: None,
+                                strikethrough: None,
+                            }];
                         }
                         // gpui indexes the string BY these lengths and panics if they
                         // do not add up, which aborts the process rather than drawing
@@ -3096,10 +3211,14 @@ impl CardBody for EditorBody {
             };
             if in_tree {
                 let row = ((local.y - PAD_Y) / self.line_h()).floor().max(0.) as usize;
-                let index = row + tree.scroll;
                 self.tree_focused = true;
                 self.focus = Focus::Tree;
                 self.dirty = true;
+                // A click on the list's heading only gives it the keys.
+                let Some(row) = row.checked_sub(self.tree_head_rows()) else {
+                    return BodyAction::None;
+                };
+                let index = row + tree.scroll;
                 let action = self.tree.as_mut().unwrap().toggle(index, &mut list_dir);
                 return match action {
                     TreeAction::Open(path) => self.open_from_tree(path, crate::now_ms()),

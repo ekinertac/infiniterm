@@ -65,6 +65,14 @@ impl CardKind {
             CardKind::Page => "page",
         }
     }
+
+    /// Whether the card's body is the editor's, so the editor's keyboard
+    /// lock, chords and Cmd+F apply: an editor, and a diff, which is the
+    /// editor in a read-only diff mode (2026-10-20). Saved kinds stay apart
+    /// ("diff" still loads as a diff), only the runtime treats them alike.
+    pub fn has_editor_body(self) -> bool {
+        matches!(self, CardKind::Editor | CardKind::Diff)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

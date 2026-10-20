@@ -692,7 +692,7 @@ impl AppView {
                 // `card.locked` — the ring is the one place on the card
                 // itself that shows it, since nothing else changes there.
                 let locked = focused
-                    && matches!(card.kind, CardKind::Browser | CardKind::Editor)
+                    && (card.kind.has_editor_body() || card.kind == CardKind::Browser)
                     && card.locked;
                 let ring_color = if locked {
                     chrome.warn

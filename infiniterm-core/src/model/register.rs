@@ -75,17 +75,13 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
     // Cmd+Alt+Arrow, it is a card like any other and the canvas has its
     // keys: Cmd+/ on an arrowed-to editor commented the highlighted line
     // instead of opening the shortcuts panel.
-    if kind == Some(crate::saved_layout::CardKind::Editor)
-        && card.is_some_and(|c| c.locked)
-        && crate::editor_keys::editor_keeps(chord)
-    {
+    // A diff has the editor's body, so the editor's keys (2026-10-20).
+    let editor_body = kind.is_some_and(|k| k.has_editor_body());
+    if editor_body && card.is_some_and(|c| c.locked) && crate::editor_keys::editor_keeps(chord) {
         return None;
     }
     let locked = card.is_some_and(|c| c.locked)
-        && matches!(
-            kind,
-            Some(crate::saved_layout::CardKind::Browser | crate::saved_layout::CardKind::Editor)
-        );
+        && (editor_body || kind == Some(crate::saved_layout::CardKind::Browser));
     // A locked card claims everything except Ctrl+1..9 and the two
     // app-carve-out chords below: real Chrome shortcuts shadow this app's
     // own bindings on the same keys, the whole point of locking. Workspace
@@ -113,7 +109,9 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
         && !leaves
         && !opens_palette
     {
-        let id = if kind == Some(crate::saved_layout::CardKind::Editor) {
+        let id = if kind == Some(crate::saved_layout::CardKind::Diff) {
+            crate::editor_keys::diff_lock_override(chord)
+        } else if kind == Some(crate::saved_layout::CardKind::Editor) {
             crate::editor_keys::lock_override(chord)
         } else {
             crate::browser_keys::lock_override(chord)
@@ -164,7 +162,7 @@ fn is_locked_carveout(chord: &str, kind: Option<crate::saved_layout::CardKind>) 
     if matches!(chord, "cmd+escape" | "ctrl+tab" | "ctrl+shift+tab") {
         return true;
     }
-    chord == "cmd+l" && kind != Some(crate::saved_layout::CardKind::Editor)
+    chord == "cmd+l" && !kind.is_some_and(|k| k.has_editor_body())
 }
 
 /// Runs a command and then any `RunCommand` effects it queued, so a palette
@@ -3932,6 +3930,53 @@ mod tests {
         assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the comment toggle");
         assert_eq!(resolve_chord(&h.m, "cmd+z"), None, "the buffer's undo");
         assert_eq!(resolve_chord(&h.m, "cmd+s").as_deref(), Some("card.save"));
+    }
+
+    // A diff card is the editor's body in a read-only mode, so it locks the
+    // editor's way (2026-10-20): the find, comment and undo chords are the
+    // body's once locked, Cmd+F finds, and with no tabs Cmd+W closes the card
+    // and Cmd+T does not become a tab command.
+    #[test]
+    fn a_diff_card_locks_like_an_editor_without_the_tab_chords() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        h.m.cards[0].kind = CardKind::Diff;
+        h.m.cards[0].locked = false;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+/").as_deref(),
+            Some("app.shortcuts")
+        );
+        assert_eq!(resolve_chord(&h.m, "cmd+w").as_deref(), Some("card.close"));
+        h.m.cards[0].locked = true;
+        assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the body's");
+        assert_eq!(resolve_chord(&h.m, "cmd+f"), None, "the body's find");
+        assert_eq!(resolve_chord(&h.m, "cmd+z"), None);
+        assert_eq!(resolve_chord(&h.m, "cmd+w").as_deref(), Some("card.close"));
+        assert_eq!(resolve_chord(&h.m, "cmd+s").as_deref(), Some("card.save"));
+        assert_eq!(resolve_chord(&h.m, "cmd+t"), None, "no tabs to open");
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+k").as_deref(),
+            Some("editor.explorer"),
+            "the list of changed files, locked or not"
+        );
+        // Cmd+L is the body's select-line, not the omnibox.
+        assert_eq!(resolve_chord(&h.m, "cmd+l"), None);
+        // The way out is the same.
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+escape").as_deref(),
+            Some("browser.leave")
+        );
+        // Cmd+F on a diff card opens the editor's find, not the app's bar.
+        h.m.take_effects();
+        h.m.find_in_card();
+        assert!(h.m.take_effects().iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::Find,
+                ..
+            }
+        )));
     }
 
     // Ctrl+digit is workspace switching, never a Chrome shortcut, so lock
