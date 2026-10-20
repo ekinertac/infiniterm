@@ -1,6 +1,6 @@
 ---
 title: Editor cards
-description: Editing files on the canvas, ift as your EDITOR, multiple cursors, tabs, and saving.
+description: Editing files on the canvas, ift as your EDITOR, multiple cursors, tabs, saving, and the diff card.
 ---
 
 An editor card is a file on the canvas: syntax highlighting for 17 languages through tree-sitter, find and replace, go to line (`Ctrl G`), comment toggle, and a file tree beside it (`Cmd K`). There is no LSP, on purpose; the completions are words from your files and, for JSON files with a schema, keys and values (below). A scrollbar at the right edge shows when the file is longer than the card.
@@ -43,6 +43,15 @@ Your own `settings.json` needs no `$schema`: type `"ui.` and every `ui.*` settin
 - `Escape` goes back to one cursor.
 
 Typing, deleting and moving work at every cursor. Copy, paste and the line commands still act on the main one, and an edit made at several cursors takes several `Cmd Z` to undo.
+
+## The diff card
+
+`ift diff` opens your changes against git HEAD (`ift diff src/` only under a path). The card is an editor in a read-only diff mode, so it keeps the editor's features.
+
+- **Left:** the changed files, each with its `+added` and `-removed` counts. A long name is cut from the front, so the end of the name stays.
+- **Right:** the file's diff. It has the syntax colours of the file's language, two line-number columns (old and new) with `+` and `-` signs, green added lines and red removed lines. Unchanged stretches are folded under "N unchanged lines". There is a real caret and selection, `Cmd C` copies, `Cmd F` finds, and `Cmd B` adds a blame gutter.
+- **Keys.** The card locks like an editor card. Click into it or press `Enter` to go in. On `ift diff <folder>`, a second `Enter` opens the file under the list cursor. In the list, `Right` or `Enter` opens the file and puts the focus on its text; `Left` at column 0 goes back to the list. `Cmd Alt Left` and `Cmd Alt Right` also move between the list and the text. `Cmd K` cycles the list through three states. `Escape` leaves the card, and `Cmd W` on a locked diff closes it. Bare arrow keys no longer work until you have gone in.
+- **Not there yet:** a right-click menu with a Copy row, and the picture of a changed image.
 
 ## Saving and closing
 

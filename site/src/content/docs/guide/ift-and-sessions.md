@@ -16,7 +16,7 @@ ift -t src/main.rs     # the file as a tab of an editor card
 ift -t src/main.rs 2   # ...of card 2 (a number like 2 or #2, or an id)
 ift src/main.rs:42     # ...at line 42 (file:42:7 for a column)
 ift terminal ~/a ~/b   # a terminal card per folder, its shell starting there
-ift diff               # changes against git HEAD, as a card
+ift diff               # changes against git HEAD, as a card (see Editor cards)
 ift diff src/          # only under a path
 ```
 
