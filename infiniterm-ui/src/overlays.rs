@@ -861,6 +861,7 @@ impl AppView {
             .and_then(|c| match c.kind {
                 CardKind::Browser => Some("locked: browser"),
                 CardKind::Editor => Some("locked: editor"),
+                CardKind::Diff => Some("locked: diff"),
                 _ => None,
             })
     }

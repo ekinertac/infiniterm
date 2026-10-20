@@ -8,7 +8,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-20
 
-- New: the diff pane of a diff card has a line cursor. Up, Down, Page Up, Page Down, Home and End move it, a click puts it on a row, and the view follows it. Left in the diff goes to the changed-files list (when it shows), and Right or Enter in the list opens the file and goes back to the diff, keeping your place if that file was already open. Cmd+K still works as before.
+- Changed: a diff card is now a read-only editor. It has a real cursor and selection, Cmd+C copies, Cmd+F finds, long lines can wrap, Cmd+D, Cmd+L, the word and line moves and the fold keys all work, and the code has the same syntax colours as in an editor card (added lines and removed lines are coloured by their own file). Nothing in it can be typed or saved.
+- Changed: a diff card locks like an editor card. Press Enter on the focused card (or click in the text) to use the keys, Escape or Cmd+Escape to give them back. Before, a diff card took arrow keys at once; now the first Enter goes in, and in a diff opened on a folder a second Enter opens the file under the list's cursor.
+- Changed: in the diff, the line numbers of the old file and of the new file are two columns (blank on the side where the line does not exist), with a + or - sign. Unchanged stretches are folds named "N unchanged lines": click the gutter, press Enter on the line, or use Cmd+Alt+] to open one.
+- New: Left on the first column of a line in the diff goes to the changed-files list, and Right or Enter in the list opens the file and goes back to the diff, keeping your place if that file was already open. Cmd+Alt+Left and Cmd+Alt+Right do the same from anywhere in the text. Cmd+K works as before. Cmd+W on a locked diff closes the card.
 - Fixed: the "N changed" heading of the changed-files list is cut at the edge of the list in a narrow card instead of running into the diff.
 
 ## 0.6.2 (build 1049), 2026-10-20

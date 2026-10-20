@@ -1042,7 +1042,7 @@ impl AppView {
         let locked_editor = self
             .model
             .focused()
-            .is_some_and(|c| c.locked && c.kind == infiniterm_core::saved_layout::CardKind::Editor);
+            .is_some_and(|c| c.locked && c.kind.has_editor_body());
         if locked_editor && m.platform && m.alt && !m.control && !m.shift {
             let dir = match k.key.as_str() {
                 "left" => Some(infiniterm_core::navigate::Direction::Left),

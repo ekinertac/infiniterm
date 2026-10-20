@@ -1411,7 +1411,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             // A locked editor: the lock is dropped and focus stays on the
             // card. Escape does it too when it has nothing else to close
             // (`input.rs`); this is the chord you can rebind (#265).
-            if card.kind == CardKind::Editor {
+            if card.kind.has_editor_body() {
                 if card.locked {
                     if let Some(c) = m.card_mut(&id) {
                         c.locked = false;
