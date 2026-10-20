@@ -55,6 +55,27 @@ impl Tree {
         }
     }
 
+    /// A tree that is one flat list of files, no directories: the diff card's
+    /// changed files. Every key and click works as for a real tree; it must
+    /// never be refreshed from the disk (`refresh` would list `root`), the
+    /// owner calls `set_flat` instead.
+    pub fn flat(root: &str, entries: Vec<Entry>) -> Tree {
+        let mut t = Tree::new(root);
+        t.listed.insert(root.to_string(), entries);
+        t
+    }
+
+    /// Replaces a flat tree's files. The cursor stays on the same file when
+    /// it is still listed, else on the row it was on, clamped.
+    pub fn set_flat(&mut self, entries: Vec<Entry>) {
+        let on = self.rows().get(self.cursor).map(|r| r.entry.path.clone());
+        let last = entries.len().saturating_sub(1);
+        self.cursor = on
+            .and_then(|p| entries.iter().position(|e| e.path == p))
+            .unwrap_or(self.cursor.min(last));
+        self.listed.insert(self.root.clone(), entries);
+    }
+
     /// Lists a directory the first time it is needed; `list` is the
     /// filesystem (`files::dir_list`), asked once per directory.
     pub fn load(&mut self, dir: &str, list: &mut dyn FnMut(&str) -> Vec<Entry>) {
@@ -269,6 +290,28 @@ mod tests {
         assert_eq!(t.rows().len(), 0);
         assert_eq!(t.cursor, 0);
         assert!(!t.is_expanded("/r/src"));
+    }
+
+    #[test]
+    fn a_flat_tree_keeps_its_cursor_on_the_same_file_across_a_new_list() {
+        let file = |name: &str| Entry {
+            name: name.into(),
+            path: format!("/r/{name}"),
+            is_dir: false,
+        };
+        let mut list = |_: &str| -> Vec<Entry> { panic!("a flat tree lists nothing") };
+        let mut t = Tree::flat("/r", vec![file("a.rs"), file("b.rs"), file("c.rs")]);
+        assert_eq!(t.rows().len(), 3);
+        t.key("down", &mut list);
+        assert_eq!(t.cursor, 1);
+        // a.rs is no longer changed: the cursor follows b.rs up to row 0.
+        t.set_flat(vec![file("b.rs"), file("c.rs")]);
+        assert_eq!(t.cursor, 0);
+        // The file under the cursor vanished: the row stays, clamped.
+        t.key("down", &mut list);
+        t.set_flat(vec![file("b.rs")]);
+        assert_eq!(t.cursor, 0);
+        assert_eq!(t.key("enter", &mut list), TreeAction::Open("/r/b.rs".into()));
     }
 
     #[test]
