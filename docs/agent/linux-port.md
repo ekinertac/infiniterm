@@ -20,10 +20,11 @@ What it took: master does not build on Linux (`core-graphics-types` fails first,
 What is wrong at runtime, found by the spike:
 
 1. The first frame is never shown. The window stays black until the first input event (a mouse move is enough), on every launch. Probably gpui's X11 backend drawing before the window is exposed while the app draws on demand (`needs_frame()`); not looked into yet.
-2. The default terminal font `ui-monospace, Menlo, monospace` resolves to a PROPORTIONAL font on Linux: the cell is measured from its `M` and the text is spread wide. gpui's Linux text system (cosmic-text) does not apply the fontconfig alias `monospace`. Linux needs its own default (`DejaVu Sans Mono` worked) or a lookup through `fc-match monospace`.
+2. The default terminal font `ui-monospace, Menlo, monospace` resolves to a PROPORTIONAL font on Linux: the cell is measured from its `M` and the text is spread wide. `fc-match monospace` on the same box names DejaVu Sans Mono, so the font gpui picked is not the one the fontconfig alias gives; why was not looked into. Linux needs its own default (`DejaVu Sans Mono` worked) or a lookup through `fc-match monospace`.
 3. Nerd Font icons draw as boxes: `icon_font` is a stub off macOS, so the bundled `Symbols Nerd Font Mono` is not registered.
 4. Themes come from `<data>/themes/`, which `tools/bundle.sh` fills on a Mac. A Linux build needs its own way to ship them (the spike copied one by hand).
 5. Idle CPU is about 36% of one core with a focused terminal card, all of it in llvmpipe threads (the cursor blink redraws the window in software). That is the price of lavapipe, not a bug; a real GPU will not show it. Do not measure performance on the droplet.
+6. Not confirmed: on a first launch the welcome card was clipped by the window's right edge after the window was resized from 1600x1000 to 1400x900 with xdotool. Either no refit follows a resize or framing differs on X11; check on a window that is not resized under it.
 
 Not tested: Wayland, a real GPU, IME (`ime.rs` compiles because it is gpui's generic `EntityInputHandler`), clipboard, colour emoji (no colour emoji font was installed; ⚠️ drew in monochrome).
 
@@ -32,6 +33,15 @@ Not tested: Wayland, a real GPU, IME (`ime.rs` compiles because it is gpui's gen
 ```
 doctl --context ekinertac compute droplet create ift-linux-spike --image ubuntu-24-04-x64 --size s-8vcpu-16gb --region fra1 --ssh-keys 23752258 --wait
 apt-get install -y gcc g++ libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev make cmake clang lld llvm git curl pkg-config build-essential mesa-vulkan-drivers vulkan-tools xvfb imagemagick xdotool fonts-dejavu-core x11-utils
+git clone https://github.com/ekinertac/infiniterm.git && cd infiniterm && git checkout windows-merge-master
+cat >> infiniterm-ui/src/keycode.rs <<'R'
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn install() {}
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn dom_code(_code: u16) -> Option<&'static str> { None }
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn last_dead() -> bool { false }
+R
 cargo build -p infiniterm-ui --no-default-features && cargo build -p infiniterm-cli -p infiniterm-session -p infiniterm-hook
 Xvfb :99 -screen 0 1920x1080x24 &
 DISPLAY=:99 INFINITERM_DATA_DIR=/tmp/ift-spike PATH=$PWD/target/debug:$PATH infiniterm &
@@ -39,7 +49,7 @@ DISPLAY=:99 xdotool mousemove 500 500          # the black first frame
 DISPLAY=:99 import -window root shot.png
 ```
 
-The package list is zed's `script/linux` (the set for gpui) plus Mesa, Xvfb, ImageMagick and xdotool. Package install, rustup and a first debug build of the ui crate took about 15 minutes together on 8 vCPU. `iftd` is found on PATH. `xdotool windowactivate` fails without a window manager; `windowfocus` and plain `type` / `key` work. The `default` context of doctl is the employer's production: always pass `--context ekinertac`, and delete the droplet afterwards (`droplet delete` has no `--wait`; poll `droplet list`).
+The package list is most of zed's `script/linux` (the set for gpui; libgit2, libva, sqlite, pipewire and the portal were left out and were not needed) plus Mesa, Xvfb, ImageMagick and xdotool. Package install, rustup and a first debug build of the ui crate took about 15 minutes together on 8 vCPU. `iftd` is found on PATH. `xdotool windowactivate` fails without a window manager; `windowfocus` and plain `type` / `key` work. The `default` context of doctl is the employer's production: always pass `--context ekinertac`, and delete the droplet afterwards (`droplet delete` has no `--wait`; poll `droplet list`).
 
 ## The macOS-only pieces and a plan for each
 
