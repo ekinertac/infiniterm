@@ -147,6 +147,21 @@ impl Model {
         }
     }
 
+    /// Whether the chips on this card are hidden because the view is filled by
+    /// it: the maximised card (`ui.hideLabelWhenMaximised`, #71) or the card
+    /// Cmd+1 fitted to the window (`ui.hideLabelWhenFitted`, a ui theme key,
+    /// #511). The status bar names the focused card either way.
+    pub fn card_label_hidden(&self, card_id: &str) -> bool {
+        if self.selection.focused_id.as_deref() != Some(card_id) {
+            return false;
+        }
+        let ui = &self.config.ui;
+        (ui.hide_label_when_maximised && self.selection.maximized)
+            || (ui.hide_label_when_fitted
+                && self.framing
+                && self.framed_card.as_deref() == Some(card_id))
+    }
+
     /// Steps through the installed schemes, so trying them is one keystroke.
     pub fn cycle_theme(&mut self, delta: isize) {
         self.effects.push(Effect::RefreshThemes);
@@ -357,6 +372,12 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.theme_before_preview = m.theme_current.clone();
         m.effects.push(Effect::RefreshThemes);
         m.open_palette(Source::Themes);
+    });
+    // The ui themes (#511): how the app looks, not the terminal colours.
+    r.register("uitheme.pick", "UI theme: switch…", |m| {
+        m.ui_theme_before_preview = Some(m.ui_theme_name.clone());
+        m.effects.push(Effect::RefreshUiThemes);
+        m.open_palette(Source::UiThemes);
     });
     r.register("theme.next", "Theme: next", |m| m.cycle_theme(1));
     r.register("theme.prev", "Theme: previous", |m| m.cycle_theme(-1));

@@ -1525,13 +1525,13 @@ mod tests {
         assert!(h.m.card(&id).is_none(), "confirmed: closed");
     }
 
-    // #160: the local colour is the setting `ui.windowColor`, applied when the
-    // settings are, and a remote window ignores it.
+    // #160, #511: the local colour is the look key `ui.windowColor` of the ui
+    // theme, applied when the theme is, and a remote window ignores it.
     #[test]
     fn the_window_colour_setting_tints_the_local_window_and_not_a_remote_one() {
         let mut h = Harness::new();
         h.m.effects.clear();
-        h.m.apply_settings_text(r#"{"ui.windowColor": "teal"}"#);
+        h.m.apply_ui_theme_text("default", Some(r#"{"ui.windowColor": "teal"}"#));
         assert_eq!(h.m.window_color(), crate::remote_identity::named("teal"));
         assert!(
             h.m.effects
@@ -1540,21 +1540,21 @@ mod tests {
             "the Dock follows the file"
         );
         h.m.effects.clear();
-        h.m.apply_settings_text(r#"{"ui.windowColor": "teal"}"#);
+        h.m.apply_ui_theme_text("default", Some(r#"{"ui.windowColor": "teal"}"#));
         assert!(
             !h.m.effects
                 .iter()
                 .any(|e| matches!(e, Effect::WindowColor { .. })),
             "nothing changed, nothing to redraw"
         );
-        h.m.apply_settings_text("{}");
+        h.m.apply_ui_theme_text("default", Some("{}"));
         assert_eq!(h.m.window_color(), None, "removed from the file: no colour");
         h.m.remote = crate::remote_identity::RemoteIdentity::from_vars(
             Some("ops@box"),
             None,
             Some("ff8800"),
         );
-        h.m.apply_settings_text(r#"{"ui.windowColor": "teal"}"#);
+        h.m.apply_ui_theme_text("default", Some(r#"{"ui.windowColor": "teal"}"#));
         assert_eq!(
             h.m.window_color(),
             Some((0xff, 0x88, 0x00)),
@@ -1991,48 +1991,232 @@ mod tests {
     #[test]
     fn a_broken_settings_file_keeps_the_last_good_settings() {
         let mut h = Harness::new();
-        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.cardOpacity": 0.9}"#);
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.fitPadding": 40}"#);
         assert_eq!(h.m.config.terminal.font_size, 21.);
-        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.cardOpacity": 0.9,, "x": 1}"#);
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.fitPadding": 40,, "x": 1}"#);
         assert!(h.m.settings_error.is_some());
         assert_eq!(
             h.m.config.terminal.font_size, 21.,
             "the last good settings stay"
         );
-        assert_eq!(h.m.config.ui.card_opacity, 0.9);
+        assert_eq!(h.m.config.ui.fit_padding, 40.);
         h.m.apply_settings_text(r#"{"terminal.fontSize": 18}"#);
         assert!(h.m.settings_error.is_none());
         assert_eq!(h.m.config.terminal.font_size, 18.);
     }
 
-    // theme.json follows the same rule (#425): a bad edit warns and the theme
-    // in force stays; an emptied file is the empty theme.
+    // A ui theme follows the same rule (#425, #511): a bad edit warns and the
+    // look in force stays; an emptied file is the built-in look.
     #[test]
-    fn a_broken_theme_file_keeps_the_last_good_theme() {
-        use crate::theme_file::{BorderSpec, ColorSpec};
+    fn a_broken_ui_theme_keeps_the_last_good_look() {
+        use crate::ui_theme::{BorderSpec, ColorSpec};
         let mut h = Harness::new();
-        h.m.apply_theme_file_text(
-            r#"{"titlebar.background": "canvas", "titlebar.border": "none"}"#,
+        h.m.apply_ui_theme_text(
+            "default",
+            Some(r#"{"titlebar.background": "canvas", "titlebar.border": "none", "ui.cardRadius": 12}"#),
         );
-        assert_eq!(
-            h.m.chrome_theme.titlebar.background,
-            Some(ColorSpec::Canvas)
-        );
-        assert_eq!(h.m.chrome_theme.titlebar.border, Some(BorderSpec::None));
+        assert_eq!(h.m.ui_theme.titlebar.background, Some(ColorSpec::Canvas));
+        assert_eq!(h.m.ui_theme.titlebar.border, Some(BorderSpec::None));
+        assert_eq!(h.m.config.ui.card_radius, 12.);
         h.m.effects.clear();
-        h.m.apply_theme_file_text(r#"{"titlebar.background": "canvas",, }"#);
+        h.m.apply_ui_theme_text("default", Some(r#"{"titlebar.background": "canvas",, }"#));
         assert_eq!(
-            h.m.chrome_theme.titlebar.background,
+            h.m.ui_theme.titlebar.background,
             Some(ColorSpec::Canvas),
-            "the last good theme stays"
+            "the last good look stays"
         );
+        assert_eq!(h.m.config.ui.card_radius, 12.);
         assert!(h
             .m
             .effects
             .iter()
-            .any(|e| matches!(e, Effect::Warn(w) if w.contains("theme.json not applied"))));
-        h.m.apply_theme_file_text("");
-        assert_eq!(h.m.chrome_theme, Default::default());
+            .any(|e| matches!(e, Effect::Warn(w) if w.contains("default.json not applied"))));
+        h.m.apply_ui_theme_text("default", Some(""));
+        assert_eq!(h.m.ui_theme, Default::default());
+        assert_eq!(h.m.config.ui.card_radius, 0., "back to the built-in look");
+    }
+
+    // #511: the look comes from the theme and survives a settings.json apply,
+    // which builds a fresh `config.ui` each time.
+    #[test]
+    fn the_look_survives_a_settings_apply_and_settings_cannot_set_it() {
+        let mut h = Harness::new();
+        h.m.apply_ui_theme_text(
+            "default",
+            Some(r#"{"ui.cardRadius": 12, "ui.showGrid": false}"#),
+        );
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 17, "ui.fitPadding": 9}"#);
+        assert_eq!(h.m.config.ui.card_radius, 12.);
+        assert!(!h.m.config.ui.show_grid);
+        assert_eq!(h.m.config.ui.fit_padding, 9.);
+        // A look key typed into settings.json is ignored, with a notice, and is
+        // not an error: the rest of the file applies.
+        h.m.effects.clear();
+        h.m.apply_settings_text(
+            r#"{"terminal.fontSize": 18, "ui.cardRadius": 30, "ui": {"showGrid": true}}"#,
+        );
+        assert!(h.m.settings_error.is_none());
+        assert_eq!(h.m.config.terminal.font_size, 18.);
+        assert_eq!(h.m.config.ui.card_radius, 12.);
+        assert!(!h.m.config.ui.show_grid);
+        assert!(h.m.effects.iter().any(|e| matches!(e, Effect::Warn(w)
+            if w.contains("ui.cardRadius") && w.contains("ui.showGrid") && w.contains("ui-themes"))));
+    }
+
+    // A joined viewer is sent the host's settings (#433): the look in them, from
+    // a host older than this build, is dropped without a notice, and the host's
+    // `ui.theme` does not change the viewer's look (#511).
+    #[test]
+    fn a_host_settings_file_does_not_touch_the_viewers_look() {
+        let mut h = Harness::new();
+        h.m.apply_settings_text(r#"{"ui.theme": "mine"}"#);
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadUiTheme("mine".into())));
+        h.m.apply_ui_theme_text("mine", Some(r#"{"ui.cardRadius": 7}"#));
+        h.m.effects.clear();
+        h.m.apply_host_settings_text(
+            r#"{"ui.theme": "theirs", "ui.cardRadius": 30, "terminal.fontSize": 15}"#,
+        );
+        assert_eq!(h.m.config.terminal.font_size, 15.);
+        assert_eq!(h.m.config.ui.card_radius, 7.);
+        assert_eq!(h.m.ui_theme_name, "mine");
+        assert!(!h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadUiTheme(_) | Effect::Warn(_))));
+        // The viewer's own settings.json names its theme.
+        h.m.note_ui_theme_setting("other");
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadUiTheme("other".into())));
+        assert_eq!(
+            crate::model::settings_in::ui_theme_name_in("{ // mine\n \"ui.theme\": \"glass\" }"),
+            Some("glass".into())
+        );
+        assert_eq!(crate::model::settings_in::ui_theme_name_in("{}"), None);
+    }
+
+    #[test]
+    fn a_ui_theme_loads_when_the_setting_changes_and_not_on_every_settings_edit() {
+        let mut h = Harness::new();
+        h.m.apply_settings_text("{}");
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadUiTheme("default".into())));
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 17}"#);
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::LoadUiTheme(_))));
+        h.m.apply_settings_text(r#"{"ui.theme": "glass"}"#);
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadUiTheme("glass".into())));
+    }
+
+    // A name with no file keeps the look you had and says so; `default` needs no file.
+    #[test]
+    fn a_ui_theme_with_no_file_keeps_the_look_you_had() {
+        let mut h = Harness::new();
+        h.m.apply_ui_theme_text("glass", Some(r#"{"ui.cardRadius": 12}"#));
+        h.m.effects.clear();
+        h.m.apply_ui_theme_text("ghost", None);
+        assert_eq!(h.m.ui_theme_name, "glass");
+        assert_eq!(h.m.config.ui.card_radius, 12.);
+        assert!(h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::Warn(w) if w.contains("ghost"))));
+        h.m.effects.clear();
+        h.m.apply_ui_theme_text("default", None);
+        assert_eq!(h.m.ui_theme_name, "default");
+        assert_eq!(h.m.config.ui.card_radius, 0.);
+        assert!(h.m.effects.is_empty());
+    }
+
+    // The watcher reports every file; only the one in force counts, and a file
+    // that failed to load at startup is retried by the name the setting gave.
+    #[test]
+    fn only_the_ui_theme_in_force_follows_its_file() {
+        let mut h = Harness::new();
+        h.m.apply_settings_text(r#"{"ui.theme": "glass"}"#);
+        h.m.apply_ui_theme_text("glass", Some("{ broken"));
+        assert_eq!(h.m.ui_theme_name, "", "never loaded");
+        h.m.ui_theme_file_changed("other", r#"{"ui.cardRadius": 5}"#);
+        assert_eq!(h.m.config.ui.card_radius, 0.);
+        h.m.ui_theme_file_changed("glass", r#"{"ui.cardRadius": 5}"#);
+        assert_eq!(h.m.config.ui.card_radius, 5.);
+        h.m.ui_theme_file_changed("other", r#"{"ui.cardRadius": 9}"#);
+        assert_eq!(h.m.config.ui.card_radius, 5.);
+        h.m.ui_theme_file_changed("glass", r#"{"ui.cardRadius": 6}"#);
+        assert_eq!(h.m.config.ui.card_radius, 6.);
+    }
+
+    // The picker (#511): rows from the folder, the one you had first under
+    // "active", a move previews, cancel puts back, Enter writes `ui.theme`.
+    #[test]
+    fn the_ui_theme_picker_previews_cancels_and_saves() {
+        use crate::model::palette_state::{Source, ACTIVE_THEME_HINT};
+        let mut h = Harness::new();
+        h.m.apply_ui_theme_text("default", Some("{}"));
+        let effects = h.run("uitheme.pick");
+        assert!(effects.contains(&Effect::RefreshUiThemes));
+        h.m.ui_theme_names = vec!["default".into(), "glass".into(), "zen".into()];
+        h.m.ui_theme_name = "glass".into();
+        h.m.ui_theme_before_preview = Some("glass".into());
+        let items = h.m.palette_items(Source::UiThemes, &[]);
+        assert_eq!(
+            items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            ["glass", "default", "zen"]
+        );
+        assert_eq!(items[0].hint.as_deref(), Some(ACTIVE_THEME_HINT));
+        assert!(!Source::UiThemes.dims_canvas());
+        assert!(Source::UiThemes.keeps_its_order());
+        h.m.palette_preview(Source::UiThemes, Some("zen"));
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadUiTheme("zen".into())));
+        h.m.palette_preview(Source::UiThemes, None);
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadUiTheme("glass".into())));
+        h.m.palette_run(Source::UiThemes, "zen");
+        assert!(h.m.take_effects().contains(&Effect::SaveSetting {
+            path: "ui.theme".into(),
+            value: serde_json::json!("zen"),
+        }));
+    }
+
+    // #511: the label of the card Cmd+1 fitted hides when the theme asks.
+    #[test]
+    fn the_fitted_card_hides_its_label_when_the_ui_theme_asks() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.framing);
+        assert!(!h.m.card_label_hidden(&b), "off by default");
+        h.m.apply_ui_theme_text("default", Some(r#"{"ui.hideLabelWhenFitted": true}"#));
+        assert!(h.m.card_label_hidden(&b));
+        assert!(!h.m.card_label_hidden(&a), "only the fitted card");
+        h.m.set_focus(Some(&a));
+        assert!(!h.m.card_label_hidden(&b), "not once focus left it");
+        // The maximised card keeps its own key, which stays in settings.json.
+        h.m.apply_ui_theme_text("default", Some("{}"));
+        h.m.apply_settings_text(r#"{"ui.hideLabelWhenMaximised": true}"#);
+        h.m.selection.maximized = true;
+        assert!(h.m.card_label_hidden(&a));
     }
 
     // The file is checked before it is applied, and a file with an error is not
@@ -2052,7 +2236,7 @@ mod tests {
         };
         let _ = warned(&mut h);
         // a setting of the wrong kind
-        h.m.apply_settings_text(r#"{"terminal.fontSize": "big", "ui.showGrid": false}"#);
+        h.m.apply_settings_text(r#"{"terminal.fontSize": "big", "ui.animations": false}"#);
         let w = warned(&mut h);
         assert!(
             w.iter()
@@ -2063,7 +2247,7 @@ mod tests {
             h.m.config.terminal.font_size, 21.,
             "nothing of it was applied"
         );
-        assert!(h.m.config.ui.show_grid, "not even the part that was fine");
+        assert!(h.m.config.ui.animations, "not even the part that was fine");
         // a file that is not an object
         h.m.apply_settings_text("[1, 2]");
         assert!(!warned(&mut h).is_empty());
@@ -2071,12 +2255,12 @@ mod tests {
         // what must NOT be refused: the nested shape, a list for the background,
         // an unknown name, a number out of range, a trailing comma, comments
         h.m.apply_settings_text(
-            "{ // mine\n \"terminal\": {\"fontSize\": 19,},\n \"ui.backgroundImage\": [\"dusk\", \"ember\"],\n \"nope.nothing\": 1,\n \"ui.cardOpacity\": 7,\n}",
+            "{ // mine\n \"terminal\": {\"fontSize\": 19,},\n \"ui.panStep\": [100],\n \"nope.nothing\": 1,\n \"ui.fitPadding\": 7000,\n}",
         );
         assert!(warned(&mut h).is_empty());
         assert!(h.m.settings_error.is_none());
         assert_eq!(h.m.config.terminal.font_size, 19.);
-        assert_eq!(h.m.config.ui.background_image.len(), 2);
+        assert_eq!(h.m.config.ui.fit_padding, 500., "clamped, not refused");
     }
 
     #[test]
@@ -2098,14 +2282,14 @@ mod tests {
     // must leave a file that still parses.
     #[test]
     fn saving_a_setting_into_a_file_with_a_trailing_comma_still_parses() {
-        let text = "{\n  \"terminal.fontSize\": 16,\n  \"ui.cardOpacity\": 0.9,\n}\n";
+        let text = "{\n  \"terminal.fontSize\": 16,\n  \"ui.fitPadding\": 9,\n}\n";
         let patched =
-            Model::patched_settings(Some(text), "ui.windowColor", &serde_json::json!("lime"))
+            Model::patched_settings(Some(text), "ui.fitMagnify", &serde_json::json!(true))
                 .expect("a change");
         let mut h = Harness::new();
         h.m.apply_settings_text(&patched);
         assert!(h.m.settings_error.is_none(), "{patched}");
-        assert_eq!(h.m.config.ui.window_color, "lime");
+        assert!(h.m.config.ui.fit_magnify);
         assert_eq!(h.m.config.terminal.font_size, 16.);
     }
 

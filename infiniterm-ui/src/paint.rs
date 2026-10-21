@@ -895,9 +895,8 @@ impl AppView {
         let ui = &self.model.config.ui;
         // A maximised card fills the window and the status bar names it, so
         // its chips can go (#71). The ssh warning below them stays.
-        let hide = ui.hide_label_when_maximised
-            && self.model.selection.maximized
-            && self.model.selection.focused_id.as_deref() == Some(card.id.as_str());
+        // Likewise the card Cmd+1 fitted to the window, when the ui theme asks.
+        let hide = self.model.card_label_hidden(&card.id);
         let corner = ui.card_label_position;
         let chrome = &self.chrome;
         let inv = inverse_scale(scale, self.model.ui_scale) as f32;

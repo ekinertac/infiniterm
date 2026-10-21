@@ -1157,6 +1157,11 @@ impl Model {
                 path: "theme".into(),
                 value: serde_json::Value::String(id.into()),
             }),
+            // Previewed already; this writes `ui.theme` so it outlives the session.
+            Source::UiThemes => self.effects.push(Effect::SaveSetting {
+                path: "ui.theme".into(),
+                value: serde_json::Value::String(id.into()),
+            }),
             Source::Placement => match id {
                 "slot" => self.pick_slot(),
                 "here" => self
