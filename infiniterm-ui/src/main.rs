@@ -31,18 +31,32 @@ mod editor_body;
 mod editor_tabs;
 mod editors;
 mod field;
+// Seven modules talk to AppKit and CoreText. Elsewhere `not_macos.rs`
+// answers under the same names (its header says what each leaves undone).
+#[cfg(target_os = "macos")]
 mod finder_service;
 mod fonts;
+#[cfg(target_os = "macos")]
 mod fullscreen;
+#[cfg(target_os = "macos")]
 mod icon_font;
 mod ime;
 mod input;
+#[cfg(target_os = "macos")]
 mod instance_icon;
 mod keycast;
 mod keycode;
 mod menus;
+#[cfg(target_os = "macos")]
 mod middle_drag;
+#[cfg(target_os = "macos")]
 mod native_menu;
+#[cfg(not(target_os = "macos"))]
+mod not_macos;
+#[cfg(not(target_os = "macos"))]
+use not_macos::{
+    finder_service, fullscreen, icon_font, instance_icon, middle_drag, native_menu, title_drag,
+};
 mod omnibox;
 mod overlays;
 mod own_window;
@@ -56,6 +70,7 @@ mod tab_strip;
 mod terminal_body;
 mod terminals;
 mod text;
+#[cfg(target_os = "macos")]
 mod title_drag;
 mod transcript_body;
 mod updater;
@@ -281,13 +296,16 @@ pub struct AppView {
     pub pick_request: Option<Option<String>>,
     /// The socket viewers join through (`ift join`, #423); `None` when the
     /// backend is not the daemon or the socket could not be bound.
+    #[cfg(unix)]
     pub join: Option<infiniterm_core::backend::join::JoinHub>,
     /// The agent states last sent to viewers, so a change is sent once.
     pub last_agents: String,
     /// The edits viewers send up (host side, #423): applied in the poll.
+    #[cfg(unix)]
     pub join_updates:
         Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join::RemoteUpdate>>,
     /// A viewer's edits on their way up to the host (viewer side).
+    #[cfg(unix)]
     pub uplink: Option<std::sync::mpsc::Sender<infiniterm_core::backend::join::RemoteUpdate>>,
     /// This window is a viewer (`ift join`, #423): the canvas is the host's,
     /// nothing is saved, nothing is seeded, no session is started.
@@ -296,6 +314,7 @@ pub struct AppView {
     /// connection tries again now (#442).
     pub viewer_poke: bool,
     /// The host's canvas, as the client thread reads it.
+    #[cfg(unix)]
     pub canvas_rx:
         Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join_client::CanvasEvent>>,
     /// A terminal's Paste from the right-click menu: the card to paste into,
@@ -464,7 +483,9 @@ fn main() {
     };
     // An `ift serve` of this data dir (a canvas host kept while the app was
     // closed, #438) is asked to save and go first: the app takes over its
-    // canvas and its sessions, and viewers join the app (#442).
+    // canvas and its sessions, and viewers join the app (#442). `ift serve`
+    // is unix-only, so there is nothing to take over from elsewhere.
+    #[cfg(unix)]
     {
         use infiniterm_core::headless::{serve_pid_file, stop_running_serve, ServeStop};
         match stop_running_serve(&serve_pid_file(), std::time::Duration::from_secs(10)) {
@@ -506,7 +527,11 @@ fn main() {
             .status();
         std::process::exit(0);
     }
+    // A joined window is `ift join`'s, which is unix-only.
+    #[cfg(unix)]
     let joined = infiniterm_core::backend::remote::join_from_env().is_some();
+    #[cfg(windows)]
+    let joined = false;
     Application::new().run(move |cx: &mut App| {
         keycode::install();
         #[cfg(target_os = "macos")]
@@ -847,6 +872,7 @@ fn main() {
                     // A joined window ends the shared ssh connection a
                     // password host got (#450), so a normal quit leaves
                     // nothing running; a crash leaves it its 10 minutes.
+                    #[cfg(unix)]
                     if let Some(host) = infiniterm_core::backend::remote::join_from_env() {
                         use std::os::unix::fs::MetadataExt;
                         let uid = std::fs::metadata(infiniterm_core::paths::home_dir())

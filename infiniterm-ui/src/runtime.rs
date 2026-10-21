@@ -75,12 +75,16 @@ impl AppView {
             shortcuts_field: Default::default(),
             shortcuts_index: 0,
             pick_request: None,
+            #[cfg(unix)]
             join: None,
             last_agents: String::new(),
+            #[cfg(unix)]
             join_updates: None,
+            #[cfg(unix)]
             uplink: None,
             viewer: false,
             viewer_poke: false,
+            #[cfg(unix)]
             canvas_rx: None,
             read_requests: vec![],
             shortcuts_scroll: gpui::ScrollHandle::new(),
@@ -760,6 +764,7 @@ impl AppView {
             match change.file {
                 ConfigFile::Settings => {
                     self.apply_settings_text(&change.contents);
+                    #[cfg(unix)]
                     if let Some(hub) = &self.join {
                         hub.publish_config(
                             infiniterm_core::backend::join::KIND_SETTINGS,
@@ -772,6 +777,7 @@ impl AppView {
                 ConfigFile::Theme => self.model.apply_theme_file_text(&change.contents),
                 _ => {
                     self.model.apply_keymap_text(&change.contents);
+                    #[cfg(unix)]
                     if let Some(hub) = &self.join {
                         hub.publish_config(
                             infiniterm_core::backend::join::KIND_KEYBINDINGS,
@@ -924,6 +930,11 @@ impl AppView {
     }
 
     /// A viewer's canvas, to the host, on the revision it was edited on.
+    /// Joining is unix-only, so there is no host to send to elsewhere.
+    #[cfg(windows)]
+    fn send_up(&mut self) {}
+
+    #[cfg(unix)]
     fn send_up(&mut self) {
         // Nothing to say before the host's own canvas has arrived.
         if !self.model.snapshot_seen {
@@ -943,6 +954,12 @@ impl AppView {
     /// canvas in place. An edit made on an old canvas is dropped and the host
     /// republishes its own, which is how that viewer finds out. True when the
     /// canvas changed, so the next frame starts any shell it now needs.
+    #[cfg(windows)]
+    pub fn apply_remote_updates(&mut self) -> bool {
+        false
+    }
+
+    #[cfg(unix)]
     pub fn apply_remote_updates(&mut self) -> bool {
         use infiniterm_core::model::persist::RemoteApply;
         let Some(rx) = &self.join_updates else {
@@ -987,6 +1004,10 @@ impl AppView {
     /// What the host's canvas said since the last tick (a viewer, #423): a
     /// layout is applied in place, agent states on top of it, and a status
     /// (joined, lost, refused) is shown as a notice.
+    #[cfg(windows)]
+    pub fn drain_canvas(&mut self) {}
+
+    #[cfg(unix)]
     pub fn drain_canvas(&mut self) {
         use infiniterm_core::backend::join_client::CanvasEvent;
         let Some(rx) = &self.canvas_rx else {
@@ -1072,7 +1093,11 @@ fn startup_terminal() -> (infiniterm_core::config::TerminalBackend, usize) {
 
 /// Opens the socket `ift join` viewers reach through ssh, and gives them the
 /// canvas as it is now (#423). A failure is said and costs nothing else: the
-/// app runs without joining.
+/// app runs without joining. Unix only: the hub rides on a unix socket.
+#[cfg(windows)]
+fn start_join(_app: &mut AppView) {}
+
+#[cfg(unix)]
 fn start_join(app: &mut AppView) {
     // A viewer is a window onto the host's canvas, never a host: it would
     // relay sessions that are not its own (found in the #423 drive, which
@@ -1251,7 +1276,11 @@ pub fn startup(app: &mut AppView) {
         // The settings were applied before this, with the Mac's folder.
         app.model.start_dir = "~".into();
     }
+    #[cfg(unix)]
     let join_host = infiniterm_core::backend::remote::join_from_env();
+    // No joining on Windows (unix sockets and ssh), so never a viewer.
+    #[cfg(windows)]
+    let join_host: Option<()> = None;
     app.viewer = join_host.is_some();
     // A viewer asks the host nothing at launch: the canvas arrives from the
     // client thread, and every session on it is adoptable through the host.
@@ -1266,13 +1295,18 @@ pub fn startup(app: &mut AppView) {
         app.model.load_layout(None);
         app.model.first_run = false;
         app.model.read_only = true;
-        let (tx, rx) = std::sync::mpsc::channel();
-        let (edit_tx, edit_rx) = std::sync::mpsc::channel();
-        app.canvas_rx = Some(rx);
-        app.uplink = Some(edit_tx);
-        std::thread::spawn(move || {
-            infiniterm_core::backend::join_client::run_canvas_client(host, tx, edit_rx)
-        });
+        #[cfg(unix)]
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (edit_tx, edit_rx) = std::sync::mpsc::channel();
+            app.canvas_rx = Some(rx);
+            app.uplink = Some(edit_tx);
+            std::thread::spawn(move || {
+                infiniterm_core::backend::join_client::run_canvas_client(host, tx, edit_rx)
+            });
+        }
+        #[cfg(windows)]
+        let _ = host;
     } else {
         app.model
             .load_layout(infiniterm_core::layout_file::read_layout().as_deref());

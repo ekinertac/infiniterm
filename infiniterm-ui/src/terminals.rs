@@ -72,6 +72,13 @@ impl AppView {
     /// the frame alone never ran in a window behind others, which drew
     /// nothing, so a card the host's app had taken over stayed lost until the
     /// window was brought forward. True when a card got its session back.
+    #[cfg(windows)]
+    pub fn drive_viewer_links(&mut self) -> bool {
+        // Joining is unix-only, so there are no viewer cards to drive.
+        false
+    }
+
+    #[cfg(unix)]
     pub fn drive_viewer_links(&mut self) -> bool {
         if !self.viewer {
             return false;

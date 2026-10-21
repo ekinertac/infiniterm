@@ -68,6 +68,12 @@ pub struct BrowserStubBody {
 impl BrowserStubBody {
     /// The real body hands focus to the page. There is no page.
     pub fn set_focus(&mut self, _focused: bool) {}
+
+    /// The real body names the tab under a right-click. A stub card has no
+    /// tab strip.
+    pub fn tab_at(&self, _local: infiniterm_core::grid::Point) -> Option<usize> {
+        None
+    }
 }
 
 impl CardBody for BrowserStubBody {
@@ -176,6 +182,13 @@ impl AppView {
 
     /// No Chromium, no find results to drain.
     pub fn drain_find(&mut self) {}
+
+    /// The page's native menu. There is no page to ask, so there is no menu
+    /// to open; `overlays.rs` and `main.rs` go on calling it without a cfg.
+    pub fn show_page_menu(&mut self, _cx: &mut gpui::Context<Self>) {}
+
+    /// The mouse's back and forward buttons over a page. There is no page.
+    pub fn mouse_navigate(&mut self, _e: &gpui::MouseDownEvent, _forward: bool) {}
 
     /// Never reached: `context_menu` is only ever set from a page's own
     /// right-click, and there are no pages. It exists so `overlays.rs` can
