@@ -107,7 +107,7 @@ impl DiffView {
     }
 
     fn full(&self, rel: &str) -> String {
-        format!("{}/{rel}", self.repo.trim_end_matches('/'))
+        format!("{}/{rel}", self.repo.trim_end_matches(['/', '\\']))
     }
 
     /// The list's rows: flat, the name is the path in the repo.
@@ -148,7 +148,10 @@ impl EditorBody {
         });
         match file {
             Some(t) => {
-                let rel = t[repo.len()..].trim_start_matches('/').to_string();
+                // Git names files with `/` whatever the platform's separator is.
+                let rel = t[repo.len()..]
+                    .trim_start_matches(['/', '\\'])
+                    .replace('\\', "/");
                 self.diff_show(&rel);
                 if list_shown {
                     self.diff_show_list(false);
@@ -326,8 +329,8 @@ impl EditorBody {
             return BodyAction::None;
         };
         let rel = path
-            .strip_prefix(d.repo.trim_end_matches('/'))
-            .map(|r| r.trim_start_matches('/').to_string())
+            .strip_prefix(d.repo.trim_end_matches(['/', '\\']))
+            .map(|r| r.trim_start_matches(['/', '\\']).replace('\\', "/"))
             .unwrap_or_else(|| path.to_string());
         if d.shown.as_deref() != Some(rel.as_str()) {
             self.diff_show(&rel);
