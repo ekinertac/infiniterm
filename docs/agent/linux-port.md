@@ -19,12 +19,12 @@ What it took: master does not build on Linux (`core-graphics-types` fails first,
 
 What is wrong at runtime, found by the spike:
 
-1. The first frame is never shown. The window stays black until the first input event (a mouse move is enough), on every launch. Probably gpui's X11 backend drawing before the window is exposed while the app draws on demand (`needs_frame()`); not looked into yet.
-2. The default terminal font `ui-monospace, Menlo, monospace` resolves to a PROPORTIONAL font on Linux: the cell is measured from its `M` and the text is spread wide. `fc-match monospace` on the same box names DejaVu Sans Mono, so the font gpui picked is not the one the fontconfig alias gives; why was not looked into. Linux needs its own default (`DejaVu Sans Mono` worked) or a lookup through `fc-match monospace`.
+1. The first frame is never shown. The window stays black until the first input event (a mouse move is enough), on every launch. 2026-10-22: only with NO window manager. With openbox running on the same Xvfb the first frame draws at once, so it is not an app bug and was not fixed; a test run starts a window manager (openbox) before the app. The window manager also draws its own title bar above the app's (gpui's X11 window asks for server-side decorations); that is a later polish item.
+2. The default terminal font `ui-monospace, Menlo, monospace` resolves to a PROPORTIONAL font on Linux: the cell is measured from its `M` and the text is spread wide. `fc-match monospace` on the same box names DejaVu Sans Mono, so the font gpui picked is not the one the fontconfig alias gives; why was not looked into. Linux needs its own default (`DejaVu Sans Mono` worked) or a lookup through `fc-match monospace`. Fixed 2026-10-22: gpui takes ONE family name and draws a name that is not installed in the platform's default face, and the old `family_of` took the first named family (Menlo) without asking. `fonts::terminal_family_of` now picks the first INSTALLED named family, then for `monospace` the first installed entry of a per-platform list (`PLATFORM_MONOSPACE`), from gpui's `all_font_names`, read once when the window opens (`fonts::remember_installed`). Checked on the droplet: the default list draws DejaVu Sans Mono. `family_of` kept its one-argument signature because the Windows branch's `browser_stub.rs` calls it with no window at hand.
 3. Nerd Font icons draw as boxes: `icon_font` is a stub off macOS, so the bundled `Symbols Nerd Font Mono` is not registered.
 4. Themes come from `<data>/themes/`, which `tools/bundle.sh` fills on a Mac. A Linux build needs its own way to ship them (the spike copied one by hand).
 5. Idle CPU is about 36% of one core with a focused terminal card, all of it in llvmpipe threads (the cursor blink redraws the window in software). That is the price of lavapipe, not a bug; a real GPU will not show it. Do not measure performance on the droplet.
-6. Not confirmed: on a first launch the welcome card was clipped by the window's right edge after the window was resized from 1600x1000 to 1400x900 with xdotool. Either no refit follows a resize or framing differs on X11; check on a window that is not resized under it.
+6. On a first launch the welcome card was clipped by the window's right edge after the window was resized with xdotool. 2026-10-22: a first launch on a window that is not resized frames the card as on the Mac; nothing in master refits the view when the window changes size, on any platform, so this is the app's behaviour everywhere and was left alone.
 
 Not tested: Wayland, a real GPU, IME (`ime.rs` compiles because it is gpui's generic `EntityInputHandler`), clipboard, colour emoji (no colour emoji font was installed; ⚠️ drew in monochrome).
 
@@ -32,7 +32,7 @@ Not tested: Wayland, a real GPU, IME (`ime.rs` compiles because it is gpui's gen
 
 ```
 doctl --context ekinertac compute droplet create ift-linux-spike --image ubuntu-24-04-x64 --size s-8vcpu-16gb --region fra1 --ssh-keys 23752258 --wait
-apt-get install -y gcc g++ libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev make cmake clang lld llvm git curl pkg-config build-essential mesa-vulkan-drivers vulkan-tools xvfb imagemagick xdotool fonts-dejavu-core x11-utils
+apt-get install -y gcc g++ libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev make cmake clang lld llvm git curl pkg-config build-essential mesa-vulkan-drivers vulkan-tools xvfb imagemagick xdotool fonts-dejavu-core x11-utils openbox
 git clone https://github.com/ekinertac/infiniterm.git && cd infiniterm && git checkout windows-merge-master
 cat >> infiniterm-ui/src/keycode.rs <<'R'
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -44,8 +44,8 @@ pub fn last_dead() -> bool { false }
 R
 cargo build -p infiniterm-ui --no-default-features && cargo build -p infiniterm-cli -p infiniterm-session -p infiniterm-hook
 Xvfb :99 -screen 0 1920x1080x24 &
+DISPLAY=:99 openbox &                          # without a window manager the first frame stays black
 DISPLAY=:99 INFINITERM_DATA_DIR=/tmp/ift-spike PATH=$PWD/target/debug:$PATH infiniterm &
-DISPLAY=:99 xdotool mousemove 500 500          # the black first frame
 DISPLAY=:99 import -window root shot.png
 ```
 
