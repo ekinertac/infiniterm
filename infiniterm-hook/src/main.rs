@@ -34,7 +34,7 @@ fn try_report() -> Option<()> {
     let payload = payload.trim();
     let payload = if payload.starts_with('{') { payload } else { "{}" };
 
-    let mut stream = connect(&endpoint())?;
+    let stream = connect(&endpoint())?;
 
     let agent = match agent {
         Some(a) => format!(",\"agent\":{}", json_string(&a)),
@@ -47,8 +47,65 @@ fn try_report() -> Option<()> {
         agent,
         payload
     );
-    stream.write_all(line.as_bytes()).ok()?;
-    Some(())
+    send(stream, line.as_bytes()).then_some(())
+}
+
+/// How long the hook gives the app, for each of opening its endpoint and
+/// writing the line. The hook runs inside an agent's turn, which waits for
+/// it: an app that is wedged or busy must cost a turn at most this long, and
+/// then the event is dropped, which is cheaper than a stalled agent.
+#[cfg(windows)]
+const BUDGET: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Windows' `ERROR_PIPE_BUSY`: every instance of the pipe is serving another
+/// client for the moment. Not "nobody is listening", so it is worth a retry.
+#[cfg(any(windows, test))]
+const ERROR_PIPE_BUSY: i32 = 231;
+
+/// Runs `open` until it works, retrying only while the pipe is busy and only
+/// within `budget`. Any other error means there is no app to tell.
+#[cfg(any(windows, test))]
+fn open_within<T>(
+    budget: std::time::Duration,
+    mut open: impl FnMut() -> std::io::Result<T>,
+) -> Option<T> {
+    let start = std::time::Instant::now();
+    loop {
+        match open() {
+            Ok(v) => return Some(v),
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) && start.elapsed() < budget => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Writes `bytes` on a thread and waits at most `budget` for it. A `File` has
+/// no write timeout, so this is where a stuck pipe gets cut off; the thread
+/// is left behind and ends with the process, which exits right after.
+#[cfg(any(windows, test))]
+fn write_within<W: Write + Send + 'static>(
+    mut w: W,
+    bytes: Vec<u8>,
+    budget: std::time::Duration,
+) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(w.write_all(&bytes).is_ok());
+    });
+    rx.recv_timeout(budget).unwrap_or(false)
+}
+
+/// The unix socket carries its own write timeout (see `connect`).
+#[cfg(unix)]
+fn send<W: Write + Send + 'static>(mut w: W, bytes: &[u8]) -> bool {
+    w.write_all(bytes).is_ok()
+}
+
+#[cfg(windows)]
+fn send<W: Write + Send + 'static>(w: W, bytes: &[u8]) -> bool {
+    write_within(w, bytes.to_vec(), BUDGET)
 }
 
 /// Where a running infiniterm listens. Must match `paths::socket_path`.
@@ -93,22 +150,24 @@ fn fnv1a(text: &str) -> u64 {
 /// the client half, which is the whole reason this binary can stay
 /// dependency-free on Windows.
 ///
-/// No write timeout, unlike the unix side: a `File` has none. The pipe's
-/// buffer is 64 KiB against a line of a few hundred bytes and the app reads
-/// each connection at once, so a write here does not block in practice.
+/// A `File` has no write timeout, unlike the unix side, so `send` writes on
+/// a thread and gives up after `BUDGET`. Opening retries while every pipe
+/// instance is busy with another client (another hook, say), and gives up at
+/// the same budget: an event dropped there was a lost agent state change.
 #[cfg(windows)]
-fn connect(path: &std::path::Path) -> Option<impl Write> {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .ok()
+fn connect(path: &std::path::Path) -> Option<impl Write + Send + 'static> {
+    open_within(BUDGET, || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+    })
 }
 
 /// The timeout matters here: the app may be wedged, and a hook that waits on
 /// it holds up the agent's turn.
 #[cfg(unix)]
-fn connect(path: &std::path::Path) -> Option<impl Write> {
+fn connect(path: &std::path::Path) -> Option<impl Write + Send + 'static> {
     let stream = std::os::unix::net::UnixStream::connect(path).ok()?;
     stream
         .set_write_timeout(Some(std::time::Duration::from_millis(200)))
@@ -134,4 +193,83 @@ fn json_string(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+    use std::time::{Duration, Instant};
+
+    fn busy() -> io::Error {
+        io::Error::from_raw_os_error(ERROR_PIPE_BUSY)
+    }
+
+    // Another client holds every instance of the pipe for a moment; the next
+    // try is free.
+    #[test]
+    fn a_busy_pipe_is_tried_again_until_it_opens() {
+        let mut calls = 0;
+        let got = open_within(Duration::from_secs(1), || {
+            calls += 1;
+            if calls < 4 {
+                Err(busy())
+            } else {
+                Ok("open")
+            }
+        });
+        assert_eq!(got, Some("open"));
+        assert_eq!(calls, 4);
+    }
+
+    // No pipe at all means no app: one try, no waiting.
+    #[test]
+    fn any_other_error_gives_up_at_once() {
+        let mut calls = 0;
+        let got: Option<()> = open_within(Duration::from_secs(1), || {
+            calls += 1;
+            Err(io::Error::from(io::ErrorKind::NotFound))
+        });
+        assert_eq!(got, None);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn a_pipe_that_stays_busy_is_given_up_on_at_the_budget() {
+        let start = Instant::now();
+        let got: Option<()> = open_within(Duration::from_millis(40), || Err(busy()));
+        assert_eq!(got, None);
+        assert!(start.elapsed() < Duration::from_secs(1), "{:?}", start.elapsed());
+    }
+
+    /// A pipe nobody reads: the write never returns.
+    struct Stuck;
+    impl Write for Stuck {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            std::thread::sleep(Duration::from_secs(30));
+            Ok(0)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    // The point of #469: a wedged app costs the agent's turn 200 ms, not
+    // however long the app stays wedged.
+    #[test]
+    fn a_write_that_never_returns_is_cut_off_at_the_budget() {
+        let start = Instant::now();
+        assert!(!write_within(Stuck, b"x".to_vec(), Duration::from_millis(50)));
+        assert!(start.elapsed() < Duration::from_secs(5), "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn a_write_that_works_reports_success() {
+        assert!(write_within(Vec::<u8>::new(), b"line\n".to_vec(), Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn a_json_string_escapes_what_would_break_the_line() {
+        assert_eq!(json_string("a\"b\\c\nd"), "\"a\\\"b\\\\c\\nd\"");
+    }
 }
