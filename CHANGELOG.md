@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-22
+
+- Fixed: `terminal.fontFamily` is now read as a list. A family that is not installed is skipped and the next one is used; before, the first name was used even when it was missing, and the system's default font drew the terminal. A list that ends with `monospace` gets an installed monospace font when no named family is there.
+
 ### 2026-10-21
 
 - New: UI themes. The look of the app (window opacity and blur, window colour, background pictures, card corners and opacity, grid, dimming, the chrome font) and the title and status bar styling now live in `ui-themes/<name>.json` in the config folder (`~/.config/infiniterm/`), one file per look. `ui.theme` in `settings.json` picks the file (default `default`), and "UI theme: switch…" in the palette lists them and previews each one live; Escape puts the old look back. A file applies as you save it, and a file with a mistake is not applied (a notice says why and the look you had stays). Copy `default.json` to make another look; it lists every key with its default. The bars are `titlebar.background`, `titlebar.border`, `statusbar.background` and `statusbar.border`: a background is `#rgb`, `#rrggbb`, `canvas`, `card`, `bar` or `transparent`, a border is a colour or `none`.

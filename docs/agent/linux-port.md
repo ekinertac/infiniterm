@@ -1,0 +1,84 @@
+# Linux desktop app (#464)
+
+What this covers: whether the gpui app runs on Linux, how to test it on a server with no screen, and every macOS-only piece of the ui crate with a plan for Linux.
+
+Read it before touching a `cfg(target_os = "macos")` / `cfg(not(target_os = "macos"))` gate in `infiniterm-ui`, `not_macos.rs`, `keycode.rs`, or anything that runs `open`, `osascript` or reads `/Applications`.
+
+Related: `docs/windows-handoff.md` on the `windows-merge-master` branch (the same seam, built for Windows first), `join-serve-and-login.md` (`ift serve`, which already runs on Linux), `daemon-and-backends.md`.
+
+## Spike result, 2026-10-21
+
+The app draws on a Linux server with no screen. Droplet: Ubuntu 24.04, 8 vCPU, 16 GB, Xvfb at 1920x1080x24, Mesa lavapipe (`llvmpipe (LLVM 20.1.2)`, Vulkan 1.4) as gpui's renderer. Checked with screenshots and `ift read`:
+
+- The window opens (1600x1000, no decorations because Xvfb has no window manager), the welcome Page card draws, the title bar and status bar draw.
+- A terminal card made with `ift run card.new.terminal` runs bash under `iftd` (the daemon backend), colours and the cursor draw, `ift send` and `ift read` work.
+- `xdotool type` reaches the shell. Super is Cmd: Super+T made a card, Super+2 fit every card.
+- A relaunch adopts the running `iftd` sessions with their screens.
+
+What it took: master does not build on Linux (`core-graphics-types` fails first, because the ui crate depends on the Cocoa crates unconditionally). The `windows-merge-master` branch (5abe95f) builds with `cargo build -p infiniterm-ui --no-default-features` after one change: `keycode.rs` has `install`, `dom_code` and `last_dead` for macOS and Windows only, so Linux needs its own three (the spike used no-op stand-ins). Nothing else in that branch's seam failed on `unix && !macos`.
+
+What is wrong at runtime, found by the spike:
+
+1. The first frame is never shown. The window stays black until the first input event (a mouse move is enough), on every launch. 2026-10-22: only with NO window manager. With openbox running on the same Xvfb the first frame draws at once, so it is not an app bug and was not fixed; a test run starts a window manager (openbox) before the app. The window manager also draws its own title bar above the app's (gpui's X11 window asks for server-side decorations); that is a later polish item.
+2. The default terminal font `ui-monospace, Menlo, monospace` resolves to a PROPORTIONAL font on Linux: the cell is measured from its `M` and the text is spread wide. `fc-match monospace` on the same box names DejaVu Sans Mono, so the font gpui picked is not the one the fontconfig alias gives; why was not looked into. Linux needs its own default (`DejaVu Sans Mono` worked) or a lookup through `fc-match monospace`. Fixed 2026-10-22: gpui takes ONE family name and draws a name that is not installed in the platform's default face, and the old `family_of` took the first named family (Menlo) without asking. `fonts::terminal_family_of` now picks the first INSTALLED named family, then for `monospace` the first installed entry of a per-platform list (`PLATFORM_MONOSPACE`), from gpui's `all_font_names`, read once when the window opens (`fonts::remember_installed`). Checked on the droplet: the default list draws DejaVu Sans Mono. `family_of` kept its one-argument signature because the Windows branch's `browser_stub.rs` calls it with no window at hand.
+3. Nerd Font icons draw as boxes: `icon_font` is a stub off macOS, so the bundled `Symbols Nerd Font Mono` is not registered.
+4. Themes come from `<data>/themes/`, which `tools/bundle.sh` fills on a Mac. A Linux build needs its own way to ship them (the spike copied one by hand).
+5. Idle CPU is about 36% of one core with a focused terminal card, all of it in llvmpipe threads (the cursor blink redraws the window in software). That is the price of lavapipe, not a bug; a real GPU will not show it. Do not measure performance on the droplet.
+6. On a first launch the welcome card was clipped by the window's right edge after the window was resized with xdotool. 2026-10-22: a first launch on a window that is not resized frames the card as on the Mac; nothing in master refits the view when the window changes size, on any platform, so this is the app's behaviour everywhere and was left alone.
+
+Not tested: Wayland, a real GPU, IME (`ime.rs` compiles because it is gpui's generic `EntityInputHandler`), clipboard, colour emoji (no colour emoji font was installed; ⚠️ drew in monochrome).
+
+## How to repeat it
+
+```
+doctl --context ekinertac compute droplet create ift-linux-spike --image ubuntu-24-04-x64 --size s-8vcpu-16gb --region fra1 --ssh-keys 23752258 --wait
+apt-get install -y gcc g++ libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev make cmake clang lld llvm git curl pkg-config build-essential mesa-vulkan-drivers vulkan-tools xvfb imagemagick xdotool fonts-dejavu-core x11-utils openbox
+git clone https://github.com/ekinertac/infiniterm.git && cd infiniterm && git checkout windows-merge-master
+cat >> infiniterm-ui/src/keycode.rs <<'R'
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn install() {}
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn dom_code(_code: u16) -> Option<&'static str> { None }
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn last_dead() -> bool { false }
+R
+cargo build -p infiniterm-ui --no-default-features && cargo build -p infiniterm-cli -p infiniterm-session -p infiniterm-hook
+Xvfb :99 -screen 0 1920x1080x24 &
+DISPLAY=:99 openbox &                          # without a window manager the first frame stays black
+DISPLAY=:99 INFINITERM_DATA_DIR=/tmp/ift-spike PATH=$PWD/target/debug:$PATH infiniterm &
+DISPLAY=:99 import -window root shot.png
+```
+
+The package list is most of zed's `script/linux` (the set for gpui; libgit2, libva, sqlite, pipewire and the portal were left out and were not needed) plus Mesa, Xvfb, ImageMagick and xdotool. Package install, rustup and a first debug build of the ui crate took about 15 minutes together on 8 vCPU. `iftd` is found on PATH. `xdotool windowactivate` fails without a window manager; `windowfocus` and plain `type` / `key` work. The `default` context of doctl is the employer's production: always pass `--context ekinertac`, and delete the droplet afterwards (`droplet delete` has no `--wait`; poll `droplet list`).
+
+## The macOS-only pieces and a plan for each
+
+The Windows branch already put the seam in: Cocoa crates under `[target.'cfg(target_os = "macos")'.dependencies]`, browser cards behind a `browser` feature (on by default), and `not_macos.rs` answering seven modules under the same names. Linux uses that seam; the plan below is what each piece needs on Linux on top of it.
+
+| Piece | On macOS | Linux plan |
+|---|---|---|
+| `keycode.rs` | NSEvent monitor gives the physical key code and the real Shift flag | Required to build. gpui's X11/Wayland keystroke comes from xkb; the physical key is the evdev/xkb keycode, which gpui does not pass on. First version: the three no-op functions (chords from gpui's key name, so Turkish Q has the old Cmd+= bug). Real fix: read the keycode in gpui's event or an XInput2 / xkb state query, a table like the Windows scan-code one. |
+| Cmd key | `platform` is Cmd | gpui maps Super to `platform`, which the spike confirmed. Desktops take many Super chords themselves (GNOME: Super+number, Super+A). Decide: Super as is, or the Windows branch's `keyboard.commandModifier` (left Ctrl for the app, right Ctrl for the terminal); `roles` is `cfg(windows)` today and would need an xkb read of which Ctrl is down. Ekin's choice. |
+| `ime.rs`, `composing.rs` | the macOS text input system | Compile as they are (gpui's generic input handler). gpui's Linux backends speak XIM and Wayland text-input. Dead keys: `last_dead` returns false until tested with a compose key. |
+| `native_menu.rs` | NSMenu for the right-click menus | gpui has no native context menu on Linux. Draw the menu with gpui from the same `context_menu.rs` data; that also serves Windows. |
+| `title_drag.rs` | AppKit drag of a transparent title bar | gpui's `start_window_move` on Linux (X11 `_NET_WM_MOVERESIZE`, Wayland `xdg_toplevel.move`) from the bare bar; window decorations through gpui's client-side decorations on Wayland. |
+| `fullscreen.rs` | `toggleFullScreen:` patch | gpui's `toggle_fullscreen` on the window. |
+| `icon_font.rs` | CoreText registration of the bundled Nerd Font | Load the font into gpui's text system with `add_fonts` and check that cosmic-text's fallback finds it (on the Mac it did not, which is why CoreText is used there). |
+| `instance_icon.rs` | Dock icon and badge | The window icon through the `.desktop` file; no badge (a remote or joined window keeps its title and chip). |
+| `finder_service.rs` | "Open in infiniterm" Finder service | None. A `.desktop` file with `MimeType=inode/directory` is the Linux equivalent, later. |
+| `middle_drag.rs` | adds `otherMouseDragged:` to gpui's view | Not needed if gpui's X11/Wayland backends report middle drags; test with `xdotool mousedown 2`. |
+| `system_reduces_motion` | NSWorkspace | `false` now; later the `org.gnome.desktop.interface enable-animations` setting. |
+| Default fonts (`config.rs`) | `ui-monospace, Menlo` | A Linux default: `DejaVu Sans Mono, Liberation Mono, monospace`, or the family `fc-match monospace` names. |
+| CEF, `app_protocol.rs`, the helper | browser cards | First version without them (`--no-default-features`). CEF has Linux builds; adding them is a later step with its own spike. |
+| `osascript` dialogs (`ssh_login` askpass, the takeover's "Stuck") | dialogs before any window exists | `zenity` or `kdialog` when present, else the message on stderr; askpass also has `ssh-askpass` packages. |
+| `open` (links, `open -n` in `ift connect` / `ift join`) | macOS `open` | `xdg-open` for links and files; for a second app, run the binary with the same environment. |
+| Updater, `ift install`, `/Applications` paths | bundle swap, `codesign`, `spctl` | Off for the first version (the updater already refuses anything outside an Applications folder). Packaging (AppImage or .deb) decides the paths. |
+| Themes and assets | copied into the bundle by `tools/bundle.sh` | Ship `assets/themes` beside the binary or under `share/infiniterm/`, and look there. |
+
+## Order
+
+1. Base the Linux work on the Windows branch's seam (or wait for it on master), not a second seam.
+2. `keycode.rs` Linux functions, the Linux default fonts, the first-frame fix: the app is then usable on X11.
+3. A `tools/drive/linux/` driver (the commands above as a script on a droplet) so each change is checked with a screenshot.
+4. Context menu drawn by gpui, title bar drag, the icon font.
+5. Packaging, then CEF.

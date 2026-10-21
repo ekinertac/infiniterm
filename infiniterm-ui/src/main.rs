@@ -683,6 +683,9 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
+                // Before anything measures a terminal cell: the family is
+                // picked from the fonts this machine has (#464).
+                fonts::remember_installed(window);
                 let view = cx.new(|cx| {
                     let mut app = AppView::new(cx.focus_handle(), window.scale_factor());
                     app.cef_running = cef_running;

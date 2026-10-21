@@ -5,7 +5,7 @@
 //! backpressure), what the programs wrote back goes to the PTYs, and a card
 //! whose rect or metrics changed re-counts its grid and tells the PTY.
 //! Port of `paneRegistry.ts`'s routing and `TerminalCard.svelte`'s start.
-use crate::fonts::weight_of;
+use crate::fonts::{installed_families, terminal_family_of, weight_of};
 #[cfg(unix)]
 use crate::terminal_body::LostLink;
 use crate::terminal_body::{Metrics, TerminalBody, READOPT_POLL_MS};
@@ -15,16 +15,11 @@ use infiniterm_core::backend::Panes;
 use infiniterm_core::grid::Size;
 use infiniterm_core::saved_layout::CardKind;
 
-/// The first family in a CSS-style list that is a real font name. The
-/// reference's default is `ui-monospace, Menlo, monospace`; the generic
-/// names mean nothing to gpui, so Menlo is what every Mac gets.
+/// The terminal family for a CSS-style list, against the fonts this machine
+/// has. The rule is `fonts::terminal_family_of`; the installed names are
+/// read from gpui once, when the window opens (`fonts::remember_installed`).
 pub fn family_of(list: &str) -> String {
-    list.split(',')
-        .map(|f| f.trim().trim_matches('"').trim_matches('\'').to_string())
-        .find(|f| {
-            !f.is_empty() && !matches!(f.as_str(), "ui-monospace" | "monospace" | "system-ui")
-        })
-        .unwrap_or_else(|| "Menlo".to_string())
+    terminal_family_of(list, installed_families())
 }
 
 impl AppView {
