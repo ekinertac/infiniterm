@@ -139,7 +139,7 @@ impl Model {
         crate::when::Context {
             card_kind: kind,
             card_locked: card.is_some_and(|c| {
-                c.locked && matches!(c.kind, CardKind::Editor | CardKind::Browser)
+                c.locked && (c.kind.has_editor_body() || c.kind == CardKind::Browser)
             }),
             overlay,
             phantom_focus: card.is_none() && self.selection.phantom.is_some(),

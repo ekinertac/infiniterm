@@ -12,7 +12,9 @@
 //! Called from the ui: `install` once at startup (runtime.rs), `zsh_env`
 //! when a card's shell is spawned (terminals.rs). Only zsh: it is the macOS
 //! default and the only shell anybody here uses; bash and fish can follow
-//! when missed. A card made to run one program gets nothing.
+//! when missed. A card made to run one program gets nothing, and neither does
+//! a card of a remote instance (`applies`, #408): its shell starts on the
+//! server, where this Mac's shim directory does not exist.
 use std::path::{Path, PathBuf};
 
 const ZSHENV: &str = include_str!("shell/zshenv.zsh");
@@ -30,6 +32,17 @@ pub fn install(dir: &Path) -> std::io::Result<PathBuf> {
 /// Whether `shell` (a path or a name) is zsh.
 pub fn is_zsh(shell: &str) -> bool {
     Path::new(shell.trim()).file_name().and_then(|n| n.to_str()) == Some("zsh")
+}
+
+/// Whether a card's shell is started with the integration. Not a card made to
+/// run one program (no prompt to mark), and not a card of a remote instance
+/// (`ift connect`): its shell runs on the server, where `dir` (a path on this
+/// Mac) does not exist, so a ZDOTDIR pointing at it made zsh skip the user's
+/// own dotfiles there and start bare (#408). Such a card loses the command
+/// marks of the integration (a long command colouring the card); its state
+/// comes from the agent hooks on the server, as before. Pure, so it is tested.
+pub fn applies(runs_program: bool, remote: bool, installed: bool) -> bool {
+    !runs_program && !remote && installed
 }
 
 /// The variables that load the integration into a card's zsh: ZDOTDIR at
@@ -61,6 +74,24 @@ mod tests {
         let e = zsh_env("/bin/zsh", d, Some("/home/me/zd".into()));
         assert_eq!(e[0], ("ZDOTDIR".into(), "/x".into()));
         assert_eq!(e[1], ("INFINITERM_ZDOTDIR".into(), "/home/me/zd".into()));
+    }
+
+    #[test]
+    fn a_remote_instances_card_and_a_program_card_get_no_integration() {
+        assert!(applies(false, false, true), "a local shell card does");
+        assert!(
+            !applies(false, true, true),
+            "the shim directory is on this Mac only (#408)"
+        );
+        assert!(
+            !applies(true, false, true),
+            "a program has no prompt to mark"
+        );
+        assert!(
+            !applies(false, false, false),
+            "nothing installed, nothing to load"
+        );
+        assert!(!applies(true, true, true));
     }
 
     /// A real interactive zsh: the user's .zshenv and .zshrc still load,

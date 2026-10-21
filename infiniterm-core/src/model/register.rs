@@ -75,17 +75,13 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
     // Cmd+Alt+Arrow, it is a card like any other and the canvas has its
     // keys: Cmd+/ on an arrowed-to editor commented the highlighted line
     // instead of opening the shortcuts panel.
-    if kind == Some(crate::saved_layout::CardKind::Editor)
-        && card.is_some_and(|c| c.locked)
-        && crate::editor_keys::editor_keeps(chord)
-    {
+    // A diff has the editor's body, so the editor's keys (2026-10-20).
+    let editor_body = kind.is_some_and(|k| k.has_editor_body());
+    if editor_body && card.is_some_and(|c| c.locked) && crate::editor_keys::editor_keeps(chord) {
         return None;
     }
     let locked = card.is_some_and(|c| c.locked)
-        && matches!(
-            kind,
-            Some(crate::saved_layout::CardKind::Browser | crate::saved_layout::CardKind::Editor)
-        );
+        && (editor_body || kind == Some(crate::saved_layout::CardKind::Browser));
     // A locked card claims everything except Ctrl+1..9 and the two
     // app-carve-out chords below: real Chrome shortcuts shadow this app's
     // own bindings on the same keys, the whole point of locking. Workspace
@@ -113,7 +109,9 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
         && !leaves
         && !opens_palette
     {
-        let id = if kind == Some(crate::saved_layout::CardKind::Editor) {
+        let id = if kind == Some(crate::saved_layout::CardKind::Diff) {
+            crate::editor_keys::diff_lock_override(chord)
+        } else if kind == Some(crate::saved_layout::CardKind::Editor) {
             crate::editor_keys::lock_override(chord)
         } else {
             crate::browser_keys::lock_override(chord)
@@ -164,7 +162,7 @@ fn is_locked_carveout(chord: &str, kind: Option<crate::saved_layout::CardKind>) 
     if matches!(chord, "cmd+escape" | "ctrl+tab" | "ctrl+shift+tab") {
         return true;
     }
-    chord == "cmd+l" && kind != Some(crate::saved_layout::CardKind::Editor)
+    chord == "cmd+l" && !kind.is_some_and(|k| k.has_editor_body())
 }
 
 /// Runs a command and then any `RunCommand` effects it queued, so a palette
@@ -2163,6 +2161,57 @@ mod tests {
         assert_eq!(h.m.selection.focused_id, focus);
     }
 
+    // #265: `ift -t <file> [card]` puts a file in a tab of an editor card: the
+    // focused one by default, a named one when given, a file already open is
+    // switched to, a terminal is refused, and with no editor focused it opens
+    // a card of its own.
+    #[test]
+    fn a_file_opens_as_a_tab_of_an_editor_card() {
+        let mut h = Harness::new();
+        // No editor focused: a card of its own, an editor.
+        let before = h.m.cards.len();
+        let first = h.m.open_file_tab("/tmp/a.rs", None, None).unwrap();
+        assert_eq!(h.m.cards.len(), before + 1);
+        assert_eq!(h.m.card(&first).unwrap().kind, CardKind::Editor);
+        // Now that editor is focused: the next file is a tab of it.
+        let second = h.m.open_file_tab("/tmp/b.rs", None, None).unwrap();
+        assert_eq!(second, first);
+        assert_eq!(h.m.cards.len(), before + 1, "no new card");
+        let tabs = h.m.card(&first).unwrap().tabs.clone();
+        assert!(tabs.contains(&"/tmp/a.rs".to_string()) && tabs.contains(&"/tmp/b.rs".to_string()));
+        assert_eq!(h.m.card(&first).unwrap().active_tab, tabs.len() - 1);
+        // A file already open is switched to, not opened twice.
+        h.m.open_file_tab("/tmp/a.rs", None, None).unwrap();
+        let after = h.m.card(&first).unwrap();
+        assert_eq!(after.tabs, tabs);
+        assert_eq!(after.tabs[after.active_tab], "/tmp/a.rs");
+        // A named card: by number, even when another card is focused.
+        let number = h.m.card(&first).unwrap().number;
+        h.run("card.new.terminal");
+        let named =
+            h.m.open_file_tab("/tmp/c.rs", Some(&format!("#{number}")), None)
+                .unwrap();
+        assert_eq!(named, first);
+        assert!(h
+            .m
+            .card(&first)
+            .unwrap()
+            .tabs
+            .contains(&"/tmp/c.rs".to_string()));
+        // A terminal is not an editor.
+        let term =
+            h.m.cards
+                .iter()
+                .find(|c| c.kind == CardKind::Terminal)
+                .unwrap()
+                .number;
+        let err =
+            h.m.open_file_tab("/tmp/d.rs", Some(&term.to_string()), None)
+                .unwrap_err();
+        assert!(err.contains("not an editor"), "{err}");
+        assert!(h.m.open_file_tab("/tmp/e.rs", Some("#999"), None).is_err());
+    }
+
     // #419: Cmd+A selects every card of the workspace and keeps the focus where
     // it was; a locked editor keeps Cmd+A for its text.
     #[test]
@@ -3798,6 +3847,75 @@ mod tests {
         assert_eq!(h.m.card(&id).unwrap().tabs.len(), 2, "a tab instead");
     }
 
+    // Cmd+R redraws the focused terminal (#447). It was the development-only
+    // reload; a locked browser card keeps it as the page's reload.
+    #[test]
+    fn cmd_r_redraws_the_focused_terminal() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].pane_id = Some(7);
+        h.m.set_focus(Some(&id));
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+r").as_deref(),
+            Some("terminal.redraw")
+        );
+        h.m.take_effects();
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+r"));
+        assert!(
+            h.m.take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::RedrawPane(7))),
+            "the focused terminal's pane is asked to repaint"
+        );
+        // Not a reload any more, even in a development build.
+        h.m.dev_build = true;
+        h.m.take_effects();
+        handle_chord(&mut h.m, &h.r, "cmd+r");
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::KillAllPanes | Effect::Reload)));
+    }
+
+    #[test]
+    fn redraw_on_a_card_that_is_not_a_terminal_says_so() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.set_focus(Some(&id));
+        h.m.take_effects();
+        let effects = h.run("terminal.redraw");
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RedrawPane(_))));
+        assert!(
+            h.m.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("terminal cards")),
+            "a notice names what redraw works on"
+        );
+    }
+
+    #[test]
+    fn a_locked_browser_card_keeps_cmd_r_as_the_pages_reload() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].locked = true;
+        h.m.cards[0].pane_id = Some(7);
+        h.m.set_focus(Some(&id));
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+r").as_deref(),
+            Some("browser.reload")
+        );
+        h.m.take_effects();
+        handle_chord(&mut h.m, &h.r, "cmd+r");
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::RedrawPane(_))));
+    }
+
     // The keycast labels a chord with what `resolve_chord` says, so on a
     // locked card it must name the tab command, not the keymap's card one.
     #[test]
@@ -3842,6 +3960,53 @@ mod tests {
         assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the comment toggle");
         assert_eq!(resolve_chord(&h.m, "cmd+z"), None, "the buffer's undo");
         assert_eq!(resolve_chord(&h.m, "cmd+s").as_deref(), Some("card.save"));
+    }
+
+    // A diff card is the editor's body in a read-only mode, so it locks the
+    // editor's way (2026-10-20): the find, comment and undo chords are the
+    // body's once locked, Cmd+F finds, and with no tabs Cmd+W closes the card
+    // and Cmd+T does not become a tab command.
+    #[test]
+    fn a_diff_card_locks_like_an_editor_without_the_tab_chords() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        h.m.cards[0].kind = CardKind::Diff;
+        h.m.cards[0].locked = false;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+/").as_deref(),
+            Some("app.shortcuts")
+        );
+        assert_eq!(resolve_chord(&h.m, "cmd+w").as_deref(), Some("card.close"));
+        h.m.cards[0].locked = true;
+        assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the body's");
+        assert_eq!(resolve_chord(&h.m, "cmd+f"), None, "the body's find");
+        assert_eq!(resolve_chord(&h.m, "cmd+z"), None);
+        assert_eq!(resolve_chord(&h.m, "cmd+w").as_deref(), Some("card.close"));
+        assert_eq!(resolve_chord(&h.m, "cmd+s").as_deref(), Some("card.save"));
+        assert_eq!(resolve_chord(&h.m, "cmd+t"), None, "no tabs to open");
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+k").as_deref(),
+            Some("editor.explorer"),
+            "the list of changed files, locked or not"
+        );
+        // Cmd+L is the body's select-line, not the omnibox.
+        assert_eq!(resolve_chord(&h.m, "cmd+l"), None);
+        // The way out is the same.
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+escape").as_deref(),
+            Some("browser.leave")
+        );
+        // Cmd+F on a diff card opens the editor's find, not the app's bar.
+        h.m.take_effects();
+        h.m.find_in_card();
+        assert!(h.m.take_effects().iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::Find,
+                ..
+            }
+        )));
     }
 
     // Ctrl+digit is workspace switching, never a Chrome shortcut, so lock

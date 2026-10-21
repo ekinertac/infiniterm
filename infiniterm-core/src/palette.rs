@@ -1,7 +1,7 @@
 //! Palette ranking, highlighting, navigation, and recent/rest sections.
 //! Port of palette.ts and its tests. UI sources provide items and usage weights.
 //! Label matches outrank hints; truncation reports the true total before limiting.
-use crate::fuzzy::{fuzzy_match, Match};
+use crate::fuzzy::{strict_match, Match};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaletteItem {
     pub id: String,
@@ -29,14 +29,16 @@ pub fn rank(
     let mut scored = vec![];
     for item in items {
         let weight = bonus(&item.id);
-        let matched = if let Some(mut m) = fuzzy_match(query, &item.label) {
+        // `strict_match`: a word of four letters or more must be in the row
+        // (#490); a shorter query is the loose abbreviation match as before.
+        let matched = if let Some(mut m) = strict_match(query, &item.label) {
             m.score += weight;
             Some(m)
         } else {
             item.hint
                 .as_deref()
                 .filter(|h| !h.is_empty())
-                .and_then(|h| fuzzy_match(query, h))
+                .and_then(|h| strict_match(query, h))
                 .map(|m| Match {
                     score: m.score + weight - HINT_PENALTY,
                     matches: vec![],
@@ -97,6 +99,91 @@ pub fn highlight(text: &str, matches: &[usize]) -> Vec<Highlight> {
         })
         .collect()
 }
+/// A row's label as it is drawn: cut to the room it has, with the matched
+/// letters as offsets into the SHOWN text (UTF-16, like `Match::matches`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FittedLabel {
+    pub text: String,
+    pub matches: Vec<usize>,
+}
+
+const ELLIPSIS: char = '\u{2026}';
+
+/// Cuts a row's label to `room` (whatever `measure` counts in) with an
+/// ellipsis, whatever its length (#492: a card's label can be a whole
+/// sentence, an agent's title, and it ran past the palette's edge). A label
+/// that fits is returned as it is. Otherwise it is cut at the RIGHT end only,
+/// with `…` last, and the highlights beyond the cut are dropped (Ekin,
+/// 2026-10-19: a window that moved to the match cut the label from both ends
+/// and read badly; the start of a label names the row). Empty text when not
+/// even the ellipsis fits.
+pub fn fit_label(
+    label: &str,
+    matches: &[usize],
+    room: f32,
+    measure: impl Fn(&str) -> f32,
+) -> FittedLabel {
+    if label.is_empty() || measure(label) <= room {
+        return FittedLabel {
+            text: label.to_string(),
+            matches: matches.to_vec(),
+        };
+    }
+    let chars: Vec<char> = label.chars().collect();
+    // The UTF-16 offset at which each character starts, and the total.
+    let mut offsets: Vec<usize> = Vec::with_capacity(chars.len() + 1);
+    let mut at = 0;
+    for c in &chars {
+        offsets.push(at);
+        at += c.len_utf16();
+    }
+    offsets.push(at);
+    let from = |s: usize, e: usize| -> String {
+        let mut text = String::new();
+        if s > 0 {
+            text.push(ELLIPSIS);
+        }
+        text.extend(chars[s..e].iter());
+        if e < chars.len() {
+            text.push(ELLIPSIS);
+        }
+        text
+    };
+    // The most characters from `s` that fit, at least `need` of them.
+    let widest = |s: usize, need: usize| -> Option<usize> {
+        let (mut lo, mut hi) = (s, chars.len());
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if measure(&from(s, mid)) <= room {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        (lo >= need && measure(&from(s, lo)) <= room).then_some(lo)
+    };
+    let shown = |s: usize, e: usize| -> FittedLabel {
+        let lead = usize::from(s > 0);
+        FittedLabel {
+            text: from(s, e),
+            matches: matches
+                .iter()
+                .filter(|&&m| (offsets[s]..offsets[e]).contains(&m))
+                .map(|&m| lead + m - offsets[s])
+                .collect(),
+        }
+    };
+    // Cut at the right end only: it keeps the label's start, which names the
+    // row. A match past the cut is simply not shown.
+    match widest(0, 0) {
+        Some(e) => shown(0, e),
+        None => FittedLabel {
+            text: String::new(),
+            matches: vec![],
+        },
+    }
+}
+
 pub fn step_index(index: usize, count: usize, step: isize) -> usize {
     if count == 0 {
         return 0;
@@ -180,6 +267,123 @@ mod tests {
     fn drops_nonmatches() {
         assert_eq!(ids(&ranked("zoom")), vec!["canvas.zoom.in"]);
     }
+    #[test]
+    fn a_word_of_four_letters_lists_only_rows_that_hold_it() {
+        // (see also fuzzy.rs: the table of the screenshot)
+        // The screenshot of #490: `check` listed rows with scattered letters.
+        let items = vec![
+            item("canvas.tidy", "Canvas: tidy the cards into a block", None),
+            item("app.update", "App: check for updates", None),
+            item("card.mask", "Card: mask with a decoy / unmask", None),
+            item(
+                "window.colour",
+                "Window: change the title bar and Dock colour…",
+                None,
+            ),
+        ];
+        let r = rank(&items, "check", MAX_RESULTS, |_| 0.);
+        assert_eq!(ids(&r), vec!["app.update"]);
+        assert_eq!(r.total, 1);
+        // An abbreviation of three letters is still the loose match.
+        let r = rank(&items, "cdc", MAX_RESULTS, |_| 0.);
+        assert!(!r.items.is_empty());
+    }
+
+    // A fake measure: every character is ten wide, so the arithmetic is one
+    // a reader can do.
+    fn ten(text: &str) -> f32 {
+        text.chars().count() as f32 * 10.
+    }
+    fn long_label() -> String {
+        // 200 characters, words of nine letters; the word `unchecked` last.
+        let mut s = String::new();
+        while s.chars().count() + 10 <= 190 {
+            s.push_str("sentence. ");
+        }
+        s.push_str("unchecked");
+        while s.chars().count() < 200 {
+            s.push('.');
+        }
+        s
+    }
+    fn utf16_of(text: &str, unit: usize) -> char {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        char::from_u32(units[unit] as u32).unwrap()
+    }
+
+    #[test]
+    fn a_label_that_fits_is_left_alone() {
+        let f = fit_label("Zoom in", &[0, 1], 500., ten);
+        assert_eq!(f.text, "Zoom in");
+        assert_eq!(f.matches, vec![0, 1]);
+    }
+
+    #[test]
+    fn a_long_label_is_cut_at_the_end_with_an_ellipsis() {
+        let label = long_label();
+        // A match near the start: the cut is at the end.
+        let f = fit_label(&label, &[0, 1], 300., ten);
+        assert_eq!(f.text.chars().count(), 30);
+        assert!(f.text.ends_with('\u{2026}'));
+        assert!(f.text.starts_with("se"));
+        assert_eq!(f.matches, vec![0, 1]);
+    }
+
+    #[test]
+    fn a_match_past_the_cut_is_not_shown_and_the_label_still_starts_at_its_start() {
+        // `check` inside `unchecked` at the end of 200 characters, the
+        // screenshot of #492: the cut is at the right end only.
+        let label = long_label();
+        let at = label.find("unchecked").unwrap() + 2;
+        let matches: Vec<usize> = (at..at + 5).collect();
+        let f = fit_label(&label, &matches, 300., ten);
+        assert!(f.text.starts_with("sentence."), "{:?}", f.text);
+        assert!(f.text.ends_with('\u{2026}'), "{:?}", f.text);
+        assert!(f.matches.is_empty(), "the match is past the cut");
+    }
+
+    #[test]
+    fn a_label_of_two_hundred_characters_fits_every_width_and_is_cut_at_the_right() {
+        let label = long_label();
+        let at = label.find("unchecked").unwrap() + 2;
+        let tail: Vec<usize> = (at..at + 5).collect();
+        for room in [30., 50., 100., 150., 300., 600., 1500., 1990., 2000.] {
+            for matches in [vec![], vec![0, 1], tail.clone()] {
+                let f = fit_label(&label, &matches, room, ten);
+                assert!(ten(&f.text) <= room, "room {room}: {:?}", f.text);
+                // Never cut at the start: what is shown begins the label.
+                let body = f.text.trim_end_matches('\u{2026}');
+                assert!(label.starts_with(body), "room {room}: {:?}", f.text);
+                // Every highlight still points at the same letter.
+                for &shown in &f.matches {
+                    assert_eq!(
+                        utf16_of(&f.text, shown),
+                        label.chars().nth(shown).unwrap(),
+                        "room {room}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_room_for_even_an_ellipsis_shows_nothing() {
+        let f = fit_label(&long_label(), &[0], 5., ten);
+        assert_eq!(f.text, "");
+        assert!(f.matches.is_empty());
+    }
+
+    #[test]
+    fn offsets_follow_utf16_through_the_cut() {
+        // A crab is two UTF-16 units; the highlight must keep pointing at the z.
+        let label = format!("🦀 zoom {}", "x".repeat(150));
+        let at = 3;
+        let f = fit_label(&label, &[at], 300., ten);
+        assert!(ten(&f.text) <= 300.);
+        assert_eq!(f.matches.len(), 1);
+        assert_eq!(utf16_of(&f.text, f.matches[0]), 'z');
+    }
+
     #[test]
     fn best_match_first() {
         assert_eq!(ids(&ranked("ntc"))[0], "card.new.terminal");

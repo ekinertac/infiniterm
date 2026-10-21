@@ -114,7 +114,7 @@ impl Model {
         match kind {
             // The editor's search is its own bar, in the body; opening it
             // also locks the editor so the query can be typed.
-            CardKind::Editor => self.with_active_card(|m, id| {
+            CardKind::Editor | CardKind::Diff => self.with_active_card(|m, id| {
                 m.effects.push(Effect::Editor {
                     card_id: id,
                     action: super::EditorAction::Find,

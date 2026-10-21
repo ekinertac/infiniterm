@@ -9,6 +9,7 @@
 //! size, popups as urls, titles and addresses as strings. The ui owns the
 //! texture, the card and the keys.
 pub mod app_protocol;
+pub mod frame_fit;
 pub mod moat;
 pub mod process;
 pub mod surface;

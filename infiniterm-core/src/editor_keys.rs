@@ -65,9 +65,36 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
     })
 }
 
+/// What a LOCKED diff card claims. It has the editor's body and so the
+/// editor's lock, but one file and no tabs: the tab chords mean nothing, so
+/// Cmd+W closes the card (there is nothing unsaved to lose) and Cmd+S says
+/// the diff is read-only (`card.save` answers that for a diff). Cmd+K (the
+/// list of changed files, its three states) and Cmd+B (blame) are the diff's
+/// own commands and have no text meaning, so they work locked too: the list
+/// is half of the card. Every other chord is the body's, as in a locked editor.
+pub fn diff_lock_override(chord: &str) -> Option<&'static str> {
+    match chord {
+        "cmd+w" => Some("card.close"),
+        "cmd+s" => Some("card.save"),
+        "cmd+k" => Some("editor.explorer"),
+        "cmd+b" => Some("editor.blame"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_locked_diff_closes_on_cmd_w_and_has_no_tabs() {
+        assert_eq!(diff_lock_override("cmd+w"), Some("card.close"));
+        assert_eq!(diff_lock_override("cmd+s"), Some("card.save"));
+        assert_eq!(diff_lock_override("cmd+k"), Some("editor.explorer"));
+        assert_eq!(diff_lock_override("cmd+b"), Some("editor.blame"));
+        assert_eq!(diff_lock_override("cmd+t"), None);
+        assert_eq!(diff_lock_override("cmd+1"), None);
+    }
 
     #[test]
     fn an_editor_keeps_the_select_to_boundary_chords() {

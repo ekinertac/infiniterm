@@ -191,6 +191,7 @@ const TERMINAL_TOP: &[Def] = &[
     ),
     Def::Separator,
     titled("card.clear", "Clear Buffer"),
+    titled("terminal.redraw", "Redraw"),
     titled("card.transcript", "Show Transcript"),
 ];
 

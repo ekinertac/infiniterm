@@ -45,6 +45,10 @@ Closing a terminal card does not kill its program on the spot:
 - A closed card whose agent is waiting for you is kept until the app quits. The status bar says so, "#7 … (closed) is waiting for you: Alt+T", and `Alt T` reopens it. At any other time `Alt T` goes to the terminal as usual.
 - `Cmd Z` or `Cmd Shift T` reopen the card with its program still live and the screen redrawn from its scrollback, as long as it has not ended yet.
 
+Quitting the app is different. It does not end any open card: each shell runs in its own `iftd`, so it keeps running, and the next launch reconnects every card to its shell with the screen redrawn from its scrollback. A shell ends only when you exit it, when you close its card and it stays quiet for a minute, or when the Mac restarts (the card then shows its saved output, a `[session lost]` line and a fresh shell).
+
+A card you closed that was still running when you quit is not kept. The next launch ends every shell that no saved card claims, so it ends then, not at the quit.
+
 This needs the default backend (`terminal.backend: "daemon"`). Under `pty` or `tmux` a closed card's program ends at once.
 
 ## A terminal in its own window
@@ -52,6 +56,10 @@ This needs the default backend (`terminal.backend: "daemon"`). Under `pty` or `t
 `Cmd Shift O` takes the focused terminal card into a window of its own. The card keeps its place on the canvas as an empty card that says "In its own window", and keys sent to it on the canvas do nothing while it is out. The window's terminal refits when you resize the window. Close the window (`Cmd W` or the red button) and the card gets its canvas size back.
 
 In the window, `Cmd =` and `Cmd -` change the font size, `Cmd K` clears, `Cmd Shift C` is visual mode, and copy, paste and `Cmd Left` / `Cmd Right` work as in a card. Find and the command palette are not there yet. Only terminal cards can go out for now.
+
+## Redraw
+
+`Cmd R` asks the program in the focused terminal card to paint its screen again. It clears a scrambled Claude Code card and leaves the scrollback alone. "Terminal: redraw" in the palette and Redraw in the card's right-click menu do the same. In a window opened with `ift join`, it makes the card join its session again, which has the same effect.
 
 ## Which shell
 

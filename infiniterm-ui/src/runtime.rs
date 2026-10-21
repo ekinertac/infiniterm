@@ -60,6 +60,7 @@ impl AppView {
             label_hits: Vec::new(),
             show_character_palette: false,
             pan: None,
+            scroll_nav: Default::default(),
             left_on_canvas: false,
             middle_press: None,
             marquee: None,
@@ -74,6 +75,13 @@ impl AppView {
             shortcuts_field: Default::default(),
             shortcuts_index: 0,
             pick_request: None,
+            join: None,
+            last_agents: String::new(),
+            join_updates: None,
+            uplink: None,
+            viewer: false,
+            viewer_poke: false,
+            canvas_rx: None,
             read_requests: vec![],
             shortcuts_scroll: gpui::ScrollHandle::new(),
             whats_new_body: None,
@@ -332,6 +340,40 @@ impl AppView {
                         body.grid.clear();
                     }
                 }
+                Effect::RedrawPane(pane) => {
+                    let (cols, rows) = self
+                        .terminal_for_pane(pane)
+                        .map(|b| (b.cols(), b.rows()))
+                        .unwrap_or((0, 0));
+                    if self.backend.pty.redraw(pane, cols, rows)
+                        == infiniterm_core::backend::Redraw::Rejoin
+                    {
+                        // A viewer's card: its connection is gone on purpose.
+                        // The card is read as one waiting for a session (no
+                        // pane), the grid stays as it is until the new
+                        // join's replay resets it (`reconcile_terminals`).
+                        let id = self
+                            .model
+                            .cards
+                            .iter()
+                            .find(|c| c.pane_id == Some(pane))
+                            .map(|c| c.id.clone());
+                        if let Some(id) = id {
+                            if let Some(c) = self.model.card_mut(&id) {
+                                c.pane_id = None;
+                            }
+                            if let Some(body) = self.bodies.get_mut(&id).and_then(|b| {
+                                b.as_any_mut()
+                                    .downcast_mut::<crate::terminal_body::TerminalBody>()
+                            }) {
+                                body.pane = None;
+                                body.lost =
+                                    Some(crate::terminal_body::LostLink::redraw(crate::now_ms()));
+                                body.mark_dirty();
+                            }
+                        }
+                    }
+                }
                 Effect::WritePane(pane, bytes) => self.backend.pty.write(pane, &bytes),
                 Effect::DraftDelete(id) => {
                     let _ = infiniterm_core::files::draft_delete(&id);
@@ -390,6 +432,14 @@ impl AppView {
                         self.model.notify(format!("could not open {url}"));
                         eprintln!("[infiniterm] {e}");
                     }
+                }
+                // The settings in a joined window are the host's, shown
+                // read only for now: writing one here would put a file in the
+                // viewer's own folder that nothing reads.
+                Effect::SaveSetting { path, .. } if self.viewer => {
+                    self.model.notify(format!(
+                        "{path}: the settings in this window are the host's; change them on the host"
+                    ));
                 }
                 Effect::SaveSetting { path, value } => {
                     let existing = config_read(ConfigFile::Settings);
@@ -644,8 +694,12 @@ impl AppView {
                 // fallback exists so a byte is never dropped, not because
                 // it is expected to run.
                 PaneEvent::Replay(bytes) => {
+                    let host_size = self.backend.pty.viewer_pane_size(pane);
                     let fed = match self.terminal_for_pane(pane) {
                         Some(body) => {
+                            if let Some((c, r)) = host_size {
+                                body.fit_host_cells(c as usize, r as usize);
+                            }
                             body.feed_replay(bytes);
                             true
                         }
@@ -683,15 +737,33 @@ impl AppView {
             self.model.apply_pane_statuses(&statuses);
         }
         while let Ok(change) = self.backend.config_changes.try_recv() {
+            // A joined window runs on the HOST's files, which arrive on the
+            // canvas stream (#433); its own folder is empty and stays so.
+            if self.viewer {
+                continue;
+            }
             match change.file {
                 ConfigFile::Settings => {
-                    self.model.apply_settings_text(&change.contents);
-                    self.chrome.apply_ui_typography(&self.model.config.ui);
-                    self.animator.animations_on =
-                        self.model.config.ui.animations && !self.reduce_motion;
+                    self.apply_settings_text(&change.contents);
+                    if let Some(hub) = &self.join {
+                        hub.publish_config(
+                            infiniterm_core::backend::join::KIND_SETTINGS,
+                            &change.contents,
+                        );
+                    }
                 }
+                // theme.json is this window's own look (#425): the chrome stays
+                // per client, so it is never published to a joined viewer.
                 ConfigFile::Theme => self.model.apply_theme_file_text(&change.contents),
-                _ => self.model.apply_keymap_text(&change.contents),
+                _ => {
+                    self.model.apply_keymap_text(&change.contents);
+                    if let Some(hub) = &self.join {
+                        hub.publish_config(
+                            infiniterm_core::backend::join::KIND_KEYBINDINGS,
+                            &change.contents,
+                        );
+                    }
+                }
             }
             // An edit made outside the app arrives while the window idles:
             // without this the new settings were applied and never drawn
@@ -814,11 +886,66 @@ impl AppView {
     }
 
     fn write_layout(&mut self) {
+        // A viewer saves nothing of its own: what it edited goes up to the
+        // host, which makes it so (#423).
+        if self.viewer {
+            self.send_up();
+            return;
+        }
         if let Some(text) = self.model.save_text() {
             if let Err(e) = infiniterm_core::layout_file::write_layout(&text) {
                 eprintln!("[infiniterm] could not save the layout: {e}");
             }
+            // The same text, to every viewer that joined, with the revision
+            // it is. The viewer keeps its own viewport and focus; nothing is
+            // stripped here.
+            if let Some(hub) = &self.join {
+                // Remembered by revision, so a viewer's edit can be compared
+                // with the canvas it started from and merged field by field.
+                let rev = self.model.record_published(&text);
+                hub.publish_layout(&text, rev);
+            }
         }
+    }
+
+    /// A viewer's canvas, to the host, on the revision it was edited on.
+    fn send_up(&mut self) {
+        // Nothing to say before the host's own canvas has arrived.
+        if !self.model.snapshot_seen {
+            return;
+        }
+        let Some(up) = &self.uplink else {
+            return;
+        };
+        let layout = self.model.layout_snapshot();
+        let _ = up.send(infiniterm_core::backend::join::RemoteUpdate {
+            base: self.model.layout_rev,
+            layout,
+        });
+    }
+
+    /// What the viewers sent up since the last tick (#423), applied to this
+    /// canvas in place. An edit made on an old canvas is dropped and the host
+    /// republishes its own, which is how that viewer finds out. True when the
+    /// canvas changed, so the next frame starts any shell it now needs.
+    pub fn apply_remote_updates(&mut self) -> bool {
+        use infiniterm_core::model::persist::RemoteApply;
+        let Some(rx) = &self.join_updates else {
+            return false;
+        };
+        let updates: Vec<_> = rx.try_iter().collect();
+        let mut changed = false;
+        for u in updates {
+            match self.model.apply_remote_layout(&u.layout, u.base) {
+                Ok(RemoteApply::Applied) => changed = true,
+                Ok(RemoteApply::Stale) => {
+                    self.write_layout();
+                    changed = true;
+                }
+                Err(why) => eprintln!("[infiniterm] a viewer's canvas was refused: {why}"),
+            }
+        }
+        changed
     }
 
     /// Immediately, for a quit: anything done in the last half second would
@@ -833,7 +960,80 @@ impl AppView {
         }
     }
 
+    /// A settings file's text applied to the model and the chrome that
+    /// follows it. The same for the app's own file and, in a joined window,
+    /// the host's.
+    fn apply_settings_text(&mut self, text: &str) {
+        self.model.apply_settings_text(text);
+        self.chrome.apply_ui_typography(&self.model.config.ui);
+        self.animator.animations_on = self.model.config.ui.animations && !self.reduce_motion;
+    }
+
+    /// What the host's canvas said since the last tick (a viewer, #423): a
+    /// layout is applied in place, agent states on top of it, and a status
+    /// (joined, lost, refused) is shown as a notice.
+    pub fn drain_canvas(&mut self) {
+        use infiniterm_core::backend::join_client::CanvasEvent;
+        let Some(rx) = &self.canvas_rx else {
+            return;
+        };
+        let events: Vec<CanvasEvent> = rx.try_iter().collect();
+        for event in events {
+            match event {
+                CanvasEvent::Layout(text) => {
+                    // An edit still waiting for its debounce would be
+                    // overwritten by this snapshot (a closed card comes
+                    // back, a move is undone) and the next send would carry
+                    // the host's own state. Send it first, on the revision
+                    // it was made on; the host's next canvas has it applied.
+                    if self.save_due.is_some() || self.model.dirty_layout {
+                        self.flush_save();
+                    }
+                    if let Err(why) = self.model.apply_snapshot(&text) {
+                        self.model.notify(&why);
+                    }
+                }
+                CanvasEvent::Revision(rev) => self.model.layout_rev = rev,
+                CanvasEvent::Agents(text) => self.model.apply_agent_states(&text),
+                CanvasEvent::Connected => {
+                    self.viewer_poke = true;
+                    self.redraw = true;
+                }
+                CanvasEvent::Settings(text) => {
+                    self.apply_settings_text(&text);
+                    self.redraw = true;
+                }
+                CanvasEvent::Keybindings(text) => {
+                    self.model.apply_keymap_text(&text);
+                    self.redraw = true;
+                }
+                CanvasEvent::Status(text) => self.model.notify(&text),
+                CanvasEvent::Fatal(text) => {
+                    eprintln!("[infiniterm] {text}");
+                    self.model.notify(&text);
+                }
+            }
+        }
+    }
+
+    /// The host sends viewers the agent states when they change (#423).
+    pub fn publish_agents(&mut self) {
+        let Some(hub) = &self.join else {
+            return;
+        };
+        let text = self.model.agent_states_text();
+        if text != self.last_agents {
+            hub.publish_agents(&text);
+            self.last_agents = text;
+        }
+    }
+
     pub fn maybe_sweep(&mut self, now: f64) {
+        // A viewer's states are the host's; a local sweep would end a working
+        // card the host still has working.
+        if self.viewer {
+            return;
+        }
         if now - self.last_sweep >= SWEEP_MS {
             self.last_sweep = now;
             self.model.sweep_stale();
@@ -853,6 +1053,49 @@ fn startup_terminal() -> (infiniterm_core::config::TerminalBackend, usize) {
     let value = infiniterm_core::jsonc::parse_jsonc(&text).unwrap_or(serde_json::Value::Null);
     let terminal = infiniterm_core::config::merge_config(&value).terminal;
     (terminal.backend, terminal.session_buffer as usize)
+}
+
+/// Opens the socket `ift join` viewers reach through ssh, and gives them the
+/// canvas as it is now (#423). A failure is said and costs nothing else: the
+/// app runs without joining.
+fn start_join(app: &mut AppView) {
+    // A viewer is a window onto the host's canvas, never a host: it would
+    // relay sessions that are not its own (found in the #423 drive, which
+    // showed a viewer binding its own j.sock).
+    let Some((relay, write, nudge)) = app.backend.pty.join_parts() else {
+        return;
+    };
+    if !app.model.config.join.enabled || app.viewer {
+        // No server, so nothing is kept for one.
+        relay.lock().unwrap().set_enabled(false);
+        return;
+    }
+    let hub = infiniterm_core::backend::join::JoinHub::new(relay, write).with_nudge(nudge);
+    // The host's files as they are now, for a viewer that joins before the
+    // first change (#433).
+    for (file, kind) in [
+        (
+            ConfigFile::Settings,
+            infiniterm_core::backend::join::KIND_SETTINGS,
+        ),
+        (
+            ConfigFile::Keybindings,
+            infiniterm_core::backend::join::KIND_KEYBINDINGS,
+        ),
+    ] {
+        if let Some(text) = config_read(file) {
+            hub.publish_config(kind, &text);
+        }
+    }
+    match hub.serve(&infiniterm_core::paths::join_socket()) {
+        Ok(()) => {
+            app.join_updates = hub.take_updates();
+            app.join = Some(hub);
+        }
+        Err(e) => eprintln!("[infiniterm/warn] ift join is off: {e}"),
+    }
+    // Viewers that join before the first save still get a canvas.
+    app.write_layout();
 }
 
 pub fn startup(app: &mut AppView) {
@@ -988,10 +1231,32 @@ pub fn startup(app: &mut AppView) {
         // The settings were applied before this, with the Mac's folder.
         app.model.start_dir = "~".into();
     }
-    app.live_sessions = app.backend.pty.live_sessions();
+    let join_host = infiniterm_core::backend::remote::join_from_env();
+    app.viewer = join_host.is_some();
+    // A viewer asks the host nothing at launch: the canvas arrives from the
+    // client thread, and every session on it is adoptable through the host.
+    app.live_sessions = if app.viewer {
+        vec![]
+    } else {
+        app.backend.pty.live_sessions()
+    };
     app.model.can_park = app.backend.pty.can_park();
-    app.model
-        .load_layout(infiniterm_core::layout_file::read_layout().as_deref());
+    if let Some(host) = join_host {
+        // An empty, read-only canvas; the first snapshot fills it in place.
+        app.model.load_layout(None);
+        app.model.first_run = false;
+        app.model.read_only = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (edit_tx, edit_rx) = std::sync::mpsc::channel();
+        app.canvas_rx = Some(rx);
+        app.uplink = Some(edit_tx);
+        std::thread::spawn(move || {
+            infiniterm_core::backend::join_client::run_canvas_client(host, tx, edit_rx)
+        });
+    } else {
+        app.model
+            .load_layout(infiniterm_core::layout_file::read_layout().as_deref());
+    }
     // The omnibox ranks against this; a missing file is an empty history.
     app.model.history =
         infiniterm_core::omni::history::History::load(&infiniterm_core::paths::history_path());
@@ -1013,6 +1278,7 @@ pub fn startup(app: &mut AppView) {
         infiniterm_core::files::draft_prune(&keep);
     }
     start_updater(app);
+    start_join(app);
     app.perform_effects();
     if !app.backend.socket_ok {
         app.model

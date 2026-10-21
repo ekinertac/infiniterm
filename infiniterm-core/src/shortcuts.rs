@@ -197,6 +197,16 @@ pub const GESTURES: &[(&str, &str, &str)] = &[
         "Zoom about the pointer",
         "mouse.canvas.zoom",
     ),
+    (
+        "Cmd Alt + two fingers",
+        "Move the focus to the next card in that direction",
+        "mouse.focus.scroll",
+    ),
+    (
+        "Cmd Shift + two fingers sideways",
+        "Switch workspace",
+        "mouse.workspace.scroll",
+    ),
     ("Cmd drag", "Pan the canvas", "mouse.canvas.pan"),
     ("middle drag", "Pan the canvas", "mouse.canvas.pan"),
     (

@@ -17,7 +17,9 @@ use gpui::{
 };
 use infiniterm_core::agent_state::AgentState;
 use infiniterm_core::format_zoom::format_zoom;
-use infiniterm_core::palette::{highlight, rank, sectionise, step_index, RankedItem, MAX_RESULTS};
+use infiniterm_core::palette::{
+    fit_label, highlight, rank, sectionise, step_index, RankedItem, MAX_RESULTS,
+};
 use infiniterm_core::palette_usage::{recent_keys, usage_bonus, use_key, RECENT_LIMIT};
 use infiniterm_core::saved_layout::CardKind;
 use infiniterm_core::shortcuts::{filter_shortcuts, shortcut_sections, GESTURES};
@@ -442,7 +444,10 @@ impl Render for AppView {
         let focus = self.focus.clone();
         let title_bar = self.render_title_bar(cx);
         let status_bar = self.render_status_bar(cx);
-        let palette = self.model.palette_open().then(|| self.render_palette(cx));
+        let palette = self
+            .model
+            .palette_open()
+            .then(|| self.render_palette(window, cx));
         let prompt = self.model.prompt.is_open().then(|| self.render_prompt(cx));
         let shortcuts = self.model.shortcuts_open.then(|| self.render_shortcuts(cx));
         let omnibox = self.model.omni.open.then(|| self.render_omnibox(cx));
@@ -858,6 +863,7 @@ impl AppView {
             .and_then(|c| match c.kind {
                 CardKind::Browser => Some("locked: browser"),
                 CardKind::Editor => Some("locked: editor"),
+                CardKind::Diff => Some("locked: diff"),
                 _ => None,
             })
     }
@@ -1000,7 +1006,7 @@ impl AppView {
             )
     }
 
-    fn render_palette(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_palette(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
         let ui = self.model.ui_scale as f32;
         let chrome = &self.chrome;
@@ -1013,6 +1019,29 @@ impl AppView {
             .saturating_sub(PALETTE_ROWS - 1)
             .min(flat.len().saturating_sub(PALETTE_ROWS));
         let query = self.model.palette.query.clone();
+        // What a label may take of a row (#492): the sheet's width less its
+        // border and the row's padding, measured in the palette's own font.
+        let rem = f32::from(window.rem_size());
+        let palette_w = PALETTE_WIDTH_PX * ui;
+        let source_hint_is_prose = matches!(
+            source,
+            infiniterm_core::model::palette_state::Source::Snippets
+                | infiniterm_core::model::palette_state::Source::Themes
+        );
+        let body_px = px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui);
+        let cap_px = px(chrome.typography.size(KEY_CAP_FONT_PX) * ui);
+        let mut body_font = gpui::font(chrome.typography.family.clone());
+        body_font.weight = chrome.typography.regular.weight;
+        let mut cap_font = gpui::font(chrome.typography.family.clone());
+        cap_font.weight = chrome.typography.bold.weight;
+        let measure = |text: &str, cap: bool| -> f32 {
+            let (size, font) = if cap {
+                (cap_px, &cap_font)
+            } else {
+                (body_px, &body_font)
+            };
+            f32::from(crate::text::shape(window, text, size, font, chrome.text).width)
+        };
         let mut list = div().flex().flex_col();
         if flat.is_empty() {
             list = list.child(
@@ -1049,8 +1078,30 @@ impl AppView {
             }
             let selected = i == index;
             let id = item.item.id.clone();
-            let mut label = div().flex().gap_0();
-            for run in highlight(&item.item.label, &item.matched.matches) {
+            // The label gets what the keys (or a snippet's first line) leave
+            // of the row, and is cut to it with an ellipsis (#492): a card's
+            // label can be a whole sentence.
+            let hint_room = match &item.item.hint {
+                None => 0.,
+                Some(hint) if source_hint_is_prose => {
+                    measure(hint, false).min(SNIPPET_HINT_MAX_W_PX * ui)
+                }
+                Some(hint) => hint
+                    .split(' ')
+                    .map(|key| measure(key, true) + 2. * KEY_CAP_PAD_X_PX * ui + 0.25 * rem)
+                    .sum(),
+            };
+            let room = (palette_w - 2. - 1.5 * rem - hint_room - 0.5 * rem).max(0.);
+            let fitted = fit_label(&item.item.label, &item.matched.matches, room, |t| {
+                measure(t, false)
+            });
+            let mut label = div()
+                .flex()
+                .gap_0()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap();
+            for run in highlight(&fitted.text, &fitted.matches) {
                 label = label.child(
                     div()
                         .when(run.hit, |d| d.text_color(chrome.sel_bg))

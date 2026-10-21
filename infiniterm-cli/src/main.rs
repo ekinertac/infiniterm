@@ -26,8 +26,10 @@ mod cursor_hooks;
 mod completion;
 mod connect;
 mod install;
+mod join;
 mod licence_cmd;
 mod proxy;
+mod serve;
 mod socket;
 
 use std::path::{Path, PathBuf};
@@ -47,6 +49,9 @@ ift — drive infiniterm from a shell
                              below is taken as one); its directory must
                              exist
   ift -n <path>              a file in a card of its own, returning at once
+  ift -t <path> [card]       a file as a tab of an editor card: the card's
+                             number (2 or #2) or id, else the focused editor
+                             card, else a card of its own
   ift diff [path]            changes against git HEAD, as a card: a tree of the
                              changed files under path (the current directory
                              without one) and each file's diff
@@ -68,6 +73,14 @@ ift — drive infiniterm from a shell
                              Ctrl-\\ (0x1c) detaches, leaving it running
   ift --version              the version of this ift
   ift connect <[user@]host> [--name N] [--color RRGGBB] [--check] [--install]
+  ift serve [--detach|--stop]
+                             hold this Mac's saved canvas and its cards for
+                             viewers (ift join) with the app closed; --detach
+                             runs it in the background, --stop ends it (the
+                             cards keep running; the app takes over at its
+                             next launch)
+  ift join <[user@]host> [--name N] [--color RRGGBB] [--check]
+                             a viewer window on the canvas running on host
                              open a second infiniterm for a host: its own
                              window, Dock icon and canvas, with terminal cards
                              that run on that host over ssh (key login; ift
@@ -139,12 +152,14 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 25] = [
+pub const SUBCOMMANDS: [&str; 27] = [
     "diff",
     "ls",
     "sessions",
     "attach",
     "connect",
+    "serve",
+    "join",
     "terminal",
     "send",
     "read",
@@ -195,6 +210,8 @@ fn main() -> ExitCode {
         Some("install") => install_self(),
         Some("licence") => licence_cmd::run(&args[1..]),
         Some("connect") => connect::run(&args[1..]),
+        Some("join") => join::run(&args[1..]),
+        Some("serve") => serve::run(&args[1..]),
         // Not `ift version`: any word that is not a verb is a file to open.
         Some("--version") | Some("-V") => {
             println!("ift {}", env!("CARGO_PKG_VERSION"));
@@ -203,6 +220,19 @@ fn main() -> ExitCode {
         // Plumbing for the remote instances, called over ssh by the app, so it
         // is in neither USAGE nor the completion (like dev-run).
         Some("proxy") => proxy::run(&args[1..]),
+        // Run by ssh as SSH_ASKPASS for `ift join` with no terminal (#450):
+        // the question is the one argument, the answer goes to stdout, for ssh
+        // alone. Plumbing, so in neither USAGE nor the completion.
+        Some("askpass") => match args.get(1) {
+            Some(prompt) => match infiniterm_core::backend::ssh_login::run_askpass(prompt) {
+                Ok(answer) => {
+                    println!("{answer}");
+                    ExitCode::SUCCESS
+                }
+                Err(_) => ExitCode::from(1),
+            },
+            None => ExitCode::from(2),
+        },
         Some("completion") => match args.get(1).map(String::as_str) {
             Some("zsh") => {
                 print!("{}", completion::ZSH);
@@ -240,6 +270,13 @@ fn main() -> ExitCode {
             Some(p) => open_path(p, false),
             None => {
                 eprintln!("ift: -n takes a path");
+                ExitCode::from(2)
+            }
+        },
+        Some("-t") => match tab_args(&args) {
+            Some((path, card)) => open_tab(path, card),
+            None => {
+                eprintln!("ift: -t takes a path and optionally a card");
                 ExitCode::from(2)
             }
         },
@@ -513,6 +550,34 @@ fn send(cmd: &str, args: Vec<String>) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// `ift -t <path> [card]`: the path right after `-t` and the card after it.
+fn tab_args(args: &[String]) -> Option<(&str, Option<&str>)> {
+    let path = args.get(1).map(String::as_str).filter(|p| !p.is_empty())?;
+    Some((path, args.get(2).map(String::as_str).filter(|c| !c.is_empty())))
+}
+
+/// `ift -t`: the file is resolved here, where the working directory is, and
+/// the app puts it in a tab (#265). A directory is not a tab.
+fn open_tab(arg: &str, card: Option<&str>) -> ExitCode {
+    let (path, _line) = split_line(arg);
+    let full = match resolve(path) {
+        Ok(full) => full,
+        Err(e) => {
+            eprintln!("ift: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if full.is_dir() {
+        eprintln!("ift: -t takes a file, not a directory: {}", full.display());
+        return ExitCode::from(2);
+    }
+    let mut args = vec![full.to_string_lossy().into_owned()];
+    if let Some(card) = card {
+        args.push(card.to_string());
+    }
+    send("tab", args)
 }
 
 /// The path after `-n`. `args` already left the program name out, so it
@@ -956,6 +1021,19 @@ fn install_extension(source: Option<&str>) -> ExitCode {
 mod tests {
     use super::*;
 
+    // `ift -t <file> [card]`: the file right after `-t`, then the card.
+    #[test]
+    fn tab_takes_a_path_and_an_optional_card() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            tab_args(&a(&["-t", "src/main.rs", "#2"])),
+            Some(("src/main.rs", Some("#2")))
+        );
+        assert_eq!(tab_args(&a(&["-t", "a.rs"])), Some(("a.rs", None)));
+        assert_eq!(tab_args(&a(&["-t"])), None);
+        assert_eq!(tab_args(&a(&["-t", ""])), None);
+    }
+
     // `ift -n <file>`: the path is the argument right after `-n`.
     #[test]
     fn dash_n_takes_the_next_argument_as_its_path() {
@@ -996,10 +1074,15 @@ mod tests {
         if Command::new("python3").arg("--version").output().is_err() {
             return None;
         }
+        // One folder per call. It was named from the lengths of the arguments,
+        // so two tests running in parallel whose inputs happened to be as long
+        // shared a folder, and one's cleanup or log overwrote the other's: the
+        // flaky failure of #452.
+        static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
             "ift-adapter-{}-{}",
             std::process::id(),
-            event_arg.len() + stdin.len()
+            CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("call.txt");

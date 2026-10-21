@@ -288,6 +288,10 @@ pub enum Effect {
         text: String,
     },
     ClearPane(PaneId),
+    /// `terminal.redraw` (#447): ask the program in this pane to repaint,
+    /// through `Panes::redraw`; the ui knows the card's size and, in a
+    /// viewer, joins the session again.
+    RedrawPane(PaneId),
     WritePane(PaneId, Vec<u8>),
     DraftDelete(String),
     /// These cards are about to move: their rects as they are now, so the
@@ -691,6 +695,20 @@ pub struct Model {
     pub first_run: bool,
     pub read_only: bool,
     pub dirty_layout: bool,
+    /// A viewer has applied at least one host snapshot, so its viewport,
+    /// zoom, focus and workspace are its own from here on.
+    pub snapshot_seen: bool,
+    /// The revision of the canvas a viewer and its host share (#423). On the
+    /// host: the number of the last layout it published. On a viewer: the
+    /// revision of the last snapshot it applied, which an edit it sends up
+    /// names, so the host can tell an edit made on an old canvas from one made
+    /// on the current one.
+    pub layout_rev: u64,
+    /// The last canvases the host published, by revision (#423). A viewer's
+    /// edit names the revision it was made on; the host works out WHAT the
+    /// viewer changed by comparing the edit with that canvas, and applies only
+    /// that to its current state.
+    pub published: std::collections::VecDeque<(u64, crate::saved_layout::SavedLayout)>,
     pub config: Config,
     pub keymap: Keymap,
     /// Bindings with a `when` from keybindings.json (#269); the last one whose
@@ -811,6 +829,9 @@ impl Model {
             first_run: false,
             read_only: false,
             dirty_layout: false,
+            snapshot_seen: false,
+            layout_rev: 0,
+            published: std::collections::VecDeque::new(),
             config: default_config(),
             keymap: default_keymap(),
             conditional_keys: vec![],

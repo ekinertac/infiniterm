@@ -19,7 +19,6 @@ mod browsers;
 mod chrome;
 mod composing;
 mod decoys;
-mod diff_body;
 mod editor_body;
 mod editor_tabs;
 mod editors;
@@ -91,6 +90,17 @@ fn titlebar_base_h(font_size: f32) -> f32 {
 
 fn statusbar_base_h(font_size: f32) -> f32 {
     STATUSBAR_H.max(font_size * 2.)
+}
+
+#[cfg(test)]
+mod cef_start_tests {
+    use super::starts_cef;
+
+    #[test]
+    fn a_joined_window_never_starts_cef_so_its_quit_never_shuts_it_down() {
+        assert!(!starts_cef(true));
+        assert!(starts_cef(false));
+    }
 }
 
 #[cfg(test)]
@@ -210,6 +220,9 @@ pub struct AppView {
     /// `app.emoji` asked; the next frame, which has the window, opens it.
     pub show_character_palette: bool,
     pub pan: Option<Pan>,
+    /// Cmd + scroll as navigation (`scroll_nav`): the swipe gathered so far,
+    /// whether the fingers lifted, the last workspace switch.
+    pub scroll_nav: infiniterm_core::scroll_nav::NavState,
     /// A rectangle being dragged on bare canvas to select cards (input.rs,
     /// `Model::marquee_select`).
     pub marquee: Option<Marquee>,
@@ -258,6 +271,25 @@ pub struct AppView {
     /// "Open a file" asked for the open panel (`Effect::PickFile`); the idle
     /// timer, which has the app, shows it (#64). The card it opens beside.
     pub pick_request: Option<Option<String>>,
+    /// The socket viewers join through (`ift join`, #423); `None` when the
+    /// backend is not the daemon or the socket could not be bound.
+    pub join: Option<infiniterm_core::backend::join::JoinHub>,
+    /// The agent states last sent to viewers, so a change is sent once.
+    pub last_agents: String,
+    /// The edits viewers send up (host side, #423): applied in the poll.
+    pub join_updates:
+        Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join::RemoteUpdate>>,
+    /// A viewer's edits on their way up to the host (viewer side).
+    pub uplink: Option<std::sync::mpsc::Sender<infiniterm_core::backend::join::RemoteUpdate>>,
+    /// This window is a viewer (`ift join`, #423): the canvas is the host's,
+    /// nothing is saved, nothing is seeded, no session is started.
+    pub viewer: bool,
+    /// The canvas connection (re)joined: every viewer card without a live
+    /// connection tries again now (#442).
+    pub viewer_poke: bool,
+    /// The host's canvas, as the client thread reads it.
+    pub canvas_rx:
+        Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join_client::CanvasEvent>>,
     /// A terminal's Paste from the right-click menu: the card to paste into,
     /// read from the clipboard in the poll task.
     pub paste_request: Option<String>,
@@ -384,6 +416,15 @@ fn system_reduces_motion() -> bool {
     }
 }
 
+/// Whether this process starts CEF. A joined window (`ift join`, #423, #444)
+/// has no browser cards (they are refused there and the host's show as
+/// "browser on <host>"), so it has nothing for CEF to do, and quitting it
+/// crashed inside CEF's shutdown (EXC_BREAKPOINT, three reports on the Air).
+/// The helper invocations are decided before this, in `early`.
+fn starts_cef(joined: bool) -> bool {
+    !joined
+}
+
 fn main() {
     // CEF first: a helper invocation runs and exits here; the browser
     // process loads the framework from the bundle and goes on. Outside a
@@ -396,6 +437,38 @@ fn main() {
             None
         }
     };
+    // An `ift serve` of this data dir (a canvas host kept while the app was
+    // closed, #438) is asked to save and go first: the app takes over its
+    // canvas and its sessions, and viewers join the app (#442).
+    {
+        use infiniterm_core::headless::{serve_pid_file, stop_running_serve, ServeStop};
+        match stop_running_serve(&serve_pid_file(), std::time::Duration::from_secs(10)) {
+            ServeStop::NotRunning => {}
+            ServeStop::Stopped => eprintln!("[infiniterm] took over from ift serve"),
+            ServeStop::Stuck(pid) => {
+                // Said where the person is looking, not only in a log: the
+                // app is about to exit, and a launch that ends with no window
+                // and no word reads as a crash.
+                let text = format!(
+                    "`ift serve` (pid {pid}) is holding this canvas and did not stop in 10 seconds. infiniterm did not start. Stop it with `ift serve --stop`, or quit that process, and open infiniterm again."
+                );
+                eprintln!("[infiniterm] {text}");
+                let _ = std::process::Command::new("osascript")
+                    .args([
+                        "-e",
+                        "on run argv",
+                        "-e",
+                        "display dialog (item 1 of argv) with title \"infiniterm\" buttons {\"OK\"} default button \"OK\" with icon caution",
+                        "-e",
+                        "end run",
+                        "--",
+                        &text,
+                    ])
+                    .status();
+                std::process::exit(1);
+            }
+        }
+    }
     if runtime::another_instance_holds_the_socket() {
         eprintln!("[infiniterm] another infiniterm holds the socket; activating it");
         let _ = std::process::Command::new("open")
@@ -403,10 +476,11 @@ fn main() {
             .status();
         std::process::exit(0);
     }
+    let joined = infiniterm_core::backend::remote::join_from_env().is_some();
     Application::new().run(move |cx: &mut App| {
         keycode::install();
         finder_service::register();
-        let cef_running = match cef.as_mut() {
+        let cef_running = match cef.as_mut().filter(|_| starts_cef(joined)) {
             Some(p) => {
                 infiniterm_browser::app_protocol::install();
                 let ok = p.start();
@@ -541,6 +615,13 @@ fn main() {
                     app
                 });
                 window.focus(&view.read(cx).focus.clone());
+                // A joined window opens from `ift join`, run in another app's
+                // window (a terminal): without this it can open behind it.
+                // The app-wide `cx.activate` below does not always win over
+                // the app that launched us; making this window key does.
+                if infiniterm_core::backend::remote::join_from_env().is_some() {
+                    window.activate_window();
+                }
                 // gpui's view never answers middle-button drags; now that the
                 // window (and so its view class) exists, teach it to.
                 middle_drag::install();
@@ -558,6 +639,21 @@ fn main() {
                         .await;
                     let alive = poll.update(cx, |this, cx| {
                         this.drain_backend();
+                        // The host's canvas, for a viewer; the host's agent
+                        // states, for viewers (#423).
+                        this.drain_canvas();
+                        // A viewer's cards that lost their session rejoin
+                        // here too, not only in the frame: a window behind
+                        // others draws no frames (#442).
+                        if this.drive_viewer_links() {
+                            cx.notify();
+                        }
+                        this.publish_agents();
+                        // What viewers changed on this canvas (#423).
+                        if this.apply_remote_updates() {
+                            this.redraw = true;
+                            cx.notify();
+                        }
                         // The save debounce runs here, not in the frame: a
                         // layout change with nothing else moving must not
                         // hold the frame loop open for half a second.
@@ -659,6 +755,18 @@ fn main() {
                 // second of moves; the window's frame goes with it.
                 let quitting = view.clone();
                 cx.on_app_quit(move |cx| {
+                    // A joined window ends the shared ssh connection a
+                    // password host got (#450), so a normal quit leaves
+                    // nothing running; a crash leaves it its 10 minutes.
+                    if let Some(host) = infiniterm_core::backend::remote::join_from_env() {
+                        use std::os::unix::fs::MetadataExt;
+                        let uid = std::fs::metadata(infiniterm_core::paths::home_dir())
+                            .map(|m| m.uid())
+                            .unwrap_or(0);
+                        let control =
+                            infiniterm_core::backend::ssh_login::control_path(&host.target, uid);
+                        infiniterm_core::backend::ssh_login::stop_master(&host, &control);
+                    }
                     quitting.update(cx, |this, _| {
                         this.flush_save();
                         // The shells: local ones die with us, tmux windows

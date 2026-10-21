@@ -36,6 +36,7 @@ export const featureGroups: FeatureGroup[] = [
       { text: '`Cmd 1` on a fitted terminal card zooms to 150% at its bottom, and `Cmd Up` / `Cmd Down` pan inside it.', href: 'guide/canvas/#zooming-in-on-a-cards-bottom' },
       { text: '`Cmd Ctrl Alt` + arrow slides a card into the next gap; `Cmd Alt Shift` + arrow moves a whole selection one block.', href: 'guide/canvas/#moving-and-resizing' },
       { text: '`Cmd Ctrl Shift` + arrow pans the canvas from the keyboard.', href: 'guide/canvas/#moving-and-resizing' },
+      { text: '`Cmd Alt` + two fingers moves the focus between cards, and `Cmd Shift` + two fingers sideways switches workspace.', href: 'guide/canvas/#zoom' },
       { text: 'Select several cards with a drag or `Cmd` + click, then move, close, fit or group them together.' },
       { text: '`Cmd Alt` + arrow moves to the neighbour; `Ctrl Tab` walks the cards you used, most recent first.' },
       { text: 'Right-click opens the native Mac menu on a terminal, a card, the canvas, a tab, an editor and a browser page, with each shortcut at the right edge.', href: 'guide/canvas/#the-right-click-menu' },
@@ -70,7 +71,7 @@ export const featureGroups: FeatureGroup[] = [
       { text: '`ift file.rs` in a terminal card edits the file over that card and waits, so `EDITOR=ift` works for `git commit`.' },
       { text: 'JSON files with a `$schema` complete their keys and values; setting names complete in `settings.json`.', href: 'guide/editor/#json-with-a-schema' },
       { text: 'Words from the file and the other tabs complete as you type, from two letters.', href: 'guide/editor/#words-from-your-files' },
-      { text: '`ift diff` opens your changes against HEAD, with a blame gutter on `Cmd B`.' },
+      { text: '`ift diff` opens your changes against HEAD in a read-only editor: syntax colours, folded unchanged lines, find, copy and a blame gutter on `Cmd B`.', href: 'guide/editor/#the-diff-card' },
       { text: 'Browser cards are Chromium with tabs and the Claude in Chrome extension, beside the agent that drives them.' },
       { text: 'An address bar (`Cmd L`) that takes a URL or a search, with your history.' },
       { text: 'Page cards show Markdown read-only; the "Start here" card is one.' },
@@ -89,6 +90,7 @@ export const featureGroups: FeatureGroup[] = [
   {
     title: 'Servers',
     items: [
+      { text: '`ift join host` opens a window on another Mac\'s running canvas with full control, even when its app is closed (`ift serve`).', href: 'guide/servers/#joining-a-canvas-that-already-exists' },
       { text: '`ift connect user@host` opens a second window whose terminal cards run on that server over ssh.', href: 'guide/servers/' },
       { text: 'The shells stay on the server when the window closes; connecting again brings the same cards back.' },
       { text: '`--install` puts `ift` and `iftd` on a Linux server through the ssh connection, checksum checked.' },
