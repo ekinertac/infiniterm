@@ -756,7 +756,12 @@ mod tests {
             2
         );
         assert!(b.read_only && !b.is_dirty(), "a diff is never unsaved");
-        assert_eq!(b.path.as_deref(), Some(a_rs.as_str()));
+        // The path is git's spelling of the root (`C:/...` on Windows), the
+        // same file as the test's `C:\...`.
+        assert_eq!(
+            b.path.as_deref().map(|p| p.replace('\\', "/")),
+            Some(a_rs.replace('\\', "/"))
+        );
         assert!(b.buffer.has_folds(), "the unchanged stretches start folded");
         assert!(b.buffer.text().contains("let v10 = 10;"), "removed text");
         assert!(!b.buffer.text().contains("+let"), "no diff prefixes");
