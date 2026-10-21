@@ -309,10 +309,12 @@ pub use self::set1_dom_code as dom_code;
 
 /// An X11 key code is the evdev code plus this (the X protocol reserves
 /// codes 0 to 7).
-#[cfg_attr(target_os = "macos", allow(dead_code))]
+// The X11 items below exist where `x11_keys` uses them, and for the tests,
+// which run on every platform; anywhere else they would be dead code.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 const X11_KEYCODE_OFFSET: u16 = 8;
 /// Left and right Shift as X11 key codes (evdev 42 and 54).
-#[cfg_attr(target_os = "macos", allow(dead_code))]
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 const X11_SHIFT_KEYS: [u16; 2] = [50, 62];
 
 /// The one key the table names among the keys down in an X11 `QueryKeymap`
@@ -320,7 +322,7 @@ const X11_SHIFT_KEYS: [u16; 2] = [50, 62];
 /// Modifiers are not in the table, so a chord leaves exactly one key. Two
 /// named keys down at once (typing fast) is ambiguous and answers `None`,
 /// which hands the keymap gpui's own name, as for a key the table lacks.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 fn pressed_scan(keys: &[u8; 32]) -> Option<u16> {
     let mut found = None;
     for code in X11_KEYCODE_OFFSET..256 {
@@ -339,12 +341,12 @@ fn pressed_scan(keys: &[u8; 32]) -> Option<u16> {
 }
 
 /// Whether either Shift is down in a `QueryKeymap` bitmap.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 fn shift_down(keys: &[u8; 32]) -> bool {
     X11_SHIFT_KEYS.iter().any(|&code| key_down_in(keys, code))
 }
 
-#[cfg_attr(target_os = "macos", allow(dead_code))]
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
 fn key_down_in(keys: &[u8; 32], code: u16) -> bool {
     keys[(code / 8) as usize] & (1 << (code % 8)) != 0
 }
