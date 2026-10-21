@@ -2,6 +2,39 @@
 
 For a Claude session on Ekin's Windows desktop (the "gpu box", RTX 4070 Ti), starting from nothing but this repo. Written 2026-09-23 on the Mac by the session that built most of the tree. Read `CLAUDE.md` first: it holds the rules and the traps, and most of them still apply. This file is only what is different about Windows.
 
+## Merged with master, 2026-10-21
+
+The port was merged with master (about 750 commits since it forked at
+e4802dc: `ift join`, `ift serve`, the diff card as a read-only editor, native
+context menus, theme.json). What was checked on the gpu box after the merge,
+with the browser feature OFF (CEF is not in these builds): `cargo check` and
+`cargo test` for core, term, editor, hook and cli (about 1,390 tests, all
+passing), and `cargo check` plus `cargo test` for the ui crate (112 passing).
+Not checked on Windows after the merge: a build with CEF on, and anything on
+screen. The Mac side passed `make check`.
+
+Master's new code is Mac or unix only and stays that way here, each behind a
+`cfg` with a one-line answer rather than a port:
+
+- **Join, remote instances, `ift serve`, the ssh login step.** `backend::join`,
+  `join_client`, `relay`, `remote`, `ssh_login` and `headless` are unix-only
+  modules (unix sockets, ssh stdio, `iftd`). `ift connect`, `join`, `serve`,
+  `proxy` and `askpass` answer "not available on Windows" and exit 2. The ui
+  has no join hub, no viewer links and no uplink on Windows.
+- **Seven AppKit/CoreText ui modules** (finder_service, fullscreen, icon_font,
+  instance_icon, middle_drag, native_menu, title_drag) have same-named
+  stand-ins in `infiniterm-ui/src/not_macos.rs`. What each leaves undone is
+  in that file's header. The visible gaps are: **no right-click menu** (the
+  native menu is the only one), no full-screen toggle, and the bundled Nerd
+  Font is not registered, so prompt icons need an installed Nerd Font.
+- **Daemon-only features** (parking a closed card, `ift sessions`/`attach`)
+  are absent as before: there is no `iftd`.
+
+Two rules for the next merge: a new `std::os::unix` or `libc` call in a crate
+the box builds fails the Windows build, and a test that writes `/tmp`, uses a
+symlink, checks a mode bit or canonicalises with `std::fs::canonicalize`
+(use `paths::canonical`) fails on Windows only.
+
 ## Where this stands
 
 **Every phase is done, 2026-09-23 to -25.** Every crate builds and passes
