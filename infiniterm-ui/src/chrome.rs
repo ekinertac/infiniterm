@@ -12,7 +12,7 @@ use crate::fonts::UiTypography;
 use gpui::{rgb, Hsla, Rgba};
 use infiniterm_core::config::Ui;
 use infiniterm_core::itermcolors::Theme;
-use infiniterm_core::theme_file::{BarTheme, BorderSpec, ColorSpec};
+use infiniterm_core::ui_theme::{BarTheme, BorderSpec, ColorSpec};
 
 /// A one-device-pixel line: the thinnest gpui draws crisply. Every card
 /// body's hairline dividers and 1px outlines share this so they read as one
@@ -391,7 +391,7 @@ pub fn with_alpha(c: Hsla, a: f32) -> Hsla {
     Hsla { a, ..c }
 }
 
-/// A bar's ground and edge once theme.json (#425) has had its say. `bg` is
+/// A bar's ground and edge once the ui theme (#425, #511) has had its say. `bg` is
 /// the colour the bar would wear without the file (the title bar's may be a
 /// window-colour tint); `border` is `None` when the file asks for none.
 pub struct BarStyle {
@@ -400,9 +400,9 @@ pub struct BarStyle {
 }
 
 impl Chrome {
-    /// A theme.json colour as a paint colour. Tokens are read from the live
+    /// A ui theme colour as a paint colour. Tokens are read from the live
     /// chrome, so "canvas" follows the canvas rather than freezing it. An
-    /// unparseable hex cannot reach here (`theme_file::parse` checked it).
+    /// unparseable hex cannot reach here (`ui_theme::parse` checked it).
     pub fn theme_color(&self, spec: &ColorSpec) -> Hsla {
         match spec {
             ColorSpec::Hex(s) => hex(s).unwrap_or(self.bar_bg),

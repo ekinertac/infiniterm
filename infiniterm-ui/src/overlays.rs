@@ -154,8 +154,11 @@ impl AppView {
                 i.item.hint.as_deref()
                     == Some(infiniterm_core::model::palette_state::ACTIVE_THEME_HINT)
             });
-            let heads = if source == infiniterm_core::model::palette_state::Source::Themes
-                && active_first
+            let heads = if matches!(
+                source,
+                infiniterm_core::model::palette_state::Source::Themes
+                    | infiniterm_core::model::palette_state::Source::UiThemes
+            ) && active_first
                 && ranked.items.len() > 1
             {
                 vec![(String::new(), 1)]
@@ -664,8 +667,8 @@ impl AppView {
             idle_faint,
             chosen_fill,
         } = crate::chrome::tab_colors(chrome, wear, REMOTE_BAR_TINT);
-        // theme.json (#425) wins over the tint for the ground and sets the edge.
-        let bar_style = chrome.bar_style(&self.model.chrome_theme.titlebar, bar);
+        // The ui theme (#425, #511) wins over the tint for the ground and sets the edge.
+        let bar_style = chrome.bar_style(&self.model.ui_theme.titlebar, bar);
         let mut tabs = div().flex().items_center().gap_1();
         for (index, ws) in self.model.workspaces.iter().enumerate() {
             let cards = self.model.cards_on(Some(&ws.id));
@@ -932,7 +935,7 @@ impl AppView {
         } else {
             chrome.text_faint
         };
-        let bar_style = chrome.bar_style(&m.chrome_theme.statusbar, chrome.bar_bg);
+        let bar_style = chrome.bar_style(&m.ui_theme.statusbar, chrome.bar_bg);
         div()
             .h(px(self.statusbar_h()))
             .w_full()
@@ -1041,6 +1044,7 @@ impl AppView {
             source,
             infiniterm_core::model::palette_state::Source::Snippets
                 | infiniterm_core::model::palette_state::Source::Themes
+                | infiniterm_core::model::palette_state::Source::UiThemes
         );
         let body_px = px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui);
         let cap_px = px(chrome.typography.size(KEY_CAP_FONT_PX) * ui);
@@ -1154,6 +1158,7 @@ impl AppView {
                     source,
                     infiniterm_core::model::palette_state::Source::Snippets
                         | infiniterm_core::model::palette_state::Source::Themes
+                        | infiniterm_core::model::palette_state::Source::UiThemes
                 ) {
                     row = row.child(
                         div()

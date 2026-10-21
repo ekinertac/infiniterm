@@ -48,18 +48,80 @@ pub const EMPTY_KEYBINDINGS: &str = concat!(
 );
 
 impl Model {
-    /// theme.json changed (#425). A file with a mistake is not applied and
-    /// the theme in force stays, the rule settings.json follows (#246).
-    pub fn apply_theme_file_text(&mut self, text: &str) {
-        match crate::theme_file::parse(text) {
-            Ok(theme) => self.chrome_theme = theme,
-            Err(e) => self.effects.push(Effect::Warn(format!(
-                "theme.json not applied, the theme you had stays: {e}"
-            ))),
+    /// A ui theme's text arrived (#511): `text` is the file's contents, `None`
+    /// when `ui-themes/<name>.json` does not exist. The look it sets is laid
+    /// over `config.ui`. A file with a mistake, or a name with no file (other
+    /// than `default`, which is the built-in look without one), is not applied
+    /// and the look in force stays: the rule settings.json follows (#246).
+    pub fn apply_ui_theme_text(&mut self, name: &str, text: Option<&str>) {
+        let parsed = match text {
+            Some(t) => crate::ui_theme::parse(t).map_err(|e| {
+                format!("ui-themes/{name}.json not applied, the look you had stays: {e}")
+            }),
+            None if name == crate::ui_theme::DEFAULT_NAME => Ok(Default::default()),
+            None => Err(format!(
+                "ui theme \"{name}\" has no file in ui-themes/, the look you had stays"
+            )),
+        };
+        match parsed {
+            Ok(theme) => {
+                self.look_ui = merge_config(&serde_json::Value::Object(theme.look.clone())).ui;
+                self.ui_theme = theme;
+                self.ui_theme_name = name.to_string();
+                self.config.ui.take_look_from(&self.look_ui);
+                self.sync_local_color();
+            }
+            Err(e) => self.effects.push(Effect::Warn(e)),
+        }
+    }
+
+    /// The watcher saw `ui-themes/<name>.json` change. Only the theme in force
+    /// matters (every file is watched, see `config_files::poll_ui_themes`); one
+    /// that never loaded (a mistake at startup) is retried by its name.
+    pub fn ui_theme_file_changed(&mut self, name: &str, text: &str) {
+        let in_force = name == self.ui_theme_name
+            || (self.ui_theme_name.is_empty() && name == self.ui_theme_setting);
+        if in_force {
+            self.apply_ui_theme_text(name, Some(text));
+        }
+    }
+
+    /// `ui.theme` as the settings say it. Only a CHANGE loads a file, so a
+    /// preview in the picker is not undone by an unrelated settings edit.
+    pub fn note_ui_theme_setting(&mut self, name: &str) {
+        if name != self.ui_theme_setting {
+            self.ui_theme_setting = name.to_string();
+            self.effects.push(Effect::LoadUiTheme(name.to_string()));
+        }
+    }
+
+    /// The local instance's colour is a look key, so a ui theme change moves
+    /// the title bar and the Dock icon too; a remote window keeps its host's.
+    fn sync_local_color(&mut self) {
+        if self.remote.is_none() {
+            let color = crate::remote_identity::parse_color(&self.config.ui.window_color);
+            if color != self.local_color {
+                self.local_color = color;
+                self.effects.push(Effect::WindowColor {
+                    color,
+                    save: super::WindowColorSave::No,
+                });
+            }
         }
     }
 
     pub fn apply_settings_text(&mut self, text: &str) {
+        self.apply_settings_from(text, true);
+    }
+
+    /// The HOST's settings.json in a joined viewer (#433): everything applies
+    /// but `ui.theme`, because the look is per client (#511); the viewer's
+    /// own choice comes from `note_ui_theme_setting`.
+    pub fn apply_host_settings_text(&mut self, text: &str) {
+        self.apply_settings_from(text, false);
+    }
+
+    fn apply_settings_from(&mut self, text: &str, own: bool) {
         // Checked BEFORE it is applied: a file with an error is not accepted,
         // and the settings in force stay (#246). It used to fall back to the
         // defaults, which read as the app losing every setting (font,
@@ -70,7 +132,22 @@ impl Model {
             .and_then(|raw| validate_settings(&raw).map(|()| raw))
         {
             Ok(raw) => {
+                // The look keys are a ui theme's now (#511). Dropped, not
+                // refused: a valid file must never be refused, and a joined
+                // viewer is sent a host's file that may be older than this
+                // build. The startup move (`look_migration`) takes them out
+                // of the user's own file, so a notice here means a key typed
+                // by hand since.
+                let (raw, dropped) = crate::ui_theme::strip_look(&raw);
+                if !dropped.is_empty() && own {
+                    self.effects.push(Effect::Warn(format!(
+                        "settings.json: {} belong in a ui theme (ui-themes/{}.json), ignored here",
+                        dropped.join(", "),
+                        crate::ui_theme::DEFAULT_NAME
+                    )));
+                }
                 self.config = merge_config(&raw);
+                self.config.ui.take_look_from(&self.look_ui);
                 self.settings_error = None;
             }
             Err(e) => {
@@ -83,17 +160,12 @@ impl Model {
         if let Some(dir) = Some(self.config.starting_dir.clone()).filter(|d| !d.is_empty()) {
             self.start_dir = dir;
         }
-        // The local instance's colour is a setting, so editing the file changes
-        // the title bar and the Dock icon too; a remote window keeps its host's.
-        if self.remote.is_none() {
-            let color = crate::remote_identity::parse_color(&self.config.ui.window_color);
-            if color != self.local_color {
-                self.local_color = color;
-                self.effects.push(Effect::WindowColor {
-                    color,
-                    save: super::WindowColorSave::No,
-                });
-            }
+        self.sync_local_color();
+        // Which ui theme is the LOCAL client's choice: a joined viewer keeps
+        // its own and ignores the host's `ui.theme` (see `ui_theme_name_in`).
+        if own {
+            let name = self.config.ui.theme.clone();
+            self.note_ui_theme_setting(&name);
         }
         // A remote instance's cards start in the server's home, whatever
         // folder the local settings it was seeded from name: that one is a
@@ -196,6 +268,16 @@ impl Model {
     ) -> Option<String> {
         patch_json_text(existing.unwrap_or(EMPTY_SETTINGS), path, value)
     }
+}
+
+/// The `ui.theme` a settings text names, or `None` when it says none or does
+/// not parse. A joined viewer reads its OWN settings.json for this alone
+/// (#511): everything else in that window is the host's.
+pub fn ui_theme_name_in(text: &str) -> Option<String> {
+    let raw = parse_jsonc(text).ok()?;
+    let flat = flatten(raw.as_object()?);
+    let name = flat.get("ui.theme")?.as_str()?.trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Why a parsed settings file must not be applied, or `Ok`. Two things are

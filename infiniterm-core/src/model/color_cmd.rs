@@ -10,7 +10,7 @@
 //! as `remote.json` in the instance's folder, which the ui writes. In the local
 //! instance the colour is optional: the default is none (the normal title bar
 //! and the normal icon) and a choice is the setting `ui.windowColor`, saved to
-//! settings.json the way the theme is.
+//! the ui theme in force (`Effect::SaveLook`): a colour is a look key, #511.
 //!
 //! The model holds the colour (`Model::window_color`, which the title bar reads
 //! every frame); the Dock icon and `remote.json` are the ui's, reached through
@@ -167,7 +167,7 @@ impl Model {
                         }
                         _ => String::new(),
                     };
-                    self.effects.push(Effect::SaveSetting {
+                    self.effects.push(Effect::SaveLook {
                         path: SETTING.into(),
                         value: serde_json::Value::String(value),
                     });
@@ -219,7 +219,7 @@ mod tests {
 
     fn saved_setting(m: &Model) -> Option<String> {
         m.effects.iter().find_map(|e| match e {
-            Effect::SaveSetting { path, value } if path == SETTING => {
+            Effect::SaveLook { path, value } if path == SETTING => {
                 value.as_str().map(str::to_string)
             }
             _ => None,

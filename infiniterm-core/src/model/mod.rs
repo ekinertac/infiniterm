@@ -336,8 +336,20 @@ pub enum Effect {
         path: String,
         value: Value,
     },
+    /// Written into the ui theme in force (#511), the way `SaveSetting` writes
+    /// settings.json: a look key such as `ui.windowColor` is the theme's.
+    SaveLook {
+        path: String,
+        value: Value,
+    },
     LoadTheme(String),
     RefreshThemes,
+    /// Read `ui-themes/<name>.json` and hand its text (`None`: no such file)
+    /// to `Model::apply_ui_theme_text`. From `ui.theme` changing and from the
+    /// ui theme picker's preview.
+    LoadUiTheme(String),
+    /// Re-list `ui-themes/` into `Model::ui_theme_names`; before the picker opens.
+    RefreshUiThemes,
     /// Onto the system clipboard. The model never touches it directly:
     /// only the ui has an App to write through.
     Copy(String),
@@ -718,8 +730,21 @@ pub struct Model {
     /// frame (the completion popup, the editor's find panel and selection).
     pub ui_context: UiContext,
     pub settings_error: Option<String>,
-    /// theme.json's chrome overrides (#425), kept while a later edit is bad.
-    pub chrome_theme: crate::theme_file::ChromeTheme,
+    /// The ui theme in force (#511): its bar overrides (#425) and look keys,
+    /// kept while a later edit is bad. Per client: a joined viewer keeps its own.
+    pub ui_theme: crate::ui_theme::UiTheme,
+    /// The ui theme's name that `ui_theme` came from; empty before the first
+    /// load. A preview changes it; cancelling puts the old one back.
+    pub ui_theme_name: String,
+    /// The last `ui.theme` setting seen, so only a CHANGE of it loads a file.
+    pub ui_theme_setting: String,
+    /// The folder's names, read by the ui when the picker opens.
+    pub ui_theme_names: Vec<String>,
+    /// The ui theme in force when its picker opened, which cancel puts back.
+    pub ui_theme_before_preview: Option<String>,
+    /// The look keys of `ui_theme` run through the settings reader, so a
+    /// settings.json apply can lay them over its own fresh `config.ui`.
+    pub look_ui: crate::config::Ui,
     pub theme_names: Vec<String>,
     /// the snippets folder's files, read by the ui when the picker opens
     /// (`Effect::RefreshSnippets`), the way `theme_names` is.
@@ -844,7 +869,12 @@ impl Model {
             conditional_keys: vec![],
             ui_context: UiContext::default(),
             settings_error: None,
-            chrome_theme: Default::default(),
+            ui_theme: Default::default(),
+            ui_theme_name: String::new(),
+            ui_theme_setting: String::new(),
+            ui_theme_names: vec![],
+            ui_theme_before_preview: None,
+            look_ui: default_config().ui,
             theme_names: vec![],
             snippets: vec![],
             theme_current: None,

@@ -17,7 +17,6 @@ use infiniterm_core::model::settings_in::{EMPTY_KEYBINDINGS, EMPTY_SETTINGS};
 use infiniterm_core::model::Effect;
 use infiniterm_core::paths::{home_dir, socket_path};
 use infiniterm_core::settings_doc::default_settings_text;
-use infiniterm_core::theme_file::EMPTY_THEME;
 use infiniterm_core::themes_files::{ensure_themes_dir, list_themes, read_theme};
 use std::path::PathBuf;
 
@@ -243,6 +242,22 @@ impl AppView {
         self.model.theme_names = list_themes(&self.themes_dir);
     }
 
+    /// Reads `ui-themes/<name>.json` into the model and redraws what the look
+    /// drives. A missing file is told to the model, which keeps the look you
+    /// had unless the name is `default`.
+    pub fn load_ui_theme(&mut self, name: &str) {
+        let text = infiniterm_core::config_files::ui_theme_read(name);
+        self.model.apply_ui_theme_text(name, text.as_deref());
+        self.after_look_change();
+    }
+
+    /// What follows a change of the look: the chrome's typeface (the rest of
+    /// the look is read from the model each frame).
+    fn after_look_change(&mut self) {
+        self.chrome.apply_ui_typography(&self.model.config.ui);
+        self.redraw = true;
+    }
+
     /// The snippets folder into the model, as the picker opens. A missing
     /// folder is made and seeded: with the entries of the day-old
     /// `snippets.json` when there is one (left in place, never rewritten),
@@ -455,7 +470,9 @@ impl AppView {
                 // The settings in a joined window are the host's, shown
                 // read only for now: writing one here would put a file in the
                 // viewer's own folder that nothing reads.
-                Effect::SaveSetting { path, .. } if self.viewer => {
+                // `ui.theme` is the exception: the look is per client (#511),
+                // so a viewer's choice is written to its own settings.json.
+                Effect::SaveSetting { path, .. } if self.viewer && path != "ui.theme" => {
                     self.model.notify(format!(
                         "{path}: the settings in this window are the host's; change them on the host"
                     ));
@@ -471,6 +488,30 @@ impl AppView {
                             eprintln!("[infiniterm] could not write settings: {e}");
                         }
                     }
+                }
+                // A look key goes into the ui theme in force, text patched like
+                // settings.json is. The watcher reads it back a second later.
+                Effect::SaveLook { path, value } => {
+                    let name = if self.model.ui_theme_name.is_empty() {
+                        infiniterm_core::ui_theme::DEFAULT_NAME.to_string()
+                    } else {
+                        self.model.ui_theme_name.clone()
+                    };
+                    let existing = infiniterm_core::config_files::ui_theme_read(&name)
+                        .unwrap_or_else(infiniterm_core::settings_doc::default_ui_theme_text);
+                    if let Some(patched) =
+                        infiniterm_core::jsonc::patch_json_text(&existing, &path, &value)
+                    {
+                        if let Err(e) =
+                            infiniterm_core::config_files::ui_theme_write(&name, &patched)
+                        {
+                            eprintln!("[infiniterm] could not write ui theme {name}: {e}");
+                        }
+                    }
+                }
+                Effect::LoadUiTheme(name) => self.load_ui_theme(&name),
+                Effect::RefreshUiThemes => {
+                    self.model.ui_theme_names = infiniterm_core::config_files::list_ui_themes();
                 }
                 Effect::LoadTheme(name) => self.load_theme(&name),
                 Effect::RefreshThemes => self.refresh_themes(),
@@ -757,8 +798,26 @@ impl AppView {
         }
         while let Ok(change) = self.backend.config_changes.try_recv() {
             // A joined window runs on the HOST's files, which arrive on the
-            // canvas stream (#433); its own folder is empty and stays so.
+            // canvas stream (#433); its own folder is empty and stays so,
+            // except for the look, which is per client (#511): `ui.theme` in
+            // its own settings.json and the ui theme files.
             if self.viewer {
+                match change.file {
+                    ConfigFile::Settings => {
+                        let name =
+                            infiniterm_core::model::settings_in::ui_theme_name_in(&change.contents)
+                                .unwrap_or_else(|| infiniterm_core::ui_theme::DEFAULT_NAME.into());
+                        self.model.note_ui_theme_setting(&name);
+                    }
+                    ConfigFile::UiTheme => {
+                        if let Some(name) = &change.name {
+                            self.model.ui_theme_file_changed(name, &change.contents);
+                            self.after_look_change();
+                        }
+                    }
+                    _ => {}
+                }
+                self.redraw = true;
                 continue;
             }
             match change.file {
@@ -772,9 +831,14 @@ impl AppView {
                         );
                     }
                 }
-                // theme.json is this window's own look (#425): the chrome stays
-                // per client, so it is never published to a joined viewer.
-                ConfigFile::Theme => self.model.apply_theme_file_text(&change.contents),
+                // A ui theme is this window's own look (#425, #511): the look
+                // stays per client, so it is never published to a joined viewer.
+                ConfigFile::UiTheme => {
+                    if let Some(name) = &change.name {
+                        self.model.ui_theme_file_changed(name, &change.contents);
+                        self.after_look_change();
+                    }
+                }
                 _ => {
                     self.model.apply_keymap_text(&change.contents);
                     #[cfg(unix)]
@@ -998,6 +1062,16 @@ impl AppView {
     /// the host's.
     fn apply_settings_text(&mut self, text: &str) {
         self.model.apply_settings_text(text);
+        self.after_settings();
+    }
+
+    /// The host's file in a joined window: everything but the look (#511).
+    fn apply_host_settings_text(&mut self, text: &str) {
+        self.model.apply_host_settings_text(text);
+        self.after_settings();
+    }
+
+    fn after_settings(&mut self) {
         self.chrome.apply_ui_typography(&self.model.config.ui);
         self.animator.animations_on = self.model.config.ui.animations && !self.reduce_motion;
     }
@@ -1037,7 +1111,7 @@ impl AppView {
                     self.redraw = true;
                 }
                 CanvasEvent::Settings(text) => {
-                    self.apply_settings_text(&text);
+                    self.apply_host_settings_text(&text);
                     self.redraw = true;
                 }
                 CanvasEvent::Keybindings(text) => {
@@ -1178,6 +1252,21 @@ pub fn startup(app: &mut AppView) {
         ConfigFile::KeybindingsDefault,
         &render_keybindings_default(&default_keymap(), label_for),
     );
+    // The look keys an older settings.json holds move into
+    // ui-themes/default.json BEFORE the settings are read (#511), and that
+    // file is created when missing. A joined viewer has no files of its own
+    // to move (its look is whatever its folder holds).
+    if infiniterm_core::backend::remote::join_from_env().is_none() {
+        match infiniterm_core::config_files::migrate_look_keys() {
+            Ok(keys) if !keys.is_empty() => eprintln!(
+                "[infiniterm] moved {} look settings from settings.json to ui-themes/default.json: {}",
+                keys.len(),
+                keys.join(", ")
+            ),
+            Ok(_) => {}
+            Err(e) => eprintln!("[infiniterm/warn] could not move the look settings: {e}"),
+        }
+    }
     let settings = config_read(ConfigFile::Settings).unwrap_or_else(|| {
         let _ = config_write(ConfigFile::Settings, EMPTY_SETTINGS);
         EMPTY_SETTINGS.to_string()
@@ -1186,14 +1275,16 @@ pub fn startup(app: &mut AppView) {
         let _ = config_write(ConfigFile::Keybindings, EMPTY_KEYBINDINGS);
         EMPTY_KEYBINDINGS.to_string()
     });
-    let theme = config_read(ConfigFile::Theme).unwrap_or_else(|| {
-        let _ = config_write(ConfigFile::Theme, EMPTY_THEME);
-        EMPTY_THEME.to_string()
-    });
-    app.model.apply_theme_file_text(&theme);
     app.themes_dir = ensure_themes_dir(AppView::bundled_themes().as_deref());
     app.refresh_themes();
     app.model.apply_settings_text(&settings);
+    // The look, now, so the first frame wears it; the effect that the
+    // settings queued for the same file would only load it twice.
+    let ui_theme = app.model.config.ui.theme.clone();
+    app.load_ui_theme(&ui_theme);
+    app.model
+        .effects
+        .retain(|e| !matches!(e, Effect::LoadUiTheme(_)));
     app.chrome.apply_ui_typography(&app.model.config.ui);
     app.model.apply_keymap_text(&keys);
     // The "Start here" card's file, rewritten every launch like the defaults

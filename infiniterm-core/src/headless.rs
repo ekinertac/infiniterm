@@ -178,6 +178,9 @@ impl Host {
         // A missing or empty file is the defaults the model starts with; the
         // app writes its own on first launch, and a host with no app has
         // none of them.
+        // The look keys an older settings.json holds move out first (#511),
+        // the same move the app makes, so the text sent to viewers is clean.
+        let _ = crate::config_files::migrate_look_keys();
         let settings = config_read(ConfigFile::Settings).unwrap_or_default();
         let keys = config_read(ConfigFile::Keybindings).unwrap_or_default();
         if !settings.trim().is_empty() {
@@ -307,6 +310,8 @@ impl Host {
                     self.model.apply_settings_text(&change.contents);
                     self.hub.publish_config(KIND_SETTINGS, &change.contents);
                 }
+                // A host with no window has no look to apply (#511).
+                ConfigFile::UiTheme => {}
                 _ => {
                     self.model.apply_keymap_text(&change.contents);
                     self.hub.publish_config(KIND_KEYBINDINGS, &change.contents);
