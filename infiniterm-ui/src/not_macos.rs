@@ -24,6 +24,10 @@
 //!
 //! Related: the real modules beside this file; docs/windows-handoff.md.
 
+// A stand-in exists for the whole API of its module, whether or not this
+// build still reaches every name; that is the point of keeping them equal.
+#![allow(dead_code)]
+
 pub mod finder_service {
     /// No service delivers folders here.
     pub fn take() -> Vec<String> {

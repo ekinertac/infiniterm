@@ -28,6 +28,8 @@ pub const HAIRLINE_ALPHA: f32 = 0.4;
 /// Was 3 px, then 5: at 4 px nothing was readable and everything was
 /// paid for, and Ekin's fit-all is 6.6 px, where a frame still cost 100
 /// ms and the text still did not read.
+// Read by the browser card only; a build without it has no other reader.
+#[cfg_attr(not(feature = "browser"), allow(dead_code))]
 pub const LEGIBLE_FONT_PX: f64 = 7.;
 /// The physical floor under `LEGIBLE_FONT_PX`, in logical pixels. That
 /// constant counts DEVICE pixels, measured on Ekin's 1x 4K: a glyph needs

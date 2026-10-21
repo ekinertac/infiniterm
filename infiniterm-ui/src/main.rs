@@ -454,6 +454,7 @@ fn system_reduces_motion() -> bool {
 /// "browser on <host>"), so it has nothing for CEF to do, and quitting it
 /// crashed inside CEF's shutdown (EXC_BREAKPOINT, three reports on the Air).
 /// The helper invocations are decided before this, in `early`.
+#[cfg(feature = "browser")]
 fn starts_cef(joined: bool) -> bool {
     !joined
 }
