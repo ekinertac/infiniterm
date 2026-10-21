@@ -128,9 +128,6 @@ pub enum Panes {
     Daemon(daemon::DaemonBackend),
 }
 
-// On Windows only the `Local` arm survives, so the session handles every
-// other arm reads (pane ids, session ids, the orphan list) go unread here.
-#[cfg_attr(windows, allow(unused_variables))]
 /// Whether quitting DETACHES a card's shell instead of ending it.
 ///
 /// Not the same question as which variant the setting names, which is why
@@ -151,6 +148,9 @@ pub fn detaches_on_quit(backend: TerminalBackend) -> bool {
     !cfg!(windows) && matches!(backend, TerminalBackend::Daemon)
 }
 
+// On Windows only the `Local` arm survives, so the session handles every
+// other arm reads (pane ids, session ids, the orphan list) go unread here.
+#[cfg_attr(windows, allow(unused_variables))]
 impl Panes {
     /// tmux or the daemon when asked for AND there is one to talk to (a
     /// `tmux` binary on PATH, an `iftd` sidecar beside the app or on PATH).

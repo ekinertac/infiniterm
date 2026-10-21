@@ -1,3 +1,4 @@
+#![cfg(unix)] // headless hosts are unix-only
 //! `headless::Host` against a real `iftd` and a real join socket (#438): a
 //! canvas held with no window, a viewer's edit applied by the model's own
 //! merge, and the cards still there for the next host.

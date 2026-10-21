@@ -1,3 +1,4 @@
+#![cfg(unix)] // join is unix-only; see docs/windows-handoff.md
 //! `ift join --check` against a stand-in ssh (#423): what the launcher decides
 //! before it opens a viewer window. The stand-in runs the remote command here,
 //! as the host's login shell would, against a "host" data directory.

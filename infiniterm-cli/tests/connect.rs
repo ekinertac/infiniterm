@@ -1,3 +1,4 @@
+#![cfg(unix)] // remote instances are unix-only; see docs/windows-handoff.md
 //! `ift connect --check` against a stand-in ssh (#118): what the launcher
 //! decides before it opens a window. The stand-in runs the remote command
 //! here, as the server's login shell would.

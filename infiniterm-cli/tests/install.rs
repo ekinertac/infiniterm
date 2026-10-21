@@ -1,3 +1,4 @@
+#![cfg(unix)] // remote instances are unix-only; see docs/windows-handoff.md
 //! `ift connect --install` against a stand-in ssh (#159): the package reaches
 //! the host's `tar` through ssh, lands where a non-root user's files go, and the
 //! check then passes. The stand-in gives the host its own HOME and a PATH with

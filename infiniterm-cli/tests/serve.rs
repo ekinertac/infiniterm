@@ -1,3 +1,4 @@
+#![cfg(unix)] // ift serve is unix-only
 //! `ift serve` as a process (#438): starts detached, answers viewers and `ift`,
 //! refuses a second one, stops cleanly, and never signals a process because a
 //! stale pid file names it.

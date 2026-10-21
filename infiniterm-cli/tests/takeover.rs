@@ -1,3 +1,4 @@
+#![cfg(unix)] // ift serve is unix-only
 //! The app's takeover from a running `ift serve` (#438), with a real serve
 //! process: `stop_running_serve` is what the app calls before it binds its
 //! sockets. The app itself is not started; the function is.

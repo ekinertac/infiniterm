@@ -24,11 +24,19 @@ mod claude_hooks;
 mod antigravity_hooks;
 mod cursor_hooks;
 mod completion;
+// Remote instances, join, serve and the proxy behind them ride on unix
+// sockets, ssh stdio and `iftd`; none of it exists on Windows. The verbs stay
+// in the table and answer with one line (`unix_only_verb`).
+#[cfg(unix)]
 mod connect;
+#[cfg(unix)]
 mod install;
+#[cfg(unix)]
 mod join;
 mod licence_cmd;
+#[cfg(unix)]
 mod proxy;
+#[cfg(unix)]
 mod serve;
 mod socket;
 
@@ -211,30 +219,14 @@ fn main() -> ExitCode {
         Some("install-extension") => install_extension(args.get(1).map(String::as_str)),
         Some("install") => install_self(),
         Some("licence") => licence_cmd::run(&args[1..]),
-        Some("connect") => connect::run(&args[1..]),
-        Some("join") => join::run(&args[1..]),
-        Some("serve") => serve::run(&args[1..]),
+        Some(verb @ ("connect" | "join" | "serve" | "proxy" | "askpass")) => {
+            unix_only_verb(verb, &args[1..])
+        }
         // Not `ift version`: any word that is not a verb is a file to open.
         Some("--version") | Some("-V") => {
             println!("ift {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        // Plumbing for the remote instances, called over ssh by the app, so it
-        // is in neither USAGE nor the completion (like dev-run).
-        Some("proxy") => proxy::run(&args[1..]),
-        // Run by ssh as SSH_ASKPASS for `ift join` with no terminal (#450):
-        // the question is the one argument, the answer goes to stdout, for ssh
-        // alone. Plumbing, so in neither USAGE nor the completion.
-        Some("askpass") => match args.get(1) {
-            Some(prompt) => match infiniterm_core::backend::ssh_login::run_askpass(prompt) {
-                Ok(answer) => {
-                    println!("{answer}");
-                    ExitCode::SUCCESS
-                }
-                Err(_) => ExitCode::from(1),
-            },
-            None => ExitCode::from(2),
-        },
         Some("completion") => match args.get(1).map(String::as_str) {
             Some("zsh") => {
                 print!("{}", completion::ZSH);
@@ -295,6 +287,38 @@ fn main() -> ExitCode {
         // typo'd verb opens an empty editor; nothing is written unless saved.
         Some(arg) => open_path(arg, true),
     }
+}
+
+/// The verbs that need unix sockets, ssh stdio or `iftd`.
+///
+/// `proxy` is plumbing for the remote instances, called over ssh by the app,
+/// and `askpass` is run by ssh as SSH_ASKPASS for `ift join` with no terminal
+/// (#450): the question is the one argument, the answer goes to stdout, for
+/// ssh alone. Both are in neither USAGE nor the completion.
+#[cfg(unix)]
+fn unix_only_verb(verb: &str, args: &[String]) -> ExitCode {
+    match verb {
+        "connect" => connect::run(args),
+        "join" => join::run(args),
+        "serve" => serve::run(args),
+        "proxy" => proxy::run(args),
+        _ => match args.first() {
+            Some(prompt) => match infiniterm_core::backend::ssh_login::run_askpass(prompt) {
+                Ok(answer) => {
+                    println!("{answer}");
+                    ExitCode::SUCCESS
+                }
+                Err(_) => ExitCode::from(1),
+            },
+            None => ExitCode::from(2),
+        },
+    }
+}
+
+#[cfg(windows)]
+fn unix_only_verb(verb: &str, _args: &[String]) -> ExitCode {
+    eprintln!("ift: {verb} is not available on Windows (it needs unix sockets or iftd)");
+    ExitCode::from(2)
 }
 
 /// Bare `ift`: the app, the way typing `code` opens the editor.
@@ -755,11 +779,15 @@ fn write_cursor_script(path: &std::path::Path, body: &str) -> Result<(), ExitCod
         eprintln!("ift: could not write {}: {e}", path.display());
         return Err(ExitCode::from(2));
     }
-    use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = std::fs::metadata(path) {
-        let mut perms = meta.permissions();
-        perms.set_mode(0o755);
-        let _ = std::fs::set_permissions(path, perms);
+    // Executable on unix; Windows decides by extension, not a mode bit.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = std::fs::set_permissions(path, perms);
+        }
     }
     println!("installed {}", path.display());
     Ok(())
@@ -1163,9 +1191,13 @@ mod tests {
         let script = dir.join("adapter.sh");
         std::fs::write(&script, adapter.replace("__INFINITERM_HOOK__", &fake.to_string_lossy()))
             .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        for f in [&fake, &script] {
-            std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Windows has no execute bit; `sh` runs the script by path anyway.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for f in [&fake, &script] {
+                std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
         }
         let mut child = Command::new("sh")
             .arg(&script)

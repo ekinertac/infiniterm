@@ -106,6 +106,14 @@ pub struct SessionRow {
 /// `infiniterm-session`) is skipped rather than aborting the whole listing.
 /// Whether a process with this pid exists. `kill(pid, 0)` sends nothing; a
 /// process that exists but is not ours answers EPERM, which still means alive.
+#[cfg(windows)]
+fn pid_alive(_pid: u32) -> bool {
+    // Sessions are `iftd`'s, and there is no `iftd` on Windows, so a meta
+    // file found here is a copy from another machine and names nothing live.
+    false
+}
+
+#[cfg(unix)]
 fn pid_alive(pid: u32) -> bool {
     if pid == 0 || pid > i32::MAX as u32 {
         return false;
@@ -721,6 +729,7 @@ mod tests {
 
     #[test]
     fn a_pid_check_knows_this_process_and_a_gone_one() {
+        #[cfg(unix)]
         assert!(pid_alive(std::process::id()));
         assert!(!pid_alive(0));
         assert!(!pid_alive(4_000_000));

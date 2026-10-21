@@ -1,3 +1,4 @@
+#![cfg(unix)] // there is no iftd on Windows
 //! The remote backend end to end (#118): `DaemonBackend::spawn_remote` and
 //! `adopt_remote` over a stand-in `ssh` that runs the real `ift proxy` and
 //! `iftd` on this machine, with the "server" data dir apart from the client's.

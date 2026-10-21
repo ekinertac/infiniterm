@@ -1,3 +1,4 @@
+#![cfg(unix)] // there is no iftd on Windows
 //! `ift proxy session --spawn` against the real `iftd`: the daemon's protocol
 //! comes out of the child's stdout and keystrokes go in through its stdin,
 //! which is all `ssh -T host ift proxy ...` needs to carry (#118).
