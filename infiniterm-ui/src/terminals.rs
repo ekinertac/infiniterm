@@ -5,7 +5,8 @@
 //! backpressure), what the programs wrote back goes to the PTYs, and a card
 //! whose rect or metrics changed re-counts its grid and tells the PTY.
 //! Port of `paneRegistry.ts`'s routing and `TerminalCard.svelte`'s start.
-use crate::terminal_body::{weight_of, Metrics, TerminalBody, READOPT_POLL_MS};
+use crate::fonts::weight_of;
+use crate::terminal_body::{LostLink, Metrics, TerminalBody, READOPT_POLL_MS};
 use crate::AppView;
 use gpui::{font, px, TextRun, Window};
 use infiniterm_core::backend::Panes;
@@ -64,7 +65,152 @@ impl AppView {
     /// Every terminal card gets a body and a shell once; closed cards lose
     /// theirs (the model already killed the shell). Rect and metric changes
     /// re-count the grid.
+    /// A viewer's cards and their connections to the host's sessions (#442):
+    /// the reconnects that ended take their card over (or the card says why
+    /// not and waits longer), and every card with no live connection starts
+    /// its next try when it is due. Run from the 16 ms poll AND the frame:
+    /// the frame alone never ran in a window behind others, which drew
+    /// nothing, so a card the host's app had taken over stayed lost until the
+    /// window was brought forward. True when a card got its session back.
+    pub fn drive_viewer_links(&mut self) -> bool {
+        if !self.viewer {
+            return false;
+        }
+        let terminal_cards = |model: &infiniterm_core::model::Model| -> Vec<_> {
+            model
+                .cards
+                .iter()
+                .filter(|c| c.kind == CardKind::Terminal)
+                .cloned()
+                .collect()
+        };
+        let mut cards = terminal_cards(&self.model);
+        let poke_lost = std::mem::take(&mut self.viewer_poke);
+        let mut rejoined = false;
+        for (session, result) in self.backend.pty.take_reconnected() {
+            let now = crate::now_ms();
+            let Some((card_id, kitty)) = cards
+                .iter()
+                .find(|c| c.session.as_deref() == Some(session.as_str()))
+                .map(|c| (c.id.clone(), c.kitty_keys))
+            else {
+                // The card went while the try ran; the new connection has no
+                // card to feed.
+                if let Ok(pane) = result {
+                    self.backend.pty.release(pane);
+                }
+                continue;
+            };
+            let Some(body) = self
+                .bodies
+                .get_mut(&card_id)
+                .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
+            else {
+                continue;
+            };
+            match result {
+                Ok(pane) => {
+                    // The join replays the whole ring; onto the copy the
+                    // grid already holds it would show twice.
+                    body.reset_for_replay();
+                    body.pane = Some(pane);
+                    body.displaced = false;
+                    body.lost = None;
+                    body.waiting_note = false;
+                    body.mark_dirty();
+                    // As an adopt does: the program announced the kitty
+                    // keyboard protocol at its startup, long out of the ring.
+                    if kitty {
+                        body.assume_kitty_keys();
+                    }
+                    if let Some(c) = self.model.card_mut(&card_id) {
+                        c.pane_id = Some(pane);
+                        c.displaced = false;
+                    }
+                    rejoined = true;
+                    self.redraw = true;
+                    self.model.log(format!(
+                        "rejoined {} after the connection was lost",
+                        &card_id[..8.min(card_id.len())]
+                    ));
+                }
+                Err(failure) => {
+                    let fatal = matches!(
+                        failure,
+                        infiniterm_core::backend::remote::JoinFailure::Fatal(_)
+                    );
+                    body.lost.get_or_insert_with(|| LostLink::new(now)).failed(
+                        now,
+                        failure.message(),
+                        fatal,
+                    );
+                    body.mark_dirty();
+                }
+            }
+        }
+        // The loop below reads each card's `displaced` and `pane_id`: a card
+        // a reconnect just gave back must be read again, or it is taken for a
+        // lost one still, given a new banner and its keys swallowed for good
+        // (found on the real pair, #442).
+        if rejoined {
+            cards = terminal_cards(&self.model);
+        }
+        for card in cards {
+            if card.session.is_none() || !(card.displaced || card.pane_id.is_none()) {
+                continue;
+            }
+            let Some(body) = self
+                .bodies
+                .get_mut(&card.id)
+                .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
+            else {
+                continue;
+            };
+            // The first join of a card is the same thing, on the same path:
+            // a blocking adopt held the frame for the whole handshake, 38 of
+            // them in a row, and a failed one was retried every frame.
+            let now = crate::now_ms();
+            if !card.displaced {
+                if let Some(c) = self.model.card_mut(&card.id) {
+                    c.displaced = true;
+                }
+            }
+            if !body.displaced {
+                body.displaced = true;
+                body.mark_dirty();
+            }
+            let first = !card.displaced && body.lost.is_none();
+            let lost = body.lost.get_or_insert_with(|| {
+                if first {
+                    LostLink::first(now)
+                } else {
+                    LostLink::new(now)
+                }
+            });
+            if poke_lost {
+                lost.poke(now);
+            }
+            if let Some(session) = card.session.as_deref() {
+                if lost.due(now) {
+                    lost.in_flight = true;
+                    self.backend.pty.begin_reconnect(session);
+                }
+            }
+            // Asked about again soon: while a try runs, to take its answer;
+            // otherwise when the next one is due.
+            body.readopt_due = if lost.in_flight {
+                now + 250.
+            } else {
+                lost.next_at.max(now + 250.)
+            };
+        }
+        rejoined
+    }
+
     pub fn reconcile_terminals(&mut self, window: &Window) {
+        // Before the cards are read below, so a card rejoined here is seen as
+        // live by this frame.
+        self.drive_viewer_links();
         let ids: Vec<String> = self.model.cards.iter().map(|c| c.id.clone()).collect();
         self.bodies.retain(|id, _| ids.contains(id));
         let metrics = self.metrics(window);
@@ -73,10 +219,18 @@ impl AppView {
         let palette = self.palette.clone();
         let blink = self.model.config.terminal.cursor_blink;
         let inactive_dim = self.model.config.ui.inactive_dim;
-        let in_motion = self.animator.is_running()
-            || self.pan.is_some()
-            || self.gesture.is_some()
-            || !self.glides.is_empty();
+        let copy_on_select = self.model.config.terminal.copy_on_select;
+        let scroll_multiplier = self.model.config.terminal.scroll_multiplier;
+        let padding = self.model.config.terminal.padding;
+        let extra_env: Vec<(String, String)> = self
+            .model
+            .config
+            .terminal
+            .env
+            .iter()
+            .filter_map(|kv| kv.split_once('='))
+            .map(|(k, v)| (k.trim().to_string(), v.to_string()))
+            .collect();
         let cards: Vec<_> = self
             .model
             .cards
@@ -91,12 +245,19 @@ impl AppView {
             .then(|| self.model.selection.focused_id.clone())
             .flatten();
         for card in cards {
-            let world = fit_size(
-                &card.id,
-                card.rect,
-                maximized.as_deref(),
-                self.model.view_size,
-            );
+            // A card in its own window fills that window (#356 spike).
+            let world = self
+                .extracted_size
+                .get(&card.id)
+                .copied()
+                .unwrap_or_else(|| {
+                    fit_size(
+                        &card.id,
+                        card.rect,
+                        maximized.as_deref(),
+                        self.model.view_size,
+                    )
+                });
             let is_terminal = self
                 .bodies
                 .get_mut(&card.id)
@@ -113,6 +274,16 @@ impl AppView {
                         card.cwd.clone(),
                     )),
                 );
+                // The agent's session name the save file kept, until the
+                // program sets one again; the mirror below would otherwise
+                // copy the new body's empty title over it.
+                if let Some(b) = self
+                    .bodies
+                    .get_mut(&card.id)
+                    .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
+                {
+                    b.title = card.osc_title.clone();
+                }
             }
             let Some(body) = self
                 .bodies
@@ -126,9 +297,15 @@ impl AppView {
             }
             body.blink = blink;
             body.inactive_dim = inactive_dim;
-            if body.in_motion != in_motion {
-                body.in_motion = in_motion;
-                body.mark_dirty();
+            body.copy_on_select = copy_on_select;
+            body.scroll_multiplier = scroll_multiplier;
+            // A padding change refits the grid through `refit_to` below.
+            body.pad = padding;
+            // A viewer's card draws the host's grid, whatever its own size.
+            // Kept when the connection is lost (no pane to ask any more): the
+            // frozen screen must not reflow to this card's own size.
+            if let Some((c, r)) = body.pane.and_then(|p| self.backend.pty.viewer_pane_size(p)) {
+                body.fixed_cells = Some((c as usize, r as usize));
             }
             let metrics_changed = body.font_family != metrics.family
                 || body.weight != metrics.weight
@@ -145,6 +322,13 @@ impl AppView {
             // meta whether that client is still there, and take the session
             // back the moment it is not. The replay that comes with an
             // adopt is what fills in whatever the card missed meanwhile.
+            // A viewer's card with no live connection to its session (lost,
+            // or not yet made) is driven by `drive_viewer_links`, which the
+            // poll runs too: a window that is not drawing runs no frame, and
+            // its cards must still rejoin (#442).
+            if self.viewer && card.session.is_some() && (card.displaced || card.pane_id.is_none()) {
+                continue;
+            }
             if card.displaced {
                 let now = crate::now_ms();
                 if !body.displaced {
@@ -194,10 +378,16 @@ impl AppView {
                 let adopt = card
                     .session
                     .clone()
-                    .filter(|s| self.live_sessions.iter().any(|live| live == s))
+                    .filter(|s| self.viewer || self.live_sessions.iter().any(|live| live == s))
                     .and_then(|s| self.backend.pty.adopt(&s));
                 if let Some(pane) = adopt {
                     body.pane = Some(pane);
+                    // The note a waiting viewer card showed goes before the
+                    // host's replay fills the screen.
+                    if body.waiting_note {
+                        body.reset_for_replay();
+                        body.waiting_note = false;
+                    }
                     // The program in an adopted session announced whether it
                     // speaks the kitty keyboard protocol at ITS startup,
                     // which is long out of the ring we are about to replay,
@@ -209,6 +399,17 @@ impl AppView {
                     self.backend.pty.resize_now(pane, body.cols(), body.rows());
                     if let Some(c) = self.model.card_mut(&card.id) {
                         c.pane_id = Some(pane);
+                    }
+                    continue;
+                }
+                // A viewer starts no shell of its own: a card made here is
+                // started by the HOST, which learns of it from the canvas the
+                // viewer sends up, and the host's next snapshot carries its
+                // session, which the adopt above takes (#423).
+                if self.viewer {
+                    if !body.waiting_note {
+                        body.waiting_note = true;
+                        body.feed(b"\x1b[2mstarting on the host...\x1b[0m");
                     }
                     continue;
                 }
@@ -226,12 +427,14 @@ impl AppView {
                     .as_deref()
                     .and_then(|s| self.backend.pty.take_ring(s))
                 {
-                    let resume = card.agent_session.as_deref();
-                    body.feed_lost_session(&ring, &when, resume);
+                    // The agent's own resume command (`resume_command`).
+                    let resume = card.agent_session.as_deref().and_then(|id| {
+                        infiniterm_core::agent_state::resume_command(card.agent_kind.as_deref(), id)
+                    });
+                    body.feed_lost_session(&ring, &when, resume.as_deref());
                     // And the same command as the card's last history entry,
                     // so Up in the new shell is all it takes.
-                    if let Some(id) = resume {
-                        let cmd = format!("claude --resume {id}");
+                    if let Some(cmd) = resume {
                         if let Err(e) = infiniterm_core::shell_history::append(&history, &cmd) {
                             eprintln!(
                                 "[infiniterm/warn] could not write {}: {e}",
@@ -243,13 +446,38 @@ impl AppView {
                 // `terminal.shell` when set, else the backend's $SHELL; a card
                 // made to run one program runs that instead.
                 let command = card.command.clone().or_else(|| shell.clone());
-                let env = vec![
+                // The user's own `terminal.env` first, so ours below win
+                // over a clash: INFINITERM_CARD_ID is what `ift` finds its
+                // card by.
+                let mut env = extra_env.clone();
+                env.extend([
                     ("INFINITERM_CARD_ID".to_string(), card.id.clone()),
                     (
                         "INFINITERM_HISTFILE".to_string(),
                         history.to_string_lossy().to_string(),
                     ),
-                ];
+                ]);
+                // A shell card's zsh loads our command marks, so a long
+                // command colours its card (program_state.rs). Not a card
+                // made to run one program: it has no prompt to mark. Not a
+                // remote instance's card either: its shell starts on the
+                // server, where this Mac's shim directory does not exist and
+                // a ZDOTDIR pointing at it hid the server's own .zshrc (#408).
+                let integration = infiniterm_core::paths::shell_integration_dir();
+                if infiniterm_core::shell_integration::applies(
+                    card.command.is_some(),
+                    self.model.remote.is_some(),
+                    integration.join(".zshenv").exists(),
+                ) {
+                    let sh = shell
+                        .clone()
+                        .unwrap_or_else(infiniterm_core::shell_cmd::default_shell);
+                    env.extend(infiniterm_core::shell_integration::zsh_env(
+                        &sh,
+                        &integration,
+                        std::env::var("ZDOTDIR").ok(),
+                    ));
+                }
                 match self.backend.pty.spawn_now(
                     std::path::Path::new(&card.cwd),
                     command.as_deref(),
@@ -305,9 +533,77 @@ impl AppView {
             if card.osc_title != osc {
                 if let Some(c) = self.model.card_mut(&card.id) {
                     c.osc_title = osc;
+                    // An agent's session name is saved (`agentTitle`).
+                    if c.runs_agent() {
+                        self.model.dirty_layout = true;
+                    }
                 }
                 // The label was drawn before this ran.
                 self.redraw = true;
+            }
+        }
+    }
+
+    /// The terminal body of card `id`, if it is one.
+    pub fn terminal_body(&mut self, id: &str) -> Option<&mut TerminalBody> {
+        self.bodies
+            .get_mut(id)
+            .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
+    }
+
+    /// Find in a terminal (`Grid::find`): a new query searches, a step
+    /// moves (Enter goes UP to older output, since the search starts at the
+    /// newest), `None` closes. The count goes back to the bar.
+    pub fn terminal_find(
+        &mut self,
+        id: &str,
+        request: Option<infiniterm_core::model::FindRequest>,
+    ) {
+        let Some(body) = self.terminal_body(id) else {
+            return;
+        };
+        let (count, current) = match request {
+            Some(r) if r.next => body.grid.find_step(r.forward),
+            Some(r) => body.grid.find(&r.text),
+            None => {
+                body.grid.find_clear();
+                (0, 0)
+            }
+        };
+        body.mark_dirty();
+        self.model.find_result(id, count as i32, current as i32);
+        self.redraw = true;
+    }
+
+    /// Answers the `ift read` requests waiting. The grid only holds what
+    /// `feed_terminals` has parsed, and that runs inside a frame, so a window
+    /// that is not drawing (hidden, behind others, on another Space) leaves
+    /// output unparsed and a read would be stale or empty. So the output is
+    /// fed here first, from the poll timer, which runs either way. The loop
+    /// is bounded: a flooding card must not hold the timer.
+    pub fn answer_reads(&mut self, now: f64, cx: &mut gpui::App) {
+        if self.read_requests.is_empty() {
+            return;
+        }
+        for _ in 0..READ_FEED_PASSES {
+            if !self.scheduler.pending() {
+                break;
+            }
+            self.feed_terminals(now, cx);
+        }
+        for r in std::mem::take(&mut self.read_requests) {
+            let text = self
+                .bodies
+                .get_mut(&r.card_id)
+                .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
+                .map(|t| t.grid.text(r.last, r.scrollback));
+            match text {
+                Some(text) => self.backend.cli.reply(r.request_id, true, text),
+                None => self.backend.cli.reply(
+                    r.request_id,
+                    false,
+                    "that card has no terminal to read".into(),
+                ),
             }
         }
     }
@@ -329,6 +625,14 @@ impl AppView {
             let owed = self.ledger.note(pane, n);
             if owed > 0 {
                 self.backend.pty.ack_now(pane, owed);
+            }
+        }
+        // `terminal.copyOnSelect`: a selection finished with the mouse.
+        for body in self.bodies.values_mut() {
+            if let Some(t) = body.as_any_mut().downcast_mut::<TerminalBody>() {
+                if let Some(text) = t.clipboard_out.take() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                }
             }
         }
         // Small outputs must not wait for a batch to fill.
@@ -448,6 +752,18 @@ fn gated_writes(answer: bool, per_pane: Vec<PaneWrites>) -> Vec<(u32, Vec<u8>)> 
         }
     }
     writes
+}
+
+/// How many frame-sized budgets `answer_reads` will parse before reading: a
+/// quiet card needs one, and the cap keeps a flood from holding the timer.
+const READ_FEED_PASSES: usize = 64;
+
+/// An `ift read` waiting for its card's output to be parsed (see `answer_reads`).
+pub struct ReadRequest {
+    pub request_id: u64,
+    pub card_id: String,
+    pub last: Option<usize>,
+    pub scrollback: bool,
 }
 
 #[cfg(test)]

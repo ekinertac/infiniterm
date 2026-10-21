@@ -9,9 +9,11 @@ pub fn register_commands(r: &mut CommandRegistry<Model>) {
     super::focus_cmd::register(r);
     super::canvas_cmd::register(r);
     super::workspaces_cmd::register(r);
+    super::color_cmd::register(r);
     super::groups_cmd::register(r);
     super::dev_cmd::register(r);
     super::tabs_cmd::register(r);
+    super::reading_cmd::register(r);
 }
 
 /// What the command trace says about each command: the card it acted on.
@@ -52,18 +54,34 @@ pub fn handle_chord(m: &mut Model, r: &CommandRegistry<Model>, chord: &str) -> b
 /// label a chord with the command it ACTUALLY ran: on a locked card the
 /// keymap says "Card: new terminal" for Cmd+T while this says the tab.
 pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
+    // A user's `when` binding for this chord, in force right now, comes first
+    // (#269): it runs, or, with `command: null`, unbinds the chord here.
+    if let Some(bound) = m.conditional_for(chord) {
+        return bound;
+    }
+    // In reading mode Cmd+Up and Cmd+Down pan the view along the card; at every
+    // other time they are the program's (#313).
+    if m.reading.is_some() {
+        match chord {
+            "cmd+arrowup" => return Some("canvas.zoom.cardBottom.up".into()),
+            "cmd+arrowdown" => return Some("canvas.zoom.cardBottom.down".into()),
+            _ => {}
+        }
+    }
     let card = m.focused();
     let kind = card.map(|c| c.kind);
-    if kind == Some(crate::saved_layout::CardKind::Editor)
-        && crate::editor_keys::editor_keeps(chord)
-    {
+    // An editor keeps its find, comment, undo and select-to-boundary
+    // chords only once you are IN it (locked). Merely focused, with
+    // Cmd+Alt+Arrow, it is a card like any other and the canvas has its
+    // keys: Cmd+/ on an arrowed-to editor commented the highlighted line
+    // instead of opening the shortcuts panel.
+    // A diff has the editor's body, so the editor's keys (2026-10-20).
+    let editor_body = kind.is_some_and(|k| k.has_editor_body());
+    if editor_body && card.is_some_and(|c| c.locked) && crate::editor_keys::editor_keeps(chord) {
         return None;
     }
     let locked = card.is_some_and(|c| c.locked)
-        && matches!(
-            kind,
-            Some(crate::saved_layout::CardKind::Browser | crate::saved_layout::CardKind::Editor)
-        );
+        && (editor_body || kind == Some(crate::saved_layout::CardKind::Browser));
     // A locked card claims everything except Ctrl+1..9 and the two
     // app-carve-out chords below: real Chrome shortcuts shadow this app's
     // own bindings on the same keys, the whole point of locking. Workspace
@@ -71,8 +89,29 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
     // editor card locks the same way with its own tab commands behind the
     // same chords (`editor_keys::lock_override`); what neither table
     // knows falls through to the body, where the editor's own keys live.
-    if locked && !is_workspace_switch(chord) && !is_locked_carveout(chord) {
-        let id = if kind == Some(crate::saved_layout::CardKind::Editor) {
+    // The way out is whatever the keymap binds to `browser.leave`: Cmd+Escape
+    // by default, and a rebind (the user's keybindings.json) must work on a
+    // locked card too, or the chord would go to the page or the text.
+    let leaves = m
+        .keymap
+        .iter()
+        .any(|(c, id)| c == chord && id == "browser.leave");
+    // The command palette opens from a locked card too (#334): it is how you
+    // reach every command, so a lock must not hide it. Whatever chord the
+    // keymap binds to it, as for `browser.leave`.
+    let opens_palette = m
+        .keymap
+        .iter()
+        .any(|(c, id)| c == chord && id == "app.palette");
+    if locked
+        && !is_workspace_switch(chord)
+        && !is_locked_carveout(chord, kind)
+        && !leaves
+        && !opens_palette
+    {
+        let id = if kind == Some(crate::saved_layout::CardKind::Diff) {
+            crate::editor_keys::diff_lock_override(chord)
+        } else if kind == Some(crate::saved_layout::CardKind::Editor) {
             crate::editor_keys::lock_override(chord)
         } else {
             crate::browser_keys::lock_override(chord)
@@ -104,23 +143,26 @@ fn is_workspace_switch(chord: &str) -> bool {
         && parts[1].chars().all(|c| c.is_ascii_digit())
 }
 
-/// The other carve-out a locked browser card does not claim: the omnibox
-/// (`cmd+l`, an app overlay, not the page — the design doc: "the omnibox
-/// already does this") and the way out of a locked page (`browser.leave`,
-/// bound to `cmd+escape` in the default keymap). Both are app-level, not
-/// Chrome shortcuts a real browser window would bind, and `browser.leave`
-/// in particular has to stay reachable or a locked card's own way out
-/// becomes unreachable now that plain Escape's separate meaning
-/// (double-Escape to unlock) sits on the same key. Hardcoded rather than a
-/// keymap lookup, the same way `is_workspace_switch` is: this is about
-/// what these two chords MEAN to the app, not about tracking a rebind.
-fn is_locked_carveout(chord: &str) -> bool {
+/// The other carve-outs a locked card does not claim: the way out of a
+/// locked page or editor (`browser.leave`, bound to `cmd+escape` in the
+/// default keymap and followed through the keymap if rebound, see
+/// `resolve_chord`; an editor also unlocks on an Escape with nothing else to
+/// close) and,
+/// for a BROWSER only, the omnibox (`cmd+l`, an app overlay, not the page
+/// — the design doc: "the omnibox already does this"). A locked editor
+/// does not carve `cmd+l` out: 2026-09-24, Ekin wants an editor's own
+/// shortcuts (`editor_keys::editor_keeps`) to shadow the app's while
+/// locked the same way Chrome's do for a browser, and Cmd+L there is
+/// "select the line", not the address bar. Hardcoded rather than a keymap
+/// lookup, the same way `is_workspace_switch` is: this is about what these
+/// chords MEAN to the app, not about tracking a rebind.
+fn is_locked_carveout(chord: &str, kind: Option<crate::saved_layout::CardKind>) -> bool {
     // Ctrl+Tab is the card switcher, a way OUT of a locked card like
     // Cmd+Escape; Chrome's own next-tab is Cmd+Shift+] here.
-    matches!(
-        chord,
-        "cmd+l" | "cmd+escape" | "ctrl+tab" | "ctrl+shift+tab"
-    )
+    if matches!(chord, "cmd+escape" | "ctrl+tab" | "ctrl+shift+tab") {
+        return true;
+    }
+    chord == "cmd+l" && !kind.is_some_and(|k| k.has_editor_body())
 }
 
 /// Runs a command and then any `RunCommand` effects it queued, so a palette
@@ -165,10 +207,18 @@ mod tests {
             r.set_context(describe_context);
             let mut m = Model::new();
             m.view_size = Size { w: 1600., h: 1000. };
+            // The placement, focus and swap tests below were written against
+            // the fixed 69 by 80 card, the default until 2026-09-24; they are
+            // about geometry, not about the default size, so they keep it.
+            m.config.cards.width = 69.;
+            m.config.cards.height = 80.;
             m.home = "/Users/me".into();
             m.start_dir = "/Users/me".into();
             m.now_ms = 1_000_000.;
             m.load_layout(None);
+            // The placement tests count from one seeded terminal; the
+            // welcome card a real first launch adds has its own tests.
+            m.first_run = false;
             let mut seeded = false;
             m.seed_first_card(&mut seeded);
             m.take_effects();
@@ -197,6 +247,35 @@ mod tests {
         h.m.focus_trail.clear();
         h.m.set_focus(Some(&ids[0]));
         ids
+    }
+
+    // Cmd+T lands in block order whatever is focused: focus the first
+    // card, and the fifth still starts column three, the sixth goes under
+    // it; close card 2 and the next Cmd+T fills its hole.
+    #[test]
+    fn new_cards_fill_the_block_whatever_is_focused() {
+        let mut h = Harness::new();
+        for _ in 0..3 {
+            h.run("card.new.terminal");
+        }
+        let first = h.m.cards[0].clone();
+        let (w, hgt) = (first.rect.w, first.rect.h);
+        h.m.set_focus(Some(&first.id));
+        h.run("card.new.terminal");
+        h.run("card.new.terminal");
+        let at = |c: &Card| {
+            (
+                ((c.rect.x - first.rect.x) / w).round() as i64,
+                ((c.rect.y - first.rect.y) / hgt).round() as i64,
+            )
+        };
+        let spots: Vec<(i64, i64)> = h.m.cards.iter().map(at).collect();
+        assert_eq!(spots, [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (2, 1)]);
+        let second = h.m.cards[1].id.clone();
+        h.m.set_focus(Some(&second));
+        h.run("card.close");
+        h.run("card.new.terminal");
+        assert_eq!(at(h.m.cards.last().unwrap()), (1, 0), "the hole first");
     }
 
     // Cmd+Alt+Arrow across two cards on the way to a third leaves no trace:
@@ -239,6 +318,41 @@ mod tests {
         assert_eq!(h.m.focus_trail.last(), Some(&ids[2]), "typed in: earned");
     }
 
+    // A done card goes grey once it has been looked at, with the app in
+    // front; the others stay green until you get to them.
+    #[test]
+    fn a_done_card_clears_once_seen() {
+        use crate::agent_state::AgentState::{Done, None};
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        for id in &ids {
+            h.m.card_mut(id).unwrap().agent = Done;
+        }
+        h.m.set_focus(Some(&ids[1]));
+        let t = h.m.now_ms;
+        h.m.tick(t);
+        h.m.tick(t + crate::model::SEEN_MS - 1.);
+        assert_eq!(
+            h.m.card(&ids[1]).unwrap().agent,
+            Done,
+            "a glance is not a read"
+        );
+        assert!(h.m.done_seen_due(t + crate::model::SEEN_MS));
+        h.m.tick(t + crate::model::SEEN_MS);
+        assert_eq!(h.m.card(&ids[1]).unwrap().agent, None);
+        assert_eq!(h.m.card(&ids[2]).unwrap().agent, Done, "not looked at");
+        // With another app in front nothing is seen.
+        h.m.app_active = false;
+        h.m.set_focus(Some(&ids[2]));
+        h.m.tick(t + 10_000.);
+        h.m.tick(t + 20_000.);
+        assert_eq!(h.m.card(&ids[2]).unwrap().agent, Done);
+        // Typing into it reads it at once.
+        h.m.app_active = true;
+        h.m.note_input();
+        assert_eq!(h.m.card(&ids[2]).unwrap().agent, None);
+    }
+
     // Release commits: the selected card is focused; Escape leaves things
     // where they were. A card in another workspace brings its workspace.
     #[test]
@@ -259,6 +373,38 @@ mod tests {
         // Backwards from the top wraps to the oldest.
         h.run("card.switcher.prev");
         assert_eq!(h.m.switcher.as_ref().unwrap().index, 3);
+    }
+
+    // #101: with `ui.workspaceIsolation` the switcher lists this workspace's
+    // cards only and the count is this workspace's.
+    #[test]
+    fn workspace_isolation_limits_the_switcher_and_the_count() {
+        let mut h = Harness::new();
+        let here = four_cards(&mut h);
+        let first_workspace = h.m.here().len();
+        h.run("workspace.new");
+        h.run("card.new.terminal");
+        let there = h.focused().id.clone();
+        assert!(!here.contains(&there));
+        let all = h.m.cards.len();
+        assert!(
+            all > first_workspace,
+            "the new workspace has cards of its own"
+        );
+        h.m.set_focus(Some(&here[0]));
+        // Off: the other workspace's card is a row and counts.
+        assert_eq!(h.m.card_count(), all);
+        h.run("card.switcher.next");
+        assert_eq!(h.m.switcher.as_ref().unwrap().list.len(), all);
+        h.m.switcher_cancel();
+        h.m.apply_settings_text(r#"{"ui.workspaceIsolation": true}"#);
+        h.run("workspace.prev");
+        h.m.set_focus(Some(&here[0]));
+        assert_eq!(h.m.card_count(), first_workspace);
+        h.run("card.switcher.next");
+        let list = h.m.switcher.as_ref().unwrap().list.clone();
+        assert_eq!(list.len(), first_workspace);
+        assert!(!list.contains(&there));
     }
 
     // Ctrl+Tab is a way out of a locked browser card, like Cmd+Escape.
@@ -292,6 +438,34 @@ mod tests {
         );
     }
 
+    // A closed card's number goes back into use, and a card reopened after
+    // its number was taken gets a free one rather than a twin.
+    #[test]
+    fn numbers_are_the_lowest_free_and_never_doubled() {
+        assert_eq!(lowest_free_number(&[]), 1);
+        assert_eq!(lowest_free_number(&[1, 2, 4]), 3);
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        h.run("card.new.terminal");
+        let numbers = |h: &Harness| {
+            let mut n: Vec<u32> = h.m.cards.iter().map(|c| c.number).collect();
+            n.sort();
+            n
+        };
+        assert_eq!(numbers(&h), [1, 2, 3]);
+        // Close #2, and the next card is #2 again, not #4.
+        let two = h.m.cards.iter().find(|c| c.number == 2).unwrap().clone();
+        h.m.set_focus(Some(&two.id));
+        h.run("card.close");
+        h.run("card.new.terminal");
+        assert_eq!(numbers(&h), [1, 2, 3]);
+        // The old #2 comes back (Cmd+Z, `card.reopen`): not a second #2.
+        h.m.reopen_card(two);
+        let n = numbers(&h);
+        assert_eq!(n.len(), 4);
+        n.windows(2).for_each(|w| assert_ne!(w[0], w[1], "{n:?}"));
+    }
+
     // Every default binding names a command that exists: a binding pointing
     // at nothing reads as a broken shortcut.
     #[test]
@@ -300,6 +474,151 @@ mod tests {
         let ids: Vec<&str> = h.r.all().iter().map(|c| c.id.as_str()).collect();
         let missing = crate::keymap::unregistered_bindings(&crate::keymap::default_keymap(), &ids);
         assert!(missing.is_empty(), "{missing:?}");
+    }
+
+    // #277: a command that needs a second action from you (a name, a file, a
+    // choice) says so with an ellipsis, as every Mac menu does, in the palette
+    // and in the context menu alike. Found by running every command on a
+    // terminal, an editor and a browser card and seeing what is left open.
+    #[test]
+    fn a_command_that_asks_for_more_ends_its_label_with_an_ellipsis() {
+        // Information to read, not an answer to give, and a save that asks only
+        // for a file that has no name yet.
+        const NO_ELLIPSIS: &[&str] = &["app.about", "app.shortcuts", "card.save", "help.whatsNew"];
+        // Ask only with state the probe does not build (a group, a snippet
+        // folder), so they are named here.
+        const ALSO_ASK: &[&str] = &[
+            "group.rename",
+            "card.moveToWorkspace",
+            "group.moveToWorkspace",
+            "window.color",
+            "card.size",
+            "snippet.paste",
+        ];
+        let probe = Harness::new();
+        let labels: Vec<(String, String)> = probe
+            .r
+            .all()
+            .iter()
+            .map(|c| (c.id.clone(), c.label.clone()))
+            .collect();
+        let mut missing = vec![];
+        for (id, label) in &labels {
+            let mut asks = ALSO_ASK.contains(&id.as_str());
+            for kind in [CardKind::Terminal, CardKind::Editor, CardKind::Browser] {
+                let mut h = Harness::new();
+                let card = h.focused().id.clone();
+                h.m.card_mut(&card).unwrap().kind = kind;
+                h.m.card_mut(&card).unwrap().locked = kind != CardKind::Terminal;
+                h.m.take_effects();
+                run_with_effects(&mut h.m, &h.r, id);
+                let effects = h.m.take_effects();
+                asks |= h.m.modal_open()
+                    || h.m.find.open
+                    || effects.iter().any(|e| matches!(e, Effect::PickFile { .. }));
+            }
+            if asks && !NO_ELLIPSIS.contains(&id.as_str()) && !label.ends_with('\u{2026}') {
+                missing.push(format!("{id} -> {label}"));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "these ask for more and need an ellipsis: {missing:#?}"
+        );
+        // and the other way: an ellipsis is a promise
+        for (id, label) in &labels {
+            if label.ends_with('\u{2026}') {
+                assert!(!NO_ELLIPSIS.contains(&id.as_str()), "{id}");
+            }
+        }
+    }
+
+    // #278: a context menu names only registered commands, builds from the live
+    // registry and keymap, and an item for a command that asks for more keeps
+    // the label's ellipsis.
+    #[test]
+    fn the_context_menus_name_real_commands_and_build_from_the_registry() {
+        use crate::context_menu::{self, Area, Row, Source};
+        let mut h = Harness::new();
+        // an editor focused: the tab strip's rows are per card kind
+        let card = h.focused().id.clone();
+        h.m.card_mut(&card).unwrap().kind = CardKind::Editor;
+        for area in [
+            Area::Terminal,
+            Area::Frame,
+            Area::Canvas,
+            Area::Tab,
+            Area::Editor,
+            Area::Tree,
+            Area::TabStrip,
+        ] {
+            for id in context_menu::command_ids(area) {
+                assert!(
+                    h.r.get(id).is_some(),
+                    "{area:?} names {id}, which is not a command"
+                );
+            }
+            let ctx = h.m.key_context();
+            let rows = context_menu::rows(
+                area,
+                &Source {
+                    context: &ctx,
+                    label: &|id| h.r.get(id).map(|c| c.label.clone()),
+                    chord: &|id| {
+                        h.m.keymap
+                            .iter()
+                            .find(|(_, c)| c == id)
+                            .map(|(k, _)| k.clone())
+                    },
+                },
+            );
+            fn items(rows: &[Row], out: &mut Vec<(String, String)>) {
+                for r in rows {
+                    match r {
+                        Row::Item { command, title, .. } => {
+                            out.push((command.clone(), title.clone()))
+                        }
+                        Row::Submenu { rows, .. } => items(rows, out),
+                        Row::Separator => {}
+                    }
+                }
+            }
+            let mut all = vec![];
+            items(&rows, &mut all);
+            assert!(!all.is_empty(), "{area:?}");
+            for (command, title) in all {
+                let label = h.r.get(&command).unwrap().label.clone();
+                // a table title may replace the label's, but never drops the promise
+                if label.ends_with('\u{2026}') {
+                    assert!(title.ends_with('\u{2026}'), "{command}: {label} -> {title}");
+                }
+            }
+        }
+    }
+
+    // The terminal menu's Copy, Paste and Search act on a terminal card only.
+    #[test]
+    fn the_terminal_menu_commands_reach_the_ui_only_for_a_terminal() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        for command in [
+            "terminal.copy",
+            "terminal.paste",
+            "terminal.searchSelection",
+        ] {
+            let effects = h.run(command);
+            assert!(
+                effects
+                    .iter()
+                    .any(|e| matches!(e, Effect::Terminal { card_id, .. } if *card_id == id)),
+                "{command}"
+            );
+        }
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        let effects = h.run("terminal.copy");
+        assert!(effects
+            .iter()
+            .all(|e| !matches!(e, Effect::Terminal { .. })));
     }
 
     #[test]
@@ -324,6 +643,121 @@ mod tests {
         h.m.seed_first_card(&mut seeded);
         assert!(h.m.cards.is_empty());
         assert_eq!(h.m.selection.focused_id, None);
+    }
+
+    // A first launch (no save file) seeds the "Start here" card alone,
+    // focused; the newcomer makes the first terminal from it.
+    #[test]
+    fn a_first_launch_opens_only_the_welcome_card() {
+        let mut m = Model::new();
+        m.view_size = Size { w: 1600., h: 1000. };
+        m.home = "/Users/me".into();
+        m.start_dir = "/Users/me".into();
+        m.load_layout(None);
+        assert!(m.first_run);
+        let mut seeded = false;
+        m.seed_first_card(&mut seeded);
+        assert_eq!(m.cards.len(), 1);
+        let welcome = crate::welcome::welcome_path()
+            .to_string_lossy()
+            .into_owned();
+        let card = m.focused().unwrap();
+        assert_eq!(card.kind, CardKind::Page);
+        assert_eq!(card.path.as_deref(), Some(welcome.as_str()));
+        assert!(m.layout_undo.is_empty(), "the seed is not an undo step");
+        // Centred in the window (screen point = (world - origin) * scale),
+        // at once rather than by a glide.
+        let r = card.rect;
+        let v = m.viewport;
+        let centre_x = (r.x + r.w / 2. - v.x) * v.scale;
+        let centre_y = (r.y + r.h / 2. - v.y) * v.scale;
+        assert!((centre_x - 800.).abs() < 1., "x centre {centre_x}");
+        assert!((centre_y - 500.).abs() < 1., "y centre {centre_y}");
+        assert!(!m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::AnimatePan { .. } | Effect::AnimateFit(_))));
+    }
+
+    // What the welcome card promises: Cmd+T opens the first terminal
+    // beside it, and Cmd+Alt+Left comes back to it.
+    #[test]
+    fn the_first_terminal_opens_right_of_the_welcome_card() {
+        let mut r = CommandRegistry::new(|_| {});
+        register_commands(&mut r);
+        let mut m = Model::new();
+        m.view_size = Size { w: 1600., h: 1000. };
+        m.home = "/Users/me".into();
+        m.start_dir = "/Users/me".into();
+        m.load_layout(None);
+        let mut seeded = false;
+        m.seed_first_card(&mut seeded);
+        let welcome = m.focused().unwrap().clone();
+        run_with_effects(&mut m, &r, "card.new.terminal");
+        let term = m.focused().unwrap().clone();
+        assert_eq!(term.kind, CardKind::Terminal);
+        assert!(term.rect.x > welcome.rect.x, "beside it, to the right");
+        assert_eq!(term.rect.y, welcome.rect.y);
+        run_with_effects(&mut m, &r, "focus.move.left");
+        assert_eq!(m.focused().unwrap().id, welcome.id);
+    }
+
+    // An existing canvas that happens to be empty gets the one terminal.
+    #[test]
+    fn a_later_launch_on_an_empty_canvas_gets_no_welcome_card() {
+        let mut m = Model::new();
+        m.view_size = Size { w: 1600., h: 1000. };
+        m.home = "/Users/me".into();
+        m.start_dir = "/Users/me".into();
+        m.load_layout(Some("{}"));
+        assert!(!m.first_run);
+        let mut seeded = false;
+        m.seed_first_card(&mut seeded);
+        assert_eq!(m.cards.len(), 1);
+    }
+
+    #[test]
+    fn help_docs_opens_the_first_page_with_the_folder_beside_it() {
+        let mut h = Harness::new();
+        h.run("help.docs");
+        let dir = crate::help_docs::docs_dir().to_string_lossy().into_owned();
+        let card = h.focused().clone();
+        assert_eq!(card.kind, CardKind::Editor);
+        assert_eq!(card.root.as_deref(), Some(dir.as_str()));
+        assert!(card.explorer, "the tree is the table of contents");
+        assert!(card
+            .path
+            .as_deref()
+            .unwrap()
+            .ends_with(crate::help_docs::FIRST_PAGE));
+        h.run("help.docs");
+        assert_eq!(h.m.cards.len(), 2, "a second run focuses the open one");
+    }
+
+    #[test]
+    fn help_welcome_opens_the_card_once() {
+        let mut h = Harness::new();
+        h.run("help.welcome");
+        assert_eq!(h.m.cards.len(), 2);
+        assert_eq!(h.focused().kind, CardKind::Page);
+        h.run("help.welcome");
+        assert_eq!(h.m.cards.len(), 2, "a second run focuses the open one");
+    }
+
+    #[test]
+    fn help_changelog_opens_the_card_once_beside_the_focused_one() {
+        let mut h = Harness::new();
+        let first = h.focused().rect;
+        h.run("help.changelog");
+        assert_eq!(h.m.cards.len(), 2);
+        assert_eq!(h.focused().kind, CardKind::Page);
+        let path = crate::changelog::changelog_path()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(h.focused().path.as_deref(), Some(path.as_str()));
+        assert!(h.focused().rect.x > first.x, "beside, not over");
+        h.run("help.changelog");
+        assert_eq!(h.m.cards.len(), 2, "a second run focuses the open one");
     }
 
     // New cards take the first free slot AFTER the active card: beside it.
@@ -515,10 +949,11 @@ mod tests {
         assert_eq!(h.m.card(&kept_id).unwrap().soft_group_id, None);
     }
 
-    // "#7" is how a card is named to somebody else: given once, shown ahead
-    // of the label, never repeated within a session even after a close.
+    // "#7" is how a card is named to somebody else, shown ahead of the
+    // label. Since 2026-09-24 a closed card's number goes back into use, so
+    // numbers stay small (Ekin: a week of cards would have read #2332).
     #[test]
-    fn cards_are_numbered_once_and_the_number_leads_the_label() {
+    fn cards_are_numbered_and_the_number_leads_the_label() {
         let mut h = Harness::new();
         let first = h.focused().clone();
         assert_eq!(first.number, 1);
@@ -527,11 +962,7 @@ mod tests {
         assert_eq!(h.focused().number, 2);
         h.run("card.close");
         h.run("card.new.terminal");
-        assert_eq!(
-            h.focused().number,
-            3,
-            "a closed card's number is not reused"
-        );
+        assert_eq!(h.focused().number, 2, "a closed card's number is reused");
         // The bare label is for names that become something else.
         assert!(!h.m.label_of(h.focused()).starts_with('#'));
     }
@@ -572,6 +1003,198 @@ mod tests {
     // The way back up: a quarter kept after Cmd+Ctrl+W grows to the
     // default size from its corner when the space is free, and stays put
     // with a word when a card is in the way.
+    // A resize keeps the top-left corner, so a smaller card sits far from its
+    // neighbour; sliding closes the gap from the keyboard, undoably.
+    #[test]
+    fn a_card_slides_into_the_gap_a_resize_left() {
+        let mut h = Harness::new();
+        let left = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let right = h.focused().id.clone();
+        assert_ne!(left, right);
+        // Shrink the right card to a half and slide it back toward the left one.
+        h.run("card.size.reset");
+        let before = h.m.card(&right).unwrap().rect;
+        let anchor = h.m.card(&left).unwrap().rect;
+        // Pull the card away to make a gap, as a resize of the left one would.
+        h.m.card_mut(&right).unwrap().rect.x += 400.;
+        h.m.set_focus(Some(&right));
+        h.run("card.slide.left");
+        let slid = h.m.card(&right).unwrap().rect;
+        let (l, r) = if slid.x > anchor.x {
+            (anchor, slid)
+        } else {
+            (slid, anchor)
+        };
+        assert!(
+            (r.x - (l.x + l.w) - h.m.gap()).abs() < 1.,
+            "one gutter apart: {anchor:?} {slid:?} (was {before:?})"
+        );
+        // Snug now: a second slide says so and moves nothing.
+        let at = h.m.card(&right).unwrap().rect;
+        h.run("card.slide.left");
+        assert_eq!(h.m.card(&right).unwrap().rect, at);
+        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("nowhere")));
+        // Cmd+Z puts it back where the gap was.
+        h.run("layout.undo");
+        assert!(h.m.card(&right).unwrap().rect.x > at.x);
+    }
+
+    #[test]
+    fn the_slide_chords_are_bound_and_the_commands_exist() {
+        let h = Harness::new();
+        for dir in ["left", "right", "up", "down"] {
+            let id = format!("card.slide.{dir}");
+            assert!(h.r.get(&id).is_some(), "{id} is registered");
+            assert!(
+                h.m.keymap.iter().any(|(_, bound)| *bound == id),
+                "{id} has a default chord"
+            );
+        }
+    }
+
+    // Reading mode (#313): Cmd+1 on a fitted terminal card zooms to the card's
+    // bottom, Cmd+Up and Cmd+Down pan along it and only while it is on, typing
+    // returns to the bottom, Cmd+1 or Cmd+2 leaves.
+    #[test]
+    fn cmd1_on_a_fitted_terminal_card_enters_reading_mode() {
+        let mut h = Harness::new();
+        h.m.view_size = crate::grid::Size { w: 3840., h: 2000. };
+        let id = h.focused().id.clone();
+        h.m.set_focus(Some(&id));
+        // Cmd+Up is the program's until the mode is on.
+        assert_eq!(resolve_chord(&h.m, "cmd+arrowup"), None);
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.framing && h.m.reading.is_none());
+        let effects = h.run("canvas.zoom.fitCard");
+        let scale = h.m.config.ui.card_zoom;
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::AnimateFit(v) if v.scale == scale)),
+            "zoomed to ui.cardZoom: {effects:?}"
+        );
+        assert!(h.m.reading.is_some());
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+arrowup").as_deref(),
+            Some("canvas.zoom.cardBottom.up")
+        );
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+arrowdown").as_deref(),
+            Some("canvas.zoom.cardBottom.down")
+        );
+
+        // Panning up moves toward the card's top, never past it.
+        let bottom = h.m.reading.as_ref().unwrap().y;
+        h.run("canvas.zoom.cardBottom.up");
+        let up = h.m.reading.as_ref().unwrap().y;
+        assert!(up < bottom);
+        for _ in 0..500 {
+            h.run("canvas.zoom.cardBottom.up");
+        }
+        let top = h.m.reading.as_ref().unwrap().y;
+        assert_eq!(top, h.m.reading.as_ref().unwrap().frame.lo);
+        // Typing goes back to the bottom and keeps the mode.
+        h.m.note_input();
+        assert_eq!(h.m.reading.as_ref().unwrap().y, bottom);
+        h.run("canvas.zoom.cardBottom.down");
+        assert_eq!(
+            h.m.reading.as_ref().unwrap().y,
+            bottom,
+            "already at the bottom"
+        );
+
+        // Cmd+1 leaves, back to the plain fit; Cmd+1 again is reading again.
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.reading.is_none() && h.m.framing);
+        assert_eq!(resolve_chord(&h.m, "cmd+arrowup"), None);
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.reading.is_some());
+        // Cmd+2 leaves too, and the keys are the program's again.
+        h.run("canvas.zoom.fitAll");
+        assert!(h.m.reading.is_none() && !h.m.framing);
+    }
+
+    #[test]
+    fn card_zoom_zero_turns_the_second_cmd1_off() {
+        let mut h = Harness::new();
+        h.m.view_size = crate::grid::Size { w: 3840., h: 2000. };
+        h.m.config.ui.card_zoom = 0.;
+        let id = h.focused().id.clone();
+        h.m.set_focus(Some(&id));
+        h.run("canvas.zoom.fitCard");
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.reading.is_none(), "a second Cmd+1 is only a fit again");
+        h.run("canvas.zoom.cardBottom");
+        assert!(h.m.reading.is_none());
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("ui.cardZoom")));
+    }
+
+    #[test]
+    fn reading_mode_is_for_terminal_cards_and_a_hand_pan_leaves_it() {
+        let mut h = Harness::new();
+        h.m.view_size = crate::grid::Size { w: 3840., h: 2000. };
+        let id = h.focused().id.clone();
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.set_focus(Some(&id));
+        h.run("canvas.zoom.fitCard");
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.reading.is_none(), "an editor card never reads");
+        h.m.cards[0].kind = CardKind::Terminal;
+        h.run("canvas.zoom.cardBottom");
+        assert!(h.m.reading.is_some());
+        h.m.stop_framing(); // what a pan or a wheel zoom does
+        assert!(h.m.reading.is_none());
+        h.run("canvas.zoom.cardBottom.up");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("not zoomed on a card")));
+    }
+
+    // The palette is the way to every command: a locked editor or browser
+    // card does not swallow its chord (#334).
+    #[test]
+    fn the_palette_opens_from_a_locked_card() {
+        for kind in [CardKind::Editor, CardKind::Browser] {
+            let mut h = Harness::new();
+            let id = h.m.cards[0].id.clone();
+            h.m.cards[0].kind = kind;
+            h.m.cards[0].locked = true;
+            h.m.set_focus(Some(&id));
+            assert_eq!(
+                resolve_chord(&h.m, "cmd+shift+p").as_deref(),
+                Some("app.palette"),
+                "{kind:?}"
+            );
+            // The lock still holds for a chord the app has no business with.
+            assert_eq!(resolve_chord(&h.m, "cmd+shift+alt+ctrl+9"), None);
+        }
+    }
+
+    // A right-click on one of several selected cards keeps the selection
+    // (#346): the model says so, and one outside it is not in it.
+    #[test]
+    fn a_card_of_a_multi_selection_is_recognised() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let c = h.focused().id.clone();
+        assert!(!h.m.in_multi_selection(&c), "one card is no selection");
+        h.m.set_focus(Some(&a));
+        h.m.extend_to(&b);
+        assert_eq!(h.m.selected_ids().len(), 2);
+        assert!(h.m.in_multi_selection(&a) && h.m.in_multi_selection(&b));
+        assert!(!h.m.in_multi_selection(&c), "a card outside is not in it");
+    }
+
     #[test]
     fn full_size_restores_the_default_when_the_space_is_free() {
         let mut h = Harness::new();
@@ -581,25 +1204,34 @@ mod tests {
         let half = h.m.card(&kept).unwrap().rect;
         assert!(half.w < original.w);
         h.m.set_focus(Some(&kept));
-        h.run("card.size.reset");
-        assert_eq!(
-            h.m.card(&kept).unwrap().rect,
-            half,
-            "the split partner is in the way"
-        );
-        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("no room")));
-        // Close the partner leaving the space, then it fits.
-        let partner = h.m.cards.iter().find(|c| c.id != kept).unwrap().id.clone();
-        h.m.set_focus(Some(&partner));
-        h.run("card.close.leave");
-        h.m.set_focus(Some(&kept));
+        // The split partner blocks the right, so it grows LEFT into the
+        // free canvas, its right edge where it was (card #96's case).
         let effects = h.run("card.size.reset");
-        assert_eq!(h.m.card(&kept).unwrap().rect, original);
-        assert_eq!(h.m.card(&kept).unwrap().soft_group_id, None);
+        let grown = h.m.card(&kept).unwrap().rect;
+        assert_eq!(grown.w, original.w, "{grown:?}");
+        assert_eq!(grown.x + grown.w, half.x + half.w, "the right edge stays");
         assert!(
             effects.iter().any(|e| matches!(e, Effect::MarkSwap(_))),
             "animated"
         );
+        // Already the default size: nothing to grow into, and it says so.
+        h.run("card.size.reset");
+        assert_eq!(h.m.card(&kept).unwrap().rect, grown);
+        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("no room")));
+
+        // Close the partner leaving its space: the top-left corner grows
+        // back into it, and the card is where it started.
+        let mut h = Harness::new();
+        let kept = h.focused().id.clone();
+        let original = h.focused().rect;
+        h.run("card.split.right");
+        let partner = h.m.cards.iter().find(|c| c.id != kept).unwrap().id.clone();
+        h.m.set_focus(Some(&partner));
+        h.run("card.close.leave");
+        h.m.set_focus(Some(&kept));
+        h.run("card.size.reset");
+        assert_eq!(h.m.card(&kept).unwrap().rect, original);
+        assert_eq!(h.m.card(&kept).unwrap().soft_group_id, None);
     }
 
     // Cmd+Ctrl+S: the file's names, a paste into the focused card, and the
@@ -800,12 +1432,12 @@ mod tests {
         );
     }
 
-    // One trail: a move, a new card and a close undo in the order they
-    // happened. Undoing a close brings the card back to its slot; undoing
-    // a new card removes it; redo goes the other way; a card reopened by
-    // hand is not reopened again by Cmd+Z.
+    // One trail: a move and a close undo in the order they happened.
+    // Undoing a close brings the card back to its slot. Undo NEVER closes
+    // a card: not a new one you may be working in, not by redoing a close.
+    // A card reopened by hand is not reopened again by Cmd+Z.
     #[test]
-    fn undo_walks_back_through_closes_and_new_cards_too() {
+    fn undo_walks_back_moves_and_closes_and_never_closes_a_card() {
         let mut h = Harness::new();
         let a = h.focused().id.clone();
         let a_rect = h.focused().rect;
@@ -826,20 +1458,20 @@ mod tests {
             "the move undone"
         );
         h.run("layout.undo");
-        assert!(h.m.card(&b).is_none(), "the new card undone");
+        assert!(
+            h.m.card(&b).is_some(),
+            "the new card stays: undo closes nothing"
+        );
         h.run("layout.redo");
-        assert!(h.m.card(&b).is_some(), "and redone");
-        // A close reopened by hand: Cmd+Z undoes the reopen, not the close.
+        h.run("layout.redo");
+        assert!(h.m.card(&a).is_some(), "and redo does not close it again");
+        // A close reopened by hand leaves the trail: Cmd+Z does not bring
+        // a second copy, and does not close the reopened card.
         h.m.set_focus(Some(&b));
         h.run("card.close");
         h.run("card.reopen");
-        assert!(h.m.card(&b).is_some());
         h.run("layout.undo");
-        assert!(h.m.card(&b).is_none(), "the reopen undone");
-        assert!(
-            h.m.closed.iter().any(|c| c.id == b),
-            "and Cmd+Ctrl+T has it again"
-        );
+        assert_eq!(h.m.cards.iter().filter(|c| c.id == b).count(), 1);
     }
 
     // A locked card is not closed by Cmd+W, by its shell exiting, or by
@@ -897,6 +1529,128 @@ mod tests {
         let (pending, text) = h.m.prompt.settle(Some("")).unwrap();
         h.m.answer(pending, text, |_| true);
         assert!(h.m.card(&id).is_none(), "confirmed: closed");
+    }
+
+    // #160: the local colour is the setting `ui.windowColor`, applied when the
+    // settings are, and a remote window ignores it.
+    #[test]
+    fn the_window_colour_setting_tints_the_local_window_and_not_a_remote_one() {
+        let mut h = Harness::new();
+        h.m.effects.clear();
+        h.m.apply_settings_text(r#"{"ui.windowColor": "teal"}"#);
+        assert_eq!(h.m.window_color(), crate::remote_identity::named("teal"));
+        assert!(
+            h.m.effects
+                .iter()
+                .any(|e| matches!(e, Effect::WindowColor { color: Some(_), .. })),
+            "the Dock follows the file"
+        );
+        h.m.effects.clear();
+        h.m.apply_settings_text(r#"{"ui.windowColor": "teal"}"#);
+        assert!(
+            !h.m.effects
+                .iter()
+                .any(|e| matches!(e, Effect::WindowColor { .. })),
+            "nothing changed, nothing to redraw"
+        );
+        h.m.apply_settings_text("{}");
+        assert_eq!(h.m.window_color(), None, "removed from the file: no colour");
+        h.m.remote = crate::remote_identity::RemoteIdentity::from_vars(
+            Some("ops@box"),
+            None,
+            Some("ff8800"),
+        );
+        h.m.apply_settings_text(r#"{"ui.windowColor": "teal"}"#);
+        assert_eq!(
+            h.m.window_color(),
+            Some((0xff, 0x88, 0x00)),
+            "a remote window wears its host's"
+        );
+    }
+
+    // A remote instance starts its cards in the server's home, not in the
+    // Mac folder its seeded settings name, and keeps doing so when the
+    // settings are applied again.
+    #[test]
+    fn a_remote_instance_starts_cards_in_the_servers_home() {
+        let mut h = Harness::new();
+        h.m.remote = crate::remote_identity::RemoteIdentity::from_vars(Some("ops@box"), None, None);
+        h.m.apply_settings_text(r#"{"startingDir": "/Users/me/Code"}"#);
+        assert_eq!(h.m.start_dir, "~");
+        h.m.remote = None;
+        h.m.apply_settings_text(r#"{"startingDir": "/Users/me/Code"}"#);
+        assert_eq!(
+            h.m.start_dir, "/Users/me/Code",
+            "a local instance is unchanged"
+        );
+    }
+
+    // #118: a remote instance has no browser cards, however one is asked for.
+    #[test]
+    fn a_remote_instance_refuses_browser_cards() {
+        let mut h = Harness::new();
+        let before = h.m.cards.len();
+        h.m.remote = crate::remote_identity::RemoteIdentity::from_vars(Some("ops@box"), None, None);
+        h.m.new_beside_active(CardKind::Browser, None, Some("https://a".into()));
+        assert_eq!(h.m.cards.len(), before, "no card");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .unwrap_or("")
+            .contains("remote instance"));
+        h.m.notice = None;
+        h.run("card.new.browser");
+        assert!(
+            !h.m.omni.open,
+            "the address bar does not open for a new card"
+        );
+        assert!(h.m.notice.is_some());
+        let plan = crate::ift::OpenPlan::Browser {
+            cwd: "/tmp".into(),
+            url: "https://a".into(),
+        };
+        assert_eq!(h.m.open_in_card(plan, None), None);
+        assert_eq!(h.m.cards.len(), before);
+        // A terminal is still fine, and so is a browser once it is not remote.
+        h.run("card.new.terminal");
+        assert_eq!(h.m.cards.len(), before + 1);
+        h.m.remote = None;
+        h.m.new_beside_active(CardKind::Browser, None, Some("https://a".into()));
+        assert_eq!(h.m.cards.len(), before + 2);
+    }
+
+    // #373: the editor's twin of `card.open.diff`: a card beside the focused
+    // one, an editor with its tree rooted at the focused card's directory.
+    #[test]
+    fn open_editor_here_makes_an_editor_on_the_cards_folder() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().cwd = "/tmp".into();
+        let before = h.m.cards.len();
+        h.run("card.open.editor");
+        assert_eq!(h.m.cards.len(), before + 1);
+        let c = h.focused();
+        assert_eq!(c.kind, CardKind::Editor);
+        assert_eq!(c.cwd, "/tmp");
+        assert_eq!(c.root.as_deref(), Some("/tmp"));
+    }
+
+    // #90: `app.about` opens the About window. It has no buttons, so
+    // closing it asks for nothing, not even an update check.
+    #[test]
+    fn about_opens_and_closing_it_checks_nothing() {
+        let mut h = Harness::new();
+        h.run("app.about");
+        assert!(h.m.prompt.is_open() && h.m.prompt.about);
+        let (pending, text) = h.m.prompt.press_choice().unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert!(!h.m.prompt.is_open());
+        assert!(!h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::CheckForUpdate)));
     }
 
     // Grouping moves the selection to a free block right of the grid, as one block.
@@ -1060,6 +1814,32 @@ mod tests {
         assert!(h.m.selection.phantom.is_none());
     }
 
+    // #253: with the address bar open from the phantom's kind picker the phantom
+    // is still waiting, and the bare Enter that submits the address reached the
+    // phantom first and opened the picker again. No overlay lets a bare key
+    // through to the canvas behind it.
+    #[test]
+    fn a_bare_key_does_not_reach_the_phantom_while_an_overlay_is_open() {
+        let mut h = Harness::new();
+        h.run("focus.move.right");
+        assert!(h.m.selection.phantom.is_some());
+        h.m.handle_bare_key(focus_cmd::BareKey::Enter);
+        h.m.close_palette(true);
+        h.m.palette_run(Source::SlotKind, "browser");
+        assert!(h.m.omni.open && h.m.selection.phantom.is_some());
+        assert!(!h.m.handle_bare_key(focus_cmd::BareKey::Enter));
+        assert!(!h.m.handle_bare_key(focus_cmd::BareKey::Char('a')));
+        assert!(!h.m.palette_open(), "no second picker");
+        h.m.shortcuts_open = true;
+        h.m.close_omnibox();
+        assert!(!h.m.handle_bare_key(focus_cmd::BareKey::Enter));
+        assert!(!h.m.palette_open());
+        h.m.shortcuts_open = false;
+        // and with nothing open the phantom still takes Enter
+        assert!(h.m.handle_bare_key(focus_cmd::BareKey::Enter));
+        assert!(h.m.palette_open());
+    }
+
     // "Browser" in the phantom's kind picker used to open the old text
     // prompt; it opens the omnibox now, and Enter has to land the result in
     // the SAME phantom rect the picker was opened from, not beside whatever
@@ -1109,9 +1889,11 @@ mod tests {
         h.run("focus.hint");
         assert_eq!(h.m.selection.hints.len(), 2);
         let key_a = h.m.selection.hints[&a];
+        h.m.take_effects();
         assert!(h.m.handle_bare_key(focus_cmd::BareKey::Char(key_a)));
         assert_eq!(h.focused().id, a);
         assert!(h.m.selection.hints.is_empty());
+        assert!(h.m.framing, "the jump fits the card, as Cmd+1 does");
         let _ = b;
     }
 
@@ -1132,6 +1914,205 @@ mod tests {
         h.run("focus.extend.right");
         assert!(h.m.handle_bare_key(focus_cmd::BareKey::Escape));
         assert!(h.m.selection.extra.is_empty());
+    }
+
+    // Several cards selected: Cmd+Alt+Shift+Arrow moves the selection as one
+    // block, a block over, trading places with the cards there (#238).
+    #[test]
+    fn a_selection_moves_as_one_block_and_swaps_with_what_is_there() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let c = h.focused().id.clone();
+        let rects = |h: &Harness| -> Vec<crate::grid::Rect> {
+            [&a, &b, &c]
+                .iter()
+                .map(|id| h.m.card(id).unwrap().rect)
+                .collect()
+        };
+        let before = rects(&h);
+        // a and b selected, b focused
+        h.m.focus_extended(&b, vec![a.clone()]);
+        assert_eq!(h.m.selected_ids().len(), 2);
+        let effects = h.run("card.swap.right");
+        let after = rects(&h);
+        assert_ne!(after, before, "the selection moved");
+        // the pair moved together: the gap between a and b is unchanged
+        assert_eq!(after[1].x - after[0].x, before[1].x - before[0].x);
+        assert_eq!(after[1].y - after[0].y, before[1].y - before[0].y);
+        assert!(effects.iter().any(|e| matches!(e, Effect::MarkSwap(_))));
+        // nothing overlaps, focus stayed, the selection is still two cards
+        for (i, x) in after.iter().enumerate() {
+            for y in &after[i + 1..] {
+                assert!(!crate::layout::rects_overlap(*x, *y), "{x:?} over {y:?}");
+            }
+        }
+        assert_eq!(h.focused().id, b);
+        assert_eq!(h.m.selected_ids().len(), 2);
+        // and it undoes in one step
+        h.run("layout.undo");
+        assert_eq!(rects(&h), before);
+    }
+
+    // The tab row's order (#242): a drag does it with the mouse, these keep it
+    // from being mouse-only. The workspace that moved stays the active one.
+    #[test]
+    fn workspace_tabs_reorder_and_the_moved_one_stays_active() {
+        let mut h = Harness::new();
+        h.run("workspace.new");
+        h.run("workspace.new");
+        let ids: Vec<String> = h.m.workspaces.iter().map(|w| w.id.clone()).collect();
+        let order =
+            |h: &Harness| -> Vec<String> { h.m.workspaces.iter().map(|w| w.id.clone()).collect() };
+        let last = ids[2].clone();
+        assert_eq!(h.m.active_workspace.as_deref(), Some(last.as_str()));
+        h.run("workspace.reorder.left");
+        assert_eq!(
+            order(&h),
+            vec![ids[0].clone(), last.clone(), ids[1].clone()]
+        );
+        h.run("workspace.reorder.left");
+        h.run("workspace.reorder.left");
+        assert_eq!(
+            order(&h),
+            vec![last.clone(), ids[0].clone(), ids[1].clone()],
+            "stops at the left end"
+        );
+        assert_eq!(h.m.active_workspace.as_deref(), Some(last.as_str()));
+        h.run("workspace.reorder.right");
+        assert_eq!(order(&h)[1], last);
+        // what a drop does: the tab takes the index of the tab it lands on
+        h.m.move_workspace(&last, 2);
+        assert_eq!(
+            order(&h),
+            vec![ids[0].clone(), ids[1].clone(), last.clone()]
+        );
+        assert!(h.m.dirty_layout, "the order is saved");
+    }
+
+    // A settings.json that stops parsing keeps the settings in force and says
+    // so; it used to reset every setting to its default (#246).
+    #[test]
+    fn a_broken_settings_file_keeps_the_last_good_settings() {
+        let mut h = Harness::new();
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.cardOpacity": 0.9}"#);
+        assert_eq!(h.m.config.terminal.font_size, 21.);
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.cardOpacity": 0.9,, "x": 1}"#);
+        assert!(h.m.settings_error.is_some());
+        assert_eq!(
+            h.m.config.terminal.font_size, 21.,
+            "the last good settings stay"
+        );
+        assert_eq!(h.m.config.ui.card_opacity, 0.9);
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 18}"#);
+        assert!(h.m.settings_error.is_none());
+        assert_eq!(h.m.config.terminal.font_size, 18.);
+    }
+
+    // theme.json follows the same rule (#425): a bad edit warns and the theme
+    // in force stays; an emptied file is the empty theme.
+    #[test]
+    fn a_broken_theme_file_keeps_the_last_good_theme() {
+        use crate::theme_file::{BorderSpec, ColorSpec};
+        let mut h = Harness::new();
+        h.m.apply_theme_file_text(
+            r#"{"titlebar.background": "canvas", "titlebar.border": "none"}"#,
+        );
+        assert_eq!(
+            h.m.chrome_theme.titlebar.background,
+            Some(ColorSpec::Canvas)
+        );
+        assert_eq!(h.m.chrome_theme.titlebar.border, Some(BorderSpec::None));
+        h.m.effects.clear();
+        h.m.apply_theme_file_text(r#"{"titlebar.background": "canvas",, }"#);
+        assert_eq!(
+            h.m.chrome_theme.titlebar.background,
+            Some(ColorSpec::Canvas),
+            "the last good theme stays"
+        );
+        assert!(h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::Warn(w) if w.contains("theme.json not applied"))));
+        h.m.apply_theme_file_text("");
+        assert_eq!(h.m.chrome_theme, Default::default());
+    }
+
+    // The file is checked before it is applied, and a file with an error is not
+    // accepted: the settings in force stay and the notice says what is wrong.
+    #[test]
+    fn a_settings_file_with_an_error_is_not_accepted() {
+        let mut h = Harness::new();
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21}"#);
+        let warned = |h: &mut Harness| {
+            h.m.take_effects()
+                .iter()
+                .filter_map(|e| match e {
+                    Effect::Warn(w) => Some(w.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let _ = warned(&mut h);
+        // a setting of the wrong kind
+        h.m.apply_settings_text(r#"{"terminal.fontSize": "big", "ui.showGrid": false}"#);
+        let w = warned(&mut h);
+        assert!(
+            w.iter()
+                .any(|m| m.contains("terminal.fontSize") && m.contains("a number")),
+            "{w:?}"
+        );
+        assert_eq!(
+            h.m.config.terminal.font_size, 21.,
+            "nothing of it was applied"
+        );
+        assert!(h.m.config.ui.show_grid, "not even the part that was fine");
+        // a file that is not an object
+        h.m.apply_settings_text("[1, 2]");
+        assert!(!warned(&mut h).is_empty());
+        assert_eq!(h.m.config.terminal.font_size, 21.);
+        // what must NOT be refused: the nested shape, a list for the background,
+        // an unknown name, a number out of range, a trailing comma, comments
+        h.m.apply_settings_text(
+            "{ // mine\n \"terminal\": {\"fontSize\": 19,},\n \"ui.backgroundImage\": [\"dusk\", \"ember\"],\n \"nope.nothing\": 1,\n \"ui.cardOpacity\": 7,\n}",
+        );
+        assert!(warned(&mut h).is_empty());
+        assert!(h.m.settings_error.is_none());
+        assert_eq!(h.m.config.terminal.font_size, 19.);
+        assert_eq!(h.m.config.ui.background_image.len(), 2);
+    }
+
+    #[test]
+    fn a_keybindings_file_with_an_error_keeps_the_bindings_you_had() {
+        let mut h = Harness::new();
+        h.m.apply_keymap_text(r#"{"cmd+shift+y": "app.palette"}"#);
+        let had = h.m.keymap.clone();
+        let _ = h.m.take_effects();
+        h.m.apply_keymap_text(r#"{"cmd+shift+y": "app.palette",,}"#);
+        assert_eq!(h.m.keymap, had, "the bindings in force stay");
+        assert!(h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::Warn(w) if w.contains("not applied"))));
+    }
+
+    // Saving a setting into a file whose last entry already ends in a comma
+    // must leave a file that still parses.
+    #[test]
+    fn saving_a_setting_into_a_file_with_a_trailing_comma_still_parses() {
+        let text = "{\n  \"terminal.fontSize\": 16,\n  \"ui.cardOpacity\": 0.9,\n}\n";
+        let patched =
+            Model::patched_settings(Some(text), "ui.windowColor", &serde_json::json!("lime"))
+                .expect("a change");
+        let mut h = Harness::new();
+        h.m.apply_settings_text(&patched);
+        assert!(h.m.settings_error.is_none(), "{patched}");
+        assert_eq!(h.m.config.ui.window_color, "lime");
+        assert_eq!(h.m.config.terminal.font_size, 16.);
     }
 
     // A swap trades whole rects; focus stays on the card that moved.
@@ -1163,6 +2144,456 @@ mod tests {
         assert!(effects
             .iter()
             .any(|e| matches!(e, Effect::AnimateFit(v) if v.scale == 1.)));
+    }
+
+    // #402: the "what's new" sheet is modal, flashes when a key is typed into
+    // it for WHATS_NEW_FLASH_MS, and closes without touching anything else.
+    #[test]
+    fn the_whats_new_sheet_is_modal_flashes_and_closes() {
+        use crate::model::WHATS_NEW_FLASH_MS;
+        let mut h = Harness::new();
+        let focus = h.m.selection.focused_id.clone();
+        assert!(!h.m.modal_open());
+        h.run("help.whatsNew");
+        assert!(h.m.whats_new_open && h.m.modal_open() && h.m.overlay_open());
+        assert_eq!(h.m.key_context().overlay, "whatsNew");
+        let t = h.m.now_ms;
+        assert!(!h.m.whats_new_flashing(t));
+        h.m.flash_whats_new();
+        assert!(h.m.whats_new_flashing(t + WHATS_NEW_FLASH_MS - 1.));
+        assert!(!h.m.whats_new_flashing(t + WHATS_NEW_FLASH_MS));
+        h.m.close_whats_new();
+        assert!(!h.m.modal_open() && !h.m.whats_new_flashing(t));
+        assert_eq!(h.m.selection.focused_id, focus);
+    }
+
+    // #265: `ift -t <file> [card]` puts a file in a tab of an editor card: the
+    // focused one by default, a named one when given, a file already open is
+    // switched to, a terminal is refused, and with no editor focused it opens
+    // a card of its own.
+    #[test]
+    fn a_file_opens_as_a_tab_of_an_editor_card() {
+        let mut h = Harness::new();
+        // No editor focused: a card of its own, an editor.
+        let before = h.m.cards.len();
+        let first = h.m.open_file_tab("/tmp/a.rs", None, None).unwrap();
+        assert_eq!(h.m.cards.len(), before + 1);
+        assert_eq!(h.m.card(&first).unwrap().kind, CardKind::Editor);
+        // Now that editor is focused: the next file is a tab of it.
+        let second = h.m.open_file_tab("/tmp/b.rs", None, None).unwrap();
+        assert_eq!(second, first);
+        assert_eq!(h.m.cards.len(), before + 1, "no new card");
+        let tabs = h.m.card(&first).unwrap().tabs.clone();
+        assert!(tabs.contains(&"/tmp/a.rs".to_string()) && tabs.contains(&"/tmp/b.rs".to_string()));
+        assert_eq!(h.m.card(&first).unwrap().active_tab, tabs.len() - 1);
+        // A file already open is switched to, not opened twice.
+        h.m.open_file_tab("/tmp/a.rs", None, None).unwrap();
+        let after = h.m.card(&first).unwrap();
+        assert_eq!(after.tabs, tabs);
+        assert_eq!(after.tabs[after.active_tab], "/tmp/a.rs");
+        // A named card: by number, even when another card is focused.
+        let number = h.m.card(&first).unwrap().number;
+        h.run("card.new.terminal");
+        let named =
+            h.m.open_file_tab("/tmp/c.rs", Some(&format!("#{number}")), None)
+                .unwrap();
+        assert_eq!(named, first);
+        assert!(h
+            .m
+            .card(&first)
+            .unwrap()
+            .tabs
+            .contains(&"/tmp/c.rs".to_string()));
+        // A terminal is not an editor.
+        let term =
+            h.m.cards
+                .iter()
+                .find(|c| c.kind == CardKind::Terminal)
+                .unwrap()
+                .number;
+        let err =
+            h.m.open_file_tab("/tmp/d.rs", Some(&term.to_string()), None)
+                .unwrap_err();
+        assert!(err.contains("not an editor"), "{err}");
+        assert!(h.m.open_file_tab("/tmp/e.rs", Some("#999"), None).is_err());
+    }
+
+    // #419: Cmd+A selects every card of the workspace and keeps the focus where
+    // it was; a locked editor keeps Cmd+A for its text.
+    #[test]
+    fn cmd_a_selects_every_card_and_a_locked_editor_keeps_its_own() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        h.m.set_focus(Some(&ids[2]));
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+a"));
+        assert_eq!(h.m.selected_ids().len(), 4, "all four are selected");
+        assert_eq!(
+            h.m.selection.focused_id.as_deref(),
+            Some(ids[2].as_str()),
+            "the focus stays on the card it was on"
+        );
+        // A locked editor: Cmd+A is not ours.
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.cards[0].locked = true;
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        assert!(!handle_chord(&mut h.m, &h.r, "cmd+a"));
+    }
+
+    // #398: the keyboard pans the view by a fixed number of SCREEN pixels, a
+    // repeat adds to where the last press is heading, and the focus stays.
+    #[test]
+    fn the_pan_keys_move_the_view_a_screen_step_and_chain() {
+        let mut h = Harness::new();
+        let focus = h.m.selection.focused_id.clone();
+        h.m.viewport = crate::viewport::Viewport {
+            x: 100.,
+            y: 50.,
+            scale: 0.5,
+        };
+        let step = h.m.config.ui.pan_step / 0.5;
+        let effects = h.run("canvas.pan.right");
+        assert!(effects.iter().any(|e| matches!(
+            e, Effect::AnimatePan { x, y } if (*x - (100. + step)).abs() < 1e-9 && *y == 50.
+        )));
+        let effects = h.run("canvas.pan.right");
+        assert!(
+            effects.iter().any(|e| matches!(
+                e, Effect::AnimatePan { x, .. } if (*x - (100. + 2. * step)).abs() < 1e-9
+            )),
+            "a second press adds to the first's target, not to where the view is"
+        );
+        let effects = h.run("canvas.pan.up");
+        assert!(effects.iter().any(|e| matches!(
+            e, Effect::AnimatePan { x, y } if (*x - (100. + 2. * step)).abs() < 1e-9
+                && (*y - (50. - step)).abs() < 1e-9
+        )));
+        assert_eq!(
+            h.m.selection.focused_id, focus,
+            "panning does not move focus"
+        );
+    }
+
+    // `ui.panStep` is the step a press moves, in screen pixels at any zoom.
+    #[test]
+    fn the_pan_step_setting_sets_how_far_a_press_goes() {
+        let mut h = Harness::new();
+        h.m.config.ui.pan_step = 300.;
+        h.m.viewport = crate::viewport::Viewport {
+            x: 0.,
+            y: 0.,
+            scale: 1.,
+        };
+        let effects = h.run("canvas.pan.down");
+        assert!(effects.iter().any(
+            |e| matches!(e, Effect::AnimatePan { x, y } if *x == 0. && (*y - 300.).abs() < 1e-9)
+        ));
+    }
+
+    // Cmd+3 with several cards selected fits exactly those cards; with one
+    // it fits that card's block.
+    #[test]
+    fn fit_group_fits_a_selection_of_cards() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        h.m.set_focus(Some(&ids[0]));
+        h.m.extend_to(&ids[3]);
+        let rects: Vec<_> = [&ids[0], &ids[3]]
+            .iter()
+            .map(|id| h.m.card(id).unwrap().rect)
+            .collect();
+        let want = crate::viewport::fit_rect(
+            crate::viewport::bounding_rect(&rects).unwrap(),
+            h.m.view_size,
+        );
+        let effects = h.run("canvas.zoom.fitGroup");
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::AnimateFit(v) if *v == want)));
+    }
+
+    // A closed terminal is watched, not timed: kept while it works, ended
+    // after PARK_MS of quiet, kept while its agent waits for you (Alt+T
+    // brings that one back), and a reopen takes the running program back.
+    #[test]
+    fn a_closed_terminal_runs_until_quiet_and_a_reopen_takes_it_back() {
+        use crate::agent_state::AgentState::{Waiting, Working};
+        use crate::backend::PaneEvent;
+        use crate::model::lifecycle::PARK_MS;
+        let mut h = Harness::new();
+        h.m.can_park = true;
+        let ids = four_cards(&mut h);
+        for (i, id) in ids.iter().enumerate() {
+            let c = h.m.card_mut(id).unwrap();
+            c.pane_id = Some(100 + i as u32);
+            c.session = Some(format!("s{i}"));
+        }
+        let kills = |h: &mut Harness| -> Vec<u32> {
+            h.m.take_effects()
+                .into_iter()
+                .filter_map(|e| match e {
+                    Effect::KillPane(p) => Some(p),
+                    _ => None,
+                })
+                .collect()
+        };
+        // A build: output keeps it alive past the minute, quiet ends it.
+        h.m.set_focus(Some(&ids[0]));
+        let effects = h.run("card.close");
+        assert!(!effects.iter().any(|e| matches!(e, Effect::KillPane(_))));
+        let t = h.m.now_ms;
+        h.m.tick(t + PARK_MS - 1.);
+        h.m.apply_pane_event(100, &PaneEvent::Output(b"compiling".to_vec()));
+        h.m.tick(t + PARK_MS + 1.);
+        assert!(kills(&mut h).is_empty(), "still printing, still running");
+        let later = h.m.now_ms;
+        h.m.tick(later + PARK_MS);
+        assert_eq!(kills(&mut h), vec![100], "a quiet minute ends it");
+        assert!(h.m.parked.is_empty());
+
+        // An agent waiting for you is kept however long, and Alt+T
+        // reopens it with the state it has now.
+        h.m.set_focus(Some(&ids[1]));
+        h.m.card_mut(&ids[1]).unwrap().agent = Working;
+        h.run("card.close");
+        h.m.parked[0].card.agent = Waiting;
+        let t = h.m.now_ms;
+        h.m.tick(t + 10. * PARK_MS);
+        assert!(kills(&mut h).is_empty());
+        assert_eq!(
+            h.m.waiting_parked().map(|c| c.id.clone()),
+            Some(ids[1].clone())
+        );
+        // Another card closed since does not change what Alt+T brings.
+        h.m.set_focus(Some(&ids[2]));
+        h.run("card.close");
+        assert!(h.m.reopen_waiting());
+        let effects = h.m.take_effects();
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::ReleasePane(101))));
+        assert_eq!(h.m.card(&ids[1]).unwrap().agent, Waiting);
+        assert!(h.m.waiting_parked().is_none());
+        // Cmd+Shift+T is still the card closed last.
+        h.run("card.reopen");
+        assert!(h.m.card(&ids[2]).is_some());
+        // Undoing the waiting card's close now finds it back already.
+        let before = h.m.cards.len();
+        h.m.reopen_card(h.m.card(&ids[1]).unwrap().clone());
+        assert_eq!(h.m.cards.len(), before, "no twin");
+
+        // Cmd+Shift+T reopens, as in a browser; the placement menu moved.
+        let chord = |c: &str| {
+            h.m.keymap
+                .iter()
+                .find(|(k, _)| k == c)
+                .map(|(_, id)| id.clone())
+        };
+        assert_eq!(chord("cmd+shift+t").as_deref(), Some("card.reopen"));
+        assert_eq!(chord("cmd+ctrl+t").as_deref(), Some("card.place"));
+    }
+
+    // A rectangle selects the cards it touches, the nearest to where it
+    // began leading; Shift keeps what was selected; Cmd+click toggles.
+    #[test]
+    fn a_marquee_selects_what_it_touches_and_cmd_click_toggles() {
+        use crate::grid::{Point, Rect};
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        let r: Vec<Rect> = ids.iter().map(|id| h.m.card(id).unwrap().rect).collect();
+        // From just outside card 0's top-left, across cards 0 and 1 only.
+        let start = Point {
+            x: r[0].x - 5.,
+            y: r[0].y - 5.,
+        };
+        let span = Rect {
+            x: start.x,
+            y: start.y,
+            w: (r[1].x + 10.) - start.x,
+            h: 10.,
+        };
+        h.m.marquee_select(span, start, None);
+        h.m.marquee_done();
+        let mut got = h.m.selected_ids();
+        got.sort();
+        let mut want = vec![ids[0].clone(), ids[1].clone()];
+        want.sort();
+        assert_eq!(got, want);
+        assert_eq!(
+            h.m.selection.focused_id.as_deref(),
+            Some(ids[0].as_str()),
+            "nearest leads"
+        );
+        // Shift+drag over card 2 alone adds it.
+        let kept = h.m.selected_ids();
+        let c2 = Rect {
+            x: r[2].x + 1.,
+            y: r[2].y + 1.,
+            w: 5.,
+            h: 5.,
+        };
+        h.m.marquee_select(c2, Point { x: c2.x, y: c2.y }, Some(&kept));
+        assert_eq!(h.m.selected_ids().len(), 3);
+        // A drag over nothing, without Shift, selects nothing.
+        let far = Rect {
+            x: -1e6,
+            y: -1e6,
+            w: 5.,
+            h: 5.,
+        };
+        h.m.marquee_select(far, Point { x: far.x, y: far.y }, None);
+        assert!(h.m.selected_ids().is_empty());
+        // Cmd+click: adds a card, takes a selected one out, and a lone
+        // focused card is left to its body.
+        h.m.set_focus(Some(&ids[0]));
+        assert!(
+            !h.m.toggle_selected(&ids[0]),
+            "a link click on the card you are in"
+        );
+        assert!(h.m.toggle_selected(&ids[3]));
+        assert_eq!(h.m.selected_ids().len(), 2);
+        assert!(h.m.toggle_selected(&ids[0]));
+        assert_eq!(h.m.selected_ids(), vec![ids[3].clone()]);
+    }
+
+    // A selection dragged together lands when the space is free, even when
+    // its cards belong to different groups; onto another card it goes back.
+    #[test]
+    fn a_selection_across_groups_moves_as_one() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        let ga = h.m.add_group("a");
+        let gb = h.m.add_group("b");
+        h.m.card_mut(&ids[0]).unwrap().group_id = Some(ga);
+        h.m.card_mut(&ids[1]).unwrap().group_id = Some(gb);
+        let moved = [ids[0].clone(), ids[1].clone()];
+        let start: Vec<_> = moved
+            .iter()
+            .map(|id| (id.clone(), h.m.card(id).unwrap().rect))
+            .collect();
+        let far = 100_000.;
+        for id in &moved {
+            h.m.card_mut(id).unwrap().rect.y += far;
+        }
+        assert!(h.m.end_gesture(&moved, &start), "free space: it lands");
+        assert_eq!(h.m.card(&ids[0]).unwrap().rect.y, start[0].1.y + far);
+        // Onto card 2: back where it started.
+        let back: Vec<_> = moved
+            .iter()
+            .map(|id| (id.clone(), h.m.card(id).unwrap().rect))
+            .collect();
+        let target = h.m.card(&ids[2]).unwrap().rect;
+        h.m.card_mut(&ids[0]).unwrap().rect = target;
+        assert!(!h.m.end_gesture(&moved, &back));
+        assert_eq!(h.m.card(&ids[0]).unwrap().rect, back[0].1);
+    }
+
+    // #91: opening the settings focuses the user's file alone; the defaults
+    // card beside it is not part of a selection.
+    #[test]
+    fn opening_settings_selects_only_the_users_file() {
+        let mut h = Harness::new();
+        four_cards(&mut h);
+        h.run("app.settings");
+        let focused = h.m.focused().cloned().expect("a focused card");
+        assert!(focused
+            .path
+            .as_deref()
+            .unwrap_or("")
+            .ends_with("settings.json"));
+        assert_eq!(h.m.selected().len(), 1, "one card selected");
+        assert_eq!(h.m.config_pairs.len(), 1, "the pair is still remembered");
+    }
+
+    // "Open a file" asks for the macOS panel, and what it picks opens as
+    // `ift <path>` would: a file in an editor, a folder with its tree (#64).
+    #[test]
+    fn open_a_file_shows_the_panel_and_opens_the_pick() {
+        let mut h = Harness::new();
+        let effects = h.run("card.open.file");
+        assert!(effects.iter().any(|e| matches!(e, Effect::PickFile { .. })));
+        let dir = std::env::temp_dir().join(format!("ift-pick-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.md");
+        std::fs::write(&file, "x").unwrap();
+        let from = h.focused().id.clone();
+        let id =
+            h.m.open_picked(&file.to_string_lossy(), Some(&from))
+                .unwrap();
+        let card = h.m.card(&id).unwrap();
+        assert_eq!(card.kind, CardKind::Editor);
+        assert_eq!(card.path.as_deref(), Some(file.to_string_lossy().as_ref()));
+        let id =
+            h.m.open_picked(&dir.to_string_lossy(), Some(&from))
+                .unwrap();
+        assert!(
+            h.m.card(&id).unwrap().explorer,
+            "a folder opens with its tree"
+        );
+    }
+
+    // A dialog owns the keyboard: the group-name prompt is modal, the
+    // switcher is not (it runs on Ctrl held down).
+    #[test]
+    fn a_dialog_is_modal_and_the_switcher_is_not() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        h.m.set_focus(Some(&ids[0]));
+        h.m.extend_to(&ids[1]);
+        assert!(!h.m.modal_open());
+        h.run("group.new");
+        assert!(h.m.prompt.is_open(), "Cmd+G asks for the name");
+        assert!(h.m.modal_open());
+    }
+
+    // Shift+click: the card clicked takes the focus, the one it left stays
+    // selected, and a second Shift+click on a member takes it out.
+    #[test]
+    fn shift_click_builds_a_selection_and_takes_cards_out() {
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        h.m.set_focus(Some(&ids[0]));
+        h.m.extend_to(&ids[1]);
+        h.m.extend_to(&ids[2]);
+        assert_eq!(h.m.selection.focused_id.as_deref(), Some(ids[2].as_str()));
+        assert_eq!(h.m.selection.extra, vec![ids[0].clone(), ids[1].clone()]);
+        h.m.tick(h.m.now_ms + 5_000.);
+        assert_eq!(h.m.selection.extra.len(), 2, "nothing clears it on its own");
+        h.m.extend_to(&ids[0]);
+        assert_eq!(h.m.selection.extra, vec![ids[1].clone()]);
+    }
+
+    // Cmd+= / Cmd+- size the terminal font, one point a press, saved, and
+    // stop at the ends; the canvas does not zoom.
+    #[test]
+    fn the_font_keys_size_the_terminal_font_and_save_it() {
+        let mut h = Harness::new();
+        h.m.config.terminal.font_size = 14.;
+        let effects = h.run("terminal.font.bigger");
+        assert_eq!(h.m.config.terminal.font_size, 15.);
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::SaveSetting { path, value } if path == "terminal.fontSize" && value == 15.
+        )));
+        assert!(!effects
+            .iter()
+            .any(|e| matches!(e, Effect::AnimateZoom { .. })));
+        h.run("terminal.font.smaller");
+        h.run("terminal.font.smaller");
+        assert_eq!(h.m.config.terminal.font_size, 13.);
+        h.m.config.terminal.font_size = 6.;
+        let effects = h.run("terminal.font.smaller");
+        assert_eq!(h.m.config.terminal.font_size, 6.);
+        assert!(!effects
+            .iter()
+            .any(|e| matches!(e, Effect::SaveSetting { .. })));
+        assert_eq!(
+            h.m.keymap
+                .iter()
+                .find(|(c, _)| c == "cmd+=")
+                .map(|(_, id)| id.as_str()),
+            Some("terminal.font.bigger")
+        );
     }
 
     // A held zoom key chains from the pending target, not the passing scale.
@@ -1200,6 +2631,278 @@ mod tests {
         assert!(h.m.framing);
     }
 
+    // Cmd+3 on a loose card frames the block of cards around it (here a
+    // split's pieces and the card beside them), not only a group.
+    #[test]
+    fn fit_group_frames_a_loose_cards_cluster() {
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        h.run("card.split.right");
+        let rects: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+        assert_eq!(rects.len(), 3);
+        let want = crate::viewport::bounding_rect(&rects).unwrap();
+        let effects = h.run("canvas.zoom.fitGroup");
+        let Some(Effect::AnimateFit(v)) =
+            effects.iter().find(|e| matches!(e, Effect::AnimateFit(_)))
+        else {
+            panic!("no fit")
+        };
+        assert_eq!(*v, crate::viewport::fit_rect(want, h.m.view_size));
+    }
+
+    // #87: `ui.fitPadding` is the margin around a fit and `ui.fitMagnify`
+    // lets it pass 100%; the defaults are the old fixed 48 px and the cap.
+    #[test]
+    fn fit_settings_set_the_margin_and_the_ceiling() {
+        use crate::viewport::{fit_rect_with, FIT_PADDING, MAX_FIT_SCALE, MAX_SCALE};
+        let mut h = Harness::new();
+        let ids = four_cards(&mut h);
+        let rect = h.m.card(&ids[0]).unwrap().rect;
+        let size = h.m.view_size;
+        assert_eq!(
+            h.m.fit_viewport(rect),
+            fit_rect_with(rect, size, FIT_PADDING, MAX_FIT_SCALE),
+            "defaults are the old fit"
+        );
+        h.m.apply_settings_text(r#"{"ui.fitPadding": 0, "ui.fitMagnify": true}"#);
+        assert_eq!(
+            h.m.fit_viewport(rect),
+            fit_rect_with(rect, size, 0., MAX_SCALE)
+        );
+        // A card smaller than the window grows past 100% only when asked.
+        let small = crate::grid::Rect {
+            x: 0.,
+            y: 0.,
+            w: 100.,
+            h: 100.,
+        };
+        assert!(h.m.fit_viewport(small).scale > 1.);
+        h.m.apply_settings_text(r#"{"ui.fitPadding": 0}"#);
+        assert_eq!(h.m.fit_viewport(small).scale, 1.);
+    }
+
+    // `ui.fitSplitSlot`: Cmd+1 on a split half frames both halves by default;
+    // off, it fits the half itself.
+    #[test]
+    fn fit_split_slot_off_fits_the_half_alone() {
+        let mut h = Harness::new();
+        h.run("card.split.right");
+        let half = h.m.focused().unwrap().rect;
+        let slot = {
+            let rects: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+            crate::viewport::bounding_rect(&rects).unwrap()
+        };
+        let selected = h.m.selected();
+        let rects: Vec<_> = selected.iter().map(|c| c.rect).collect();
+        let groups: Vec<_> = selected.iter().map(|c| c.soft_group_id.clone()).collect();
+        assert_eq!(h.m.slot_bounds(&rects, &groups), Some(slot));
+        h.m.apply_settings_text(r#"{"ui.fitSplitSlot": false}"#);
+        assert_eq!(h.m.slot_bounds(&rects, &groups), Some(half));
+    }
+
+    // Cmd+Ctrl+Enter on an empty slot (the phantom) grows it into the free
+    // room, so a slot beside a quarter can become a card of any size up to the
+    // default. A slot with nothing to grow into says so.
+    #[test]
+    fn fill_the_free_space_grows_the_phantom() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        let default = h.m.default_size();
+        let quarter = h.m.card(&id).unwrap().rect;
+        let small = crate::grid::Rect {
+            w: default.w / 2.,
+            h: default.h / 2.,
+            ..quarter
+        };
+        h.m.card_mut(&id).unwrap().rect = small;
+        h.run("focus.move.right");
+        let phantom = h.m.selection.phantom.clone().expect("a slot");
+        assert_eq!((phantom.rect.w, phantom.rect.h), (small.w, small.h));
+        h.run("card.size.reset");
+        let grown = h.m.selection.phantom.clone().expect("still a slot").rect;
+        assert!(grown.w > small.w || grown.h > small.h, "{grown:?}");
+        assert!(grown.w <= default.w && grown.h <= default.h);
+        assert!(h.m.focused().is_none(), "no card was made or focused");
+    }
+
+    // `cards.gap` (#232) is the space every placement leaves: a split, a new
+    // card, a tidy and a group frame all take it, where the constant used to
+    // be 25. The nearest two cards are exactly one gap apart and none is closer.
+    fn nearest_gap(h: &Harness) -> (f64, f64) {
+        let rects: Vec<crate::grid::Rect> = h.m.here().iter().map(|c| c.rect).collect();
+        let mut nearest = f64::MAX;
+        for (i, a) in rects.iter().enumerate() {
+            for b in &rects[i + 1..] {
+                let dx = (b.x - (a.x + a.w)).max(a.x - (b.x + b.w));
+                let dy = (b.y - (a.y + a.h)).max(a.y - (b.y + b.h));
+                // beside each other (they overlap on the other axis), else a corner
+                let d = if dy < 0. {
+                    dx
+                } else if dx < 0. {
+                    dy
+                } else {
+                    f64::MAX
+                };
+                nearest = nearest.min(d);
+            }
+        }
+        let overlapping = rects.iter().enumerate().any(|(i, a)| {
+            rects[i + 1..]
+                .iter()
+                .any(|b| crate::layout::rects_overlap(*a, *b))
+        });
+        (nearest, if overlapping { 1. } else { 0. })
+    }
+
+    #[test]
+    fn the_gap_setting_spaces_splits_new_cards_and_group_frames() {
+        for gap in [0., 10., 60.] {
+            let mut h = Harness::new();
+            h.m.apply_settings_text(&format!("{{\"cards.gap\": {gap}}}"));
+            assert_eq!(h.m.gap(), gap);
+            assert_eq!(h.m.group_pad(), gap / 2.);
+            h.run("card.split.right");
+            h.run("card.new.terminal");
+            h.run("card.new.terminal");
+            h.run("card.new.terminal");
+            let (nearest, overlapping) = nearest_gap(&h);
+            assert_eq!(overlapping, 0., "gap {gap}: cards overlap");
+            assert_eq!(
+                nearest, gap,
+                "gap {gap}: the nearest cards are one gap apart"
+            );
+            // Canvas: tidy puts them back in the block, still a gap apart.
+            h.run("canvas.tidy");
+            let (nearest, overlapping) = nearest_gap(&h);
+            assert_eq!(overlapping, 0., "gap {gap}: tidy overlaps");
+            assert_eq!(nearest, gap, "gap {gap}: tidy keeps one gap");
+        }
+    }
+
+    #[test]
+    fn the_gap_defaults_to_the_grid_and_is_clamped() {
+        let mut h = Harness::new();
+        assert_eq!(h.m.gap(), crate::cards::GUTTER);
+        h.m.apply_settings_text(r#"{"cards.gap": 900}"#);
+        assert_eq!(h.m.gap(), 200.);
+        h.m.apply_settings_text(r#"{"cards.gap": -5}"#);
+        assert_eq!(h.m.gap(), 0.);
+    }
+
+    fn edit_from(h: &mut Harness, card: Option<&str>, path: &str) -> crate::cli::CliReply {
+        h.m.run_ift(
+            &crate::cli::CliRequest {
+                id: 77,
+                cmd: "edit".into(),
+                args: vec![path.into()],
+                card_id: card.map(String::from),
+            },
+            &[],
+        )
+    }
+
+    // `ift ~/.zshrc` in a terminal: the file opens over that card, same
+    // rect, locked and focused, the request left for later; the terminal
+    // drops out of what you can navigate to; closing answers the waiting
+    // `ift` and hands the focus back, with nothing for Cmd+Z to bring back.
+    #[test]
+    fn edit_opens_in_place_and_closing_answers_the_waiting_ift() {
+        let mut h = Harness::new();
+        let term = h.focused().id.clone();
+        let rect = h.focused().rect;
+        let reply = edit_from(&mut h, Some(&term), "/Users/me/.zshrc");
+        assert!(reply.ok);
+        assert!(h.m.reply_deferred, "answered when it closes, not now");
+        let cover = h.focused().clone();
+        assert_ne!(cover.id, term);
+        assert_eq!(
+            (cover.kind, cover.rect, cover.locked),
+            (CardKind::Editor, rect, true)
+        );
+        assert_eq!(cover.path.as_deref(), Some("/Users/me/.zshrc"));
+        assert!(
+            h.m.here().iter().all(|c| c.id != term),
+            "the terminal is under it"
+        );
+        assert!(!h.m.save_text().unwrap().contains(&cover.id), "not saved");
+        h.m.take_effects();
+        let effects = h.run("card.close");
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::CliReply {
+                id: 77,
+                ok: true,
+                ..
+            }
+        )));
+        assert_eq!(h.focused().id, term, "back to the shell");
+        assert!(h.m.card(&cover.id).is_none());
+        assert!(h.m.covers.is_empty() && h.m.edit_waiters.is_empty());
+        assert!(h.m.here().iter().any(|c| c.id == term));
+        assert!(
+            h.m.closed.iter().all(|c| c.id != cover.id),
+            "no Cmd+Ctrl+T twin"
+        );
+    }
+
+    // The pair is one card on screen: moving the cover takes the terminal
+    // with it, and so does moving the terminal (a swap, an undo).
+    #[test]
+    fn a_cover_and_its_terminal_move_together() {
+        let mut h = Harness::new();
+        let term = h.focused().id.clone();
+        edit_from(&mut h, Some(&term), "/tmp/x.txt");
+        let cover = h.focused().id.clone();
+        let mut to = h.focused().rect;
+        to.x += 5000.;
+        assert!(
+            h.m.drop_card(&cover, to),
+            "its own terminal is not in the way"
+        );
+        h.m.tick(h.m.now_ms + 16.);
+        assert_eq!(
+            h.m.card(&term).unwrap().rect,
+            h.m.card(&cover).unwrap().rect
+        );
+        let mut back = to;
+        back.y += 3000.;
+        h.m.card_mut(&term).unwrap().rect = back;
+        h.m.tick(h.m.now_ms + 16.);
+        assert_eq!(h.m.card(&cover).unwrap().rect, back);
+    }
+
+    // No terminal to cover (run outside a card, or from an editor): an
+    // ordinary card, answered at once.
+    #[test]
+    fn edit_without_a_terminal_opens_a_card_and_answers_now() {
+        let mut h = Harness::new();
+        let reply = edit_from(&mut h, None, "/tmp/x.txt");
+        assert!(reply.ok && !h.m.reply_deferred);
+        assert!(h.m.covers.is_empty());
+        assert_eq!(h.focused().kind, CardKind::Editor);
+        assert_ne!(h.focused().rect, h.m.cards[0].rect);
+    }
+
+    // A Claude card keeps its session's name across a relaunch, with no
+    // hook arriving to say an agent is there: the saved session id is the
+    // evidence and the saved title the name. A shell's title never is.
+    #[test]
+    fn a_claude_card_keeps_its_name_across_a_relaunch() {
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        h.m.cards[0].agent_session = Some("c0ffee".into());
+        h.m.cards[0].osc_title = Some("fix the tab dots".into());
+        h.m.cards[1].osc_title = Some("zsh: ~/Code".into());
+        let text = h.m.save_text().expect("saveable");
+        let mut again = Model::new();
+        again.home = "/Users/me".into();
+        again.load_layout(Some(&text));
+        assert!(again
+            .label_of(&again.cards[0].clone())
+            .contains("fix the tab dots"));
+        assert!(!again.label_of(&again.cards[1].clone()).contains("zsh"));
+    }
+
     #[test]
     fn the_layout_round_trips_through_save_and_load() {
         let mut h = Harness::new();
@@ -1217,14 +2920,14 @@ mod tests {
         assert_eq!(again.selection.focused_id, h.m.selection.focused_id);
         assert!(again.loaded && !again.read_only);
         assert_eq!(again.save_text().unwrap(), text);
-        // Numbers come back as they were and the counter continues past
-        // them; a file with none (before the field) gets them in file
-        // order, above whichever it does have.
+        // Numbers come back as they were, and the next card takes the
+        // lowest free one; a file with none (before the field) gets the
+        // lowest free ones in file order.
         assert_eq!(
             again.cards.iter().map(|c| c.number).collect::<Vec<_>>(),
             [1, 2]
         );
-        assert_eq!(again.next_number, 3);
+        assert_eq!(again.take_number(), 3);
         let mixed = text.replacen("\"number\": 1", "\"number\": 9", 1).replacen(
             "\"number\": 2",
             "\"nope\": 2",
@@ -1235,9 +2938,9 @@ mod tests {
         old.load_layout(Some(&mixed));
         assert_eq!(
             old.cards.iter().map(|c| c.number).collect::<Vec<_>>(),
-            [9, 10]
+            [9, 1]
         );
-        assert_eq!(old.next_number, 11);
+        assert_eq!(old.take_number(), 2);
     }
 
     #[test]
@@ -1292,6 +2995,7 @@ mod tests {
             tool: None,
             transcript: Some("/s/x.jsonl".into()),
             session: Some("sess-1".into()),
+            agent: None,
         };
         h.m.apply_hook(&report("PreToolUse"));
         assert_eq!(h.focused().agent, crate::agent_state::AgentState::Working);
@@ -1314,6 +3018,106 @@ mod tests {
         assert_eq!(h.focused().agent, crate::agent_state::AgentState::None);
     }
 
+    // Four cards dragged all over the canvas come back as a 2x2 in the
+    // order you read them, sizes kept, and Cmd+Z scatters them again.
+    #[test]
+    fn tidy_puts_scattered_cards_back_into_the_block() {
+        let mut h = Harness::new();
+        for _ in 0..3 {
+            h.run("card.new.terminal");
+        }
+        let scattered = [(9000., 40.), (25., 5000.), (4000., 4000.), (25., 25.)];
+        for (c, (x, y)) in h.m.cards.iter_mut().zip(scattered) {
+            c.rect.x = x;
+            c.rect.y = y;
+        }
+        let before: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+        let effects = h.run("canvas.tidy");
+        assert!(
+            effects.iter().any(|e| matches!(e, Effect::MarkSwap(_))),
+            "glides"
+        );
+        let r: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+        let (w, g) = (r[0].w, crate::cards::GUTTER);
+        // Reading order was card 3 (top-left), 0, 2, 1, on the placement
+        // grid (anchored at the half cell), not wherever card 3 happened to be.
+        let o = crate::grid::HALF_CELL;
+        assert_eq!((r[3].x, r[3].y), (o, o));
+        assert_eq!((r[0].x, r[0].y), (o + w + g, o));
+        assert_eq!((r[2].x, r[2].y), (o, o + r[0].h + g));
+        assert_eq!((r[1].x, r[1].y), (o + w + g, o + r[0].h + g));
+        assert!(r.iter().zip(&before).all(|(a, b)| (a.w, a.h) == (b.w, b.h)));
+        h.run("layout.undo");
+        let back: Vec<_> = h.m.cards.iter().map(|c| c.rect).collect();
+        assert_eq!(back, before);
+    }
+
+    // Clearing a card's state greys its ring and dot until it has something
+    // new to say; a card with nothing to say stays as it is.
+    #[test]
+    fn a_cards_state_colour_can_be_cleared_by_hand() {
+        use crate::agent_state::AgentState::*;
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().agent = Failed;
+        let effects = h.run("card.clearState");
+        assert_eq!(h.focused().agent, None);
+        assert!(effects.iter().any(|e| matches!(e, Effect::AgentLog(_))));
+        let effects = h.run("card.clearState");
+        assert!(
+            !effects.iter().any(|e| matches!(e, Effect::AgentLog(_))),
+            "nothing to log"
+        );
+    }
+
+    // A shell command that runs long colours its card from the marks in
+    // its output: working after five seconds, done when it ends well, and
+    // a quiet build is not taken for a crashed agent by the sweep. A
+    // replay of the same bytes changes nothing.
+    #[test]
+    fn a_long_shell_command_colours_its_card() {
+        use crate::agent_state::AgentState::*;
+        use crate::backend::{PaneEvent, PaneId};
+        let mut h = Harness::new();
+        let pane: PaneId = 7;
+        h.m.cards[0].pane_id = Some(pane);
+        let out = |b: &[u8]| PaneEvent::Output(b.to_vec());
+        let t0 = h.m.now_ms;
+        h.m.apply_pane_event(pane, &out(b"cargo build\r\n\x1b]133;C\x07"));
+        h.m.tick(t0 + 1_000.);
+        assert_eq!(h.focused().agent, None);
+        h.m.tick(t0 + crate::program_state::LONG_MS);
+        assert_eq!(h.focused().agent, Working);
+        h.m.tick(t0 + crate::agent_state::STALE_MS * 2.);
+        h.m.sweep_stale();
+        assert_eq!(
+            h.focused().agent,
+            Working,
+            "ten silent minutes is still a build"
+        );
+        h.m.apply_pane_event(pane, &out(b"\x1b]133;D;0\x07"));
+        assert_eq!(h.focused().agent, Done);
+        // Every mark reaches agent.log, the end with how long it ran.
+        let logged: Vec<String> =
+            h.m.take_effects()
+                .into_iter()
+                .filter_map(|e| match e {
+                    Effect::AgentLog(l) => Some(l),
+                    _ => Option::None,
+                })
+                .collect();
+        assert!(
+            logged
+                .iter()
+                .any(|l| l.contains("[shell] CommandEnd(Some(0)) after 600.0s working -> done")),
+            "{logged:?}"
+        );
+        h.m.apply_pane_event(pane, &PaneEvent::Replay(b"\x1b]133;C\x07".to_vec()));
+        assert_eq!(h.focused().agent, Done, "a replay is old news");
+        h.m.apply_pane_event(pane, &out(b"\x1b]133;C\x07"));
+        assert_eq!(h.focused().agent, None, "the next command clears it");
+    }
+
     // The keymap dispatches through the editor and browser exceptions.
     #[test]
     fn chords_dispatch_through_the_keymap_with_the_editor_and_browser_exceptions() {
@@ -1321,15 +3125,35 @@ mod tests {
         assert!(handle_chord(&mut h.m, &h.r, "cmd+t"));
         assert_eq!(h.m.cards.len(), 2);
         assert!(!handle_chord(&mut h.m, &h.r, "cmd+alt+shift+z"), "unbound");
-        // An editor keeps Cmd+F; a terminal gives it to hints.
+        // An editor you are IN keeps Cmd+F; one you only arrowed to gets
+        // its search from the app. A terminal opens the find bar; Cmd+J
+        // letters the cards.
         h.m.take_effects();
         let id = h.focused().id.clone();
         h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        h.m.card_mut(&id).unwrap().locked = true;
         assert!(!handle_chord(&mut h.m, &h.r, "cmd+f"));
+        h.m.card_mut(&id).unwrap().locked = false;
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+f"));
+        assert!(h.m.take_effects().iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::Find,
+                ..
+            }
+        )));
         h.m.card_mut(&id).unwrap().kind = CardKind::Terminal;
         assert!(handle_chord(&mut h.m, &h.r, "cmd+f"));
+        assert!(h.m.find.open && h.m.find.card_id.as_deref() == Some(id.as_str()));
+        h.m.close_find();
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+j"));
         assert!(!h.m.selection.hints.is_empty());
         h.m.selection.hints.clear();
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+e"));
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::FindSelection(id.clone())));
         // A browser takes the zoom chords for the page.
         h.m.card_mut(&id).unwrap().kind = CardKind::Browser;
         h.m.card_mut(&id).unwrap().url = Some("https://x".into());
@@ -1343,7 +3167,7 @@ mod tests {
     }
 
     // A locked editor card's Cmd+T is a tab, its Cmd+W the tab; unlocked,
-    // both are the app's. Cmd+F stays the editor's either way, and Ctrl+1
+    // both are the app's. Cmd+F is the editor's while locked, and Ctrl+1
     // the workspace's.
     #[test]
     fn a_locked_editor_card_gets_tab_chords_an_unlocked_one_does_not() {
@@ -1373,6 +3197,28 @@ mod tests {
             handle_chord(&mut h.m, &h.r, "ctrl+1"),
             "workspaces switch through a lock"
         );
+    }
+
+    // Cmd+L is the omnibox on a locked BROWSER card but not on a locked
+    // EDITOR one: there it is the editor's "select the line" (Batch 1,
+    // 2026-09-24), so it must fall through to the body rather than open
+    // the address bar. Ctrl+G is `editor.goToLine`, a command (it opens
+    // the model's prompt), unlike the line, bracket and selection chords,
+    // which are pure body key handling and need no entry here at all.
+    #[test]
+    fn a_locked_editor_does_not_carve_out_cmd_l_but_does_bind_ctrl_g() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        h.m.card_mut(&id).unwrap().path = Some("/h/a.rs".into());
+        h.m.card_mut(&id).unwrap().locked = true;
+        assert!(
+            !handle_chord(&mut h.m, &h.r, "cmd+l"),
+            "falls to the body instead of opening the omnibox"
+        );
+        assert!(!h.m.omni.open);
+        assert!(handle_chord(&mut h.m, &h.r, "ctrl+g"));
+        assert!(h.m.prompt.is_open());
     }
 
     // A card dropped over another goes back where it was: nothing may end
@@ -1425,19 +3271,314 @@ mod tests {
         assert!(h.m.notice.is_none());
     }
 
-    // A dirty editor closes on the second press, within the window.
+    // A long notice gets time to be read, and a quick follow-up does not wipe
+    // the line before it could be (#384).
     #[test]
-    fn a_dirty_editor_takes_two_presses_to_close() {
+    fn a_long_notice_stays_longer_and_a_quick_one_waits_its_turn() {
+        use crate::model::{notice_duration_ms, NOTICE_MIN_SHOW_MS};
+        assert_eq!(notice_duration_ms("copied"), NOTICE_MS);
+        let long = "infiniterm 0.5.12 (884) is ready: restart to install (Cmd+Ctrl+Shift+R)";
+        assert!(notice_duration_ms(long) > NOTICE_MS);
+        assert_eq!(notice_duration_ms(&"x".repeat(1000)), 12000.);
+
+        let mut h = Harness::new();
+        let t0 = h.m.now_ms;
+        h.m.tick(t0);
+        h.m.notify("checking for updates…");
+        h.m.tick(t0 + 100.);
+        h.m.notify_after_read("infiniterm is up to date");
+        assert_eq!(h.m.notice.as_deref(), Some("checking for updates…"));
+        h.m.tick(t0 + NOTICE_MIN_SHOW_MS - 1.);
+        assert_eq!(h.m.notice.as_deref(), Some("checking for updates…"));
+        assert!(!h.m.notice_expired(t0 + NOTICE_MIN_SHOW_MS - 1.));
+        assert!(h.m.notice_expired(t0 + NOTICE_MIN_SHOW_MS));
+        h.m.tick(t0 + NOTICE_MIN_SHOW_MS);
+        assert_eq!(h.m.notice.as_deref(), Some("infiniterm is up to date"));
+        // A plain notice is never held back: a refusal shows at once.
+        h.m.notify("nowhere to go");
+        assert_eq!(h.m.notice.as_deref(), Some("nowhere to go"));
+    }
+
+    // "move card" in the palette, Enter, then the workspace: the card goes
+    // there, into a free slot (never onto the card already there), you stay
+    // where you were, and going there lands on it.
+    #[test]
+    fn a_card_moves_to_another_workspace_and_you_stay() {
+        let mut h = Harness::new();
+        let here = h.m.active_workspace.clone().unwrap();
+        let kept = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let mover = h.focused().id.clone();
+        let there = h.m.add_workspace(Some("Acme"));
+        let resident = h.m.add_card(
+            "/Users/me",
+            NewCard {
+                workspace_id: Some(there.clone()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&mover));
+        h.run("card.moveToWorkspace");
+        assert_eq!(h.m.palette.source, Some(Source::MoveTo));
+        let rows = h.m.palette_items(Source::MoveTo, &[]);
+        let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, ["Acme", "New workspace"], "not the one you are on");
+        assert_eq!(rows[0].hint.as_deref(), Some("1 card"));
+        h.m.palette_run(Source::MoveTo, &there);
+        let moved = h.m.card(&mover).unwrap().clone();
+        assert_eq!(moved.workspace_id, there);
+        let r = h.m.card(&resident).unwrap().rect;
+        assert!(!crate::layout::rects_overlap(moved.rect, r), "a free slot");
+        assert_eq!(
+            h.m.active_workspace.as_deref(),
+            Some(here.as_str()),
+            "you stay"
+        );
+        assert_eq!(h.focused().id, kept);
+        assert_eq!(
+            h.m.notice.as_deref(),
+            Some(format!("moved #{} to Acme", moved.number).as_str())
+        );
+        let ws = h.m.workspaces.iter().find(|w| w.id == there).unwrap();
+        assert_eq!(
+            ws.focused.as_deref(),
+            Some(mover.as_str()),
+            "lands on it there"
+        );
+    }
+
+    #[test]
+    fn a_group_moves_to_another_workspace_with_its_arrangement() {
+        let mut h = Harness::new();
+        let here = h.m.active_workspace.clone().unwrap();
+        h.run("card.new.terminal");
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let outsider = h.focused().id.clone();
+        h.m.focus_extended(&b, vec![a.clone()]);
+        h.run("group.new");
+        let (pending, text) = h.m.prompt.settle(Some("Pair")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        let group = h.m.card(&a).unwrap().group_id.clone().unwrap();
+        let (ra, rb) = (h.m.card(&a).unwrap().rect, h.m.card(&b).unwrap().rect);
+        let there = h.m.add_workspace(Some("Acme"));
+        let resident = h.m.add_card(
+            "/Users/me",
+            NewCard {
+                workspace_id: Some(there.clone()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&a));
+        h.run("group.moveToWorkspace");
+        assert_eq!(h.m.palette.source, Some(Source::MoveGroupTo));
+        h.m.palette_run(Source::MoveGroupTo, &there);
+        let (ma, mb) = (h.m.card(&a).unwrap().clone(), h.m.card(&b).unwrap().clone());
+        assert_eq!(
+            (ma.workspace_id.as_str(), mb.workspace_id.as_str()),
+            (there.as_str(), there.as_str())
+        );
+        assert_eq!(
+            ma.group_id.as_deref(),
+            Some(group.as_str()),
+            "still grouped"
+        );
+        assert_eq!(mb.group_id.as_deref(), Some(group.as_str()));
+        // The arrangement and the sizes are kept: the same offset between them.
+        assert_eq!(
+            (mb.rect.x - ma.rect.x, mb.rect.y - ma.rect.y),
+            (rb.x - ra.x, rb.y - ra.y)
+        );
+        assert_eq!((ma.rect.w, ma.rect.h), (ra.w, ra.h));
+        // Clear of the card already there, and the group's frame is on the new canvas.
+        let r = h.m.card(&resident).unwrap().rect;
+        assert!(!crate::layout::rects_overlap(ma.rect, r));
+        assert!(!crate::layout::rects_overlap(mb.rect, r));
+        assert!(h.m.group_frame(&group, &there).is_some());
+        assert_eq!(
+            h.m.card(&outsider).unwrap().workspace_id,
+            here,
+            "others stay"
+        );
+        assert_eq!(
+            h.m.active_workspace.as_deref(),
+            Some(here.as_str()),
+            "you stay"
+        );
+        assert_eq!(h.m.notice.as_deref(), Some("moved group \"Pair\" to Acme"));
+    }
+
+    #[test]
+    fn a_card_outside_any_group_has_no_group_to_move() {
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        h.run("group.moveToWorkspace");
+        assert_eq!(h.m.palette.source, None);
+        assert_eq!(
+            h.m.notice.as_deref(),
+            Some("the focused card is in no group")
+        );
+    }
+
+    #[test]
+    fn a_card_can_move_to_a_new_workspace() {
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        let mover = h.focused().id.clone();
+        let before = h.m.workspaces.len();
+        h.run("card.moveToWorkspace");
+        h.m.palette_run(
+            Source::MoveTo,
+            super::super::workspaces_cmd::NEW_WORKSPACE_ROW,
+        );
+        assert_eq!(h.m.workspaces.len(), before + 1);
+        let new_ws = h.m.workspaces.last().unwrap().id.clone();
+        assert_eq!(h.m.card(&mover).unwrap().workspace_id, new_ws);
+    }
+
+    // An untitled editor's first save: the field starts on the card's
+    // directory and untitled.txt with the stem selected; a new path saves;
+    // a missing directory sends you back to the field with what you typed;
+    // an existing file asks before replacing it.
+    #[test]
+    fn saving_an_untitled_buffer_names_it_like_the_mac_panel() {
         let mut h = Harness::new();
         let id = h.focused().id.clone();
-        let c = h.m.card_mut(&id).unwrap();
-        c.kind = CardKind::Editor;
-        c.dirty = true;
+        {
+            let c = h.m.card_mut(&id).unwrap();
+            c.kind = CardKind::Editor;
+            c.path = None;
+            c.cwd = "/Users/me/Code".into();
+        }
+        let disk = ["/Users/me/Code", "/Users/me/Code/old.txt"];
+        let exists = |p: &str| disk.contains(&p);
+        let submit = |h: &mut Harness, typed: &str| {
+            let (pending, text) = h.m.prompt.settle(Some(typed)).unwrap();
+            h.m.answer(pending, text, exists);
+            h.m.take_effects()
+        };
+        h.run("card.save");
+        assert_eq!(h.m.prompt.value, "~/Code/untitled.txt");
+        assert_eq!(h.m.prompt.select, Some((7, 15)));
+
+        submit(&mut h, "~/Code/nope/a.txt");
+        assert!(h.m.prompt.open, "back to the field");
+        assert_eq!(h.m.prompt.value, "~/Code/nope/a.txt");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("no such directory: ~/Code/nope"));
+
+        submit(&mut h, "~/Code/old.txt");
+        assert!(h.m.prompt.confirm && h.m.prompt.label.contains("old.txt exists"));
+        let (pending, text) = h.m.prompt.settle(None).unwrap();
+        h.m.answer(pending, text, exists);
+        assert_eq!(h.m.card(&id).unwrap().path, None, "not replaced");
+
+        h.run("card.save");
+        let effects = submit(&mut h, "~/Code/notes.md");
+        assert_eq!(
+            h.m.card(&id).unwrap().path.as_deref(),
+            Some("/Users/me/Code/notes.md")
+        );
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::Save,
+                ..
+            }
+        )));
+    }
+
+    // Closing an untitled buffer: Save in the sheet asks for the name, and
+    // the card closes once that save lands.
+    #[test]
+    fn saving_an_untitled_buffer_from_the_close_sheet_names_it_then_closes() {
+        use crate::prompt::ButtonKind;
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        {
+            let c = h.m.card_mut(&id).unwrap();
+            c.kind = CardKind::Editor;
+            c.path = None;
+            c.cwd = "/Users/me".into();
+            c.dirty = true;
+        }
         h.run("card.close");
-        assert_eq!(h.m.cards.len(), 1);
-        assert!(h.m.notice.as_deref().unwrap().contains("unsaved"));
-        let effects = h.run("card.close");
+        let (pending, text) = h.m.prompt.press(ButtonKind::Primary).unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert!(h.m.prompt.open && h.m.prompt.label == "save as");
+        let (pending, text) = h.m.prompt.settle(Some("/Users/me/n.txt")).unwrap();
+        h.m.answer(pending, text, |p: &str| p == "/Users/me");
+        assert_eq!(h.m.cards.len(), 1, "waits for the save");
+        h.m.card_mut(&id).unwrap().dirty = false;
+        h.m.tick(h.m.now_ms + 16.);
         assert!(h.m.cards.is_empty());
+    }
+
+    // A dirty editor asks the save sheet; a second Cmd+W only asks again.
+    // Cancel keeps it; Don't Save discards; Save saves and closes once the
+    // editor reports the file clean, and a save that never lands closes
+    // nothing.
+    #[test]
+    fn a_dirty_editor_asks_save_dont_save_or_cancel() {
+        use crate::prompt::ButtonKind;
+        let dirty_editor = |h: &mut Harness| {
+            let id = h.focused().id.clone();
+            let c = h.m.card_mut(&id).unwrap();
+            c.kind = CardKind::Editor;
+            c.path = Some("/tmp/x.txt".into());
+            c.dirty = true;
+            id
+        };
+        let press = |h: &mut Harness, k: ButtonKind| {
+            let (pending, text) = h.m.prompt.press(k).unwrap();
+            h.m.answer(pending, text, |_| true);
+            h.m.take_effects()
+        };
+        let mut h = Harness::new();
+        let id = dirty_editor(&mut h);
+        h.run("card.close");
+        h.run("card.close");
+        assert_eq!(h.m.cards.len(), 1, "a double press is not an answer");
+        assert!(h.m.prompt.open && h.m.prompt.label.starts_with("save changes to"));
+        press(&mut h, ButtonKind::Cancel);
+        assert_eq!(h.m.cards.len(), 1, "Cancel keeps it");
+
+        h.run("card.close");
+        let effects = press(&mut h, ButtonKind::Primary);
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::Save,
+                ..
+            }
+        )));
+        assert_eq!(h.m.cards.len(), 1, "not before the save lands");
+        h.m.card_mut(&id).unwrap().dirty = false; // the editor's mirror
+        h.m.tick(h.m.now_ms + 16.);
+        assert!(h.m.cards.is_empty(), "saved, then closed");
+
+        let mut h = Harness::new();
+        dirty_editor(&mut h);
+        h.run("card.close");
+        press(&mut h, ButtonKind::Primary);
+        h.m.tick(h.m.now_ms + 3000.);
+        assert_eq!(
+            h.m.cards.len(),
+            1,
+            "a save that never landed closes nothing"
+        );
+
+        let mut h = Harness::new();
+        let id = dirty_editor(&mut h);
+        h.run("card.close");
+        let effects = press(&mut h, ButtonKind::Alt);
+        assert!(h.m.cards.is_empty(), "Don't Save discards");
         assert!(effects.contains(&Effect::DraftDelete(id)));
     }
 
@@ -1465,8 +3606,10 @@ mod tests {
         let mut h = Harness::new();
         let id = h.m.cards[0].id.clone();
         h.m.set_focus(Some(&id));
+        // An editor has its own search; the bar is for pages and terminals.
+        h.m.cards[0].kind = CardKind::Editor;
         h.run("browser.find");
-        assert_eq!(h.m.notice.as_deref(), Some("not a browser card"));
+        assert_eq!(h.m.notice.as_deref(), Some("nothing to find in here"));
         assert!(!h.m.find.open);
 
         h.m.cards[0].kind = CardKind::Browser;
@@ -1652,6 +3795,36 @@ mod tests {
         }));
     }
 
+    // DevTools needs the debugging port, which the setting decides at
+    // launch: with the setting off the command says so instead of asking the
+    // ui for a port that was never opened.
+    #[test]
+    fn devtools_goes_to_the_page_s_card_and_says_when_it_is_off() {
+        use crate::model::BrowserAction;
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        let effects = h.run("browser.devtools");
+        assert_eq!(h.m.notice.as_deref(), Some("not a browser card"));
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Browser { .. })));
+
+        h.m.cards[0].kind = CardKind::Browser;
+        assert!(h.run("browser.devtools").contains(&Effect::Browser {
+            card_id: id.clone(),
+            action: BrowserAction::DevTools,
+        }));
+
+        h.m.config.browser.devtools = false;
+        let effects = h.run("browser.devtools");
+        assert!(!effects.iter().any(|e| matches!(e, Effect::Browser { .. })));
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .unwrap_or("")
+            .contains("browser.devtools"));
+    }
+
     // Locking a browser card hands Chrome's own tab shortcuts to the page's
     // chrome instead of the app's: Cmd+T stops making a new card and starts
     // a tab on the one that is locked.
@@ -1680,6 +3853,75 @@ mod tests {
         assert_eq!(h.m.card(&id).unwrap().tabs.len(), 2, "a tab instead");
     }
 
+    // Cmd+R redraws the focused terminal (#447). It was the development-only
+    // reload; a locked browser card keeps it as the page's reload.
+    #[test]
+    fn cmd_r_redraws_the_focused_terminal() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].pane_id = Some(7);
+        h.m.set_focus(Some(&id));
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+r").as_deref(),
+            Some("terminal.redraw")
+        );
+        h.m.take_effects();
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+r"));
+        assert!(
+            h.m.take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::RedrawPane(7))),
+            "the focused terminal's pane is asked to repaint"
+        );
+        // Not a reload any more, even in a development build.
+        h.m.dev_build = true;
+        h.m.take_effects();
+        handle_chord(&mut h.m, &h.r, "cmd+r");
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::KillAllPanes | Effect::Reload)));
+    }
+
+    #[test]
+    fn redraw_on_a_card_that_is_not_a_terminal_says_so() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.set_focus(Some(&id));
+        h.m.take_effects();
+        let effects = h.run("terminal.redraw");
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RedrawPane(_))));
+        assert!(
+            h.m.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("terminal cards")),
+            "a notice names what redraw works on"
+        );
+    }
+
+    #[test]
+    fn a_locked_browser_card_keeps_cmd_r_as_the_pages_reload() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].locked = true;
+        h.m.cards[0].pane_id = Some(7);
+        h.m.set_focus(Some(&id));
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+r").as_deref(),
+            Some("browser.reload")
+        );
+        h.m.take_effects();
+        handle_chord(&mut h.m, &h.r, "cmd+r");
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::RedrawPane(_))));
+    }
+
     // The keycast labels a chord with what `resolve_chord` says, so on a
     // locked card it must name the tab command, not the keymap's card one.
     #[test]
@@ -1704,6 +3946,73 @@ mod tests {
         );
         // Unknown to every table: the body's.
         assert_eq!(resolve_chord(&h.m, "cmd+shift+alt+ctrl+9"), None);
+    }
+
+    // An arrowed-to editor is a card: the canvas's chords are the canvas's
+    // until you are in it. Locked, the same chords are the editor's.
+    #[test]
+    fn an_editor_keeps_its_chords_only_once_you_are_in_it() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.cards[0].locked = false;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+/").as_deref(),
+            Some("app.shortcuts")
+        );
+        assert_eq!(resolve_chord(&h.m, "cmd+z").as_deref(), Some("layout.undo"));
+        h.m.cards[0].locked = true;
+        assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the comment toggle");
+        assert_eq!(resolve_chord(&h.m, "cmd+z"), None, "the buffer's undo");
+        assert_eq!(resolve_chord(&h.m, "cmd+s").as_deref(), Some("card.save"));
+    }
+
+    // A diff card is the editor's body in a read-only mode, so it locks the
+    // editor's way (2026-10-20): the find, comment and undo chords are the
+    // body's once locked, Cmd+F finds, and with no tabs Cmd+W closes the card
+    // and Cmd+T does not become a tab command.
+    #[test]
+    fn a_diff_card_locks_like_an_editor_without_the_tab_chords() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        h.m.cards[0].kind = CardKind::Diff;
+        h.m.cards[0].locked = false;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+/").as_deref(),
+            Some("app.shortcuts")
+        );
+        assert_eq!(resolve_chord(&h.m, "cmd+w").as_deref(), Some("card.close"));
+        h.m.cards[0].locked = true;
+        assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the body's");
+        assert_eq!(resolve_chord(&h.m, "cmd+f"), None, "the body's find");
+        assert_eq!(resolve_chord(&h.m, "cmd+z"), None);
+        assert_eq!(resolve_chord(&h.m, "cmd+w").as_deref(), Some("card.close"));
+        assert_eq!(resolve_chord(&h.m, "cmd+s").as_deref(), Some("card.save"));
+        assert_eq!(resolve_chord(&h.m, "cmd+t"), None, "no tabs to open");
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+k").as_deref(),
+            Some("editor.explorer"),
+            "the list of changed files, locked or not"
+        );
+        // Cmd+L is the body's select-line, not the omnibox.
+        assert_eq!(resolve_chord(&h.m, "cmd+l"), None);
+        // The way out is the same.
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+escape").as_deref(),
+            Some("browser.leave")
+        );
+        // Cmd+F on a diff card opens the editor's find, not the app's bar.
+        h.m.take_effects();
+        h.m.find_in_card();
+        assert!(h.m.take_effects().iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::Find,
+                ..
+            }
+        )));
     }
 
     // Ctrl+digit is workspace switching, never a Chrome shortcut, so lock
@@ -1759,6 +4068,174 @@ mod tests {
         }
     }
 
+    // #369: a command the extracted window runs from a chord must exist, or
+    // the chord would silently do nothing there.
+    #[test]
+    fn every_command_an_extracted_window_runs_is_registered() {
+        let h = Harness::new();
+        for id in crate::extracted_keys::COMMANDS {
+            assert!(h.r.get(id).is_some(), "{id} is not a command");
+        }
+    }
+
+    // #269: a binding with a `when` wins only where its clause holds, the last
+    // matching one in the file wins, `command: null` unbinds a chord in a
+    // context, and a key without cmd works where the file's reader allowed it.
+    #[test]
+    fn a_when_binding_wins_where_its_clause_holds_and_the_last_match_wins() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone(); // a terminal
+        h.m.apply_keymap_text(
+            r#"{"cmd+shift+y": [
+                {"command": "app.shortcuts", "when": "editorFocus"},
+                {"command": "card.new.terminal", "when": "terminalFocus"},
+                {"command": "app.palette", "when": "terminalFocus"}
+            ]}"#,
+        );
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+shift+y").as_deref(),
+            Some("app.palette"),
+            "the last match"
+        );
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+shift+y").as_deref(),
+            Some("app.shortcuts")
+        );
+        h.m.card_mut(&id).unwrap().kind = CardKind::Browser;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+shift+y"),
+            None,
+            "no clause holds, no default"
+        );
+        // a null command unbinds the DEFAULT chord in that context only
+        h.m.card_mut(&id).unwrap().kind = CardKind::Terminal;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+t").as_deref(),
+            Some("card.new.terminal")
+        );
+        h.m.apply_keymap_text(r#"{"cmd+t": {"command": null, "when": "terminalFocus"}}"#);
+        assert_eq!(resolve_chord(&h.m, "cmd+t"), None, "unbound in a terminal");
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+t").as_deref(),
+            Some("card.new.terminal"),
+            "still bound elsewhere"
+        );
+        // a broken file leaves the bindings that were in force
+        h.m.apply_keymap_text(r#"{"cmd+t": ,}"#);
+        assert_eq!(h.m.conditional_keys.len(), 1);
+    }
+
+    #[test]
+    fn a_key_without_cmd_binds_only_where_the_when_holds_and_the_context_reads_the_model() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.apply_keymap_text(
+            r#"{"f2": {"command": "app.palette", "when": "editorTextFocus && !suggestWidgetVisible"}}"#,
+        );
+        assert!(h.m.conditional_keys.len() == 1);
+        // a terminal: never
+        assert_eq!(h.m.conditional_for("f2"), None);
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        assert_eq!(h.m.conditional_for("f2"), None, "an editor you are not in");
+        h.m.card_mut(&id).unwrap().locked = true;
+        assert_eq!(h.m.conditional_for("f2"), Some(Some("app.palette".into())));
+        // the body's own state, written by the ui
+        h.m.ui_context.suggest_widget_visible = true;
+        assert_eq!(h.m.conditional_for("f2"), None, "a popup is open");
+        h.m.ui_context = Default::default();
+        // overlays are named, and the context says what is focused
+        let ctx = h.m.key_context();
+        assert_eq!(
+            (ctx.card_kind, ctx.card_locked, ctx.overlay),
+            ("editor", true, "none")
+        );
+        h.run("app.palette");
+        assert_eq!(h.m.key_context().overlay, "palette");
+        h.m.close_palette(true);
+        h.m.selection.extra = vec!["x".into()];
+        assert!(h.m.key_context().multi_selection);
+    }
+
+    // The examples in a new keybindings.json are commented lines that must
+    // work when switched on: they parse with no error and every command in
+    // them exists, so they cannot rot as commands are renamed.
+    #[test]
+    fn the_keybinding_examples_in_a_new_file_parse_and_name_real_commands() {
+        let h = Harness::new();
+        let lines: Vec<&str> = settings_in::EMPTY_KEYBINDINGS
+            .lines()
+            .filter_map(|l| l.strip_prefix("//   "))
+            .collect();
+        assert!(lines.len() >= 8, "the examples are there: {lines:?}");
+        let file = format!("{{\n{}\n}}", lines.join("\n"));
+        let parsed = crate::keymap::parse_keymap(&crate::jsonc::parse_jsonc(&file).unwrap());
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let ids: Vec<String> = parsed
+            .bindings
+            .iter()
+            .filter_map(|(_, id)| id.clone())
+            .chain(parsed.conditional.iter().filter_map(|c| c.command.clone()))
+            .collect();
+        assert!(ids.len() >= 8);
+        for id in ids {
+            assert!(h.r.get(&id).is_some(), "{id} is not a command");
+        }
+        // and the new file itself, as written, has no bindings and no errors
+        let mut m = Model::new();
+        m.apply_keymap_text(settings_in::EMPTY_KEYBINDINGS);
+        assert!(m.conditional_keys.is_empty());
+        assert!(m
+            .take_effects()
+            .iter()
+            .all(|e| !matches!(e, Effect::Warn(_))));
+    }
+
+    // The way out of a locked editor is a command in the keymap (#265):
+    // Cmd+Escape by default, and a rebind in keybindings.json works while the
+    // card is locked, or the chord would go to the text.
+    #[test]
+    fn the_way_out_of_a_locked_editor_is_a_rebindable_command() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().kind = CardKind::Editor;
+        h.m.card_mut(&id).unwrap().locked = true;
+        // the default chord
+        let effects = {
+            assert!(handle_chord(&mut h.m, &h.r, "cmd+escape"));
+            h.m.take_effects()
+        };
+        assert!(!h.m.card(&id).unwrap().locked);
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor { card_id, action: EditorAction::Unlock } if *card_id == id
+        )));
+        // another chord, once bound to it: claimed while locked
+        h.m.card_mut(&id).unwrap().locked = true;
+        h.m.apply_keymap_text(r#"{"cmd+escape": null, "cmd+shift+e": "browser.leave"}"#);
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+shift+e").as_deref(),
+            Some("browser.leave")
+        );
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+escape"),
+            None,
+            "unbound: the text has it"
+        );
+        let _ = h.m.take_effects();
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+shift+e"));
+        assert!(!h.m.card(&id).unwrap().locked);
+        // an editor that is not locked: nothing to do, nothing happens
+        let _ = h.m.take_effects();
+        h.run("browser.leave");
+        assert!(h
+            .m
+            .take_effects()
+            .iter()
+            .all(|e| !matches!(e, Effect::Editor { .. })));
+    }
+
     // Two chords stay the app's even on a locked card: the omnibox (an app
     // overlay, not the page) and the way out of a locked page
     // (`browser.leave`, `cmd+escape` in the default keymap). Neither is in
@@ -1805,6 +4282,53 @@ mod tests {
         assert!(!is_workspace_switch("ctrl+55"));
         assert!(!is_workspace_switch("cmd+5"));
         assert!(!is_workspace_switch("ctrl+shift+5"));
+    }
+
+    // Cmd+T on a browser card opens a blank tab, and a blank page with no way
+    // to type was a dead end: the address bar opens on it, empty, and Enter
+    // navigates that tab.
+    #[test]
+    fn a_new_browser_tab_opens_the_address_bar_empty() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].url = Some("https://a.example/one".into());
+        h.m.set_focus(Some(&id));
+        h.run("browser.tab.new");
+        assert!(h.m.omni.open);
+        assert_eq!(h.m.omni.query, "");
+        assert_eq!(h.m.omni.target.as_deref(), Some(id.as_str()));
+        h.m.omni_type("b.example");
+        h.m.omni_enter();
+        let card = h.m.card(&id).unwrap();
+        assert_eq!(card.tabs.len(), 2);
+        assert_eq!(card.url.as_deref(), Some("https://b.example"));
+    }
+
+    #[test]
+    fn the_zoom_chords_zoom_a_browser_page_locked_or_not() {
+        for locked in [false, true] {
+            let mut h = Harness::new();
+            let id = h.m.cards[0].id.clone();
+            h.m.cards[0].kind = CardKind::Browser;
+            h.m.cards[0].locked = locked;
+            h.m.set_focus(Some(&id));
+            for (chord, up) in [("cmd+=", true), ("cmd+-", false)] {
+                assert_eq!(
+                    resolve_chord(&h.m, chord).as_deref(),
+                    Some(if up {
+                        "browser.zoom.in"
+                    } else {
+                        "browser.zoom.out"
+                    })
+                );
+            }
+            h.run("browser.zoom.in");
+            assert!(
+                h.m.card(&id).unwrap().zoom.unwrap() > 1.0,
+                "locked={locked}"
+            );
+        }
     }
 
     // Cmd+L on a browser card edits THAT card's address; anywhere else it
@@ -1988,8 +4512,23 @@ mod tests {
         assert_eq!(h.m.palette.source, Some(Source::Themes));
         let items = h.m.palette_items(Source::Themes, &[]);
         assert_eq!(items[0].id, "Current", "the theme in force is listed first");
+        assert_eq!(items[0].hint.as_deref(), Some("active"), "and says so");
+        assert!(items[1..].iter().all(|i| i.hint.is_none()));
         h.m.palette_preview(Source::Themes, Some("A"));
         assert!(h.m.take_effects().contains(&Effect::LoadTheme("A".into())));
+        // The preview makes A the theme in force; the rows must not move
+        // under the highlight because of it (#67).
+        h.m.theme_current = Some("A".into());
+        let ids: Vec<String> =
+            h.m.palette_items(Source::Themes, &[])
+                .into_iter()
+                .map(|i| i.id)
+                .collect();
+        assert_eq!(
+            ids,
+            ["Current", "A", "B"],
+            "the order holds while previewing"
+        );
         h.m.close_palette(false);
         assert!(h
             .m
@@ -2003,7 +4542,10 @@ mod tests {
             .take_effects()
             .iter()
             .any(|e| matches!(e, Effect::SaveSetting { path, .. } if path == "theme")));
-        assert_eq!(h.m.usage.len(), 1);
+        assert!(
+            h.m.usage.is_empty(),
+            "the theme list keeps its order, so a pick is not recorded (#72)"
+        );
     }
 
     // A menu is muscle memory. The placement menu and the phantom's kind
@@ -2019,8 +4561,8 @@ mod tests {
             "hundreds of commands: recency helps"
         );
         assert!(
-            !Source::Themes.keeps_its_order(),
-            "hundreds of themes: recency helps"
+            Source::Themes.keeps_its_order(),
+            "the active theme on top, then A to Z (#72)"
         );
         h.m.note_use(Source::Placement, "claude");
         h.m.note_use(Source::SlotKind, "browser");
@@ -2064,6 +4606,22 @@ mod tests {
                 .find(|(_, id)| id == "app.emoji")
                 .map(|(c, _)| c.as_str()),
             Some("cmd+ctrl+space")
+        );
+    }
+
+    #[test]
+    fn full_screen_is_a_command_on_the_systems_chord() {
+        let mut h = Harness::new();
+        let effects = h.run("app.fullscreen");
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::ToggleFullScreen)));
+        assert_eq!(
+            crate::keymap::default_keymap()
+                .iter()
+                .find(|(_, id)| id == "app.fullscreen")
+                .map(|(c, _)| c.as_str()),
+            Some("cmd+ctrl+f")
         );
     }
 
@@ -2183,7 +4741,8 @@ mod tests {
             .iter()
             .any(|e| matches!(e, Effect::Editor { .. })));
         let (pending, text) = h.m.prompt.settle(Some("notes/todo.md")).unwrap();
-        h.m.answer(pending, text, |_| true);
+        // The directory is there, the file is not: a plain save.
+        h.m.answer(pending, text, |p: &str| p.ends_with("/notes"));
         let card = h.m.card(&id).unwrap();
         assert!(card.path.as_deref().unwrap().ends_with("/notes/todo.md"));
         assert!(card.cwd.ends_with("/notes"));

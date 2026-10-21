@@ -72,7 +72,15 @@ pub struct PaneStatus {
     pub cwd: Option<String>,
     /// The ssh destination when this pane is remote, or just "ssh".
     pub remote: Option<String>,
+    /// Something under the shell is using the CPU (`BUSY_CPU`): what tells a
+    /// closed card's build from its idle dev server (lifecycle.rs, parked).
+    pub busy: bool,
 }
+
+/// Percent of one core, summed over everything under a pane's shell, above
+/// which the pane is doing something. ps's %cpu is a decaying average, so a
+/// build's short pauses stay above it and an idle server's wakeups stay under.
+pub const BUSY_CPU: f32 = 1.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Proc {
@@ -83,10 +91,12 @@ pub struct Proc {
     pub pgid: u32,
     /// True when the process is in its terminal's foreground process group.
     pub foreground: bool,
+    /// ps's %cpu.
+    pub cpu: f32,
     pub args: String,
 }
 
-/// Parses `ps -axo pid=,ppid=,pgid=,stat=,args=`.
+/// Parses `ps -axo pid=,ppid=,pgid=,stat=,%cpu=,args=`.
 ///
 /// `split_whitespace`, not `splitn(4, char::is_whitespace)`: ps pads its columns,
 /// and splitn treats each space in a run as its own separator, so every line came
@@ -104,6 +114,7 @@ pub fn parse_ps(output: &str) -> Vec<Proc> {
             let ppid = parts.next()?.parse().ok()?;
             let pgid = parts.next()?.parse().ok()?;
             let stat = parts.next()?;
+            let cpu = parts.next()?.parse().ok()?;
             let args = parts.collect::<Vec<_>>().join(" ");
             Some(Proc {
                 pid,
@@ -112,6 +123,7 @@ pub fn parse_ps(output: &str) -> Vec<Proc> {
                 // BSD ps marks foreground-process-group members with a trailing
                 // `+`, which saves a tcgetpgrp on a raw master fd.
                 foreground: stat.contains('+'),
+                cpu,
                 args,
             })
         })
@@ -205,6 +217,9 @@ pub fn pane_statuses(shells: &[(u32, u32)], procs: &[Proc]) -> Vec<(PaneStatus, 
         // Kept as a fallback for a foreground tree with no leader in it at all.
         let mut deepest: Option<(usize, &Proc)> = None;
         let mut remote = None;
+        // Every descendant counts here, foreground or not: a closed card's
+        // backgrounded build is still work.
+        let mut cpu = 0f32;
         // (pid, depth). Bounded so a pid cycle in a malformed table cannot spin.
         let mut stack = vec![(*shell, 0usize)];
         let mut seen = 0;
@@ -217,7 +232,9 @@ pub fn pane_statuses(shells: &[(u32, u32)], procs: &[Proc]) -> Vec<(PaneStatus, 
                 continue;
             };
             for kid in kids {
+                cpu += kid.cpu;
                 if !kid.foreground {
+                    stack.push((kid.pid, depth + 1));
                     continue;
                 }
                 if remote.is_none() && is_ssh(&kid.args) {
@@ -245,6 +262,7 @@ pub fn pane_statuses(shells: &[(u32, u32)], procs: &[Proc]) -> Vec<(PaneStatus, 
                 // Filled in by the caller, which batches one lsof for every pane.
                 cwd: None,
                 remote,
+                busy: cpu > BUSY_CPU,
             },
             // The foreground job's directory, or the shell's when nothing is
             // running — so a `cd` still shows.
@@ -354,7 +372,7 @@ fn snapshot() -> Vec<Proc> {
 #[cfg(unix)]
 fn snapshot() -> Vec<Proc> {
     std::process::Command::new("ps")
-        .args(["-axo", "pid=,ppid=,pgid=,stat=,args="])
+        .args(["-axo", "pid=,ppid=,pgid=,stat=,%cpu=,args="])
         .output()
         .ok()
         .map(|o| parse_ps(&String::from_utf8_lossy(&o.stdout)))
@@ -478,6 +496,7 @@ mod tests {
             ppid,
             pgid: pid,
             foreground,
+            cpu: 0.,
             args: args.to_string(),
         }
     }
@@ -490,6 +509,7 @@ mod tests {
             ppid: parent.pid,
             pgid: parent.pgid,
             foreground: true,
+            cpu: 0.,
             args: args.to_string(),
         }
     }
@@ -497,7 +517,7 @@ mod tests {
     #[test]
     fn parses_real_ps_output() {
         let out =
-            "    1     0     1 Ss   /sbin/launchd\n 4242  4200  4242 S+   ssh -p 2222 me@box\n";
+            "    1     0     1 Ss    0.0 /sbin/launchd\n 4242  4200  4242 S+    0.0 ssh -p 2222 me@box\n";
         assert_eq!(
             parse_ps(out),
             vec![
@@ -616,6 +636,23 @@ mod tests {
         );
     }
 
+    /// Busy is the CPU of everything under the shell, background jobs
+    /// included; the shell's own is not counted.
+    #[test]
+    fn a_pane_is_busy_when_something_under_its_shell_uses_the_cpu() {
+        let shell = Proc {
+            cpu: 50.,
+            ..proc(100, 1, false, "-zsh")
+        };
+        let idle = proc(200, 100, true, "node server.js");
+        assert!(!pane_statuses(&[(7, 100)], &[shell.clone(), idle])[0].0.busy);
+        let build = Proc {
+            cpu: 80.,
+            ..proc(300, 100, false, "cargo build")
+        };
+        assert!(pane_statuses(&[(7, 100)], &[shell, build])[0].0.busy);
+    }
+
     /// A foreground tree with no leader under the shell still reports something
     /// rather than falling back to the shell's own directory.
     #[test]
@@ -625,6 +662,7 @@ mod tests {
             ppid: 100,
             pgid: 100,
             foreground: true,
+            cpu: 0.,
             args: "odd".into(),
         };
         assert_eq!(pane_statuses(&[(7, 100)], &[shellish])[0].1, 200);

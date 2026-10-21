@@ -97,7 +97,7 @@ pub fn run() {
     // Past this line nobody is reading our stderr: the process the app
     // waited on has already exited 0. `run` reports its own failures by
     // writing `opts.meta_path()` instead.
-    run(listener, opts);
+    serve(listener, opts);
 }
 
 /// Everything `iftd` was told to do, parsed from argv. A hand-rolled parser
@@ -260,7 +260,7 @@ fn fail_startup(meta_path: &Path, socket_path: &Path, err: impl std::fmt::Displa
 /// child waiter — the fourth, the client reader, is spawned per attach by
 /// the accept loop below). Never returns: the process ends either via
 /// `fail_startup` or when the child waiter calls `std::process::exit`.
-fn run(listener: UnixListener, opts: Options) -> ! {
+fn serve(listener: UnixListener, opts: Options) -> ! {
     let meta_path = opts.meta_path();
 
     let pair = match native_pty_system().openpty(PtySize {

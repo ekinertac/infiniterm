@@ -26,6 +26,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::viewport::FIT_PADDING;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
@@ -41,6 +43,7 @@ pub struct Config {
     pub canvas: Canvas,
     pub editor: Editor,
     pub browser: Browser,
+    pub join: Join,
     pub ui: Ui,
     pub keyboard: Keyboard,
 }
@@ -78,6 +81,15 @@ pub enum CommandModifier {
     Win,
 }
 
+/// `ift join` (#423): whether this app opens the socket a viewer on another
+/// Mac reaches through ssh. On by default; the socket is owner-only, like the
+/// one `ift send` uses.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Join {
+    pub enabled: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Terminal {
@@ -102,6 +114,8 @@ pub struct Terminal {
     pub backend: TerminalBackend,
     pub cursor_style: CursorStyle,
     pub cursor_blink: bool,
+    /// The cursor's colour as a CSS hex colour. Empty follows the theme.
+    pub cursor_color: String,
     pub font_family: String,
     pub font_size: f64,
     pub font_weight: String,
@@ -119,6 +133,67 @@ pub struct Terminal {
     /// screen: a program that looks like work and says nothing. Empty
     /// falls back to the default.
     pub decoy_command: String,
+    /// A mouse selection goes to the clipboard as it is made (iTerm2's
+    /// "copy to pasteboard on selection").
+    pub copy_on_select: bool,
+    /// Lines per wheel step, as a multiple of the normal rate.
+    pub scroll_multiplier: f64,
+    /// Space between a card's edge and its text, in points at 100%.
+    pub padding: f64,
+    /// `KEY=value` pairs added to every new card's environment.
+    pub env: Vec<String>,
+}
+
+/// How the background picture fills the window (`ui.backgroundImageFit`,
+/// #97): `cover` fills it and crops, `contain` shows all of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundFit {
+    Cover,
+    Contain,
+}
+
+/// A card label's corner (`ui.cardLabelPosition`). Written "top right";
+/// "right top" reads the same (`label_corner`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LabelCorner {
+    #[serde(rename = "top right")]
+    TopRight,
+    #[serde(rename = "top left")]
+    TopLeft,
+    #[serde(rename = "bottom left")]
+    BottomLeft,
+    #[serde(rename = "bottom right")]
+    BottomRight,
+}
+
+impl LabelCorner {
+    pub fn left(self) -> bool {
+        matches!(self, LabelCorner::TopLeft | LabelCorner::BottomLeft)
+    }
+    pub fn bottom(self) -> bool {
+        matches!(self, LabelCorner::BottomLeft | LabelCorner::BottomRight)
+    }
+}
+
+/// `ui.cardLabelPosition`, either word first, any case; anything else keeps
+/// the fallback.
+fn label_corner(value: Option<&Value>, fallback: LabelCorner) -> LabelCorner {
+    let Some(s) = value.and_then(Value::as_str) else {
+        return fallback;
+    };
+    let words: Vec<String> = s.split_whitespace().map(str::to_lowercase).collect();
+    let has = |w: &str| words.iter().any(|x| x == w);
+    if words.len() != 2 {
+        return fallback;
+    }
+    match (has("top"), has("bottom"), has("left"), has("right")) {
+        (true, false, false, true) => LabelCorner::TopRight,
+        (true, false, true, false) => LabelCorner::TopLeft,
+        (false, true, true, false) => LabelCorner::BottomLeft,
+        (false, true, false, true) => LabelCorner::BottomRight,
+        _ => fallback,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,12 +215,20 @@ pub enum TerminalBackend {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Cards {
-    /// Size of a new card, in 25px grid cells.
+    /// Size of a new card, in 25px grid cells; 0 (the default) sizes it
+    /// from the window (`cards::auto_size`).
     pub width: f64,
     pub height: f64,
+    /// The shape of a card sized from the window: a ratio like "16:9"
+    /// (the default) or "window" for the window's own shape
+    /// (`cards::parse_shape`).
+    pub shape: String,
     /// Whether a card carved out of another (a split) keeps its
     /// directory. A plain new card always starts at `starting_dir`.
     pub inherit_directory: bool,
+    /// The space between cards, in pixels (`cards.gap`). Every placement,
+    /// split, tidy and growth works from it; 25 is the grid.
+    pub gap: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -162,10 +245,15 @@ pub struct Canvas {
 pub struct Editor {
     /// A wash behind the line the cursor is on.
     pub highlight_line: bool,
+    /// The word popup: letters typed in an editor offer words from the file
+    /// and the card's other tabs (`words.rs`).
+    pub complete_words: bool,
     /// Selected text's background and colour. Empty means the theme's yellow
     /// on the theme's background: a highlighter pen, visible on any scheme.
     pub selection_color: String,
     pub selection_text_color: String,
+    /// The caret's colour. Empty follows the theme.
+    pub cursor_color: String,
     pub wrap: Wrap,
 }
 
@@ -188,6 +276,11 @@ pub struct Browser {
     /// default: it is the only thing in this app that talks to anything but
     /// the page you asked for.
     pub suggestions: bool,
+    /// Opens CEF's debugging port on a random loopback port at launch, which
+    /// the DevTools command needs (read at launch: CEF cannot open or close
+    /// the port later). ON by default (Ekin, 2026-10-09): easier to use, and
+    /// the port takes connections only from our own frontend's origin.
+    pub devtools: bool,
     /// EXTRA tab-to-search sites, added to the nine built in. Empty in the
     /// defaults file, so nobody has to scroll past a list they did not
     /// write; `Config::engines` is what the omnibox actually reads.
@@ -205,27 +298,125 @@ impl Config {
     }
 }
 
+/// `ui.glyphBudget`'s default: about eleven full cards of terminal cells, the
+/// cost of one frame in glyphs (`infiniterm-ui/src/chrome.rs`, where the rule
+/// and its measurements live).
+pub const DEFAULT_GLYPH_BUDGET: usize = 150_000;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ui {
+    /// The app chrome's typeface. `.SystemUIFont` is gpui's platform-native
+    /// UI font alias, which is Apple's app font on macOS.
+    pub font_family: String,
+    /// General chrome size in screen pixels before the UI-scale multiplier.
+    pub font_size: f64,
+    pub font_weight: String,
+    pub font_weight_bold: String,
     /// How much of an inactive card's text is dimmed away, 0 to 1.
     pub inactive_dim: f64,
     /// How much the whole canvas is dimmed while another app is in front.
     pub unfocused_dim: f64,
+    /// Alpha of the window's own fill: canvas, title bar, status bar (#84).
+    pub window_opacity: f64,
+    /// Blur what is behind a see-through window; nothing at opacity 1.
+    pub window_blur: bool,
+    /// Bundled picture names or paths, in the order they rotate; empty for
+    /// none (#97, a list since #210). One string in the file is a list of one.
+    pub background_image: Vec<String>,
+    pub background_image_fit: BackgroundFit,
+    /// Seconds a picture stays before the next one fades in.
+    pub background_image_interval: f64,
+    /// Seconds the crossfade takes; 0 changes pictures at once.
+    pub background_image_fade: f64,
+    /// Ctrl+Tab and the status bar's card count look at the current
+    /// workspace only (#101).
+    pub workspace_isolation: bool,
+    /// A colour for the title bar and the Dock icon: a name from the picker or
+    /// a hex code, empty for none (#160). A remote instance wears its host's.
+    pub window_color: String,
+    /// Alpha of a card's background fill, text untouched (#98).
+    pub card_opacity: f64,
+    /// Rounded card corners, in pixels at 100% zoom; 0 keeps them square (#235).
+    pub card_radius: f64,
+    /// Whether the canvas draws its grid (#96).
+    /// Canvas scale reading mode zooms to (#313): 1.5 is 150%.
+    pub card_zoom: f64,
+    /// Terminal cells that may be on screen before every card draws bars
+    /// instead of text (`chrome::over_glyph_budget`).
+    pub glyph_budget: usize,
+    /// Device pixels a glyph needs to be drawn at all; smaller text is bars.
+    pub min_text_px: f64,
+    /// Whether far or crowded cards draw bars instead of text at all. Off
+    /// draws every glyph at any zoom, however many (`chrome::over_glyph_budget`).
+    pub text_as_bars: bool,
+    pub show_grid: bool,
+    /// Screen pixels left around a card or cluster when it is fitted (#87).
+    pub fit_padding: f64,
+    /// Whether a fit may zoom past 100% to fill the window.
+    pub fit_magnify: bool,
+    /// Whether Cmd+1 on a card that was split frames the whole slot (the
+    /// card and the pieces it was split from), as it always did. Off: it fits
+    /// the card itself, split or not.
+    pub fit_split_slot: bool,
     /// Chrome font sizes in SCREEN pixels, before the UI-scale multiplier.
     /// Three values because they are read at three distances: a card label
     /// has to survive 10% zoom, a group name sits above a block, the status
     /// bar is always at arm's length.
     pub card_label_size: f64,
+    /// Which corner of a card its label sits in (#71).
+    pub card_label_position: LabelCorner,
+    /// No label on the card a maximised view fills: the status bar names it.
+    pub hide_label_when_maximised: bool,
     pub group_label_size: f64,
     pub status_bar_size: f64,
+    /// How far one press of `canvas.pan.*` moves the view, in screen pixels
+    /// (#398). A screen distance, so a press goes as far at every zoom.
+    pub pan_step: f64,
     /// Whether the canvas animates at all. Reduced motion still wins.
     pub animations: bool,
     /// The frame counter in the status bar. On by default because the point
     /// of it is to be there when something stutters; it holds a permanent
     /// frame loop while on.
     pub show_fps: bool,
+    /// The changelog in an overlay on the first launch after an update
+    /// (#402). On by default; off shows nothing, and the version is still
+    /// recorded.
+    pub show_whats_new: bool,
+    /// The focused terminal card's directory in the status bar at all times
+    /// (#371): the card label says the process while one runs, so the path
+    /// is otherwise hidden exactly when a program is going.
+    pub status_bar_pwd: bool,
+    /// Which end of the status bar `status_bar_pwd` writes to.
+    pub status_bar_pwd_side: StatusBarSide,
+    /// What the green button and `app.fullscreen` do: macOS's own full
+    /// screen, or the window over the whole screen, notch strip
+    /// included (`fullscreen.rs`).
+    pub fullscreen: FullscreenMode,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FullscreenMode {
+    /// macOS's full screen: its own Space, content below the notch.
+    Native,
+    /// The window covers the whole screen, beside the notch too.
+    Cover,
+}
+
+/// An end of the status bar (`ui.statusBarPwdSide`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StatusBarSide {
+    Left,
+    Right,
+}
+
+/// `ui.panStep`: the default, and the range it is held to so a typo cannot
+/// freeze the view (a press that moves nothing) or throw it off the canvas.
+pub const DEFAULT_PAN_STEP: f64 = 120.;
+pub const MIN_PAN_STEP: f64 = 20.;
+pub const MAX_PAN_STEP: f64 = 1000.;
 
 /// Page zoom limits for browser cards, the range Safari allows.
 pub const BROWSER_ZOOM_MIN: f64 = 0.3;
@@ -233,9 +424,11 @@ pub const BROWSER_ZOOM_MAX: f64 = 3.;
 
 pub fn default_config() -> Config {
     Config {
-        // Bundled with the app, so a fresh install has colours rather than
-        // the fallback palette.
-        theme: Some("Catppuccin Mocha".into()),
+        // Bundled with the app (assets/themes), so a fresh install has
+        // colours rather than the fallback palette. Violite since
+        // 2026-09-30: Ekin's own, chosen over Catppuccin Mocha for a first
+        // launch.
+        theme: Some("Violite".into()),
         starting_dir: String::new(),
         terminal: Terminal {
             shell: String::new(),
@@ -249,6 +442,7 @@ pub fn default_config() -> Config {
             backend: TerminalBackend::Daemon,
             cursor_style: CursorStyle::Block,
             cursor_blink: true,
+            cursor_color: String::new(),
             // What every machine of that kind already has. A Nerd Font is
             // one you install, and a default that renders tofu on a fresh
             // machine is worse than one that renders plain ASCII. Cascadia
@@ -265,6 +459,12 @@ pub fn default_config() -> Config {
             line_height: 1.2,
             scrollback: 10_000.,
             session_buffer: 4.,
+            copy_on_select: false,
+            scroll_multiplier: 1.,
+            // The inset cards have had since the first day
+            // (terminal_body.rs `PAD`).
+            padding: 6.,
+            env: vec![],
             // Live, dense, unreadable at a glance, on every Mac. Not
             // system.log: unified logging left it a line every ten minutes.
             // `command` bypasses zsh's own builtin `log` (a login shell
@@ -292,9 +492,14 @@ pub fn default_config() -> Config {
                 .into(),
         },
         cards: Cards {
-            width: 69.,
-            height: 80.,
+            // From the window: 69 by 80 cells, portrait, was the default
+            // until 2026-09-24 and suited one 32-inch 4K screen; on a
+            // laptop it is a tall sliver. 0 means "size it from the window".
+            width: 0.,
+            height: 0.,
+            shape: "16:9".into(),
             inherit_directory: true,
+            gap: crate::cards::GUTTER,
         },
         canvas: Canvas {
             zoom_sensitivity: 1.,
@@ -302,24 +507,61 @@ pub fn default_config() -> Config {
         },
         editor: Editor {
             highlight_line: true,
+            complete_words: true,
             selection_color: String::new(),
             selection_text_color: String::new(),
+            cursor_color: String::new(),
             wrap: Wrap::Prose,
         },
+        join: Join { enabled: true },
         browser: Browser {
             zoom: 1.,
             search_engine: crate::omni::address::SEARCH_TEMPLATE.into(),
             suggestions: false,
+            devtools: true,
             engines: vec![],
         },
         ui: Ui {
+            font_family: ".SystemUIFont".into(),
+            font_size: 13.,
+            font_weight: "normal".into(),
+            font_weight_bold: "bold".into(),
             inactive_dim: 0.45,
             unfocused_dim: 0.4,
+            window_opacity: 1.,
+            window_blur: false,
+            background_image: Vec::new(),
+            background_image_fit: BackgroundFit::Cover,
+            background_image_interval: 300.,
+            background_image_fade: 2.,
+            workspace_isolation: false,
+            window_color: String::new(),
+            card_opacity: 1.,
+            card_radius: 0.,
+            card_zoom: 1.5,
+            glyph_budget: DEFAULT_GLYPH_BUDGET,
+            min_text_px: 7.,
+            text_as_bars: false,
+            show_grid: true,
+            fit_padding: FIT_PADDING,
+            fit_magnify: false,
+            fit_split_slot: true,
             card_label_size: 15.,
+            card_label_position: LabelCorner::TopRight,
+            hide_label_when_maximised: false,
             group_label_size: 15.,
             status_bar_size: 11.,
+            pan_step: DEFAULT_PAN_STEP,
             animations: true,
-            show_fps: true,
+            // A development number; the release does not show it by
+            // default (issue #16).
+            show_fps: false,
+            show_whats_new: true,
+            status_bar_pwd: false,
+            status_bar_pwd_side: StatusBarSide::Left,
+            // Native full screen on a notched MacBook leaves the strip
+            // beside the camera black; cover puts the title bar there.
+            fullscreen: FullscreenMode::Cover,
         },
         keyboard: Keyboard {
             // See `CommandModifier`. Ignored on macOS.
@@ -328,11 +570,50 @@ pub fn default_config() -> Config {
     }
 }
 
+/// A card size in cells: 0 is "from the window" and kept; anything else is
+/// whole cells between `min` and 400.
+fn cells(value: Option<&Value>, fallback: f64, min: f64) -> f64 {
+    match value.and_then(Value::as_f64) {
+        Some(0.) => 0.,
+        _ => num(value, fallback, min, 400.).round(),
+    }
+}
+
 fn num(value: Option<&Value>, fallback: f64, min: f64, max: f64) -> f64 {
     match value.and_then(Value::as_f64) {
         Some(n) if n.is_finite() => n.clamp(min, max),
         _ => fallback,
     }
+}
+
+/// A setting that is one string or a list of them (`ui.backgroundImage`):
+/// the trimmed, non-empty strings, in order. Anything else is an empty list.
+fn string_or_list(value: Option<&Value>) -> Vec<String> {
+    let one = |v: &Value| v.as_str().map(|s| s.trim().to_string());
+    match value {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(one)
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Some(v) => one(v).filter(|s| !s.is_empty()).into_iter().collect(),
+        None => Vec::new(),
+    }
+}
+
+/// `terminal.env`: the `KEY=value` strings with a key before the `=`;
+/// anything else in the list is skipped rather than failing the file.
+fn env_pairs(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .filter(|s| s.split_once('=').is_some_and(|(k, _)| !k.trim().is_empty()))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn bool_(value: Option<&Value>, fallback: bool) -> bool {
@@ -419,6 +700,7 @@ pub fn merge_config(raw: &Value) -> Config {
     let e = group(r, "editor");
     let b = group(r, "browser");
     let k = group(r, "keyboard");
+    let j = group(r, "join");
 
     Config {
         theme: match r.get("theme").and_then(Value::as_str) {
@@ -447,6 +729,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 ],
             ),
             cursor_blink: bool_(t.get("cursorBlink"), d.terminal.cursor_blink),
+            cursor_color: str_(t.get("cursorColor"), &d.terminal.cursor_color),
             font_family: str_(t.get("fontFamily"), &d.terminal.font_family),
             font_size: num(t.get("fontSize"), d.terminal.font_size, 6., 96.),
             font_weight: str_(t.get("fontWeight"), &d.terminal.font_weight),
@@ -459,14 +742,32 @@ pub fn merge_config(raw: &Value) -> Config {
                 s if s.is_empty() => d.terminal.decoy_command.clone(),
                 s => s,
             },
+            copy_on_select: bool_(t.get("copyOnSelect"), d.terminal.copy_on_select),
+            scroll_multiplier: num(
+                t.get("scrollMultiplier"),
+                d.terminal.scroll_multiplier,
+                0.1,
+                10.,
+            ),
+            padding: num(t.get("padding"), d.terminal.padding, 0., 60.),
+            env: env_pairs(t.get("env")),
         },
         cards: Cards {
             // Floors that keep a card usable: below about 40 columns a
             // terminal stops being one; the ceiling is what placement can
             // still fit.
-            width: num(c.get("width"), d.cards.width, 12., 400.).round(),
-            height: num(c.get("height"), d.cards.height, 8., 400.).round(),
+            // 0 stays 0: "from the window", not a card 12 cells wide.
+            width: cells(c.get("width"), d.cards.width, 12.),
+            height: cells(c.get("height"), d.cards.height, 8.),
+            // A value that is neither "window" nor a ratio keeps the default.
+            shape: match trimmed(c.get("shape"), &d.cards.shape) {
+                s if crate::cards::shape_is_valid(&s) => s,
+                _ => d.cards.shape.clone(),
+            },
             inherit_directory: bool_(c.get("inheritDirectory"), d.cards.inherit_directory),
+            // 0 packs cards edge to edge; above 200 a gap is a gulf and the
+            // placement maths has no use for it.
+            gap: num(c.get("gap"), d.cards.gap, 0., 200.),
         },
         canvas: Canvas {
             zoom_sensitivity: num(v.get("zoomSensitivity"), d.canvas.zoom_sensitivity, 0.1, 5.),
@@ -474,8 +775,10 @@ pub fn merge_config(raw: &Value) -> Config {
         },
         editor: Editor {
             highlight_line: bool_(e.get("highlightLine"), d.editor.highlight_line),
+            complete_words: bool_(e.get("completeWords"), d.editor.complete_words),
             selection_color: str_(e.get("selectionColor"), &d.editor.selection_color),
             selection_text_color: str_(e.get("selectionTextColor"), &d.editor.selection_text_color),
+            cursor_color: str_(e.get("cursorColor"), &d.editor.cursor_color),
             wrap: one(
                 e.get("wrap"),
                 d.editor.wrap,
@@ -485,6 +788,9 @@ pub fn merge_config(raw: &Value) -> Config {
                     ("never", Wrap::Never),
                 ],
             ),
+        },
+        join: Join {
+            enabled: bool_(j.get("enabled"), d.join.enabled),
         },
         browser: Browser {
             zoom: num(
@@ -500,6 +806,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 _ => d.browser.search_engine.clone(),
             },
             suggestions: bool_(b.get("suggestions"), d.browser.suggestions),
+            devtools: bool_(b.get("devtools"), d.browser.devtools),
             engines: b
                 .get("engines")
                 .and_then(Value::as_array)
@@ -521,13 +828,96 @@ pub fn merge_config(raw: &Value) -> Config {
                 .unwrap_or_default(),
         },
         ui: Ui {
+            font_family: str_(u.get("fontFamily"), &d.ui.font_family),
+            font_size: num(u.get("fontSize"), d.ui.font_size, 6., 64.),
+            font_weight: str_(u.get("fontWeight"), &d.ui.font_weight),
+            font_weight_bold: str_(u.get("fontWeightBold"), &d.ui.font_weight_bold),
             inactive_dim: num(u.get("inactiveDim"), d.ui.inactive_dim, 0., 1.),
             unfocused_dim: num(u.get("unfocusedDim"), d.ui.unfocused_dim, 0., 1.),
+            window_opacity: num(u.get("windowOpacity"), d.ui.window_opacity, 0.1, 1.),
+            window_blur: bool_(u.get("windowBlur"), d.ui.window_blur),
+            background_image: string_or_list(u.get("backgroundImage")),
+            background_image_interval: num(
+                u.get("backgroundImageInterval"),
+                d.ui.background_image_interval,
+                5.,
+                86_400.,
+            ),
+            background_image_fade: num(
+                u.get("backgroundImageFade"),
+                d.ui.background_image_fade,
+                0.,
+                30.,
+            ),
+            background_image_fit: match u.get("backgroundImageFit").and_then(Value::as_str) {
+                Some(s) if s.eq_ignore_ascii_case("contain") => BackgroundFit::Contain,
+                _ => BackgroundFit::Cover,
+            },
+            workspace_isolation: bool_(u.get("workspaceIsolation"), d.ui.workspace_isolation),
+            window_color: u
+                .get("windowColor")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+            card_opacity: num(u.get("cardOpacity"), d.ui.card_opacity, 0.1, 1.),
+            card_radius: num(u.get("cardRadius"), d.ui.card_radius, 0., 40.),
+            // `ui.readZoom` was this setting's name in 0.5.11; the new one wins.
+            card_zoom: {
+                let v = num(
+                    u.get("cardZoom").or_else(|| u.get("readZoom")),
+                    d.ui.card_zoom,
+                    0.,
+                    4.,
+                );
+                // 0 turns it off; anything else is a zoom of at least 1.1.
+                if v > 0. {
+                    v.max(1.1)
+                } else {
+                    0.
+                }
+            },
+            min_text_px: num(u.get("minTextPx"), d.ui.min_text_px, 2., 20.),
+            text_as_bars: bool_(u.get("textAsBars"), d.ui.text_as_bars),
+            glyph_budget: num(
+                u.get("glyphBudget"),
+                d.ui.glyph_budget as f64,
+                1_000.,
+                5_000_000.,
+            ) as usize,
+            show_grid: bool_(u.get("showGrid"), d.ui.show_grid),
+            fit_padding: num(u.get("fitPadding"), d.ui.fit_padding, 0., 500.),
+            fit_magnify: bool_(u.get("fitMagnify"), d.ui.fit_magnify),
+            fit_split_slot: bool_(u.get("fitSplitSlot"), d.ui.fit_split_slot),
             card_label_size: num(u.get("cardLabelSize"), d.ui.card_label_size, 6., 64.),
+            card_label_position: label_corner(u.get("cardLabelPosition"), d.ui.card_label_position),
+            hide_label_when_maximised: bool_(
+                u.get("hideLabelWhenMaximised"),
+                d.ui.hide_label_when_maximised,
+            ),
             group_label_size: num(u.get("groupLabelSize"), d.ui.group_label_size, 6., 64.),
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),
+            pan_step: num(u.get("panStep"), d.ui.pan_step, MIN_PAN_STEP, MAX_PAN_STEP),
             animations: bool_(u.get("animations"), d.ui.animations),
             show_fps: bool_(u.get("showFps"), d.ui.show_fps),
+            show_whats_new: bool_(u.get("showWhatsNew"), d.ui.show_whats_new),
+            status_bar_pwd: bool_(u.get("statusBarPwd"), d.ui.status_bar_pwd),
+            status_bar_pwd_side: one(
+                u.get("statusBarPwdSide"),
+                d.ui.status_bar_pwd_side,
+                &[
+                    ("left", StatusBarSide::Left),
+                    ("right", StatusBarSide::Right),
+                ],
+            ),
+            fullscreen: one(
+                u.get("fullscreen"),
+                d.ui.fullscreen,
+                &[
+                    ("native", FullscreenMode::Native),
+                    ("cover", FullscreenMode::Cover),
+                ],
+            ),
         },
         keyboard: Keyboard {
             command_modifier: one(
@@ -544,7 +934,55 @@ pub fn merge_config(raw: &Value) -> Config {
 
 #[cfg(test)]
 mod tests {
+
+    // Either word first, any case; nonsense keeps the default (#71).
+    #[test]
+    fn the_label_corner_reads_either_way_round() {
+        let c = |v: &str| {
+            merge_config(&serde_json::json!({ "ui.cardLabelPosition": v }))
+                .ui
+                .card_label_position
+        };
+        assert_eq!(c("bottom left"), LabelCorner::BottomLeft);
+        assert_eq!(c("Left Bottom"), LabelCorner::BottomLeft);
+        assert_eq!(c("right top"), LabelCorner::TopRight);
+        assert_eq!(c("top top"), LabelCorner::TopRight);
+        assert_eq!(c("middle"), LabelCorner::TopRight);
+        assert_eq!(
+            default_config().ui.card_label_position,
+            LabelCorner::TopRight
+        );
+    }
+
+    // The four settings added for people coming from other terminals.
+    #[test]
+    fn copy_on_select_scroll_padding_and_env_are_read_and_clamped() {
+        let c = merge_config(&serde_json::json!({
+            "terminal.copyOnSelect": true,
+            "terminal.scrollMultiplier": 50,
+            "terminal.padding": 12,
+            "terminal.env": ["EDITOR=ift", "no equals sign", "=novalue", 7, "LANG=en_US.UTF-8"],
+        }));
+        assert!(c.terminal.copy_on_select);
+        assert_eq!(c.terminal.scroll_multiplier, 10., "clamped");
+        assert_eq!(c.terminal.padding, 12.);
+        assert_eq!(c.terminal.env, ["EDITOR=ift", "LANG=en_US.UTF-8"]);
+        let d = default_config();
+        assert!(!d.terminal.copy_on_select);
+        assert_eq!((d.terminal.scroll_multiplier, d.terminal.padding), (1., 6.));
+        assert!(d.terminal.env.is_empty());
+    }
+
     use super::*;
+
+    #[test]
+    fn joining_is_on_unless_switched_off() {
+        assert!(default_config().join.enabled);
+        let c = merge_config(&serde_json::json!({"join.enabled": false}));
+        assert!(!c.join.enabled);
+        let nested = merge_config(&serde_json::json!({"join": {"enabled": false}}));
+        assert!(!nested.join.enabled);
+    }
 
     #[test]
     fn the_browser_group_carries_the_omnibox_settings() {
@@ -554,6 +992,7 @@ mod tests {
             crate::omni::address::SEARCH_TEMPLATE
         );
         assert!(!d.browser.suggestions, "the network call is opt in");
+        assert!(d.browser.devtools, "DevTools is on unless switched off");
         // The defaults file shows an empty list; the built-ins are in code.
         assert!(d.browser.engines.is_empty());
         assert_eq!(
@@ -615,6 +1054,53 @@ mod tests {
                 .terminal
                 .backend,
             default_config().terminal.backend
+        );
+    }
+
+    #[test]
+    fn full_screen_is_native_or_cover_and_cover_by_default() {
+        assert_eq!(default_config().ui.fullscreen, FullscreenMode::Cover);
+        assert_eq!(
+            m(json!({"ui.fullscreen": "native"})).ui.fullscreen,
+            FullscreenMode::Native
+        );
+        assert_eq!(
+            m(json!({"ui": {"fullscreen": "sideways"}})).ui.fullscreen,
+            FullscreenMode::Cover
+        );
+    }
+
+    #[test]
+    fn the_pan_step_has_a_default_and_is_held_to_a_range() {
+        assert_eq!(default_config().ui.pan_step, DEFAULT_PAN_STEP);
+        assert_eq!(m(json!({"ui.panStep": 300})).ui.pan_step, 300.);
+        assert_eq!(m(json!({"ui.panStep": 1})).ui.pan_step, MIN_PAN_STEP);
+        assert_eq!(m(json!({"ui.panStep": 99999})).ui.pan_step, MAX_PAN_STEP);
+        assert_eq!(
+            m(json!({"ui.panStep": "far"})).ui.pan_step,
+            DEFAULT_PAN_STEP
+        );
+    }
+
+    #[test]
+    fn the_whats_new_overlay_is_on_by_default_and_can_be_turned_off() {
+        assert!(default_config().ui.show_whats_new);
+        assert!(!m(json!({"ui.showWhatsNew": false})).ui.show_whats_new);
+    }
+
+    #[test]
+    fn status_bar_pwd_is_off_and_left_by_default_and_side_rejects_nonsense() {
+        let d = default_config();
+        assert!(!d.ui.status_bar_pwd);
+        assert_eq!(d.ui.status_bar_pwd_side, StatusBarSide::Left);
+        let c = m(json!({"ui.statusBarPwd": true, "ui.statusBarPwdSide": "right"}));
+        assert!(c.ui.status_bar_pwd);
+        assert_eq!(c.ui.status_bar_pwd_side, StatusBarSide::Right);
+        assert_eq!(
+            m(json!({"ui.statusBarPwdSide": "middle"}))
+                .ui
+                .status_bar_pwd_side,
+            StatusBarSide::Left
         );
     }
 
@@ -751,6 +1237,45 @@ mod tests {
     }
 
     #[test]
+    fn ui_typography_defaults_to_the_system_font_and_clamps_its_base_size() {
+        let u = m(json!({})).ui;
+        assert_eq!(u.font_family, ".SystemUIFont");
+        assert_eq!(u.font_size, 13.);
+        assert_eq!(u.font_weight, "normal");
+        assert_eq!(u.font_weight_bold, "bold");
+
+        let c = m(json!({
+            "ui.fontFamily": "JetBrainsMono Nerd Font",
+            "ui.fontSize": 999,
+            "ui.fontWeight": "450",
+            "ui.fontWeightBold": "750"
+        }));
+        assert_eq!(c.ui.font_family, "JetBrainsMono Nerd Font");
+        assert_eq!(c.ui.font_size, 64.);
+        assert_eq!(c.ui.font_weight, "450");
+        assert_eq!(c.ui.font_weight_bold, "750");
+        assert_eq!(m(json!({"ui.fontSize": 0})).ui.font_size, 6.);
+        assert_eq!(
+            m(json!({"ui.fontFamily": "  "})).ui.font_family,
+            ".SystemUIFont"
+        );
+    }
+
+    #[test]
+    fn ui_and_terminal_typography_are_independent() {
+        let c = m(json!({
+            "ui.fontFamily": "SF Pro",
+            "ui.fontSize": 16,
+            "terminal.fontFamily": "JetBrainsMono Nerd Font",
+            "terminal.fontSize": 20
+        }));
+        assert_eq!(c.ui.font_family, "SF Pro");
+        assert_eq!(c.ui.font_size, 16.);
+        assert_eq!(c.terminal.font_family, "JetBrainsMono Nerd Font");
+        assert_eq!(c.terminal.font_size, 20.);
+    }
+
+    #[test]
     fn a_non_numeric_chrome_size_falls_back_rather_than_reaching_the_renderer() {
         assert_eq!(
             m(json!({"ui": {"cardLabelSize": "big"}}))
@@ -800,7 +1325,18 @@ mod tests {
     #[test]
     fn card_size_is_whole_cells_and_clamped_to_something_usable() {
         let c = m(json!({})).cards;
-        assert_eq!((c.width, c.height, c.inherit_directory), (69., 80., true));
+        assert_eq!(
+            (c.width, c.height, c.inherit_directory),
+            (0., 0., true),
+            "from the window"
+        );
+        assert_eq!(m(json!({"cards": {"width": 0}})).cards.width, 0.);
+        assert_eq!(
+            m(json!({"cards": {"width": 69, "height": 80}}))
+                .cards
+                .height,
+            80.
+        );
         assert_eq!(m(json!({"cards": {"width": 40.7}})).cards.width, 41.);
         assert_eq!(m(json!({"cards": {"width": 1}})).cards.width, 12.);
         assert_eq!(m(json!({"cards": {"height": 9999}})).cards.height, 400.);
@@ -822,6 +1358,127 @@ mod tests {
             5.
         );
         assert!(!m(json!({"canvas": {"momentum": false}})).canvas.momentum);
+    }
+
+    #[test]
+    fn window_opacity_defaults_opaque_and_clamps() {
+        assert_eq!(m(json!({})).ui.window_opacity, 1.);
+        assert!(!m(json!({})).ui.window_blur);
+        assert_eq!(m(json!({"ui.windowOpacity": 0.6})).ui.window_opacity, 0.6);
+        assert_eq!(m(json!({"ui.windowOpacity": 0})).ui.window_opacity, 0.1);
+        assert_eq!(m(json!({"ui.windowOpacity": 3})).ui.window_opacity, 1.);
+        assert!(m(json!({"ui.windowBlur": true})).ui.window_blur);
+    }
+
+    #[test]
+    fn the_background_image_settings_default_to_none_and_cover() {
+        let ui = m(json!({})).ui;
+        assert!(ui.background_image.is_empty());
+        assert_eq!(ui.background_image_fit, BackgroundFit::Cover);
+        let ui = m(json!({"ui.backgroundImage": " dusk ", "ui.backgroundImageFit": "Contain"})).ui;
+        assert_eq!(ui.background_image, ["dusk"]);
+        assert_eq!(ui.background_image_fit, BackgroundFit::Contain);
+        assert_eq!(
+            m(json!({"ui.backgroundImageFit": "stretch"}))
+                .ui
+                .background_image_fit,
+            BackgroundFit::Cover
+        );
+    }
+
+    #[test]
+    fn the_background_image_is_a_string_or_a_list_with_a_timer_and_a_fade() {
+        let ui = m(json!({"ui.backgroundImage": ["dusk", " ", "~/a.png", 7, "ember "]})).ui;
+        assert_eq!(ui.background_image, ["dusk", "~/a.png", "ember"]);
+        assert_eq!(ui.background_image_interval, 300.);
+        assert_eq!(ui.background_image_fade, 2.);
+        let ui = m(json!({
+            "ui.backgroundImageInterval": 1,
+            "ui.backgroundImageFade": 99
+        }))
+        .ui;
+        assert_eq!(ui.background_image_interval, 5.);
+        assert_eq!(ui.background_image_fade, 30.);
+        assert_eq!(
+            m(json!({"ui.backgroundImageFade": 0}))
+                .ui
+                .background_image_fade,
+            0.
+        );
+        assert!(m(json!({"ui.backgroundImage": 3}))
+            .ui
+            .background_image
+            .is_empty());
+    }
+
+    #[test]
+    fn workspace_isolation_is_off_unless_asked_for() {
+        assert!(!m(json!({})).ui.workspace_isolation);
+        assert!(
+            m(json!({"ui.workspaceIsolation": true}))
+                .ui
+                .workspace_isolation
+        );
+    }
+
+    #[test]
+    fn the_window_colour_is_none_unless_set() {
+        assert_eq!(m(json!({})).ui.window_color, "");
+        assert_eq!(
+            m(json!({"ui.windowColor": " blue "})).ui.window_color,
+            "blue"
+        );
+        assert_eq!(
+            m(json!({"ui.windowColor": 5})).ui.window_color,
+            "",
+            "not a string"
+        );
+    }
+
+    #[test]
+    fn card_radius_defaults_to_square_and_clamps() {
+        assert_eq!(m(json!({})).ui.card_radius, 0.);
+        assert_eq!(m(json!({"ui.cardRadius": 12})).ui.card_radius, 12.);
+        assert_eq!(m(json!({"ui.cardRadius": 500})).ui.card_radius, 40.);
+        assert_eq!(m(json!({"ui.cardRadius": -3})).ui.card_radius, 0.);
+        assert_eq!(m(json!({"ui.cardRadius": "big"})).ui.card_radius, 0.);
+    }
+
+    #[test]
+    fn card_opacity_defaults_opaque_and_clamps() {
+        assert_eq!(m(json!({})).ui.card_opacity, 1.);
+        assert_eq!(m(json!({"ui.cardOpacity": 0.7})).ui.card_opacity, 0.7);
+        assert_eq!(m(json!({"ui.cardOpacity": 0})).ui.card_opacity, 0.1);
+        assert_eq!(m(json!({"ui.cardOpacity": 2})).ui.card_opacity, 1.);
+    }
+
+    #[test]
+    fn the_grid_is_on_unless_turned_off() {
+        assert_eq!(m(json!({})).ui.glyph_budget, 150_000);
+        assert_eq!(
+            m(json!({"ui.glyphBudget": 150000})).ui.glyph_budget,
+            150_000
+        );
+        assert_eq!(m(json!({"ui.glyphBudget": 5})).ui.glyph_budget, 1_000);
+        assert!(!m(json!({})).ui.text_as_bars);
+        assert!(m(json!({"ui.textAsBars": true})).ui.text_as_bars);
+        assert_eq!(m(json!({})).ui.min_text_px, 7.);
+        assert_eq!(m(json!({"ui.minTextPx": 4})).ui.min_text_px, 4.);
+        assert_eq!(m(json!({"ui.minTextPx": 1})).ui.min_text_px, 2.);
+        assert_eq!(m(json!({})).ui.card_zoom, 1.5);
+        assert_eq!(m(json!({"ui.cardZoom": 2})).ui.card_zoom, 2.);
+        assert_eq!(m(json!({"ui.cardZoom": 9})).ui.card_zoom, 4.);
+        assert_eq!(m(json!({"ui.cardZoom": 1})).ui.card_zoom, 1.1);
+        assert_eq!(m(json!({"ui.cardZoom": 0})).ui.card_zoom, 0., "0 is off");
+        // The old name still applies, and the new one wins over it.
+        assert_eq!(m(json!({"ui.readZoom": 2})).ui.card_zoom, 2.);
+        assert_eq!(
+            m(json!({"ui.readZoom": 2, "ui.cardZoom": 3})).ui.card_zoom,
+            3.
+        );
+        assert!(m(json!({})).ui.show_grid);
+        assert!(!m(json!({"ui.showGrid": false})).ui.show_grid);
+        assert!(m(json!({"ui.showGrid": "no"})).ui.show_grid);
     }
 
     #[test]

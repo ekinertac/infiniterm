@@ -14,7 +14,8 @@ pub fn read_layout() -> Option<String> {
 }
 
 pub fn write_layout(contents: &str) -> Result<(), String> {
-    let path = layout_path();
+    // Through a link, not over it (#219): the canvas file may live in a dotfiles repo.
+    let path = crate::files::resolve_link(&layout_path());
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }

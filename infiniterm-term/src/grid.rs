@@ -13,9 +13,12 @@
 use crate::palette::Palette;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::Direction;
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionRange, SelectionType};
 use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
+use alacritty_terminal::term::ClipboardType;
 use alacritty_terminal::term::{viewport_to_point, Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 use std::cell::RefCell;
@@ -30,6 +33,10 @@ pub enum TermEvent {
     Bell,
     /// OSC 52: the program put text on the clipboard.
     Clipboard(String),
+    /// OSC 52 with the "selection" buffer: what the shell's line editor has
+    /// selected (our zsh integration reports it on every change, empty
+    /// when the selection ends), so Cmd+C can copy it. Not the clipboard.
+    LineSelection(String),
 }
 
 #[derive(Clone, Default)]
@@ -42,6 +49,9 @@ impl EventListener for Listener {
             Event::PtyWrite(s) => out.push(TermEvent::Write(s)),
             Event::Title(t) => out.push(TermEvent::Title(t)),
             Event::Bell => out.push(TermEvent::Bell),
+            Event::ClipboardStore(ClipboardType::Selection, s) => {
+                out.push(TermEvent::LineSelection(s))
+            }
             Event::ClipboardStore(_, s) => out.push(TermEvent::Clipboard(s)),
             Event::ColorRequest(index, format) => {
                 // Answered from the default palette; a theme change re-answers
@@ -101,8 +111,22 @@ pub struct Run {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Row {
     pub runs: Vec<Run>,
-    /// The row as text, for links and selection.
+    /// The row as text, for links and selection: exactly one character per
+    /// cell, which the bar painter, the backgrounds and the link underlines
+    /// all count as columns.
     pub text: String,
+    /// The zero-width characters alacritty keeps ON a cell (`Cell::
+    /// zerowidth`), by column, sparse: U+FE0F asking for the colour emoji
+    /// (⚠️ drew as a flat text ⚠ without it), the joiner in a ZWJ emoji
+    /// (🏃‍♀️ drew as a runner and a text ♀), combining accents. Beside the
+    /// text rather than in it, so a column is still a character everywhere
+    /// else; only the shaper reads these (`terminal_body::shape_row`).
+    pub zerowidth: Vec<(usize, String)>,
+    /// OSC 8 hyperlinks on this row: the columns from `start` up to `end` (not
+    /// included) point at the address. A program wrote them (`ls --hyperlink`,
+    /// an agent's markdown links), so the text can say anything; the ui opens
+    /// only web addresses (`links::merge_hyperlinks`).
+    pub hyperlinks: Vec<(usize, usize, String)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -112,6 +136,34 @@ pub enum CursorKind {
     Underline,
     #[default]
     Hidden,
+}
+
+/// A move of the visual-mode cursor (`Grid::visual_move`), named for what
+/// it does rather than as alacritty's `ViMotion`, so the ui crate needs no
+/// alacritty types. Mac keys and vim keys both land here (terminal_body.rs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CursorMove {
+    Up,
+    Down,
+    Left,
+    Right,
+    WordLeft,
+    WordRight,
+    WordEnd,
+    LineStart,
+    LineEnd,
+    Top,
+    Bottom,
+    HalfPageUp,
+    HalfPageDown,
+}
+
+/// What `v`, `V` and Ctrl+V start in visual mode: vim's three selections.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisualSelect {
+    Cells,
+    Lines,
+    Block,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -125,6 +177,9 @@ pub struct Frame {
     /// Whether any row carries selection colours, so clearing the
     /// selection rebuilds them.
     pub selected: bool,
+    /// Visual mode is on: `cursor` is the visual cursor, in viewport rows,
+    /// and is drawn even while the view is up in the scrollback.
+    pub visual: bool,
 }
 
 /// How many cells short of the width a row may end and still count as
@@ -147,6 +202,39 @@ pub struct Grid {
     full_dirty: bool,
     /// A program asked `CSI ? u` and has not left since. See `kitty_keys`.
     kitty_asked: bool,
+    /// Find in the terminal (`find`): every match in the scrollback and the
+    /// one you are on. `None` when the bar is closed.
+    search: Option<Search>,
+    /// The last frame drew search colours, so the next rebuilds every row
+    /// to clear them.
+    search_painted: bool,
+    /// Visual mode's selection came from `v` / `V` / Ctrl+V, vim's way, so
+    /// plain moves extend it; one made with Shift+move is the Mac's, and a
+    /// plain move drops it.
+    visual_sticky: bool,
+}
+
+/// What `find` found, in order from the top of the scrollback.
+struct Search {
+    matches: Vec<Match>,
+    current: usize,
+}
+
+/// Matches counted and highlighted at most: past this a query is too
+/// common to be worth stepping through, and collecting them is the cost.
+pub const MAX_FIND_MATCHES: usize = 1000;
+
+/// A query as a literal pattern: find is for text, not regular
+/// expressions, so `a.b` finds `a.b`.
+fn literal(query: &str) -> String {
+    let mut out = String::with_capacity(query.len() * 2);
+    for c in query.chars() {
+        if "\\.+*?()|[]{}^$#&-~".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 impl Grid {
@@ -175,7 +263,206 @@ impl Grid {
             size,
             full_dirty: true,
             kitty_asked: false,
+            search: None,
+            search_painted: false,
+            visual_sticky: false,
         }
+    }
+
+    /// Visual mode (Cmd+Shift+C, 2026-09-27): a cursor over the output and
+    /// the scrollback, moved by keys, selecting as it goes, for copying
+    /// without the mouse. alacritty's vi mode underneath: its cursor, its
+    /// motions and its selection, which is what tmux's copy mode and
+    /// WezTerm's are too. Nothing reaches the program while it is on.
+    pub fn visual(&self) -> bool {
+        self.term.mode().contains(TermMode::VI)
+    }
+
+    /// Starts at the terminal's own cursor, or the top-left of the view
+    /// when that is off screen (alacritty's rule).
+    pub fn visual_enter(&mut self) {
+        if !self.visual() {
+            self.term.toggle_vi_mode();
+        }
+        self.term.selection = None;
+        self.visual_sticky = false;
+        self.full_dirty = true;
+    }
+
+    /// Escape, and only Escape (Ekin: leave deliberately, a copy does not):
+    /// the selection goes and the view returns to the prompt.
+    pub fn visual_leave(&mut self) {
+        if self.visual() {
+            self.term.toggle_vi_mode();
+        }
+        self.term.selection = None;
+        self.visual_sticky = false;
+        self.term.scroll_display(Scroll::Bottom);
+        self.full_dirty = true;
+    }
+
+    /// Moves the visual cursor, keeping it in view. `extend` (Shift held)
+    /// grows the selection from where the cursor was, starting one if
+    /// there is none; a plain move drops a Shift selection and extends a
+    /// `v` one.
+    pub fn visual_move(&mut self, m: CursorMove, extend: bool) {
+        use alacritty_terminal::vi_mode::ViMotion as V;
+        if !self.visual() {
+            return;
+        }
+        if extend || self.visual_sticky {
+            if !self.has_selection() {
+                self.select_at_cursor(SelectionType::Simple);
+            }
+        } else {
+            self.term.selection = None;
+        }
+        let half = (self.size.rows / 2).max(1) as i32;
+        match m {
+            CursorMove::Top => {
+                let p = Point::new(self.term.topmost_line(), Column(0));
+                self.term.vi_goto_point(p);
+            }
+            CursorMove::Bottom => {
+                let p = Point::new(self.term.bottommost_line(), Column(0));
+                self.term.vi_goto_point(p);
+            }
+            CursorMove::HalfPageUp | CursorMove::HalfPageDown => {
+                let lines = if m == CursorMove::HalfPageUp {
+                    half
+                } else {
+                    -half
+                };
+                let p = self.term.vi_mode_cursor.scroll(&self.term, lines).point;
+                self.term.vi_goto_point(p);
+            }
+            _ => {
+                self.term.vi_motion(match m {
+                    CursorMove::Up => V::Up,
+                    CursorMove::Down => V::Down,
+                    CursorMove::Left => V::Left,
+                    CursorMove::Right => V::Right,
+                    CursorMove::WordLeft => V::SemanticLeft,
+                    CursorMove::WordRight => V::SemanticRight,
+                    CursorMove::WordEnd => V::SemanticRightEnd,
+                    CursorMove::LineStart => V::First,
+                    _ => V::Last,
+                });
+                let p = self.term.vi_mode_cursor.point;
+                self.term.scroll_to_point(p);
+            }
+        }
+        self.full_dirty = true;
+    }
+
+    /// `v`, `V`, Ctrl+V: vim's toggle. The same kind again ends the
+    /// selection; another kind converts it; none starts one at the cursor.
+    pub fn visual_select(&mut self, kind: VisualSelect) {
+        let ty = match kind {
+            VisualSelect::Cells => SelectionType::Simple,
+            VisualSelect::Lines => SelectionType::Lines,
+            VisualSelect::Block => SelectionType::Block,
+        };
+        match self.term.selection.as_mut() {
+            Some(sel) if self.visual_sticky && sel.ty == ty => {
+                self.term.selection = None;
+                self.visual_sticky = false;
+            }
+            Some(sel) => {
+                sel.ty = ty;
+                self.visual_sticky = true;
+            }
+            None => {
+                self.select_at_cursor(ty);
+                self.visual_sticky = true;
+            }
+        }
+        self.full_dirty = true;
+    }
+
+    /// A selection covering the cell under the visual cursor. `include_all`
+    /// makes it non-empty, without which alacritty never extends it.
+    fn select_at_cursor(&mut self, ty: SelectionType) {
+        let mut sel = Selection::new(ty, self.term.vi_mode_cursor.point, Side::Left);
+        sel.include_all();
+        self.term.selection = Some(sel);
+    }
+
+    /// Searches the whole scrollback for `query` (smart case: a lowercase
+    /// query ignores case, alacritty's rule) and lands on the NEWEST match,
+    /// nearest the bottom, since what you look for in a terminal has
+    /// usually just scrolled past. Returns (matches, the current one as
+    /// 1-based); (0, 0) when nothing matches, and an empty query clears.
+    pub fn find(&mut self, query: &str) -> (usize, usize) {
+        self.full_dirty = true;
+        if query.is_empty() {
+            self.search = None;
+            return (0, 0);
+        }
+        let Ok(mut regex) = RegexSearch::new(&literal(query)) else {
+            self.search = None;
+            return (0, 0);
+        };
+        let start = Point::new(self.term.topmost_line(), Column(0));
+        let end = Point::new(self.term.bottommost_line(), self.term.last_column());
+        let matches: Vec<Match> =
+            RegexIter::new(start, end, Direction::Right, &self.term, &mut regex)
+                .take(MAX_FIND_MATCHES)
+                .collect();
+        if matches.is_empty() {
+            self.search = None;
+            return (0, 0);
+        }
+        let current = matches.len() - 1;
+        self.search = Some(Search { matches, current });
+        self.show_current()
+    }
+
+    /// Steps to the next match: `older` goes up the scrollback, wrapping.
+    pub fn find_step(&mut self, older: bool) -> (usize, usize) {
+        let Some(s) = self.search.as_mut() else {
+            return (0, 0);
+        };
+        let n = s.matches.len();
+        s.current = if older {
+            (s.current + n - 1) % n
+        } else {
+            (s.current + 1) % n
+        };
+        self.full_dirty = true;
+        self.show_current()
+    }
+
+    /// The bar closed: the colours go, and the match you were on stays
+    /// SELECTED where it is, so Cmd+C copies it (Ekin, 2026-09-26: Escape
+    /// used to clear it and jump to the bottom, and there was no way to
+    /// copy what you had found). The view stays on it; typing scrolls down
+    /// as it always does.
+    pub fn find_clear(&mut self) {
+        if let Some(s) = self.search.take() {
+            let m = &s.matches[s.current];
+            let mut sel = Selection::new(SelectionType::Simple, *m.start(), Side::Left);
+            sel.update(*m.end(), Side::Right);
+            self.term.selection = Some(sel);
+            self.full_dirty = true;
+        }
+    }
+
+    /// The text of the match you are on, for Cmd+C while the bar is open.
+    pub fn find_current_text(&self) -> Option<String> {
+        let s = self.search.as_ref()?;
+        let m = &s.matches[s.current];
+        Some(self.term.bounds_to_string(*m.start(), *m.end()))
+    }
+
+    /// Scrolls the current match into view; (count, 1-based current).
+    fn show_current(&mut self) -> (usize, usize) {
+        let Some(s) = self.search.as_ref() else {
+            return (0, 0);
+        };
+        let (n, i, at) = (s.matches.len(), s.current, *s.matches[s.current].start());
+        self.term.scroll_to_point(at);
+        (n, i + 1)
     }
 
     pub fn cols(&self) -> usize {
@@ -196,7 +483,38 @@ impl Grid {
     }
 
     fn advance_bytes(&mut self, bytes: &[u8]) {
+        let history = self.term.history_size();
         self.processor.advance(&mut self.term, bytes);
+        // Output pushes lines into history, which moves every match up by
+        // as many lines; without this the highlights drifted off their
+        // text while a program kept printing. Once the scrollback is full
+        // its size stops changing and this cannot tell; the highlights may
+        // then drift until the next search.
+        if let Some(s) = self.search.as_mut() {
+            let grew = self.term.history_size().saturating_sub(history) as i32;
+            if grew > 0 {
+                let top = self.term.topmost_line();
+                let current = s.matches[s.current].clone();
+                let shift = |m: &Match| {
+                    let (mut a, mut b) = (*m.start(), *m.end());
+                    a.line -= grew;
+                    b.line -= grew;
+                    a..=b
+                };
+                s.matches = s
+                    .matches
+                    .iter()
+                    .map(shift)
+                    .filter(|m| m.start().line >= top)
+                    .collect();
+                let moved = shift(&current);
+                s.current = s.matches.iter().position(|m| *m == moved).unwrap_or(0);
+                if s.matches.is_empty() {
+                    self.search = None;
+                }
+                self.full_dirty = true;
+            }
+        }
     }
 
     pub fn resize(&mut self, cols: usize, rows: usize) -> bool {
@@ -256,6 +574,29 @@ impl Grid {
         if let Some(sel) = self.term.selection.as_mut() {
             sel.update(point, if right { Side::Right } else { Side::Left });
         }
+    }
+
+    /// What the terminal shows as plain text, for `ift read`: the screen, or
+    /// with `scrollback` the history above it too, trailing blanks dropped
+    /// from every line and from the end, and with `last` only the final N
+    /// lines. Wrapped rows are one line.
+    pub fn text(&self, last: Option<usize>, scrollback: bool) -> String {
+        let screen = self.term.screen_lines() as i32;
+        let history = self.term.history_size() as i32;
+        let top = if scrollback { -history } else { 0 };
+        let raw = self.term.bounds_to_string(
+            Point::new(Line(top), Column(0)),
+            Point::new(Line(screen - 1), Column(self.size.cols.saturating_sub(1))),
+        );
+        let mut lines: Vec<&str> = raw.lines().map(str::trim_end).collect();
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        if let Some(n) = last {
+            let from = lines.len().saturating_sub(n);
+            lines.drain(..from);
+        }
+        lines.join("\n")
     }
 
     /// The selection as text, `None` when nothing is selected. Trailing
@@ -481,8 +822,15 @@ impl Grid {
             )
         };
         let fresh = frame.rows.len() != rows || frame.cols != cols;
-        let full = fresh || self.full_dirty || selection.is_some() || frame.selected;
+        let searching = self.search.is_some();
+        let full = fresh
+            || self.full_dirty
+            || selection.is_some()
+            || frame.selected
+            || searching
+            || self.search_painted;
         self.full_dirty = false;
+        self.search_painted = searching;
         let damaged: Vec<usize> = if full {
             (0..rows).collect()
         } else {
@@ -497,6 +845,8 @@ impl Grid {
                 .map(|_| Row {
                     runs: Vec::new(),
                     text: String::with_capacity(cols),
+                    zerowidth: Vec::new(),
+                    hyperlinks: Vec::new(),
                 })
                 .collect();
         }
@@ -517,7 +867,16 @@ impl Grid {
             line: Line(line),
             column: Column(col),
         } = cursor_point;
-        frame.cursor = (col, line.max(0) as usize);
+        frame.visual = self.visual();
+        frame.cursor = if frame.visual {
+            // The visual cursor can be up in the history: grid line to
+            // viewport row. The terminal's own cursor is drawn only at the
+            // bottom, where the two agree.
+            frame.cursor_kind = CursorKind::Block;
+            (col, (line + offset as i32).max(0) as usize)
+        } else {
+            (col, line.max(0) as usize)
+        };
         frame.display_offset = offset;
         frame.cols = cols;
         damaged
@@ -534,20 +893,55 @@ impl Grid {
     ) {
         out.runs.clear();
         out.text.clear();
+        out.zerowidth.clear();
+        out.hyperlinks.clear();
+        // The hyperlink spans being read along the row: (start column, id, address).
+        let mut open: Option<(usize, String, String)> = None;
         let grid_line = Line(line as i32 - offset as i32);
         let row = &self.term.grid()[grid_line];
+        // The matches touching this row, found once: checking every cell
+        // against every match was cells times matches a frame.
+        let (row_matches, current_match): (Vec<&Match>, Option<&Match>) = match &self.search {
+            Some(s) => (
+                s.matches
+                    .iter()
+                    .filter(|m| m.start().line <= grid_line && grid_line <= m.end().line)
+                    .collect(),
+                Some(&s.matches[s.current]),
+            ),
+            None => (vec![], None),
+        };
         for col in 0..self.size.cols {
             let cell = &row[Column(col)];
             let flags = cell.flags;
             let point = Point::new(grid_line, Column(col));
+            let link = cell.hyperlink();
+            if link.is_some() || open.is_some() {
+                let same = matches!((&open, &link), (Some((_, id, _)), Some(h)) if id == h.id());
+                if !same {
+                    if let Some((start, _, uri)) = open.take() {
+                        out.hyperlinks.push((start, col, uri));
+                    }
+                    if let Some(h) = &link {
+                        open = Some((col, h.id().to_string(), h.uri().to_string()));
+                    }
+                }
+            }
             let selected = selection.is_some_and(|s| s.contains(point));
+            // Find: every match, and the current one, which wears the
+            // selection pair like a selection would.
+            let hit = |m: &&Match| m.start() <= &point && &point <= m.end();
+            let current = current_match.as_ref().is_some_and(hit);
+            let found = current || row_matches.iter().any(hit);
             // The common cell is a blank on the default ground: it joins the
             // run before it, or starts one in the default colour, and
             // nothing is resolved. Most of a screen is this, and a flood of
             // short lines is nearly all of it.
             if cell.c == ' '
                 && flags.is_empty()
+                && link.is_none()
                 && !selected
+                && !found
                 && matches!(cell.bg, Color::Named(NamedColor::Background))
             {
                 out.text.push(' ');
@@ -582,9 +976,14 @@ impl Grid {
             // the reference pushes the same pair into every xterm, because a
             // theme's own selection colour is chosen against a prompt and
             // vanishes on a page of anything.
-            if selected {
+            if selected || current {
                 fg_rgb = palette.selection_text;
                 bg_rgb = Some(palette.selection);
+            } else if found {
+                // The theme's yellow, as every terminal marks a match, with
+                // the ground as ink so it reads on any theme.
+                fg_rgb = palette.background;
+                bg_rgb = Some(palette.ansi[3]);
             }
             let run = Run {
                 text: String::new(),
@@ -606,6 +1005,11 @@ impl Grid {
             } else {
                 cell.c
             };
+            if ch == cell.c {
+                if let Some(zw) = cell.zerowidth().filter(|zw| !zw.is_empty()) {
+                    out.zerowidth.push((col, zw.iter().collect()));
+                }
+            }
             out.text.push(ch);
             match out.runs.last_mut() {
                 Some(last)
@@ -626,11 +1030,183 @@ impl Grid {
                 }
             }
         }
+        if let Some((start, _, uri)) = open.take() {
+            out.hyperlinks.push((start, self.size.cols, uri));
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    // `ift read`: the screen, the history above it, and the last N lines.
+    #[test]
+    fn text_is_the_screen_or_the_history_trimmed() {
+        let mut g = Grid::new(20, 3, 100);
+        g.advance(b"one\r\ntwo   \r\nthree\r\nfour");
+        assert_eq!(g.text(None, false), "two\nthree\nfour");
+        assert_eq!(g.text(None, true), "one\ntwo\nthree\nfour");
+        assert_eq!(g.text(Some(2), true), "three\nfour");
+        assert_eq!(g.text(Some(9), false), "two\nthree\nfour");
+        // Blank rows under the cursor are not part of the text.
+        let mut h = Grid::new(20, 5, 100);
+        h.advance(b"only");
+        assert_eq!(h.text(None, true), "only");
+        assert_eq!(Grid::new(20, 3, 100).text(None, true), "");
+    }
+
+    // The shell's selection comes as OSC 52 "s" and is not the clipboard.
+    #[test]
+    fn an_osc52_selection_is_the_line_selection_not_the_clipboard() {
+        let mut g = Grid::new(20, 2, 100);
+        g.advance(b"\x1b]52;s;bG8=\x07\x1b]52;c;aGk=\x07");
+        let got: Vec<String> = g
+            .take_events()
+            .into_iter()
+            .map(|e| format!("{e:?}"))
+            .collect();
+        assert_eq!(got, ["LineSelection(\"lo\")", "Clipboard(\"hi\")"]);
+    }
+
+    // Visual mode: the cursor walks the output, Shift selects the Mac's
+    // way, and Escape puts everything back.
+    #[test]
+    fn visual_mode_moves_selects_and_leaves() {
+        let mut g = Grid::new(20, 3, 100);
+        g.advance(b"alpha beta\r\ngamma\r\n$ ");
+        g.visual_enter();
+        assert!(g.visual());
+        let pal = Palette::default_palette();
+        assert_eq!(
+            g.frame(&pal).cursor,
+            (2, 2),
+            "starts at the prompt's cursor"
+        );
+        g.visual_move(CursorMove::Top, false);
+        assert_eq!(g.frame(&pal).cursor, (0, 0));
+        g.visual_move(CursorMove::WordRight, true);
+        g.visual_move(CursorMove::Left, true);
+        g.visual_move(CursorMove::Left, true);
+        assert_eq!(g.selection_text().as_deref(), Some("alpha"));
+        // A plain move drops a Shift selection.
+        g.visual_move(CursorMove::Down, false);
+        assert!(!g.has_selection());
+        g.visual_leave();
+        assert!(!g.visual());
+        assert!(!g.has_selection());
+    }
+
+    // `v` makes the selection follow plain moves; `V` takes whole lines;
+    // the same key again ends it.
+    #[test]
+    fn visual_v_selections_follow_plain_moves() {
+        let mut g = Grid::new(20, 3, 100);
+        g.advance(b"one\r\ntwo\r\n$ ");
+        g.visual_enter();
+        g.visual_move(CursorMove::Top, false);
+        g.visual_select(VisualSelect::Lines);
+        g.visual_move(CursorMove::Down, false);
+        assert_eq!(
+            g.selection_text().as_deref(),
+            Some("one\ntwo\n"),
+            "whole lines, as vim yanks them"
+        );
+        g.visual_select(VisualSelect::Lines);
+        assert!(!g.has_selection());
+    }
+
+    // The cursor can go up into the scrollback and the view follows it.
+    #[test]
+    fn visual_top_scrolls_the_history_into_view() {
+        let mut g = Grid::new(10, 2, 100);
+        g.advance(b"1\r\n2\r\n3\r\n4\r\n5");
+        g.visual_enter();
+        g.visual_move(CursorMove::Top, false);
+        let f = g.frame(&Palette::default_palette());
+        assert!(f.display_offset > 0);
+        assert_eq!(f.cursor, (0, 0));
+        assert!(f.visual);
+        g.visual_leave();
+        assert_eq!(g.frame(&Palette::default_palette()).display_offset, 0);
+    }
+
+    fn fed(text: &str) -> Grid {
+        let mut g = Grid::new(20, 4, 100);
+        g.advance(text.replace('\n', "\r\n").as_bytes());
+        g
+    }
+
+    // Every match in the scrollback is counted, the newest is current (it
+    // is at the bottom), a lowercase query ignores case, and stepping up
+    // wraps round.
+    #[test]
+    fn find_counts_every_match_and_starts_at_the_newest() {
+        let mut g = fed("error one\nok\nError two\nok\nok\nok\nerror three\nok");
+        assert_eq!(g.find("error"), (3, 3));
+        assert_eq!(g.find_step(true), (3, 2));
+        assert_eq!(g.find_step(true), (3, 1));
+        assert_eq!(g.find_step(true), (3, 3), "wraps");
+        assert_eq!(g.find("Error"), (1, 1), "a capital makes it exact");
+        assert_eq!(g.find("nothing"), (0, 0));
+        assert_eq!(g.find(""), (0, 0));
+    }
+
+    // Output after the search moves the text up; the highlights follow it.
+    #[test]
+    fn matches_follow_their_text_as_output_scrolls() {
+        let palette = crate::palette::Palette::default_palette();
+        let mut g = fed("target\n");
+        assert_eq!(g.find("target"), (1, 1));
+        g.advance(b"a\r\nb\r\nc\r\nd\r\ne\r\n");
+        let mut frame = Frame::default();
+        g.update_frame(&palette, &mut frame);
+        let s = g.search.as_ref().unwrap();
+        let line = s.matches[0].start().line;
+        let text: String = (0..6).map(|c| g.term.grid()[line][Column(c)].c).collect();
+        assert_eq!(text, "target");
+    }
+
+    // Find is for text: punctuation is literal, not a pattern.
+    #[test]
+    fn find_takes_the_query_literally() {
+        let mut g = fed("a.b axb (x) [y] $z ~/c-d #1 &");
+        assert_eq!(g.find("a.b").0, 1);
+        assert_eq!(g.find("(x)").0, 1);
+        assert_eq!(g.find("[y]").0, 1);
+        assert_eq!(g.find("$z").0, 1);
+        assert_eq!(g.find("~/c-d").0, 1);
+        assert_eq!(g.find("#1").0, 1);
+        assert_eq!(g.find("&").0, 1);
+    }
+
+    // The current match wears the selection pair and the others the theme's
+    // yellow; closing the bar clears them.
+    #[test]
+    fn matches_are_coloured_and_the_colours_go_with_the_bar() {
+        let palette = crate::palette::Palette::default_palette();
+        let mut g = fed("find me\nand me");
+        let mut frame = Frame::default();
+        g.find("me");
+        g.update_frame(&palette, &mut frame);
+        let bgs = |frame: &Frame, row: usize| -> Vec<Option<[u8; 3]>> {
+            frame.rows[row].runs.iter().map(|r| r.bg).collect()
+        };
+        assert!(
+            bgs(&frame, 1).contains(&Some(palette.selection)),
+            "the newest is current"
+        );
+        assert!(
+            bgs(&frame, 0).contains(&Some(palette.ansi[3])),
+            "the other is yellow"
+        );
+        assert_eq!(g.find_current_text().as_deref(), Some("me"));
+        g.find_clear();
+        g.update_frame(&palette, &mut frame);
+        assert!(!bgs(&frame, 0).contains(&Some(palette.ansi[3])));
+        // What you were on stays selected, for Cmd+C.
+        assert_eq!(g.selection_text().as_deref(), Some("me"));
+    }
+
     use super::*;
 
     fn text(frame: &Frame) -> Vec<String> {
@@ -639,6 +1215,86 @@ mod tests {
             .iter()
             .map(|r| r.text.trim_end().to_string())
             .collect()
+    }
+
+    // OSC 8 (`ESC ] 8 ; ; URI ST text ESC ] 8 ; ; ST`): the cells between the
+    // two carry the address, and the row reports the columns, spaces inside
+    // the span included.
+    #[test]
+    fn an_osc8_hyperlink_is_reported_as_a_span_of_columns() {
+        let mut g = Grid::new(40, 2, 100);
+        g.advance(
+            b"see \x1b]8;;https://github.com/o/r/issues/432\x1b\\issue 432\x1b]8;;\x1b\\ now\r\nplain",
+        );
+        let f = g.frame(&Palette::default_palette());
+        assert_eq!(
+            f.rows[0].hyperlinks,
+            vec![(4, 13, "https://github.com/o/r/issues/432".to_string())]
+        );
+        assert_eq!(&f.rows[0].text[4..13], "issue 432");
+        assert!(f.rows[1].hyperlinks.is_empty());
+        // Two links back to back stay two spans; one ending at the row's edge closes there.
+        let mut g = Grid::new(10, 1, 100);
+        g.advance(b"\x1b]8;;http://a.io\x1b\\aa\x1b]8;;http://b.io\x1b\\bbbbbbbb");
+        let f = g.frame(&Palette::default_palette());
+        assert_eq!(
+            f.rows[0].hyperlinks,
+            vec![
+                (0, 2, "http://a.io".to_string()),
+                (2, 10, "http://b.io".to_string())
+            ]
+        );
+    }
+
+    // Claude Code writes OSC 8 with an id and a BEL terminator, not the ST
+    // form the tests above use; both must read the same.
+    #[test]
+    fn an_osc8_hyperlink_with_an_id_and_a_bel_terminator_is_read() {
+        let mut g = Grid::new(40, 1, 100);
+        g.advance(
+            b"See \x1b]8;id=1v04av0;https://github.com/o/r/issues/337\x07#337\x1b]8;;\x07 and more",
+        );
+        let f = g.frame(&Palette::default_palette());
+        assert_eq!(
+            f.rows[0].hyperlinks,
+            vec![(4, 8, "https://github.com/o/r/issues/337".to_string())]
+        );
+        assert_eq!(&f.rows[0].text[4..8], "#337");
+    }
+
+    // ⚠️ is a text symbol plus U+FE0F, 🏃‍♀️ a runner, a joiner, ♀ and
+    // U+FE0F. alacritty keeps the zero-width ones ON a cell; they must
+    // reach the row beside its text, on the right columns, or the painter
+    // draws a flat ⚠ and a runner next to a text ♀.
+    #[test]
+    fn zero_width_characters_ride_beside_the_text_on_their_cells() {
+        let mut g = Grid::new(20, 2, 100);
+        g.advance("\u{26a0}\u{fe0f} x\r\n\u{1f3c3}\u{200d}\u{2640}\u{fe0f}!".as_bytes());
+        let f = g.frame(&Palette::default_palette());
+        // The text is still one character per cell.
+        assert!(
+            f.rows[0].text.starts_with("\u{26a0} x"),
+            "{:?}",
+            f.rows[0].text
+        );
+        assert_eq!(f.rows[0].zerowidth, vec![(0, "\u{fe0f}".to_string())]);
+        let runner = &f.rows[1];
+        assert!(
+            runner
+                .text
+                .starts_with(&format!("\u{1f3c3}{SPACER}\u{2640}!")),
+            "{:?}",
+            runner.text
+        );
+        assert_eq!(
+            runner.zerowidth,
+            vec![(0, "\u{200d}".to_string()), (2, "\u{fe0f}".to_string())]
+        );
+        // A plain row carries none.
+        g.advance(b"\x1b[2J\x1b[Hplain");
+        assert!(g.frame(&Palette::default_palette()).rows[0]
+            .zerowidth
+            .is_empty());
     }
 
     #[test]

@@ -53,6 +53,106 @@ pub fn fuzzy_match(query: &str, text: &str) -> Option<Match> {
     })
 }
 
+/// The shortest query the palette holds to a REAL match (#490). Shorter
+/// ones are abbreviations (`rgs`, `ntc`) and keep the loose subsequence rule.
+pub const STRICT_MIN_CHARS: usize = 4;
+
+/// What a query that contains the text contiguously earns over any other
+/// kind of match, so the rows that hold the word come first whatever the
+/// length or the position bonuses say. Far below the palette's hint penalty
+/// (1000) so a label match still outranks a hint match.
+const CONTIGUOUS_TIER: f64 = 200.;
+
+/// The palette's match (#490). For a query of `STRICT_MIN_CHARS` or more
+/// letters a row shows only when the query matches as a REAL match:
+/// - all the letters in one run anywhere in the text (the word is in the
+///   label, even at the end of a long one), or
+/// - the letters are initials: each one starts a word, or
+/// - at most two runs of two letters or more, each starting a word
+///   (`tidy cards` against `tidy the cards`).
+///
+/// Letters scattered over a long label (`check` in `tidy the cards into a
+/// block`) or pieces that start in the middle of a word (`che` + `ck` in
+/// `chess game stack`) do not count. A one-run match gets `CONTIGUOUS_TIER`.
+/// A shorter query is `fuzzy_match` unchanged. Editor completion and the
+/// shortcuts panel keep calling `fuzzy_match`: a prefix like `hmap` for
+/// `HashMap` is a fuzzy match there on purpose.
+pub fn strict_match(query: &str, text: &str) -> Option<Match> {
+    let q: Vec<char> = query
+        .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+        .to_lowercase()
+        .chars()
+        .collect();
+    if q.len() < STRICT_MIN_CHARS {
+        return fuzzy_match(query, text);
+    }
+    let lower: Vec<u16> = text.to_lowercase().encode_utf16().collect();
+    let needles: Vec<Vec<u16>> = q
+        .iter()
+        .map(|c| {
+            let mut units = [0; 2];
+            c.encode_utf16(&mut units).to_vec()
+        })
+        .collect();
+    let starts: Vec<usize> = lower
+        .windows(needles[0].len())
+        .enumerate()
+        .filter(|(_, w)| *w == needles[0].as_slice())
+        .map(|(i, _)| i)
+        .collect();
+    let mut best: Option<Match> = None;
+    for start in starts {
+        let Some(mut m) = align_from(&lower, &needles, start) else {
+            continue;
+        };
+        let pieces = pieces(&m.matches);
+        if !is_real_match(&lower, &pieces) {
+            continue;
+        }
+        if pieces.len() == 1 {
+            m.score += CONTIGUOUS_TIER;
+        }
+        if best.as_ref().is_none_or(|b| m.score > b.score) {
+            best = Some(m);
+        }
+    }
+    best.map(|mut m| {
+        m.score -= text.encode_utf16().count().min(60) as f64 / 10.;
+        m
+    })
+}
+
+/// The characters that end a word: space . - _ / : +.
+const WORD_SEPARATORS: [u16; 7] = [32, 46, 45, 95, 47, 58, 43];
+
+fn starts_word(lower: &[u16], at: usize) -> bool {
+    at == 0 || WORD_SEPARATORS.contains(&lower[at - 1])
+}
+
+/// The runs of consecutive positions: (start, length) for each.
+fn pieces(matches: &[usize]) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = vec![];
+    for &at in matches {
+        match out.last_mut() {
+            Some((start, len)) if *start + *len == at => *len += 1,
+            _ => out.push((at, 1)),
+        }
+    }
+    out
+}
+
+fn is_real_match(lower: &[u16], pieces: &[(usize, usize)]) -> bool {
+    if pieces.len() == 1 {
+        return true;
+    }
+    if !pieces.iter().all(|&(start, _)| starts_word(lower, start)) {
+        return false;
+    }
+    // Initials, or a couple of whole pieces.
+    pieces.iter().all(|&(_, len)| len == 1)
+        || (pieces.len() <= 2 && pieces.iter().all(|&(_, len)| len >= 2))
+}
+
 /// One alignment: the first character at `start`, each next one at the
 /// position right after the last when it is there, else the first
 /// occurrence further on. Scored as the greedy walk always was.
@@ -181,6 +281,86 @@ mod tests {
             })
         );
     }
+    // #490: the screenshot's rows for `check`. (label, shown)
+    const CHECK_TABLE: [(&str, bool); 7] = [
+        ("App: check for updates", true),
+        (
+            "Card: #27 * The chord sheet is built and the tests pass. I haven't opened it in a browser, so the layout on a phone is unchecked",
+            true,
+        ),
+        ("Canvas: tidy the cards into a block", false),
+        ("Card: #8 3D mobile chess game stack · Personal Stuff", false),
+        ("Window: change the title bar and Dock colour…", false),
+        ("Card: mask with a decoy / unmask", false),
+        ("Canvas: fit the selection, the group or the block", false),
+    ];
+
+    #[test]
+    fn a_word_of_four_letters_finds_only_rows_that_hold_it() {
+        for (label, shown) in CHECK_TABLE {
+            assert_eq!(
+                strict_match("check", label).is_some(),
+                shown,
+                "check against {label:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_word_at_the_end_of_a_long_label_is_found() {
+        let label = CHECK_TABLE[1].0;
+        let m = strict_match("check", label).unwrap();
+        let at = label.find("unchecked").unwrap() + 2;
+        assert_eq!(m.matches, (at..at + 5).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn rows_that_hold_the_word_come_first() {
+        let word_start = strict_match("check", "App: check for updates")
+            .unwrap()
+            .score;
+        let mid_word = strict_match("check", "A very unchecked row").unwrap().score;
+        // Two whole pieces that start words: real, but not the word itself.
+        let pieces = strict_match("tidy cards", "Canvas: tidy the cards into a block").unwrap();
+        assert!(word_start > mid_word, "{word_start} vs {mid_word}");
+        assert!(mid_word > pieces.score, "{mid_word} vs {}", pieces.score);
+    }
+
+    #[test]
+    fn two_whole_pieces_that_start_words_count() {
+        assert!(strict_match("tidy cards", "Canvas: tidy the cards into a block").is_some());
+        // The second piece starts in the middle of a word: no.
+        assert!(strict_match("tidy ards", "Canvas: tidy the cards into a block").is_none());
+        // Three pieces: no.
+        assert!(strict_match("tidy ta bl", "Canvas: tidy the cards into a block").is_none());
+    }
+
+    #[test]
+    fn four_initials_count() {
+        assert!(strict_match("ntce", "New terminal card extra").is_some());
+        // Scattered inside words: no.
+        assert!(strict_match("ewmr", "New terminal card extra").is_none());
+    }
+
+    #[test]
+    fn a_short_query_keeps_the_loose_rule() {
+        // Three letters and fewer are abbreviations: unchanged.
+        for (q, t) in [
+            ("rgs", "Group: go to the previous"),
+            ("ntc", "New terminal card"),
+            ("cke", "Canvas: tidy the cards into a block"),
+        ] {
+            assert_eq!(strict_match(q, t), fuzzy_match(q, t), "{q} against {t}");
+        }
+        let run = strict_match("rgs", "Card: #13 CG-RGS · CuriousOS")
+            .unwrap()
+            .score;
+        let scattered = strict_match("rgs", "Group: go to the previous")
+            .unwrap()
+            .score;
+        assert!(run > scattered);
+    }
+
     #[test]
     fn unicode_positions_match_utf16_reference() {
         assert_eq!(fuzzy_match("z", "🦀 Zoom").unwrap().matches, vec![3]);

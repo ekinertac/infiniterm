@@ -33,6 +33,7 @@
 //! Every binding carries the reason beside it. Do not restate chords in
 //! other files: name the command, not the key. `shortcuts.rs` renders this
 //! for the panel; the ui crate dispatches with `chord_for`.
+use crate::when::{Context, When};
 use serde_json::Value;
 
 /// Which of the keys actually down play Cmd's part and Ctrl's, when the
@@ -145,6 +146,16 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
     ("cmd+alt+shift+arrowright", "card.swap.right", ""),
     ("cmd+alt+shift+arrowup", "card.swap.up", ""),
     ("cmd+alt+shift+arrowdown", "card.swap.down", ""),
+    // Slides the card along a row or column into the gap beside it, to the
+    // next card or grid slot: the way back after a resize left space.
+    (
+        "cmd+ctrl+alt+arrowleft",
+        "card.slide.left",
+        "close the space a resize left, from the keyboard",
+    ),
+    ("cmd+ctrl+alt+arrowright", "card.slide.right", ""),
+    ("cmd+ctrl+alt+arrowup", "card.slide.up", ""),
+    ("cmd+ctrl+alt+arrowdown", "card.slide.down", ""),
     // Same commands on JKL, so switching cards does not need the arrow
     // cluster. Cmd+Alt+I was WebKit's inspector in the reference and is
     // left unbound here too so the two keymaps stay the same file.
@@ -161,16 +172,35 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "canvas.zoom.actual",
         "actual size, as in every browser and editor",
     ),
+    // Pan the view without the mouse (#398). The Shift variant of the slide
+    // chord above and of the focus-move chord, so the family reads together.
+    (
+        "cmd+ctrl+shift+arrowleft",
+        "canvas.pan.left",
+        "pan the canvas by keyboard; the focus stays where it is",
+    ),
+    ("cmd+ctrl+shift+arrowright", "canvas.pan.right", ""),
+    ("cmd+ctrl+shift+arrowup", "canvas.pan.up", ""),
+    ("cmd+ctrl+shift+arrowdown", "canvas.pan.down", ""),
+    // Every card of the workspace (#419). A locked editor or browser keeps its
+    // own Cmd+A (the file's or the page's select all): a locked card falls
+    // through to the body for a chord its table does not claim.
+    (
+        "cmd+a",
+        "focus.selectAll",
+        "select every card; a locked editor or browser still selects its text",
+    ),
     ("cmd+1", "canvas.zoom.fitCard", ""),
     ("cmd+2", "canvas.zoom.fitAll", ""),
-    // Keyboard zoom, since scroll-zoom needs Cmd held and a pinch is awkward
-    // mid-keystroke.
+    // The terminal's font size, iTerm2's and every Mac terminal's keys
+    // (2026-09-28, Ekin). They zoomed the canvas before; the canvas still
+    // zooms with Cmd+scroll, a pinch and the palette.
     (
         "cmd+=",
-        "canvas.zoom.in",
-        "scroll-zoom needs Cmd held; a pinch is awkward mid-keystroke",
+        "terminal.font.bigger",
+        "the terminal font, as in every Mac terminal",
     ),
-    ("cmd+-", "canvas.zoom.out", ""),
+    ("cmd+-", "terminal.font.smaller", ""),
     // Shift on the same keys sizes the INTERFACE rather than the canvas:
     // labels, borders and the status bar are screen-constant by design and
     // so are the one thing zoom cannot reach.
@@ -248,12 +278,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "card.size",
         "a size from the default's fractions: full, halves, quarter, doubles",
     ),
-    // The undo for Cmd+W. Cmd+Shift+T is the browser's chord for this and
-    // is already the placement menu here, so the close chord takes Ctrl.
+    // The undo for Cmd+W, on the browser's chord for it: Ekin reached for
+    // Cmd+Shift+T by reflex after a close. Cmd+Ctrl+T held it until
+    // 2026-09-28 and the placement menu had Shift; they swapped.
     (
-        "cmd+ctrl+t",
+        "cmd+shift+t",
         "card.reopen",
-        "Cmd+Shift+T is already the placement menu",
+        "reopen the card you closed, the browser's chord",
     ),
     // The editor's save. A terminal has nothing to save, so the key is inert
     // there rather than reaching the shell, the same as every Cmd key.
@@ -277,11 +308,14 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "card.transcript",
         "\"info\" in iTerm2 and most Mac apps",
     ),
-    // Out of a browser card's page, which owns every other key while focused.
+    // Out of a browser card's page or a locked editor, which own every other
+    // key while locked. An editor also unlocks on a bare Escape that has
+    // nothing else to close (a popup, the find panel, a selection); bind this
+    // command to another chord to change the way out.
     (
         "cmd+escape",
         "browser.leave",
-        "the page owns every other key while focused",
+        "the page or the editor owns every other key while locked",
     ),
     // The sidebar above the content or beside it, Gmail's reading-pane
     // toggle; Cmd+\ is what the split editors use to flip an arrangement.
@@ -290,12 +324,14 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "card.sidebar.flip",
         "what split editors use to flip an arrangement",
     ),
-    // Reloads the interface, killing the shells first. Inert outside a
-    // development build: it is the browser reflex key.
+    // Asks the focused terminal's program to repaint (2026-10-19, #447). It
+    // was `app.reload`, a development-only command that killed every shell,
+    // so nobody used it; that command has no default key now. A locked
+    // browser keeps Cmd+R as the page's reload (`browser_keys`).
     (
         "cmd+r",
-        "app.reload",
-        "development builds only; the browser reflex key would cost every shell",
+        "terminal.redraw",
+        "the browser reflex key, for a terminal: a fresh screen from the program",
     ),
     ("cmd+shift+r", "card.rename", ""),
     // The macOS convention for preferences.
@@ -321,6 +357,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "app.emoji",
         "the system's chord, owned by us",
     ),
+    // macOS's own full screen chord, so it reaches `ui.fullscreen` rather
+    // than always meaning the native Space.
+    (
+        "cmd+ctrl+f",
+        "app.fullscreen",
+        "the system's chord; ui.fullscreen says which kind",
+    ),
     (
         "cmd+/",
         "app.shortcuts",
@@ -338,7 +381,7 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
     ),
     // Cmd+T with Shift: a new terminal, but WHERE is the question. A short
     // menu whose first entry letters every empty slot around the cards.
-    ("cmd+shift+t", "card.place", "a new terminal, but WHERE"),
+    ("cmd+ctrl+t", "card.place", "a new terminal, but WHERE"),
     // Snippets: Cmd+Ctrl+S, chosen by Ekin over Cmd+Shift+V; Ctrl with
     // Shift or Cmd is comfortable where Ctrl with Alt is not.
     (
@@ -359,13 +402,27 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "card.switcher.prev",
         "the switcher, backwards",
     ),
-    // A letter on every card, one keystroke to any of them. "Find", loosely.
-    // Cmd+H was the first choice and is Hide on macOS.
+    // Find in the card you are on: a terminal's scrollback, a page, a
+    // file. Cmd+F letters the cards until 2026-09-26, "find, loosely", which
+    // left a terminal with no search at all; the hints moved to Cmd+J.
+    ("cmd+f", "card.find", "find, as everywhere on a Mac"),
+    // Cmd+E puts the selection in the find field, macOS's "use selection
+    // for find".
     (
-        "cmd+f",
-        "focus.hint",
-        "\"find\", loosely: how you find a card. Cmd+H is Hide",
+        "cmd+e",
+        "card.findSelection",
+        "use selection for find, macOS's",
     ),
+    // A cursor over a terminal's output for copying without the mouse
+    // (2026-09-27): iTerm2's key for its copy mode, free here.
+    (
+        "cmd+shift+c",
+        "terminal.visual",
+        "visual mode: move a cursor over the output, Esc leaves",
+    ),
+    // A letter on every card, one keystroke to any of them: jump. Cmd+F
+    // until 2026-09-26; Cmd+H was the first choice and is Hide on macOS.
+    ("cmd+j", "focus.hint", "jump to a card by its letter"),
     // Groups. Cmd+G and Cmd+Shift+G are group / ungroup nearly everywhere
     // that has the concept.
     (
@@ -558,15 +615,105 @@ pub fn is_allowed_chord(chord: &str) -> bool {
         && parts[1].chars().all(|c| c.is_ascii_digit())
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ParsedKeymap {
     /// `None` is how a binding is REMOVED: a file of overrides needs a way
     /// to give a chord back to the terminal, not only to point it elsewhere.
     pub bindings: Vec<(String, Option<String>)>,
+    /// Bindings with a `when` (#269), in file order: the LAST one whose
+    /// clause holds wins, over the default and the plain bindings alike.
+    pub conditional: Vec<CondBinding>,
     pub errors: Vec<String>,
 }
 
-/// Reads a keybindings file into overrides.
+/// A binding that applies only while its `when` holds. `command: None` unbinds
+/// the chord in that context (the key goes on to the card as if unbound).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CondBinding {
+    pub chord: String,
+    pub command: Option<String>,
+    pub when: Option<When>,
+}
+
+/// A chord that is more than a bare modifier name: something to match a key
+/// against. Spelled as `chord_for` spells it, lower case, `+` between parts.
+fn is_well_formed(chord: &str) -> bool {
+    !chord.is_empty() && chord.split('+').all(|p| !p.is_empty())
+}
+
+/// One binding of a chord, from a string, `null` or `{"command", "when"}`.
+fn parse_one(chord: &str, value: &Value, out: &mut ParsedKeymap) {
+    let (command, when) = match value {
+        Value::Null => (None, None),
+        Value::String(s) => (Some(s.clone()), None),
+        Value::Object(o) => {
+            let command = match o.get("command") {
+                Some(Value::String(s)) => Some(s.clone()),
+                Some(Value::Null) => None,
+                _ => {
+                    out.errors.push(format!(
+                        "\"{chord}\": an object needs \"command\": a command id, or null to unbind"
+                    ));
+                    return;
+                }
+            };
+            let when = match o.get("when") {
+                None => None,
+                Some(Value::String(src)) => match When::parse(src) {
+                    Ok(w) => Some(w),
+                    Err(e) => {
+                        out.errors.push(format!("\"{chord}\": when: {e}"));
+                        return;
+                    }
+                },
+                Some(_) => {
+                    out.errors
+                        .push(format!("\"{chord}\": \"when\" must be a string"));
+                    return;
+                }
+            };
+            (command, when)
+        }
+        _ => {
+            out.errors.push(format!(
+                "\"{chord}\": value must be a command id, null to unbind, or {{\"command\", \"when\"}}"
+            ));
+            return;
+        }
+    };
+    let lower = chord.to_lowercase();
+    match when {
+        None => {
+            if !is_allowed_chord(chord) {
+                out.errors.push(format!(
+                    "\"{chord}\": must include cmd, or be ctrl plus a digit \u{2014} other chords belong to the focused terminal; a \"when\" that is false in a terminal allows them"
+                ));
+                return;
+            }
+            out.bindings.push((lower, command));
+        }
+        Some(w) => {
+            // A key a terminal needs may be bound only where no terminal is
+            // focused: the clause must be false for a focused terminal, so a
+            // binding can never take its input.
+            if !is_allowed_chord(chord)
+                && (!is_well_formed(&lower) || w.eval(&Context::terminal_focused()))
+            {
+                out.errors.push(format!(
+                    "\"{chord}\": a key without cmd needs a \"when\" that is false in a focused terminal (editorTextFocus, browserFocus, phantomFocus ...): other keys belong to the terminal"
+                ));
+                return;
+            }
+            out.conditional.push(CondBinding {
+                chord: lower,
+                command,
+                when: Some(w),
+            });
+        }
+    }
+}
+
+/// Reads a keybindings file into overrides and `when` bindings.
 pub fn parse_keymap(json: &Value) -> ParsedKeymap {
     let mut out = ParsedKeymap::default();
     let Some(map) = json.as_object() else {
@@ -574,24 +721,12 @@ pub fn parse_keymap(json: &Value) -> ParsedKeymap {
             .push("keybindings.json must be a JSON object of \"chord\": \"command.id\"".into());
         return out;
     };
-    for (chord, id) in map {
-        let id = match id {
-            Value::Null => None,
-            Value::String(s) => Some(s.clone()),
-            _ => {
-                out.errors.push(format!(
-                    "\"{chord}\": value must be a command id, or null to unbind"
-                ));
-                continue;
-            }
-        };
-        if !is_allowed_chord(chord) {
-            out.errors.push(format!(
-                "\"{chord}\": must include cmd, or be ctrl plus a digit \u{2014} other chords belong to the focused terminal"
-            ));
-            continue;
+    for (chord, value) in map {
+        match value {
+            // Several bindings on one chord, each with its own when.
+            Value::Array(items) => items.iter().for_each(|v| parse_one(chord, v, &mut out)),
+            v => parse_one(chord, v, &mut out),
         }
-        out.bindings.push((chord.to_lowercase(), id));
     }
     out
 }
@@ -622,6 +757,24 @@ const KEYMAP_HEADER: &[&str] = &[
     "Every chord must include cmd. A focused terminal consumes ctrl, alt and bare",
     "keys and has to keep consuming them, or TUI applications break.",
     "",
+    "A binding can carry a \"when\", so it applies only in some situations. Give the",
+    "chord an object, or a list of them (the last one that holds wins):",
+    "",
+    "    { \"cmd+shift+e\": { \"command\": \"browser.leave\", \"when\": \"editorTextFocus\" } }",
+    "    { \"cmd+t\": { \"command\": null, \"when\": \"editorTextFocus\" } }",
+    "",
+    "A \"command\" of null unbinds the chord in that situation. A key WITHOUT cmd is",
+    "allowed only with a \"when\" that is false in a focused terminal, so it can never",
+    "take a terminal's input:",
+    "",
+    "    { \"f2\": { \"command\": \"editor.goToLine\", \"when\": \"editorTextFocus && !suggestWidgetVisible\" } }",
+    "",
+    "A \"when\" joins keys with && and ||, negates with !, compares with == and !=",
+    "(strings in quotes) and groups with parentheses. The keys:",
+    "",
+    // The names come from `when::KEYS`, rendered below.
+    "@WHEN_KEYS@",
+    "",
     "Comments and trailing commas are allowed in both files.",
 ];
 
@@ -632,8 +785,16 @@ pub fn render_keybindings_default(
     bindings: &Keymap,
     label_for: impl Fn(&str) -> Option<String>,
 ) -> String {
+    let when_keys: Vec<String> = crate::when::KEYS
+        .iter()
+        .map(|(name, what)| format!("    {name}: {what}"))
+        .collect();
     let header: Vec<String> = KEYMAP_HEADER
         .iter()
+        .flat_map(|line| match *line {
+            "@WHEN_KEYS@" => when_keys.clone(),
+            other => vec![other.to_string()],
+        })
         .map(|line| {
             if line.is_empty() {
                 "//".to_string()
@@ -1100,5 +1261,113 @@ mod tests {
             );
             assert_eq!(chord_for(&e), *chord);
         }
+    }
+
+    // #269: a binding may carry a `when`; the flat shape still works.
+    fn parsed(json: &str) -> ParsedKeymap {
+        parse_keymap(&crate::jsonc::parse_jsonc(json).unwrap())
+    }
+
+    #[test]
+    fn a_binding_takes_a_command_and_a_when_as_an_object_or_a_list() {
+        let p = parsed(
+            r#"{
+              "cmd+k": "app.palette",
+              "cmd+j": {"command": "card.new.terminal"},
+              "cmd+i": {"command": "app.shortcuts", "when": "editorTextFocus"},
+              "cmd+u": [
+                {"command": "a.one", "when": "editorTextFocus"},
+                {"command": null, "when": "browserFocus"},
+                "b.two"
+              ]
+            }"#,
+        );
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        assert_eq!(
+            p.bindings,
+            vec![
+                ("cmd+k".into(), Some("app.palette".into())),
+                ("cmd+j".into(), Some("card.new.terminal".into())),
+                ("cmd+u".into(), Some("b.two".into())),
+            ]
+        );
+        let conds: Vec<_> = p
+            .conditional
+            .iter()
+            .map(|c| {
+                (
+                    c.chord.as_str(),
+                    c.command.as_deref(),
+                    c.when.as_ref().unwrap().source(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            conds,
+            vec![
+                ("cmd+i", Some("app.shortcuts"), "editorTextFocus"),
+                ("cmd+u", Some("a.one"), "editorTextFocus"),
+                ("cmd+u", None, "browserFocus"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_key_without_cmd_needs_a_when_that_is_false_in_a_terminal() {
+        // allowed where no terminal is focused
+        let ok = parsed(
+            r#"{"escape": {"command": "browser.leave", "when": "editorTextFocus && !suggestWidgetVisible"}}"#,
+        );
+        assert!(ok.errors.is_empty(), "{:?}", ok.errors);
+        assert_eq!(ok.conditional.len(), 1);
+        for (json, why) in [
+            (r#"{"escape": "browser.leave"}"#, "no when at all"),
+            (
+                r#"{"escape": {"command": "x", "when": "true"}}"#,
+                "true in a terminal",
+            ),
+            (
+                r#"{"f2": {"command": "x", "when": "!browserFocus"}}"#,
+                "true in a terminal",
+            ),
+            (
+                r#"{"a": {"command": "x", "when": "terminalFocus"}}"#,
+                "the terminal itself",
+            ),
+            (
+                r#"{"a": {"command": "x", "when": "cardKind != 'browser'"}}"#,
+                "a terminal is not a browser",
+            ),
+        ] {
+            let p = parsed(json);
+            assert!(
+                p.conditional.is_empty() && p.bindings.is_empty(),
+                "{why}: {json}"
+            );
+            assert_eq!(p.errors.len(), 1, "{why}: {:?}", p.errors);
+        }
+        // cmd chords never needed the check
+        let cmd = parsed(r#"{"cmd+e": {"command": "x", "when": "true"}}"#);
+        assert!(cmd.errors.is_empty() && cmd.conditional.len() == 1);
+    }
+
+    #[test]
+    fn a_bad_when_or_object_is_an_error_naming_the_chord_and_the_binding_is_dropped() {
+        let p = parsed(
+            r#"{
+              "cmd+a": {"command": "x", "when": "editorTextFocuss"},
+              "cmd+b": {"when": "editorFocus"},
+              "cmd+c": {"command": "x", "when": 3},
+              "cmd+d": 7,
+              "cmd+e": {"command": "ok", "when": "editorFocus"}
+            }"#,
+        );
+        assert_eq!(p.errors.len(), 4, "{:?}", p.errors);
+        assert!(p.errors[0].starts_with("\"cmd+a\": when: unknown context key"));
+        assert!(p.errors[1].contains("needs \"command\""));
+        assert!(p.errors[2].contains("must be a string"));
+        assert!(p.errors[3].starts_with("\"cmd+d\""));
+        assert_eq!(p.conditional.len(), 1, "the good one still lands");
+        assert_eq!(p.conditional[0].chord, "cmd+e");
     }
 }

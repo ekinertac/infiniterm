@@ -47,9 +47,26 @@ fn appdata_dir() -> PathBuf {
 }
 
 /// `~/.config/infiniterm`, or `INFINITERM_CONFIG_DIR`: the Tauri app watches
-/// the real one, so a test that edits settings must edit a copy.
+/// the real one, so a test that edits settings must edit a copy. An instance
+/// with its own data directory (`INFINITERM_DATA_DIR`: a scratch run, a remote
+/// host) starts CLEAN: its settings live in `<data>/config` unless
+/// `INFINITERM_CONFIG_DIR` says otherwise (Ekin, 2026-10-05: a new instance
+/// must not read the personal files). `make run` names the real one on purpose.
 pub fn config_dir() -> PathBuf {
-    config_dir_from(std::env::var_os("INFINITERM_CONFIG_DIR").as_deref())
+    config_dir_for(
+        std::env::var_os("INFINITERM_CONFIG_DIR").as_deref(),
+        std::env::var_os("INFINITERM_DATA_DIR").as_deref(),
+    )
+}
+
+/// `config_dir` over explicit values: the config override wins, then a data
+/// override's own `config` folder, then `~/.config/infiniterm`.
+pub fn config_dir_for(config: Option<&std::ffi::OsStr>, data: Option<&std::ffi::OsStr>) -> PathBuf {
+    match (config, data) {
+        (Some(dir), _) => PathBuf::from(dir),
+        (None, Some(data)) => PathBuf::from(data).join("config"),
+        (None, None) => config_dir_from(None),
+    }
 }
 
 pub fn config_dir_from(override_: Option<&std::ffi::OsStr>) -> PathBuf {
@@ -92,10 +109,35 @@ pub fn data_dir(override_: Option<&std::ffi::OsStr>) -> PathBuf {
     {
         appdata_dir().join("infiniterm")
     }
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     {
-        home_dir()
-            .join("Library")
+        default_data_dir(
+            &home_dir(),
+            std::env::var_os("XDG_DATA_HOME").as_deref(),
+            cfg!(target_os = "linux"),
+        )
+    }
+}
+
+/// Where the data lives with no override: Application Support on a Mac, and
+/// on Linux (a server running `iftd`, #118) `$XDG_DATA_HOME` or
+/// `~/.local/share`, where a Linux user looks. A relative `XDG_DATA_HOME` is
+/// ignored, as the XDG spec says. A pure function so both answers are tested
+/// on either OS. Windows does not come through here (`data_dir` answers
+/// with `%APPDATA%` itself).
+pub fn default_data_dir(
+    home: &std::path::Path,
+    xdg_data_home: Option<&std::ffi::OsStr>,
+    linux: bool,
+) -> PathBuf {
+    if linux {
+        xdg_data_home
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .unwrap_or_else(|| home.join(".local").join("share"))
+            .join(BUNDLE_ID)
+    } else {
+        home.join("Library")
             .join("Application Support")
             .join(BUNDLE_ID)
     }
@@ -168,6 +210,25 @@ pub fn chrome_support_dir() -> PathBuf {
 /// here.
 pub fn sessions_dir() -> PathBuf {
     app_support_dir().join("s")
+}
+
+/// The socket `ift join` viewers reach through ssh (`backend::join`). Short
+/// on purpose: the data dir already takes about 70 of the 103 bytes a unix
+/// socket path may have.
+pub fn join_socket() -> PathBuf {
+    app_support_dir().join("j.sock")
+}
+
+/// Every command run, one line each, for `ift usage` (`usage_log.rs`).
+/// Local only, beside `agent.log`.
+pub fn usage_log_path() -> PathBuf {
+    app_support_dir().join("usage.log")
+}
+
+/// The zsh integration a card's shell loads through ZDOTDIR
+/// (`shell_integration`), rewritten at every launch.
+pub fn shell_integration_dir() -> PathBuf {
+    app_support_dir().join("shell").join("zsh")
 }
 
 /// The endpoint `ift` and the hook binary connect to (`transport.rs`). Its
@@ -264,7 +325,16 @@ pub fn parent_dir(path: &str) -> String {
 /// resolved and its spelling says where it came from, not where it is being
 /// read.
 pub fn is_rooted(path: &str) -> bool {
-    path.starts_with('/') || path.starts_with('\\') || std::path::Path::new(path).is_absolute()
+    // `C:\x` and `C:/x`: a drive letter, a colon and a separator. Spelled
+    // out because `Path::is_absolute` only knows it on Windows, and this
+    // function's point is to answer the same on both.
+    let b = path.as_bytes();
+    let drive =
+        b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'/' | b'\\');
+    drive
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || std::path::Path::new(path).is_absolute()
 }
 
 /// `std::fs::canonicalize`, with the answer in a form a shell, a card label
@@ -311,10 +381,40 @@ mod tests {
         let path = layout_path();
         assert!(path.starts_with(app_support_dir()), "{path:?}");
         assert_eq!(path.file_name().unwrap(), "workspace.json");
-        #[cfg(unix)]
+        #[cfg(target_os = "macos")]
         assert!(path.to_string_lossy().contains("Application Support"));
         #[cfg(windows)]
         assert!(path.to_string_lossy().contains("infiniterm"));
+    }
+
+    // #118: a Mac keeps its data in Application Support, Linux where XDG says.
+    #[test]
+    fn the_default_data_dir_follows_the_os() {
+        let home = std::path::Path::new("/home/u");
+        assert_eq!(
+            default_data_dir(home, None, false),
+            home.join("Library/Application Support/dev.ekinertac.infiniterm")
+        );
+        assert_eq!(
+            default_data_dir(home, None, true),
+            home.join(".local/share/dev.ekinertac.infiniterm")
+        );
+        let xdg = std::ffi::OsString::from("/data");
+        assert_eq!(
+            default_data_dir(home, Some(&xdg), true),
+            std::path::Path::new("/data/dev.ekinertac.infiniterm")
+        );
+        let relative = std::ffi::OsString::from("data");
+        assert_eq!(
+            default_data_dir(home, Some(&relative), true),
+            home.join(".local/share/dev.ekinertac.infiniterm"),
+            "a relative XDG_DATA_HOME is ignored"
+        );
+        assert_eq!(
+            default_data_dir(home, Some(&xdg), false),
+            home.join("Library/Application Support/dev.ekinertac.infiniterm"),
+            "a Mac ignores it"
+        );
     }
 
     // The override moves the save file and the drafts (and the socket, see
@@ -324,6 +424,10 @@ mod tests {
         let dir = std::env::temp_dir().join("infiniterm-x");
         assert_eq!(data_dir(Some(dir.as_os_str())), dir);
         assert_ne!(data_dir(None), dir);
+        #[cfg(not(windows))]
+        assert!(data_dir(None)
+            .to_string_lossy()
+            .contains("dev.ekinertac.infiniterm"));
         assert!(layout_path().starts_with(app_support_dir()));
         assert!(drafts_dir().starts_with(app_support_dir()));
     }
@@ -370,6 +474,15 @@ mod tests {
         assert_ne!(path_hash("/tmp/a"), path_hash("/tmp/b"));
         assert_eq!(path_hash("/tmp/a"), path_hash("/tmp/a"));
         assert_ne!(path_hash(""), path_hash("x"));
+    }
+
+    #[test]
+    fn an_instance_with_its_own_data_dir_starts_with_its_own_config() {
+        use std::ffi::OsStr;
+        let (cfg, data) = (OsStr::new("/c"), OsStr::new("/d"));
+        assert_eq!(config_dir_for(Some(cfg), Some(data)), PathBuf::from("/c"));
+        assert_eq!(config_dir_for(None, Some(data)), PathBuf::from("/d/config"));
+        assert!(config_dir_for(None, None).ends_with(".config/infiniterm"));
     }
 
     // The config is hand-edited and this is not; they must never collide.

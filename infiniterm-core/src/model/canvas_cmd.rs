@@ -2,19 +2,63 @@
 //! palette, the shortcuts panel, the settings pair, the theme picker,
 //! reload. Port of `commands/canvas.ts`.
 use super::palette_state::Source;
-use super::{ConfigPair, Effect, Model};
+use super::{ConfigPair, Effect, Model, WHATS_NEW_FLASH_MS};
 use crate::chrome::{clamp_ui_scale, UI_SCALE_STEP};
 use crate::config_files::{config_path, ConfigFile};
 use crate::grid::Point;
 use crate::ift::{open_plan, PathKind};
 use crate::saved_layout::CardKind;
-use crate::viewport::{bounding_rect, centre_on, fit_rect, viewport_centre, MAX_SCALE, MIN_SCALE};
+use crate::viewport::{bounding_rect, centre_on, viewport_centre, MAX_SCALE, MIN_SCALE};
 
 impl Model {
     /// Keyboard zoom, pinned to the active card at the MIDDLE of the view.
     /// The anchor is deliberately constant: pinning a visible card where it
     /// sat and centring an off-screen one made the same key behave two ways.
     /// Chains from the pending target so a held key ramps evenly.
+    /// Moves the view `dx`, `dy` SCREEN pixels (so a press goes as far on screen
+    /// at every zoom), animated like any viewport change (#398). A key that
+    /// repeats adds its step to where the last one is heading
+    /// (`pending_pan`). The focus stays where it is, as with the mouse. A hand
+    /// pan ends card zoom (`stop_framing`), as the others do.
+    pub fn pan_canvas(&mut self, dx: f64, dy: f64) {
+        self.stop_framing();
+        let scale = self.viewport.scale.max(MIN_SCALE);
+        let from = self.pending_pan.unwrap_or(Point {
+            x: self.viewport.x,
+            y: self.viewport.y,
+        });
+        let to = Point {
+            x: from.x + dx / scale,
+            y: from.y + dy / scale,
+        };
+        self.pending_pan = Some(to);
+        self.effects.push(Effect::AnimatePan { x: to.x, y: to.y });
+    }
+
+    pub fn open_whats_new(&mut self) {
+        self.whats_new_open = true;
+        self.whats_new_flash_until = 0.;
+    }
+
+    pub fn close_whats_new(&mut self) {
+        self.whats_new_open = false;
+    }
+
+    /// A key was typed into the sheet: it flashes, and nothing else happens.
+    pub fn flash_whats_new(&mut self) {
+        self.whats_new_flash_until = self.now_ms + WHATS_NEW_FLASH_MS;
+    }
+
+    /// A frame is due while the sheet flashes and once more when it stops, so
+    /// the border goes back to its colour.
+    pub fn whats_new_wants_frame(&self, now_ms: f64) -> bool {
+        self.whats_new_open && now_ms < self.whats_new_flash_until + 100.
+    }
+
+    pub fn whats_new_flashing(&self, now_ms: f64) -> bool {
+        self.whats_new_open && now_ms < self.whats_new_flash_until
+    }
+
     pub fn zoom_by(&mut self, factor: f64) {
         let anchor_world = match self.focused() {
             Some(c) => Point {
@@ -86,10 +130,11 @@ impl Model {
                 .collect();
             self.config_pairs.push(ConfigPair { ids, return_to });
         }
-        // Focus set through the extend path, so the extras (the defaults
-        // card) survive the focus landing on the user's file.
-        let extra = defaults.iter().filter(|d| **d != user).cloned().collect();
-        self.focus_extended(&user, extra);
+        // Your file alone is focused and selected: the defaults card is for
+        // reading, and a two-card selection meant deselecting before the
+        // file you came for would take a key (#91). Both stay in view, and
+        // the pair still closes as one (`config_pairs`).
+        self.focus_extended(&user, vec![]);
         let rects: Vec<_> = defaults
             .iter()
             .chain(std::iter::once(&user))
@@ -97,7 +142,7 @@ impl Model {
             .map(|c| c.rect)
             .collect();
         if let Some(bounds) = bounding_rect(&rects) {
-            self.apply_viewport(fit_rect(bounds, self.view_size));
+            self.apply_viewport(self.fit_viewport(bounds));
         }
     }
 
@@ -123,6 +168,17 @@ impl Model {
 }
 
 pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
+    for (id, label, dx, dy) in [
+        ("canvas.pan.left", "Canvas: pan left", -1., 0.),
+        ("canvas.pan.right", "Canvas: pan right", 1., 0.),
+        ("canvas.pan.up", "Canvas: pan up", 0., -1.),
+        ("canvas.pan.down", "Canvas: pan down", 0., 1.),
+    ] {
+        r.register(id, label, move |m| {
+            let step = m.config.ui.pan_step;
+            m.pan_canvas(dx * step, dy * step)
+        });
+    }
     // Centre on the active card if there is one, otherwise hold the point
     // you are already looking at; never reset to the origin.
     r.register("canvas.zoom.actual", "Canvas: actual size (100%)", |m| {
@@ -144,6 +200,19 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // been split the whole space those halves share. Framing half a slot
     // put the other half off screen, and a split is not somewhere else.
     r.register("canvas.zoom.fitCard", "Canvas: fit the selection", |m| {
+        // Cmd+1 on the terminal card the view already frames: reading mode
+        // (#313). Pressed again, or Cmd+2, it leaves, through the fit below.
+        if m.reading.is_none()
+            && m.config.ui.card_zoom > 0.
+            && m.framing
+            && m.selected().len() == 1
+            && m.framed_card.is_some()
+            && m.framed_card.as_deref() == m.selection.focused_id.as_deref()
+            && m.focused().is_some_and(|c| c.kind == CardKind::Terminal)
+        {
+            m.read_card();
+            return;
+        }
         let selected = m.selected();
         let rects: Vec<_> = selected.iter().map(|c| c.rect).collect();
         let groups: Vec<_> = selected.iter().map(|c| c.soft_group_id.clone()).collect();
@@ -156,12 +225,67 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("canvas.zoom.fitAll", "Canvas: fit all cards", |m| {
         let rects: Vec<_> = m.here().iter().map(|c| c.rect).collect();
         if let Some(bounds) = bounding_rect(&rects) {
-            let next = fit_rect(bounds, m.view_size);
+            let next = m.fit_viewport(bounds);
+            m.apply_viewport(next);
+        }
+    });
+    // Cards dragged about by hand, back into the block new cards fill, in
+    // the order you read them now, each keeping its size; then fit all so
+    // you see the result. Cmd+Z puts them back.
+    // Groups and split clusters move as units, their inside arrangement
+    // kept (`layout::tidy_units`); loose cards each on their own.
+    r.register("canvas.tidy", "Canvas: tidy the cards into a block", |m| {
+        let here: Vec<crate::model::Card> = m.here().into_iter().cloned().collect();
+        if here.len() < 2 {
+            return;
+        }
+        // A card's unit: its group, else its split cluster, else itself.
+        let mut keys: Vec<String> = vec![];
+        let mut pad: Vec<f64> = vec![];
+        let unit: Vec<usize> = here
+            .iter()
+            .map(|c| {
+                let (key, p) = match (&c.group_id, &c.soft_group_id) {
+                    (Some(g), _) => (format!("g:{g}"), m.group_pad()),
+                    (None, Some(s)) => (format!("s:{s}"), 0.),
+                    _ => (format!("c:{}", c.id), 0.),
+                };
+                match keys.iter().position(|k| *k == key) {
+                    Some(u) => u,
+                    None => {
+                        keys.push(key);
+                        pad.push(p);
+                        keys.len() - 1
+                    }
+                }
+            })
+            .collect();
+        let rects: Vec<_> = here.iter().map(|c| c.rect).collect();
+        let grid = (
+            Point {
+                x: crate::grid::HALF_CELL,
+                y: crate::grid::HALF_CELL,
+            },
+            m.default_size(),
+        );
+        let placed = crate::layout::tidy_units(&rects, &unit, &pad, m.gap(), grid);
+        m.remember_layout();
+        let ids: Vec<String> = here.iter().map(|c| c.id.clone()).collect();
+        m.mark_swap(&ids);
+        for (c, rect) in here.iter().zip(placed) {
+            if let Some(card) = m.card_mut(&c.id) {
+                card.rect = rect;
+            }
+        }
+        m.dirty_layout = true;
+        let all: Vec<_> = m.here().iter().map(|c| c.rect).collect();
+        if let Some(bounds) = bounding_rect(&all) {
+            let next = m.fit_viewport(bounds);
             m.apply_viewport(next);
         }
     });
     // Toggle: the key that opened it is the obvious one to press to dismiss it.
-    r.register("app.palette", "Run a command", |m| {
+    r.register("app.palette", "Run a command…", |m| {
         if m.palette_open() {
             m.close_palette(false);
         } else {
@@ -175,6 +299,9 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // One owner now.
     r.register("app.emoji", "App: emoji & symbols", |m| {
         m.effects.push(Effect::ShowCharacterPalette);
+    });
+    r.register("app.about", "App: about infiniterm", |m| {
+        m.prompt.about(super::Pending::About);
     });
     r.register("app.shortcuts", "App: keyboard shortcuts", |m| {
         m.shortcuts_open = !m.shortcuts_open
@@ -195,6 +322,29 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         "App: open settings, beside the defaults",
         |m| m.open_config_pair(false),
     );
+    r.register("help.docs", "Help: open the docs", |m| {
+        let from = m.focused().map(|c| c.id.clone());
+        if let Some(id) = m.open_docs(from.as_deref()) {
+            m.set_focus(Some(&id));
+        }
+    });
+    r.register("help.welcome", "Help: open the welcome card", |m| {
+        let from = m.focused().map(|c| c.id.clone());
+        if let Some(id) = m.open_welcome(from.as_deref()) {
+            m.set_focus(Some(&id));
+        }
+    });
+    // The overlay the first launch after an update shows, reachable any time
+    // (#402). Esc or its X closes it; a key typed into it flashes it.
+    r.register("help.whatsNew", "Help: show what's new", |m| {
+        m.open_whats_new()
+    });
+    r.register("help.changelog", "Help: open the changelog", |m| {
+        let from = m.focused().map(|c| c.id.clone());
+        if let Some(id) = m.open_changelog(from.as_deref()) {
+            m.set_focus(Some(&id));
+        }
+    });
     r.register(
         "app.keybindings",
         "App: open keybindings, beside the defaults",
@@ -202,7 +352,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     );
     // The theme picker: the reason the palette exists. The theme in force is
     // captured HERE, before any preview runs, so cancel can put it back.
-    r.register("theme.pick", "Theme: switch", |m| {
+    r.register("theme.pick", "Theme: switch…", |m| {
         m.theme_before_preview = m.theme_current.clone();
         m.effects.push(Effect::RefreshThemes);
         m.open_palette(Source::Themes);
@@ -223,6 +373,9 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // The label says "keycast" because that is the word typed into the
     // palette to find it; "show pressed shortcuts" alone matched nothing
     // Ekin tried.
+    r.register("app.fullscreen", "App: toggle full screen", |m| {
+        m.effects.push(Effect::ToggleFullScreen)
+    });
     r.register(
         "app.keycast",
         "App: keycast, show pressed shortcuts on screen",

@@ -37,6 +37,26 @@ _ift_sessions() {
   _describe -t sessions 'session or card number' rows
 }
 
+_ift_cards() {
+  # `ift ls` into a pipe: id, group, directory, state, remote, #card.
+  local -a rows
+  local id group dir state remote card
+  while IFS=$'\t' read -r id group dir state remote card; do
+    [[ $card == \#* ]] && rows+=("${card#\#}:${dir//:/\\:} (${state})")
+  done < <(ift ls 2>/dev/null)
+  _describe -t cards 'card number' rows
+}
+
+_ift_command_ids() {
+  # `ift commands` into a pipe: id, label, key.
+  local -a rows
+  local id label key
+  while IFS=$'\t' read -r id label key; do
+    [[ -n $id ]] && rows+=("${id}:${label//:/\\:}")
+  done < <(ift commands 2>/dev/null)
+  _describe -t commands 'command id' rows
+}
+
 _ift_groups() {
   # `ift ls` into a pipe: id, group, directory, state, remote, card.
   local -a groups
@@ -54,13 +74,27 @@ _ift() {
     'ls:cards as a table'
     'sessions:session daemons still running, app or no app'
     'attach:connect a session'\''s shell to this terminal'
+    'connect:open a second infiniterm for a host'
+    'serve:hold this Mac'\''s canvas for viewers with the app closed'
+    'join:a viewer window on the canvas running on a host'
+    'terminal:a terminal card in each folder'
+    'send:type into a card'\''s shell'
+    'read:print what a card shows'
+    'close:close a card'
+    'run:run a registered command by id'
     'omni:what the omnibox would show for a term'
     'commands:every command the app registers, with its key'
+    'usage:the commands and gestures you used, and the ones you never did'
+    'licence:register this Mac with its commercial licence key'
     'name:name the card this is run from'
     'group:put this card in a group'
     'install:put ift on $PATH and this completion on fpath'
     'install-claude-hooks:wire infiniterm into ~/.claude/settings.json'
+    'install-codex-hooks:wire infiniterm into ~/.codex/hooks.json'
+    'install-opencode-hooks:install the OpenCode plugin'
     'install-pi-hooks:install the Pi extension'
+    'install-cursor-hooks:wire infiniterm into ~/.cursor/hooks.json'
+    'install-antigravity-hooks:wire infiniterm into ~/.gemini/config/hooks.json'
     'install-extension:add an extension the browser cards load'
     'completion:print the zsh completion'
   )
@@ -70,11 +104,23 @@ _ift() {
     return
   fi
   case $words[2] in
+    serve) _arguments '--detach[run in the background]' '--stop[end the running one]' ;;
     attach) (( CURRENT == 3 )) && _ift_sessions ;;
+    join) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_hosts' ;;
+    connect) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_hosts' ;;
+    send) (( CURRENT == 3 )) && _ift_cards ;;
+    read) (( CURRENT == 3 )) && _ift_cards || _arguments '--lines[the last N lines only]:lines:' '--all[include the history]' ;;
+    close) (( CURRENT == 3 )) && _ift_cards ;;
+    run) (( CURRENT == 3 )) && _ift_command_ids ;;
     diff) _files -/ ;;
+    terminal) _files -/ ;;
     group) _ift_groups ;;
     install-pi-hooks) _arguments '--dry-run[show the edit, write nothing]' '1:agent dir:_files -/' ;;
     install-claude-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
+    install-codex-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
+    install-opencode-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
+    install-cursor-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
+    install-antigravity-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;
     install-extension) _files -/ ;;
     sessions) _arguments '--full[every column: id, pid, cwd, command, started]' ;;
     completion) _values 'shell' zsh ;;

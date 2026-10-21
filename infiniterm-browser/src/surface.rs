@@ -6,6 +6,10 @@
 //! card can raise when drawn above 100%, popups turned into urls for the
 //! ui to open as cards, and the title and address for the label and the
 //! save file.
+// CEF's flag enums wrap a `u32` on macOS and an `i32` on Windows, and the
+// casts to `u32` below are what make one source line right on both. On the
+// Mac they are the same type, which clippy calls unnecessary.
+#![allow(clippy::unnecessary_cast)]
 use crate::moat;
 use cef::*;
 
@@ -17,6 +21,17 @@ type CursorHandle = *mut sys::HICON__;
 #[cfg(not(windows))]
 type CursorHandle = *mut u8;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
+
+/// `[browser]` lines on stderr under INFINITERM_KEYLOG: the size handshake with
+/// CEF (what the card asked for, what CEF asked back, what it painted), which
+/// is how #479's "sometimes it works, sometimes not" was found. Read once.
+/// How many of CEF's recent size and scale asks are kept to explain a frame.
+const ASKED_KEPT: usize = 8;
+
+pub fn keylog() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("INFINITERM_KEYLOG").is_some())
+}
 
 /// A scale below this makes CEF's layout math degenerate; a card zoomed
 /// far out still asks for a real, paintable surface.
@@ -38,6 +53,13 @@ pub struct Frame {
     pub width: u32,
     pub height: u32,
     pub bgra: Vec<u8>,
+    /// The size CEF laid the page out at (CSS pixels) when it painted this
+    /// frame: the last `view_rect` it asked for, NOT what the card wants
+    /// now. The pixels are that size times the device scale, so the ui can
+    /// draw an old frame at its natural size while a resize is still being
+    /// repainted instead of stretching it to the new card (#479).
+    pub css_width: i32,
+    pub css_height: i32,
 }
 
 /// A right-click, in page pixels (the same space `mouse_down` takes), and
@@ -50,10 +72,19 @@ pub struct ContextMenuRequest {
     pub link_url: Option<String>,
     pub editable: bool,
     pub has_selection: bool,
+    /// The page's history, so the menu offers Back and Forward only when
+    /// there is somewhere to go.
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    /// The page's own address, for "open in the system browser".
+    pub page_url: String,
 }
 
 #[derive(Default)]
 pub struct Shared {
+    /// The page's DevTools target id, asked for after each load (see
+    /// `TargetIdBuilder`). None until the first load ends.
+    pub target_id: Option<String>,
     pub frame: Option<Arc<Frame>>,
     /// A frame arrived since the ui last took one.
     pub dirty: bool,
@@ -66,6 +97,24 @@ pub struct Shared {
     /// The size the page lays out at, in CSS pixels.
     pub width: i32,
     pub height: i32,
+    /// The size CEF last ASKED for in `view_rect` (0 before the first ask):
+    /// what the next painted frame is laid out at. It trails `width` and
+    /// `height` by one round trip after a resize, which is the whole point.
+    pub reported_width: i32,
+    pub reported_height: i32,
+    /// The device scale CEF last ASKED for in `screen_info` (0 before the
+    /// first ask), the scale of the frames it paints from then on.
+    pub reported_scale: f32,
+    /// The last few sizes (CSS pixels) and device scales CEF asked for, newest
+    /// last: a frame is laid out at one pair of them, whichever its own pixels
+    /// prove (`frame_fit::frame_layout_size`), not at the newest ask (#479).
+    pub asked: Vec<(i32, i32)>,
+    pub asked_scales: Vec<f32>,
+    /// The (width, height, scale) last DELIVERED to CEF with `was_resized`: a
+    /// size is only "sent" once the browser host existed to take it. Compared
+    /// against, instead of what the card last wanted, so a size asked for before
+    /// the host was there is not forgotten (#479).
+    pub sent: (i32, i32, f32),
     pub scale: f32,
     /// The last find's result: how many matches and which one is current.
     /// Chromium reports this several times per search as it walks the page,
@@ -92,16 +141,41 @@ wrap_render_handler! {
     impl RenderHandler {
         fn view_rect(&self, _browser: Option<&mut Browser>, rect: Option<&mut Rect>) {
             if let Some(rect) = rect {
-                let s = self.handler.shared.borrow();
+                let mut s = self.handler.shared.borrow_mut();
                 rect.width = s.width.max(1);
                 rect.height = s.height.max(1);
+                // What the frame CEF paints next is laid out at (see `Frame`).
+                s.reported_width = rect.width;
+                s.reported_height = rect.height;
+                let ask = (rect.width, rect.height);
+                if s.asked.last() != Some(&ask) {
+                    s.asked.push(ask);
+                    if s.asked.len() > ASKED_KEPT {
+                        s.asked.remove(0);
+                    }
+                }
+                if keylog() {
+                    eprintln!("[browser] view_rect asked -> {}x{}", rect.width, rect.height);
+                }
             }
         }
 
         fn screen_info(&self, _browser: Option<&mut Browser>, info: Option<&mut ScreenInfo>) -> ::std::os::raw::c_int {
             match info {
                 Some(info) => {
-                    info.device_scale_factor = self.handler.shared.borrow().scale;
+                    let mut s = self.handler.shared.borrow_mut();
+                    info.device_scale_factor = s.scale;
+                    s.reported_scale = s.scale;
+                    let scale = s.scale;
+                    if s.asked_scales.last() != Some(&scale) {
+                        s.asked_scales.push(scale);
+                        if s.asked_scales.len() > ASKED_KEPT {
+                            s.asked_scales.remove(0);
+                        }
+                    }
+                    if keylog() {
+                        eprintln!("[browser] screen_info asked -> scale {}", s.scale);
+                    }
                     1
                 }
                 None => 0,
@@ -123,7 +197,35 @@ wrap_render_handler! {
             let len = (width * height * 4) as usize;
             let bgra = unsafe { std::slice::from_raw_parts(buffer, len) }.to_vec();
             let mut shared = self.handler.shared.borrow_mut();
-            shared.frame = Some(Arc::new(Frame { width: width as u32, height: height as u32, bgra }));
+            // The layout size the pixels prove, not the newest size CEF asked
+            // for (see `frame_fit::frame_layout_size`: the race of #479).
+            // Before CEF has asked for anything, the requested size and scale
+            // are the best answer there is.
+            let fallback_scale = if shared.reported_scale > 0. { shared.reported_scale } else { shared.scale };
+            let (css_width, css_height) = if shared.asked.is_empty() {
+                (shared.width, shared.height)
+            } else {
+                crate::frame_fit::frame_layout_size(
+                    width as u32,
+                    height as u32,
+                    &shared.asked,
+                    &shared.asked_scales,
+                    fallback_scale,
+                )
+            };
+            if keylog() {
+                eprintln!(
+                    "[browser] on_paint {width}x{height}px tagged css {css_width}x{css_height} (requested {}x{} @{}, reported scale {})",
+                    shared.width, shared.height, shared.scale, shared.reported_scale
+                );
+            }
+            shared.frame = Some(Arc::new(Frame {
+                width: width as u32,
+                height: height as u32,
+                bgra,
+                css_width,
+                css_height,
+            }));
             shared.dirty = true;
             shared.paints += 1;
         }
@@ -257,7 +359,15 @@ wrap_load_handler! {
     }
 
     impl LoadHandler {
-        fn on_loading_state_change(&self, _browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, _can_go_back: ::std::os::raw::c_int, _can_go_forward: ::std::os::raw::c_int) {
+        fn on_loading_state_change(&self, browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, _can_go_back: ::std::os::raw::c_int, _can_go_forward: ::std::os::raw::c_int) {
+            // Ask again once a load ends: a page that moved to another site
+            // can come back with another main frame, and the DevTools
+            // command needs the id the page has now.
+            if is_loading == 0 {
+                if let Some(host) = browser.and_then(|b| b.host()) {
+                    host.execute_dev_tools_method(TARGET_QUERY_ID, Some(&"Page.getFrameTree".into()), None);
+                }
+            }
             self.handler.shared.borrow_mut().loading = is_loading == 1;
         }
     }
@@ -300,7 +410,7 @@ wrap_context_menu_handler! {
         // is no native window to anchor one to) is never asked for.
         fn run_context_menu(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             _frame: Option<&mut cef::Frame>,
             params: Option<&mut ContextMenuParams>,
             _model: Option<&mut MenuModel>,
@@ -319,6 +429,9 @@ wrap_context_menu_handler! {
                         flags,
                         sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0 as u32,
                     ),
+                    can_go_back: browser.as_ref().is_some_and(|b| b.can_go_back() == 1),
+                    can_go_forward: browser.as_ref().is_some_and(|b| b.can_go_forward() == 1),
+                    page_url: CefStringUtf16::from(&params.page_url()).to_string(),
                 });
             }
             if let Some(callback) = callback {
@@ -335,6 +448,69 @@ fn has_flag(flags: u32, bit: u32) -> bool {
     flags & bit != 0
 }
 
+wrap_request_handler! {
+    struct RequestBuilder {
+        handler: Handler,
+    }
+
+    impl RequestHandler {
+        // A middle-click or Cmd+click on a link reaches the browser process
+        // here, not through `on_before_popup`: with no answer Chromium
+        // follows the link in the tab it came from. The address is queued
+        // for the ui as a popup is, and the navigation refused.
+        fn on_open_urlfrom_tab(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            target_url: Option<&CefString>,
+            target_disposition: WindowOpenDisposition,
+            _user_gesture: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            if target_disposition == sys::cef_window_open_disposition_t::CEF_WOD_CURRENT_TAB.into() {
+                return 0;
+            }
+            if let Some(url) = target_url {
+                let url = url.to_string();
+                if !url.is_empty() {
+                    self.handler.shared.borrow_mut().popups.push(url);
+                }
+            }
+            1
+        }
+    }
+}
+
+/// The message id of our one DevTools question, `Page.getFrameTree`: its
+/// answer carries the main frame's id, which is the page's target id on the
+/// debugging port. CEF's own frame identifier is a different value.
+const TARGET_QUERY_ID: i32 = 7001;
+
+wrap_dev_tools_message_observer! {
+    struct TargetIdBuilder {
+        handler: Handler,
+    }
+
+    impl DevToolsMessageObserver {
+        fn on_dev_tools_method_result(
+            &self,
+            _browser: Option<&mut Browser>,
+            message_id: ::std::os::raw::c_int,
+            success: ::std::os::raw::c_int,
+            result: Option<&[u8]>,
+        ) {
+            if message_id != TARGET_QUERY_ID || success != 1 {
+                return;
+            }
+            let Some(text) = result.and_then(|r| std::str::from_utf8(r).ok()) else {
+                return;
+            };
+            if let Some(id) = infiniterm_core::devtools::target_id_from_frame_tree(text) {
+                self.handler.shared.borrow_mut().target_id = Some(id);
+            }
+        }
+    }
+}
+
 wrap_client! {
     struct ClientBuilder {
         render_handler: RenderHandler,
@@ -343,9 +519,13 @@ wrap_client! {
         load_handler: LoadHandler,
         find_handler: FindHandler,
         context_menu_handler: ContextMenuHandler,
+        request_handler: RequestHandler,
     }
 
     impl Client {
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(self.request_handler.clone())
+        }
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(self.render_handler.clone())
         }
@@ -370,6 +550,8 @@ wrap_client! {
 pub struct Surface {
     browser: cef::Browser,
     pub shared: Rc<RefCell<Shared>>,
+    /// Keeps the target id observer registered for as long as the surface.
+    _target_id_observer: Option<Registration>,
 }
 
 impl Surface {
@@ -385,6 +567,7 @@ impl Surface {
         let handler = Handler {
             shared: shared.clone(),
         };
+        let handler_for_observer = handler.clone();
         let window_info = WindowInfo {
             windowless_rendering_enabled: 1,
             ..Default::default()
@@ -399,7 +582,8 @@ impl Surface {
             DisplayBuilder::new(handler.clone()),
             LoadBuilder::new(handler.clone()),
             FindBuilder::new(handler.clone()),
-            ContextMenuBuilder::new(handler),
+            ContextMenuBuilder::new(handler.clone()),
+            RequestBuilder::new(handler),
         );
         let browser = browser_host_create_browser_sync(
             Some(&window_info),
@@ -409,17 +593,30 @@ impl Surface {
             None,
             None,
         )?;
+        let mut target_id_observer = None;
         if let Some(host) = browser.host() {
             moat::apply(&host);
+            let mut observer = TargetIdBuilder::new(handler_for_observer);
+            target_id_observer = host.add_dev_tools_message_observer(Some(&mut observer));
         }
         if let Some(frame) = browser.main_frame() {
             frame.load_url(Some(&url.into()));
         }
-        Some(Surface { browser, shared })
+        Some(Surface {
+            browser,
+            shared,
+            _target_id_observer: target_id_observer,
+        })
     }
 
     fn host(&self) -> Option<BrowserHost> {
         self.browser.host()
+    }
+
+    /// The page's id on the debugging port, once a load has ended and CEF
+    /// has answered; the DevTools command builds its address from it.
+    pub fn target_id(&self) -> Option<String> {
+        self.shared.borrow().target_id.clone()
     }
 
     pub fn navigate(&self, url: &str) {
@@ -434,6 +631,12 @@ impl Surface {
 
     pub fn forward(&self) {
         self.browser.go_forward();
+    }
+
+    /// Whether the page has history behind it: a tab a link opened has none,
+    /// and Back there means "close this tab".
+    pub fn can_go_back(&self) -> bool {
+        self.browser.can_go_back() == 1
     }
 
     pub fn reload(&self) {
@@ -468,19 +671,45 @@ impl Surface {
     /// The layout size or the device scale changed: tell CEF, which asks
     /// `view_rect` and `screen_info` again and repaints.
     pub fn resize(&self, width: i32, height: i32, scale: f32) {
+        let (w, h) = (width.max(1), height.max(1));
         let changed = {
             let mut s = self.shared.borrow_mut();
-            let changed = s.width != width.max(1) || s.height != height.max(1) || s.scale != scale;
-            s.width = width.max(1);
-            s.height = height.max(1);
+            s.width = w;
+            s.height = h;
             s.scale = scale;
-            changed
+            // Against what CEF was last TOLD, not what the card last wanted:
+            // a size set while the browser host did not exist yet was never
+            // delivered, and comparing with the wanted size would call it
+            // unchanged from then on (#479).
+            s.sent != (w, h, scale)
         };
         if changed {
+            if keylog() {
+                eprintln!("[browser] resize -> css {w}x{h} @{scale}");
+            }
             if let Some(host) = self.host() {
                 host.notify_screen_info_changed();
                 host.was_resized();
+                self.shared.borrow_mut().sent = (w, h, scale);
             }
+        }
+    }
+
+    /// Ask CEF to paint again at the size the card wants now, when the newest
+    /// frame is of an older one and nothing more is coming (`frame_fit::needs_kick`,
+    /// #479): the size and scale are told again and the whole view invalidated.
+    pub fn kick(&self) {
+        if let Some(host) = self.host() {
+            if keylog() {
+                let s = self.shared.borrow();
+                eprintln!(
+                    "[browser] kick: repaint at css {}x{} @{}",
+                    s.width, s.height, s.scale
+                );
+            }
+            host.notify_screen_info_changed();
+            host.was_resized();
+            host.invalidate(PaintElementType::VIEW);
         }
     }
 
@@ -548,10 +777,17 @@ impl Surface {
     }
 
     fn mouse(x: f32, y: f32, mods: Mods) -> MouseEvent {
+        // Cmd is for the mouse only: a key sent with it would reach the page
+        // as a shortcut the app already took.
+        let command = if mods.command {
+            sys::cef_event_flags_t::EVENTFLAG_COMMAND_DOWN.0
+        } else {
+            0
+        };
         MouseEvent {
             x: x as i32,
             y: y as i32,
-            modifiers: Self::flags(mods),
+            modifiers: Self::flags(mods) | command,
         }
     }
 
@@ -591,12 +827,20 @@ impl Surface {
                 Button::Middle => MouseButtonType::MIDDLE,
                 Button::Right => MouseButtonType::RIGHT,
             };
-            host.send_mouse_click_event(
-                Some(&Self::mouse(x, y, mods)),
-                b,
-                up as i32,
-                clicks.max(1) as i32,
-            );
+            let mut event = Self::mouse(x, y, mods);
+            // Chromium reads which button is down from the flags as well as
+            // from the event's button: without this a middle press on a link
+            // was a plain click.
+            if !up && button == Button::Middle {
+                event.modifiers |= sys::cef_event_flags_t::EVENTFLAG_MIDDLE_MOUSE_BUTTON.0;
+            }
+            if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                eprintln!(
+                    "[mouse] {button:?} up={up} flags={:#x} at {},{}",
+                    event.modifiers, event.x, event.y
+                );
+            }
+            host.send_mouse_click_event(Some(&event), b, up as i32, clicks.max(1) as i32);
         }
     }
 
@@ -694,6 +938,8 @@ pub struct Mods {
     pub shift: bool,
     pub control: bool,
     pub alt: bool,
+    /// Cmd: with it Chromium opens a clicked link in a new tab.
+    pub command: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -860,13 +1106,19 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_navigation_keys_carry_their_extended_prefix() {
-        for name in ["left", "up", "right", "down", "home", "end", "pageup", "pagedown", "delete"] {
+        for name in [
+            "left", "up", "right", "down", "home", "end", "pageup", "pagedown", "delete",
+        ] {
             let code = native_key_code(name);
             assert_eq!(code & 0xFF00, 0xE000, "{name} is missing its E0 prefix");
         }
         // And the ones that are not extended do not carry it.
         for name in ["enter", "backspace", "tab", "escape", "space", "f1", "f12"] {
-            assert_eq!(native_key_code(name) & 0xFF00, 0, "{name} must not be extended");
+            assert_eq!(
+                native_key_code(name) & 0xFF00,
+                0,
+                "{name} must not be extended"
+            );
         }
     }
 

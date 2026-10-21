@@ -17,11 +17,13 @@ use gpui::{
 };
 use infiniterm_core::agent_state::AgentState;
 use infiniterm_core::format_zoom::format_zoom;
-use infiniterm_core::palette::{highlight, rank, sectionise, step_index, RankedItem, MAX_RESULTS};
+use infiniterm_core::palette::{
+    fit_label, highlight, rank, sectionise, step_index, RankedItem, MAX_RESULTS,
+};
 use infiniterm_core::palette_usage::{recent_keys, usage_bonus, use_key, RECENT_LIMIT};
 use infiniterm_core::saved_layout::CardKind;
 use infiniterm_core::shortcuts::{filter_shortcuts, shortcut_sections, GESTURES};
-use infiniterm_core::workspaces::{reading_order, tab_dots};
+use infiniterm_core::workspaces::reading_order;
 
 /// Rows the palette shows at once; the selection is kept inside the window.
 const PALETTE_ROWS: usize = 14;
@@ -57,7 +59,8 @@ pub fn key_cap_box(key: &str, chrome: &crate::chrome::Chrome, ui: f32) -> gpui::
         .py(px(KEY_CAP_PAD_Y_PX * ui))
         .rounded_sm()
         .bg(chrome.text_bright)
-        .text_size(px(KEY_CAP_FONT_PX * ui))
+        .font_weight(chrome.typography.bold.weight)
+        .text_size(px(chrome.typography.size(KEY_CAP_FONT_PX) * ui))
         .text_color(chrome.bar_bg)
         .child(key.to_string())
 }
@@ -81,6 +84,9 @@ const CAPTION_FONT_PX: f32 = 11.;
 /// An overlay's body text: the palette's rows, the prompt's field, the
 /// shortcuts list.
 pub const OVERLAY_BODY_FONT_PX: f32 = 13.;
+/// A text field's minimum height in lines of the body font, so an empty
+/// field is not a sliver (the save-as field once opened as one).
+pub const FIELD_LINE_HEIGHT: f32 = 1.4;
 /// The palette and shortcuts panel sit this far from the top, clear of the
 /// title bar.
 pub const OVERLAY_TOP_PAD_PX: f32 = 80.;
@@ -91,6 +97,14 @@ const PROMPT_TOP_PAD_PX: f32 = 120.;
 const PROMPT_WIDTH_PX: f32 = 480.;
 /// The dialog's insides: padding, the gap between its rows, and the buttons.
 const DIALOG_PAD_PX: f32 = 16.;
+/// The About window: the icon's side, the space between its lines, the
+/// name's size, and the address it links to.
+/// How far a remote instance's title bar leans toward its host's colour.
+const REMOTE_BAR_TINT: f32 = 0.32;
+const ABOUT_ICON_PX: f32 = 96.;
+const ABOUT_GAP_PX: f32 = 6.;
+const ABOUT_TITLE_FONT_PX: f32 = 18.;
+const ABOUT_SITE: &str = "https://infiniterm.app";
 const DIALOG_GAP_PX: f32 = 10.;
 const DIALOG_BUTTON_GAP_PX: f32 = 8.;
 const DIALOG_BUTTON_PAD_X_PX: f32 = 12.;
@@ -133,7 +147,22 @@ impl AppView {
         // the source listed it. See `Source::keeps_its_order`.
         if source.keeps_its_order() {
             let ranked = rank(&items, &self.model.palette.query, MAX_RESULTS, |_| 0.);
-            return (ranked.items, ranked.total, vec![]);
+            // The active theme stands apart from the choices: an untitled
+            // heading after it is a rule (#72). Only while it leads the list;
+            // typing may filter it away.
+            let active_first = ranked.items.first().is_some_and(|i| {
+                i.item.hint.as_deref()
+                    == Some(infiniterm_core::model::palette_state::ACTIVE_THEME_HINT)
+            });
+            let heads = if source == infiniterm_core::model::palette_state::Source::Themes
+                && active_first
+                && ranked.items.len() > 1
+            {
+                vec![(String::new(), 1)]
+            } else {
+                vec![]
+            };
+            return (ranked.items, ranked.total, heads);
         }
         let usage = &self.model.usage;
         let ranked = rank(&items, &self.model.palette.query, MAX_RESULTS, |id| {
@@ -208,10 +237,71 @@ impl AppView {
     }
 
     /// The panel takes the keys while open: Escape closes, typing filters.
+    /// The commands the panel shows for its filter, in order, with the list
+    /// child each row is (a section's heading comes before its rows), for
+    /// the highlight, the copy and the scroll.
+    fn shortcut_rows(&self) -> Vec<(String, usize)> {
+        let labels = self.command_labels();
+        let labels_ref: Vec<(&str, &str)> = labels
+            .iter()
+            .map(|(i, l)| (i.as_str(), l.as_str()))
+            .collect();
+        let sections = filter_shortcuts(
+            &shortcut_sections(
+                &self.model.keymap,
+                &labels_ref,
+                self.model.modifier_labels(),
+            ),
+            &self.shortcuts_field.text,
+        );
+        let mut rows = vec![];
+        let mut child = 0;
+        for s in sections {
+            child += 1;
+            for sc in s.shortcuts {
+                rows.push((sc.id, child));
+                child += 1;
+            }
+        }
+        rows
+    }
+
     pub fn shortcuts_key(&mut self, k: &Keystroke, cx: &mut gpui::App) -> bool {
         if k.key == "escape" {
             self.model.shortcuts_open = false;
             self.shortcuts_field = crate::field::Field::default();
+            self.shortcuts_index = 0;
+            return true;
+        }
+        let m = &k.modifiers;
+        let plain = !m.platform && !m.alt && !m.control && !m.shift;
+        let rows = self.shortcut_rows();
+        // Up and Down walk the rows; the scroll follows the highlight.
+        if plain && (k.key == "down" || k.key == "up") {
+            let last = rows.len().saturating_sub(1);
+            self.shortcuts_index = if k.key == "down" {
+                (self.shortcuts_index + 1).min(last)
+            } else {
+                self.shortcuts_index.saturating_sub(1)
+            };
+            if let Some((_, child)) = rows.get(self.shortcuts_index) {
+                self.shortcuts_scroll.scroll_to_item(*child);
+            }
+            return true;
+        }
+        // Cmd+C copies the highlighted command's id, what keybindings.json
+        // binds (#76); a selection in the filter field is copied instead.
+        if m.platform
+            && !m.shift
+            && !m.alt
+            && !m.control
+            && k.key == "c"
+            && !self.shortcuts_field.selected()
+        {
+            if let Some((id, _)) = rows.get(self.shortcuts_index) {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(id.clone()));
+                self.model.notify(format!("copied {id}"));
+            }
             return true;
         }
         let paste = (k.modifiers.platform && k.key == "v")
@@ -221,14 +311,35 @@ impl AppView {
         if let Some(text) = edit.clipboard() {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
         }
+        // A new filter starts the highlight on its first match.
+        if edit.changed() {
+            self.shortcuts_index = 0;
+            self.shortcuts_scroll.scroll_to_item(0);
+        }
         !matches!(edit, crate::field::Edit::Ignored)
     }
 
     pub fn prompt_key(&mut self, k: &Keystroke, cx: &mut gpui::App) -> bool {
         let confirm = self.model.prompt.confirm;
         let mut taken = true;
+        let back = k.modifiers.shift;
         let settled = match k.key.as_str() {
             "escape" => self.model.prompt.settle(None),
+            // A confirm's buttons are walked by keys and Enter presses the
+            // highlighted one (prompt.rs says why one key, not macOS's two).
+            "enter" if confirm => self.model.prompt.press_choice(),
+            "left" | "up" if confirm => {
+                self.model.prompt.move_choice(-1);
+                None
+            }
+            "right" | "down" if confirm => {
+                self.model.prompt.move_choice(1);
+                None
+            }
+            "tab" if confirm => {
+                self.model.prompt.move_choice(if back { -1 } else { 1 });
+                None
+            }
             "enter" => {
                 let v = self.model.prompt.value.clone();
                 self.model.prompt.settle(Some(&v))
@@ -259,15 +370,44 @@ impl AppView {
 }
 
 impl AppView {
+    /// A window-level fill (canvas, title bar, status bar) at the window's
+    /// opacity; cards, dialogs and text keep theirs.
+    pub fn window_fill(&self, c: gpui::Hsla) -> gpui::Hsla {
+        crate::chrome::with_alpha(c, c.a * self.model.config.ui.window_opacity as f32)
+    }
+
+    /// Tells gpui whether the window may show the desktop through it, and
+    /// whether blurred. Only on a change: the call touches the NSWindow.
+    fn sync_window_background(&mut self, window: &mut Window) {
+        use gpui::WindowBackgroundAppearance as Bg;
+        let ui = &self.model.config.ui;
+        let want = if ui.window_opacity >= 1. {
+            Bg::Opaque
+        } else if ui.window_blur {
+            Bg::Blurred
+        } else {
+            Bg::Transparent
+        };
+        if self.window_bg != Some(want) {
+            window.set_background_appearance(want);
+            self.window_bg = Some(want);
+        }
+    }
+
     /// Keeps the two fields in step with the model's strings: a prompt that
     /// just opened gets its suggestion selected; a palette query that the
     /// model reset (it always resets on open) empties the field.
     fn sync_fields(&mut self) {
         let open = self.model.prompt.is_open();
-        if open && !self.prompt_was_open {
-            self.prompt_field = crate::field::Field::open(&self.model.prompt.value, true);
+        let serial = self.model.prompt.serial;
+        if open && (!self.prompt_was_open || serial != self.prompt_serial) {
+            self.prompt_field = match self.model.prompt.select {
+                Some((a, b)) => crate::field::Field::open_selecting(&self.model.prompt.value, a, b),
+                None => crate::field::Field::open(&self.model.prompt.value, true),
+            };
         }
         self.prompt_was_open = open;
+        self.prompt_serial = serial;
         if !self.model.shortcuts_open && !self.shortcuts_field.text.is_empty() {
             self.shortcuts_field = crate::field::Field::default();
         }
@@ -284,22 +424,44 @@ impl AppView {
 }
 
 impl Render for AppView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_fields();
+        self.sync_window_background(window);
+        if !self.window_titled {
+            if let Some(r) = &self.model.remote {
+                window.set_window_title(&format!("infiniterm: {}", r.name));
+                self.window_titled = true;
+            }
+        }
+        // A fade is an animation: the system's reduced-motion switch and
+        // `ui.animations` turn it into a cut.
+        let animate = self.model.config.ui.animations && !self.reduce_motion;
+        self.background.update(
+            &self.model.config.ui,
+            self.backgrounds_dir.as_deref(),
+            animate,
+            crate::now_ms(),
+            window,
+            cx,
+        );
+        let background = self.background.layers(
+            self.model.config.ui.background_image_fit,
+            self.window_fill(self.chrome.canvas_bg),
+        );
         let chrome = self.chrome.clone();
         let entity = cx.entity();
         let focus = self.focus.clone();
         let title_bar = self.render_title_bar(cx);
         let status_bar = self.render_status_bar(cx);
-        let palette = self.model.palette_open().then(|| self.render_palette(cx));
+        let palette = self
+            .model
+            .palette_open()
+            .then(|| self.render_palette(window, cx));
         let prompt = self.model.prompt.is_open().then(|| self.render_prompt(cx));
-        let shortcuts = self.model.shortcuts_open.then(|| self.render_shortcuts());
+        let shortcuts = self.model.shortcuts_open.then(|| self.render_shortcuts(cx));
         let omnibox = self.model.omni.open.then(|| self.render_omnibox(cx));
+        let whats_new = self.model.whats_new_open.then(|| self.render_whats_new(cx));
         let find_bar = self.model.find.open.then(|| self.render_find_bar(cx));
-        let context_menu = self
-            .context_menu
-            .is_some()
-            .then(|| self.render_context_menu(cx));
         let keycast = self
             .keycasts_alive(crate::now_ms())
             .then(|| self.render_keycast());
@@ -313,7 +475,11 @@ impl Render for AppView {
             .size_full()
             .flex()
             .flex_col()
-            .bg(chrome.canvas_bg)
+            .bg(if self.model.config.ui.window_opacity < 1. {
+                crate::chrome::with_alpha(chrome.canvas_bg, 0.)
+            } else {
+                chrome.canvas_bg
+            })
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 if this.key_down(e, cx) {
@@ -321,6 +487,10 @@ impl Render for AppView {
                     // the same key again as a key down.
                     cx.stop_propagation();
                 }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &crate::AboutApp, _, cx| {
+                this.run_command("app.about");
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &crate::CheckForUpdates, _, cx| {
@@ -344,6 +514,20 @@ impl Render for AppView {
                     cx.notify();
                 }
             }))
+            // The pointer over the title bar or the status bar is not over a
+            // card edge or a page: the canvas's hover state (the card edge's
+            // resize cursor, a browser page's cursor) is dropped there, or
+            // it would keep answering for a pointer that left (#256).
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
+                let top = this.titlebar_h();
+                let y = f32::from(e.position.y) as f64;
+                let outside = y < top as f64 || y > top as f64 + this.model.view_size.h;
+                if outside && (this.hover_edge.is_some() || this.hover_body.is_some()) {
+                    this.hover_edge = None;
+                    this.hover_body = None;
+                    cx.notify();
+                }
+            }))
             .child(title_bar)
             .child(
                 div()
@@ -362,6 +546,22 @@ impl Render for AppView {
                         MouseButton::Middle,
                         cx.listener(|this, e: &MouseDownEvent, _, _| this.mouse_down(e)),
                     )
+                    // The mouse's back and forward buttons go through the
+                    // page under the pointer, like a browser's.
+                    .on_mouse_down(
+                        MouseButton::Navigate(gpui::NavigationDirection::Back),
+                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                            this.mouse_navigate(e, false);
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Navigate(gpui::NavigationDirection::Forward),
+                        cx.listener(|this, e: &MouseDownEvent, _, cx| {
+                            this.mouse_navigate(e, true);
+                            cx.notify();
+                        }),
+                    )
                     // A browser card's own right-click menu (CEF asks for it
                     // once the down and up both arrive); every other body
                     // ignores the button, same as it always has.
@@ -370,6 +570,7 @@ impl Render for AppView {
                         cx.listener(|this, e: &MouseDownEvent, window, cx| {
                             window.focus(&this.focus);
                             this.mouse_down(e);
+                            this.open_context_menu(e, cx);
                             cx.notify();
                         }),
                     )
@@ -397,6 +598,7 @@ impl Render for AppView {
                             cx.notify();
                         }),
                     )
+                    .children(background)
                     .child(
                         canvas(
                             |_, _, _| (),
@@ -410,7 +612,14 @@ impl Render for AppView {
                                     cx,
                                 );
                                 let more = entity.update(cx, |this, cx| {
+                                    let started = std::time::Instant::now();
                                     this.frame(bounds, window, cx);
+                                    if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+                                        eprintln!(
+                                            "[main-window] frame {} us",
+                                            started.elapsed().as_micros()
+                                        );
+                                    }
                                     this.needs_frame()
                                 });
                                 // Only while something moves or arrives; an idle
@@ -427,8 +636,8 @@ impl Render for AppView {
                     .children(prompt)
                     .children(shortcuts)
                     .children(omnibox)
+                    .children(whats_new)
                     .children(find_bar)
-                    .children(context_menu)
                     .children(keycast)
                     .children(switcher),
             )
@@ -441,44 +650,123 @@ impl AppView {
         // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
         let ui = self.model.ui_scale as f32;
         let chrome = &self.chrome;
+        let tab_font_px = chrome.typography.size(TAB_LABEL_FONT_PX) * ui;
         let active = self.model.active_workspace.clone();
+        // Any window can wear a colour (`window.color`): a remote one its
+        // host's, the local one its choice, and none is the normal bar. The
+        // tabs follow it (#173): the chosen tab's fill leans the same way and
+        // the other names are drawn brighter, since the muted grey was made
+        // for the plain bar and fades on a tint.
+        let wear = self.model.window_color();
+        let crate::chrome::TabColors {
+            bar,
+            idle_text,
+            idle_faint,
+            chosen_fill,
+        } = crate::chrome::tab_colors(chrome, wear, REMOTE_BAR_TINT);
+        // theme.json (#425) wins over the tint for the ground and sets the edge.
+        let bar_style = chrome.bar_style(&self.model.chrome_theme.titlebar, bar);
         let mut tabs = div().flex().items_center().gap_1();
-        for ws in &self.model.workspaces {
+        for (index, ws) in self.model.workspaces.iter().enumerate() {
             let cards = self.model.cards_on(Some(&ws.id));
             let is_active = active.as_deref() == Some(&ws.id);
-            // In the cards' reading order on the canvas, so the row of dots
-            // is the row of cards.
+            // One dot per card, in the cards' reading order on the canvas, so
+            // the row of dots is the row of cards, each the card's own
+            // colour: a done card is green only until you have looked at
+            // it (`Model::clear_seen_done`), so a lit dot is news.
             let rects: Vec<_> = cards.iter().map(|c| c.rect).collect();
-            let timed: Vec<_> = reading_order(&rects)
+            let dots: Vec<_> = reading_order(&rects)
                 .into_iter()
-                .map(|i| (cards[i].agent, cards[i].last_event_at))
+                .map(|i| cards[i].agent)
                 .collect();
-            let dots = tab_dots(
-                &timed,
-                self.model.left_at.get(&ws.id).copied().unwrap_or(0.),
-                is_active,
-            );
             let id = ws.id.clone();
+            let menu_id = ws.id.clone();
+            let drop_line = chrome.text_bright;
             let mut tab = div()
                 .id(gpui::SharedString::from(format!("tab-{}", ws.id)))
                 .flex()
                 .items_center()
                 .gap_1()
-                .px_2()
+                // The side borders are always there (clear) so the drop line
+                // appears without moving the tabs: 2 px border + 6 px padding
+                // is the 8 px of `px_2`.
+                .border_l_2()
+                .border_r_2()
+                .border_color(gpui::transparent_black())
+                .px(px(6.))
                 .py_1()
                 .rounded_sm()
-                .text_size(px(TAB_LABEL_FONT_PX * ui))
+                .text_size(px(tab_font_px))
+                .font_weight(if is_active {
+                    chrome.typography.bold.weight
+                } else {
+                    chrome.typography.regular.weight
+                })
                 .text_color(if is_active {
                     chrome.text_bright
                 } else {
-                    chrome.text_muted
+                    idle_text
                 })
-                .when(is_active, |d| d.bg(chrome.control_bg))
+                .when(is_active, |d| d.bg(chosen_fill))
+                .cursor_pointer()
+                .when(!is_active, |d| {
+                    d.hover(|s| s.bg(crate::chrome::hover_fill(chosen_fill)))
+                })
+                // Drag a tab onto another to take its place (#242).
+                .on_drag(
+                    crate::tab_drag::DraggedTab {
+                        id: ws.id.clone(),
+                        from: index,
+                        name: ws.name.clone(),
+                        font_family: chrome.typography.family.clone().into(),
+                        font_weight: chrome.typography.bold.weight,
+                        font_px: tab_font_px,
+                        bg: chosen_fill,
+                        fg: chrome.text_bright,
+                    },
+                    |dragged, _, _, cx| cx.new(|_| crate::tab_drag::TabGhost(dragged.clone())),
+                )
+                // A line at the edge where the dragged tab will sit after the
+                // drop, not a fill on the tab under it (#417).
+                .drag_over::<crate::tab_drag::DraggedTab>(move |style, dragged, _, _| {
+                    match infiniterm_core::workspaces::drop_side(dragged.from, index) {
+                        Some(infiniterm_core::workspaces::DropSide::Left) => {
+                            style.border_l_2().border_color(drop_line)
+                        }
+                        Some(infiniterm_core::workspaces::DropSide::Right) => {
+                            style.border_r_2().border_color(drop_line)
+                        }
+                        None => style,
+                    }
+                })
+                .on_drop(
+                    cx.listener(move |this, dragged: &crate::tab_drag::DraggedTab, _, cx| {
+                        this.model.move_workspace(&dragged.id, index);
+                        this.perform_effects();
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                        this.open_tab_menu(&menu_id, cx);
+                    }),
+                )
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                    cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                        // The bar behind a tab would start a window drag; the
+                        // tab's own drag is the one wanted here (#414).
+                        cx.stop_propagation();
                         this.model.show_workspace(&id);
                         this.perform_effects();
+                        // A double-click on the name renames it (#413), the
+                        // way a double-click on a card's label fits the card.
+                        // The first click already made this workspace the
+                        // active one, which is what the command renames.
+                        if e.click_count >= 2 {
+                            this.run_command("workspace.rename");
+                        }
                         cx.notify();
                     }),
                 )
@@ -489,13 +777,12 @@ impl AppView {
             for state in dots {
                 let color = match state {
                     AgentState::Waiting => chrome.agent_waiting,
+                    AgentState::Failed => chrome.agent_failed,
                     AgentState::Working => {
                         crate::chrome::with_alpha(chrome.agent_working, TAB_WORKING_DOT_ALPHA)
                     }
                     AgentState::Done => chrome.agent_done,
-                    AgentState::None => {
-                        crate::chrome::with_alpha(chrome.text_faint, TAB_IDLE_DOT_ALPHA)
-                    }
+                    AgentState::None => crate::chrome::with_alpha(idle_faint, TAB_IDLE_DOT_ALPHA),
                 };
                 tab = tab.child(
                     div()
@@ -510,43 +797,87 @@ impl AppView {
         tabs = tabs.child(
             div()
                 .id("tab-new")
+                .cursor_pointer()
+                .hover(|s| s.bg(crate::chrome::hover_fill(chosen_fill)))
                 .px_2()
                 .py_1()
-                .text_size(px(TAB_LABEL_FONT_PX * ui))
-                .text_color(chrome.text_faint)
+                .text_size(px(tab_font_px))
+                .text_color(idle_faint)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
                         this.run_command("workspace.new");
                         cx.notify();
                     }),
                 )
                 .child("+"),
         );
+        // A remote instance wears its host's colour: the bar leans toward it and
+        // a chip on the right names the host, so it is never taken for the
+        // local canvas (#118).
+        let remote = self.model.remote.clone();
+        let chip = remote.map(|r| {
+            let color = gpui::rgb(
+                ((r.color.0 as u32) << 16) | ((r.color.1 as u32) << 8) | r.color.2 as u32,
+            );
+            let luma =
+                0.299 * r.color.0 as f32 + 0.587 * r.color.1 as f32 + 0.114 * r.color.2 as f32;
+            div()
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .bg(color)
+                .text_color(if luma > 140. {
+                    gpui::black()
+                } else {
+                    gpui::white()
+                })
+                .text_size(px(tab_font_px))
+                .font_weight(chrome.typography.bold.weight)
+                .child(r.name)
+        });
         div()
             .h(px(self.titlebar_h()))
             .w_full()
             .flex()
             .items_center()
+            .justify_between()
             .pl(px(TITLE_BAR_TRAFFIC_LIGHT_INSET_PX))
             .pr_2()
-            .bg(chrome.bar_bg)
+            .bg(self.window_fill(bar_style.bg))
             .border_b_1()
-            .border_color(chrome.bar_border)
-            .font_family("Menlo")
+            .border_color(bar_style.border.unwrap_or(gpui::transparent_black()))
+            .font_family(chrome.typography.family.clone())
+            .font_weight(chrome.typography.regular.weight)
+            // A press that reaches the bar itself (not a tab or the "+", which
+            // stop it) drags the window; a double-click does the system's
+            // title bar action. `title_drag.rs` says why this is by hand.
+            .on_mouse_down(MouseButton::Left, |e: &MouseDownEvent, window, _| {
+                if e.click_count >= 2 {
+                    window.titlebar_double_click();
+                } else {
+                    crate::title_drag::begin();
+                }
+            })
             .child(tabs)
+            .children(chip)
     }
 
     /// Whether the focused card is a locked browser: the one fact the
     /// status bar needs to say the keyboard currently means something
     /// different than it did a keystroke ago.
     fn browser_lock_indicator(&self) -> Option<&'static str> {
+        if self.model.reading.is_some() {
+            return Some("zoomed: Cmd+Up/Down pan, Cmd+1 leaves");
+        }
         self.model
             .focused()
             .filter(|c| c.locked)
             .and_then(|c| match c.kind {
                 CardKind::Browser => Some("locked: browser"),
                 CardKind::Editor => Some("locked: editor"),
+                CardKind::Diff => Some("locked: diff"),
                 _ => None,
             })
     }
@@ -558,8 +889,8 @@ impl AppView {
         let mut left = format!(
             "{}   {} card{}",
             format_zoom(m.viewport.scale),
-            m.cards.len(),
-            if m.cards.len() == 1 { "" } else { "s" }
+            m.card_count(),
+            if m.card_count() == 1 { "" } else { "s" }
         );
         if let Some(c) = m.focused() {
             left.push_str(&format!("   {}", m.numbered_label(c)));
@@ -567,17 +898,41 @@ impl AppView {
         if m.selection.maximized {
             left.push_str("   maximised");
         }
+        let pwd = m
+            .config
+            .ui
+            .status_bar_pwd
+            .then(|| m.focused())
+            .flatten()
+            .and_then(|c| {
+                infiniterm_core::card_label::status_bar_path(
+                    c.kind,
+                    &m.label_of(c),
+                    &c.cwd,
+                    &m.home,
+                )
+            });
+        let pwd_right =
+            m.config.ui.status_bar_pwd_side == infiniterm_core::config::StatusBarSide::Right;
+        if let Some(p) = pwd.as_deref().filter(|_| !pwd_right) {
+            left.push_str(&format!("   {p}"));
+        }
         let notice = m.notice.clone().unwrap_or_default();
-        let right = if m.config.ui.show_fps {
-            format!("{:.0} fps", self.fps)
-        } else {
-            String::new()
-        };
-        let fps_color = if self.fps < LOW_FPS_THRESHOLD && self.fps > 0. {
+        // Only while frames are drawn back to back; at rest, nothing
+        // (issue #16: a rationed canvas read "6 fps" in the warn colour).
+        let rate = m
+            .config
+            .ui
+            .show_fps
+            .then(|| self.frame_rate.shown(crate::now_ms()))
+            .flatten();
+        let right = rate.map(|r| format!("{r:.0} fps")).unwrap_or_default();
+        let fps_color = if rate.is_some_and(|r| r < LOW_FPS_THRESHOLD as f64) {
             chrome.warn
         } else {
             chrome.text_faint
         };
+        let bar_style = chrome.bar_style(&m.chrome_theme.statusbar, chrome.bar_bg);
         div()
             .h(px(self.statusbar_h()))
             .w_full()
@@ -585,23 +940,49 @@ impl AppView {
             .items_center()
             .justify_between()
             .px_2()
-            .bg(chrome.bar_bg)
+            .bg(self.window_fill(bar_style.bg))
             .border_t_1()
-            .border_color(chrome.bar_border)
-            .font_family("Menlo")
+            .border_color(bar_style.border.unwrap_or(gpui::transparent_black()))
+            .font_family(chrome.typography.family.clone())
+            .font_weight(chrome.typography.regular.weight)
             .text_size(size)
             .text_color(chrome.text_muted)
-            .child(div().child(left))
+            // A long directory (`ui.statusBarPwd`, #371) is cut with an
+            // ellipsis rather than pushed over the notice.
+            .child(div().min_w_0().truncate().child(left))
             .child(div().text_color(chrome.text).child(notice))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
+                    // The directory gives way first: it shrinks and is cut,
+                    // the build number and the other segments keep their size.
+                    .min_w_0()
+                    .children(
+                        pwd.filter(|_| pwd_right)
+                            .map(|p| div().min_w_0().truncate().child(p)),
+                    )
                     .children(
                         self.browser_lock_indicator()
                             .map(|label| div().text_color(chrome.warn).child(label)),
                     )
+                    // A settings.json that was not accepted stays said until a
+                    // valid one lands: the notice fades, and the app keeps
+                    // running on the old settings, so nothing else would tell.
+                    .children(m.settings_error.as_ref().map(|e| {
+                        div()
+                            .text_color(chrome.warn)
+                            .child(format!("settings.json not applied: {e}"))
+                    }))
+                    // A closed card whose agent waits for you, and the key
+                    // that brings it back (lifecycle.rs, parked).
+                    .children(m.waiting_parked().map(|c| {
+                        div().text_color(chrome.warn).child(format!(
+                            "{} (closed) is waiting for you: Alt+T",
+                            m.numbered_label(c)
+                        ))
+                    }))
                     // A downloaded update stays said, in the colour that
                     // asks for attention, until the restart installs it;
                     // the notice alone faded before Ekin could read it.
@@ -639,7 +1020,7 @@ impl AppView {
             )
     }
 
-    fn render_palette(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_palette(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
         let ui = self.model.ui_scale as f32;
         let chrome = &self.chrome;
@@ -652,6 +1033,29 @@ impl AppView {
             .saturating_sub(PALETTE_ROWS - 1)
             .min(flat.len().saturating_sub(PALETTE_ROWS));
         let query = self.model.palette.query.clone();
+        // What a label may take of a row (#492): the sheet's width less its
+        // border and the row's padding, measured in the palette's own font.
+        let rem = f32::from(window.rem_size());
+        let palette_w = PALETTE_WIDTH_PX * ui;
+        let source_hint_is_prose = matches!(
+            source,
+            infiniterm_core::model::palette_state::Source::Snippets
+                | infiniterm_core::model::palette_state::Source::Themes
+        );
+        let body_px = px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui);
+        let cap_px = px(chrome.typography.size(KEY_CAP_FONT_PX) * ui);
+        let mut body_font = gpui::font(chrome.typography.family.clone());
+        body_font.weight = chrome.typography.regular.weight;
+        let mut cap_font = gpui::font(chrome.typography.family.clone());
+        cap_font.weight = chrome.typography.bold.weight;
+        let measure = |text: &str, cap: bool| -> f32 {
+            let (size, font) = if cap {
+                (cap_px, &cap_font)
+            } else {
+                (body_px, &body_font)
+            };
+            f32::from(crate::text::shape(window, text, size, font, chrome.text).width)
+        };
         let mut list = div().flex().flex_col();
         if flat.is_empty() {
             list = list.child(
@@ -664,25 +1068,54 @@ impl AppView {
         }
         for (i, item) in flat.iter().enumerate().skip(start).take(PALETTE_ROWS) {
             if let Some((title, at)) = heads.iter().find(|(_, at)| *at == i) {
-                list = list.child(
-                    div()
-                        .px_3()
-                        .pt_2()
-                        .pb_1()
-                        // A rule above every heading but the first, so the
-                        // split is visible before the words are read.
-                        .when(*at > 0, |d| {
-                            d.border_t_1().border_color(chrome.bar_border).mt_1()
-                        })
-                        .text_size(px(PALETTE_SECTION_FONT_PX * ui))
-                        .text_color(chrome.text_faint)
-                        .child(title.clone()),
-                );
+                if title.is_empty() {
+                    // An untitled heading is a plain rule: the line under
+                    // the active theme (#72), no room kept for words.
+                    list = list.child(div().mx_3().my_1().h(px(1.)).bg(chrome.bar_border));
+                } else {
+                    list = list.child(
+                        div()
+                            .px_3()
+                            .pt_2()
+                            .pb_1()
+                            // A rule above every heading but the first, so the
+                            // split is visible before the words are read.
+                            .when(*at > 0, |d| {
+                                d.border_t_1().border_color(chrome.bar_border).mt_1()
+                            })
+                            .font_weight(chrome.typography.bold.weight)
+                            .text_size(px(chrome.typography.size(PALETTE_SECTION_FONT_PX) * ui))
+                            .text_color(chrome.text_faint)
+                            .child(title.clone()),
+                    );
+                }
             }
             let selected = i == index;
             let id = item.item.id.clone();
-            let mut label = div().flex().gap_0();
-            for run in highlight(&item.item.label, &item.matched.matches) {
+            // The label gets what the keys (or a snippet's first line) leave
+            // of the row, and is cut to it with an ellipsis (#492): a card's
+            // label can be a whole sentence.
+            let hint_room = match &item.item.hint {
+                None => 0.,
+                Some(hint) if source_hint_is_prose => {
+                    measure(hint, false).min(SNIPPET_HINT_MAX_W_PX * ui)
+                }
+                Some(hint) => hint
+                    .split(' ')
+                    .map(|key| measure(key, true) + 2. * KEY_CAP_PAD_X_PX * ui + 0.25 * rem)
+                    .sum(),
+            };
+            let room = (palette_w - 2. - 1.5 * rem - hint_room - 0.5 * rem).max(0.);
+            let fitted = fit_label(&item.item.label, &item.matched.matches, room, |t| {
+                measure(t, false)
+            });
+            let mut label = div()
+                .flex()
+                .gap_0()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap();
+            for run in highlight(&fitted.text, &fitted.matches) {
                 label = label.child(
                     div()
                         .when(run.hit, |d| d.text_color(chrome.sel_bg))
@@ -697,6 +1130,10 @@ impl AppView {
                 .px_3()
                 .py_1()
                 .when(selected, |d| d.bg(chrome.row_selected))
+                .cursor_pointer()
+                .when(!selected, |d| {
+                    d.hover(|s| s.bg(crate::chrome::hover_fill(chrome.row_selected)))
+                })
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _: &MouseDownEvent, _, cx| {
@@ -712,7 +1149,12 @@ impl AppView {
                 // A hint is a chord, one cap per key, for every source but
                 // the snippets, whose hint is the text's first line and
                 // reads as prose: faint, one line, cut with an ellipsis.
-                if source == infiniterm_core::model::palette_state::Source::Snippets {
+                // The themes' "active" is a word, not a chord.
+                if matches!(
+                    source,
+                    infiniterm_core::model::palette_state::Source::Snippets
+                        | infiniterm_core::model::palette_state::Source::Themes
+                ) {
                     row = row.child(
                         div()
                             .max_w(px(SNIPPET_HINT_MAX_W_PX * ui))
@@ -749,7 +1191,22 @@ impl AppView {
             .flex()
             .justify_center()
             .pt(px(OVERLAY_TOP_PAD_PX * ui))
-            .bg(chrome.overlay_backdrop)
+            // No sheet over the canvas while themes are browsed: the theme is
+            // previewed on the cards behind it.
+            .bg(if source.dims_canvas() {
+                chrome.overlay_backdrop
+            } else {
+                crate::chrome::with_alpha(chrome.overlay_backdrop, 0.)
+            })
+            // A click outside the sheet closes it, as Escape does (and puts a
+            // previewed theme back); a click on the sheet stays on the sheet.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.model.close_palette(false);
+                    cx.notify();
+                }),
+            )
             .child(
                 div()
                     .w(px(PALETTE_WIDTH_PX * ui))
@@ -765,9 +1222,13 @@ impl AppView {
                             .border_color(chrome.overlay_border)
                             .rounded_md()
                             .shadow_lg()
-                            .font_family("Menlo")
-                            .text_size(px(OVERLAY_BODY_FONT_PX * ui))
+                            .font_family(chrome.typography.family.clone())
+                            .font_weight(chrome.typography.regular.weight)
+                            .text_size(px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui))
                             .text_color(chrome.text)
+                            .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
+                                cx.stop_propagation()
+                            })
                             .child(
                                 div()
                                     .px_3()
@@ -780,7 +1241,9 @@ impl AppView {
                                         chrome.text_bright
                                     })
                                     .when(query.is_empty(), |d| {
-                                        d.child(source.placeholder().to_string())
+                                        d.child(crate::field::Field::empty_with_placeholder(
+                                            source.placeholder(),
+                                        ))
                                     })
                                     .when(!query.is_empty(), |d| {
                                         d.child(self.query_field.inline_composing(
@@ -796,6 +1259,16 @@ impl AppView {
     }
 
     /// The dialog's verdict from a button: yes or no, then the answer.
+    /// A dialog button pressed, by what it does (a click, or a chord the
+    /// dialog takes first: Cmd+D, Cmd+.).
+    pub fn prompt_press(&mut self, kind: infiniterm_core::prompt::ButtonKind) {
+        if let Some((pending, text)) = self.model.prompt.press(kind) {
+            self.model
+                .answer(pending, text, |path| std::path::Path::new(path).exists());
+        }
+        self.perform_effects();
+    }
+
     pub fn prompt_settle(&mut self, yes: bool) {
         let v = self.model.prompt.value.clone();
         let settled = self.model.prompt.settle(yes.then_some(v.as_str()));
@@ -811,6 +1284,66 @@ impl AppView {
     /// buttons) and an alert (message, OK). Centred, modal in look, and
     /// every button has its key beside it because the keyboard is how the
     /// app is used; the buttons are there so a mouse is not refused.
+    /// What the About window says (#90): the icon, the name, the version and
+    /// build, who made it and where it lives. The website is a link. A Mac
+    /// registered with `ift licence` (#106) also says who it is licensed to;
+    /// an unregistered one says nothing, by design: no nag.
+    fn about_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use std::sync::{Arc, OnceLock};
+        static ICON: OnceLock<Arc<gpui::Image>> = OnceLock::new();
+        let icon = ICON
+            .get_or_init(|| {
+                Arc::new(gpui::Image::from_bytes(
+                    gpui::ImageFormat::Png,
+                    include_bytes!("../../assets/icon.png").to_vec(),
+                ))
+            })
+            .clone();
+        let ui = self.model.ui_scale as f32;
+        let chrome = &self.chrome;
+        let version = match self.build {
+            Some(b) => format!("Version {} (build {b})", env!("CARGO_PKG_VERSION")),
+            None => format!("Version {}", env!("CARGO_PKG_VERSION")),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(ABOUT_GAP_PX * ui))
+            .child(gpui::img(icon).size(px(ABOUT_ICON_PX * ui)))
+            .child(
+                div()
+                    .text_color(chrome.text_bright)
+                    .font_weight(chrome.typography.bold.weight)
+                    .text_size(px(chrome.typography.size(ABOUT_TITLE_FONT_PX) * ui))
+                    .child("infiniterm"),
+            )
+            .child(div().text_color(chrome.text_muted).child(version))
+            .child(div().text_color(chrome.text_muted).child("by Ekin Ertac"))
+            // shortcut: reads a tiny file each frame the About window is
+            // drawn, and frames come on demand, so a handful per opening.
+            .children(
+                infiniterm_core::licence::read(&infiniterm_core::licence::path()).map(|l| {
+                    div()
+                        .text_color(chrome.text_muted)
+                        .child(infiniterm_core::licence::licensed_to(&l))
+                }),
+            )
+            .child(
+                div()
+                    .id("about-site")
+                    .text_color(chrome.focus_ring)
+                    .cursor_pointer()
+                    .child(ABOUT_SITE.trim_start_matches("https://"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_, _: &MouseDownEvent, _, cx| {
+                            cx.open_url(ABOUT_SITE);
+                        }),
+                    ),
+            )
+    }
+
     fn render_prompt(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
         let ui = self.model.ui_scale as f32;
@@ -834,7 +1367,8 @@ impl AppView {
                     DIALOG_KEY_BG_ALPHA,
                 ))
                 .text_color(chrome.text_bright)
-                .text_size(px(KEY_CAP_FONT_PX * ui))
+                .font_weight(chrome.typography.bold.weight)
+                .text_size(px(chrome.typography.size(KEY_CAP_FONT_PX) * ui))
                 .child(label.to_string())
         };
         let button = |label: String, key: &str, primary: bool, chrome: &crate::chrome::Chrome| {
@@ -858,7 +1392,8 @@ impl AppView {
                 })
                 .text_color(if primary { chrome.sel_fg } else { chrome.text })
                 .child(label)
-                .child(key_cap(key, chrome))
+                // No key, no cap: an empty badge read as a lost shortcut.
+                .children((!key.is_empty()).then(|| key_cap(key, chrome)))
         };
         let mut body = div()
             .flex()
@@ -870,44 +1405,62 @@ impl AppView {
             .border_color(chrome.overlay_border)
             .rounded_lg()
             .shadow_lg()
-            .font_family("Menlo")
-            .text_size(px(OVERLAY_BODY_FONT_PX * ui));
+            .font_family(chrome.typography.family.clone())
+            .font_weight(chrome.typography.regular.weight)
+            .text_size(px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui));
         if is_confirm || is_alert {
             // The question, then the buttons: Cancel on the left, the verb on
             // the right in the selection colour, as macOS lays them out.
-            body = body.child(div().text_color(chrome.text_bright).child(p.label.clone()));
+            body = if p.about {
+                body.child(self.about_card(cx))
+            } else {
+                body.child(div().text_color(chrome.text_bright).child(p.label.clone()))
+            };
             let mut row = div()
                 .flex()
                 .justify_end()
                 .gap(px(DIALOG_BUTTON_GAP_PX * ui))
                 .pt(px(DIALOG_GAP_PX * ui));
-            if is_confirm {
-                row = row.child(
-                    button("Cancel".into(), "esc", false, &chrome).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                            this.prompt_settle(false);
-                            cx.notify();
-                        }),
-                    ),
-                );
-            }
-            row = row.child(
-                button(p.action.clone(), "enter", true, &chrome).on_mouse_down(
+            // Left to right as macOS lays them out (Don't Save, Cancel, the
+            // action). The highlighted button wears the focus ring and the
+            // `enter` cap, since Enter presses it; the others keep their
+            // own keys.
+            use infiniterm_core::prompt::ButtonKind;
+            for (i, (label, kind)) in p.buttons().into_iter().enumerate() {
+                let lit = i == p.choice;
+                let key = if lit {
+                    "enter"
+                } else {
+                    match kind {
+                        ButtonKind::Cancel => "esc",
+                        ButtonKind::Alt => "\u{2318}D",
+                        ButtonKind::Primary => "",
+                    }
+                };
+                let mut b = button(label, key, kind == ButtonKind::Primary, &chrome);
+                if lit {
+                    b = b.border_2().border_color(chrome.focus_ring);
+                }
+                row = row.child(b.cursor_pointer().hover(|s| s.opacity(0.85)).on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                        this.prompt_settle(true);
+                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                        this.prompt_press(kind);
                         cx.notify();
                     }),
-                ),
-            );
-            body = body.child(row);
+                ));
+            }
+            // About has no buttons (Ekin, 2026-10-04): Enter, Escape or a
+            // click outside closes it, and the app menu checks for updates.
+            if !p.about {
+                body = body.child(row);
+            }
         } else {
             body = body
                 .child(
                     div()
                         .text_color(chrome.text_muted)
-                        .text_size(px(CAPTION_FONT_PX * ui))
+                        .font_weight(chrome.typography.bold.weight)
+                        .text_size(px(chrome.typography.size(CAPTION_FONT_PX) * ui))
                         .child(p.label.clone()),
                 )
                 .child(
@@ -915,6 +1468,10 @@ impl AppView {
                         .flex()
                         .px_2()
                         .py_1()
+                        // An empty field is still a line tall.
+                        .min_h(px(chrome.typography.size(OVERLAY_BODY_FONT_PX)
+                            * ui
+                            * FIELD_LINE_HEIGHT))
                         .rounded_sm()
                         .bg(chrome.control_bg)
                         .border_1()
@@ -930,7 +1487,7 @@ impl AppView {
                         .gap(px(DIALOG_BUTTON_GAP_PX * ui))
                         .items_center()
                         .text_color(chrome.text_faint)
-                        .text_size(px(KEY_CAP_FONT_PX * ui))
+                        .text_size(px(chrome.typography.size(KEY_CAP_FONT_PX) * ui))
                         .child(key_cap("enter", &chrome))
                         .child("confirm")
                         .child(key_cap("esc", &chrome))
@@ -970,7 +1527,7 @@ impl AppView {
     /// The palette's shape and place, on purpose: the two are the same kind
     /// of thing, a searchable list of what the app can do. Taller, because
     /// this one is meant to be read as well as searched.
-    fn render_shortcuts(&self) -> impl IntoElement {
+    fn render_shortcuts(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
         let ui = self.model.ui_scale as f32;
         let chrome = &self.chrome;
@@ -989,11 +1546,14 @@ impl AppView {
             &query,
         );
         let key_box = |key: &str| key_cap_box(key, chrome, ui);
+        let mut row_ix = 0usize;
+        let highlighted = self.shortcuts_index;
         let mut list = div()
             .id("shortcuts-list")
             .flex()
             .flex_col()
             .overflow_y_scroll()
+            .track_scroll(&self.shortcuts_scroll)
             .max_h(px(SHORTCUTS_LIST_MAX_H_PX * ui))
             .pb_2();
         for s in sections {
@@ -1002,7 +1562,8 @@ impl AppView {
                     .px_4()
                     .pt_3()
                     .pb_1()
-                    .text_size(px(CAPTION_FONT_PX * ui))
+                    .font_weight(chrome.typography.bold.weight)
+                    .text_size(px(chrome.typography.size(CAPTION_FONT_PX) * ui))
                     .text_color(chrome.text_muted)
                     .child(s.title.to_uppercase()),
             );
@@ -1015,13 +1576,38 @@ impl AppView {
                     }
                     keys = keys.child(k);
                 }
+                let this_row = row_ix;
+                row_ix += 1;
                 list = list.child(
                     div()
+                        .id(gpui::SharedString::from(format!("sc-{}", sc.id)))
                         .flex()
                         .justify_between()
                         .px_4()
                         .py(px(SHORTCUTS_ROW_PAD_PX * ui))
-                        .child(div().text_color(chrome.text).child(sc.label))
+                        .when(this_row == highlighted, |d| d.bg(chrome.row_selected))
+                        .cursor_pointer()
+                        .when(this_row != highlighted, |d| {
+                            d.hover(|s| s.bg(crate::chrome::hover_fill(chrome.row_selected)))
+                        })
+                        // A click highlights the row, for Cmd+C (#76).
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                this.shortcuts_index = this_row;
+                                cx.notify();
+                            }),
+                        )
+                        // The id beside the label, faint: what keybindings.json
+                        // binds, which nothing in the app showed (#74).
+                        .child(
+                            div()
+                                .flex()
+                                .items_baseline()
+                                .gap_2()
+                                .child(div().text_color(chrome.text).child(sc.label))
+                                .child(div().text_color(chrome.text_faint).child(sc.id)),
+                        )
                         .child(keys),
                 );
             }
@@ -1030,7 +1616,7 @@ impl AppView {
         let q = query.trim().to_lowercase();
         let gestures: Vec<_> = GESTURES
             .iter()
-            .filter(|(keys, label)| {
+            .filter(|(keys, label, _)| {
                 q.is_empty()
                     || label.to_lowercase().contains(&q)
                     || keys.to_lowercase().contains(&q)
@@ -1042,11 +1628,12 @@ impl AppView {
                     .px_4()
                     .pt_3()
                     .pb_1()
-                    .text_size(px(CAPTION_FONT_PX * ui))
+                    .font_weight(chrome.typography.bold.weight)
+                    .text_size(px(chrome.typography.size(CAPTION_FONT_PX) * ui))
                     .text_color(chrome.text_muted)
                     .child("GESTURES"),
             );
-            for (keys, label) in gestures {
+            for (keys, label, _) in gestures {
                 list = list.child(
                     div()
                         .flex()
@@ -1067,6 +1654,16 @@ impl AppView {
             .justify_center()
             .pt(px(OVERLAY_TOP_PAD_PX * ui))
             .bg(chrome.overlay_backdrop)
+            // A click outside the sheet closes the panel, as Escape does.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.model.shortcuts_open = false;
+                    this.shortcuts_field = crate::field::Field::default();
+                    this.shortcuts_index = 0;
+                    cx.notify();
+                }),
+            )
             .child(
                 div().w(px(SHORTCUTS_WIDTH_PX * ui)).h(px(0.)).child(
                     div()
@@ -1077,22 +1674,29 @@ impl AppView {
                         .border_color(chrome.overlay_border)
                         .rounded_md()
                         .shadow_lg()
-                        .font_family("Menlo")
-                        .text_size(px(OVERLAY_BODY_FONT_PX * ui))
+                        .font_family(chrome.typography.family.clone())
+                        .font_weight(chrome.typography.regular.weight)
+                        .text_size(px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui))
+                        .on_mouse_down(MouseButton::Left, |_: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation()
+                        })
                         .child(
                             div()
                                 .px_4()
                                 .py_3()
                                 .border_b_1()
                                 .border_color(chrome.card_border)
-                                .text_size(px(PANEL_TITLE_FONT_PX * ui))
+                                .font_weight(chrome.typography.bold.weight)
+                                .text_size(px(chrome.typography.size(PANEL_TITLE_FONT_PX) * ui))
                                 .text_color(if query.is_empty() {
                                     chrome.text_faint
                                 } else {
                                     chrome.text_bright
                                 })
                                 .when(query.is_empty(), |d| {
-                                    d.child("Filter shortcuts".to_string())
+                                    d.child(crate::field::Field::empty_with_placeholder(
+                                        "Filter shortcuts",
+                                    ))
                                 })
                                 .when(!query.is_empty(), |d| {
                                     d.child(self.shortcuts_field.inline_composing(

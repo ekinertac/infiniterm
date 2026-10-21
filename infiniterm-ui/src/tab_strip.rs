@@ -11,13 +11,12 @@
 //!
 //! Called by `editor_tabs.rs`. `body::TabClick` is the shared answer.
 use crate::body::TabClick;
-use gpui::{fill, font, point, px, size, App, Bounds, Hsla, Pixels, Window};
+use gpui::{fill, point, px, size, App, Bounds, Font, Hsla, Pixels, Window};
 use infiniterm_core::grid::Point;
 
-/// The strip is sized from its FONT, and the font is the terminal's
-/// (`terminal.fontSize`, in screen pixels, times `ui_scale`): an 11 px
-/// strip under 19 px text was unreadable. Everything else is a ratio of
-/// that, so the strip keeps its proportions at any size.
+/// The strip is sized from `ui.fontSize`, in screen pixels times `ui_scale`.
+/// Everything else is a ratio of that, so the strip keeps its proportions
+/// at any size.
 pub const TAB_STRIP_HEIGHT_RATIO: f64 = 1.9;
 /// A tab's width in font sizes. Fixed rather than proportional to the
 /// card: a card with many tabs would otherwise shrink every tab to a
@@ -27,6 +26,10 @@ pub const TAB_STRIP_LABEL_PAD_RATIO: f64 = 0.6;
 /// The close button's band at a tab's right edge.
 pub const TAB_STRIP_CLOSE_WIDTH_RATIO: f64 = 1.5;
 pub const TAB_STRIP_BORDER_PX: f64 = 1.;
+/// The "+" button's slot after the last tab, in font sizes: wide enough to
+/// click, narrow enough that the glyph sits beside the tabs. It took a whole
+/// tab's width (9) and floated about four sizes away from them (#375).
+pub const TAB_STRIP_PLUS_WIDTH_RATIO: f64 = 2.5;
 
 /// The strip's colours, mirrored from the chrome each frame.
 #[derive(Clone, Debug, PartialEq)]
@@ -36,8 +39,9 @@ pub struct StripStyle {
     pub active_bg: Hsla,
     pub text_bright: Hsla,
     pub text_muted: Hsla,
-    pub font_family: String,
-    /// `terminal.fontSize`: the strip's font, in screen pixels.
+    pub regular: Font,
+    pub bold: Font,
+    /// `ui.fontSize`: the strip's font, in screen pixels.
     pub font_px: f64,
 }
 
@@ -74,11 +78,10 @@ pub fn strip_hit(local: Point, font_px: f64, ui_scale: f32, tab_count: usize) ->
     let unit = font_px * ui_scale as f64;
     let tab_w = TAB_STRIP_TAB_WIDTH_RATIO * unit;
     let index = (local.x / tab_w).floor().max(0.) as usize;
-    if index == tab_count {
-        return Some(TabClick::New);
-    }
-    if index > tab_count {
-        return None;
+    if index >= tab_count {
+        let from_plus = local.x - tab_count as f64 * tab_w;
+        return (from_plus >= 0. && from_plus < TAB_STRIP_PLUS_WIDTH_RATIO * unit)
+            .then_some(TabClick::New);
     }
     let x_in_tab = local.x - (index as f64) * tab_w;
     if x_in_tab >= close_band_left_ratio() * unit {
@@ -107,25 +110,31 @@ pub fn paint_strip(
     let unit = style.font_px * ui_scale as f64 * scale;
     let strip_h = px((TAB_STRIP_HEIGHT_RATIO * unit) as f32);
     let strip = Bounds::new(bounds.origin, size(bounds.size.width, strip_h));
-    window.paint_quad(fill(strip, style.bg));
+    // The strip is the card's top edge: with rounded cards its top corners follow.
+    let r = crate::chrome::card_radius(cx);
+    window.paint_quad(fill(strip, style.bg).corner_radii(gpui::Corners {
+        top_left: r,
+        top_right: r,
+        bottom_left: px(0.),
+        bottom_right: px(0.),
+    }));
     let border = px((TAB_STRIP_BORDER_PX * ui_scale as f64 * scale) as f32);
     let tab_w = px((TAB_STRIP_TAB_WIDTH_RATIO * unit) as f32);
     let strip_font = px(unit as f32);
     let close_w = px((TAB_STRIP_CLOSE_WIDTH_RATIO * unit) as f32);
     let close_left = px((close_band_left_ratio() * unit) as f32);
-    let f = font(style.font_family.clone());
-    if strip_font >= px(crate::chrome::LEGIBLE_FONT_PX as f32) {
+    if strip_font >= crate::chrome::legible_font_px(window.scale_factor()) {
         let pad = px((TAB_STRIP_LABEL_PAD_RATIO * unit) as f32);
         for (i, label) in labels.iter().enumerate() {
             let tab_bounds = Bounds::new(
                 point(strip.origin.x + tab_w * (i as f32), strip.origin.y),
                 size(tab_w, strip_h),
             );
-            let color = if i == active {
+            let (color, font) = if i == active {
                 window.paint_quad(fill(tab_bounds, style.active_bg));
-                style.text_bright
+                (style.text_bright, &style.bold)
             } else {
-                style.text_muted
+                (style.text_muted, &style.regular)
             };
             let sep = Bounds::new(
                 point(tab_bounds.origin.x + tab_w - border, tab_bounds.origin.y),
@@ -134,11 +143,11 @@ pub fn paint_strip(
             window.paint_quad(fill(sep, style.border));
             let room = f32::from(close_left) - f32::from(pad) * 2.;
             let shown = crate::text::elide(label, room, |t| {
-                f32::from(crate::text::shape(window, t, strip_font, &f, color).width)
+                f32::from(crate::text::shape(window, t, strip_font, font, color).width)
             });
-            let line = crate::text::shape(window, &shown, strip_font, &f, color);
+            let line = crate::text::shape(window, &shown, strip_font, font, color);
             crate::text::paint_in(window, cx, &line, tab_bounds, pad);
-            let close_line = crate::text::shape(window, "×", strip_font, &f, color);
+            let close_line = crate::text::shape(window, "×", strip_font, font, color);
             let close_bounds = Bounds::new(
                 point(
                     tab_bounds.origin.x + close_left + (close_w - close_line.width) / 2.,
@@ -148,10 +157,11 @@ pub fn paint_strip(
             );
             crate::text::paint_in(window, cx, &close_line, close_bounds, px(0.));
         }
-        let plus = crate::text::shape(window, "+", strip_font, &f, style.text_muted);
+        let plus = crate::text::shape(window, "+", strip_font, &style.regular, style.text_muted);
+        let plus_w = px((TAB_STRIP_PLUS_WIDTH_RATIO * unit) as f32);
         let plus_bounds = Bounds::new(
             point(
-                strip.origin.x + tab_w * (labels.len() as f32) + tab_w / 2. - plus.width / 2.,
+                strip.origin.x + tab_w * (labels.len() as f32) + plus_w / 2. - plus.width / 2.,
                 strip.origin.y,
             ),
             size(plus.width, strip_h),
@@ -159,7 +169,13 @@ pub fn paint_strip(
         crate::text::paint_in(window, cx, &plus, plus_bounds, px(0.));
         if card_number > 0 {
             let number = number_label(card_number, protected);
-            let line = crate::text::shape(window, &number, strip_font, &f, style.text_muted);
+            let line = crate::text::shape(
+                window,
+                &number,
+                strip_font,
+                &style.regular,
+                style.text_muted,
+            );
             let number_bounds = Bounds::new(
                 point(
                     strip.origin.x + strip.size.width - line.width - pad,
@@ -187,7 +203,7 @@ mod tests {
 
     // Hit-test geometry in world units at a 10 px font and ui_scale 1: a
     // tab is 90 wide, its last 15 the close band, the strip 19 tall, the
-    // band after the last tab is "+".
+    // 25 after the last tab is "+".
     #[test]
     fn a_click_lands_on_a_tab_its_close_or_the_plus() {
         let at = |x: f64, y: f64| Point { x, y };
@@ -203,7 +219,12 @@ mod tests {
             strip_hit(at(100., 10.), 10., 1., 2),
             Some(TabClick::Switch(1))
         );
-        assert_eq!(strip_hit(at(200., 10.), 10., 1., 2), Some(TabClick::New));
+        assert_eq!(strip_hit(at(190., 10.), 10., 1., 2), Some(TabClick::New));
+        assert_eq!(
+            strip_hit(at(210., 10.), 10., 1., 2),
+            None,
+            "past the plus's own slot, 25 wide after the last tab (#375)"
+        );
         assert_eq!(strip_hit(at(400., 10.), 10., 1., 2), None, "past the plus");
         assert_eq!(strip_hit(at(10., 25.), 10., 1., 2), None, "below the strip");
         // Twice the interface scale: everything twice as big.

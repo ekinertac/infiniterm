@@ -10,6 +10,7 @@
 //! texture, the card and the keys.
 #[cfg(target_os = "macos")]
 pub mod app_protocol;
+pub mod frame_fit;
 pub mod moat;
 pub mod process;
 pub mod surface;

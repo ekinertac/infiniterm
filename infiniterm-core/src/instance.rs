@@ -32,6 +32,8 @@
 //! Related: `transport.rs` (the endpoint itself), `hooks.rs` (which binds),
 //! `infiniterm-ui/src/runtime.rs` (`another_instance_holds_the_socket`), and
 //! `infiniterm-ui/src/main.rs` (the quit that calls `release`).
+// Only the Windows half touches paths; `holds_the_endpoint` is pure.
+#[cfg(windows)]
 use std::path::{Path, PathBuf};
 
 /// The claim file, beside the save file rather than beside the pipe: a pipe

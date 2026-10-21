@@ -12,6 +12,7 @@
 //! anything about cards; it draws what the model says and hands back what
 //! the person did.
 mod animator;
+mod background_show;
 mod body;
 #[cfg(feature = "browser")]
 mod browser_body;
@@ -26,26 +27,39 @@ mod browsers;
 mod chrome;
 mod composing;
 mod decoys;
-mod diff_body;
 mod editor_body;
 mod editor_tabs;
 mod editors;
 mod field;
+mod finder_service;
+mod fonts;
+mod fullscreen;
+mod icon_font;
 mod ime;
 mod input;
+mod instance_icon;
 mod keycast;
 mod keycode;
+mod menus;
+mod middle_drag;
+mod native_menu;
 mod omnibox;
 mod overlays;
+mod own_window;
+mod page_body;
 mod paint;
 mod runtime;
+mod scrollbar;
 mod switcher_view;
+mod tab_drag;
 mod tab_strip;
 mod terminal_body;
 mod terminals;
 mod text;
+mod title_drag;
 mod transcript_body;
 mod updater;
+mod whats_new;
 mod window_state;
 
 use animator::Animator;
@@ -62,7 +76,6 @@ use infiniterm_core::model::Model;
 use infiniterm_core::momentum::Sample;
 use infiniterm_core::resize::Edge;
 use std::collections::HashMap;
-use std::time::Instant;
 
 pub const TITLEBAR_H: f32 = 44.;
 
@@ -70,14 +83,51 @@ impl AppView {
     /// The title bar's height under the interface multiplier. The traffic
     /// lights stay where macOS put them; the bar grows around them.
     pub fn titlebar_h(&self) -> f32 {
-        TITLEBAR_H * self.model.ui_scale as f32
+        titlebar_base_h(self.model.config.ui.font_size as f32) * self.model.ui_scale as f32
     }
 
     pub fn statusbar_h(&self) -> f32 {
-        STATUSBAR_H * self.model.ui_scale as f32
+        statusbar_base_h(self.model.config.ui.status_bar_size as f32) * self.model.ui_scale as f32
     }
 }
 pub const STATUSBAR_H: f32 = 22.;
+
+fn titlebar_base_h(font_size: f32) -> f32 {
+    TITLEBAR_H.max(font_size * 2.4)
+}
+
+fn statusbar_base_h(font_size: f32) -> f32 {
+    STATUSBAR_H.max(font_size * 2.)
+}
+
+#[cfg(test)]
+mod cef_start_tests {
+    use super::starts_cef;
+
+    #[test]
+    fn a_joined_window_never_starts_cef_so_its_quit_never_shuts_it_down() {
+        assert!(!starts_cef(true));
+        assert!(starts_cef(false));
+    }
+}
+
+#[cfg(test)]
+mod chrome_height_tests {
+    use super::{statusbar_base_h, titlebar_base_h, STATUSBAR_H, TITLEBAR_H};
+
+    #[test]
+    fn default_type_sizes_preserve_existing_bar_heights() {
+        assert_eq!(titlebar_base_h(13.), TITLEBAR_H);
+        assert_eq!(statusbar_base_h(11.), STATUSBAR_H);
+    }
+
+    #[test]
+    fn large_type_grows_bars_instead_of_clipping() {
+        assert!(titlebar_base_h(32.) > TITLEBAR_H);
+        assert!(statusbar_base_h(32.) > STATUSBAR_H);
+    }
+}
+
 /// Movement below this is a click with a shaky hand, not a drag.
 pub const DRAG_SLOP: f64 = 4.;
 /// The edge band of a card that moves or resizes it, in screen pixels.
@@ -97,6 +147,9 @@ pub enum GestureKind {
     Resize(Edge),
     /// Dragging a group by its name tab: every member moves together.
     MoveGroup(String),
+    /// Dragging one card of a selection of several by its frame or label:
+    /// every selected card moves together, the group drag's way.
+    MoveSelection,
 }
 
 pub struct Gesture {
@@ -126,6 +179,32 @@ pub type SuggestChannel = (
     std::sync::mpsc::Receiver<(u64, Vec<String>)>,
 );
 
+/// A selection rectangle in progress. `from` and `to` are canvas points;
+/// `start` is where the press was in window pixels, for the drag slop.
+pub struct Marquee {
+    pub start: infiniterm_core::grid::Point,
+    pub from: infiniterm_core::grid::Point,
+    pub to: infiniterm_core::grid::Point,
+    /// The selection a Shift+drag adds to; `None` replaces.
+    pub kept: Option<Vec<String>>,
+    /// The selection before the press, for Escape.
+    pub before: (Option<String>, Vec<String>),
+    /// Past the drag slop: until then the press is a click.
+    pub active: bool,
+}
+
+impl Marquee {
+    /// The rectangle, whichever way it was dragged.
+    pub fn rect(&self) -> infiniterm_core::grid::Rect {
+        infiniterm_core::grid::Rect {
+            x: self.from.x.min(self.to.x),
+            y: self.from.y.min(self.to.y),
+            w: (self.from.x - self.to.x).abs(),
+            h: (self.from.y - self.to.y).abs(),
+        }
+    }
+}
+
 pub struct AppView {
     pub model: Model,
     pub registry: CommandRegistry<Model>,
@@ -149,6 +228,20 @@ pub struct AppView {
     /// `app.emoji` asked; the next frame, which has the window, opens it.
     pub show_character_palette: bool,
     pub pan: Option<Pan>,
+    /// Cmd + scroll as navigation (`scroll_nav`): the swipe gathered so far,
+    /// whether the fingers lifted, the last workspace switch.
+    pub scroll_nav: infiniterm_core::scroll_nav::NavState,
+    /// A rectangle being dragged on bare canvas to select cards (input.rs,
+    /// `Model::marquee_select`).
+    pub marquee: Option<Marquee>,
+    /// The left button went down on empty canvas and has not come up: a
+    /// right click now fits everything (`pan_mode::chord_fits_all`).
+    pub left_on_canvas: bool,
+    /// Where the middle button went down, to tell a click from a pan.
+    pub middle_press: Option<Point>,
+    /// The last frame was over its glyph budget (`paint_world`): cards drew
+    /// bars, and content frames are rationed (`AppView::far`).
+    pub crowded: bool,
     pub gesture: Option<Gesture>,
     /// The card whose body is following a drag (a text selection).
     pub body_drag: Option<String>,
@@ -173,11 +266,57 @@ pub struct AppView {
     /// the card each frame: simplest thing that works for a menu open for a
     /// couple of clicks, at the cost of not tracking a pan mid-menu.
     pub context_menu: Option<crate::browsers::CardContextMenu>,
+    /// The page's native menu is open (`browsers.rs::show_page_menu`).
+    pub page_menu_open: bool,
     /// The prompt's field, opened with the suggestion selected; the palette's query.
     pub prompt_field: field::Field,
     pub query_field: field::Field,
     /// The shortcuts panel's filter.
     pub shortcuts_field: field::Field,
+    /// The shortcuts panel's highlighted row among the filtered commands,
+    /// whose id Cmd+C copies (#76), and the list's scroll, kept on it.
+    pub shortcuts_index: usize,
+    /// "Open a file" asked for the open panel (`Effect::PickFile`); the idle
+    /// timer, which has the app, shows it (#64). The card it opens beside.
+    pub pick_request: Option<Option<String>>,
+    /// The socket viewers join through (`ift join`, #423); `None` when the
+    /// backend is not the daemon or the socket could not be bound.
+    pub join: Option<infiniterm_core::backend::join::JoinHub>,
+    /// The agent states last sent to viewers, so a change is sent once.
+    pub last_agents: String,
+    /// The edits viewers send up (host side, #423): applied in the poll.
+    pub join_updates:
+        Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join::RemoteUpdate>>,
+    /// A viewer's edits on their way up to the host (viewer side).
+    pub uplink: Option<std::sync::mpsc::Sender<infiniterm_core::backend::join::RemoteUpdate>>,
+    /// This window is a viewer (`ift join`, #423): the canvas is the host's,
+    /// nothing is saved, nothing is seeded, no session is started.
+    pub viewer: bool,
+    /// The canvas connection (re)joined: every viewer card without a live
+    /// connection tries again now (#442).
+    pub viewer_poke: bool,
+    /// The host's canvas, as the client thread reads it.
+    pub canvas_rx:
+        Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join_client::CanvasEvent>>,
+    /// A terminal's Paste from the right-click menu: the card to paste into,
+    /// read from the clipboard in the poll task.
+    pub paste_request: Option<String>,
+    /// Cards in a window of their own (#356 spike), by card id. The canvas
+    /// keeps the slot and paints a placeholder; `own_window.rs` owns the
+    /// windows.
+    pub extracted: std::collections::HashMap<String, gpui::WindowHandle<own_window::CardWindow>>,
+    /// The grid size of each extracted card: its window's content, in
+    /// world units at scale 1 (terminals.rs `reconcile_terminals`).
+    pub extracted_size: std::collections::HashMap<String, infiniterm_core::grid::Size>,
+    /// Set by a key, opened by the poll task (`own_window::CardWindow::open`
+    /// must not run inside an app update).
+    pub extract_request: Option<String>,
+    /// `ift read` requests the poll timer answers once the output is parsed.
+    pub read_requests: Vec<crate::terminals::ReadRequest>,
+    pub shortcuts_scroll: gpui::ScrollHandle,
+    /// The "what's new" sheet's page, alive while the sheet is open
+    /// (`whats_new.rs`, #402).
+    pub whats_new_body: Option<page_body::PageBody>,
     /// The omnibox's text, opened selected so typing replaces a prefilled
     /// address the way it does in a browser.
     pub omni_field: field::Field,
@@ -188,6 +327,11 @@ pub struct AppView {
     /// so anything drained there (a find count, the omnibox's suggestions)
     /// is a frame behind and would sit unseen until the next keystroke.
     pub redraw: bool,
+    /// The window background last handed to gpui (`ui.windowOpacity`,
+    /// `ui.windowBlur`), so it is set again only when it changes.
+    pub window_bg: Option<gpui::WindowBackgroundAppearance>,
+    /// The title of the window has been set for a remote instance.
+    pub window_titled: bool,
     /// The pressed-shortcut overlay (`keycast.rs`): on or off, and what
     /// is showing.
     pub keycast_on: bool,
@@ -195,6 +339,8 @@ pub struct AppView {
     /// When the last frame was painted (ms), for the far-zoom refresh gate.
     pub last_paint_ms: f64,
     pub prompt_was_open: bool,
+    /// `Prompt::serial` when the field was last filled.
+    pub prompt_serial: u64,
     /// Text an effect asked to put on the clipboard, written on the next
     /// frame: only a frame has an App to write through.
     pub clipboard_out: Option<String>,
@@ -216,9 +362,9 @@ pub struct AppView {
     pub marked: HashMap<String, Rect>,
     /// Each body's size as last told to it, so `resized` fires on a change.
     pub body_sizes: HashMap<String, infiniterm_core::grid::Size>,
-    pub frames: u32,
-    pub fps_window: Instant,
-    pub fps: f32,
+    /// The status bar's frame rate, counted only over frames drawn back
+    /// to back (`frame_rate.rs`).
+    pub frame_rate: infiniterm_core::frame_rate::FrameRate,
     /// Under `INFINITERM_KEYLOG`: feed ms, paint ms, frames, last report.
     pub timing: (f64, f64, u32, f64),
     /// The window frame as last seen, and when a changed one is due to be
@@ -226,6 +372,10 @@ pub struct AppView {
     pub window_seen: Option<window_state::WindowState>,
     pub window_save_due: Option<f64>,
     pub themes_dir: std::path::PathBuf,
+    /// The pictures `ui.backgroundImage` can name: the bundle's, else the checkout's.
+    pub backgrounds_dir: Option<std::path::PathBuf>,
+    /// The picture list and its rotation (`ui.backgroundImage`).
+    pub background: background_show::Show,
     pub scale_factor: f32,
     /// CEF initialised in this process: browser cards can open surfaces.
     pub cef_running: bool,
@@ -256,8 +406,10 @@ actions!(
         ShowAll,
         Minimize,
         Zoom,
+        ToggleFullScreen,
         ShowCharacterPalette,
-        CheckForUpdates
+        CheckForUpdates,
+        AboutApp
     ]
 );
 
@@ -278,6 +430,15 @@ fn system_reduces_motion() -> bool {
         let reduce: objc::runtime::BOOL = msg_send![ws, accessibilityDisplayShouldReduceMotion];
         reduce == objc::runtime::YES
     }
+}
+
+/// Whether this process starts CEF. A joined window (`ift join`, #423, #444)
+/// has no browser cards (they are refused there and the host's show as
+/// "browser on <host>"), so it has nothing for CEF to do, and quitting it
+/// crashed inside CEF's shutdown (EXC_BREAKPOINT, three reports on the Air).
+/// The helper invocations are decided before this, in `early`.
+fn starts_cef(joined: bool) -> bool {
+    !joined
 }
 
 fn main() {
@@ -301,6 +462,38 @@ fn main() {
             None
         }
     };
+    // An `ift serve` of this data dir (a canvas host kept while the app was
+    // closed, #438) is asked to save and go first: the app takes over its
+    // canvas and its sessions, and viewers join the app (#442).
+    {
+        use infiniterm_core::headless::{serve_pid_file, stop_running_serve, ServeStop};
+        match stop_running_serve(&serve_pid_file(), std::time::Duration::from_secs(10)) {
+            ServeStop::NotRunning => {}
+            ServeStop::Stopped => eprintln!("[infiniterm] took over from ift serve"),
+            ServeStop::Stuck(pid) => {
+                // Said where the person is looking, not only in a log: the
+                // app is about to exit, and a launch that ends with no window
+                // and no word reads as a crash.
+                let text = format!(
+                    "`ift serve` (pid {pid}) is holding this canvas and did not stop in 10 seconds. infiniterm did not start. Stop it with `ift serve --stop`, or quit that process, and open infiniterm again."
+                );
+                eprintln!("[infiniterm] {text}");
+                let _ = std::process::Command::new("osascript")
+                    .args([
+                        "-e",
+                        "on run argv",
+                        "-e",
+                        "display dialog (item 1 of argv) with title \"infiniterm\" buttons {\"OK\"} default button \"OK\" with icon caution",
+                        "-e",
+                        "end run",
+                        "--",
+                        &text,
+                    ])
+                    .status();
+                std::process::exit(1);
+            }
+        }
+    }
     if runtime::another_instance_holds_the_socket() {
         eprintln!("[infiniterm] another infiniterm holds the endpoint; activating it");
         // Bringing the first copy forward is macOS's `open -b`. Windows has
@@ -313,14 +506,17 @@ fn main() {
             .status();
         std::process::exit(0);
     }
+    let joined = infiniterm_core::backend::remote::join_from_env().is_some();
     Application::new().run(move |cx: &mut App| {
         keycode::install();
+        #[cfg(target_os = "macos")]
+        finder_service::register();
         // Without the feature there is no CEF to start and no pump to run:
         // `browser_stub.rs` draws those cards instead.
         #[cfg(not(feature = "browser"))]
         let cef_running = false;
         #[cfg(feature = "browser")]
-        let cef_running = match cef.as_mut() {
+        let cef_running = match cef.as_mut().filter(|_| starts_cef(joined)) {
             Some(p) => {
                 // CEF's two methods on gpui's NSApplication; nothing on
                 // Windows owns an NSApplication to patch.
@@ -365,6 +561,9 @@ fn main() {
                 let _ = cx.update_window(w, |_, window, _| window.zoom_window());
             }
         });
+        // The same message the green button sends, so `ui.fullscreen`
+        // decides for both (fullscreen.rs).
+        cx.on_action(|_: &ToggleFullScreen, _| fullscreen::toggle());
         // The emoji panel, from the menu. The chord is `app.emoji` in the
         // keymap, not a gpui binding here: macOS also handles
         // Cmd+Ctrl+Space system-wide, and with a gpui action bound to it
@@ -385,6 +584,8 @@ fn main() {
             Menu {
                 name: "infiniterm".into(),
                 items: vec![
+                    MenuItem::action("About infiniterm", AboutApp),
+                    MenuItem::separator(),
                     // Where a Mac user looks for it; handled on the view
                     // (overlays.rs), which runs `app.update.check`.
                     MenuItem::action("Check for Updates…", CheckForUpdates),
@@ -405,13 +606,32 @@ fn main() {
                 items: vec![
                     MenuItem::action("Minimize", Minimize),
                     MenuItem::action("Zoom", Zoom),
+                    MenuItem::action("Toggle Full Screen", ToggleFullScreen),
                 ],
             },
         ]);
         // Where it was last time, else centred: the reference's window-state
         // plugin, owned here.
+        // The icon font every card falls back to (`icon_font.rs`), bundled
+        // so a Mac without a Nerd Font still draws the prompt's icons. With
+        // CoreText, not gpui's `add_fonts`: gpui resolves a fallback by name
+        // through CoreText, which cannot see gpui's own store.
+        if !icon_font::register() {
+            eprintln!("[infiniterm/warn] the bundled icon font is not resolvable; prompt icons may draw as boxes");
+        }
+        // A window that quit full screen opens at its old frame and goes
+        // full screen once it exists, through the same toggle as the green
+        // button, so `ui.fullscreen` picks the kind; left to gpui it would
+        // always be a native Space.
+        let mut reopen_full = false;
         let window_bounds = window_state::WindowState::load()
-            .map(|s| s.bounds())
+            .map(|s| match s.bounds() {
+                WindowBounds::Fullscreen(b) => {
+                    reopen_full = true;
+                    WindowBounds::Windowed(b)
+                }
+                b => b,
+            })
             .unwrap_or_else(|| {
                 WindowBounds::Windowed(Bounds::centered(None, size(px(1600.), px(1000.)), cx))
             });
@@ -444,6 +664,7 @@ fn main() {
                     app.cef_running = cef_running;
                     app.reduce_motion = system_reduces_motion();
                     runtime::startup(&mut app);
+                    fullscreen::set_mode(app.model.config.ui.fullscreen);
                     app
                 });
                 window.focus(&view.read(cx).focus.clone());
@@ -479,6 +700,22 @@ fn main() {
                         runtime::leave_now();
                     });
                 }
+                // A joined window opens from `ift join`, run in another app's
+                // window (a terminal): without this it can open behind it.
+                // The app-wide `cx.activate` below does not always win over
+                // the app that launched us; making this window key does.
+                if joined {
+                    window.activate_window();
+                }
+                // gpui's view never answers middle-button drags; now that the
+                // window (and so its view class) exists, teach it to. These
+                // three patch AppKit's view class, so they are macOS only.
+                #[cfg(target_os = "macos")]
+                {
+                    middle_drag::install();
+                    title_drag::install();
+                    fullscreen::install();
+                }
                 // The idle wake-up: every 16 ms, drain what the backend's
                 // threads sent and draw a frame if anything needs one. A
                 // receiver cannot be awaited on gpui's executor, so a short
@@ -491,16 +728,113 @@ fn main() {
                         .await;
                     let alive = poll.update(cx, |this, cx| {
                         this.drain_backend();
+                        // The host's canvas, for a viewer; the host's agent
+                        // states, for viewers (#423).
+                        this.drain_canvas();
+                        // A viewer's cards that lost their session rejoin
+                        // here too, not only in the frame: a window behind
+                        // others draws no frames (#442).
+                        if this.drive_viewer_links() {
+                            cx.notify();
+                        }
+                        this.publish_agents();
+                        // What viewers changed on this canvas (#423).
+                        if this.apply_remote_updates() {
+                            this.redraw = true;
+                            cx.notify();
+                        }
                         // The save debounce runs here, not in the frame: a
                         // layout change with nothing else moving must not
                         // hold the frame loop open for half a second.
                         this.schedule_save(now_ms());
                         this.schedule_window_save(now_ms());
                         this.idle_editors(now_ms());
+                        // The macOS open panel, asked for by "Open a file"
+                        // (#64). Its answer arrives later, on its own task.
+                        this.answer_reads(now_ms(), cx);
+                        if this.context_menu.is_some() {
+                            this.show_page_menu(cx);
+                        }
+                        if let Some(card) = this.paste_request.take() {
+                            if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                                this.paste_text(&card, &text);
+                            }
+                        }
+                        if let Some(from) = this.pick_request.take() {
+                            let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
+                                files: true,
+                                directories: true,
+                                multiple: false,
+                                prompt: Some("Open".into()),
+                            });
+                            cx.spawn(async move |view, cx| {
+                                let path = picked
+                                    .await
+                                    .ok()
+                                    .and_then(Result::ok)
+                                    .flatten()
+                                    .and_then(|paths| paths.into_iter().next());
+                                let Some(path) = path else { return };
+                                let _ = view.update(cx, |this, cx| {
+                                    this.model
+                                        .open_picked(&path.to_string_lossy(), from.as_deref());
+                                    this.perform_effects();
+                                    cx.notify();
+                                });
+                            })
+                            .detach();
+                        }
+                        // The green button has no model to ask; an atomic
+                        // store is cheaper than noticing a settings change.
+                        fullscreen::set_mode(this.model.config.ui.fullscreen);
                         if this.needs_frame() {
                             cx.notify();
                         }
                     });
+                    // Extraction (#356 spike). Opened here, after the update
+                    // above has returned, so no second window touches the
+                    // app while it is borrowed.
+                    let asked = poll
+                        .update(cx, |this, _| this.extract_request.take())
+                        .ok()
+                        .flatten();
+                    if let Some(card) = asked {
+                        let app = poll.clone();
+                        let key = card.clone();
+                        let opened = cx
+                            .update(|cx| own_window::CardWindow::open(app, key, cx))
+                            .ok()
+                            .flatten();
+                        if let Some(handle) = opened {
+                            let _ = poll.update(cx, |this, _| {
+                                this.extracted.insert(card, handle);
+                            });
+                        }
+                    }
+                    // An extracted card's window repaints when its body has
+                    // output or a blink is due, as the canvas does.
+                    let windows: Vec<_> = poll
+                        .update(cx, |this, _| {
+                            this.extracted
+                                .iter()
+                                .map(|(c, h)| (c.clone(), *h))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    for (card, handle) in windows {
+                        let now = now_ms();
+                        // Output waiting for the grid is the card's to draw:
+                        // its window feeds it when it paints.
+                        let wants = poll
+                            .update(cx, |this, _| {
+                                this.scheduler.pending()
+                                    || this.bodies.get(&card).is_some_and(|b| b.wants_frame(now))
+                            })
+                            .unwrap_or(false);
+                        if wants {
+                            let _ = handle.update(cx, |_, window, _| window.refresh());
+                        }
+                    }
                     if alive.is_err() {
                         break;
                     }
@@ -510,6 +844,18 @@ fn main() {
                 // second of moves; the window's frame goes with it.
                 let quitting = view.clone();
                 cx.on_app_quit(move |cx| {
+                    // A joined window ends the shared ssh connection a
+                    // password host got (#450), so a normal quit leaves
+                    // nothing running; a crash leaves it its 10 minutes.
+                    if let Some(host) = infiniterm_core::backend::remote::join_from_env() {
+                        use std::os::unix::fs::MetadataExt;
+                        let uid = std::fs::metadata(infiniterm_core::paths::home_dir())
+                            .map(|m| m.uid())
+                            .unwrap_or(0);
+                        let control =
+                            infiniterm_core::backend::ssh_login::control_path(&host.target, uid);
+                        infiniterm_core::backend::ssh_login::stop_master(&host, &control);
+                    }
                     quitting.update(cx, |this, _| {
                         this.flush_save();
                         // The shells: local ones die with us, tmux windows
@@ -554,5 +900,8 @@ fn main() {
         )
         .expect("a window");
         cx.activate(true);
+        if reopen_full {
+            fullscreen::toggle();
+        }
     });
 }

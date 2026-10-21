@@ -64,7 +64,8 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "terminal.shell",
         &[
-            "Program to run in a new card. Empty uses your login shell ($SHELL).",
+            "Program to run in a new card, with any arguments (\"/bin/zsh -l\",",
+            "\"fish --private\"). Empty uses your login shell ($SHELL).",
             "Only affects cards opened afterwards; a running shell is not restarted.",
         ],
     ),
@@ -73,6 +74,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["\"block\", \"bar\", or \"underline\"."],
     ),
     ("terminal.cursorBlink", &["Whether the cursor blinks."]),
+    (
+        "terminal.cursorColor",
+        &[
+            "The cursor's colour as a hex colour (\"#ffcc00\"). Empty follows the theme.",
+            "The letter under a block cursor is drawn in black or white, whichever reads.",
+        ],
+    ),
     (
         "terminal.fontFamily",
         &[
@@ -102,6 +110,25 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "terminal.lineHeight",
         &["Multiple of the font size. 1.2 is tighter than the 1.25 a font asks for."],
+    ),
+    (
+        "terminal.copyOnSelect",
+        &["Copy a mouse selection to the clipboard as soon as it is made."],
+    ),
+    (
+        "terminal.scrollMultiplier",
+        &["Scroll speed: lines per wheel step, times this. 0.1 to 10."],
+    ),
+    (
+        "terminal.padding",
+        &["Space between a card's edge and its text, in points at 100% zoom. 0 to 60."],
+    ),
+    (
+        "terminal.env",
+        &[
+            "Extra environment for every new card, as \"KEY=value\" strings,",
+            "e.g. [\"EDITOR=ift\", \"LANG=en_US.UTF-8\"]. Cards already open keep theirs.",
+        ],
     ),
     (
         "terminal.scrollback",
@@ -149,13 +176,35 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "cards.width",
         &[
-            "Width in 25px grid cells. 69 is 1725px, about 192 columns at the default font",
-            "\u{2014} the size of a full iTerm2 window. Existing cards keep the size they have.",
+            "Width in 25px grid squares of canvas (not text columns), or 0 to size new cards from",
+            "the window: the canvas at 100% minus a margin, at most 80 squares wide. 69 is 1725px,",
+            "a full iTerm2 window. At terminal.fontSize 19 a square is about 2.6 text columns,",
+            "so 50 is about 130 columns. Existing cards keep the size they have.",
         ],
     ),
     (
         "cards.height",
-        &["Height in 25px grid cells. 80 is 2000px, about 83 rows."],
+        &[
+            "Height in 25px grid squares of canvas (not text rows), or 0 to size from the window.",
+            "80 is 2000px; at terminal.fontSize 19 and lineHeight 1.2 that is about 87 text rows.",
+        ],
+    ),
+    (
+        "cards.gap",
+        &[
+            "The space between cards, in pixels (0 to 200, 25 by default). New cards, splits,",
+            "growing a card, Canvas: tidy and group frames all use it. Cards already on the",
+            "canvas stay where they are; a different gap shows as cards are added or tidied.",
+        ],
+    ),
+    (
+        "cards.shape",
+        &[
+            "The shape of a card sized from the window: a ratio like \"16:9\" or \"4:3\",",
+            "or \"window\" for the window's own shape. 16:9 keeps every card the same",
+            "shape on every Mac and after a window resize; \"window\" makes one card fill",
+            "the window exactly when fitted. Used only where width or height is 0.",
+        ],
     ),
     (
         "cards.inheritDirectory",
@@ -187,6 +236,16 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["A wash behind the line the cursor is on."],
     ),
     (
+        "editor.completeWords",
+        &[
+            "Offer words from the file and the card's other tabs while you type in",
+            "an editor (two letters open the list, Tab takes the top one, Enter only",
+            "after you moved the row). Inside comments and strings of a file with a",
+            "grammar, words are not collected. settings.json and files that name a",
+            "JSON schema complete their own keys regardless.",
+        ],
+    ),
+    (
         "editor.selectionColor",
         &[
             "Behind selected text, as a CSS colour. Empty is the theme's yellow: a",
@@ -196,6 +255,10 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "editor.selectionTextColor",
         &["Selected text itself. Empty is the theme's background, dark on the yellow."],
+    ),
+    (
+        "editor.cursorColor",
+        &["The caret's colour as a hex colour. Empty follows the theme."],
     ),
     (
         "editor.wrap",
@@ -223,11 +286,29 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "join.enabled",
+        &[
+            "Open the socket that `ift join <host>` on another Mac reaches through ssh,",
+            "so it can show and drive this canvas. The socket is owner-only, like the one",
+            "`ift send` uses, and ssh is the only way in. Read at launch.",
+        ],
+    ),
+    (
         "browser.suggestions",
         &[
             "Ask Google to complete what you type in the omnibox.",
             "OFF by default: every keystroke goes to Google while it is on.",
             "Nothing else in this app talks to the network on its own.",
+        ],
+    ),
+    (
+        "browser.devtools",
+        &[
+            "Let a browser card open DevTools (the palette's Browser: open DevTools).",
+            "ON by default. It opens a debugging port on a random loopback port;",
+            "only our own DevTools page may connect to it, a web page cannot.",
+            "A program on this Mac can still attach to the port: turn it off if",
+            "that matters to you. Read at launch: restart after changing it.",
         ],
     ),
     (
@@ -245,10 +326,169 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["The app's own chrome: labels, the status bar, dimming."],
     ),
     (
+        "ui.fontFamily",
+        &[
+            "Font family for the app's own chrome. .SystemUIFont, the default, is the",
+            "platform's native app UI font. A comma-separated list uses the first real name.",
+        ],
+    ),
+    (
+        "ui.fontSize",
+        &[
+            "Base chrome size in screen pixels, before the Cmd+Shift+= multiplier.",
+            "Workspace tabs, card tab strips, palettes and dialogs derive their sizes from it.",
+        ],
+    ),
+    (
+        "ui.fontWeight",
+        &["Normal chrome weight: \"normal\", \"bold\", or a number from 100 to 900."],
+    ),
+    (
+        "ui.fontWeightBold",
+        &["Emphasised chrome weight: \"normal\", \"bold\", or a number from 100 to 900."],
+    ),
+    (
         "ui.inactiveDim",
         &[
             "How much an unfocused card's text is dimmed, 0 to 1. Painted as a scrim over",
             "the text rather than as opacity, which would blur it.",
+        ],
+    ),
+    (
+        "ui.windowOpacity",
+        &[
+            "How opaque the window's own fill is, 0.1 to 1: the canvas background, title bar",
+            "and status bar. Below 1 the desktop shows through; cards stay solid.",
+        ],
+    ),
+    (
+        "ui.windowBlur",
+        &["Blur what is behind the window. Only does anything while ui.windowOpacity is below 1."],
+    ),
+    (
+        "ui.backgroundImage",
+        &[
+            "A picture behind the canvas: the name of one that comes with the app (\"dusk\",",
+            "\"aurora\", \"ember\") or a path to your own, \"~\" allowed. Empty for none. A list",
+            "of them rotates: [\"dusk\", \"~/Pictures/lake.jpg\"]. It is drawn opaque, so",
+            "ui.windowOpacity does not show the desktop through it. Only the picture on screen",
+            "and the next one are kept in memory, a 4K one is about 65 MB, so a long list costs",
+            "no more than a short one.",
+        ],
+    ),
+    (
+        "ui.backgroundImageInterval",
+        &["Seconds each picture of a ui.backgroundImage list stays before the next fades in. 5 to 86400."],
+    ),
+    (
+        "ui.backgroundImageFade",
+        &[
+            "Seconds the crossfade between two pictures takes; 0 changes at once. A fade is an",
+            "animation, so it is a cut while ui.animations is off or the system reduces motion.",
+        ],
+    ),
+    (
+        "ui.backgroundImageFit",
+        &["\"cover\" fills the window and crops the edges; \"contain\" shows the whole picture."],
+    ),
+    (
+        "ui.workspaceIsolation",
+        &[
+            "Ctrl+Tab switches between the current workspace's cards only, and the status bar",
+            "counts this workspace's cards, not every workspace's. The palette still lists",
+            "every card, so it stays the way to jump to another workspace.",
+        ],
+    ),
+    (
+        "ui.windowColor",
+        &[
+            "A colour for the title bar and the Dock icon: a name (red, orange, amber, yellow,",
+            "lime, green, emerald, teal, cyan, sky, blue, indigo, violet, purple, pink, rose,",
+            "gray) or a hex code like 3b82f6. Empty for none. The palette's \"Window: change the",
+            "title bar and Dock colour\" sets it. A window opened by ift connect wears its host's.",
+        ],
+    ),
+    (
+        "ui.cardRadius",
+        &[
+            "Round the corners of cards and group frames, in pixels at 100% zoom (0 to 40).",
+            "0, the default, keeps them square. The radius scales with the zoom like the card.",
+        ],
+    ),
+    (
+        "ui.cardOpacity",
+        &[
+            "How opaque a card's background is, 0.1 to 1. Text stays solid, so it never gets",
+            "blurry; below 1 the canvas, the grid and ui.backgroundImage show through. Cells a",
+            "program colours itself (vim's status line) and browser cards stay opaque.",
+        ],
+    ),
+    (
+        "ui.glyphBudget",
+        &[
+            "How many terminal cells (text columns times rows, not cards.width squares) may be",
+            "on screen, across every visible card, before the canvas draws all of them as bars",
+            "instead of text. Default 150000, about eleven full cards. A card of cards.width 50",
+            "by cards.height 80 holds about 11000 at terminal.fontSize 19, so twelve need about",
+            "130000. A window covered edge to edge in cards reads down to about 82% zoom, and the",
+            "limit grows with the window. Each cell costs at most 50 nanoseconds a frame, so",
+            "150000 is under 8 ms while the canvas moves; raise it until zooming gets slow.",
+            "1000 to 5000000.",
+        ],
+    ),
+    (
+        "ui.textAsBars",
+        &[
+            "Off (the default): every card draws its text at every zoom, however small and however",
+            "many cards are on screen. On: a card draws faint bars instead of text when its font is",
+            "smaller than ui.minTextPx or more than ui.glyphBudget cells are on screen, which keeps",
+            "the canvas fast on a slow Mac. Measured on an M4 Mac mini, 18 cards printing at once while",
+            "zooming: about 45 frames a second with text, and no faster with bars.",
+        ],
+    ),
+    (
+        "ui.minTextPx",
+        &[
+            "How many device pixels tall a font must be on screen before its text is drawn; below",
+            "that every card draws bars instead. Default 7: with terminal.fontSize 19 that is 37%",
+            "zoom on a 1x screen, so a canvas of 20 cards zoomed out to 34% is bars whatever",
+            "ui.glyphBudget says. 4 draws the text down to about 21% (tiny, but you see its shape).",
+            "A retina screen keeps a floor of 4.5 points unless this is lower. 2 to 20.",
+        ],
+    ),
+    (
+        "ui.cardZoom",
+        &[
+            "The canvas scale Cmd+1 zooms to on a terminal card that is already fitted: 1.5 is 150%,",
+            "with the card's bottom at the window's bottom, so you read the prompt and the newest",
+            "lines larger. Cmd+Up and Cmd+Down pan along the card, Cmd+1 or Cmd+2 leaves, and typing",
+            "returns the view to the bottom. 0 turns it off: a second Cmd+1 does nothing new.",
+            "1.1 to 4. It was called ui.readZoom, which still works.",
+        ],
+    ),
+    (
+        "ui.showGrid",
+        &["Draw the canvas grid. Off leaves the canvas background plain."],
+    ),
+    (
+        "ui.fitPadding",
+        &[
+            "Screen pixels left around a card or cluster when it is fitted (Cmd+1, Cmd+2,",
+            "Cmd+3). 0 lets a card touch the window's edges.",
+        ],
+    ),
+    (
+        "ui.fitMagnify",
+        &[
+            "Let a fit zoom past 100% so a card fills the window. Off: a fit never magnifies,",
+            "and a card smaller than the window sits in open canvas.",
+        ],
+    ),
+    (
+        "ui.fitSplitSlot",
+        &[
+            "Cmd+1 on a card that was split frames the whole slot, both halves together.",
+            "Off: it fits the card itself and fills the window with it.",
         ],
     ),
     (
@@ -259,11 +499,22 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.cardLabelPosition",
+        &[
+            "The corner of a card its label sits in: \"top right\", \"top left\", \"bottom left\"",
+            "or \"bottom right\". An ssh chip moves to the other side of the same edge.",
+        ],
+    ),
+    (
+        "ui.hideLabelWhenMaximised",
+        &["No label on a maximised card: it fills the window and the status bar names it."],
+    ),
+    (
         "ui.cardLabelSize",
         &[
-            "Screen pixels, before the Cmd+Shift+= multiplier; the label is drawn at 1.2x",
-            "this. Card labels have to survive being zoomed out to 10%, which is why this",
-            "is separate from the others.",
+            "Screen pixels, before the Cmd+Shift+= multiplier, at 60% zoom and closer;",
+            "1.1x below 60% and 1.45x below 25%, so a name still registers zoomed far out.",
+            "Separate from the other sizes for that reason.",
         ],
     ),
     (
@@ -275,6 +526,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["Screen pixels. The status bar is always at arm's length."],
     ),
     (
+        "ui.panStep",
+        &[
+            "How far one press of Cmd+Ctrl+Shift+Arrow moves the canvas, in screen",
+            "pixels (20 to 1000). A held key repeats, so a smaller step is a slower pan.",
+        ],
+    ),
+    (
         "ui.animations",
         &[
             "Zooming, panning and card swaps animate rather than jumping. The system",
@@ -284,13 +542,46 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "ui.showFps",
         &[
-            "Frame counter in the status bar, orange below 50. It holds a permanent",
-            "animation frame loop, so the app never fully idles while it is on.",
+            "Frame counter in the status bar, shown while frames are drawn back to back",
+            "(a zoom, a pan, a drag, fast output); nothing at rest, where the app draws",
+            "only when something changes. Orange below 50.",
+        ],
+    ),
+    (
+        "ui.showWhatsNew",
+        &[
+            "Show the changelog in an overlay the first time you open a new version",
+            "after an update. Escape or the X in its corner closes it. \"Help: show",
+            "what's new\" opens it any time.",
+        ],
+    ),
+    (
+        "ui.statusBarPwd",
+        &[
+            "Show the focused terminal card's directory in the status bar at all times.",
+            "The card label shows the running program instead of the directory while one",
+            "runs; this keeps the path visible then too. Home is written as ~.",
+        ],
+    ),
+    (
+        "ui.statusBarPwdSide",
+        &[
+            "Which end of the status bar the directory goes on: \"left\" (after the card",
+            "label) or \"right\". Only used when ui.statusBarPwd is on.",
+        ],
+    ),
+    (
+        "ui.fullscreen",
+        &[
+            "What the green button and Cmd+Ctrl+F do. \"cover\" makes the window cover the",
+            "whole screen, the strip beside a MacBook's notch included, with the menu bar",
+            "and Dock hidden until the pointer reaches them. \"native\" is macOS's own",
+            "full screen: a Space of its own, content starting below the notch.",
         ],
     ),
 ];
 
-fn doc(key: &str) -> &'static [&'static str] {
+pub(crate) fn doc(key: &str) -> &'static [&'static str] {
     SETTINGS_DOC
         .iter()
         .find(|(k, _)| *k == key)
@@ -335,7 +626,7 @@ const HEADER: &[&str] = &[
 /// One JSON value, printed the way JSON.stringify prints it: `14`, not
 /// `14.0`. The config holds f64 everywhere and a file people copy from must
 /// not suggest a decimal where the reference writes a whole number.
-fn scalar(value: &Value) -> String {
+pub(crate) fn scalar(value: &Value) -> String {
     match value.as_f64() {
         Some(n) => n.to_string(),
         None => value.to_string(),

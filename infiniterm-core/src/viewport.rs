@@ -62,11 +62,17 @@ pub fn fit_rect(rect: Rect, size: Size) -> Viewport {
 
 /// Explicit padding supports callers that fit content with different chrome.
 pub fn fit_rect_with_padding(rect: Rect, size: Size, padding: f64) -> Viewport {
+    fit_rect_with(rect, size, padding, MAX_FIT_SCALE)
+}
+
+/// The fit's two knobs (`ui.fitPadding`, `ui.fitMagnify`): the margin and the
+/// largest scale a fit may reach.
+pub fn fit_rect_with(rect: Rect, size: Size, padding: f64, max_scale: f64) -> Viewport {
     let usable_w = (size.w - padding * 2.0).max(1.0);
     let usable_h = (size.h - padding * 2.0).max(1.0);
     let scale = (usable_w / rect.w)
         .min(usable_h / rect.h)
-        .clamp(MIN_SCALE, MAX_FIT_SCALE);
+        .clamp(MIN_SCALE, max_scale);
     centre_on(
         Point {
             x: rect.x + rect.w / 2.0,

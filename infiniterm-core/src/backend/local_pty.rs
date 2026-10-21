@@ -397,6 +397,11 @@ pub fn terminal_identity() -> Vec<(String, String)> {
             "TERM_PROGRAM_VERSION".into(),
             env!("CARGO_PKG_VERSION").into(),
         ),
+        // The terminal reads OSC 8 hyperlinks (#335), but programs that decide
+        // by who the terminal is (Claude Code, anything using the
+        // supports-hyperlinks package) have never heard of infiniterm and
+        // print `text (url)` instead. This is their documented switch.
+        ("FORCE_HYPERLINK".into(), "1".into()),
     ]
 }
 
@@ -497,6 +502,13 @@ mod tests {
             }
         }
         false
+    }
+
+    #[test]
+    fn every_card_is_told_the_terminal_reads_hyperlinks() {
+        let id = terminal_identity();
+        assert!(id.contains(&("FORCE_HYPERLINK".to_string(), "1".to_string())));
+        assert!(id.contains(&("TERM_PROGRAM".to_string(), "infiniterm".to_string())));
     }
 
     /// Drains events for `pane` until `needle` is seen or the deadline passes.
@@ -701,9 +713,12 @@ mod tests {
 
         // Drain without acking: the stream must stop by itself, somewhere just
         // past the mark (one read of slack, since the check precedes the read).
+        // The idle count starts at the first byte: a shell that is slow to
+        // start (a busy CI runner, #171) is not a pane that has stopped.
         let mut got = 0usize;
         let mut idle = 0;
-        while idle < 5 {
+        let started = std::time::Instant::now();
+        while idle < 5 && (got > 0 || started.elapsed() < Duration::from_secs(20)) {
             match rx.recv_timeout(Duration::from_millis(200)) {
                 Ok((p, PaneEvent::Output(b))) if p == pane => {
                     answer_conpty_probe(&backend, pane, &b);
@@ -711,7 +726,11 @@ mod tests {
                     idle = 0;
                 }
                 Ok(_) => {}
-                Err(_) => idle += 1,
+                Err(_) => {
+                    if got > 0 {
+                        idle += 1;
+                    }
+                }
             }
         }
         assert!(got > HIGH_WATER, "never reached the mark: {got}");

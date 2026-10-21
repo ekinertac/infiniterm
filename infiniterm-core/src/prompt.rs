@@ -14,11 +14,18 @@
 //! `confirm` is a question with two buttons, the verb on the second
 //! (`action`): Enter or the button for yes, Escape or Cancel for no. Used
 //! only where a key would otherwise destroy something with nothing to undo
-//! it (closing a workspace kills every shell on it). A dirty editor
-//! deliberately does NOT get one; a dialog on every close is a dialog
-//! nobody reads. `alert` is a message with one button, for something the
+//! it (closing a workspace kills every shell on it). `confirm3` adds a
+//! third, the macOS save sheet's shape (2026-09-26, Ekin): Save, Don't Save
+//! (Cmd+D, the old Mac key, in his muscle memory), Cancel; a dirty editor's
+//! close asks it, because the two-press close it replaced lost work to a
+//! double press. `alert` is a message with one button, for something the
 //! status bar's notice is too small for. The dialog element renders all
 //! three and calls `settle`.
+//!
+//! The buttons are keyboard-reachable (`choice`): arrows and Tab move a
+//! highlight that starts on the action, and Enter presses whatever is
+//! highlighted. macOS splits that between Return (the default) and Space
+//! (the focused button), a hidden rule; here one key does one thing.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Prompt<P> {
     pub open: bool,
@@ -28,10 +35,40 @@ pub struct Prompt<P> {
     pub confirm: bool,
     /// A message with one button; settles yes on Enter, no on Escape.
     pub alert: bool,
+    /// The About window (#90): a confirm with no buttons (Enter, Escape or a
+    /// click outside closes it) whose body the ui draws itself, icon and
+    /// details, not `label`.
+    pub about: bool,
     /// The verb on the confirming button ("Close workspace"), "OK" for an alert.
     pub action: String,
+    /// A third button (`confirm3`): "Don't Save".
+    pub alt_action: Option<String>,
+    /// The highlighted button, an index into `buttons()`.
+    pub choice: usize,
+    /// A text prompt's starting selection, as a char range, when it is not
+    /// the whole value (`ask_selecting`: the stem of `untitled.txt`).
+    pub select: Option<(usize, usize)>,
+    /// Counts the questions asked, so the ui refills its field for a new
+    /// one even when it replaces another without the dialog closing (the
+    /// save sheet's Save opening the save-as field in the same answer;
+    /// watching `open` alone left that field empty, 2026-09-26).
+    pub serial: u64,
     pending: Option<P>,
 }
+
+/// What a button does when pressed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ButtonKind {
+    /// The action, the default: `Some("")`.
+    Primary,
+    /// The third choice (`confirm3`): `Some(ALT)`.
+    Alt,
+    /// `None`.
+    Cancel,
+}
+
+/// The answer text a pressed third button settles with.
+pub const ALT: &str = "alt";
 
 /// What a settled prompt hands back: the question's payload and the answer,
 /// trimmed text or `None` for a cancel (for a confirm, `Some` means yes).
@@ -45,7 +82,12 @@ impl<P> Default for Prompt<P> {
             value: String::new(),
             confirm: false,
             alert: false,
+            about: false,
             action: String::new(),
+            alt_action: None,
+            choice: 0,
+            select: None,
+            serial: 0,
             pending: None,
         }
     }
@@ -60,9 +102,27 @@ impl<P> Prompt<P> {
         self.confirm = false;
         self.alert = false;
         self.action = String::new();
+        self.alt_action = None;
+        self.choice = 0;
+        self.select = None;
+        self.serial += 1;
         self.label = label.into();
         self.value = initial.into();
         self.pending = Some(pending);
+        displaced
+    }
+
+    /// `ask` with only part of the value selected, so typing replaces that
+    /// part: the name in a save-as path.
+    pub fn ask_selecting(
+        &mut self,
+        label: &str,
+        initial: &str,
+        select: (usize, usize),
+        pending: P,
+    ) -> Option<Answer<P>> {
+        let displaced = self.ask(label, initial, pending);
+        self.select = Some(select);
         displaced
     }
 
@@ -73,10 +133,104 @@ impl<P> Prompt<P> {
         self.open = true;
         self.confirm = true;
         self.alert = false;
+        self.about = false;
         self.action = action.into();
+        self.alt_action = None;
+        self.serial += 1;
         self.label = label.into();
         self.value.clear();
         self.pending = Some(pending);
+        self.choice = self.primary_index();
+        displaced
+    }
+
+    /// A confirm with a third button, `alt` ("Don't Save"), laid out the
+    /// way macOS does it: the alternative on the left, then Cancel, then
+    /// the action.
+    pub fn confirm3(
+        &mut self,
+        label: &str,
+        action: &str,
+        alt: &str,
+        pending: P,
+    ) -> Option<Answer<P>> {
+        let displaced = self.confirm(label, action, pending);
+        self.alt_action = Some(alt.into());
+        self.choice = self.primary_index();
+        displaced
+    }
+
+    /// The buttons left to right, as labels and what each does.
+    pub fn buttons(&self) -> Vec<(String, ButtonKind)> {
+        if self.alert {
+            return vec![(self.action.clone(), ButtonKind::Primary)];
+        }
+        if !self.confirm || self.about {
+            return vec![];
+        }
+        let mut b = vec![];
+        if let Some(alt) = &self.alt_action {
+            b.push((alt.clone(), ButtonKind::Alt));
+        }
+        b.push(("Cancel".into(), ButtonKind::Cancel));
+        b.push((self.action.clone(), ButtonKind::Primary));
+        b
+    }
+
+    fn primary_index(&self) -> usize {
+        self.buttons()
+            .iter()
+            .position(|(_, k)| *k == ButtonKind::Primary)
+            .unwrap_or(0)
+    }
+
+    /// Arrows and Tab: the highlight moves by `delta`, wrapping.
+    pub fn move_choice(&mut self, delta: i32) {
+        let n = self.buttons().len() as i32;
+        if n > 0 {
+            self.choice = (self.choice as i32 + delta).rem_euclid(n) as usize;
+        }
+    }
+
+    /// Enter: presses the highlighted button.
+    pub fn press_choice(&mut self) -> Option<Answer<P>> {
+        // About has no buttons: Enter closes it.
+        if self.about {
+            return self.settle(None);
+        }
+        let kind = self.buttons().get(self.choice).map(|(_, k)| *k)?;
+        self.press(kind)
+    }
+
+    /// A button, by what it does.
+    pub fn press(&mut self, kind: ButtonKind) -> Option<Answer<P>> {
+        match kind {
+            ButtonKind::Primary => self.settle(Some("")),
+            ButtonKind::Alt if self.alt_action.is_some() => self.settle(Some(ALT)),
+            ButtonKind::Alt => None,
+            ButtonKind::Cancel => self.settle(None),
+        }
+    }
+
+    /// Chords a confirm takes before the canvas sees them: Cmd+D is Don't
+    /// Save (else it would split the card behind the dialog) and Cmd+. is
+    /// Cancel, both macOS's.
+    pub fn chord(&self, chord: &str) -> Option<ButtonKind> {
+        if !self.open || !self.confirm || self.alert {
+            return None;
+        }
+        match chord {
+            "cmd+d" if self.alt_action.is_some() => Some(ButtonKind::Alt),
+            "cmd+." => Some(ButtonKind::Cancel),
+            _ => None,
+        }
+    }
+
+    /// The About window: a confirm with no buttons. Enter, Escape or a click
+    /// outside closes it; the update check is the app menu's.
+    pub fn about(&mut self, pending: P) -> Option<Answer<P>> {
+        let displaced = self.confirm("about", "", pending);
+        self.about = true;
         displaced
     }
 
@@ -114,6 +268,57 @@ impl<P> Prompt<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The save sheet: Don't Save, Cancel, Save, the highlight on Save so
+    // Enter keeps your work; arrows and Tab walk the buttons, wrapping;
+    // Enter presses what is highlighted; Cmd+D is Don't Save.
+    #[test]
+    fn the_save_sheet_defaults_to_save_and_walks_by_keys() {
+        let mut p = Prompt::default();
+        p.confirm3("save changes to .zshrc?", "Save", "Don't Save", 1);
+        let labels: Vec<String> = p.buttons().into_iter().map(|(l, _)| l).collect();
+        assert_eq!(labels, ["Don't Save", "Cancel", "Save"]);
+        assert_eq!(p.choice, 2, "Save is highlighted");
+        p.move_choice(1);
+        assert_eq!(p.choice, 0, "wraps");
+        p.move_choice(-1);
+        p.move_choice(-1);
+        assert_eq!(p.choice, 1, "Cancel");
+        assert_eq!(p.press_choice(), Some((1, None)), "Enter pressed Cancel");
+        p.confirm3("q", "Save", "Don't Save", 2);
+        assert_eq!(
+            p.press_choice(),
+            Some((2, Some(String::new()))),
+            "Enter is Save"
+        );
+        p.confirm3("q", "Save", "Don't Save", 3);
+        assert_eq!(p.chord("cmd+d"), Some(ButtonKind::Alt));
+        assert_eq!(p.press(ButtonKind::Alt), Some((3, Some(ALT.into()))));
+    }
+
+    // A two-button confirm has no Cmd+D (it would split the card behind
+    // it for nothing) and starts on its action.
+    #[test]
+    fn a_plain_confirm_starts_on_its_action_and_leaves_cmd_d_alone() {
+        let mut p = Prompt::default();
+        p.confirm("close workspace?", "Close workspace", 1);
+        assert_eq!(p.buttons().len(), 2);
+        assert_eq!(p.choice, 1);
+        assert_eq!(p.chord("cmd+d"), None);
+        assert_eq!(p.chord("cmd+."), Some(ButtonKind::Cancel));
+    }
+
+    // A question replacing another with the dialog still up is still a new
+    // question: the serial moves.
+    #[test]
+    fn every_question_has_its_own_serial() {
+        let mut p = Prompt::default();
+        p.confirm3("save?", "Save", "Don't Save", 1);
+        let first = p.serial;
+        p.ask_selecting("save as", "~/untitled.txt", (2, 10), 2);
+        assert!(p.open);
+        assert_ne!(p.serial, first);
+    }
 
     #[test]
     fn ask_opens_with_the_label_and_the_suggested_value() {
@@ -187,5 +392,20 @@ mod tests {
         // A text prompt after that carries neither.
         p.ask("name", "", 4);
         assert!(!p.confirm && !p.alert);
+    }
+
+    #[test]
+    fn about_has_no_buttons_and_enter_or_escape_closes_it() {
+        let mut p: Prompt<u8> = Prompt::default();
+        p.about(1);
+        assert!(p.open && p.about);
+        assert!(p.buttons().is_empty());
+        assert_eq!(p.press_choice(), Some((1, None)));
+        p.about(2);
+        assert_eq!(p.settle(None), Some((2, None)));
+        // A later confirm is not an About.
+        p.confirm("sure?", "Yes", 3);
+        assert!(!p.about);
+        assert_eq!(p.buttons()[0].0, "Cancel");
     }
 }

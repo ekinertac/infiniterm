@@ -30,6 +30,13 @@ pub struct ToolCall {
 pub enum Role {
     User,
     Assistant,
+    /// Another agent session's message, relayed into this one
+    /// (`<cross-session-message>`); `Turn::from` names the sender. Before
+    /// 2026-09-26 these read as the user's own turns, tags and all.
+    Peer,
+    /// The harness talking, not a person: a background task finishing.
+    /// One line, its summary.
+    Notice,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +47,68 @@ pub struct Turn {
     pub at: String,
     pub text: String,
     pub tools: Vec<ToolCall>,
+    /// A `Peer` turn's sender, the session's name; empty otherwise.
+    pub from: String,
+}
+
+/// What a user record really is: a person, another session, or the
+/// harness. Returns the role, the sender (for a peer) and the text to show.
+pub fn classify_user(text: &str) -> (Role, String, String) {
+    const OPEN: &str = "<cross-session-message";
+    const CLOSE: &str = "</cross-session-message>";
+    if let Some(at) = text.find(OPEN) {
+        let head_end = text[at..]
+            .find('>')
+            .map(|i| at + i + 1)
+            .unwrap_or(text.len());
+        let head = &text[at..head_end];
+        let from = head
+            .split("from-name=\"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .unwrap_or("another session")
+            .to_string();
+        let end = text[head_end..]
+            .find(CLOSE)
+            .map(|i| head_end + i)
+            .unwrap_or(text.len());
+        let body: Vec<&str> = text[head_end..end]
+            .lines()
+            .filter(|l| {
+                let t = l.trim();
+                !(t.starts_with("<agent-message") || t == "</agent-message>")
+            })
+            .collect();
+        return (Role::Peer, from, body.join("\n").trim().to_string());
+    }
+    let trimmed = text.trim_start();
+    if trimmed.starts_with("<task-notification>") {
+        let summary = trimmed
+            .split("<summary>")
+            .nth(1)
+            .and_then(|r| r.split("</summary>").next())
+            .unwrap_or("a background task finished");
+        return (Role::Notice, String::new(), summary.to_string());
+    }
+    if let Some(rest) = trimmed.strip_prefix("[Cross-session idle notice]") {
+        let line = rest.trim().lines().next().unwrap_or("").to_string();
+        return (Role::Notice, String::new(), line);
+    }
+    (Role::User, String::new(), text.to_string())
+}
+
+/// A message this session sent another (`SendMessage`), as the text the
+/// turn shows: who it went to, then the whole message, not the tool's JSON
+/// cut at `INPUT_CAP`.
+fn sent_message(input: &Value) -> Option<String> {
+    let to = input.get("to")?.as_str()?;
+    let message = input.get("message")?.as_str()?;
+    if message.is_empty() {
+        return None;
+    }
+    // `name [ref]`: the ref is an address detail, not a name.
+    let to = to.split(" [").next().unwrap_or(to);
+    Some(format!("\u{2192} {to}\n{message}"))
 }
 
 /// `23:04:12.345` from Unix ms, local time. The agent log needs seconds and
@@ -264,11 +333,13 @@ pub fn parse_transcript(jsonl: &str) -> Vec<Turn> {
                 if text.trim().is_empty() {
                     continue;
                 }
+                let (role, from, text) = classify_user(&text);
                 turns.push(Turn {
-                    role: Role::User,
+                    role,
                     at,
                     text: cap(&text, TEXT_CAP),
                     tools: Vec::new(),
+                    from,
                 });
             }
             "assistant" => {
@@ -280,6 +351,7 @@ pub fn parse_transcript(jsonl: &str) -> Vec<Turn> {
                         at: at.clone(),
                         text: String::new(),
                         tools: Vec::new(),
+                        from: String::new(),
                     });
                 }
                 let turn = turns.last_mut().unwrap();
@@ -294,6 +366,19 @@ pub fn parse_transcript(jsonl: &str) -> Vec<Turn> {
                                 turn.text.push('\n');
                             }
                             turn.text.push_str(t);
+                            turn.text = cap(&turn.text, TEXT_CAP);
+                        }
+                        // A message to another session reads as what it
+                        // said, in the turn's own text.
+                        Some("tool_use")
+                            if b.get("name").and_then(Value::as_str) == Some("SendMessage")
+                                && b.get("input").and_then(sent_message).is_some() =>
+                        {
+                            let msg = b.get("input").and_then(sent_message).unwrap_or_default();
+                            if !turn.text.is_empty() {
+                                turn.text.push_str("\n\n");
+                            }
+                            turn.text.push_str(&msg);
                             turn.text = cap(&turn.text, TEXT_CAP);
                         }
                         Some("tool_use") | Some("toolCall") => turn.tools.push(ToolCall {
@@ -352,7 +437,60 @@ mod tests {
             at: String::new(),
             text: text.into(),
             tools,
+            from: String::new(),
         }
+    }
+
+    // Another session's message is the peer's turn, named and without the
+    // wrapper; a background notice is one line; a person is still a person.
+    #[test]
+    fn a_relayed_message_and_a_notice_are_not_the_users_turns() {
+        let peer = "Another Claude session sent a message:\n<cross-session-message from=\"uds:/tmp/x.sock\" from-name=\"ift-editor\" from-mode=\"bypass\">\n<agent-message from=\"a1\">\nCommitted at 74cc1c2.\n</agent-message>\n</cross-session-message>\n\nThis came from another Claude session.";
+        assert_eq!(
+            classify_user(peer),
+            (
+                Role::Peer,
+                "ift-editor".into(),
+                "Committed at 74cc1c2.".into()
+            )
+        );
+        let notice = "<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n<summary>Agent \"Build it\" finished</summary>\n</task-notification>";
+        assert_eq!(
+            classify_user(notice),
+            (
+                Role::Notice,
+                String::new(),
+                "Agent \"Build it\" finished".into()
+            )
+        );
+        assert_eq!(classify_user("fix the tab dots").0, Role::User);
+    }
+
+    // A SendMessage call reads as the message it sent, whole, inline in
+    // the turn, not as a tool line with the input cut at INPUT_CAP.
+    #[test]
+    fn a_sent_message_reads_as_what_it_said() {
+        let long = "word ".repeat(200);
+        let jsonl = format!(
+            "{}\n",
+            serde_json::json!({
+                "type": "assistant",
+                "timestamp": "t1",
+                "message": {"content": [
+                    {"type": "text", "text": "Handing it over."},
+                    {"type": "tool_use", "id": "s1", "name": "SendMessage",
+                     "input": {"to": "ift-editor [1d02be]", "message": long.trim()}}
+                ]}
+            })
+        );
+        let turns = parse_transcript(&jsonl);
+        assert_eq!(turns.len(), 1);
+        assert!(turns[0].tools.is_empty(), "not a tool line");
+        assert!(turns[0].text.contains("\u{2192} ift-editor\nword word"));
+        assert!(
+            turns[0].text.len() > 900,
+            "the whole message, not 400 chars"
+        );
     }
 
     #[test]

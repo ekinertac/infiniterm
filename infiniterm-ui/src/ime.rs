@@ -47,6 +47,11 @@ impl AppView {
             self.model.prompt.value = self.prompt_field.text.clone();
         } else if self.model.shortcuts_open {
             self.shortcuts_field.insert_text(text);
+        } else if self.model.whats_new_open {
+            // Composed text (an emoji, a dead key's letter) is a key typed
+            // into the sheet: it flashes, nothing else.
+            self.model.flash_whats_new();
+            self.redraw = true;
         } else if let Some(id) = self.model.selection.focused_id.clone() {
             if let Some(body) = self.live_body(&id) {
                 body.insert_text(text);

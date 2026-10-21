@@ -12,7 +12,10 @@
 //! a pty crate into a binary on an agent's hot path. Two copies, one rule: change
 //! one and change the other.
 //!
-//! Usage: infiniterm-hook <EventName>   (the harness pipes its JSON on stdin)
+//! Usage: infiniterm-hook <EventName> [agent]   (the harness pipes its JSON on stdin)
+//!
+//! `agent` names the agent that is not Claude Code (`codex`, `opencode`,
+//! `pi`, `cursor`), so the card knows which resume command its session takes.
 
 use std::io::{Read, Write};
 
@@ -23,6 +26,7 @@ fn main() {
 
 fn try_report() -> Option<()> {
     let event = std::env::args().nth(1)?;
+    let agent = std::env::args().nth(2);
     let card_id = std::env::var("INFINITERM_CARD_ID").ok()?;
 
     let mut payload = String::new();
@@ -31,10 +35,16 @@ fn try_report() -> Option<()> {
     let payload = if payload.starts_with('{') { payload } else { "{}" };
 
     let mut stream = connect(&endpoint())?;
+
+    let agent = match agent {
+        Some(a) => format!(",\"agent\":{}", json_string(&a)),
+        None => String::new(),
+    };
     let line = format!(
-        "{{\"card_id\":{},\"event\":{},\"payload\":{}}}\n",
+        "{{\"card_id\":{},\"event\":{}{},\"payload\":{}}}\n",
         json_string(&card_id),
         json_string(&event),
+        agent,
         payload
     );
     stream.write_all(line.as_bytes()).ok()?;

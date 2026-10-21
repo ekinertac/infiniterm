@@ -16,11 +16,20 @@
 //! could drift from the palette's.
 //!
 //! Exit codes are API once anything scripts against them: 0 success, 1 infiniterm
-//! is not running, 2 bad usage.
+//! is not running, 2 bad usage; `ift licence` adds 3 (rejected) and 4 (Lemon
+//! Squeezy unreachable) for itself only.
 
 mod attach;
 mod claude_hooks;
+mod antigravity_hooks;
+mod cursor_hooks;
 mod completion;
+mod connect;
+mod install;
+mod join;
+mod licence_cmd;
+mod proxy;
+mod serve;
 mod socket;
 
 use std::path::{Path, PathBuf};
@@ -31,13 +40,27 @@ ift — drive infiniterm from a shell
 
   ift                        launch infiniterm, or focus it if it is running
   ift <path>                 open a directory as a terminal card, a file as an
-                             editor card; file:42 or file:42:7 opens at a line
+                             editor card; file:42 or file:42:7 opens at a line.
+                             Run inside a card, a file opens IN PLACE over it
+                             and ift waits until you close it, like vim, so
+                             EDITOR=ift works for git commit. A file that
+                             does not exist opens empty and the first save
+                             creates it (any word that is not a command
+                             below is taken as one); its directory must
+                             exist
+  ift -n <path>              a file in a card of its own, returning at once
+  ift -t <path> [card]       a file as a tab of an editor card: the card's
+                             number (2 or #2) or id, else the focused editor
+                             card, else a card of its own
   ift diff [path]            changes against git HEAD, as a card: a tree of the
                              changed files under path (the current directory
                              without one) and each file's diff
   ift ls                     cards: id, group, directory, state, remote, number
                              (the #7 on the card's label); a table on a
                              terminal, tab separated without a header into a pipe
+  ift ls --agents            the cards with an agent: number, agent, session
+                             id, state, directory, tab separated; the session
+                             id is what `claude --resume` takes
   ift sessions [--full]      session daemons still running, app or no app:
                              card number and label (or directory) on a
                              terminal, every column with --full (id, pid,
@@ -48,6 +71,45 @@ ift — drive infiniterm from a shell
                              its id or by the card's number (#7 on its
                              label, the same after a reboot; the id is not);
                              Ctrl-\\ (0x1c) detaches, leaving it running
+  ift --version              the version of this ift
+  ift connect <[user@]host> [--name N] [--color RRGGBB] [--check] [--install]
+  ift serve [--detach|--stop]
+                             hold this Mac's saved canvas and its cards for
+                             viewers (ift join) with the app closed; --detach
+                             runs it in the background, --stop ends it (the
+                             cards keep running; the app takes over at its
+                             next launch)
+  ift join <[user@]host> [--name N] [--color RRGGBB] [--check]
+                             a viewer window on the canvas running on host
+                             open a second infiniterm for a host: its own
+                             window, Dock icon and canvas, with terminal cards
+                             that run on that host over ssh (key login; ift
+                             and iftd installed there). Connecting again
+                             brings the same cards back. --check only tests
+                             the host. --install first puts ift and iftd on
+                             a Linux host (this version's package, sent over
+                             ssh; --from <file> uses a file, --platform
+                             linux-x86_64|linux-aarch64 skips asking the
+                             host). Settings start with the defaults.
+  ift terminal <dir>...      a terminal card whose shell starts in each folder,
+                             on the workspace on screen, the last one
+                             focused; starts infiniterm first when it is not
+                             running (what Finder's Services > Open in
+                             infiniterm does)
+  ift send <card> [text] [--enter] [--key NAME]...
+                             type into a card's shell, without moving the
+                             focus; the card is its number (#7) or its id;
+                             keys: enter esc tab backspace ctrl-c ctrl-d
+                             ctrl-l ctrl-z up down left right
+  ift read <card> [--lines N] [--all]
+                             print what a card's terminal shows (the last N
+                             lines of it; --all reaches into the history)
+  ift close <card>           close a card like Cmd+W; a locked card refuses
+  ift run <command-id>       run a registered command as the palette would,
+                             on the card in focus (ift commands lists them)
+  ift usage [days]           the commands and mouse gestures you used in the
+                             last 30 days (or [days]), then the ones you
+                             never did; from a log kept only on this Mac
   ift commands               every command the app registers: id, label,
                              key; the palette's list as text (the default
                              keybindings file has only the bound ones)
@@ -55,13 +117,27 @@ ift — drive infiniterm from a shell
                              ranked against the real history and open cards
   ift name <text>            name the card this is run from
   ift group <name>           put this card in a group, creating it if needed
+  ift licence [<email> <key>]
+                             register this Mac with its commercial licence
+                             key (optional; asks Lemon Squeezy once, then
+                             the About window says who it is licensed to);
+                             bare, says whether it is registered
   ift install                put ift on $PATH (a symlink in ~/.local/bin) and
                              its zsh completion on fpath
   ift completion zsh         print the zsh completion function
   ift install-claude-hooks   wire infiniterm into ~/.claude/settings.json
+  ift install-codex-hooks    wire infiniterm into ~/.codex/hooks.json (or
+                             $CODEX_HOME); approve them once with /hooks
+  ift install-opencode-hooks install the OpenCode plugin into
+                             ~/.config/opencode/plugins (or $XDG_CONFIG_HOME)
   ift install-pi-hooks [DIR] install the Pi extension into ~/.pi/agent (or
                              $PI_CODING_AGENT_DIR, or DIR: a wrapper that
                              runs Pi against its own agent dir needs its own)
+  ift install-cursor-hooks   wire infiniterm into ~/.cursor/hooks.json
+                             (Cursor Agent CLI and IDE agent)
+  ift install-antigravity-hooks
+                             wire infiniterm into ~/.gemini/config/hooks.json
+                             (Antigravity CLI, `agy`)
   ift install-extension <path|id|store-url>
                              add an extension the browser cards load: an
                              unpacked directory, or an id / Chrome Web
@@ -70,23 +146,38 @@ ift — drive infiniterm from a shell
                              directly, so it must be installed there
                              first); takes effect on the app's next launch
 
-Exit codes: 0 ok, 1 infiniterm not running, 2 bad usage.
+Exit codes: 0 ok, 1 infiniterm not running, 2 bad usage; for ift licence
+only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 ";
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 13] = [
+pub const SUBCOMMANDS: [&str; 27] = [
     "diff",
     "ls",
     "sessions",
     "attach",
+    "connect",
+    "serve",
+    "join",
+    "terminal",
+    "send",
+    "read",
+    "close",
+    "run",
     "omni",
     "commands",
+    "usage",
     "name",
     "group",
     "install",
+    "licence",
     "install-claude-hooks",
+    "install-codex-hooks",
+    "install-opencode-hooks",
     "install-pi-hooks",
+    "install-cursor-hooks",
+    "install-antigravity-hooks",
     "install-extension",
     "completion",
 ];
@@ -103,12 +194,47 @@ fn main() -> ExitCode {
 
     match args.first().map(String::as_str) {
         Some("install-claude-hooks") => install_hooks(args.contains(&"--dry-run".to_string())),
+        Some("install-codex-hooks") => install_codex(args.contains(&"--dry-run".to_string())),
+        Some("install-opencode-hooks") => {
+            install_opencode(args.contains(&"--dry-run".to_string()))
+        }
         Some("install-pi-hooks") => install_pi(
             args.iter().skip(1).find(|a| !a.starts_with("--")).map(String::as_str),
             args.contains(&"--dry-run".to_string()),
         ),
+        Some("install-cursor-hooks") => {
+            install_cursor(args.contains(&"--dry-run".to_string()))
+        }
+        Some("install-antigravity-hooks") => {
+            install_antigravity(args.contains(&"--dry-run".to_string()))
+        }
         Some("install-extension") => install_extension(args.get(1).map(String::as_str)),
         Some("install") => install_self(),
+        Some("licence") => licence_cmd::run(&args[1..]),
+        Some("connect") => connect::run(&args[1..]),
+        Some("join") => join::run(&args[1..]),
+        Some("serve") => serve::run(&args[1..]),
+        // Not `ift version`: any word that is not a verb is a file to open.
+        Some("--version") | Some("-V") => {
+            println!("ift {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        // Plumbing for the remote instances, called over ssh by the app, so it
+        // is in neither USAGE nor the completion (like dev-run).
+        Some("proxy") => proxy::run(&args[1..]),
+        // Run by ssh as SSH_ASKPASS for `ift join` with no terminal (#450):
+        // the question is the one argument, the answer goes to stdout, for ssh
+        // alone. Plumbing, so in neither USAGE nor the completion.
+        Some("askpass") => match args.get(1) {
+            Some(prompt) => match infiniterm_core::backend::ssh_login::run_askpass(prompt) {
+                Ok(answer) => {
+                    println!("{answer}");
+                    ExitCode::SUCCESS
+                }
+                Err(_) => ExitCode::from(1),
+            },
+            None => ExitCode::from(2),
+        },
         Some("completion") => match args.get(1).map(String::as_str) {
             Some("zsh") => {
                 print!("{}", completion::ZSH);
@@ -119,8 +245,15 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        Some("ls") if args.iter().any(|a| a == "--agents") => send("ls", rest()),
         Some("ls") => send_table("ls", &LS_HEADER),
+        Some("terminal") => terminal_cmd(&args[1..]),
+        Some("send") => send("send", rest()),
+        Some("read") => send("read", rest()),
+        Some("close") => send("close", rest()),
+        Some("run") => send("run", rest()),
         Some("commands") => send_table("commands", &["id", "label", "key"]),
+        Some("usage") => send("usage", rest()),
         Some("sessions") => attach::sessions_cmd(args.contains(&"--full".to_string())),
         Some("attach") => match args.get(1) {
             Some(id) => attach::attach(id),
@@ -135,6 +268,20 @@ fn main() -> ExitCode {
         // harness can be driven from a script instead of by typing into the
         // palette, and UI actions are otherwise deliberately NOT ift's.
         Some("dev-run") => send("dev-run", rest()),
+        Some("-n") => match new_card_path(&args) {
+            Some(p) => open_path(p, false),
+            None => {
+                eprintln!("ift: -n takes a path");
+                ExitCode::from(2)
+            }
+        },
+        Some("-t") => match tab_args(&args) {
+            Some((path, card)) => open_tab(path, card),
+            None => {
+                eprintln!("ift: -t takes a path and optionally a card");
+                ExitCode::from(2)
+            }
+        },
         Some("-h") | Some("--help") => {
             print!("{USAGE}");
             ExitCode::SUCCESS
@@ -142,11 +289,11 @@ fn main() -> ExitCode {
         None => launch(),
         // A PATH beats a verb. A directory called `ls` in front of you is what you
         // meant; the verbs are checked first only so the common ones stay short.
-        Some(arg) if Path::new(split_line(arg).0).exists() => open_path(arg),
-        Some(other) => {
-            eprintln!("ift: unknown command `{other}`\n\n{USAGE}");
-            ExitCode::from(2)
-        }
+        // Anything else is a path, existing or not: a word that is not a
+        // command above is a new file, vim's way (Ekin, 2026-09-26: a rule
+        // like "only if it has a dot" would be one more hidden thing). A
+        // typo'd verb opens an empty editor; nothing is written unless saved.
+        Some(arg) => open_path(arg, true),
     }
 }
 
@@ -279,18 +426,86 @@ fn install_self() -> ExitCode {
 ///
 /// The KIND is decided here rather than in the app: `ift` is the process standing
 /// in the directory the path is relative to, and the app is not.
-fn open_path(arg: &str) -> ExitCode {
+fn open_path(arg: &str, in_place: bool) -> ExitCode {
     let (path, line) = split_line(arg);
-    let Ok(full) = infiniterm_core::paths::canonical(path) else {
-        eprintln!("ift: cannot resolve {path}");
-        return ExitCode::from(2);
+    let full = match resolve(path) {
+        Ok(full) => full,
+        Err(e) => {
+            eprintln!("ift: {e}");
+            return ExitCode::from(2);
+        }
     };
     let kind = if full.is_dir() { "directory" } else { "file" };
+    // A file, from inside a card: in place, waiting (the app's `edit`).
+    if in_place && kind == "file" && socket::in_a_card() {
+        let mut args = vec![full.to_string_lossy().into_owned()];
+        if let Some(line) = line {
+            args.push(line.to_string());
+        }
+        return send_waiting("edit", args);
+    }
     let mut args = vec![full.to_string_lossy().into_owned(), kind.to_string()];
     if let Some(line) = line {
         args.push(line.to_string());
     }
     send("open", args)
+}
+
+/// `path` made absolute. One that exists is canonicalised; one that does
+/// not is a new file, allowed only where its directory exists, since vim
+/// finds that out at the first write and that is the worst moment to.
+fn resolve(path: &str) -> Result<PathBuf, String> {
+    // `paths::canonical`, not `fs::canonicalize`: on Windows the latter
+    // returns a `\\?\` path that nothing downstream can use.
+    if let Ok(full) = infiniterm_core::paths::canonical(path) {
+        return Ok(full);
+    }
+    let given = Path::new(path);
+    let name = given
+        .file_name()
+        .ok_or_else(|| format!("cannot resolve {path}"))?;
+    let dir = match given.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let dir = infiniterm_core::paths::canonical(&dir)
+        .map_err(|_| format!("no such directory: {}", dir.display()))?;
+    Ok(dir.join(name))
+}
+
+/// How long `ift terminal` waits for a launched app to open its socket:
+/// CEF and the canvas load take a few seconds on a cold start.
+const LAUNCH_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// `ift terminal <dir>...`: resolves each path here, since the app's working
+/// directory is not the caller's, and starts the app first when its socket
+/// is not there.
+fn terminal_cmd(paths: &[String]) -> ExitCode {
+    if paths.is_empty() {
+        eprintln!("ift: terminal takes a directory");
+        return ExitCode::from(2);
+    }
+    let mut dirs = Vec::new();
+    for p in paths {
+        match std::fs::canonicalize(p) {
+            Ok(full) if full.is_dir() => dirs.push(full.to_string_lossy().into_owned()),
+            Ok(_) => {
+                eprintln!("ift: not a directory: {p}");
+                return ExitCode::from(2);
+            }
+            Err(_) => {
+                eprintln!("ift: cannot resolve {p}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    if !socket::running()
+        && (launch() != ExitCode::SUCCESS || !socket::wait_for_socket(LAUNCH_WAIT))
+    {
+        eprintln!("ift: infiniterm did not start");
+        return ExitCode::from(1);
+    }
+    send("terminal", dirs)
 }
 
 /// `ift diff [path]`: the changes under a directory, or of one file.
@@ -362,6 +577,23 @@ fn send_table(cmd: &str, header: &[&str]) -> ExitCode {
     }
 }
 
+/// `send` for a request answered when you finish, not within seconds: no
+/// read timeout, and nothing printed on success, since this runs as
+/// `$EDITOR` under git, where stdout is somebody else's.
+fn send_waiting(cmd: &str, args: Vec<String>) -> ExitCode {
+    match socket::request_waiting(cmd, args) {
+        Ok(reply) if reply.ok => ExitCode::SUCCESS,
+        Ok(reply) => {
+            eprintln!("ift: {}", reply.text);
+            ExitCode::from(2)
+        }
+        Err(e) => {
+            eprintln!("ift: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 /// Sends one request and prints the answer.
 fn send(cmd: &str, args: Vec<String>) -> ExitCode {
     match socket::request(cmd, args) {
@@ -382,11 +614,58 @@ fn send(cmd: &str, args: Vec<String>) -> ExitCode {
     }
 }
 
+/// `ift -t <path> [card]`: the path right after `-t` and the card after it.
+fn tab_args(args: &[String]) -> Option<(&str, Option<&str>)> {
+    let path = args.get(1).map(String::as_str).filter(|p| !p.is_empty())?;
+    Some((path, args.get(2).map(String::as_str).filter(|c| !c.is_empty())))
+}
+
+/// `ift -t`: the file is resolved here, where the working directory is, and
+/// the app puts it in a tab (#265). A directory is not a tab.
+fn open_tab(arg: &str, card: Option<&str>) -> ExitCode {
+    let (path, _line) = split_line(arg);
+    let full = match resolve(path) {
+        Ok(full) => full,
+        Err(e) => {
+            eprintln!("ift: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if full.is_dir() {
+        eprintln!("ift: -t takes a file, not a directory: {}", full.display());
+        return ExitCode::from(2);
+    }
+    let mut args = vec![full.to_string_lossy().into_owned()];
+    if let Some(card) = card {
+        args.push(card.to_string());
+    }
+    send("tab", args)
+}
+
+/// The path after `-n`. `args` already left the program name out, so it
+/// is the second argument; it read the third, and `ift -n <file>` said
+/// "-n takes a path" (#48).
+fn new_card_path(args: &[String]) -> Option<&str> {
+    args.get(1).map(String::as_str).filter(|p| !p.is_empty())
+}
+
 fn home() -> PathBuf {
     // core's answer, which knows about %USERPROFILE%; `ift` had its own copy
     // that only read $HOME and so put ~/.claude at the filesystem root on
     // Windows.
     infiniterm_core::paths::home_dir()
+}
+
+/// What every installer says when `hook_binary` finds nothing: the bundle
+/// ships it beside `ift`, and a checkout builds it into the workspace's
+/// `target/` beside `ift` too (the old `crates/infiniterm-hook` path was
+/// the Tauri app's, #31).
+fn hook_missing() -> ExitCode {
+    eprintln!("ift: cannot find the infiniterm-hook binary");
+    eprintln!("ift: in a checkout, build it beside ift:");
+    eprintln!("  cargo build --release -p infiniterm-hook");
+    eprintln!("ift: or put it on $PATH next to ift");
+    ExitCode::from(2)
 }
 
 /// Where `infiniterm-hook` is, given where `ift` is.
@@ -430,7 +709,185 @@ fn which_on_path(name: &str) -> Option<String> {
 
 fn install_hooks(dry_run: bool) -> ExitCode {
     let path = home().join(".claude").join("settings.json");
-    let existing = std::fs::read_to_string(&path).unwrap_or_else(|_| "{}".into());
+    wire_hook_file(&path, &claude_hooks::EVENTS, None, dry_run)
+}
+
+const CURSOR_ADAPTER: &str = include_str!("../adapters/cursor-hook.sh");
+
+fn cursor_adapter_source(hook: &str) -> String {
+    CURSOR_ADAPTER.replace("__INFINITERM_HOOK__", hook)
+}
+
+fn cursor_hooks_dir() -> std::path::PathBuf {
+    home().join(".cursor")
+}
+
+fn install_cursor(dry_run: bool) -> ExitCode {
+    let Some(binary) = hook_binary() else {
+        return hook_missing();
+    };
+    let dir = cursor_hooks_dir();
+    let script = dir.join("hooks").join("infiniterm-cursor-hook.sh");
+    let hooks_json = dir.join("hooks.json");
+    let body = cursor_adapter_source(&binary);
+
+    if std::fs::read_to_string(&script).ok().as_deref() != Some(body.as_str()) {
+        if dry_run {
+            println!("would write {}", script.display());
+        } else if let Err(code) = write_cursor_script(&script, &body) {
+            return code;
+        }
+    } else {
+        println!("already installed: {}", script.display());
+    }
+
+    wire_cursor_hooks_file(&hooks_json, dry_run)
+}
+
+fn write_cursor_script(path: &std::path::Path, body: &str) -> Result<(), ExitCode> {
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("ift: could not create {}: {e}", parent.display());
+            return Err(ExitCode::from(2));
+        }
+    }
+    if let Err(e) = infiniterm_core::files::write_atomically(path, body) {
+        eprintln!("ift: could not write {}: {e}", path.display());
+        return Err(ExitCode::from(2));
+    }
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perms = meta.permissions();
+        perms.set_mode(0o755);
+        let _ = std::fs::set_permissions(path, perms);
+    }
+    println!("installed {}", path.display());
+    Ok(())
+}
+
+fn wire_cursor_hooks_file(path: &std::path::Path, dry_run: bool) -> ExitCode {
+    wire_json_hooks(
+        path,
+        dry_run,
+        cursor_hooks::install,
+        "takes effect in the next cursor agent session",
+    )
+}
+
+/// Reads a hooks file, lets `install` merge ours in, and writes it back only
+/// when something changed; a file that does not parse is never rewritten.
+fn wire_json_hooks(
+    path: &std::path::Path,
+    dry_run: bool,
+    install: impl FnOnce(&mut serde_json::Value) -> Vec<String>,
+    takes_effect: &str,
+) -> ExitCode {
+    let existing = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".into());
+    let mut settings: serde_json::Value = match serde_json::from_str(&existing) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("ift: {} does not parse as JSON ({e})", path.display());
+            eprintln!("ift: refusing to rewrite it; fix the file and run again");
+            return ExitCode::from(2);
+        }
+    };
+
+    let changed = install(&mut settings);
+    if changed.is_empty() {
+        println!("already wired: {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+
+    if dry_run {
+        println!("would update {} for: {}", path.display(), changed.join(", "));
+        return ExitCode::SUCCESS;
+    }
+
+    if let Some(dir) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("ift: could not create {}: {e}", dir.display());
+            return ExitCode::from(2);
+        }
+    }
+
+    let body = serde_json::to_string_pretty(&settings).unwrap_or_default() + "\n";
+    if let Err(e) = infiniterm_core::files::write_atomically(path, &body) {
+        eprintln!("ift: could not write {}: {e}", path.display());
+        return ExitCode::from(2);
+    }
+
+    println!("updated {}", path.display());
+    println!("  events: {}", changed.join(", "));
+    println!("  {takes_effect}");
+    ExitCode::SUCCESS
+}
+
+const ANTIGRAVITY_ADAPTER: &str = include_str!("../adapters/antigravity-hook.sh");
+
+fn antigravity_adapter_source(hook: &str) -> String {
+    ANTIGRAVITY_ADAPTER.replace("__INFINITERM_HOOK__", hook)
+}
+
+/// Antigravity's CLI reads global hooks from `~/.gemini/config/hooks.json`.
+/// The adapter script goes beside the CLI's own hooks, by absolute path:
+/// a relative command would run from whatever the workspace is.
+fn install_antigravity(dry_run: bool) -> ExitCode {
+    let Some(binary) = hook_binary() else {
+        return hook_missing();
+    };
+    let gemini = home().join(".gemini");
+    let script = gemini.join("hooks").join("infiniterm-antigravity-hook.sh");
+    let hooks_json = gemini.join("config").join("hooks.json");
+    let body = antigravity_adapter_source(&binary);
+
+    if std::fs::read_to_string(&script).ok().as_deref() != Some(body.as_str()) {
+        if dry_run {
+            println!("would write {}", script.display());
+        } else if let Err(code) = write_cursor_script(&script, &body) {
+            return code;
+        }
+    } else {
+        println!("already installed: {}", script.display());
+    }
+
+    let script_path = script.to_string_lossy().into_owned();
+    wire_json_hooks(
+        &hooks_json,
+        dry_run,
+        |v| antigravity_hooks::install(v, &script_path),
+        "takes effect in the next agy session (hooks load when a session starts)",
+    )
+}
+
+/// Codex reads hooks from `$CODEX_HOME/hooks.json`, `~/.codex` by default,
+/// in Claude's shape. It asks once before running hooks it did not write
+/// itself, so the install says where to approve them.
+fn install_codex(dry_run: bool) -> ExitCode {
+    let dir = std::env::var_os("CODEX_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home().join(".codex"));
+    let code = wire_hook_file(
+        &dir.join("hooks.json"),
+        &claude_hooks::CODEX_EVENTS,
+        Some("codex"),
+        dry_run,
+    );
+    if code == ExitCode::SUCCESS && !dry_run {
+        println!("  Codex runs them once you approve them: type /hooks in codex");
+    }
+    code
+}
+
+/// Merges infiniterm's hooks into a JSON hook file of Claude's shape
+/// (`claude_hooks::install_events`) and writes it back, refusing a file
+/// that does not parse.
+fn wire_hook_file(
+    path: &std::path::Path,
+    events: &[&str],
+    agent: Option<&str>,
+    dry_run: bool,
+) -> ExitCode {
+    let existing = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".into());
 
     let mut settings: serde_json::Value = match serde_json::from_str(&existing) {
         Ok(v) => v,
@@ -449,15 +906,9 @@ fn install_hooks(dry_run: bool) -> ExitCode {
         // name here, which REWROTE working absolute paths into `infiniterm-hook`
         // and silently broke a setup that was already correct — the one outcome
         // this command exists to prevent.
-        eprintln!("ift: cannot find the infiniterm-hook binary");
-        eprintln!("ift: build it first:");
-        eprintln!(
-            "  cargo build --release --manifest-path crates/infiniterm-hook/Cargo.toml"
-        );
-        eprintln!("ift: or put it on $PATH next to ift");
-        return ExitCode::from(2);
+        return hook_missing();
     };
-    let changed = claude_hooks::install(&mut settings, &binary);
+    let changed = claude_hooks::install_events(&mut settings, &binary, events, agent);
 
     if changed.is_empty() {
         println!("already wired: {}", path.display());
@@ -478,9 +929,10 @@ fn install_hooks(dry_run: bool) -> ExitCode {
 
     // Write-then-rename, so an interrupted write cannot leave a truncated
     // settings.json — which would take the user's permissions and env with it.
-    let tmp = path.with_extension("json.ift-tmp");
+    // Through a symlink, not over it: ~/.claude/settings.json is often a link
+    // into a dotfiles repo (#219).
     let body = serde_json::to_string_pretty(&settings).unwrap_or_default() + "\n";
-    if let Err(e) = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, &path)) {
+    if let Err(e) = infiniterm_core::files::write_atomically(path, &body) {
         eprintln!("ift: could not write {}: {e}", path.display());
         return ExitCode::from(2);
     }
@@ -488,6 +940,67 @@ fn install_hooks(dry_run: bool) -> ExitCode {
     println!("updated {}", path.display());
     println!("  hook: {binary}");
     println!("  events: {}", changed.join(", "));
+    ExitCode::SUCCESS
+}
+
+/// The OpenCode plugin, with the hook path filled in; see
+/// adapters/opencode.js for what it does.
+const OPENCODE_ADAPTER: &str = include_str!("../adapters/opencode.js");
+
+fn opencode_adapter_source(hook: &str) -> String {
+    OPENCODE_ADAPTER.replace("__INFINITERM_HOOK__", hook)
+}
+
+/// OpenCode loads plugins from `$XDG_CONFIG_HOME/opencode/plugins`, else
+/// `~/.config/opencode/plugins` (it globs `plugin` and `plugins` alike).
+fn opencode_plugin_path() -> std::path::PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home().join(".config"))
+        .join("opencode")
+        .join("plugins")
+        .join("infiniterm.js")
+}
+
+fn install_opencode(dry_run: bool) -> ExitCode {
+    let Some(binary) = hook_binary() else {
+        return hook_missing();
+    };
+    let path = opencode_plugin_path();
+    write_adapter(&path, &opencode_adapter_source(&binary), &binary, "opencode", dry_run)
+}
+
+/// Writes an adapter file (write-then-rename), saying so; unchanged files
+/// are left alone.
+fn write_adapter(
+    path: &std::path::Path,
+    body: &str,
+    binary: &str,
+    agent: &str,
+    dry_run: bool,
+) -> ExitCode {
+    if std::fs::read_to_string(path).ok().as_deref() == Some(body) {
+        println!("already installed: {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+    if dry_run {
+        println!("would write {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("ift: could not create {}: {e}", parent.display());
+            return ExitCode::from(2);
+        }
+    }
+    // Through a symlink, not over it (#219).
+    if let Err(e) = infiniterm_core::files::write_atomically(path, body) {
+        eprintln!("ift: could not write {}: {e}", path.display());
+        return ExitCode::from(2);
+    }
+    println!("installed {}", path.display());
+    println!("  hook: {binary}");
+    println!("  takes effect in the next {agent} session");
     ExitCode::SUCCESS
 }
 
@@ -520,11 +1033,7 @@ fn expand_home(path: &str) -> std::path::PathBuf {
 
 fn install_pi(dir: Option<&str>, dry_run: bool) -> ExitCode {
     let Some(binary) = hook_binary() else {
-        eprintln!("ift: cannot find the infiniterm-hook binary");
-        eprintln!("ift: build it first:");
-        eprintln!("  cargo build --release --manifest-path crates/infiniterm-hook/Cargo.toml");
-        eprintln!("ift: or put it on $PATH next to ift");
-        return ExitCode::from(2);
+        return hook_missing();
     };
     let agent_dir = pi_agent_dir(dir);
     let path = agent_dir.join("extensions").join("infiniterm.ts");
@@ -543,8 +1052,8 @@ fn install_pi(dir: Option<&str>, dry_run: bool) -> ExitCode {
             return ExitCode::from(2);
         }
     }
-    let tmp = path.with_extension("ts.ift-tmp");
-    if let Err(e) = std::fs::write(&tmp, &body).and_then(|()| std::fs::rename(&tmp, &path)) {
+    // Through a symlink, not over it (#219).
+    if let Err(e) = infiniterm_core::files::write_atomically(&path, &body) {
         eprintln!("ift: could not write {}: {e}", path.display());
         return ExitCode::from(2);
     }
@@ -580,12 +1089,147 @@ fn install_extension(source: Option<&str>) -> ExitCode {
 mod tests {
     use super::*;
 
+    // `ift -t <file> [card]`: the file right after `-t`, then the card.
+    #[test]
+    fn tab_takes_a_path_and_an_optional_card() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            tab_args(&a(&["-t", "src/main.rs", "#2"])),
+            Some(("src/main.rs", Some("#2")))
+        );
+        assert_eq!(tab_args(&a(&["-t", "a.rs"])), Some(("a.rs", None)));
+        assert_eq!(tab_args(&a(&["-t"])), None);
+        assert_eq!(tab_args(&a(&["-t", ""])), None);
+    }
+
+    // `ift -n <file>`: the path is the argument right after `-n`.
+    #[test]
+    fn dash_n_takes_the_next_argument_as_its_path() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(new_card_path(&a(&["-n", "CLAUDE.md"])), Some("CLAUDE.md"));
+        assert_eq!(new_card_path(&a(&["-n"])), None);
+    }
+
+    // The OpenCode plugin is the template with the hook path in it, one
+    // plugin export (OpenCode calls every export as a plugin), and it names
+    // itself to the hook so the card knows whose session it is.
+    #[test]
+    fn the_opencode_adapter_gets_the_hook_path_and_names_its_agent() {
+        let src = opencode_adapter_source("/Applications/x.app/Contents/MacOS/infiniterm-hook");
+        assert!(src.contains("const HOOK = \"/Applications/x.app/Contents/MacOS/infiniterm-hook\";"));
+        assert!(!src.contains("__INFINITERM_HOOK__"));
+        assert!(src.contains("[event, \"opencode\"]"));
+        assert_eq!(src.matches("export ").count(), 1);
+    }
+
     #[test]
     fn the_pi_adapter_gets_the_hook_path_and_nothing_else_changes() {
         let src = pi_adapter_source("/Applications/x.app/Contents/MacOS/infiniterm-hook");
         assert!(src.contains("const HOOK = \"/Applications/x.app/Contents/MacOS/infiniterm-hook\";"));
         assert!(!src.contains("__INFINITERM_HOOK__"));
         assert!(src.contains("pi.on(\"agent_settled\""));
+    }
+
+    /// Runs an adapter script the way an agent does: JSON piped in, a card id
+    /// in the environment, a stand-in for `infiniterm-hook` that records what
+    /// it was called with. Two bugs hid here until a real run: python's stdin
+    /// is the script itself (the piped JSON was never read), and
+    /// `subprocess.run(input=str)` needs `text=True` (the error was swallowed).
+    /// None when python3 is missing, as the adapters themselves do nothing then.
+    fn run_adapter(adapter: &str, event_arg: &str, stdin: &str) -> Option<String> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        if Command::new("python3").arg("--version").output().is_err() {
+            return None;
+        }
+        // One folder per call. It was named from the lengths of the arguments,
+        // so two tests running in parallel whose inputs happened to be as long
+        // shared a folder, and one's cleanup or log overwrote the other's: the
+        // flaky failure of #452.
+        static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ift-adapter-{}-{}",
+            std::process::id(),
+            CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("call.txt");
+        let fake = dir.join("hook.sh");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" > {0}\ncat >> {0}\n", log.display()),
+        )
+        .unwrap();
+        let script = dir.join("adapter.sh");
+        std::fs::write(&script, adapter.replace("__INFINITERM_HOOK__", &fake.to_string_lossy()))
+            .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        for f in [&fake, &script] {
+            std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut child = Command::new("sh")
+            .arg(&script)
+            .arg(event_arg)
+            .env("INFINITERM_CARD_ID", "card-1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+        child.wait().unwrap();
+        let out = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        Some(out)
+    }
+
+    #[test]
+    fn the_antigravity_adapter_reports_a_turn_and_its_end() {
+        let started = r#"{"conversationId":"c1","workspacePaths":["/work"],"invocationNum":0}"#;
+        let Some(out) = run_adapter(ANTIGRAVITY_ADAPTER, "PreInvocation", started) else {
+            return;
+        };
+        assert!(out.starts_with("UserPromptSubmit antigravity"), "{out}");
+        assert!(out.contains(r#""session_id": "c1""#) && out.contains(r#""cwd": "/work""#));
+        let idle = r#"{"conversationId":"c1","fullyIdle":true,"terminationReason":"NO_TOOL_CALL","error":""}"#;
+        let out = run_adapter(ANTIGRAVITY_ADAPTER, "Stop", idle).unwrap();
+        assert!(out.starts_with("Stop antigravity"), "{out}");
+        let failed = r#"{"conversationId":"c1","fullyIdle":true,"terminationReason":"ERROR","error":"quota"}"#;
+        let out = run_adapter(ANTIGRAVITY_ADAPTER, "Stop", failed).unwrap();
+        assert!(out.starts_with("StopFailure antigravity"), "{out}");
+        // A Stop between steps is not the end of the turn.
+        let busy = r#"{"conversationId":"c1","fullyIdle":false,"terminationReason":"NO_TOOL_CALL"}"#;
+        assert_eq!(run_adapter(ANTIGRAVITY_ADAPTER, "Stop", busy).unwrap(), "");
+        let tool = r#"{"conversationId":"c1","toolCall":{"name":"run_command"}}"#;
+        let out = run_adapter(ANTIGRAVITY_ADAPTER, "PreToolUse", tool).unwrap();
+        assert!(out.contains(r#""tool_name": "run_command""#), "{out}");
+    }
+
+    #[test]
+    fn the_cursor_adapter_reports_a_prompt() {
+        let prompt = r#"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"k1","cwd":"/work"}"#;
+        let Some(out) = run_adapter(CURSOR_ADAPTER, "", prompt) else {
+            return;
+        };
+        assert!(out.starts_with("UserPromptSubmit cursor"), "{out}");
+        assert!(out.contains(r#""session_id": "k1""#), "{out}");
+    }
+
+    #[test]
+    fn the_antigravity_adapter_gets_the_hook_path_and_documents_the_events() {
+        let src = antigravity_adapter_source("/Applications/x.app/Contents/MacOS/infiniterm-hook");
+        assert!(src.contains("HOOK=\"/Applications/x.app/Contents/MacOS/infiniterm-hook\""));
+        assert!(!src.contains("__INFINITERM_HOOK__"));
+        assert!(src.contains("fullyIdle"));
+        assert!(src.contains("agy --conversation"));
+    }
+
+    #[test]
+    fn the_cursor_adapter_gets_the_hook_path_and_documents_cursor_events() {
+        let src = cursor_adapter_source("/Applications/x.app/Contents/MacOS/infiniterm-hook");
+        assert!(src.contains("HOOK=\"/Applications/x.app/Contents/MacOS/infiniterm-hook\""));
+        assert!(!src.contains("__INFINITERM_HOOK__"));
+        assert!(src.contains("beforeSubmitPrompt"));
+        assert!(src.contains("postToolUseFailure"));
     }
 
     #[test]
@@ -603,5 +1247,22 @@ mod tests {
         assert_eq!(split_line("/tmp/nope.rs:42:7"), ("/tmp/nope.rs", Some(42)));
         assert_eq!(split_line("/tmp/nope.rs"), ("/tmp/nope.rs", None));
         assert_eq!(split_line("/tmp/nope:x"), ("/tmp/nope:x", None));
+    }
+
+    // A new file resolves where its directory exists and is refused where
+    // it does not, before anything opens.
+    #[test]
+    fn a_new_file_needs_its_directory() {
+        let dir = std::env::temp_dir().join(format!("ift-resolve-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(&dir).unwrap();
+        let new = dir.join("notes.txt");
+        assert_eq!(resolve(new.to_str().unwrap()).unwrap(), new);
+        let missing = dir.join("nope/notes.txt");
+        let err = resolve(missing.to_str().unwrap()).unwrap_err();
+        assert!(err.starts_with("no such directory"), "{err}");
+        std::fs::write(&new, "x").unwrap();
+        assert_eq!(resolve(new.to_str().unwrap()).unwrap(), new, "existing");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

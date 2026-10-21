@@ -59,6 +59,18 @@ pub fn tilde_path(path: &str, home: &str) -> String {
     }
 }
 
+/// The directory the status bar adds beside a terminal card's label
+/// (`ui.statusBarPwd`, #371), home as `~`. `None` when it would repeat the
+/// label (an idle card is already named for its directory), when there is
+/// no directory yet, or for any card that is not a terminal.
+pub fn status_bar_path(kind: CardKind, label: &str, cwd: &str, home: &str) -> Option<String> {
+    if kind != CardKind::Terminal || cwd.is_empty() {
+        return None;
+    }
+    let path = tilde_path(cwd, home);
+    (label != path).then_some(path)
+}
+
 /// `en.wikipedia.org` for a page there; the whole string when it is not a
 /// URL. The WHATWG `host` (with port, without credentials), found by hand:
 /// a string without `://` is not a URL with a host and comes back whole.
@@ -104,6 +116,13 @@ pub fn card_label(card: &Labelled, home: &str) -> String {
         let start = name.rfind('_').map_or(0, |i| i + 1);
         return name[start..].chars().take(8).collect();
     }
+    // A page is named by its document, without the `.md`: "Start here".
+    if card.kind == Some(CardKind::Page) {
+        if let Some(path) = card.path {
+            let name = last_segment(path);
+            return name.strip_suffix(".md").unwrap_or(name).to_string();
+        }
+    }
     if let Some(path) = card.path {
         return last_segment(path).to_string();
     }
@@ -131,7 +150,7 @@ pub fn card_label(card: &Labelled, home: &str) -> String {
 /// Splits a label so the last path segment can be kept when the card is too
 /// narrow for the whole thing: the head ellipsises, the tail never does.
 /// Exists because the obvious CSS for a left-hand ellipsis (`direction:
-/// rtl`) reordered `~/Code/humbl.ai` into `Code/humbl.ai/~`; the native
+/// rtl`) reordered `~/Code/acme.dev` into `Code/acme.dev/~`; the native
 /// frame lays out the two halves and needs no bidi either. A label with no
 /// slash (a process name) is all tail.
 pub fn split_label(label: &str) -> (&str, &str) {
@@ -289,6 +308,22 @@ mod tests {
         assert_eq!(tilde_path("/etc/hosts", HOME), "/etc/hosts");
     }
 
+    // #371: the path is added when the label hides it, never repeated.
+    #[test]
+    fn status_bar_path_shows_only_what_the_label_does_not() {
+        let cwd = "/Users/ekinertac/Code/api";
+        assert_eq!(
+            status_bar_path(CardKind::Terminal, "claude", cwd, HOME).as_deref(),
+            Some("~/Code/api")
+        );
+        assert_eq!(
+            status_bar_path(CardKind::Terminal, "~/Code/api", cwd, HOME),
+            None
+        );
+        assert_eq!(status_bar_path(CardKind::Terminal, "vim", "", HOME), None);
+        assert_eq!(status_bar_path(CardKind::Editor, "a.rs", cwd, HOME), None);
+    }
+
     // A segment boundary, so a sibling with a longer name is not swallowed.
     #[test]
     fn tilde_path_does_not_match_a_partial_segment() {
@@ -307,8 +342,8 @@ mod tests {
     #[test]
     fn split_label_keeps_the_last_segment_whole() {
         assert_eq!(
-            split_label("~/Code/humbl.ai/gunicorn_workers"),
-            ("~/Code/humbl.ai", "/gunicorn_workers")
+            split_label("~/Code/acme.dev/gunicorn_workers"),
+            ("~/Code/acme.dev", "/gunicorn_workers")
         );
     }
 

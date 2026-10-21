@@ -21,10 +21,13 @@ use crate::keymap::Keymap;
 
 /// Section order, and the id prefix that fills each one. A command matching
 /// no prefix falls into the trailing catch-all rather than disappearing.
-const SECTIONS: [(&str, &str); 7] = [
+const SECTIONS: [(&str, &str); 8] = [
     ("card.", "cards"),
     ("editor.", "editor"),
     ("group.", "groups"),
+    // Seventeen commands, the Ctrl+digit jumps among them; lost in "other"
+    // they read as leftovers rather than a feature of their own.
+    ("workspace.", "workspaces"),
     ("focus.", "moving around"),
     ("canvas.", "zoom"),
     ("theme.", "themes"),
@@ -134,6 +137,55 @@ pub fn format_chord(chord: &str, labels: ModifierLabels) -> String {
     chord_keys(chord, labels).join(CHORD_SEPARATOR)
 }
 
+/// AppKit's `NSEventModifierFlag` bits, for a native menu's key equivalents.
+pub const MAC_SHIFT: u64 = 1 << 17;
+pub const MAC_CTRL: u64 = 1 << 18;
+pub const MAC_ALT: u64 = 1 << 19;
+pub const MAC_CMD: u64 = 1 << 20;
+
+/// A chord as a Mac menu item's key equivalent: the key's character and the
+/// modifier mask, so a native menu draws the same shortcut hint every Mac app
+/// does (a command glyph and the letter). `None` for a key a menu cannot
+/// show. The chord is as `keymap::chord_for` spells it: modifiers in a fixed
+/// order, then the key.
+pub fn mac_key_equivalent(chord: &str) -> Option<(String, u64)> {
+    let lower = chord.to_lowercase();
+    let mut parts: Vec<&str> = lower.split('+').collect();
+    // A chord ending in the `+` key itself splits into an empty last part.
+    let key = match parts.pop()? {
+        "" if !parts.is_empty() => {
+            parts.pop_if(|p| p.is_empty());
+            "+"
+        }
+        k => k,
+    };
+    let mut mask = 0;
+    for m in parts {
+        mask |= match m {
+            "cmd" => MAC_CMD,
+            "ctrl" => MAC_CTRL,
+            "alt" => MAC_ALT,
+            "shift" => MAC_SHIFT,
+            _ => return None,
+        };
+    }
+    // AppKit's private-use characters for the function keys.
+    let named = match key {
+        "arrowup" => "\u{f700}",
+        "arrowdown" => "\u{f701}",
+        "arrowleft" => "\u{f702}",
+        "arrowright" => "\u{f703}",
+        "enter" => "\r",
+        "escape" => "\u{1b}",
+        "tab" => "\t",
+        "space" => " ",
+        "backspace" => "\u{8}",
+        k if k.chars().count() == 1 => k,
+        _ => return None,
+    };
+    Some((named.to_string(), mask))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Shortcut {
     pub id: String,
@@ -193,19 +245,94 @@ pub fn shortcut_sections(
 
 /// Gestures, which are not commands and so cannot be derived. They are the
 /// least discoverable thing in the app, which is exactly why they belong in
-/// the panel even though they break its one-source rule.
-pub const GESTURES: [(&str, &str); 6] = [
-    ("Cmd scroll", "Zoom about the pointer"),
-    ("Cmd drag", "Pan the canvas"),
-    ("middle drag", "Pan the canvas"),
-    ("drag top edge", "Move a card"),
-    ("drag any other edge", "Resize a card"),
-    ("drag the name tab", "Move a whole group"),
+/// the panel even though they break its one-source rule. The panel and the
+/// site's keys page both read this list.
+///
+/// Each row: what you do, what it does, and the id `usage_log` records the
+/// gesture under ("" when it records none). The ids are what keep the list
+/// whole: a test fails when `usage_log::MOUSE_GESTURES` names a gesture no
+/// row here carries, which is how marquee selection shipped and stayed off
+/// this panel for days (2026-10-01).
+pub const GESTURES: &[(&str, &str, &str)] = &[
+    (
+        "Cmd scroll or pinch",
+        "Zoom about the pointer",
+        "mouse.canvas.zoom",
+    ),
+    (
+        "Cmd Alt + two fingers",
+        "Move the focus to the next card in that direction",
+        "mouse.focus.scroll",
+    ),
+    (
+        "Cmd Shift + two fingers sideways",
+        "Switch workspace",
+        "mouse.workspace.scroll",
+    ),
+    ("Cmd drag", "Pan the canvas", "mouse.canvas.pan"),
+    ("middle drag", "Pan the canvas", "mouse.canvas.pan"),
+    (
+        "drag the top edge or the label",
+        "Move a card",
+        "mouse.card.drag",
+    ),
+    ("drag any other edge", "Resize a card", "mouse.card.resize"),
+    (
+        "drag the name tab",
+        "Move a whole group",
+        "mouse.group.drag",
+    ),
+    (
+        "drag on empty canvas",
+        "Select every card it touches",
+        "mouse.marquee",
+    ),
+    (
+        "Shift drag on empty canvas",
+        "Add to the selection",
+        "mouse.marquee",
+    ),
+    (
+        "Cmd click a card",
+        "Add it to the selection or take it out",
+        "mouse.card.cmdclick",
+    ),
+    (
+        "Shift click a label or frame",
+        "Add it to the selection or take it out",
+        "",
+    ),
+    (
+        "drag a selected card",
+        "Move the whole selection",
+        "mouse.selection.drag",
+    ),
+    (
+        "double-click a frame or label",
+        "Fit the card",
+        "mouse.fitCard.doubleclick",
+    ),
+    (
+        "double-click a card drawn as bars",
+        "Fit the card",
+        "mouse.fitCard.barsdoubleclick",
+    ),
+    (
+        "double-click empty canvas",
+        "Fit everything",
+        "mouse.fitAll.doubleclick",
+    ),
+    (
+        "hold left, click right",
+        "Fit everything",
+        "mouse.fitAll.chord",
+    ),
 ];
 
 /// The sections with only the shortcuts matching `query`, empty sections
-/// gone. Matches on the label OR the keys, since "close" and "cmd w" are
-/// the two questions a cheat sheet gets asked. Fuzzy like the palette but
+/// gone. Matches on the label, the keys or the command id, since "close",
+/// "cmd w" and "card.close" are the questions a cheat sheet gets asked (the
+/// id is what keybindings.json binds, #74). Fuzzy like the palette but
 /// unranked: a list you scan wants stable positions more than a best guess.
 pub fn filter_shortcuts(sections: &[ShortcutSection], query: &str) -> Vec<ShortcutSection> {
     let q = query.trim();
@@ -222,6 +349,7 @@ pub fn filter_shortcuts(sections: &[ShortcutSection], query: &str) -> Vec<Shortc
                 .filter(|sc| {
                     fuzzy_match(q, &sc.label).is_some()
                         || sc.chords.iter().any(|c| fuzzy_match(q, c).is_some())
+                        || fuzzy_match(q, &sc.id).is_some()
                 })
                 .cloned()
                 .collect(),
@@ -253,6 +381,52 @@ mod tests {
         }
     }
     use super::*;
+
+    // The id is searchable: what you type into keybindings.json finds its
+    // row (#74).
+    #[test]
+    fn the_filter_matches_a_command_id() {
+        let km: Keymap = vec![];
+        let s = shortcut_sections(
+            &km,
+            &[
+                ("theme.pick", "Theme: switch…"),
+                ("card.close", "Card: close"),
+            ],
+            M,
+        );
+        let hits = filter_shortcuts(&s, "theme.pick");
+        let ids: Vec<&str> = hits
+            .iter()
+            .flat_map(|s| s.shortcuts.iter().map(|sc| sc.id.as_str()))
+            .collect();
+        assert_eq!(ids, ["theme.pick"]);
+    }
+
+    // Every gesture the usage log counts has a row in the panel: a gesture
+    // that is recorded but not listed is one a user cannot find.
+    #[test]
+    fn every_recorded_mouse_gesture_is_in_the_panel() {
+        for (id, label) in crate::usage_log::MOUSE_GESTURES {
+            assert!(
+                GESTURES.iter().any(|(_, _, g)| g == id),
+                "{id} ({label}) is recorded in usage.log but missing from GESTURES"
+            );
+        }
+    }
+
+    #[test]
+    fn every_usage_id_in_the_panel_is_one_the_log_knows() {
+        for (keys, _, id) in GESTURES {
+            assert!(
+                id.is_empty()
+                    || crate::usage_log::MOUSE_GESTURES
+                        .iter()
+                        .any(|(g, _)| g == id),
+                "{keys}: {id} is not in usage_log::MOUSE_GESTURES"
+            );
+        }
+    }
     use crate::keymap::DEFAULT_KEYMAP;
 
     fn km(pairs: &[(&str, &str)]) -> Keymap {
@@ -301,6 +475,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["cards", "groups"]
         );
+    }
+
+    #[test]
+    fn workspace_commands_have_a_section_of_their_own() {
+        let sections = shortcut_sections(
+            &km(&[("ctrl+1", "workspace.show.1")]),
+            &[("workspace.show.1", "Workspace: go to 1")],
+            M,
+        );
+        assert_eq!(sections[0].title, "workspaces");
     }
 
     #[test]
@@ -441,5 +625,45 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["canvas"]
         );
+    }
+
+    #[test]
+    fn a_chord_becomes_a_menu_key_equivalent() {
+        assert_eq!(mac_key_equivalent("cmd+k"), Some(("k".into(), MAC_CMD)));
+        assert_eq!(
+            mac_key_equivalent("cmd+shift+p"),
+            Some(("p".into(), MAC_CMD | MAC_SHIFT))
+        );
+        assert_eq!(
+            mac_key_equivalent("cmd+alt+shift+arrowleft"),
+            Some(("\u{f702}".into(), MAC_CMD | MAC_ALT | MAC_SHIFT))
+        );
+        assert_eq!(mac_key_equivalent("ctrl+1"), Some(("1".into(), MAC_CTRL)));
+        assert_eq!(
+            mac_key_equivalent("cmd+escape"),
+            Some(("\u{1b}".into(), MAC_CMD))
+        );
+        assert_eq!(mac_key_equivalent("cmd+\\"), Some(("\\".into(), MAC_CMD)));
+        assert_eq!(mac_key_equivalent("cmd+="), Some(("=".into(), MAC_CMD)));
+        assert_eq!(
+            mac_key_equivalent("cmd+enter"),
+            Some(("\r".into(), MAC_CMD))
+        );
+        // what a menu cannot draw
+        assert_eq!(mac_key_equivalent("cmd+foo"), None);
+        assert_eq!(mac_key_equivalent("hyper+k"), None);
+        assert_eq!(mac_key_equivalent(""), None);
+    }
+
+    // Every default chord either maps or is knowingly unmapped: a table that
+    // quietly drops hints would leave the native menu half bare.
+    #[test]
+    fn every_default_chord_has_a_menu_key_equivalent() {
+        for (chord, id, _) in crate::keymap::DEFAULT_KEYMAP {
+            assert!(
+                mac_key_equivalent(chord).is_some(),
+                "{chord} ({id}) has no key equivalent"
+            );
+        }
     }
 }

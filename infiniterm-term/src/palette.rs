@@ -18,6 +18,10 @@ pub struct Palette {
     pub selection_text: [u8; 3],
 }
 
+fn to_hex(c: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+}
+
 fn hex(s: &str) -> Option<[u8; 3]> {
     let h = s.strip_prefix('#')?;
     if h.len() != 6 {
@@ -58,6 +62,7 @@ impl Palette {
         theme: &Theme,
         selection: Option<[u8; 3]>,
         selection_text: Option<[u8; 3]>,
+        cursor: Option<[u8; 3]>,
     ) -> Palette {
         let mut p = Palette::default_palette();
         let get = |k: &str| theme.get(k).and_then(|s| hex(s));
@@ -68,8 +73,17 @@ impl Palette {
         }
         p.foreground = get("foreground").unwrap_or(p.foreground);
         p.background = get("background").unwrap_or(p.background);
-        p.cursor = get("cursor").unwrap_or(p.foreground);
-        p.cursor_text = get("cursorAccent").unwrap_or(p.background);
+        // The letter under a block cursor: the theme's cursor text when it
+        // reads against the cursor, else black or white (#343). A cursor
+        // colour from the settings brings no text colour of its own.
+        p.cursor = cursor.or_else(|| get("cursor")).unwrap_or(p.foreground);
+        let accent = if cursor.is_some() {
+            None
+        } else {
+            theme.get("cursorAccent").map(String::as_str)
+        };
+        let text = infiniterm_core::label_colors::cursor_text_on(&to_hex(p.cursor), accent);
+        p.cursor_text = hex(&text).unwrap_or(p.background);
         p.selection = selection.or_else(|| get("yellow")).unwrap_or(p.selection);
         p.selection_text = selection_text.unwrap_or(p.background);
         p
@@ -180,7 +194,7 @@ mod tests {
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-        let p = Palette::from_theme(&theme, None, None);
+        let p = Palette::from_theme(&theme, None, None, None);
         assert_eq!(p.resolve(Color::Named(NamedColor::Red), false), [255, 0, 0]);
         assert_eq!(
             p.resolve(Color::Named(NamedColor::Red), true),
@@ -202,5 +216,29 @@ mod tests {
         assert_eq!(p.resolve(Color::Indexed(231), false), [255, 255, 255]);
         assert_eq!(p.resolve(Color::Indexed(232), false), [8, 8, 8]);
         assert_eq!(p.resolve(Color::Indexed(255), false), [238, 238, 238]);
+    }
+
+    #[test]
+    fn the_letter_under_the_cursor_reads_whatever_the_theme_says() {
+        let mk = |pairs: &[(&str, &str)]| -> Theme {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        // Cursor text equal to the cursor: black or white instead.
+        let same = mk(&[("cursor", "#e0e0e0"), ("cursorAccent", "#e0e0e0")]);
+        let p = Palette::from_theme(&same, None, None, None);
+        assert_eq!(p.cursor_text, [0x12, 0x15, 0x1a]);
+        // A good theme choice stays.
+        let good = mk(&[("cursor", "#e0e0e0"), ("cursorAccent", "#101010")]);
+        assert_eq!(
+            Palette::from_theme(&good, None, None, None).cursor_text,
+            [16, 16, 16]
+        );
+        // The setting wins over the theme's cursor and brings its own text.
+        let p = Palette::from_theme(&good, None, None, Some([0x20, 0x30, 0x80]));
+        assert_eq!(p.cursor, [0x20, 0x30, 0x80]);
+        assert_eq!(p.cursor_text, [0xf2, 0xf6, 0xfb]);
     }
 }

@@ -51,6 +51,11 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
         "cmd+7" => "editor.tab.jump.7",
         "cmd+8" => "editor.tab.jump.8",
         "cmd+9" => "editor.tab.jump.last",
+        // Not a tab command either: `editor.goToLine` opens the model's
+        // prompt (Batch 1, 2026-09-24), so it must be resolved here like
+        // Cmd+S rather than left to fall through to the body, which has no
+        // prompt of its own to open.
+        "ctrl+g" => "editor.goToLine",
         // Not a tab command, but the one app chord a locked editor cannot
         // do without: an unmatched chord falls through to the body, which
         // has no save of its own, so Cmd+S saved nothing until the lock
@@ -60,9 +65,36 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
     })
 }
 
+/// What a LOCKED diff card claims. It has the editor's body and so the
+/// editor's lock, but one file and no tabs: the tab chords mean nothing, so
+/// Cmd+W closes the card (there is nothing unsaved to lose) and Cmd+S says
+/// the diff is read-only (`card.save` answers that for a diff). Cmd+K (the
+/// list of changed files, its three states) and Cmd+B (blame) are the diff's
+/// own commands and have no text meaning, so they work locked too: the list
+/// is half of the card. Every other chord is the body's, as in a locked editor.
+pub fn diff_lock_override(chord: &str) -> Option<&'static str> {
+    match chord {
+        "cmd+w" => Some("card.close"),
+        "cmd+s" => Some("card.save"),
+        "cmd+k" => Some("editor.explorer"),
+        "cmd+b" => Some("editor.blame"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_locked_diff_closes_on_cmd_w_and_has_no_tabs() {
+        assert_eq!(diff_lock_override("cmd+w"), Some("card.close"));
+        assert_eq!(diff_lock_override("cmd+s"), Some("card.save"));
+        assert_eq!(diff_lock_override("cmd+k"), Some("editor.explorer"));
+        assert_eq!(diff_lock_override("cmd+b"), Some("editor.blame"));
+        assert_eq!(diff_lock_override("cmd+t"), None);
+        assert_eq!(diff_lock_override("cmd+1"), None);
+    }
 
     #[test]
     fn an_editor_keeps_the_select_to_boundary_chords() {
@@ -75,6 +107,7 @@ mod tests {
         assert_eq!(lock_override("cmd+9"), Some("editor.tab.jump.last"));
         assert_eq!(lock_override("cmd+shift+]"), Some("editor.tab.next"));
         assert_eq!(lock_override("cmd+s"), Some("card.save")); // saves while locked
+        assert_eq!(lock_override("ctrl+g"), Some("editor.goToLine"));
         assert_eq!(lock_override("cmd+k"), None);
     }
 

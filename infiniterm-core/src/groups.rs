@@ -8,7 +8,12 @@ use crate::{
     grid::{Rect, Size, GRID_SIZE},
     viewport::bounding_rect,
 };
-pub const GROUP_PAD: f64 = GRID_SIZE * 2.;
+/// Room a group's frame keeps around its cards: half the gutter, so two
+/// frames, or a frame and a card, fit in one gutter and groups sit on the
+/// placement grid like any card. It was two grid cells (50) until
+/// 2026-09-27, twice the gutter, and every tidy and every Cmd+T beside a
+/// group had to skip half a slot to clear the frame.
+pub const GROUP_PAD: f64 = GRID_SIZE / 2.;
 pub const GROUP_RESERVE_COLS: usize = 2;
 pub const GROUP_RESERVE_ROWS: usize = 2;
 pub const UNGROUPED: &str = "ungrouped";
@@ -39,7 +44,7 @@ pub struct CanvasUnit {
     pub rect: Rect,
     pub card_ids: Vec<String>,
 }
-pub fn canvas_units(cards: &[PlacedCard], frames: &[CardRect]) -> Vec<CanvasUnit> {
+pub fn canvas_units(cards: &[PlacedCard], frames: &[CardRect], pad: f64) -> Vec<CanvasUnit> {
     let order = |a: Rect, b: Rect| a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x));
     let mut frames: Vec<_> = frames.iter().collect();
     frames.sort_by(|a, b| order(a.rect, b.rect));
@@ -59,7 +64,7 @@ pub fn canvas_units(cards: &[PlacedCard], frames: &[CardRect]) -> Vec<CanvasUnit
         })
         .collect();
     let loose: Vec<_> = cards.into_iter().filter(|c| c.group_id.is_none()).collect();
-    if let Some(rect) = group_bounds(&loose.iter().map(|c| c.rect).collect::<Vec<_>>(), GROUP_PAD) {
+    if let Some(rect) = group_bounds(&loose.iter().map(|c| c.rect).collect::<Vec<_>>(), pad) {
         units.push(CanvasUnit {
             kind: UnitKind::Ungrouped,
             id: UNGROUPED.into(),
@@ -105,9 +110,10 @@ mod tests {
             Some(r(0., 0., 400., 150.))
         );
     }
+    // Two frames, or a frame and a card, fit in one gutter.
     #[test]
-    fn default_padding_two_cells() {
-        assert_eq!(GROUP_PAD, 50.);
+    fn a_frame_fits_in_half_a_gutter() {
+        assert_eq!(GROUP_PAD * 2., crate::cards::GUTTER);
         assert_eq!(
             bounds(&[r(0., 0., 100., 100.)]),
             Some(r(
@@ -171,6 +177,7 @@ mod tests {
                 grouped("g1a", 500., 0., "g1"),
             ],
             &[frame("g1", r(450., -50., 200., 200.))],
+            GROUP_PAD,
         );
         assert_eq!(
             u.iter().map(|u| u.id.as_str()).collect::<Vec<_>>(),
@@ -182,7 +189,7 @@ mod tests {
         let c = (0..5)
             .map(|i| card(&format!("c{i}"), i as f64 * 200., 0.))
             .collect::<Vec<_>>();
-        assert_eq!(canvas_units(&c, &[]).len(), 1);
+        assert_eq!(canvas_units(&c, &[], GROUP_PAD).len(), 1);
     }
     #[test]
     fn members_in_reading_order() {
@@ -193,12 +200,13 @@ mod tests {
                 card("left", 0., 0.),
             ],
             &[],
+            GROUP_PAD,
         );
         assert_eq!(u[0].card_ids, vec!["left", "right", "bottom"]);
     }
     #[test]
     fn loose_cards_share_frame() {
-        let u = canvas_units(&[card("a", 0., 0.), card("b", 400., 300.)], &[]);
+        let u = canvas_units(&[card("a", 0., 0.), card("b", 400., 300.)], &[], GROUP_PAD);
         assert_eq!(
             u[0].rect,
             r(
@@ -214,6 +222,7 @@ mod tests {
         let u = canvas_units(
             &[grouped("c1", 0., 0., "g1")],
             &[frame("g1", r(0., 0., 200., 200.))],
+            GROUP_PAD,
         );
         assert_eq!(
             u.iter().map(|u| u.kind).collect::<Vec<_>>(),
@@ -232,6 +241,7 @@ mod tests {
                 frame("far", r(0., 850., 200., 200.)),
                 frame("near", r(550., -50., 200., 200.)),
             ],
+            GROUP_PAD,
         );
         assert_eq!(
             u.iter().map(|u| u.id.as_str()).collect::<Vec<_>>(),

@@ -14,7 +14,7 @@ cmd 2
 cmd_alt 125;                 shot 05-phantom-below
 key_code 124 "command down, shift down"; shot 06-phantom-extended
 key_code 53;                 shot 07-escaped
-cmd_shift t;                 shot 08-placement-menu
+key t "command down, control down"; shot 08-placement-menu
 key_code 36;                 shot 09-slot-picking
 type_text s;                 shot 10-slot-s-filled
 cmd 2;                       shot 11-fit

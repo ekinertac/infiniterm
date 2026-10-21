@@ -24,12 +24,21 @@ pub enum Source {
     /// `snippet.paste` (Cmd+Ctrl+S): the snippets file's names, then a row
     /// that opens the file.
     Snippets,
+    /// `card.moveToWorkspace`: the other workspaces, then a new one.
+    MoveTo,
+    /// `group.moveToWorkspace`: the same rows, for the focused card's group.
+    MoveGroupTo,
+    /// `window.color` (#157, #160): named colours previewed live, then a hex code.
+    WindowColor,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
 /// id in the Commands source. A command id never contains a colon.
 pub const CARD_ROW: &str = "card:";
 pub const WORKSPACE_ROW: &str = "workspace:";
+
+/// The hint the theme picker puts beside the theme in force.
+pub const ACTIVE_THEME_HINT: &str = "active";
 
 impl Source {
     pub fn id(self) -> &'static str {
@@ -40,6 +49,9 @@ impl Source {
             Source::SlotKind => "slotKind",
             Source::Sizes => "sizes",
             Source::Snippets => "snippets",
+            Source::MoveTo => "moveTo",
+            Source::MoveGroupTo => "moveGroupTo",
+            Source::WindowColor => "windowColor",
         }
     }
 
@@ -51,20 +63,41 @@ impl Source {
     /// on a phantom, then Enter again, has to mean "terminal" every time,
     /// and Cmd+Shift+T then the second row has to be the same second row
     /// tomorrow. Ranking those by use moved the rows under the hand that had
-    /// learned them.
+    /// learned them. The themes keep theirs too (#72): the active one is
+    /// pinned on top under its "active" hint, and recency only reshuffled
+    /// the rest under it.
     pub fn keeps_its_order(self) -> bool {
-        matches!(self, Source::Placement | Source::SlotKind | Source::Sizes)
+        matches!(
+            self,
+            Source::Placement
+                | Source::SlotKind
+                | Source::Sizes
+                | Source::MoveTo
+                | Source::MoveGroupTo
+                | Source::Themes
+                | Source::WindowColor
+        )
+    }
+
+    /// Whether the palette dims the canvas behind it. The theme picker does
+    /// not: it previews each theme on the cards as you move, and a dim sheet
+    /// over them hid the very colours being chosen.
+    pub fn dims_canvas(self) -> bool {
+        self != Source::Themes
     }
 
     /// Prompt text in the empty input.
     pub fn placeholder(self) -> &'static str {
         match self {
-            Source::Commands => "Run a command",
+            Source::Commands => "Run a command…",
             Source::Themes => "Switch theme",
             Source::Placement => "New terminal…",
             Source::SlotKind => "New card in this slot…",
             Source::Sizes => "Resize the card to…",
             Source::Snippets => "Paste a snippet…",
+            Source::MoveTo => "Move to workspace…",
+            Source::MoveGroupTo => "Move the group to workspace…",
+            Source::WindowColor => "Window colour…",
         }
     }
 }
@@ -146,8 +179,16 @@ impl Model {
         self.palette_open()
             || self.prompt.is_open()
             || self.shortcuts_open
+            || self.whats_new_open
             || self.omni.open
             || self.switcher.is_some()
+    }
+
+    /// An overlay that owns the keyboard: while one is up no chord reaches
+    /// the canvas behind it (input.rs `key_down`). The card switcher is left
+    /// out: it is driven by Ctrl held down and handles its keys first.
+    pub fn modal_open(&self) -> bool {
+        self.overlay_open() && self.switcher.is_none()
     }
 
     /// Recomputed every time it is asked for, so it is never stale.
@@ -207,12 +248,16 @@ impl Model {
                 }
                 items
             }
-            // The theme in force is listed FIRST, so opening the picker
-            // previews what you already have instead of whatever sorts first.
+            // The theme you had when the picker opened is listed FIRST, so
+            // opening it previews what you already have instead of whatever
+            // sorts first. Not the theme in force: the preview changes that
+            // on every move, and listing it first re-sorted the rows under
+            // the highlight (#67).
             Source::Themes => {
                 let current = self
-                    .theme_current
+                    .theme_before_preview
                     .clone()
+                    .or_else(|| self.theme_current.clone())
                     .filter(|c| self.theme_names.contains(c));
                 current
                     .iter()
@@ -224,10 +269,13 @@ impl Model {
                     .map(|name| PaletteItem {
                         id: name.clone(),
                         label: name.clone(),
-                        hint: None,
+                        // Said, not only placed first (#72).
+                        hint: (Some(name) == current.as_ref())
+                            .then(|| ACTIVE_THEME_HINT.to_string()),
                     })
                     .collect()
             }
+            Source::WindowColor => self.window_color_items(),
             Source::Placement => {
                 let chord = |id: &str| {
                     self.keymap
@@ -254,7 +302,7 @@ impl Model {
                     ("file", "Editor: on a file you name", None),
                     ("untitled", "Editor: empty", chord("card.new.editor")),
                     ("diff", "Diff: this card against git HEAD", None),
-                    ("browser", "Browser: open a URL", None),
+                    ("browser", "Browser: open a URL…", None),
                     ("claude", "Terminal: Claude Code in this directory", None),
                     ("pi", "Terminal: Pi in this directory", None),
                 ]
@@ -271,7 +319,7 @@ impl Model {
             Source::SlotKind => [
                 ("terminal", "Terminal"),
                 ("editor", "Editor: empty"),
-                ("browser", "Browser: open a URL"),
+                ("browser", "Browser: open a URL…"),
             ]
             .into_iter()
             .map(|(id, label)| PaletteItem {
@@ -280,6 +328,30 @@ impl Model {
                 hint: None,
             })
             .collect(),
+            // The workspaces in tab order, less the one you are on, each with
+            // how many cards it holds, then a new one.
+            Source::MoveTo | Source::MoveGroupTo => {
+                let here = self.active_workspace.clone();
+                let mut rows: Vec<PaletteItem> = self
+                    .workspaces
+                    .iter()
+                    .filter(|w| Some(&w.id) != here.as_ref())
+                    .map(|w| {
+                        let n = self.cards_on(Some(&w.id)).len();
+                        PaletteItem {
+                            id: w.id.clone(),
+                            label: w.name.clone(),
+                            hint: Some(format!("{n} card{}", if n == 1 { "" } else { "s" })),
+                        }
+                    })
+                    .collect();
+                rows.push(PaletteItem {
+                    id: super::workspaces_cmd::NEW_WORKSPACE_ROW.into(),
+                    label: "New workspace".into(),
+                    hint: None,
+                });
+                rows
+            }
             // Sizes as fractions of the default card, from the card's own
             // corner. A menu, in a fixed order: the splits' shapes first.
             Source::Sizes => SIZES
@@ -312,6 +384,10 @@ impl Model {
 
     /// Called as the highlighted item changes, and with `None` on dismissal.
     pub fn palette_preview(&mut self, source: Source, id: Option<&str>) {
+        if source == Source::WindowColor {
+            self.window_color_preview(id);
+            return;
+        }
         if source == Source::Themes {
             let target = id
                 .map(String::from)
@@ -336,5 +412,27 @@ impl Model {
             USAGE_LIMIT,
         );
         self.dirty_layout = true;
+    }
+}
+
+#[cfg(test)]
+mod dims_tests {
+    use super::Source;
+
+    #[test]
+    fn only_the_theme_picker_leaves_the_canvas_undimmed() {
+        assert!(!Source::Themes.dims_canvas());
+        for s in [
+            Source::Commands,
+            Source::Placement,
+            Source::SlotKind,
+            Source::Sizes,
+            Source::Snippets,
+            Source::MoveTo,
+            Source::MoveGroupTo,
+            Source::WindowColor,
+        ] {
+            assert!(s.dims_canvas(), "{s:?}");
+        }
     }
 }

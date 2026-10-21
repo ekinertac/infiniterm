@@ -1,0 +1,480 @@
+//! `ift connect <[user@]host>`: open a SECOND infiniterm for a host (#118).
+//!
+//! The new instance is a separate process with its own window, Dock tile and
+//! canvas. Its terminal cards are shells kept by `iftd` on the host, reached
+//! over ssh (`infiniterm-core/src/backend/remote.rs`), and its canvas and
+//! settings live in a folder per host, so connecting again brings the same
+//! cards back and the local instance is never touched.
+//!
+//! What this does: checks that the host can serve (`remote::check`: ssh with
+//! no prompt, `ift` and `iftd` installed), makes `<data>/remotes/<host>` and a
+//! `config` folder in it, EMPTY: a host starts with default settings, never a
+//! copy of the personal ones (Ekin, 2026-10-05), and starts the app with `open -n` and the environment that puts it in
+//! remote mode. If that host's instance is already running it says so instead.
+//!
+//! Called by `main.rs`. Related: `proxy.rs` (the server half), `tools/drive/
+//! remote.sh` (the app in remote mode, headless).
+//!
+//! Non-obvious constraints:
+//! - The host is handed to ssh as the destination, so one that starts with `-`
+//!   is refused: `-oProxyCommand=...` would be an option, not a host.
+//! - The folder name comes from the host name; anything outside letters,
+//!   digits and `._@-` becomes `_`, and a name that would start with a dot is
+//!   prefixed, so a host can never name a path outside `remotes/`.
+//! - The folder is SHORT on purpose: the instance's socket is `<folder>/
+//!   infiniterm.sock` and a unix socket path holds 103 bytes, while the usual
+//!   data directory is already 70. So it is `~/.infiniterm/remotes/<host>`
+//!   (under `INFINITERM_DATA_DIR/remotes` for a scratch run), a long host name
+//!   is cut and given a hash, and a path that still does not fit is refused
+//!   here, with the length, instead of leaving an instance `ift` cannot reach.
+//!   The first real connect (a 106-byte path) found this.
+//! - `open -n` needs the .app: found from this binary's own real path, which
+//!   is `<app>/Contents/MacOS/ift` whether it was run through the
+//!   `~/.local/bin` symlink or not.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode};
+
+use infiniterm_core::backend::remote::{self, RemoteHost};
+use infiniterm_core::paths;
+
+/// What `ift connect` was asked.
+#[derive(Debug, PartialEq, Eq, Default)]
+pub struct Parsed {
+    pub host: String,
+    /// A name for the window and the Dock; the host when none is given.
+    pub name: Option<String>,
+    /// `RRGGBB`, without a `#`; the app picks one from the host name when absent.
+    pub color: Option<String>,
+    pub ssh_args: Option<String>,
+    pub ift: Option<String>,
+    pub check_only: bool,
+    /// Put `ift` and `iftd` on the host first (`install.rs`).
+    pub install: bool,
+    /// Install from this package file instead of the release.
+    pub from: Option<String>,
+    /// `linux-x86_64` or `linux-aarch64`, instead of asking the host.
+    pub platform: Option<String>,
+}
+
+/// A host ssh would take as a destination and not as an option.
+pub fn valid_host(host: &str) -> bool {
+    !host.is_empty() && !host.starts_with('-') && !host.chars().any(char::is_whitespace)
+}
+
+fn valid_color(c: &str) -> bool {
+    c.len() == 6 && c.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+pub fn parse(args: &[String]) -> Result<Parsed, String> {
+    let mut p = Parsed::default();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let mut value = |name: &str| {
+            it.next()
+                .cloned()
+                .ok_or_else(|| format!("{name} takes a value"))
+        };
+        match a.as_str() {
+            "--check" => p.check_only = true,
+            "--install" => p.install = true,
+            "--from" => p.from = Some(value("--from")?),
+            "--platform" => p.platform = Some(value("--platform")?),
+            "--name" => p.name = Some(value("--name")?),
+            "--color" => {
+                let c = value("--color")?;
+                let c = c.trim_start_matches('#').to_string();
+                if !valid_color(&c) {
+                    return Err(format!("not a colour: {c} (six hex digits, like 3b82f6)"));
+                }
+                p.color = Some(c.to_ascii_lowercase());
+            }
+            "--ssh-args" => p.ssh_args = Some(value("--ssh-args")?),
+            "--ift" => p.ift = Some(value("--ift")?),
+            other if other.starts_with("--") => return Err(format!("unknown option {other}")),
+            host => {
+                if !p.host.is_empty() {
+                    return Err("ift connect takes one host".into());
+                }
+                p.host = host.to_string();
+            }
+        }
+    }
+    if p.host.is_empty() {
+        return Err("ift connect takes a host: user@host or an ssh alias".into());
+    }
+    if !valid_host(&p.host) {
+        return Err(format!("not a host: {}", p.host));
+    }
+    if (p.from.is_some() || p.platform.is_some()) && !p.install {
+        return Err("--from and --platform belong to --install".into());
+    }
+    Ok(p)
+}
+
+/// The folder name for a host.
+pub fn slug(host: &str) -> String {
+    let s: String = host
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._@-".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if s.starts_with('.') {
+        format!("h{s}")
+    } else {
+        s
+    }
+}
+
+/// Longest folder name kept as it is; longer ones are cut and hashed.
+const MAX_FOLDER_NAME: usize = 40;
+/// A socket path longer than this is refused: macOS holds 103 bytes and a NUL,
+/// and a little room is left.
+const MAX_SOCKET_PATH: usize = 100;
+
+/// The folder name for a host: its `slug`, and for a long host the first 31
+/// characters, a dash and 8 hex digits of a hash of the whole name, so two long
+/// hosts that start alike keep separate folders.
+pub fn folder_name(host: &str) -> String {
+    let s = slug(host);
+    if s.len() <= MAX_FOLDER_NAME {
+        return s;
+    }
+    let mut h: u32 = 0x811c9dc5;
+    for b in host.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(0x01000193);
+    }
+    // The slug is ASCII, so cutting at a byte count cannot split a character.
+    format!("{}-{h:08x}", &s[..31])
+}
+
+/// Where remote instances keep their folders: under the scratch data directory
+/// when `INFINITERM_DATA_DIR` is set (a test or a scratch run), else in a short
+/// hidden folder in the home directory.
+pub fn remotes_root(data_override: Option<&Path>, home: &Path) -> PathBuf {
+    match data_override {
+        Some(dir) => dir.join("remotes"),
+        None => home.join(".infiniterm").join("remotes"),
+    }
+}
+
+/// Whether `<dir>/infiniterm.sock` fits in a socket address.
+pub fn socket_fits(dir: &Path) -> bool {
+    dir.join("infiniterm.sock").as_os_str().len() <= MAX_SOCKET_PATH
+}
+
+/// Makes the host's own config folder, empty, the first time. A host starts
+/// with the default settings and keeps whatever it is given afterwards; the
+/// local settings are never copied (they name this Mac's shell, folders and
+/// commands). Returns whether the folder was made.
+pub fn ensure_config(to: &Path) -> std::io::Result<bool> {
+    if to.exists() {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(to)?;
+    Ok(true)
+}
+
+/// The environment that puts the app in remote mode for this host.
+pub fn launch_env(p: &Parsed, data: &Path, config: &Path) -> Vec<(String, String)> {
+    let mut env = vec![
+        ("INFINITERM_DATA_DIR".to_string(), data.display().to_string()),
+        ("INFINITERM_CONFIG_DIR".to_string(), config.display().to_string()),
+        ("INFINITERM_REMOTE".to_string(), p.host.clone()),
+        (
+            "INFINITERM_REMOTE_NAME".to_string(),
+            p.name.clone().unwrap_or_else(|| p.host.clone()),
+        ),
+    ];
+    if let Some(c) = &p.color {
+        env.push(("INFINITERM_REMOTE_COLOR".into(), c.clone()));
+    }
+    if let Some(a) = &p.ssh_args {
+        env.push(("INFINITERM_REMOTE_ARGS".into(), a.clone()));
+    }
+    if let Some(i) = &p.ift {
+        env.push(("INFINITERM_REMOTE_IFT".into(), i.clone()));
+    }
+    // Only a test sets this; the instance inherits it from here.
+    if let Ok(ssh) = std::env::var("INFINITERM_REMOTE_SSH") {
+        env.push(("INFINITERM_REMOTE_SSH".into(), ssh));
+    }
+    env
+}
+
+/// The version the host's `ift` says (`ift 0.5.3`), when it says one; an older
+/// `ift` has no `--version` and gives none.
+fn host_version(host: &RemoteHost) -> Option<String> {
+    let out = remote::run_on(
+        host,
+        &format!("{} --version", infiniterm_core::drop::posix_quote(&host.ift)),
+    )
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let said = String::from_utf8_lossy(&out.stdout);
+    let mut words = said.split_whitespace();
+    (words.next()? == "ift").then(|| words.next().map(str::to_string))?
+}
+
+/// `<app>.app` from this binary's real path (`.../infiniterm.app/Contents/MacOS/ift`).
+fn app_bundle() -> Option<PathBuf> {
+    let exe = std::fs::canonicalize(std::env::current_exe().ok()?).ok()?;
+    let app = exe.parent()?.parent()?.parent()?.to_path_buf();
+    (app.extension().is_some_and(|e| e == "app")).then_some(app)
+}
+
+pub fn run(args: &[String]) -> ExitCode {
+    let mut p = match parse(args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("ift: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut host: RemoteHost = remote::from_vars(
+        Some(&p.host),
+        p.ssh_args.as_deref(),
+        p.ift.as_deref(),
+        std::env::var("INFINITERM_REMOTE_SSH").ok().as_deref(),
+    )
+    .expect("a parsed host is never empty");
+    if p.install {
+        let from = p.from.as_deref().map(Path::new);
+        match crate::install::install(&host, p.platform.as_deref(), from, env!("CARGO_PKG_VERSION"))
+        {
+            Ok(ift) => {
+                println!("{}: installed ({ift})", p.host);
+                host.ift = ift.clone();
+                p.ift = Some(ift);
+            }
+            Err(e) => {
+                eprintln!("ift: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+    match remote::check(&host) {
+        // Where `ift` really is on the host (the installer's `~/.local/bin` is
+        // not on a non-interactive ssh's PATH): the instance and every later
+        // call use that path, so a plain `ift connect host` works after an
+        // install (#397).
+        Ok(found) => {
+            if !found.is_empty() && found != host.ift {
+                host.ift = found.clone();
+                p.ift = Some(found);
+            }
+        }
+        Err(e) => {
+            eprintln!("ift: {e}");
+            if !p.install && e.contains("is not installed on the server") {
+                eprintln!("ift: `ift connect {} --install` puts them there", p.host);
+            }
+            return ExitCode::from(1);
+        }
+    }
+    // A different version is worth a line, not a refusal: iftd's protocol
+    // stays backwards compatible, so an older server still works.
+    if let Some(theirs) = host_version(&host) {
+        let ours = env!("CARGO_PKG_VERSION");
+        if theirs != ours {
+            eprintln!(
+                "ift: {} has ift {theirs} and this app is {ours}; `ift connect {} --install` updates it",
+                p.host, p.host
+            );
+        }
+    }
+    if p.check_only {
+        println!("{}: ready (ift and iftd are installed)", p.host);
+        return ExitCode::SUCCESS;
+    }
+
+    let override_dir = std::env::var_os("INFINITERM_DATA_DIR").map(PathBuf::from);
+    let data = remotes_root(override_dir.as_deref(), &paths::home_dir()).join(folder_name(&p.host));
+    if !socket_fits(&data) {
+        eprintln!(
+            "ift: the folder for {} is too long for a unix socket ({} bytes, at most {MAX_SOCKET_PATH}): {}",
+            p.host,
+            data.join("infiniterm.sock").as_os_str().len(),
+            data.display()
+        );
+        return ExitCode::from(1);
+    }
+    let config = data.join("config");
+    if let Err(e) = std::fs::create_dir_all(&data) {
+        eprintln!("ift: {}: {e}", data.display());
+        return ExitCode::from(1);
+    }
+    // Already open? The instance owns this folder's socket.
+    if std::os::unix::net::UnixStream::connect(data.join("infiniterm.sock")).is_ok() {
+        println!("{}: already connected (its window is open)", p.host);
+        if p.color.is_some() {
+            println!("its colour changes from its palette: Remote: change the title bar and Dock colour");
+        }
+        return ExitCode::SUCCESS;
+    }
+    // --color is a choice like the picker's, and the latest choice stays: the
+    // instance reads this file at startup and the palette writes it.
+    if let Some(c) = p
+        .color
+        .as_deref()
+        .and_then(infiniterm_core::remote_identity::parse_hex)
+    {
+        if let Err(e) = infiniterm_core::remote_identity::save_color(&data, Some(c)) {
+            eprintln!("ift: could not save the colour: {e}");
+            return ExitCode::from(1);
+        }
+    }
+    match ensure_config(&config) {
+        Ok(true) => println!("settings for {} start with the defaults", p.host),
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("ift: could not make {}: {e}", config.display());
+            return ExitCode::from(1);
+        }
+    }
+    let Some(app) = app_bundle() else {
+        eprintln!("ift: connect needs the app bundle (run the ift inside infiniterm.app)");
+        return ExitCode::from(1);
+    };
+    let mut open = Command::new("open");
+    open.arg("-n").arg(&app);
+    for (k, v) in launch_env(&p, &data, &config) {
+        open.arg("--env").arg(format!("{k}={v}"));
+    }
+    match open.status() {
+        Ok(s) if s.success() => {
+            println!("{}: opening a window", p.host);
+            ExitCode::SUCCESS
+        }
+        Ok(s) => {
+            eprintln!("ift: open exited with {s}");
+            ExitCode::from(1)
+        }
+        Err(e) => {
+            eprintln!("ift: could not run open: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn a(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_host_and_its_options_are_parsed() {
+        let p = parse(&a(&[
+            "root@100.1.1.1", "--name", "build box", "--color", "#3B82F6", "--ssh-args", "-p 2222",
+            "--ift", "/opt/ift", "--check",
+        ]))
+        .unwrap();
+        assert_eq!(p.host, "root@100.1.1.1");
+        assert_eq!(p.name.as_deref(), Some("build box"));
+        assert_eq!(p.color.as_deref(), Some("3b82f6"));
+        assert_eq!(p.ssh_args.as_deref(), Some("-p 2222"));
+        assert_eq!(p.ift.as_deref(), Some("/opt/ift"));
+        assert!(p.check_only);
+    }
+
+    #[test]
+    fn bad_use_is_refused_with_a_reason() {
+        assert!(parse(&a(&[])).is_err());
+        assert!(parse(&a(&["a", "b"])).is_err());
+        assert!(parse(&a(&["a", "--color", "red"])).is_err());
+        assert!(parse(&a(&["a", "--name"])).is_err());
+        assert!(parse(&a(&["a", "--nope"])).is_err());
+    }
+
+    #[test]
+    fn a_host_that_ssh_would_read_as_an_option_is_refused() {
+        assert!(!valid_host("-oProxyCommand=touch /tmp/x"));
+        assert!(parse(&a(&["-oProxyCommand=x"])).is_err());
+        assert!(!valid_host("a b"));
+        assert!(!valid_host(""));
+        assert!(valid_host("root@100.1.1.1"));
+        assert!(valid_host("mini-m4"));
+    }
+
+    #[test]
+    fn the_folder_name_cannot_leave_the_remotes_folder() {
+        assert_eq!(slug("root@100.1.1.1"), "root@100.1.1.1");
+        assert_eq!(slug("a/b"), "a_b");
+        assert_eq!(slug("../etc"), "h.._etc");
+        assert_eq!(slug("..") , "h..");
+        assert_eq!(slug("my host:22"), "my_host_22");
+    }
+
+    #[test]
+    fn a_long_host_gets_a_short_stable_folder_name_of_its_own() {
+        assert_eq!(folder_name("ops@box"), "ops@box");
+        let a = "build-server-for-the-customer-portal.eu-west.example.com";
+        let b = "build-server-for-the-customer-portal.us-east.example.com";
+        let (fa, fb) = (folder_name(a), folder_name(b));
+        assert!(fa.len() <= MAX_FOLDER_NAME && fb.len() <= MAX_FOLDER_NAME, "{fa} {fb}");
+        assert_eq!(fa, folder_name(a), "the same every time");
+        assert_ne!(fa, fb, "hosts that start alike keep separate folders");
+        assert!(fa.starts_with("build-server-for-the-customer-p-"));
+    }
+
+    #[test]
+    fn remote_folders_live_somewhere_short_unless_a_scratch_dir_says_otherwise() {
+        let home = Path::new("/Users/someone");
+        assert_eq!(remotes_root(None, home), home.join(".infiniterm/remotes"));
+        assert_eq!(
+            remotes_root(Some(Path::new("/tmp/scratch")), home),
+            Path::new("/tmp/scratch/remotes")
+        );
+    }
+
+    // The case that broke the first real connect: the data directory's own
+    // 70 bytes plus a host name pushed the socket path to 106.
+    #[test]
+    fn the_socket_path_must_fit_a_unix_socket() {
+        let old = Path::new("/Users/ekinertac/Library/Application Support/dev.ekinertac.infiniterm/remotes/humbl-uptime");
+        assert!(!socket_fits(old), "the path that failed for real");
+        let now = remotes_root(None, Path::new("/Users/ekinertac")).join(folder_name("humbl-uptime"));
+        assert!(socket_fits(&now), "{}", now.display());
+        let worst = remotes_root(None, Path::new("/Users/ekinertac"))
+            .join(folder_name(&"h".repeat(200)));
+        assert!(socket_fits(&worst), "a long host still fits: {}", worst.display());
+    }
+
+    #[test]
+    fn a_host_starts_with_an_empty_config_and_keeps_what_it_is_given() {
+        let root = std::env::temp_dir().join(format!("ift-conn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let to = root.join("remote").join("config");
+        assert!(ensure_config(&to).unwrap(), "the first time makes it");
+        assert_eq!(std::fs::read_dir(&to).unwrap().count(), 0, "nothing is copied in");
+        std::fs::write(to.join("settings.json"), "{\"theme\":\"mine\"}").unwrap();
+        assert!(!ensure_config(&to).unwrap(), "the second time does nothing");
+        assert_eq!(std::fs::read_to_string(to.join("settings.json")).unwrap(), "{\"theme\":\"mine\"}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_launch_environment_puts_the_app_in_remote_mode() {
+        let p = parse(&a(&["srv", "--color", "ff8800", "--ssh-args", "-p 2222"])).unwrap();
+        let env = launch_env(&p, Path::new("/d"), Path::new("/d/config"));
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("INFINITERM_DATA_DIR"), Some("/d"));
+        assert_eq!(get("INFINITERM_CONFIG_DIR"), Some("/d/config"));
+        assert_eq!(get("INFINITERM_REMOTE"), Some("srv"));
+        assert_eq!(get("INFINITERM_REMOTE_NAME"), Some("srv"));
+        assert_eq!(get("INFINITERM_REMOTE_COLOR"), Some("ff8800"));
+        assert_eq!(get("INFINITERM_REMOTE_ARGS"), Some("-p 2222"));
+        assert_eq!(get("INFINITERM_REMOTE_IFT"), None);
+    }
+}

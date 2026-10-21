@@ -7,7 +7,7 @@
 //! reaches the app, and only while one of these modes is up.
 use super::palette_state::Source;
 use super::{Effect, Model, NewCard, Phantom, Switcher};
-use crate::cards::{CardRect, PlacedCard, GUTTER};
+use crate::cards::{CardRect, PlacedCard};
 use crate::grid::{Point, Rect, Size, HALF_CELL};
 use crate::groups::{canvas_units, step_ring, CanvasUnit, UnitKind, UNGROUPED};
 use crate::layout::rects_overlap;
@@ -17,7 +17,7 @@ use crate::navigate::{
 };
 use crate::saved_layout::CardKind;
 use crate::slots::{free_slots_around, Slot, SLOT_KEYS};
-use crate::viewport::{bounding_rect, fit_rect};
+use crate::viewport::bounding_rect;
 
 /// A key without Cmd, as the ui sees it: named (`enter`, `escape`) or one
 /// character.
@@ -32,7 +32,7 @@ pub enum BareKey {
 impl Model {
     /// The empty slot the arrows landed on, as a card you can make. Nothing
     /// is focused while it is up, so Enter means "make the card".
-    fn show_phantom(&mut self, rect: Rect, group_id: Option<String>, keep_extra: bool) {
+    pub(super) fn show_phantom(&mut self, rect: Rect, group_id: Option<String>, keep_extra: bool) {
         self.selection.maximized = false;
         self.selection.focused_id = None;
         if !keep_extra {
@@ -51,6 +51,9 @@ impl Model {
     /// Fills the phantom (and any extras) with a card of `kind`. Returns
     /// false when there was no phantom.
     pub fn fill_phantom(&mut self, kind: CardKind, url: Option<String>) -> bool {
+        if kind == CardKind::Browser && self.browser_refused() {
+            return true;
+        }
         let Some(p) = self.selection.phantom.take() else {
             return false;
         };
@@ -108,7 +111,7 @@ impl Model {
                 .collect();
             let mut occupied = rects.clone();
             occupied.extend(self.other_frames(g.as_deref(), &ws));
-            for s in free_slots_around(&members, size, GUTTER, &occupied) {
+            for s in free_slots_around(&members, size, self.gap(), &occupied) {
                 // Keep the first proposal for any ground already offered.
                 if !slots.iter().any(|k| rects_overlap(k.rect, s.rect)) {
                     slots.push(s);
@@ -166,7 +169,7 @@ impl Model {
         let mut all = rects;
         all.extend(slots.iter().map(|s| s.rect));
         if let Some(bounds) = bounding_rect(&all) {
-            self.apply_viewport(fit_rect(bounds, self.view_size));
+            self.apply_viewport(self.fit_viewport(bounds));
         }
     }
 
@@ -208,7 +211,7 @@ impl Model {
             .map(|((id, _), k)| (id.clone(), k))
             .collect();
         if let Some(bounds) = bounding_rect(&here.iter().map(|(_, r)| *r).collect::<Vec<_>>()) {
-            self.apply_viewport(fit_rect(bounds, self.view_size));
+            self.apply_viewport(self.fit_viewport(bounds));
         }
     }
 
@@ -222,7 +225,15 @@ impl Model {
         self.selection.hints.clear();
         let Some(id) = id else { return false };
         self.set_focus(Some(&id));
-        self.reveal_focused();
+        // A jump lands framed, as Cmd+1 would (Ekin, 2026-09-26): you
+        // jumped to it to work in it.
+        if let Some(card) = self.card(&id) {
+            let (rect, group) = (card.rect, card.soft_group_id.clone());
+            match self.slot_bounds(&[rect], &[group]) {
+                Some(bounds) => self.frame_card(bounds),
+                None => self.reveal_focused(),
+            }
+        }
         true
     }
 
@@ -246,7 +257,7 @@ impl Model {
             w: p.rect.w,
             h: p.rect.h,
         };
-        let back_rect = empty_slot_beside(p.rect, dir, GUTTER, &[], size);
+        let back_rect = empty_slot_beside(p.rect, dir, self.gap(), &[], size);
         if let Some(i) = self
             .selection
             .phantom_extra
@@ -259,7 +270,7 @@ impl Model {
         }
         let mut occupied = self.occupied_here();
         occupied.extend(self.selection.phantom_extra.iter().map(|q| q.rect));
-        let Some(hole) = empty_slot_beside(p.rect, dir, GUTTER, &occupied, size) else {
+        let Some(hole) = empty_slot_beside(p.rect, dir, self.gap(), &occupied, size) else {
             return;
         };
         self.selection.phantom_extra.push(p.clone());
@@ -318,7 +329,9 @@ impl Model {
 
         // From a phantom: the same rules, with the phantom standing in for a card.
         if let Some(p) = self.selection.phantom.clone() {
-            if let Some(hole) = empty_slot_beside(p.rect, dir, GUTTER, &occupied, beside(p.rect)) {
+            if let Some(hole) =
+                empty_slot_beside(p.rect, dir, self.gap(), &occupied, beside(p.rect))
+            {
                 self.show_phantom(hole, p.group_id, false);
                 return;
             }
@@ -348,7 +361,7 @@ impl Model {
         };
         if let Some(card) = self.card(&focused).cloned() {
             if let Some(hole) =
-                empty_slot_beside(card.rect, dir, GUTTER, &occupied, beside(card.rect))
+                empty_slot_beside(card.rect, dir, self.gap(), &occupied, beside(card.rect))
             {
                 self.show_phantom(hole, card.group_id, false);
                 return;
@@ -404,6 +417,76 @@ impl Model {
         self.focus_extended(id, extra);
     }
 
+    /// A rectangle dragged on bare canvas (2026-09-29): every card of this
+    /// workspace it touches is selected, the one nearest where the drag
+    /// began taking the focus. `kept` is the selection from before a
+    /// Shift+drag, which stays in; `None` replaces it. Set directly, not
+    /// through the focus trail: this runs on every mouse move, and
+    /// `marquee_done` lands the result once at the release.
+    pub fn marquee_select(&mut self, rect: Rect, anchor: Point, kept: Option<&[String]>) {
+        let dist = |r: &Rect| {
+            let (cx, cy) = (r.x + r.w / 2., r.y + r.h / 2.);
+            (cx - anchor.x).hypot(cy - anchor.y)
+        };
+        let mut touched: Vec<(f64, String)> = self
+            .here()
+            .iter()
+            .filter(|c| crate::layout::rects_overlap(rect, c.rect))
+            .map(|c| (dist(&c.rect), c.id.clone()))
+            .collect();
+        touched.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut ids: Vec<String> = kept.map(<[String]>::to_vec).unwrap_or_default();
+        for (_, id) in touched {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        // The nearest touched card leads; with nothing touched, whatever
+        // Shift kept.
+        let first = kept.map_or(0, |k| k.len());
+        let focus = ids.get(first).or_else(|| ids.first()).cloned();
+        self.selection.extra = ids
+            .into_iter()
+            .filter(|id| Some(id) != focus.as_ref())
+            .collect();
+        self.selection.focused_id = focus;
+    }
+
+    /// The drag let go: the selection it made becomes a real focus change
+    /// (the trail, the phantom dismissed), once.
+    pub fn marquee_done(&mut self) {
+        let extra = self.selection.extra.clone();
+        match self.selection.focused_id.clone() {
+            Some(id) => self.focus_extended(&id, extra),
+            None => self.set_focus(None),
+        }
+    }
+
+    /// Cmd+click on a card: out of the selection when it is in it, into it
+    /// when it is not (Finder's rule, Ekin 2026-09-29). A lone focused card
+    /// is not a selection to toggle: that click is the body's (a link).
+    /// Returns whether the click was taken.
+    pub fn toggle_selected(&mut self, id: &str) -> bool {
+        let focused = self.selection.focused_id.clone();
+        if let Some(i) = self.selection.extra.iter().position(|x| x == id) {
+            self.selection.extra.remove(i);
+            return true;
+        }
+        if focused.as_deref() == Some(id) {
+            if self.selection.extra.is_empty() {
+                return false;
+            }
+            let next = self.selection.extra.pop();
+            let extra = self.selection.extra.clone();
+            if let Some(next) = next {
+                self.focus_extended(&next, extra);
+            }
+            return true;
+        }
+        self.extend_to(id);
+        true
+    }
+
     /// The top-level things on the canvas: whole groups, and every loose card
     /// as a single trailing stop. Scoped to the visible canvas.
     fn units(&self) -> Vec<CanvasUnit> {
@@ -420,7 +503,7 @@ impl Model {
                 })
             })
             .collect();
-        canvas_units(&placed, &frames)
+        canvas_units(&placed, &frames, self.group_pad())
     }
 
     /// The unit the active card belongs to: its group, or the loose set.
@@ -439,7 +522,7 @@ impl Model {
             .cloned();
         let target = remembered.or_else(|| unit.card_ids.first().cloned());
         self.set_focus(target.as_deref());
-        self.apply_viewport(fit_rect(unit.rect, self.view_size));
+        self.apply_viewport(self.fit_viewport(unit.rect));
     }
 
     fn step_units(&mut self, groups_only: bool, step: isize) {
@@ -468,7 +551,11 @@ impl Model {
     /// belongs to the shell. With the palette or a prompt up, Enter and
     /// Escape are theirs.
     pub fn handle_bare_key(&mut self, key: BareKey) -> bool {
-        if self.palette_open() || self.prompt.is_open() {
+        // Any overlay that owns the keyboard: the address bar and the
+        // shortcuts panel were missing, so with a phantom waiting, Enter in
+        // the omnibox (opened from the phantom's own kind picker) reached the
+        // phantom first and opened the picker again (#253).
+        if self.modal_open() || self.find.open {
             return false;
         }
         if !self.selection.hints.is_empty() {
@@ -518,7 +605,11 @@ impl Model {
     /// comes up (`switcher_commit`), or Escape puts it back.
     pub fn switcher_step(&mut self, delta: isize) {
         if self.switcher.is_none() {
-            let all: Vec<String> = self.cards.iter().map(|c| c.id.clone()).collect();
+            let all: Vec<String> = if self.config.ui.workspace_isolation {
+                self.here().iter().map(|c| c.id.clone()).collect()
+            } else {
+                self.cards.iter().map(|c| c.id.clone()).collect()
+            };
             let list = crate::switcher::order(
                 self.selection.focused_id.as_deref(),
                 &self.focus_trail,
@@ -551,8 +642,38 @@ impl Model {
     }
 }
 
+impl Model {
+    /// Selects every card of the workspace (Cmd+A, #419), the focused one
+    /// staying the active one, as after a rectangle or a Shift+arrow. A locked
+    /// editor or browser never gets here: its Cmd+A is the file's or the
+    /// page's. The others, in reading order, are the extras.
+    pub fn select_all_cards(&mut self) {
+        let here = self.here();
+        let rects: Vec<Rect> = here.iter().map(|c| c.rect).collect();
+        let ids: Vec<String> = crate::workspaces::reading_order(&rects)
+            .into_iter()
+            .map(|i| here[i].id.clone())
+            .collect();
+        let Some(first) = ids.first().cloned() else {
+            return;
+        };
+        let focus = self
+            .selection
+            .focused_id
+            .clone()
+            .filter(|f| ids.contains(f))
+            .unwrap_or(first);
+        let extra: Vec<String> = ids.into_iter().filter(|id| *id != focus).collect();
+        self.selection.phantom = None;
+        self.focus_extended(&focus, extra);
+    }
+}
+
 pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     use super::cards_cmd::dir_name;
+    r.register("focus.selectAll", "Focus: select every card", |m| {
+        m.select_all_cards()
+    });
     // Ctrl+Tab: the cards you have actually worked in, most recent first,
     // committed when Ctrl comes up (the ui watches the modifier, keycode.rs).
     for (id, label, delta) in [

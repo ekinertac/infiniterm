@@ -26,8 +26,7 @@
 use crate::body::{BodyAction, CardBody};
 use crate::tab_strip::{paint_strip, strip_hit, strip_world_h, StripStyle};
 use gpui::{
-    fill, font, point, px, size, App, Bounds, CursorStyle, Hsla, Keystroke, Pixels, RenderImage,
-    Window,
+    fill, point, px, size, App, Bounds, CursorStyle, Hsla, Keystroke, Pixels, RenderImage, Window,
 };
 use image::{Frame as ImageFrame, RgbaImage};
 use infiniterm_browser::{Button, Mods, Surface};
@@ -42,12 +41,28 @@ const DEVICE_SCALE_STEPS_PER_UNIT: f64 = 2.;
 /// CEF is never asked to render past this device scale: a sanity ceiling
 /// on how many pixels a zoomed-in browser card can demand.
 const DEVICE_SCALE_MAX: f64 = 3.;
-/// The "loading"/"unavailable" placeholder text's font size.
-const STATUS_FONT_PX: f64 = 13.;
 /// The placeholder text's inset from the card's corner.
 const STATUS_TEXT_PAD_PX: f64 = 12.;
 /// The placeholder text's line height, looser than its font size.
 const STATUS_LINE_HEIGHT_RATIO: f32 = 1.5;
+
+/// What the card knows about how current a tab's newest frame is: the layout
+/// size it wants, when a frame last arrived or that size last changed, and how
+/// often CEF has been asked to paint again for it (`frame_fit::needs_kick`).
+/// After a quick burst of resizes CEF can deliver a frame of an older size and
+/// then nothing: without asking, the page stays at that size (#479).
+#[derive(Default)]
+struct Repaint {
+    wanted_css: (i32, i32),
+    /// Frames taken so far, and how many `paint` has noticed.
+    frame_seq: u64,
+    seen_frame: u64,
+    /// When (ms) a frame last arrived or the wanted size last changed.
+    quiet_since: f64,
+    /// Requests made for the current wanted size, and when the last was.
+    kicks: u32,
+    last_kick_ms: f64,
+}
 
 /// One tab: everything that was a single field on `BrowserBody` before
 /// tabs existed, once per open page.
@@ -57,6 +72,11 @@ pub struct Tab {
     /// Why there is no surface, for the card to say.
     pub unavailable: Option<String>,
     texture: Option<Arc<RenderImage>>,
+    /// The layout size (CSS pixels) `texture` was painted at, so an old frame
+    /// is drawn at its natural size while a resize repaints (#479).
+    texture_css: (i32, i32),
+    /// How current `texture` is, and when to ask CEF for a fresh one (#479).
+    repaint: Repaint,
     /// The page title as last reported, so a change can be told from the
     /// same title arriving every frame. Not the card's title: that is a
     /// name somebody CHOSE, and a page must never overwrite it.
@@ -84,6 +104,8 @@ impl Tab {
             surface,
             unavailable,
             texture: None,
+            texture_css: (0, 0),
+            repaint: Repaint::default(),
             title: None,
             applied_zoom: None,
         }
@@ -155,9 +177,8 @@ pub struct BrowserBody {
     pub text: Hsla,
     /// The strip's colours and font, `tab_strip.rs`'s shared shape: the
     /// editor's tab strip is the same struct, so the two look and size
-    /// alike (`terminal.fontSize`, not a strip-only constant).
+    /// alike under the UI typography settings.
     pub style: StripStyle,
-    pub font_family: String,
     dirty: bool,
     pub popups: Vec<String>,
     /// A right-click since the last drain, for `browsers.rs` to turn into
@@ -177,6 +198,15 @@ pub struct BrowserBody {
 }
 
 impl BrowserBody {
+    /// The tab under a point of the card (a right-click's), `None` off the
+    /// tabs, on the "+" and below the strip.
+    pub fn tab_at(&self, local: Point) -> Option<usize> {
+        match strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
+            Some(crate::body::TabClick::Switch(i) | crate::body::TabClick::Close(i)) => Some(i),
+            _ => None,
+        }
+    }
+
     pub fn new(
         card_id: &str,
         url: &str,
@@ -212,7 +242,6 @@ impl BrowserBody {
             card_bg: gpui::rgb(0x0e101a).into(),
             text: gpui::rgb(0xb9c4d2).into(),
             style,
-            font_family: "Menlo".into(),
             dirty: true,
             popups: vec![],
             context_menu: None,
@@ -357,6 +386,14 @@ impl BrowserBody {
                             ImageFrame::new(img),
                             1,
                         ))));
+                        tab.texture_css = (frame.css_width, frame.css_height);
+                        tab.repaint.frame_seq += 1;
+                        if infiniterm_browser::surface::keylog() {
+                            eprintln!(
+                                "[browser] ui takes frame {}x{}px css {}x{}",
+                                frame.width, frame.height, frame.css_width, frame.css_height
+                            );
+                        }
                         self.dirty = true;
                     }
                 }
@@ -445,6 +482,7 @@ impl BrowserBody {
             shift: m.shift,
             control: m.control,
             alt: m.alt,
+            command: m.platform,
         }
     }
 }
@@ -486,7 +524,7 @@ impl CardBody for BrowserBody {
         bounds: Bounds<Pixels>,
         scale: f64,
         focused: bool,
-        _now: f64,
+        now: f64,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -515,6 +553,37 @@ impl CardBody for BrowserBody {
                 s.resize(page_w, page_h, device);
             }
         }
+        // The visible tab's newest frame may be of an older size than the one
+        // wanted, and CEF may have nothing more to send (#479): after a quiet
+        // moment ask it to paint again, a few times at most per wanted size.
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            let wanted = (page_w, page_h);
+            let r = &mut tab.repaint;
+            if r.wanted_css != wanted {
+                r.wanted_css = wanted;
+                r.quiet_since = now;
+                r.kicks = 0;
+            }
+            if r.seen_frame != r.frame_seq {
+                r.seen_frame = r.frame_seq;
+                r.quiet_since = now;
+            }
+            if tab.texture.is_some()
+                && infiniterm_browser::frame_fit::needs_kick(
+                    tab.texture_css,
+                    wanted,
+                    now - r.quiet_since,
+                    now - r.last_kick_ms,
+                    r.kicks,
+                )
+            {
+                if let Some(s) = &tab.surface {
+                    s.kick();
+                }
+                r.kicks += 1;
+                r.last_kick_ms = now;
+            }
+        }
         // The strip is real space now, not an overlay: the page is laid out
         // and painted into the band BELOW it, matching what `page_world_size`
         // asked CEF to render. `mouse_down`/`mouse_up`/`mouse_move`/`wheel`
@@ -535,10 +604,66 @@ impl CardBody for BrowserBody {
                 (bounds.size.height - strip_h).max(px(1.)),
             ),
         );
-        window.paint_quad(fill(bounds, self.card_bg));
+        let radius = crate::chrome::card_radius(cx);
+        window.paint_quad(fill(bounds, self.card_bg).corner_radii(radius));
+        let texture_css = self.active_tab().map(|t| t.texture_css).unwrap_or((0, 0));
         match self.active_tab().and_then(|t| t.texture.clone()) {
             Some(img) => {
-                let _ = window.paint_image(page_bounds, Default::default(), img.clone(), 0, false);
+                // The page is the card's bottom edge (the strip covers the top).
+                let page_corners = gpui::Corners {
+                    top_left: px(0.),
+                    top_right: px(0.),
+                    bottom_left: radius,
+                    bottom_right: radius,
+                };
+                // The frame is drawn at the size it was LAID OUT at (times the
+                // canvas zoom), anchored top-left and clipped to the page area:
+                // while a resize waits for CEF's repaint the newest frame is
+                // the old size, and stretching it to the new bounds squashed
+                // the page (#479). A settled card, and a canvas zoom, give the
+                // page area back exactly (`frame_fit`).
+                let (draw_w, draw_h) = infiniterm_browser::frame_fit::frame_draw_size(
+                    texture_css.0,
+                    texture_css.1,
+                    scale,
+                    f32::from(page_bounds.size.width) as f64,
+                    f32::from(page_bounds.size.height) as f64,
+                );
+                let fills = (draw_w - f32::from(page_bounds.size.width) as f64).abs() < 0.01
+                    && (draw_h - f32::from(page_bounds.size.height) as f64).abs() < 0.01;
+                if infiniterm_browser::surface::keylog() && !fills {
+                    eprintln!(
+                        "[browser] draws old size {draw_w:.0}x{draw_h:.0} in page area {:.0}x{:.0} (css {}x{} zoom {scale:.2})",
+                        f32::from(page_bounds.size.width),
+                        f32::from(page_bounds.size.height),
+                        texture_css.0,
+                        texture_css.1
+                    );
+                }
+                if fills {
+                    let _ = window.paint_image(page_bounds, page_corners, img.clone(), 0, false);
+                } else {
+                    // A transient frame of another size: square corners, the
+                    // card's own rounded quad is already painted under it.
+                    let drawn = Bounds::new(
+                        page_bounds.origin,
+                        size(px(draw_w as f32), px(draw_h as f32)),
+                    );
+                    window.with_content_mask(
+                        Some(gpui::ContentMask {
+                            bounds: page_bounds,
+                        }),
+                        |window| {
+                            let _ = window.paint_image(
+                                drawn,
+                                gpui::Corners::default(),
+                                img.clone(),
+                                0,
+                                false,
+                            );
+                        },
+                    );
+                }
                 // Only a DIFFERENT image is ever evicted: the same texture
                 // is repainted, unchanged, every frame nothing new has
                 // arrived, and dropping what this very call just referenced
@@ -553,7 +678,7 @@ impl CardBody for BrowserBody {
                 }
             }
             None => {
-                let font_size = px((STATUS_FONT_PX * scale) as f32);
+                let font_size = px((self.style.font_px * scale) as f32);
                 if font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32) {
                     let text = self
                         .active_tab()
@@ -563,7 +688,7 @@ impl CardBody for BrowserBody {
                         window,
                         &text,
                         font_size,
-                        &font(self.font_family.clone()),
+                        &self.style.regular,
                         self.text,
                     );
                     let _ = line.paint(
@@ -579,15 +704,15 @@ impl CardBody for BrowserBody {
             }
         }
         if !focused && self.inactive_dim > 0. {
-            window.paint_quad(fill(
+            window.paint_quad(crate::chrome::card_wash(
+                cx,
                 bounds,
                 crate::chrome::with_alpha(self.card_bg, self.inactive_dim as f32),
             ));
         }
         // The strip, painted LAST so it sits over the page rather than
         // under it: shared with the editor's strip, so the two look and
-        // size alike (the font is `terminal.fontSize`, times `ui_scale`,
-        // times the zoom, not a strip-only constant).
+        // size alike (`ui.fontSize`, times `ui_scale`, times the zoom).
         let labels: Vec<String> = self.tabs.iter().map(|t| tab_label(t).to_string()).collect();
         paint_strip(
             bounds,
@@ -659,6 +784,10 @@ impl CardBody for BrowserBody {
         if local.y < strip_h {
             return match strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
                 Some(hit) if button == gpui::MouseButton::Left => BodyAction::BrowserTab(hit),
+                // Middle-click closes a tab, as in every browser.
+                Some(crate::body::TabClick::Switch(i)) if button == gpui::MouseButton::Middle => {
+                    BodyAction::BrowserTab(crate::body::TabClick::Close(i))
+                }
                 _ => BodyAction::None,
             };
         }
@@ -768,6 +897,13 @@ impl CardBody for BrowserBody {
                 .tabs
                 .iter()
                 .any(|t| t.surface.as_ref().is_some_and(|s| s.has_new_frame()))
+            // The visible page is of an older size and a repaint request is
+            // still to come: keep painting so `paint` can time it (#479).
+            || self.tabs.get(self.active).is_some_and(|t| {
+                t.texture.is_some()
+                    && t.repaint.kicks < infiniterm_browser::frame_fit::MAX_KICKS
+                    && infiniterm_browser::frame_fit::is_stale(t.texture_css, t.repaint.wanted_css)
+            })
     }
 
     fn captures_drag(&self) -> bool {
@@ -820,7 +956,12 @@ fn test_strip_style() -> StripStyle {
         active_bg: gpui::black(),
         text_bright: gpui::white(),
         text_muted: gpui::white(),
-        font_family: "Menlo".into(),
+        regular: gpui::font("Menlo"),
+        bold: {
+            let mut font = gpui::font("Menlo");
+            font.weight = gpui::FontWeight::BOLD;
+            font
+        },
         font_px: 14.,
     }
 }
@@ -876,6 +1017,8 @@ mod tab_label_tests {
             surface: None,
             unavailable: None,
             texture: None,
+            texture_css: (0, 0),
+            repaint: Repaint::default(),
             title: None,
             applied_zoom: None,
         };

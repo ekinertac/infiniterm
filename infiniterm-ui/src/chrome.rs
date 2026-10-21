@@ -8,8 +8,11 @@
 //! arrives as hex strings from `itermcolors.rs`. Sizes that must hold on
 //! screen at every zoom are in SCREEN pixels here and divided by the scale
 //! at paint time (`chrome.rs` in core has the maths).
-use gpui::{font, rgb, Font, Hsla, Rgba};
+use crate::fonts::UiTypography;
+use gpui::{rgb, Hsla, Rgba};
+use infiniterm_core::config::Ui;
 use infiniterm_core::itermcolors::Theme;
+use infiniterm_core::theme_file::{BarTheme, BorderSpec, ColorSpec};
 
 /// A one-device-pixel line: the thinnest gpui draws crisply. Every card
 /// body's hairline dividers and 1px outlines share this so they read as one
@@ -26,17 +29,58 @@ pub const HAIRLINE_ALPHA: f32 = 0.4;
 /// paid for, and Ekin's fit-all is 6.6 px, where a frame still cost 100
 /// ms and the text still did not read.
 pub const LEGIBLE_FONT_PX: f64 = 7.;
-/// Below this, text is "far": while the viewport MOVES the terminal draws
-/// bars so the animation stays smooth (a zoom from fit-all passes through
-/// this band with every card still on screen), and at rest, in the band
-/// between `LEGIBLE_FONT_PX` and this where a frame is expensive but the
-/// text just reads, a frame asked for by output or the cursor blink is
-/// painted at most every `FAR_REFRESH_MS`. Zoomed in, nothing changes.
-pub const FAR_FONT_PX: f64 = 12.;
+/// The physical floor under `LEGIBLE_FONT_PX`, in logical pixels. That
+/// constant counts DEVICE pixels, measured on Ekin's 1x 4K: a glyph needs
+/// about seven to be drawn at all. On a 2x Retina screen seven device
+/// pixels are 3.5 logical ones, sharp but physically too small to read, so
+/// there the limit is size, not pixels. First measured by eye on the
+/// 15-inch MacBook Air, 2026-09-24, where the fixed 7 px line turned a
+/// single card to bars at 48% although its 6.7 px text was 13 device
+/// pixels and read fine.
+pub const LEGIBLE_FLOOR_PX: f32 = 4.5;
+
+/// The font size, in the logical pixels gpui paints in, below which text
+/// is drawn as bars: enough device pixels to draw a glyph, and big enough
+/// to read. 7 on a 1x screen, as it always was; 4.5 on Retina.
+pub fn legible_font_px(scale_factor: f32) -> gpui::Pixels {
+    legible_px(
+        f32::from_bits(LEGIBLE_DEVICE_PX.load(std::sync::atomic::Ordering::Relaxed)),
+        scale_factor,
+    )
+}
+
+/// `ui.minTextPx`: the device pixels a glyph needs to be drawn, set once a
+/// frame from the config (`set_legible_device_px`). Process-wide because
+/// nine painters ask and the app has one window; 7 until a frame sets it.
+static LEGIBLE_DEVICE_PX: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(7.0f32.to_bits());
+
+pub fn set_legible_device_px(px: f32) {
+    LEGIBLE_DEVICE_PX.store(px.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The rule behind `legible_font_px`, for `device` pixels a glyph needs: the
+/// logical size they make on this screen, never under the physical floor
+/// (4.5 logical) unless the setting itself asks for less.
+pub fn legible_px(device: f32, scale_factor: f32) -> gpui::Pixels {
+    let pixels = device / scale_factor.max(1.);
+    gpui::px(pixels.max(LEGIBLE_FLOOR_PX.min(device)))
+}
+/// While the frame is over its glyph budget (`AppView::crowded`), a frame
+/// asked for by output or the cursor blink is painted at most this often:
+/// the cards are bars then, and nobody reads a wall of bars frame by frame.
+///
+/// There used to be a `FAR_FONT_PX` (12 px) under which text drew bars
+/// while the viewport moved, counted toward the budget, and repainted at
+/// four frames a second, by font size alone. It stood in for the budget
+/// before the budget existed, and on 2026-09-24 it turned a single card at
+/// 57% (10.8 px, perfectly readable, in a smaller window on Ekin's 4K)
+/// into bars at 4 fps. The budget decides now, counting what is on screen.
 pub const FAR_REFRESH_MS: f64 = 250.;
 /// How many terminal cells may be on screen, across every visible card,
-/// before a frame stops painting glyphs at all and every card under
-/// `FAR_FONT_PX` draws bars (`AppView::crowded`).
+/// before a frame stops painting glyphs at all and every card draws bars
+/// (`AppView::crowded`). ON SCREEN: a card half out of the window counts
+/// half its cells, because the painter skips the rows outside it.
 ///
 /// The per-card size threshold above cannot say this: the cost is the
 /// TOTAL number of glyphs, and a glyph is 1.7 microseconds whatever the
@@ -47,12 +91,33 @@ pub const FAR_REFRESH_MS: f64 = 250.;
 /// two full cards: a pair side by side still reads, a wall of them does
 /// not and now costs nothing. Counted from the grids, not from what is in
 /// them, so the flag does not flip as output scrolls.
-pub const GLYPH_BUDGET_CELLS: usize = 30_000;
+///
+/// Remeasured 2026-10-09 (#330, release build, 13 busy cards, about 80,000
+/// glyphs): 215 nanoseconds a glyph, 17 ms a frame, and 44 nanoseconds, 3.5
+/// ms, once a card's rows are painted in one layer (`terminal_body.rs`).
+/// gpui's per-primitive ordering was 90% of the old cost. The default rose
+/// from 30,000 to 150,000 cells with it: about 7 ms a frame if every cell
+/// held a glyph.
+#[cfg(test)]
+pub const GLYPH_BUDGET_CELLS: usize = infiniterm_core::config::DEFAULT_GLYPH_BUDGET;
+
+/// The budget also grows with the WINDOW: it is at least this many
+/// windowfuls of text at 100%. A fixed 30,000 was less than one windowful
+/// on the 4K (three large cards covering the screen at 98% drew bars,
+/// 2026-09-24), and no terminal draws bars at its own font size. 1.5 means
+/// a window covered edge to edge in cards reads down to about 82% zoom
+/// (the square root of 1/1.5), and a half-covered one to about 58%.
+pub const GLYPH_BUDGET_WINDOWS: f32 = 1.5;
 
 /// Whether a frame showing `cells` of text across its visible cards must
-/// drop to bars. The rule, so it can be argued with in one place.
-pub fn over_glyph_budget(cells: usize) -> bool {
-    cells > GLYPH_BUDGET_CELLS
+/// drop to bars, when the window would hold `window_cells` at 100%. The
+/// rule, so it can be argued with in one place. `budget` is the floor, the
+/// user's `ui.glyphBudget` (default `GLYPH_BUDGET_CELLS`): raising it trades
+/// frame time for text at a smaller zoom (Ekin, 2026-10-09: twelve 50 by 80
+/// cards at 49% read fine and were bars).
+pub fn over_glyph_budget(cells: usize, window_cells: usize, budget: usize) -> bool {
+    let relative = (window_cells as f32 * GLYPH_BUDGET_WINDOWS) as usize;
+    cells > budget.max(relative)
 }
 /// Lines scrolled per wheel tick, shared by every card body with a text
 /// buffer, so the terminal, editor, diff and transcript all feel the same
@@ -154,7 +219,10 @@ pub struct Chrome {
     pub card_border: Hsla,
     pub card_fg: Hsla,
     pub card_label_fg: Hsla,
-    /// Mid-turn. The common state, so it stays the quiet branded clay.
+    /// Mid-turn, or a long command running. The common state, so a quiet
+    /// violet. It was Claude's clay (#d97757) until 2026-09-25, when failed
+    /// got red: clay and red are one colour at fit-all zoom, and blue was
+    /// taken by the selection ring.
     pub agent_working: Hsla,
     /// Blocked on you. The loudest thing on the canvas, and the only one
     /// that earns being loud.
@@ -162,6 +230,8 @@ pub struct Chrome {
     /// Finished. Calm, and a different HUE from the other two: at 40% zoom
     /// two oranges differing only in brightness are one colour.
     pub agent_done: Hsla,
+    /// Something failed: a non-zero exit, a turn that ended in error.
+    pub agent_failed: Hsla,
     /// Something the app wants to point out that has nothing to do with an
     /// agent: a frame rate that has fallen over, a search with no hits. Its
     /// own colour, because borrowing the agent's is how a signal colour
@@ -203,8 +273,7 @@ pub struct Chrome {
     pub phantom: Hsla,
     /// The loaded theme, for the label colours chosen by hashing an id.
     pub theme: Option<Theme>,
-    pub ui_font: Font,
-    pub mono_font: Font,
+    pub typography: UiTypography,
 }
 
 /// `#rrggbb` or `#rgb` to a colour; `None` for anything else.
@@ -221,8 +290,142 @@ pub fn hex(s: &str) -> Option<Hsla> {
     Some(rgb(v).into())
 }
 
+/// `ui.cardOpacity` for the frame being painted, as a gpui global so every
+/// body's `paint` can reach it without a new parameter on `CardBody`
+/// (#98). Set once a frame in `paint_world`; absent means opaque.
+#[derive(Clone, Copy, PartialEq)]
+pub struct CardOpacity(pub f32);
+impl gpui::Global for CardOpacity {}
+
+/// The card corner radius in SCREEN pixels this frame (`ui.cardRadius` times
+/// the zoom), set once in `paint_world` like `CardOpacity` so a body's
+/// `paint` can reach it without a new parameter on `CardBody` (#235).
+#[derive(Clone, Copy, PartialEq)]
+pub struct CardRadius(pub f32);
+impl gpui::Global for CardRadius {}
+
+/// The radius a card body rounds its own quads with; 0 when none is set.
+pub fn card_radius(cx: &gpui::App) -> gpui::Pixels {
+    gpui::px(cx.try_global::<CardRadius>().map_or(0., |r| r.0))
+}
+
+/// The fill under the pointer on a clickable row: the selected row's colour,
+/// fainter, so the row you would pick by clicking is visible before you click.
+pub fn hover_fill(selected: Hsla) -> Hsla {
+    with_alpha(selected, selected.a * 0.6)
+}
+
+/// A card body's whole-body fill: the card fill, rounded to the card.
+pub fn card_body_quad(
+    cx: &gpui::App,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    c: Hsla,
+) -> gpui::PaintQuad {
+    gpui::fill(bounds, card_fill(cx, c)).corner_radii(card_radius(cx))
+}
+
+/// A wash over a whole body (the inactive dim), rounded like the body so its
+/// corners do not poke out past the card's.
+pub fn card_wash(cx: &gpui::App, bounds: gpui::Bounds<gpui::Pixels>, c: Hsla) -> gpui::PaintQuad {
+    gpui::fill(bounds, c).corner_radii(card_radius(cx))
+}
+
+/// A card's background fill at the card opacity. Only the fill across the
+/// whole body goes through this: text, selections and cells a program
+/// coloured keep their own alpha.
+pub fn card_fill(cx: &gpui::App, c: Hsla) -> Hsla {
+    scaled_alpha(c, cx.try_global::<CardOpacity>().map_or(1., |o| o.0))
+}
+
+/// `c` with its own alpha multiplied by `factor`: a fill that was already
+/// translucent stays proportionally so.
+pub fn scaled_alpha(c: Hsla, factor: f32) -> Hsla {
+    with_alpha(c, c.a * factor)
+}
+
+/// `base` pulled `amount` (0 to 1) of the way toward `rgb`, in RGB space, alpha
+/// kept: the title bar of a remote instance in its host's colour.
+pub fn tint(base: Hsla, rgb: (u8, u8, u8), amount: f32) -> Hsla {
+    let b: gpui::Rgba = base.into();
+    let mix = |from: f32, to: u8| from + (to as f32 / 255. - from) * amount;
+    gpui::Rgba {
+        r: mix(b.r, rgb.0),
+        g: mix(b.g, rgb.1),
+        b: mix(b.b, rgb.2),
+        a: b.a,
+    }
+    .into()
+}
+
+/// The title bar's colours when the window wears a colour (`window.color`,
+/// #173): the bar leans toward it, the chosen tab's fill leans the same way,
+/// and the other tab names are drawn brighter, since the muted grey was made
+/// for the plain bar and fades on a tint.
+pub struct TabColors {
+    pub bar: Hsla,
+    pub idle_text: Hsla,
+    pub idle_faint: Hsla,
+    pub chosen_fill: Hsla,
+}
+
+pub fn tab_colors(chrome: &Chrome, wear: Option<(u8, u8, u8)>, amount: f32) -> TabColors {
+    match wear {
+        Some(c) => TabColors {
+            bar: tint(chrome.bar_bg, c, amount),
+            idle_text: chrome.text,
+            idle_faint: chrome.text_muted,
+            chosen_fill: tint(chrome.control_bg, c, amount),
+        },
+        None => TabColors {
+            bar: chrome.bar_bg,
+            idle_text: chrome.text_muted,
+            idle_faint: chrome.text_faint,
+            chosen_fill: chrome.control_bg,
+        },
+    }
+}
+
 pub fn with_alpha(c: Hsla, a: f32) -> Hsla {
     Hsla { a, ..c }
+}
+
+/// A bar's ground and edge once theme.json (#425) has had its say. `bg` is
+/// the colour the bar would wear without the file (the title bar's may be a
+/// window-colour tint); `border` is `None` when the file asks for none.
+pub struct BarStyle {
+    pub bg: Hsla,
+    pub border: Option<Hsla>,
+}
+
+impl Chrome {
+    /// A theme.json colour as a paint colour. Tokens are read from the live
+    /// chrome, so "canvas" follows the canvas rather than freezing it. An
+    /// unparseable hex cannot reach here (`theme_file::parse` checked it).
+    pub fn theme_color(&self, spec: &ColorSpec) -> Hsla {
+        match spec {
+            ColorSpec::Hex(s) => hex(s).unwrap_or(self.bar_bg),
+            ColorSpec::Canvas => self.canvas_bg,
+            ColorSpec::Card => self.card_bg,
+            ColorSpec::Bar => self.bar_bg,
+            ColorSpec::Transparent => with_alpha(self.canvas_bg, 0.),
+        }
+    }
+
+    /// `default_bg` and `bar_border` are what the bar wears with no theme
+    /// file. The file wins over a window-colour tint, for the ground only.
+    pub fn bar_style(&self, theme: &BarTheme, default_bg: Hsla) -> BarStyle {
+        BarStyle {
+            bg: theme
+                .background
+                .as_ref()
+                .map_or(default_bg, |c| self.theme_color(c)),
+            border: match &theme.border {
+                None => Some(self.bar_border),
+                Some(BorderSpec::None) => None,
+                Some(BorderSpec::Color(c)) => Some(self.theme_color(c)),
+            },
+        }
+    }
 }
 
 impl Chrome {
@@ -237,9 +440,10 @@ impl Chrome {
             card_border: c(0x2a2f38),
             card_fg: c(0xb9c4d2),
             card_label_fg: c(0x7b8794),
-            agent_working: c(0xd97757),
+            agent_working: c(0x9d7cd8),
             agent_waiting: c(0xffc400),
             agent_done: c(0x4fb477),
+            agent_failed: c(0xe5484d),
             warn: c(0xe3a008),
             remote_bg: c(0xc0392b),
             remote_fg: c(0xfff2ef),
@@ -277,9 +481,12 @@ impl Chrome {
             },
             phantom: c(0x4a5568),
             theme: None,
-            ui_font: font("Menlo"),
-            mono_font: font("Menlo"),
+            typography: UiTypography::from_config(&infiniterm_core::config::default_config().ui),
         }
+    }
+
+    pub fn apply_ui_typography(&mut self, ui: &Ui) {
+        self.typography = UiTypography::from_config(ui);
     }
 
     /// A theme drives BOTH the terminal and the chrome: card ground, label
@@ -304,17 +511,184 @@ impl Chrome {
 mod tests {
     use super::*;
 
-    /// One full card on Ekin's canvas is about 151 by 87 cells. A pair
-    /// still reads; a wall of eight cost 85 to 100 ms a frame in glyphs.
+    // #98: a card's fill takes the card opacity times its own alpha, and
+    // nothing else about the colour changes.
     #[test]
-    fn the_glyph_budget_is_about_two_full_cards() {
-        let card = 151 * 87;
-        assert!(!over_glyph_budget(card), "one card paints glyphs");
-        assert!(
-            !over_glyph_budget(card * 2),
-            "a pair side by side still does"
+    fn a_fill_scales_its_alpha_and_keeps_its_colour() {
+        let c = Hsla {
+            h: 0.5,
+            s: 0.4,
+            l: 0.3,
+            a: 1.,
+        };
+        let half = scaled_alpha(c, 0.5);
+        assert_eq!((half.h, half.s, half.l, half.a), (0.5, 0.4, 0.3, 0.5));
+        assert_eq!(
+            scaled_alpha(half, 0.5).a,
+            0.25,
+            "already translucent stays so"
         );
-        assert!(over_glyph_budget(card * 3), "three is past it");
-        assert!(over_glyph_budget(card * 8), "a 4x2 fit-all is bars");
+        assert_eq!(scaled_alpha(c, 1.), c);
+    }
+
+    #[test]
+    fn a_tint_moves_toward_the_colour_and_keeps_the_alpha() {
+        let base = gpui::rgba(0x101010ff);
+        let none: gpui::Rgba = tint(base.into(), (255, 0, 0), 0.).into();
+        let full: gpui::Rgba = tint(base.into(), (255, 0, 0), 1.).into();
+        let half: gpui::Rgba = tint(gpui::rgba(0x10101080).into(), (255, 0, 0), 0.5).into();
+        assert!((none.r - base.r).abs() < 0.01);
+        assert!((full.r - 1.).abs() < 0.01 && full.g < 0.01 && full.b < 0.01);
+        assert!(half.r > base.r && half.r < 1.);
+        assert!((half.a - 128. / 255.).abs() < 0.01, "alpha is kept");
+    }
+
+    #[test]
+    fn the_legible_line_is_pixels_on_1x_and_size_on_retina() {
+        assert_eq!(legible_font_px(1.), gpui::px(7.), "the 4K is unchanged");
+        assert_eq!(legible_font_px(2.), gpui::px(LEGIBLE_FLOOR_PX));
+        // 6.7 px on the Air (48% of a 14 px font) is text there, bars on 1x.
+        assert!(gpui::px(6.7) >= legible_font_px(2.));
+        assert!(gpui::px(6.7) < legible_font_px(1.));
+    }
+
+    /// `ui.minTextPx` below the physical floor wins over it; at the default it
+    /// changes nothing.
+    #[test]
+    fn a_zero_line_draws_every_glyph() {
+        // `ui.textAsBars` off sets 0 device pixels: nothing is too small.
+        assert_eq!(legible_px(0., 1.), gpui::px(0.));
+        assert_eq!(legible_px(0., 2.), gpui::px(0.));
+        assert!(gpui::px(0.5) >= legible_px(0., 2.));
+    }
+
+    #[test]
+    fn the_min_text_setting_moves_the_line() {
+        assert_eq!(legible_px(7., 1.), gpui::px(7.));
+        assert_eq!(legible_px(7., 2.), gpui::px(LEGIBLE_FLOOR_PX));
+        // 4 device pixels: 4 on a 1x screen, and 4 (not 4.5) on a 2x one.
+        assert_eq!(legible_px(4., 1.), gpui::px(4.));
+        assert_eq!(legible_px(4., 2.), gpui::px(4.));
+        // A larger setting draws bars sooner.
+        assert_eq!(legible_px(10., 1.), gpui::px(10.));
+        assert!(gpui::px(6.5) >= legible_px(4., 1.));
+        assert!(gpui::px(6.5) < legible_px(7., 1.));
+    }
+
+    /// One full card on Ekin's canvas is about 151 by 87 cells. The default
+    /// budget holds about eleven of them; a wall of twenty is bars.
+    #[test]
+    fn the_glyph_budget_is_about_eleven_full_cards() {
+        let card = 151 * 87;
+        assert!(
+            !over_glyph_budget(card, 0, GLYPH_BUDGET_CELLS),
+            "one card paints glyphs"
+        );
+        assert!(
+            !over_glyph_budget(card * 11, 0, GLYPH_BUDGET_CELLS),
+            "eleven side by side still do"
+        );
+        assert!(
+            over_glyph_budget(card * 12, 0, GLYPH_BUDGET_CELLS),
+            "twelve is past it"
+        );
+        assert!(
+            over_glyph_budget(card * 20, 0, GLYPH_BUDGET_CELLS),
+            "a wall of twenty is bars"
+        );
+    }
+
+    /// A window that holds 200,000 cells at 100% (a large one) and is covered
+    /// edge to edge in cards shows 200,000 / zoom^2 of them. Near 100% that is
+    /// text; at 70% it is bars.
+    #[test]
+    fn a_window_full_of_cards_is_text_near_100_percent() {
+        let window = 200_000;
+        let shown = |zoom: f32| (window as f32 / (zoom * zoom)) as usize;
+        assert!(
+            !over_glyph_budget(shown(0.98), window, GLYPH_BUDGET_CELLS),
+            "98% reads"
+        );
+        assert!(
+            !over_glyph_budget(shown(0.85), window, GLYPH_BUDGET_CELLS),
+            "85% reads"
+        );
+        assert!(
+            over_glyph_budget(shown(0.70), window, GLYPH_BUDGET_CELLS),
+            "70% is bars"
+        );
+    }
+
+    /// `ui.glyphBudget` raises the floor: twelve full cards that are bars by
+    /// default read once the budget covers them.
+    #[test]
+    fn a_larger_budget_keeps_text_on_a_wall_of_cards() {
+        let wall = 20 * 151 * 87;
+        assert!(over_glyph_budget(wall, 12_000, GLYPH_BUDGET_CELLS));
+        assert!(!over_glyph_budget(wall, 12_000, 400_000));
+        // The window-relative rule still applies when it is larger.
+        assert!(!over_glyph_budget(100_000, 100_000, 1_000));
+    }
+}
+
+#[cfg(test)]
+mod tab_color_tests {
+    use super::*;
+
+    #[test]
+    fn a_window_colour_tints_the_chosen_tab_and_brightens_the_others() {
+        let chrome = Chrome::default_chrome();
+        let plain = tab_colors(&chrome, None, 0.32);
+        assert_eq!(plain.chosen_fill, chrome.control_bg);
+        assert_eq!(plain.idle_text, chrome.text_muted);
+        let green = tab_colors(&chrome, Some((0x22, 0xaa, 0x44)), 0.32);
+        assert_ne!(green.chosen_fill, chrome.control_bg);
+        assert_ne!(green.bar, chrome.bar_bg);
+        assert_eq!(green.idle_text, chrome.text);
+        assert_eq!(green.idle_faint, chrome.text_muted);
+    }
+
+    #[test]
+    fn no_theme_file_leaves_a_bar_as_it_was() {
+        let chrome = Chrome::default_chrome();
+        let s = chrome.bar_style(&BarTheme::default(), chrome.bar_bg);
+        assert_eq!(s.bg, chrome.bar_bg);
+        assert_eq!(s.border, Some(chrome.bar_border));
+    }
+
+    #[test]
+    fn the_flat_look_takes_the_canvas_and_drops_the_border() {
+        let chrome = Chrome::default_chrome();
+        let theme = BarTheme {
+            background: Some(ColorSpec::Canvas),
+            border: Some(BorderSpec::None),
+        };
+        let s = chrome.bar_style(&theme, chrome.bar_bg);
+        assert_eq!(s.bg, chrome.canvas_bg);
+        assert_eq!(s.border, None);
+    }
+
+    // The file wins over a window-colour tint, so a flat bar stays flat.
+    #[test]
+    fn a_themed_ground_beats_the_default_it_is_given() {
+        let chrome = Chrome::default_chrome();
+        let tinted = tint(chrome.bar_bg, (0x22, 0xaa, 0x44), 0.32);
+        let theme = BarTheme {
+            background: Some(ColorSpec::Hex("#102030".into())),
+            border: None,
+        };
+        let s = chrome.bar_style(&theme, tinted);
+        assert_eq!(s.bg, hex("#102030").unwrap());
+        let untouched = chrome.bar_style(&BarTheme::default(), tinted);
+        assert_eq!(untouched.bg, tinted);
+    }
+
+    #[test]
+    fn tokens_follow_the_live_chrome() {
+        let mut chrome = Chrome::default_chrome();
+        let before = chrome.theme_color(&ColorSpec::Card);
+        chrome.card_bg = hex("#ff0000").unwrap();
+        assert_ne!(chrome.theme_color(&ColorSpec::Card), before);
+        assert_eq!(chrome.theme_color(&ColorSpec::Transparent).a, 0.);
     }
 }

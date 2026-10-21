@@ -1,7 +1,7 @@
-//! Workspace naming, navigation, and the agent dots a workspace tab wears.
+//! Workspace naming, navigation, and the order of the dots a workspace tab wears.
 //! Port of workspaces.ts and its tests; callers supply ids and states explicitly.
 //! Switching workspaces never removes cards or their PTYs and never follows activity.
-use crate::{agent_state::AgentState, grid::Rect, viewport::Viewport};
+use crate::{grid::Rect, viewport::Viewport};
 #[derive(Clone, Debug, PartialEq)]
 pub struct Workspace {
     pub id: String,
@@ -18,26 +18,6 @@ pub const INITIAL_VIEWPORT: Viewport = Viewport {
     y: 0.,
     scale: 1.,
 };
-/// The dots a workspace's tab wears: ONE PER CARD, in the card's order, a
-/// grey one for a card with nothing to say and the card's own hue when an
-/// agent in it is working, waiting or freshly done, so the tab is a row of
-/// lamps and you watch them light one at a time. `cards` is `(state, when
-/// its last hook event arrived)`; a card's dot keeps its place whatever it
-/// does, which is what makes the row readable. A Done card lights only
-/// when its Stop arrived after you LEFT the workspace (`left_at`) and never
-/// on the active tab (`active`), because a Done card stays Done until its
-/// next turn and lighting every one lit the tab for good, which is the
-/// same as having no dot; otherwise it is grey like a shell.
-pub fn tab_dots(cards: &[(AgentState, f64)], left_at: f64, active: bool) -> Vec<AgentState> {
-    cards
-        .iter()
-        .map(|&(s, at)| match s {
-            AgentState::Waiting | AgentState::Working => s,
-            AgentState::Done if !active && at > left_at => s,
-            _ => AgentState::None,
-        })
-        .collect()
-}
 /// The order the tab's dots follow: the cards as they lie on the canvas,
 /// read like a page, top row first and left to right within it. Two cards
 /// are on one row when their tops are within `ROW_SLACK` of each other,
@@ -96,32 +76,70 @@ pub fn after_closing<'a>(ids: &'a [String], closing_id: &str) -> Option<&'a str>
         .map(String::as_str)
 }
 
+/// Where the workspace `id` sits after it is moved to index `to` of the
+/// tab row (clamped), as the new order of ids; `None` when it is not there or
+/// would not move. A drag drops a tab on another tab and takes that tab's
+/// place, the way a browser's tab strip does.
+pub fn reordered(order: &[String], id: &str, to: usize) -> Option<Vec<String>> {
+    let from = order.iter().position(|w| w == id)?;
+    let to = to.min(order.len() - 1);
+    if from == to {
+        return None;
+    }
+    let mut next = order.to_vec();
+    let moved = next.remove(from);
+    next.insert(to, moved);
+    Some(next)
+}
+
+/// Which edge of the tab being hovered the dragged tab will sit against when
+/// dropped (#417). Dropping takes the hovered tab's place (`reordered`), so a
+/// tab dragged LEFT lands before it and one dragged RIGHT lands after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropSide {
+    Left,
+    Right,
+}
+
+/// The edge to draw the drop line on for a tab dragged from index `from` and
+/// held over the tab at `over`; `None` over the dragged tab itself, where
+/// nothing would move.
+pub fn drop_side(from: usize, over: usize) -> Option<DropSide> {
+    use std::cmp::Ordering;
+    match over.cmp(&from) {
+        Ordering::Less => Some(DropSide::Left),
+        Ordering::Greater => Some(DropSide::Right),
+        Ordering::Equal => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_drop_line_is_on_the_side_the_tab_will_land() {
+        assert_eq!(
+            drop_side(3, 1),
+            Some(DropSide::Left),
+            "dragged left: before"
+        );
+        assert_eq!(
+            drop_side(1, 3),
+            Some(DropSide::Right),
+            "dragged right: after"
+        );
+        assert_eq!(drop_side(2, 2), None, "over itself nothing moves");
+        // It agrees with what the drop does.
+        let order: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
+        let moved = reordered(&order, "d", 1).unwrap();
+        assert_eq!(moved, ["a", "d", "b", "c"], "d lands before b: left edge");
+        let moved = reordered(&order, "a", 2).unwrap();
+        assert_eq!(moved, ["b", "c", "a", "d"], "a lands after c: right edge");
+    }
+
     fn ids(s: &[&str]) -> Vec<String> {
         s.iter().map(|s| s.to_string()).collect()
-    }
-    #[test]
-    fn one_dot_per_card_in_place_grey_when_nothing_to_say() {
-        use AgentState::*;
-        let cards = [(Working, 1.), (None, 2.), (Waiting, 3.), (None, 4.)];
-        assert_eq!(
-            tab_dots(&cards, 0., false),
-            vec![Working, None, Waiting, None]
-        );
-        assert_eq!(tab_dots(&[], 0., false), vec![]);
-    }
-    #[test]
-    fn done_lights_only_turns_finished_since_the_workspace_was_left() {
-        use AgentState::*;
-        let cards = [(Done, 10.), (Done, 30.), (Working, 40.)];
-        assert_eq!(tab_dots(&cards, 20., false), vec![None, Done, Working]);
-        assert_eq!(tab_dots(&cards, 0., false), vec![Done, Done, Working]);
-        // Seen already: grey like a shell.
-        assert_eq!(tab_dots(&cards, 30., false), vec![None, None, Working]);
-        // The active workspace shows the cards themselves.
-        assert_eq!(tab_dots(&cards, 0., true), vec![None, None, Working]);
     }
     #[test]
     fn dots_read_the_canvas_like_a_page() {
@@ -158,7 +176,7 @@ mod tests {
     #[test]
     fn custom_names_ignored() {
         assert_eq!(
-            next_name(&ids(&["humbl.ai", "side project"]), "workspace"),
+            next_name(&ids(&["acme.dev", "side project"]), "workspace"),
             "workspace 1"
         );
     }
@@ -198,5 +216,17 @@ mod tests {
     fn closing_last_or_unknown_has_no_target() {
         assert_eq!(after_closing(&ids(&["only"]), "only"), None);
         assert_eq!(after_closing(&ids(&["a", "b", "c"]), "gone"), None);
+    }
+
+    #[test]
+    fn a_dragged_tab_takes_the_place_of_the_one_it_drops_on() {
+        let order: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
+        let ids = |v: Vec<String>| v.join("");
+        assert_eq!(ids(reordered(&order, "a", 2).unwrap()), "bcad");
+        assert_eq!(ids(reordered(&order, "d", 0).unwrap()), "dabc");
+        assert_eq!(ids(reordered(&order, "b", 99).unwrap()), "acdb");
+        assert_eq!(reordered(&order, "c", 2), None);
+        assert_eq!(reordered(&order, "zzz", 1), None);
+        assert_eq!(reordered(&[], "a", 0), None);
     }
 }

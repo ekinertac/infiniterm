@@ -27,15 +27,51 @@ use std::sync::mpsc::Receiver;
 // docs/windows-handoff.md, "No daemon", for why iftd is not being ported.
 #[cfg(unix)]
 pub mod daemon;
+// Join (`ift join`), the relay behind it, remote instances and the ssh login
+// step all ride on unix sockets and ssh; none of them has a Windows
+// counterpart yet.
+#[cfg(unix)]
+pub mod join;
+#[cfg(unix)]
+pub mod join_client;
 pub mod local_pty;
 #[cfg(unix)]
+pub mod relay;
+#[cfg(unix)]
+pub mod remote;
+#[cfg(unix)]
 pub mod session_protocol;
+#[cfg(unix)]
+pub mod ssh_login;
 #[cfg(unix)]
 pub mod tmux;
 #[cfg(unix)]
 pub mod tmux_protocol;
 
 pub type PaneId = u32;
+
+/// What `Panes::redraw` did (`terminal.redraw`, #447).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Redraw {
+    /// The program was sent the resize jog and repaints itself.
+    Asked,
+    /// A viewer's pane: its connection was let go, and the caller must join
+    /// the session again, whose replay and host-side jog do the repaint.
+    Rejoin,
+}
+
+/// The resize jog for a backend that does not know its pane's size: one
+/// column narrower, then back, so the program gets `SIGWINCH` twice and
+/// repaints. A pane is never 1 wide in practice; the bump goes up there
+/// rather than ask for 0 columns.
+fn jog(mut resize: impl FnMut(u16, u16), cols: u16, rows: u16) {
+    if cols == 0 || rows == 0 {
+        return;
+    }
+    let bumped = if cols > 1 { cols - 1 } else { cols + 1 };
+    resize(bumped, rows);
+    resize(cols, rows);
+}
 
 #[derive(Debug, Clone)]
 pub enum PaneEvent {
@@ -125,6 +161,27 @@ impl Panes {
         buffer_mib: usize,
     ) -> (Panes, Receiver<(PaneId, PaneEvent)>, Option<String>) {
         match backend {
+            // A viewer window (`ift join`, #423): the cards are the host
+            // app's, reached through it, never through its `iftd`. No
+            // forward: the host's hooks have nothing to say to this window.
+            _ if remote::join_from_env().is_some() => {
+                let host = remote::join_from_env().expect("checked by the guard");
+                let (backend, rx) = daemon::DaemonBackend::new_viewer(host, buffer_mib);
+                (Panes::Daemon(backend), rx, None)
+            }
+            // A remote instance (`ift connect`) runs its cards on the host
+            // `INFINITERM_REMOTE` names, whatever the setting says, and needs no
+            // `iftd` on THIS Mac: the daemons are on the server.
+            _ if remote::from_env().is_some() => {
+                let host = remote::from_env().expect("checked by the guard");
+                // Hooks and `ift` on the server reach this instance through it.
+                remote::forward(
+                    host.clone(),
+                    crate::paths::socket_path().to_string_lossy().into_owned(),
+                );
+                let (backend, rx) = daemon::DaemonBackend::new_remote(host, buffer_mib);
+                (Panes::Daemon(backend), rx, None)
+            }
             TerminalBackend::Pty => {
                 let (pty, rx) = local_pty::LocalPtyBackend::new();
                 (Panes::Local(pty), rx, None)
@@ -190,6 +247,67 @@ impl Panes {
             Panes::Daemon(_) => true,
             #[cfg(unix)]
             Panes::Tmux(_) => false,
+        }
+    }
+
+    /// The host's columns and rows for a viewer's pane (#423); `None` for any
+    /// other pane, whose size is its card's.
+    pub fn viewer_pane_size(&self, pane: PaneId) -> Option<(u16, u16)> {
+        match self {
+            Panes::Daemon(b) => b.viewer_pane_size(pane),
+            _ => None,
+        }
+    }
+
+    /// Asks the program in `pane` to repaint (`terminal.redraw`, #447). A
+    /// daemon pane gets the two-resize jog an attach sends (`cols` and `rows`
+    /// are its card's size, which the other backends need to jog by); a
+    /// viewer's pane cannot, because the host ignores a viewer's resizes, so
+    /// its connection is let go and the caller joins the session again:
+    /// that join replays the ring and the host jogs the program itself.
+    pub fn redraw(&self, pane: PaneId, cols: u16, rows: u16) -> Redraw {
+        match self {
+            Panes::Daemon(b) => b.redraw_now(pane),
+            Panes::Local(b) => {
+                jog(|c, r| b.resize_now(pane, c, r), cols, rows);
+                Redraw::Asked
+            }
+            Panes::Tmux(b) => {
+                jog(|c, r| b.resize_now(pane, c, r), cols, rows);
+                Redraw::Asked
+            }
+        }
+    }
+
+    /// A viewer card's session joined again on a thread of its own (#442);
+    /// the answer comes from `take_reconnected`. Nothing for any other pane.
+    pub fn begin_reconnect(&self, session: &str) {
+        if let Panes::Daemon(b) = self {
+            b.begin_reconnect(session);
+        }
+    }
+
+    /// The reconnects that ended: a new pane, or why not (#442).
+    pub fn take_reconnected(&self) -> Vec<(String, Result<PaneId, remote::JoinFailure>)> {
+        match self {
+            Panes::Daemon(b) => b.take_reconnected(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// What the join server (#423) needs from this backend: the relay and a
+    /// way to write a viewer's keys to a session. Only the daemon backend has
+    /// them; under local and tmux a card has no session a viewer could join.
+    pub fn join_parts(
+        &self,
+    ) -> Option<(
+        std::sync::Arc<std::sync::Mutex<relay::Relay>>,
+        join::WriteSession,
+        join::NudgeSession,
+    )> {
+        match self {
+            Panes::Daemon(b) => Some((b.relay(), b.session_writer(), b.session_nudger())),
+            _ => None,
         }
     }
 
@@ -263,7 +381,7 @@ impl Panes {
             #[cfg(unix)]
             Panes::Tmux(_) => tmux::TmuxBackend::live_windows(),
             #[cfg(unix)]
-            Panes::Daemon(b) => daemon::DaemonBackend::live_sessions(b.sessions_dir()),
+            Panes::Daemon(b) => b.live_sessions_now(),
         }
     }
 
@@ -319,6 +437,25 @@ impl Panes {
             Panes::Tmux(b) => b.kill_now(pane),
             #[cfg(unix)]
             Panes::Daemon(b) => b.kill_now(pane),
+        }
+    }
+
+    /// Only the daemon can hand a closed card's running program back to a
+    /// reopened one (`Model::can_park`): the local backend has no session
+    /// to adopt, and tmux was left as it was.
+    pub fn can_park(&self) -> bool {
+        matches!(self, Panes::Daemon(_))
+    }
+
+    /// Lets go of a parked card's pane so its reopened card can adopt the
+    /// session again. True when the session is left running for that.
+    pub fn release(&self, pane: PaneId) -> bool {
+        match self {
+            Panes::Daemon(b) => {
+                b.detach_now(pane);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -384,6 +521,23 @@ mod panes_tests {
         assert!(!detaches_on_quit(TerminalBackend::Tmux));
     }
     use super::*;
+
+    // The jog for a backend that does not know its pane's size: one column
+    // narrower, then the real size, so the program gets two `SIGWINCH`.
+    #[test]
+    fn the_redraw_jog_is_one_column_narrower_and_back() {
+        let mut seen = vec![];
+        jog(|c, r| seen.push((c, r)), 80, 24);
+        assert_eq!(seen, vec![(79, 24), (80, 24)]);
+        // A one-column pane goes up instead of asking for none, and a card
+        // with no size yet (0) is left alone.
+        let mut seen = vec![];
+        jog(|c, r| seen.push((c, r)), 1, 5);
+        assert_eq!(seen, vec![(2, 5), (1, 5)]);
+        let mut seen = vec![];
+        jog(|c, r| seen.push((c, r)), 0, 0);
+        assert!(seen.is_empty());
+    }
 
     // tmux is the ONLY backend that answers terminal queries itself. Getting
     // this backwards sends our answers into a program that already got

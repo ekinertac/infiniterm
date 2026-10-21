@@ -27,9 +27,10 @@ use gpui::{
     Keystroke, Pixels, SharedString, TextRun, Window,
 };
 use infiniterm_core::backend::PaneId;
+use infiniterm_core::git_repo::Repo;
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::ift::{open_plan, url_plan, PathKind};
-use infiniterm_core::links::{find_links, Found, LinkKind};
+use infiniterm_core::links::{find_links_in, merge_hyperlinks, Found, LinkKind};
 use infiniterm_core::links_fs::path_kinds;
 use infiniterm_term::grid::{CursorKind, Frame, Grid, SelectKind, TermEvent, SPACER};
 use infiniterm_term::keys::{encode, encode_with, paste, Key};
@@ -105,6 +106,13 @@ pub struct TerminalBody {
     /// check in its reconcile. Once a second: a file read per displaced
     /// card, and a second's lag after Ctrl+\ is not felt.
     pub displaced: bool,
+    /// A viewer's card whose connection to the host's session ended (#442):
+    /// what it says, and when it joins again. `displaced` is set with it, so
+    /// the screen stays and keys are refused.
+    pub lost: Option<LostLink>,
+    /// A viewer's card the host has not started a shell for yet shows a note
+    /// (#423); set once it is shown, cleared when the session arrives.
+    pub waiting_note: bool,
     pub readopt_due: f64,
     /// Bytes to write to the pty: the ui drains them after each event.
     pub outgoing: Vec<Vec<u8>>,
@@ -121,16 +129,26 @@ pub struct TerminalBody {
     pub title: Option<String>,
     /// OSC 52: text a program put on the clipboard, taken by the ui.
     pub clipboard_out: Option<String>,
+    /// What the shell's line editor has selected (Shift+Arrow at a zsh
+    /// prompt, shell/infiniterm.zsh), for Cmd+C and Cmd+X when the grid
+    /// has no selection of its own.
+    line_selection: Option<String>,
     /// `terminal.cursorBlink`, `ui.inactiveDim`; the ui keeps them current.
     pub blink: bool,
     pub inactive_dim: f64,
-    /// The viewport is moving (zoom, pan, a drag): under `FAR_FONT_PX` the
-    /// text is drawn as bars for the duration so the motion stays smooth,
-    /// and the glyphs come back the frame it stops. Set by `terminals.rs`.
-    pub in_motion: bool,
+    /// `terminal.padding`: the inset between the card's edge and its
+    /// text. `PAD` until the reconcile hands over the setting.
+    pub pad: f64,
+    /// `terminal.copyOnSelect`: a finished mouse selection goes to the
+    /// clipboard (through `clipboard_out`, flushed with the output).
+    pub copy_on_select: bool,
+    /// `terminal.scrollMultiplier`.
+    pub scroll_multiplier: f64,
     /// Too many cells on screen for glyphs to be affordable this frame;
-    /// set by `paint_world` from the frame's budget, read like `in_motion`.
+    /// set by `paint_world` from the frame's budget.
     crowded: bool,
+    /// The last paint drew bars, not glyphs (`draws_bars`).
+    bars: bool,
     /// A selection drag has left the card by the top (negative) or bottom
     /// (positive) edge: the grid scrolls this many lines a frame, growing
     /// with the distance, and the selection follows to the edge row. Set
@@ -153,13 +171,23 @@ pub struct TerminalBody {
     frame: Frame,
     /// The last frame's links, per row, with whether the filesystem said yes.
     links: Vec<Vec<(Found, Option<PathKind>)>>,
+    /// The GitHub repository of the card's directory, read when the directory
+    /// changes: what a bare `#349` in the output links to (#335).
+    repo: Option<(String, Option<Repo>)>,
     link_texts: Vec<String>,
+    /// The OSC 8 spans each row was scanned with, to tell a row whose text
+    /// is the same but whose links are not.
+    link_spans: Vec<Vec<(usize, usize, String)>>,
     hover: Option<(usize, usize)>,
     /// A button held for a drag the program is following.
     dragging: Option<MouseButton>,
     scale: f64,
     cols: usize,
     rows: usize,
+    /// A viewer's terminal (#423, `ift join`) is drawn at the HOST's columns
+    /// and rows, since the shell wraps to those; set each frame from the
+    /// pane, `None` everywhere else, where the card's size decides.
+    pub fixed_cells: Option<(usize, usize)>,
     /// Each row shaped ONCE, keyed by what it was shaped from, so a row
     /// that did not change is not shaped again. htop repaints every second;
     /// the other 39 rows of the other 24 cards do not.
@@ -215,24 +243,27 @@ pub struct Metrics {
 impl Metrics {
     /// The font at the configured weight.
     pub fn font(&self) -> gpui::Font {
-        let mut f = font(self.family.clone());
+        let mut f = term_font(&self.family);
         f.weight = self.weight;
         f
     }
 }
 
-/// `"normal"`, `"bold"`, or a number 100 to 900, as CSS spells weights.
-pub fn weight_of(s: &str) -> FontWeight {
-    match s.trim() {
-        "bold" => FontWeight::BOLD,
-        "normal" | "" => FontWeight::NORMAL,
-        n => n
-            .parse::<f32>()
-            .ok()
-            .filter(|w| (100. ..=900.).contains(w))
-            .map(FontWeight)
-            .unwrap_or(FontWeight::NORMAL),
-    }
+/// The family the app bundles for Nerd Font icons (`assets/fonts/`,
+/// registered in `main.rs`): the prompt's powerline arrows, git and folder
+/// glyphs live in Unicode's private use area, which only a Nerd Font has,
+/// and CoreText does not borrow an installed font for that range on its own.
+/// So a card in Menlo drew empty boxes where every other terminal drew
+/// icons, even on a Mac full of Nerd Fonts (the MacBook Air, 2026-09-24).
+/// WezTerm ships the same font as its fallback for the same reason.
+pub const ICON_FONT: &str = crate::icon_font::ICON_FONT_POSTSCRIPT;
+
+/// The terminal's font with the icon font behind it, so a glyph the
+/// configured family lacks is looked for there before anywhere else.
+pub fn term_font(family: &str) -> gpui::Font {
+    let mut f = font(family.to_string());
+    f.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![ICON_FONT.to_string()]));
+    f
 }
 
 impl TerminalBody {
@@ -243,8 +274,12 @@ impl TerminalBody {
         scrollback: usize,
         cwd: String,
     ) -> TerminalBody {
-        let (cols, rows) =
-            Self::cells_for(world, metrics.cell_w, metrics.font_px * metrics.line_height);
+        let (cols, rows) = Self::cells_for(
+            world,
+            metrics.cell_w,
+            metrics.font_px * metrics.line_height,
+            PAD,
+        );
         TerminalBody {
             pane: None,
             grid: Grid::new(cols, rows, scrollback),
@@ -257,18 +292,24 @@ impl TerminalBody {
             cell_w: metrics.cell_w,
             cwd,
             error: None,
-            in_motion: false,
             crowded: false,
+            bars: false,
             autoscroll: 0.,
             drag_local: Point { x: 0., y: 0. },
             displaced: false,
+            lost: None,
+            waiting_note: false,
             readopt_due: 0.,
             outgoing: vec![],
             replies: vec![],
             dirty: true,
             wheel_carry: crate::chrome::WheelCarry::default(),
+            pad: PAD,
+            copy_on_select: false,
+            scroll_multiplier: 1.,
             title: None,
             clipboard_out: None,
+            line_selection: None,
             blink: true,
             inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             blink_epoch: 0.,
@@ -278,19 +319,22 @@ impl TerminalBody {
             selecting: false,
             frame: Frame::default(),
             links: vec![],
+            repo: None,
             link_texts: vec![],
+            link_spans: vec![],
             hover: None,
             dragging: None,
             scale: 1.,
             cols,
+            fixed_cells: None,
             rows,
             shaped: vec![],
         }
     }
 
-    fn cells_for(world: Size, cell_w: f64, line_h: f64) -> (usize, usize) {
-        let cols = ((world.w - PAD * 2.) / cell_w).floor().max(2.) as usize;
-        let rows = ((world.h - PAD * 2.) / line_h).floor().max(1.) as usize;
+    fn cells_for(world: Size, cell_w: f64, line_h: f64, pad: f64) -> (usize, usize) {
+        let cols = ((world.w - pad * 2.) / cell_w).floor().max(2.) as usize;
+        let rows = ((world.h - pad * 2.) / line_h).floor().max(1.) as usize;
         (cols, rows)
     }
 
@@ -356,6 +400,9 @@ impl TerminalBody {
                 // The reference does nothing on a bell either.
                 TermEvent::Bell => {}
                 TermEvent::Clipboard(text) => self.clipboard_out = Some(text),
+                TermEvent::LineSelection(text) => {
+                    self.line_selection = Some(text).filter(|t| !t.is_empty())
+                }
             }
         }
     }
@@ -384,6 +431,19 @@ impl TerminalBody {
         self.refit(world)
     }
 
+    /// A viewer's grid at the host's size (#423). The replay is the host's
+    /// bytes, written for the host's columns; parsed at the card's own size
+    /// first, a full-screen program's cursor moves land in the wrong rows and
+    /// the screen stays garbled until something redraws it.
+    pub fn fit_host_cells(&mut self, cols: usize, rows: usize) {
+        self.fixed_cells = Some((cols, rows));
+        if cols != self.cols || rows != self.rows {
+            self.cols = cols;
+            self.rows = rows;
+            self.grid.resize(cols, rows);
+        }
+    }
+
     /// A fresh screen for a replay that starts from the ring's beginning.
     pub fn reset_for_replay(&mut self) {
         self.grid.reset();
@@ -393,7 +453,14 @@ impl TerminalBody {
     }
 
     fn refit(&mut self, world: Size) -> bool {
-        let (cols, rows) = Self::cells_for(world, self.cell_w, self.font_px * self.line_height);
+        let (cols, rows) = self.fixed_cells.unwrap_or_else(|| {
+            Self::cells_for(
+                world,
+                self.cell_w,
+                self.font_px * self.line_height,
+                self.pad,
+            )
+        });
         if cols == self.cols && rows == self.rows {
             return false;
         }
@@ -428,12 +495,12 @@ impl TerminalBody {
     /// The pointer is in the right half of its cell: a drag ending there
     /// takes the character.
     fn right_half(&self, local: Point) -> bool {
-        ((local.x - PAD) / self.cell_w).fract() > 0.5
+        ((local.x - self.pad) / self.cell_w).fract() > 0.5
     }
 
     fn cell_at(&self, local: Point) -> (usize, usize) {
-        let col = ((local.x - PAD) / self.cell_w).floor().max(0.) as usize;
-        let row = ((local.y - PAD) / (self.font_px * self.line_height))
+        let col = ((local.x - self.pad) / self.cell_w).floor().max(0.) as usize;
+        let row = ((local.y - self.pad) / (self.font_px * self.line_height))
             .floor()
             .max(0.) as usize;
         (
@@ -448,6 +515,22 @@ impl TerminalBody {
             alt: m.alt,
             ctrl: m.control,
         }
+    }
+
+    /// The first and last column of the link under a cell. Link texts hold
+    /// one character per cell, so a char count is a column.
+    fn link_span(&self, col: usize, row: usize) -> Option<(usize, usize)> {
+        let (f, _) = self.link_at(col, row)?;
+        let text = self.link_texts.get(row)?;
+        let from = text[..f.start].chars().count();
+        let to = text[..f.end].chars().count();
+        (to > from).then_some((from, to - 1))
+    }
+
+    /// Cmd is held with the pointer over a link: what turns the cursor to a hand.
+    pub fn link_hovered(&self) -> bool {
+        self.hover
+            .is_some_and(|(c, r)| self.link_at(c, r).is_some())
     }
 
     /// The link under a cell, if the row has one there.
@@ -468,27 +551,42 @@ impl TerminalBody {
     /// cannot hold a link and is not scanned.
     fn refresh_links(&mut self, frame: &Frame, rebuilt: &[usize]) {
         self.link_texts.resize(frame.rows.len(), String::new());
+        self.link_spans.resize(frame.rows.len(), vec![]);
         self.links.resize(frame.rows.len(), vec![]);
+        // The directory's repository, looked up again only when it changes.
+        if self.repo.as_ref().map(|(c, _)| c.as_str()) != Some(self.cwd.as_str()) {
+            self.repo = Some((
+                self.cwd.clone(),
+                infiniterm_core::git_repo::github_repo(&self.cwd),
+            ));
+        }
+        let repo = self.repo.as_ref().and_then(|(_, r)| r.clone());
         for &r in rebuilt {
             let row = &frame.rows[r];
             let line = row.text.trim_end();
-            if line == self.link_texts[r] {
+            if line == self.link_texts[r] && row.hyperlinks == self.link_spans[r] {
                 continue;
             }
             self.link_texts[r].clear();
             self.link_texts[r].push_str(line);
-            self.links[r] = if line.contains(['/', '.']) {
-                Self::scan_links(line, &self.cwd)
+            self.link_spans[r] = row.hyperlinks.clone();
+            self.links[r] = if line.contains(['/', '.', '#']) || !row.hyperlinks.is_empty() {
+                Self::scan_links(line, &self.cwd, repo.as_ref(), &row.hyperlinks)
             } else {
                 vec![]
             };
         }
     }
 
-    fn scan_links(line: &str, cwd: &str) -> Vec<(Found, Option<PathKind>)> {
+    fn scan_links(
+        line: &str,
+        cwd: &str,
+        repo: Option<&Repo>,
+        spans: &[(usize, usize, String)],
+    ) -> Vec<(Found, Option<PathKind>)> {
         {
             {
-                let found = find_links(line);
+                let found = merge_hyperlinks(find_links_in(line, repo), line, spans);
                 let paths: Vec<&str> = found
                     .iter()
                     .filter(|f| f.kind == LinkKind::Path)
@@ -536,11 +634,12 @@ impl TerminalBody {
 impl TerminalBody {
     /// The reference's `.scrim`: the card's ground over the text at the
     /// dim amount, so an unfocused card reads as further away.
-    fn paint_scrim(&self, bounds: Bounds<Pixels>, focused: bool, window: &mut Window) {
+    fn paint_scrim(&self, bounds: Bounds<Pixels>, focused: bool, window: &mut Window, cx: &App) {
         if focused || self.inactive_dim <= 0. {
             return;
         }
-        window.paint_quad(fill(
+        window.paint_quad(crate::chrome::card_wash(
+            cx,
             bounds,
             crate::chrome::with_alpha(rgb(self.palette.background), self.inactive_dim as f32),
         ));
@@ -558,12 +657,12 @@ impl TerminalBody {
     ) {
         window.paint_quad(fill(bounds, gpui::rgb(0x1a0f0f)));
         let size_px = px((ERROR_FONT_PX * scale) as f32);
-        if size_px < px(crate::chrome::LEGIBLE_FONT_PX as f32) {
+        if size_px < crate::chrome::legible_font_px(window.scale_factor()) {
             return;
         }
         let pad = px((ERROR_PAD_PX * scale) as f32);
         let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
-        let f = font(self.font_family.clone());
+        let f = term_font(&self.font_family);
         let mut y = bounds.origin.y + pad;
         let lines = [
             (format!("could not start a shell in {}", self.cwd), 0xfca5a5),
@@ -589,7 +688,156 @@ const AUTOSCROLL_MAX_LINES: f64 = 4.;
 /// How often a displaced card asks whether `ift attach` has let go.
 pub const READOPT_POLL_MS: f64 = 1000.;
 
+/// The wait before a viewer card's first try to join its session again, and
+/// the longest wait between tries: quick for a dropped ssh, gentle on a host
+/// that is down (every try is an ssh login).
+const REJOIN_FIRST_MS: f64 = 2000.;
+const REJOIN_LONGEST_MS: f64 = 30_000.;
+
+/// The wait after `tries` failed tries: doubling, up to the longest.
+pub fn rejoin_wait_ms(tries: u32) -> f64 {
+    (REJOIN_FIRST_MS * 2f64.powi(tries.min(10) as i32)).min(REJOIN_LONGEST_MS)
+}
+
+/// A viewer card that lost its session connection (#442).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LostLink {
+    /// When the next try may start, in ms.
+    pub next_at: f64,
+    pub tries: u32,
+    /// A try is running on its thread.
+    pub in_flight: bool,
+    /// What the card says: the last failure, or that it is joining again.
+    pub note: String,
+    /// The host answered and trying again will not change it (the session is
+    /// gone there, a login refused). No more tries until the canvas
+    /// reconnects.
+    pub fatal: bool,
+}
+
+impl LostLink {
+    pub fn new(now: f64) -> LostLink {
+        LostLink {
+            next_at: now + REJOIN_FIRST_MS,
+            tries: 0,
+            in_flight: false,
+            note: "the connection to the host was lost; joining again".into(),
+            fatal: false,
+        }
+    }
+
+    /// A card joining its session for the first time: the try is due now.
+    pub fn first(now: f64) -> LostLink {
+        LostLink {
+            next_at: now,
+            note: "joining the host's session".into(),
+            ..LostLink::new(now)
+        }
+    }
+
+    /// A viewer card asked for a redraw (`terminal.redraw`, #447): it let go
+    /// of its connection on purpose and joins again at once, so the note
+    /// says what is happening rather than that something was lost.
+    pub fn redraw(now: f64) -> LostLink {
+        LostLink {
+            next_at: now,
+            note: "redrawing from the host".into(),
+            ..LostLink::new(now)
+        }
+    }
+
+    /// A try failed: say why and wait longer for the next one.
+    pub fn failed(&mut self, now: f64, why: &str, fatal: bool) {
+        self.in_flight = false;
+        self.fatal = fatal;
+        self.tries += 1;
+        self.next_at = now + rejoin_wait_ms(self.tries);
+        self.note = if fatal {
+            why.to_string()
+        } else {
+            format!("the connection to the host was lost ({why}); joining again")
+        };
+    }
+
+    /// The canvas is back, so the host is reachable: try now, whatever was
+    /// decided before.
+    pub fn poke(&mut self, now: f64) {
+        self.fatal = false;
+        self.tries = 0;
+        if !self.in_flight {
+            self.next_at = now;
+        }
+    }
+
+    /// Whether to start a try at `now`.
+    pub fn due(&self, now: f64) -> bool {
+        !self.in_flight && !self.fatal && now >= self.next_at
+    }
+}
+
 impl TerminalBody {
+    /// A key in visual mode: move, select, copy (staying in the mode) or
+    /// leave on Escape.
+    fn visual_key(&mut self, k: &Keystroke, cx: &mut App) {
+        use infiniterm_term::visual_keys::{visual_key, VisualKey};
+        let m = &k.modifiers;
+        let key = Key {
+            name: &k.key,
+            text: k.key_char.as_deref(),
+            ctrl: m.control,
+            alt: m.alt,
+            shift: m.shift,
+            cmd: m.platform,
+        };
+        match visual_key(&key) {
+            VisualKey::Move(to, extend) => self.grid.visual_move(to, extend),
+            VisualKey::Select(kind) => self.grid.visual_select(kind),
+            VisualKey::Copy => {
+                if let Some(text) = self.grid.selection_text() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }
+            VisualKey::Leave => self.grid.visual_leave(),
+            VisualKey::Swallow => return,
+        }
+        self.dirty = true;
+    }
+
+    /// The tag in the card's bottom-right corner while visual mode is on,
+    /// in the cursor's colour, so a card that ignores typing says why.
+    fn paint_visual_tag(
+        &self,
+        bounds: Bounds<Pixels>,
+        scale: f64,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let size_px = px((ERROR_FONT_PX * scale) as f32);
+        if size_px < crate::chrome::legible_font_px(window.scale_factor()) {
+            return;
+        }
+        let pad = px((ERROR_PAD_PX * scale) as f32);
+        let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
+        let f = term_font(&self.font_family);
+        let line = crate::text::shape(window, "VISUAL", size_px, &f, rgb(self.palette.background));
+        let w = line.width + pad * 2.;
+        let h = line_h + pad;
+        let origin = point(
+            bounds.origin.x + bounds.size.width - w - pad,
+            bounds.origin.y + bounds.size.height - h - pad,
+        );
+        window.paint_quad(fill(
+            Bounds::new(origin, size(w, h)),
+            rgb(self.palette.cursor),
+        ));
+        let _ = line.paint(
+            point(origin.x + pad, origin.y + pad / 2.),
+            line_h,
+            window,
+            cx,
+        );
+    }
+
     /// One line across the top, over the frozen screen: what happened and
     /// that nothing needs doing.
     fn paint_displaced(
@@ -599,24 +847,32 @@ impl TerminalBody {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let size_px = px((ERROR_FONT_PX * scale) as f32);
-        if size_px < px(crate::chrome::LEGIBLE_FONT_PX as f32) {
+        let said = match &self.lost {
+            Some(l) => l.note.as_str(),
+            None => "attached from outside (ift attach); the card takes the shell back when that terminal detaches",
+        };
+        let mut size_px = px((ERROR_FONT_PX * scale) as f32);
+        // A lost connection is news: readable on screen at any zoom, as
+        // large as the card's width allows (a banner at the card's zoomed
+        // 12 px was a faint sliver on a canvas of 38 cards, #442).
+        let (back, fore) = if self.lost.is_some() {
+            let fits = bounds.size.width / (said.chars().count() as f32 * 0.62);
+            size_px = size_px.max(fits.min(px(14.)));
+            (0x7f1d1d, 0xfee2e2)
+        } else {
+            (0x1a0f0f, 0xfca5a5)
+        };
+        if size_px < crate::chrome::legible_font_px(window.scale_factor()) {
             return;
         }
-        let pad = px((ERROR_PAD_PX * scale) as f32);
+        let pad = (size_px * 0.5).max(px((ERROR_PAD_PX * scale) as f32));
         let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
         window.paint_quad(fill(
             Bounds::new(bounds.origin, size(bounds.size.width, line_h + pad * 2.)),
-            gpui::rgb(0x1a0f0f),
+            gpui::rgb(back),
         ));
-        let f = font(self.font_family.clone());
-        let line = crate::text::shape(
-            window,
-            "attached from outside (ift attach); the card takes the shell back when that terminal detaches",
-            size_px,
-            &f,
-            gpui::rgb(0xfca5a5).into(),
-        );
+        let f = term_font(&self.font_family);
+        let line = crate::text::shape(window, said, size_px, &f, gpui::rgb(fore).into());
         let _ = line.paint(
             point(bounds.origin.x + pad, bounds.origin.y + pad),
             line_h,
@@ -676,26 +932,35 @@ impl CardBody for TerminalBody {
         let t = std::time::Instant::now();
         self.refresh_links(&frame, &rebuilt);
         timing_add(1, t);
-        window.paint_quad(fill(bounds, rgb(self.palette.background)));
+        window.paint_quad(crate::chrome::card_body_quad(
+            cx,
+            bounds,
+            rgb(self.palette.background),
+        ));
         let font_size = px((self.font_px * scale) as f32);
         let line_h = px((self.font_px * self.line_height * scale) as f32);
         let cell_w = px((self.cell_w * scale) as f32);
-        let pad = px((PAD * scale) as f32);
+        let pad = px((self.pad * scale) as f32);
         let origin = point(bounds.origin.x + pad, bounds.origin.y + pad);
-        let mut base = font(self.font_family.clone());
+        let mut base = term_font(&self.font_family);
         base.weight = self.weight;
         let bold_weight = self.bold_weight;
-        // Too small to read: skip the glyphs, keep the ground. The corner
-        // label names the card instead. Small-and-moving counts as too
-        // small: see `in_motion`.
-        let legible = font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32)
-            && !((self.in_motion || self.crowded)
-                && font_size < px(crate::chrome::FAR_FONT_PX as f32));
+        // Too small to read, or too many cells on screen this frame
+        // (`crowded`, the glyph budget): skip the glyphs, keep the ground.
+        // The corner label names the card instead.
+        let legible =
+            font_size >= crate::chrome::legible_font_px(window.scale_factor()) && !self.crowded;
+        self.bars = !legible;
+        // Where a solid block sits: the letter under it is drawn in the
+        // palette's cursor text colour (#343).
+        let mut block_cursor: Option<(usize, usize)> = None;
         // The cursor under the text: solid when focused and on, hollow when
         // the card is not focused, nothing while scrolled into history.
-        if frame.cursor_kind != CursorKind::Hidden
-            && frame.display_offset == 0
-            && (!focused || self.painted_phase)
+        // The visual cursor is drawn anywhere in the history, and solid.
+        if frame.visual
+            || frame.cursor_kind != CursorKind::Hidden
+                && frame.display_offset == 0
+                && (!focused || self.painted_phase)
         {
             let (col, row) = frame.cursor;
             let x = origin.x + cell_w * col as f32;
@@ -716,6 +981,9 @@ impl CardBody for TerminalBody {
                 _ => Bounds::new(point(x, y), size(cell_w, line_h)),
             };
             let color = rgb(self.palette.cursor);
+            if focused && !matches!(frame.cursor_kind, CursorKind::Beam | CursorKind::Underline) {
+                block_cursor = Some((col, row));
+            }
             if focused || frame.cursor_kind != CursorKind::Block {
                 window.paint_quad(fill(rect, color));
             } else {
@@ -735,8 +1003,9 @@ impl CardBody for TerminalBody {
             );
             let bar_h = (line_h * crate::chrome::TEXTURE_BAR_HEIGHT_RATIO)
                 .max(px(crate::chrome::HAIRLINE_PX as f32));
+            let shown = window.content_mask().bounds;
             for (r, row) in frame.rows.iter().enumerate() {
-                if row_paints_nothing(row) {
+                if row_paints_nothing(row) || !row_on_screen(origin.y, line_h, r, shown) {
                     continue;
                 }
                 let y = origin.y + line_h * r as f32 + (line_h - bar_h) / 2.;
@@ -774,87 +1043,125 @@ impl CardBody for TerminalBody {
                 }
             }
             self.frame = frame;
-            self.paint_scrim(bounds, focused, window);
+            self.paint_scrim(bounds, focused, window, cx);
             return;
         }
         let hover = self.hover;
-        for (r, row) in frame.rows.iter().enumerate() {
-            if row_paints_nothing(row) {
-                continue;
-            }
-            let y = origin.y + line_h * r as f32;
-            // Backgrounds first, per run, so a full-width highlight is a quad
-            // and not a shaped-line property.
-            let mut x = origin.x;
-            for run in &row.runs {
-                let w = cell_w * run.text.chars().count() as f32;
-                if let Some(bg) = run.bg {
-                    window.paint_quad(fill(Bounds::new(point(x, y), size(w, line_h)), rgb(bg)));
+        let shown = window.content_mask().bounds;
+        // One layer for every row: gpui orders each primitive against all the
+        // ones before it through a bounds tree, which was 90% of the time of
+        // a glyph (profiled 2026-10-09, 13 busy cards); inside a layer they
+        // share one order and skip the tree. Within an order gpui draws
+        // quads, then underlines, then glyphs, which is the order the rows
+        // are painted in anyway.
+        window.paint_layer(bounds, |window| {
+            for (r, row) in frame.rows.iter().enumerate() {
+                if row_paints_nothing(row) || !row_on_screen(origin.y, line_h, r, shown) {
+                    continue;
                 }
-                x += w;
-            }
-            // The underline is the Cmd+hover affordance and nothing else.
-            // Underlining every confirmed link marked up most of the output
-            // of anything that prints paths, which is most things.
-            if let Some(links) = self.links.get(r) {
-                for (f, _) in links {
-                    let start = row.text[..f.start.min(row.text.len())].chars().count();
-                    let len = row.text[f.start.min(row.text.len())..f.end.min(row.text.len())]
-                        .chars()
-                        .count();
-                    if !under_hover(hover, r, start, len) {
-                        continue;
+                let y = origin.y + line_h * r as f32;
+                let under_cursor;
+                let row = match block_cursor {
+                    Some((col, cursor_row)) if cursor_row == r => {
+                        under_cursor = with_cursor_cell(
+                            row,
+                            col,
+                            self.palette.cursor,
+                            self.palette.cursor_text,
+                        );
+                        &under_cursor
                     }
-                    let ux = origin.x + cell_w * start as f32;
-                    window.paint_quad(fill(
-                        Bounds::new(
-                            point(ux, y + line_h - px(LINK_UNDERLINE_OFFSET_PX)),
-                            size(cell_w * len as f32, px(crate::chrome::HAIRLINE_PX as f32)),
-                        ),
-                        rgb(self.palette.selection),
-                    ));
+                    _ => row,
+                };
+                // Backgrounds first, per run, so a full-width highlight is a quad
+                // and not a shaped-line property.
+                let mut x = origin.x;
+                for run in &row.runs {
+                    let w = cell_w * run.text.chars().count() as f32;
+                    if let Some(bg) = run.bg {
+                        window.paint_quad(fill(Bounds::new(point(x, y), size(w, line_h)), rgb(bg)));
+                    }
+                    x += w;
                 }
-            }
-            // Shape per chunk, cached against the row's content and size.
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            use std::hash::{Hash, Hasher};
-            row.text.hash(&mut hasher);
-            f32::from(font_size).to_bits().hash(&mut hasher);
-            for run in &row.runs {
-                (
-                    run.fg,
-                    run.bg,
-                    run.bold,
-                    run.italic,
-                    run.underline,
-                    run.strikeout,
-                    run.dim,
-                    run.text.len(),
-                )
-                    .hash(&mut hasher);
-            }
-            let key = hasher.finish();
-            if self.shaped.len() <= r {
-                self.shaped.resize_with(r + 1, || (0, ShapedRow::default()));
-            }
-            if self.shaped[r].0 != key {
+                // The underline is the Cmd+hover affordance and nothing else.
+                // Underlining every confirmed link marked up most of the output
+                // of anything that prints paths, which is most things.
+                if let Some(links) = self.links.get(r) {
+                    for (f, _) in links {
+                        let start = row.text[..f.start.min(row.text.len())].chars().count();
+                        let len = row.text[f.start.min(row.text.len())..f.end.min(row.text.len())]
+                            .chars()
+                            .count();
+                        let hovered = under_hover(hover, r, start, len);
+                        let Some(look) = link_look(f.marked, hovered) else {
+                            continue;
+                        };
+                        let ux = origin.x + cell_w * start as f32;
+                        let ink: gpui::Hsla = rgb(self.palette.selection);
+                        if look.tint > 0. {
+                            window.paint_quad(fill(
+                                Bounds::new(point(ux, y), size(cell_w * len as f32, line_h)),
+                                crate::chrome::with_alpha(ink, look.tint),
+                            ));
+                        }
+                        let thick = px(crate::chrome::HAIRLINE_PX as f32 * look.thickness);
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(ux, y + line_h - px(LINK_UNDERLINE_OFFSET_PX) - thick / 2.),
+                                size(cell_w * len as f32, thick),
+                            ),
+                            crate::chrome::with_alpha(ink, look.alpha),
+                        ));
+                    }
+                }
+                // Shape per chunk, cached against the row's content and size.
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                use std::hash::{Hash, Hasher};
+                row.text.hash(&mut hasher);
+                // A U+FE0F arriving on a cell whose character did not change
+                // must still reshape the row.
+                row.zerowidth.hash(&mut hasher);
+                f32::from(font_size).to_bits().hash(&mut hasher);
+                for run in &row.runs {
+                    (
+                        run.fg,
+                        run.bg,
+                        run.bold,
+                        run.italic,
+                        run.underline,
+                        run.strikeout,
+                        run.dim,
+                        run.text.len(),
+                    )
+                        .hash(&mut hasher);
+                }
+                let key = hasher.finish();
+                if self.shaped.len() <= r {
+                    self.shaped.resize_with(r + 1, || (0, ShapedRow::default()));
+                }
+                if self.shaped[r].0 != key {
+                    let t = std::time::Instant::now();
+                    let shaped = shape_row(row, &base, bold_weight, font_size, window);
+                    self.shaped[r] = (key, shaped);
+                    timing_add(2, t);
+                }
                 let t = std::time::Instant::now();
-                let shaped = shape_row(row, &base, bold_weight, font_size, window);
-                self.shaped[r] = (key, shaped);
-                timing_add(2, t);
+                paint_row(
+                    &self.shaped[r].1,
+                    point(origin.x, y),
+                    cell_w,
+                    line_h,
+                    window,
+                );
+                timing_add(3, t);
             }
-            let t = std::time::Instant::now();
-            paint_row(
-                &self.shaped[r].1,
-                point(origin.x, y),
-                cell_w,
-                line_h,
-                window,
-            );
-            timing_add(3, t);
-        }
+        });
+        let visual = frame.visual;
         self.frame = frame;
-        self.paint_scrim(bounds, focused, window);
+        if visual {
+            self.paint_visual_tag(bounds, scale, window, cx);
+        }
+        self.paint_scrim(bounds, focused, window, cx);
     }
 
     fn resized(&mut self, _world: Size) {
@@ -868,11 +1175,30 @@ impl CardBody for TerminalBody {
             return BodyAction::None;
         }
         let m = &k.modifiers;
+        // Visual mode takes every key and sends none (visual_keys.rs).
+        if self.grid.visual() {
+            self.visual_key(k, cx);
+            return BodyAction::None;
+        }
         // The app owns Cmd; the Cmd keys a terminal answers are copy, paste
         // and the line-movement arrows the encoder knows.
         if m.platform && k.key == "c" {
-            if let Some(text) = self.grid.selection_text() {
+            // A mouse selection first, else what the command line selected.
+            if let Some(text) = self
+                .grid
+                .selection_text()
+                .or_else(|| self.line_selection.clone())
+            {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            return BodyAction::None;
+        }
+        // Cut: copy the command line's selection and delete it (Backspace
+        // deletes a selection in our zsh integration).
+        if m.platform && k.key == "x" {
+            if let Some(text) = self.line_selection.take() {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                self.write(vec![0x7f]);
             }
             return BodyAction::None;
         }
@@ -910,7 +1236,7 @@ impl CardBody for TerminalBody {
     /// The emoji panel, a finished composition, an input method's commit:
     /// text with no key behind it, sent as if typed.
     fn insert_text(&mut self, text: &str) {
-        if text.is_empty() {
+        if text.is_empty() || self.grid.visual() {
             return;
         }
         self.grid.scroll_to_bottom();
@@ -932,13 +1258,17 @@ impl CardBody for TerminalBody {
         }
     }
 
+    fn draws_bars(&self) -> bool {
+        self.bars || self.crowded
+    }
+
     fn caret_bounds(&self) -> Option<Bounds<Pixels>> {
         let painted = self.painted_bounds?;
         let scale = self.scale;
         let (col, row) = self.frame.cursor;
         let line_h = px((self.font_px * self.line_height * scale) as f32);
         let cell_w = px((self.cell_w * scale) as f32);
-        let pad = px((PAD * scale) as f32);
+        let pad = px((self.pad * scale) as f32);
         Some(Bounds::new(
             point(
                 painted.origin.x + pad + cell_w * col as f32,
@@ -1016,7 +1346,15 @@ impl CardBody for TerminalBody {
                     2 => SelectKind::Words,
                     _ => SelectKind::Lines,
                 };
-                self.grid.start_selection(col, row, kind);
+                // A double-click on a link takes the whole address: the
+                // word rule stops at the colon of `https://`.
+                match self.link_span(col, row).filter(|_| clicks == 2) {
+                    Some((from, to)) => {
+                        self.grid.start_selection(from, row, SelectKind::Cells);
+                        self.grid.update_selection(to, row, true);
+                    }
+                    None => self.grid.start_selection(col, row, kind),
+                }
             }
             self.selecting = true;
             self.drag_local = local;
@@ -1034,6 +1372,8 @@ impl CardBody for TerminalBody {
             if !self.grid.has_selection() {
                 self.grid.clear_selection();
                 self.dirty = true;
+            } else if self.copy_on_select {
+                self.clipboard_out = self.grid.selection_text();
             }
             return;
         }
@@ -1063,10 +1403,12 @@ impl CardBody for TerminalBody {
             // letting go. Applied per frame in `paint`.
             let line_h = self.font_px * self.line_height;
             let height = self.rows as f64 * line_h;
-            self.autoscroll = if local.y < PAD {
-                -(((PAD - local.y) / line_h).ceil().min(AUTOSCROLL_MAX_LINES))
-            } else if local.y > PAD + height {
-                ((local.y - PAD - height) / line_h)
+            self.autoscroll = if local.y < self.pad {
+                -(((self.pad - local.y) / line_h)
+                    .ceil()
+                    .min(AUTOSCROLL_MAX_LINES))
+            } else if local.y > self.pad + height {
+                ((local.y - self.pad - height) / line_h)
                     .ceil()
                     .min(AUTOSCROLL_MAX_LINES)
             } else {
@@ -1087,7 +1429,10 @@ impl CardBody for TerminalBody {
     /// on the alternate screen (`less`); the scrollback otherwise. `dy` is in
     /// card pixels, positive up.
     fn wheel(&mut self, local: Point, _dx: f64, dy: f64, modifiers: &gpui::Modifiers) {
-        let lines = self.wheel_carry.lines(dy, self.font_px * self.line_height) as i32;
+        let lines = self
+            .wheel_carry
+            .lines(dy * self.scroll_multiplier, self.font_px * self.line_height)
+            as i32;
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
             eprintln!(
                 "[wheel]   terminal: {lines} lines, mouse-mode {} alt-scroll {} offset {}",
@@ -1150,6 +1495,15 @@ impl CardBody for TerminalBody {
 
 /// The row as one shaped line, with the cell of every character. See
 /// `ShapedRow` for why the shaper's positions are not the ones painted.
+/// Whether row `r` of a grid drawn from `top` falls inside `shown` (the
+/// part of the card the window shows, its content mask). Rows outside are
+/// skipped: the mask clipped them anyway, but their glyphs were still paid
+/// for, so a card mostly out of the window cost as much as one in it.
+fn row_on_screen(top: Pixels, line_h: Pixels, r: usize, shown: Bounds<Pixels>) -> bool {
+    let y = top + line_h * r as f32;
+    y + line_h > shown.top() && y < shown.bottom()
+}
+
 fn shape_row(
     row: &infiniterm_term::grid::Row,
     base: &gpui::Font,
@@ -1163,6 +1517,9 @@ fn shape_row(
     let mut slots: Vec<CharSlot> = Vec::with_capacity(row.text.len());
     let mut decorations: Vec<(usize, usize, Hsla, Decoration)> = vec![];
     let mut col = 0usize;
+    // The row's zero-width characters, in column order, taken as the
+    // columns are walked.
+    let mut zerowidth = row.zerowidth.iter().peekable();
     for run in &row.runs {
         let color = if run.dim {
             crate::chrome::with_alpha(rgb(run.fg), TERM_DIM_ALPHA)
@@ -1184,8 +1541,17 @@ fn shape_row(
                 col += 1;
                 continue;
             }
-            let len = ch.len_utf8();
+            let mut len = ch.len_utf8();
             text.push(ch);
+            // The cell's zero-width characters join its character in the
+            // shaped text and belong to its slot: with U+FE0F the shaper
+            // picks the colour emoji, and a joiner fuses this character
+            // with the next one it meets. The wide cell's spacer never
+            // enters the shaped text, so 🏃 + joiner + ♀ arrive together.
+            while let Some((_, zw)) = zerowidth.next_if(|(c, _)| *c == col) {
+                text.push_str(zw);
+                len += zw.len();
+            }
             slot_of_byte.extend(std::iter::repeat_n(slots.len() as u32, len));
             slots.push(CharSlot {
                 col,
@@ -1303,12 +1669,89 @@ fn under_hover(hover: Option<(usize, usize)>, r: usize, start: usize, len: usize
     hover.is_some_and(|(hc, hr)| hr == r && hc >= start && hc < start + len)
 }
 
+/// How a link is drawn now (#335): `thickness` in hairlines, `alpha` of the
+/// underline, `tint` the faint fill behind the text (0 for none).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct LinkLook {
+    thickness: f32,
+    alpha: f32,
+    tint: f32,
+}
+
+/// The look of a link, or `None` for no mark. A link the program marked itself
+/// (OSC 8) wears a thin dim underline at rest, because its text need not look
+/// like one; one found by pattern shows nothing until Cmd+hover, which makes
+/// every link, marked or not, a full-strength double underline over a faint
+/// tint, so the feedback is the same and a marked link visibly changes.
+fn link_look(marked: bool, hovered: bool) -> Option<LinkLook> {
+    match (marked, hovered) {
+        (_, true) => Some(LinkLook {
+            thickness: 2.,
+            alpha: 1.,
+            tint: 0.15,
+        }),
+        (true, false) => Some(LinkLook {
+            thickness: 1.,
+            alpha: 0.5,
+            tint: 0.,
+        }),
+        (false, false) => None,
+    }
+}
+
 /// Whether a row can be skipped by the painter. Blank text is not enough:
 /// a space with a background is a painted cell. Pi draws its cursor as an
 /// inverse-video space, and on an empty input line that space is the whole
 /// row, so skipping "rows with no text" skipped the cursor and it could
 /// not be seen until something was typed beside it. The same skip would
 /// have hidden any TUI's full-width highlight on an empty row.
+/// A copy of `row` whose cell at `col` is the cursor's: the cursor colour
+/// behind and the cursor text colour on the letter. The block is painted
+/// under the text, and a theme whose cursor is its foreground left the
+/// letter the colour of the block (#343); a cell with its own background
+/// also painted over the block. The row's text is untouched.
+fn with_cursor_cell(
+    row: &infiniterm_term::grid::Row,
+    col: usize,
+    cursor: [u8; 3],
+    text: [u8; 3],
+) -> infiniterm_term::grid::Row {
+    let mut runs = Vec::with_capacity(row.runs.len() + 2);
+    let mut at = 0usize;
+    for run in &row.runs {
+        let n = run.text.chars().count();
+        if col < at || col >= at + n {
+            runs.push(run.clone());
+            at += n;
+            continue;
+        }
+        let chars: Vec<char> = run.text.chars().collect();
+        let i = col - at;
+        for (part, own) in [
+            (&chars[..i], false),
+            (&chars[i..=i], true),
+            (&chars[i + 1..], false),
+        ] {
+            if part.is_empty() {
+                continue;
+            }
+            let mut piece = run.clone();
+            piece.text = part.iter().collect();
+            if own {
+                piece.fg = text;
+                piece.bg = Some(cursor);
+                piece.dim = false;
+            }
+            runs.push(piece);
+        }
+        at += n;
+    }
+    infiniterm_term::grid::Row {
+        runs,
+        ..row.clone()
+    }
+}
+
 fn row_paints_nothing(row: &infiniterm_term::grid::Row) -> bool {
     row.text.trim().is_empty() && row.runs.iter().all(|r| r.bg.is_none())
 }
@@ -1316,16 +1759,16 @@ fn row_paints_nothing(row: &infiniterm_term::grid::Row) -> bool {
 /// What is appended after a dead session's ring. The order matters: the
 /// alternate screen is left first so the notice lands on the primary
 /// screen, and the reset of attributes comes last so the shell starts clean.
-/// `resume` is the Claude session the card was running, when known: the
-/// command to get it back is printed on its own line, plain (no dim) so it
-/// selects and pastes as typed.
+/// `resume` is the command that gets the card's agent session back, when
+/// known (`agent_state::resume_command`): printed on its own line, plain
+/// (no dim) so it selects and pastes as typed.
 pub fn lost_session_tail(when: &str, resume: Option<&str>) -> String {
     let mut out = format!(
         "\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[<u\x1b[?25h\x1b[0m\r\n\x1b[2m[session lost {when}; this is a new shell]\x1b[0m\r\n"
     );
-    if let Some(id) = resume {
+    if let Some(cmd) = resume {
         out.push_str(&format!(
-            "\x1b[2mto pick the agent up where it was:\x1b[0m claude --resume {id}\r\n"
+            "\x1b[2mto pick the agent up where it was:\x1b[0m {cmd}\r\n"
         ));
     }
     out
@@ -1334,6 +1777,113 @@ pub fn lost_session_tail(when: &str, resume: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lost_card_waits_longer_after_each_failure_up_to_a_cap() {
+        assert_eq!(rejoin_wait_ms(0), 2000.);
+        assert_eq!(rejoin_wait_ms(1), 4000.);
+        assert_eq!(rejoin_wait_ms(3), 16000.);
+        assert_eq!(rejoin_wait_ms(4), 30_000.);
+        assert_eq!(rejoin_wait_ms(500), 30_000.);
+    }
+
+    #[test]
+    fn a_lost_card_tries_when_due_says_why_it_failed_and_stops_on_a_final_answer() {
+        let mut l = LostLink::new(1000.);
+        assert!(!l.due(1500.), "not before the first wait");
+        assert!(l.due(3000.));
+        l.in_flight = true;
+        assert!(!l.due(9000.), "one try at a time");
+        l.failed(5000., "Connection refused", false);
+        assert!(l.note.contains("Connection refused"));
+        assert!(!l.due(5000.) && l.due(5000. + rejoin_wait_ms(1)));
+        // The host said the session is gone: no more tries on its own...
+        l.failed(6000., "no session s1 on this host", true);
+        assert_eq!(l.note, "no session s1 on this host");
+        assert!(!l.due(1e9));
+        // ...until the canvas connection comes back: then at once.
+        l.poke(7000.);
+        assert!(l.due(7000.) && l.tries == 0 && !l.fatal);
+    }
+
+    #[test]
+    fn a_card_joining_for_the_first_time_tries_at_once() {
+        let l = LostLink::first(500.);
+        assert!(l.due(500.));
+        assert!(l.note.contains("joining"));
+    }
+
+    /// Every terminal font carries the bundled icon font behind it, whatever
+    /// family the settings name, or a Mac without a Nerd Font draws boxes.
+    #[test]
+    fn every_terminal_font_falls_back_to_the_icon_font() {
+        for family in ["Menlo", "IosevkaTerm Nerd Font Mono"] {
+            let f = term_font(family);
+            assert_eq!(f.family.as_ref(), family);
+            let fallbacks = f.fallbacks.expect("a fallback list");
+            assert_eq!(fallbacks.fallback_list(), [ICON_FONT.to_string()]);
+        }
+    }
+
+    /// A card half out of the window paints only the rows the window shows:
+    /// its off-screen rows were clipped anyway but still cost their glyphs.
+    #[test]
+    fn only_rows_the_window_shows_are_painted() {
+        let shown = Bounds::new(point(px(0.), px(100.)), size(px(500.), px(50.)));
+        let h = px(20.);
+        // Rows from y = 0: 0..20, 20..40 ... row 4 is 80..100, row 5 100..120.
+        assert!(
+            !row_on_screen(px(0.), h, 4, shown),
+            "ends where the view starts"
+        );
+        assert!(row_on_screen(px(0.), h, 5, shown));
+        assert!(
+            row_on_screen(px(0.), h, 7, shown),
+            "140..160 overlaps the 150 edge"
+        );
+        assert!(
+            !row_on_screen(px(0.), h, 8, shown),
+            "starts where the view ends"
+        );
+        // A row cut by the edge still paints.
+        assert!(row_on_screen(px(-10.), h, 5, shown));
+    }
+
+    /// The letter under a block cursor takes the cursor text colour on the
+    /// cursor colour, and the rest of the row and its text are left alone.
+    #[test]
+    fn the_cursor_cell_is_split_out_of_its_run() {
+        use infiniterm_term::grid::{Row, Run};
+        let run = |text: &str, fg: [u8; 3]| Run {
+            text: text.into(),
+            fg,
+            bg: None,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikeout: false,
+            dim: false,
+        };
+        let row = Row {
+            runs: vec![run("ab", [1, 1, 1]), run("cde", [2, 2, 2])],
+            text: "abcde".into(),
+            ..Row::default()
+        };
+        let out = with_cursor_cell(&row, 3, [9, 9, 9], [7, 7, 7]);
+        let texts: Vec<_> = out.runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(texts, ["ab", "c", "d", "e"]);
+        assert_eq!(out.text, "abcde");
+        assert_eq!(
+            (out.runs[2].fg, out.runs[2].bg),
+            ([7, 7, 7], Some([9, 9, 9]))
+        );
+        assert_eq!(out.runs[1].fg, [2, 2, 2]);
+        assert_eq!(out.runs[3].bg, None);
+        // The first and last cells of the row, and a column past the end.
+        assert_eq!(with_cursor_cell(&row, 0, [9; 3], [7; 3]).runs[0].text, "a");
+        assert_eq!(with_cursor_cell(&row, 4, [9; 3], [7; 3]).runs.len(), 3);
+        assert_eq!(with_cursor_cell(&row, 9, [9; 3], [7; 3]).runs, row.runs);
+    }
 
     fn body() -> TerminalBody {
         let metrics = Metrics {
@@ -1371,6 +1921,8 @@ mod tests {
         let cursor = Row {
             runs: vec![run(Some([200, 200, 200]))],
             text: " ".into(),
+            zerowidth: vec![],
+            hyperlinks: vec![],
         };
         assert!(
             !row_paints_nothing(&cursor),
@@ -1379,6 +1931,8 @@ mod tests {
         let empty = Row {
             runs: vec![run(None)],
             text: "      ".into(),
+            zerowidth: vec![],
+            hyperlinks: vec![],
         };
         assert!(
             row_paints_nothing(&empty),
@@ -1387,6 +1941,8 @@ mod tests {
         let text = Row {
             runs: vec![run(None)],
             text: " x ".into(),
+            zerowidth: vec![],
+            hyperlinks: vec![],
         };
         assert!(!row_paints_nothing(&text));
     }
@@ -1472,6 +2028,90 @@ mod tests {
         assert!(!under_hover(Some((9, 3)), 3, 5, 4));
         assert!(!under_hover(Some((5, 2)), 3, 5, 4));
         assert!(!under_hover(Some((4, 3)), 3, 5, 4));
+    }
+
+    // A link the program marked (OSC 8) wears a dim thin underline at rest; one
+    // found by pattern nothing. Under Cmd+hover both get the strong look, so a
+    // marked link visibly changes.
+    #[test]
+    fn a_marked_link_changes_when_hovered_and_a_pattern_link_appears() {
+        assert_eq!(link_look(false, false), None);
+        let rest = link_look(true, false).unwrap();
+        let hover = link_look(true, true).unwrap();
+        assert!(rest.alpha < hover.alpha && rest.thickness < hover.thickness);
+        assert_eq!(rest.tint, 0.);
+        assert!(hover.tint > 0.);
+        assert_eq!(link_look(false, true), Some(hover));
+    }
+
+    // OSC 8 end to end through the body: bytes in, the row's span in, a link
+    // at those columns that opens the program's address (#335). A `file:` one
+    // is not offered.
+    #[test]
+    fn an_osc8_hyperlink_in_the_output_is_a_link_at_its_columns() {
+        let mut b = body();
+        b.feed(
+            b"go \x1b]8;;https://example.com/osc8\x1b\\CLICK ME\x1b]8;;\x1b\\ ok \x1b]8;;file:///etc/passwd\x1b\\NOPE\x1b]8;;\x1b\\\r\n",
+        );
+        let frame = b
+            .grid
+            .frame(&infiniterm_term::palette::Palette::default_palette());
+        b.refresh_links(&frame, &[0]);
+        let (found, _) = b.link_at(5, 0).expect("a link under CLICK ME").clone();
+        assert_eq!(found.target, "https://example.com/osc8");
+        assert_eq!(found.text, "CLICK ME");
+        assert!(found.marked, "an OSC 8 link is underlined at rest");
+        assert!(b.link_at(0, 0).is_none(), "plain text before it");
+        assert!(b.link_at(16, 0).is_none(), "a file: address is not offered");
+    }
+
+    // The word rule stops at the colon of `https://`, so a double-click on
+    // an address selected only `//host/path`.
+    #[test]
+    fn a_double_click_on_a_link_selects_the_whole_address() {
+        let mut b = body();
+        let line = "see https://github.com/a/b now";
+        b.feed(format!("{line}\r\n").as_bytes());
+        b.link_texts = vec![line.to_string()];
+        b.links = vec![find_links_in(line, None)
+            .into_iter()
+            .map(|f| (f, None))
+            .collect()];
+        let at = |col: f64| Point {
+            x: PAD + col * 8.4 + 1.,
+            y: PAD + 1.,
+        };
+        let plain = gpui::Modifiers::default();
+        b.mouse_down(at(12.), gpui::MouseButton::Left, &plain, 2);
+        b.mouse_up(at(12.), gpui::MouseButton::Left, &plain);
+        assert_eq!(
+            b.grid.selection_text().as_deref(),
+            Some("https://github.com/a/b")
+        );
+    }
+
+    // `terminal.copyOnSelect`: a finished drag hands its text to the
+    // clipboard; off (the default), nothing is copied until Cmd+C.
+    #[test]
+    fn copy_on_select_copies_a_finished_selection() {
+        let at = |col: f64, row: f64| Point {
+            x: PAD + col * 8.4 + 1.,
+            y: PAD + row * 14. * 1.2 + 1.,
+        };
+        let onto = |col: f64, row: f64| Point {
+            x: PAD + col * 8.4 + 7.,
+            y: PAD + row * 14. * 1.2 + 1.,
+        };
+        let plain = gpui::Modifiers::default();
+        for on in [false, true] {
+            let mut b = body();
+            b.copy_on_select = on;
+            b.feed(b"one two\r\n");
+            b.mouse_down(at(0., 0.), gpui::MouseButton::Left, &plain, 1);
+            b.mouse_move(onto(2., 0.), &plain);
+            b.mouse_up(onto(2., 0.), gpui::MouseButton::Left, &plain);
+            assert_eq!(b.clipboard_out.as_deref(), on.then_some("one"));
+        }
     }
 
     // Shift+click grows the selection to the click instead of starting a
@@ -1606,13 +2246,16 @@ mod tests {
         assert_eq!(b.grid.selection_text().as_deref(), Some("six"));
     }
 
+    // A crowded frame draws every card as bars, and a double-click there fits
+    // the card (`pan_mode::double_click_fits`); a readable card says no.
     #[test]
-    fn weights_are_spelled_as_css_spells_them() {
-        assert_eq!(weight_of("normal"), FontWeight::NORMAL);
-        assert_eq!(weight_of("bold"), FontWeight::BOLD);
-        assert_eq!(weight_of("800"), FontWeight(800.));
-        assert_eq!(weight_of(" 600 "), FontWeight(600.));
-        assert_eq!(weight_of("heavy"), FontWeight::NORMAL);
-        assert_eq!(weight_of("1000"), FontWeight::NORMAL);
+    fn a_crowded_terminal_reports_that_it_draws_bars() {
+        use crate::body::CardBody;
+        let mut b = body();
+        assert!(!b.draws_bars());
+        b.set_crowded(true);
+        assert!(b.draws_bars());
+        b.set_crowded(false);
+        assert!(!b.draws_bars());
     }
 }

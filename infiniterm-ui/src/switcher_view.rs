@@ -51,6 +51,7 @@ impl AppView {
             let dot = match card.agent {
                 AgentState::Working => Some(chrome.agent_working),
                 AgentState::Waiting => Some(chrome.agent_waiting),
+                AgentState::Failed => Some(chrome.agent_failed),
                 AgentState::Done => Some(chrome.agent_done),
                 AgentState::None => None,
             };
@@ -98,8 +99,12 @@ impl AppView {
                             .border_color(chrome.overlay_border)
                             .rounded_md()
                             .shadow_lg()
-                            .font_family("Menlo")
-                            .text_size(px(crate::overlays::OVERLAY_BODY_FONT_PX * ui))
+                            .font_family(chrome.typography.family.clone())
+                            .font_weight(chrome.typography.regular.weight)
+                            .text_size(px(chrome
+                                .typography
+                                .size(crate::overlays::OVERLAY_BODY_FONT_PX)
+                                * ui))
                             .text_color(chrome.text)
                             .child(list),
                     ),

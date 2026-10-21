@@ -17,3 +17,5 @@ run.log
 spikes/cef-extension/*.log
 tools/locked
 spikes/card-texture/target/
+# Agent worktrees: one folder per task under the project, never committed.
+.claude/worktrees/

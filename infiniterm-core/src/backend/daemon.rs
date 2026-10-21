@@ -29,8 +29,9 @@
 //!   closes a handle) is the entire feature this backend exists to add.
 
 use super::local_pty::HIGH_WATER;
+use super::relay::Relay;
 use super::session_protocol::{Frame, FrameReader};
-use super::{PaneEvent, PaneId};
+use super::{PaneEvent, PaneId, Redraw};
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::Shutdown;
@@ -56,6 +57,10 @@ const SUN_PATH_MAX: usize = 104;
 /// up. Generous: this covers process start plus `openpty` plus a shell
 /// fork, not a network round trip.
 const HELLO_DEADLINE: Duration = Duration::from_secs(5);
+
+/// The same wait over ssh: a connection, a login and a remote daemon start
+/// before `Hello`, so a network round trip or three is in it.
+const REMOTE_HELLO_DEADLINE: Duration = Duration::from_secs(20);
 
 /// Socket read granularity while polling for `Hello`. Short enough that
 /// `HELLO_DEADLINE` is honoured to within a fraction of a second.
@@ -124,6 +129,14 @@ struct Pane {
     /// it ever says `Hello`.
     pid: Option<u32>,
     credit: Arc<Credit>,
+    /// A viewer's pane (#423): its session is the host's, reached through the
+    /// host app. Nothing in this backend owns it, so a close here only lets
+    /// go of the connection; the host closes the card by its own path.
+    viewer: bool,
+}
+
+fn send(stream: &Arc<Mutex<UnixStream>>, frame: &Frame) {
+    let _ = stream.lock().unwrap().write_all(&frame.encode());
 }
 
 pub struct DaemonBackend {
@@ -136,6 +149,32 @@ pub struct DaemonBackend {
     panes: Arc<Mutex<HashMap<PaneId, Pane>>>,
     tx: Sender<(PaneId, PaneEvent)>,
     next_id: AtomicU32,
+    /// Set in a remote instance (#118): every spawn and adopt goes to this
+    /// host over ssh and the sessions are listed by asking it.
+    remote: Option<super::remote::RemoteHost>,
+    /// What viewers that joined this canvas (#423, `ift join`) are sent: this
+    /// backend is the only client iftd sees, so it is the one place every
+    /// session's bytes pass, and it fans them out from here.
+    relay: Arc<Mutex<Relay>>,
+    /// Set for the window that `ift join` opens (#423): the sessions are the
+    /// host's, reached through the host app, and this backend never starts,
+    /// resizes or ends one of them. Every way a session could die or change
+    /// is a no-op here: kill, resize, spawn, the orphan sweep, the parked end.
+    viewer: bool,
+    /// Connections a viewer's reconnect threads finished and the app has not
+    /// taken yet (`take_reconnected`): the connecting waits on ssh, so it
+    /// happens on a thread, and the cheap `register` on the app's.
+    reconnected: Arc<Mutex<Vec<Reconnected>>>,
+}
+
+/// A viewer card's new connection to its session, or why there is none.
+pub type Reconnected = (String, Result<JoinedSession, super::remote::JoinFailure>);
+
+/// What a finished join of one session holds until it is registered.
+pub struct JoinedSession {
+    stream: UnixStream,
+    reader: FrameReader,
+    size: (u16, u16),
 }
 
 impl DaemonBackend {
@@ -147,8 +186,94 @@ impl DaemonBackend {
             panes: Arc::new(Mutex::new(HashMap::new())),
             tx,
             next_id: AtomicU32::new(1),
+            remote: None,
+            relay: Arc::new(Mutex::new(Relay::new())),
+            viewer: false,
+            reconnected: Arc::new(Mutex::new(Vec::new())),
         };
         (backend, rx)
+    }
+
+    /// Joins a viewer card's session again (#442) on a thread of its own: an
+    /// unreachable host would otherwise hold a frame for the whole handshake.
+    /// The answer is waiting in `take_reconnected` when it ends. Not a viewer:
+    /// nothing happens.
+    pub fn begin_reconnect(&self, session_id: &str) {
+        let Some(host) = self.remote.clone().filter(|_| self.viewer) else {
+            return;
+        };
+        let (id, done) = (session_id.to_string(), self.reconnected.clone());
+        std::thread::spawn(move || {
+            let result =
+                super::remote::connect_join(&host, &id).and_then(|(mut stream, stderr)| {
+                    match read_hello(&mut stream, REMOTE_HELLO_DEADLINE) {
+                        Ok((_pid, cols, rows, reader)) => Ok(JoinedSession {
+                            stream,
+                            reader,
+                            size: (cols, rows),
+                        }),
+                        Err(e) => {
+                            let said = stderr.text();
+                            Err(super::remote::JoinFailure::Retry(if said.is_empty() {
+                                e.to_string()
+                            } else {
+                                said
+                            }))
+                        }
+                    }
+                });
+            done.lock().unwrap().push((id, result));
+        });
+    }
+
+    /// The reconnects that ended since the last call: a new pane for each
+    /// that worked, the failure for each that did not.
+    pub fn take_reconnected(&self) -> Vec<(String, Result<PaneId, super::remote::JoinFailure>)> {
+        let done: Vec<Reconnected> = std::mem::take(&mut *self.reconnected.lock().unwrap());
+        done.into_iter()
+            .map(|(id, result)| {
+                let pane =
+                    result.map(|j| self.register(id.clone(), j.stream, j.reader, None, j.size));
+                (id, pane)
+            })
+            .collect()
+    }
+
+    /// A backend for a viewer window (#423): its cards are cards of the app
+    /// running on `host`, joined through that app, never through `iftd`.
+    pub fn new_viewer(
+        host: super::remote::RemoteHost,
+        buffer_mib: usize,
+    ) -> (Self, Receiver<(PaneId, PaneEvent)>) {
+        let (mut backend, rx) = Self::new_remote(host, buffer_mib);
+        backend.viewer = true;
+        (backend, rx)
+    }
+
+    /// A backend whose sessions live on `host`. The local sessions directory
+    /// is still named, because the pieces that read it (the orphan sweep, the
+    /// ring from disk, `attached`) find nothing there and do nothing.
+    pub fn new_remote(
+        host: super::remote::RemoteHost,
+        buffer_mib: usize,
+    ) -> (Self, Receiver<(PaneId, PaneEvent)>) {
+        let (mut backend, rx) = Self::new(crate::paths::sessions_dir(), buffer_mib);
+        backend.remote = Some(host);
+        (backend, rx)
+    }
+
+    /// Which sessions can be adopted at launch: the server's (one ssh), or the
+    /// local sockets. A server that cannot be asked yields an empty list and
+    /// the reason on stderr; `ift connect` checks reachability before it
+    /// opens the app, so this is the rare case.
+    pub fn live_sessions_now(&self) -> Vec<String> {
+        match &self.remote {
+            Some(host) => super::remote::list_sessions(host).unwrap_or_else(|e| {
+                eprintln!("[infiniterm] could not list the sessions on {}", e);
+                Vec::new()
+            }),
+            None => Self::live_sessions(&self.sessions_dir),
+        }
     }
 
     pub fn spawn_now(
@@ -157,6 +282,14 @@ impl DaemonBackend {
         cmd: Option<&str>,
         env: Vec<(String, String)>,
     ) -> anyhow::Result<PaneId> {
+        if self.viewer {
+            anyhow::bail!(
+                "a viewer starts no shell here: a card made in a viewer is started by the host"
+            );
+        }
+        if let Some(host) = &self.remote {
+            return self.spawn_remote(host, &cwd.to_string_lossy(), cmd, env);
+        }
         let session_id = new_session_id();
         let socket = self.sessions_dir.join(format!("{session_id}.sock"));
         check_socket_path(&socket)?;
@@ -197,7 +330,7 @@ impl DaemonBackend {
                 iftd.display()
             )
         })?;
-        let (pid, cols, rows, reader) = read_hello(&mut stream)?;
+        let (pid, cols, rows, reader) = read_hello(&mut stream, HELLO_DEADLINE)?;
         Ok(self.register(session_id, stream, reader, Some(pid), (cols, rows)))
     }
 
@@ -206,9 +339,15 @@ impl DaemonBackend {
     /// never arrives; the caller spawns a fresh shell instead, same as a
     /// `local_pty` card that never had a session to come back to.
     pub fn adopt(&self, session_id: &str) -> Option<PaneId> {
+        if self.viewer {
+            return self.adopt_join(session_id);
+        }
+        if let Some(host) = &self.remote {
+            return self.adopt_remote(host, session_id);
+        }
         let socket = self.sessions_dir.join(format!("{session_id}.sock"));
         let mut stream = UnixStream::connect(&socket).ok()?;
-        let (pid, cols, rows, reader) = read_hello(&mut stream).ok()?;
+        let (pid, cols, rows, reader) = read_hello(&mut stream, HELLO_DEADLINE).ok()?;
         Some(self.register(
             session_id.to_string(),
             stream,
@@ -216,6 +355,89 @@ impl DaemonBackend {
             Some(pid),
             (cols, rows),
         ))
+    }
+
+    /// Joins one of the host's cards through the host app (#423), never
+    /// through its `iftd`, which serves one client and would drop the host's
+    /// own window. The pane has no local pid and no relay of its own.
+    fn adopt_join(&self, session_id: &str) -> Option<PaneId> {
+        let host = self.remote.as_ref()?;
+        let (mut stream, stderr) = match super::remote::connect_join(host, session_id) {
+            Ok(c) => c,
+            Err(why) => {
+                eprintln!(
+                    "[infiniterm] could not join {session_id}: {}",
+                    why.message()
+                );
+                return None;
+            }
+        };
+        match read_hello(&mut stream, REMOTE_HELLO_DEADLINE) {
+            Ok((_host_pid, cols, rows, reader)) => {
+                Some(self.register(session_id.to_string(), stream, reader, None, (cols, rows)))
+            }
+            Err(e) => {
+                let said = stderr.text();
+                eprintln!("[infiniterm] could not join {session_id}: {e} {said}");
+                None
+            }
+        }
+    }
+
+    /// A new shell on another machine: `ift proxy session --spawn` over ssh
+    /// starts the daemon there and this attaches to it (#118). The pane has no
+    /// local pid, so the inspect poller never looks up a process on THIS
+    /// machine that happens to share the remote's pid.
+    pub fn spawn_remote(
+        &self,
+        host: &super::remote::RemoteHost,
+        cwd: &str,
+        cmd: Option<&str>,
+        env: Vec<(String, String)>,
+    ) -> anyhow::Result<PaneId> {
+        let session_id = new_session_id();
+        let spec = super::remote::SpawnSpec {
+            cwd: Some(cwd.to_string()),
+            cmd: cmd.map(str::to_string),
+            env,
+            buffer_mib: Some(self.buffer_mib),
+        };
+        self.attach_remote(host, session_id, Some(&spec))
+    }
+
+    /// Takes over a session the server still holds. `None` when it is gone
+    /// or the connection fails.
+    pub fn adopt_remote(
+        &self,
+        host: &super::remote::RemoteHost,
+        session_id: &str,
+    ) -> Option<PaneId> {
+        self.attach_remote(host, session_id.to_string(), None).ok()
+    }
+
+    fn attach_remote(
+        &self,
+        host: &super::remote::RemoteHost,
+        session_id: String,
+        spawn: Option<&super::remote::SpawnSpec>,
+    ) -> anyhow::Result<PaneId> {
+        let (mut stream, stderr) = super::remote::connect(host, &session_id, spawn)
+            .map_err(|e| anyhow::anyhow!("could not run {}: {e}", host.ssh))?;
+        match read_hello(&mut stream, REMOTE_HELLO_DEADLINE) {
+            Ok((_remote_pid, cols, rows, reader)) => {
+                Ok(self.register(session_id, stream, reader, None, (cols, rows)))
+            }
+            Err(e) => {
+                // Give ssh a moment to say why before reporting it.
+                std::thread::sleep(Duration::from_millis(150));
+                let why = stderr.text();
+                if why.is_empty() {
+                    Err(e)
+                } else {
+                    Err(anyhow::anyhow!("{}: {why}", host.target))
+                }
+            }
+        }
     }
 
     /// Common tail of `spawn_now` and `adopt`: the socket is connected and
@@ -239,6 +461,16 @@ impl DaemonBackend {
             .try_clone()
             .expect("a freshly connected UnixStream always clones");
 
+        self.relay.lock().unwrap().open(
+            &session_id,
+            Frame::Hello {
+                pid: pid.unwrap_or(0),
+                cols: size.0,
+                rows: size.1,
+            },
+        );
+        let relay = self.relay.clone();
+        let relay_session = session_id.clone();
         self.panes.lock().unwrap().insert(
             id,
             Pane {
@@ -247,12 +479,30 @@ impl DaemonBackend {
                 size: Mutex::new(size),
                 pid,
                 credit: credit.clone(),
+                viewer: self.viewer,
             },
         );
 
         let tx = self.tx.clone();
         let panes = self.panes.clone();
-        std::thread::spawn(move || run_reader(id, stream, reader, tx, panes, credit));
+        std::thread::spawn(move || {
+            run_reader(
+                id,
+                stream,
+                reader,
+                tx,
+                panes,
+                credit,
+                Tap {
+                    relay: &relay,
+                    session: &relay_session,
+                },
+            );
+            // The reader is gone (exit, detach or eviction): viewers of this
+            // session end with it. A later adopt registers a new reader and
+            // opens the relay again.
+            relay.lock().unwrap().close(&relay_session);
+        });
 
         id
     }
@@ -289,16 +539,91 @@ impl DaemonBackend {
             .map(|p| p.session_id.clone())
     }
 
+    /// The size the host's shell has, for a viewer's pane only: from the
+    /// host's hello and every later `Resize` it sent (#423).
+    pub fn viewer_pane_size(&self, pane: PaneId) -> Option<(u16, u16)> {
+        if !self.viewer {
+            return None;
+        }
+        self.panes
+            .lock()
+            .unwrap()
+            .get(&pane)
+            .map(|p| *p.size.lock().unwrap())
+    }
+
+    /// The viewers' relay, shared with the join server (#423).
+    pub fn relay(&self) -> Arc<Mutex<Relay>> {
+        self.relay.clone()
+    }
+
+    /// Writes keys a viewer sent to the session they were typed for, from any
+    /// thread. The same path as the host's own keys: one connection to iftd,
+    /// whole frames serialised by the pane's stream lock, so a host key and a
+    /// viewer key never interleave inside a frame. A session this backend does
+    /// not hold is ignored. Not through the app's poll, which would add up to
+    /// 16 ms to every viewer keystroke.
+    pub fn session_writer(&self) -> super::join::WriteSession {
+        let panes = self.panes.clone();
+        Arc::new(move |session_id: &str, bytes: &[u8]| {
+            let stream = panes
+                .lock()
+                .unwrap()
+                .values()
+                .find(|p| p.session_id == session_id)
+                .map(|p| p.stream.clone());
+            if let Some(stream) = stream {
+                let mut s = stream.lock().unwrap();
+                let _ = s.write_all(&Frame::Data(bytes.to_vec()).encode());
+            }
+        })
+    }
+
+    /// The repaint jog for a viewer that just attached (#423): the same two
+    /// resizes `nudge_resize` sends after the host's own replay, so a program
+    /// that draws with relative cursor moves (Claude Code's input box)
+    /// redraws itself over the ring the viewer replayed. The viewer gets the
+    /// redraw as live output, which queues behind its replay.
+    pub fn session_nudger(&self) -> Arc<dyn Fn(&str) + Send + Sync> {
+        let panes = self.panes.clone();
+        Arc::new(move |session_id: &str| {
+            let id = panes
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(_, p)| p.session_id == session_id)
+                .map(|(id, _)| *id);
+            if let Some(id) = id {
+                nudge_resize(&panes, id);
+            }
+        })
+    }
+
+    /// `terminal.redraw` (#447): the repaint jog on this pane, the same two
+    /// resizes an attach sends. A viewer's pane has no say over the host's
+    /// size (the host ignores its `Resize` frames), so it lets go of its
+    /// connection instead and says so: the caller joins the session again,
+    /// which replays the ring and makes the host jog the program
+    /// (`session_nudger`). Does nothing for a pane that is gone.
+    pub fn redraw_now(&self, pane: PaneId) -> Redraw {
+        let viewer = self.panes.lock().unwrap().get(&pane).map(|p| p.viewer);
+        if viewer == Some(true) {
+            self.detach_now(pane);
+            return Redraw::Rejoin;
+        }
+        nudge_resize(&self.panes, pane);
+        Redraw::Asked
+    }
+
     pub fn write_now(&self, pane: PaneId, bytes: &[u8]) {
-        let stream = self
+        let found = self
             .panes
             .lock()
             .unwrap()
             .get(&pane)
             .map(|p| p.stream.clone());
-        if let Some(stream) = stream {
-            let mut s = stream.lock().unwrap();
-            let _ = s.write_all(&Frame::Data(bytes.to_vec()).encode());
+        if let Some(stream) = found {
+            send(&stream, &Frame::Data(bytes.to_vec()));
         }
     }
 
@@ -309,13 +634,43 @@ impl DaemonBackend {
                 return;
             };
             *p.size.lock().unwrap() = (cols, rows);
+            self.relay.lock().unwrap().resize(&p.session_id, cols, rows);
             p.stream.clone()
         };
-        let mut s = stream.lock().unwrap();
-        let _ = s.write_all(&Frame::Resize { cols, rows }.encode());
+        send(&stream, &Frame::Resize { cols, rows });
     }
 
     pub fn kill_now(&self, pane: PaneId) {
+        let found = {
+            let panes = self.panes.lock().unwrap();
+            panes
+                .get(&pane)
+                .map(|p| (p.stream.clone(), p.credit.clone(), p.viewer))
+        };
+        let Some((stream, credit, viewer)) = found else {
+            return;
+        };
+        if viewer {
+            // A card closed in a viewer IS closed on the host: the canvas the
+            // viewer sends up no longer has it, and the host closes it by its
+            // own path (`Model::apply_remote_layout`, parking and all). This
+            // pane only lets go of its connection, as `detach_now` does.
+            let _ = stream.lock().unwrap().shutdown(Shutdown::Both);
+            credit.close();
+            return;
+        }
+        send(&stream, &Frame::Kill);
+        // Frees a reader parked on credit, same reason and same call as
+        // local_pty::kill_now: the pane is removed by the reader thread once
+        // Exited (or EOF) actually arrives, not here, so PaneEvent::Exited
+        // still fires exactly once.
+        credit.close();
+    }
+
+    /// Lets go of one pane WITHOUT ending its session: the card closed but
+    /// may come back (`Model::parked`), and `adopt` takes it back. The
+    /// reader sees EOF and reports `Detached`, which no card owns any more.
+    pub fn detach_now(&self, pane: PaneId) {
         let found = {
             let panes = self.panes.lock().unwrap();
             panes
@@ -325,14 +680,7 @@ impl DaemonBackend {
         let Some((stream, credit)) = found else {
             return;
         };
-        {
-            let mut s = stream.lock().unwrap();
-            let _ = s.write_all(&Frame::Kill.encode());
-        }
-        // Frees a reader parked on credit, same reason and same call as
-        // local_pty::kill_now: the pane is removed by the reader thread once
-        // Exited (or EOF) actually arrives, not here, so PaneEvent::Exited
-        // still fires exactly once.
+        let _ = stream.lock().unwrap().shutdown(Shutdown::Both);
         credit.close();
     }
 
@@ -361,14 +709,17 @@ impl DaemonBackend {
     /// running. Same sweep as tmux's `kill_orphans`, on a directory only
     /// this backend writes to.
     pub fn kill_orphans(&self, claimed: &[String]) {
+        // A viewer owns no session: the ones in its data dir, if any, are not
+        // litter of its own, and the host's are the host's to sweep.
+        if self.viewer {
+            return;
+        }
         for id in Self::live_sessions(&self.sessions_dir) {
             if claimed.iter().any(|c| c == &id) {
                 continue;
             }
             let socket = self.sessions_dir.join(format!("{id}.sock"));
-            if let Ok(mut s) = UnixStream::connect(&socket) {
-                let _ = s.write_all(&Frame::Kill.encode());
-            }
+            std::thread::spawn(move || send_kill(&socket));
         }
         // A dead session's ring that no saved card will ask for (the card
         // was closed while the app was down) is a leftover, not scrollback.
@@ -469,11 +820,14 @@ impl DaemonBackend {
 /// `Replay`/`ReplayEnd` bytes read in the same syscall as `Hello`. Losing
 /// those would be exactly the kind of desync `FrameReader::feed` exists to
 /// prevent, so the reader is threaded through rather than discarded here.
-fn read_hello(stream: &mut UnixStream) -> anyhow::Result<(u32, u16, u16, FrameReader)> {
+fn read_hello(
+    stream: &mut UnixStream,
+    wait: Duration,
+) -> anyhow::Result<(u32, u16, u16, FrameReader)> {
     stream.set_read_timeout(Some(HELLO_POLL))?;
     let mut reader = FrameReader::default();
     let mut buf = [0u8; 8192];
-    let deadline = Instant::now() + HELLO_DEADLINE;
+    let deadline = Instant::now() + wait;
     loop {
         match reader.next() {
             Ok(Some(Frame::Hello { pid, cols, rows })) => {
@@ -489,7 +843,7 @@ fn read_hello(stream: &mut UnixStream) -> anyhow::Result<(u32, u16, u16, FrameRe
             Err(e) => anyhow::bail!("iftd's greeting: {e}"),
         }
         if Instant::now() > deadline {
-            anyhow::bail!("no Hello from iftd within {HELLO_DEADLINE:?}");
+            anyhow::bail!("no Hello from iftd within {wait:?}");
         }
         match stream.read(&mut buf) {
             Ok(0) => anyhow::bail!("iftd closed the connection before Hello"),
@@ -499,6 +853,14 @@ fn read_hello(stream: &mut UnixStream) -> anyhow::Result<(u32, u16, u16, FrameRe
             Err(e) => return Err(e.into()),
         }
     }
+}
+
+/// Where a pane's session output is also sent: the viewers' relay and the
+/// session id it files the bytes under (#423). One argument for `run_reader`
+/// instead of two.
+struct Tap<'a> {
+    relay: &'a Arc<Mutex<Relay>>,
+    session: &'a str,
 }
 
 /// One per pane, for its whole life. Turns frames arriving on the socket
@@ -513,6 +875,7 @@ fn run_reader(
     tx: Sender<(PaneId, PaneEvent)>,
     panes: Arc<Mutex<HashMap<PaneId, Pane>>>,
     credit: Arc<Credit>,
+    tap: Tap<'_>,
 ) {
     let mut buf = vec![0u8; 8192];
     let mut exited = false;
@@ -521,28 +884,40 @@ fn run_reader(
             match reader.next() {
                 Ok(Some(Frame::Data(bytes))) => {
                     credit.sent(bytes.len());
+                    tap.relay.lock().unwrap().publish(tap.session, &bytes);
                     if tx.send((id, PaneEvent::Output(bytes))).is_err() {
                         break 'outer;
                     }
                 }
                 Ok(Some(Frame::Replay(bytes))) => {
                     credit.sent(bytes.len());
+                    tap.relay.lock().unwrap().seed(tap.session, &bytes);
                     if tx.send((id, PaneEvent::Replay(bytes))).is_err() {
                         break 'outer;
                     }
                 }
                 Ok(Some(Frame::ReplayEnd)) => nudge_resize(&panes, id),
                 Ok(Some(Frame::Exited(code))) => {
+                    tap.relay.lock().unwrap().exited(tap.session, code);
                     let _ = tx.send((id, PaneEvent::Exited { code }));
                     exited = true;
                     break 'outer;
                 }
+                // The host's size changed (#423): only a viewer's pane is
+                // told, and only a viewer's pane keeps it.
+                Ok(Some(Frame::Resize { cols, rows })) => {
+                    if let Some(p) = panes.lock().unwrap().get(&id) {
+                        if p.viewer {
+                            *p.size.lock().unwrap() = (cols, rows);
+                        }
+                    }
+                }
                 // Hello only ever arrives once, consumed by read_hello
-                // before this thread starts; Resize and Kill only ever
-                // travel app-to-daemon. Neither is ours to act on, and
-                // dropping the connection over it would be the wrong
-                // failure mode for a frame that is merely misdirected.
-                Ok(Some(Frame::Hello { .. } | Frame::Resize { .. } | Frame::Kill)) => {}
+                // before this thread starts; Kill only ever travels
+                // app-to-daemon. Neither is ours to act on, and dropping
+                // the connection over it would be the wrong failure mode
+                // for a frame that is merely misdirected.
+                Ok(Some(Frame::Hello { .. } | Frame::Kill)) => {}
                 Ok(None) => break,
                 // The stream is not ours, or is no longer in step with us:
                 // terminal, per ProtoError's own doc comment.
@@ -570,6 +945,31 @@ fn run_reader(
     if !exited {
         let _ = tx.send((id, PaneEvent::Detached));
     }
+}
+
+/// How long `send_kill` waits for a daemon to greet and then to go.
+const KILL_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Ends the session behind `socket` from a connection of its own. iftd
+/// greets every client with `Hello` and the whole ring BEFORE it reads a
+/// frame, and drops a client whose greeting fails to send; a Kill written
+/// on connect and the socket closed straight after was lost that way
+/// whenever the ring outgrew the socket buffer (found 2026-09-29 by the
+/// parked-session test). So: read the greeting, send Kill, and hold the
+/// connection until the daemon closes it. Blocking; callers run it on a
+/// thread of its own.
+fn send_kill(socket: &Path) {
+    let Ok(mut s) = UnixStream::connect(socket) else {
+        return;
+    };
+    if read_hello(&mut s, HELLO_DEADLINE).is_err() {
+        return;
+    }
+    // After the greeting: `read_hello` sets its own short poll.
+    let _ = s.set_read_timeout(Some(KILL_WAIT));
+    let _ = s.write_all(&Frame::Kill.encode());
+    let mut sink = [0u8; 8192];
+    while matches!(s.read(&mut sink), Ok(n) if n > 0) {}
 }
 
 /// After a replay ends, jog the pane's width down one column and back so a
@@ -606,7 +1006,7 @@ fn nudge_resize(panes: &Arc<Mutex<HashMap<PaneId, Pane>>>, id: PaneId) {
 /// Refuses a socket path before it is ever bound, rather than letting a
 /// too-long one reach `iftd` and fail there with an opaque exit code. See
 /// `SUN_PATH_MAX`'s own doc comment for why this exists at all.
-fn check_socket_path(socket: &Path) -> anyhow::Result<()> {
+pub fn check_socket_path(socket: &Path) -> anyhow::Result<()> {
     // +1: sockaddr_un.sun_path always carries a terminating NUL, which is
     // part of the 104-byte budget, not extra room beyond it.
     let len = socket.as_os_str().as_bytes().len() + 1;
@@ -759,6 +1159,269 @@ mod tests {
              an attach to a daemon that is gone"
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The viewer backend (#423): a window with full control of the host, where
+/// the control is carried out BY the host (a close, a new card, a move go up as
+/// the canvas and the host applies them), so this backend never ends, starts or
+/// sweeps a session itself. Each test has a control on an ordinary backend, so
+/// a test that passes cannot be one that never reached the code.
+#[cfg(test)]
+mod viewer_tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+    use std::time::Duration;
+
+    fn frames_until_quiet(mut far: UnixStream, wait: Duration) -> Vec<Frame> {
+        far.set_read_timeout(Some(wait)).unwrap();
+        let mut reader = FrameReader::default();
+        let mut frames = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match far.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => reader.feed(&buf[..n]),
+            }
+            while let Ok(Some(f)) = reader.next() {
+                frames.push(f);
+            }
+        }
+        frames
+    }
+
+    fn pane_with_peer(backend: &DaemonBackend) -> (PaneId, UnixStream) {
+        let (near, far) = UnixStream::pair().unwrap();
+        let id = backend.register("s".into(), near, FrameReader::default(), None, (80, 24));
+        (id, far)
+    }
+
+    fn temp_sessions(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("vw-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A stand-in `ssh` that ignores its arguments and runs `body`.
+    fn stand_in(name: &str, body: &str) -> super::super::remote::RemoteHost {
+        use std::os::unix::fs::PermissionsExt;
+        let path = temp_sessions(name).join("ssh");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut host = super::super::remote::RemoteHost::new("h");
+        host.ssh = path.display().to_string();
+        host
+    }
+
+    fn reconnect_result(
+        backend: &DaemonBackend,
+    ) -> (String, Result<PaneId, super::super::remote::JoinFailure>) {
+        for _ in 0..200 {
+            let mut done = backend.take_reconnected();
+            if let Some(one) = done.pop() {
+                return one;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("the reconnect never ended");
+    }
+
+    #[test]
+    fn a_reconnect_to_a_host_that_refuses_the_connection_can_be_tried_again() {
+        use super::super::remote::JoinFailure;
+        let host = stand_in(
+            "refuse",
+            "echo 'ssh: connect to host h port 22: Connection refused' >&2; exit 255",
+        );
+        let (backend, _rx) = DaemonBackend::new_viewer(host, 1);
+        backend.begin_reconnect("s1");
+        let (id, result) = reconnect_result(&backend);
+        assert_eq!(id, "s1");
+        assert!(matches!(result, Err(JoinFailure::Retry(_))), "{result:?}");
+    }
+
+    #[test]
+    fn a_reconnect_to_a_session_the_host_no_longer_has_is_final() {
+        use super::super::remote::JoinFailure;
+        let host = stand_in("gone", "echo 'ift-join 2 error no session s1 on this host'");
+        let (backend, _rx) = DaemonBackend::new_viewer(host, 1);
+        backend.begin_reconnect("s1");
+        let (_, result) = reconnect_result(&backend);
+        match result {
+            Err(JoinFailure::Fatal(why)) => assert!(why.contains("no session s1"), "{why}"),
+            other => panic!("expected a final failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_reconnect_that_works_gives_a_pane_and_its_loss_is_told_as_detached() {
+        let dir = temp_sessions("drop");
+        let hello = Frame::Hello {
+            pid: 7,
+            cols: 100,
+            rows: 30,
+        }
+        .encode();
+        std::fs::write(dir.join("hello.bin"), hello).unwrap();
+        // The host answers, greets, and the connection drops: a killed ssh.
+        let host = stand_in(
+            "drop-ssh",
+            &format!(
+                "printf 'ift-join 2 ok\\n'; cat '{}'; sleep 0.3",
+                dir.join("hello.bin").display()
+            ),
+        );
+        let (backend, rx) = DaemonBackend::new_viewer(host, 1);
+        backend.begin_reconnect("s1");
+        let (_, result) = reconnect_result(&backend);
+        let pane = result.expect("joined");
+        assert_eq!(backend.viewer_pane_size(pane), Some((100, 30)));
+        // The end of the connection reaches the card as `Detached`, which is
+        // what makes it say so and join again.
+        let event = rx.recv_timeout(Duration::from_secs(5)).expect("an event");
+        assert_eq!(event.0, pane);
+        assert!(matches!(event.1, PaneEvent::Detached), "got another event");
+    }
+
+    #[test]
+    fn only_a_viewer_reconnects() {
+        let (backend, _rx) = DaemonBackend::new(temp_sessions("not-a-viewer"), 1);
+        backend.begin_reconnect("s1");
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(backend.take_reconnected().is_empty());
+    }
+
+    #[test]
+    fn a_viewer_pane_types_and_resizes_like_any_pane() {
+        let (backend, _rx) =
+            DaemonBackend::new_viewer(super::super::remote::RemoteHost::new("h"), 1);
+        let (id, far) = pane_with_peer(&backend);
+        backend.write_now(id, b"k");
+        backend.resize_now(id, 100, 30);
+        backend.detach_now(id);
+        let frames = frames_until_quiet(far, Duration::from_secs(2));
+        assert_eq!(
+            frames,
+            vec![
+                Frame::Data(b"k".to_vec()),
+                Frame::Resize {
+                    cols: 100,
+                    rows: 30
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn closing_a_viewers_pane_disconnects_it_and_the_host_ends_the_card() {
+        let (backend, _rx) =
+            DaemonBackend::new_viewer(super::super::remote::RemoteHost::new("h"), 1);
+        let (id, far) = pane_with_peer(&backend);
+        backend.kill_now(id);
+        // The far end sees the connection end and no Kill: ending the shell is
+        // the host's, done by its own close when the canvas goes up.
+        assert!(frames_until_quiet(far, Duration::from_secs(2)).is_empty());
+    }
+
+    #[test]
+    fn the_same_close_on_an_ordinary_backend_does_send_a_kill() {
+        let (backend, _rx) = DaemonBackend::new(temp_sessions("control-pane"), 1);
+        let (id, far) = pane_with_peer(&backend);
+        backend.write_now(id, b"k");
+        backend.resize_now(id, 100, 30);
+        backend.kill_now(id);
+        let frames = frames_until_quiet(far, Duration::from_millis(400));
+        assert_eq!(
+            frames,
+            vec![
+                Frame::Data(b"k".to_vec()),
+                Frame::Resize {
+                    cols: 100,
+                    rows: 30
+                },
+                Frame::Kill
+            ]
+        );
+    }
+
+    // `terminal.redraw` (#447): on a pane of our own it is the attach's
+    // jog, one column narrower and back, in that order.
+    #[test]
+    fn a_redraw_on_an_ordinary_pane_sends_the_two_resizes() {
+        let (backend, _rx) = DaemonBackend::new(temp_sessions("redraw-own"), 1);
+        let (id, far) = pane_with_peer(&backend);
+        assert_eq!(backend.redraw_now(id), Redraw::Asked);
+        backend.detach_now(id);
+        assert_eq!(
+            frames_until_quiet(far, Duration::from_secs(2)),
+            vec![
+                Frame::Resize { cols: 79, rows: 24 },
+                Frame::Resize { cols: 80, rows: 24 },
+            ]
+        );
+    }
+
+    // The host ignores a viewer's `Resize`, so a viewer's redraw sends none:
+    // it lets go of the connection and asks the caller to join again, which
+    // replays the ring and makes the host jog the program.
+    #[test]
+    fn a_redraw_in_a_viewer_lets_go_and_asks_to_join_again() {
+        let (backend, _rx) =
+            DaemonBackend::new_viewer(super::super::remote::RemoteHost::new("h"), 1);
+        let (id, far) = pane_with_peer(&backend);
+        assert_eq!(backend.redraw_now(id), Redraw::Rejoin);
+        assert!(
+            frames_until_quiet(far, Duration::from_secs(2)).is_empty(),
+            "no resize goes to the host, and no Kill"
+        );
+    }
+
+    #[test]
+    fn a_redraw_of_a_pane_that_is_gone_does_nothing() {
+        let (backend, _rx) = DaemonBackend::new(temp_sessions("redraw-gone"), 1);
+        assert_eq!(backend.redraw_now(999), Redraw::Asked);
+    }
+
+    #[test]
+    fn a_viewer_starts_no_shell_here_the_host_starts_it() {
+        let (backend, _rx) =
+            DaemonBackend::new_viewer(super::super::remote::RemoteHost::new("h"), 1);
+        let err = backend
+            .spawn_now(Path::new("/"), None, vec![])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("started by the host"), "{err}");
+    }
+
+    fn orphan_sweep_reaches(backend: &DaemonBackend, dir: &Path) -> bool {
+        let listener = UnixListener::bind(dir.join("zz.sock")).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        backend.kill_orphans(&[]);
+        for _ in 0..20 {
+            if listener.accept().is_ok() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        false
+    }
+
+    #[test]
+    fn a_viewer_owns_no_session_so_it_sweeps_none_at_launch() {
+        let dir = temp_sessions("viewer-sweep");
+        let (mut backend, _rx) = DaemonBackend::new(dir.clone(), 1);
+        backend.viewer = true;
+        assert!(!orphan_sweep_reaches(&backend, &dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_same_sweep_on_an_ordinary_backend_does_reach_a_session() {
+        let dir = temp_sessions("control-sweep");
+        let (backend, _rx) = DaemonBackend::new(dir.clone(), 1);
+        assert!(orphan_sweep_reaches(&backend, &dir));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

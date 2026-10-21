@@ -149,10 +149,12 @@ impl AppView {
                 } else {
                     chrome.text_bright
                 })
-                // No caret against the placeholder: the box is empty, and a
-                // caret there suggests those words are text you typed.
+                // The caret leads the placeholder, so an empty box reads as
+                // an input (field.rs `empty_with_placeholder`).
                 .when(placeholder, |d| {
-                    d.child("search or enter address".to_string())
+                    d.child(crate::field::Field::empty_with_placeholder(
+                        "search or enter address",
+                    ))
                 })
                 .when(!placeholder, |d| {
                     d.child(
@@ -196,7 +198,8 @@ impl AppView {
                     .when(row_index > 0, |d| {
                         d.border_t_1().border_color(chrome.bar_border).mt_1()
                     })
-                    .text_size(px(PALETTE_SECTION_FONT_PX * ui))
+                    .font_weight(chrome.typography.bold.weight)
+                    .text_size(px(chrome.typography.size(PALETTE_SECTION_FONT_PX) * ui))
                     .text_color(chrome.text_faint)
                     .child(section.heading.clone()),
             );
@@ -220,6 +223,10 @@ impl AppView {
                         // border, since gpui does not clip by default.
                         .overflow_hidden()
                         .when(selected, |d| d.bg(chrome.row_selected))
+                        .cursor_pointer()
+                        .when(!selected, |d| {
+                            d.hover(|s| s.bg(crate::chrome::hover_fill(chrome.row_selected)))
+                        })
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _: &MouseDownEvent, _, cx| {
@@ -272,7 +279,7 @@ impl AppView {
             .py_1()
             .border_t_1()
             .border_color(chrome.control_border)
-            .text_size(px(PALETTE_SECTION_FONT_PX * ui))
+            .text_size(px(chrome.typography.size(PALETTE_SECTION_FONT_PX) * ui))
             .text_color(chrome.text_faint)
             .child(key_cap_box("enter", chrome, ui))
             .child(div().child("open"));
@@ -320,8 +327,9 @@ impl AppView {
                             .border_color(chrome.overlay_border)
                             .rounded_md()
                             .shadow_lg()
-                            .font_family("Menlo")
-                            .text_size(px(OVERLAY_BODY_FONT_PX * ui))
+                            .font_family(chrome.typography.family.clone())
+                            .font_weight(chrome.typography.regular.weight)
+                            .text_size(px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui))
                             .text_color(chrome.text)
                             // The sheet swallows the click that would
                             // otherwise reach the backdrop and close it.
@@ -349,6 +357,30 @@ pub const FIND_BAR_WIDTH_PX: f32 = 320.;
 /// Clear of the title bar, on the right, where every browser puts it.
 pub const FIND_BAR_TOP_PX: f32 = 12.;
 pub const FIND_BAR_RIGHT_PX: f32 = 16.;
+/// The narrowest the bar gets inside a small card.
+const FIND_BAR_MIN_WIDTH_PX: f32 = 160.;
+
+/// Where the find bar goes: inside the card being searched, at its top right
+/// below the label chip when the chip is there, kept inside the window. All
+/// in screen pixels, `card` as (x, y, w, h) and `view` as (w, h). Returns
+/// (left, top, width). A card the zoom has made smaller than the bar gets a
+/// narrower bar, and one that is partly off screen gets the bar at the edge
+/// of what is visible, so it is never lost.
+pub fn find_bar_place(
+    card: (f32, f32, f32, f32),
+    view: (f32, f32),
+    width: f32,
+    margin: f32,
+    top_inset: f32,
+) -> (f32, f32, f32) {
+    let (x, y, w, _) = card;
+    let width = width
+        .min(w - margin * 2.)
+        .max(FIND_BAR_MIN_WIDTH_PX.min(width));
+    let left = (x + w - margin - width).clamp(0., (view.0 - width).max(0.));
+    let top = (y + margin + top_inset).clamp(0., (view.1 - margin).max(0.));
+    (left, top, width)
+}
 
 impl AppView {
     /// The find bar's keys. Enter steps forward, Shift+Enter back, Escape
@@ -403,11 +435,51 @@ impl AppView {
         } else {
             format!("{active}/{matches}")
         };
+        // Inside the card being searched, since that is what the search reads;
+        // the window's corner only when the card is gone.
+        let m = &self.model;
+        let bar_w = FIND_BAR_WIDTH_PX * ui;
+        let at = m
+            .find
+            .card_id
+            .as_deref()
+            .and_then(|id| m.card(id))
+            .map(|c| {
+                let b = crate::paint::screen_rect(c.rect, m.viewport);
+                let corner = m.config.ui.card_label_position;
+                // The label chip's height as `paint_labels` draws it, so the bar
+                // sits under a chip at the top right instead of covering it.
+                let chip = if !corner.left() && !corner.bottom() {
+                    m.config.ui.card_label_size as f32
+                        * infiniterm_core::chrome::corner_label_scale(m.viewport.scale) as f32
+                        * ui
+                        * 1.5
+                } else {
+                    0.
+                };
+                find_bar_place(
+                    (
+                        f32::from(b.origin.x),
+                        f32::from(b.origin.y),
+                        f32::from(b.size.width),
+                        f32::from(b.size.height),
+                    ),
+                    (m.view_size.w as f32, m.view_size.h as f32),
+                    bar_w,
+                    FIND_BAR_RIGHT_PX * ui,
+                    chip,
+                )
+            });
+        let (left, top, width) = at.unwrap_or((
+            (m.view_size.w as f32 - bar_w - FIND_BAR_RIGHT_PX * ui).max(0.),
+            FIND_BAR_TOP_PX * ui,
+            bar_w,
+        ));
         div()
             .absolute()
-            .top(px(FIND_BAR_TOP_PX * ui))
-            .right(px(FIND_BAR_RIGHT_PX * ui))
-            .w(px(FIND_BAR_WIDTH_PX * ui))
+            .top(px(top))
+            .left(px(left))
+            .w(px(width))
             .flex()
             .items_center()
             .gap_2()
@@ -418,8 +490,9 @@ impl AppView {
             .border_color(chrome.overlay_border)
             .rounded_md()
             .shadow_lg()
-            .font_family("Menlo")
-            .text_size(px(OVERLAY_BODY_FONT_PX * ui))
+            .font_family(chrome.typography.family.clone())
+            .font_weight(chrome.typography.regular.weight)
+            .text_size(px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui))
             .child(
                 div()
                     .flex_1()
@@ -428,7 +501,9 @@ impl AppView {
                     } else {
                         chrome.text_bright
                     })
-                    .when(query.is_empty(), |d| d.child("find in page".to_string()))
+                    .when(query.is_empty(), |d| {
+                        d.child(crate::field::Field::empty_with_placeholder("find in page"))
+                    })
                     .when(!query.is_empty(), |d| {
                         d.child(self.find_field.inline_composing(
                             chrome.sel_bg,
@@ -439,7 +514,7 @@ impl AppView {
             )
             .child(
                 div()
-                    .text_size(px(PALETTE_SECTION_FONT_PX * ui))
+                    .text_size(px(chrome.typography.size(PALETTE_SECTION_FONT_PX) * ui))
                     .text_color(if matches == 0 && !query.is_empty() {
                         chrome.warn
                     } else {
@@ -450,6 +525,7 @@ impl AppView {
             .child(
                 div()
                     .id("find-close")
+                    .cursor_pointer()
                     .text_color(chrome.text_faint)
                     .on_mouse_down(
                         MouseButton::Left,
@@ -462,5 +538,39 @@ impl AppView {
                     )
                     .child("✕"),
             )
+    }
+}
+
+#[cfg(test)]
+mod find_bar_tests {
+    use super::*;
+
+    const VIEW: (f32, f32) = (1600., 1000.);
+
+    #[test]
+    fn the_bar_sits_at_the_cards_top_right_under_the_label() {
+        let (left, top, width) = find_bar_place((100., 200., 800., 600.), VIEW, 320., 16., 30.);
+        assert_eq!(
+            (left, top, width),
+            (100. + 800. - 16. - 320., 200. + 16. + 30., 320.)
+        );
+    }
+
+    #[test]
+    fn a_small_card_gets_a_narrower_bar_and_never_below_the_minimum() {
+        let (_, _, width) = find_bar_place((0., 0., 300., 200.), VIEW, 320., 16., 0.);
+        assert_eq!(width, 268.);
+        let (_, _, width) = find_bar_place((0., 0., 100., 100.), VIEW, 320., 16., 0.);
+        assert_eq!(width, FIND_BAR_MIN_WIDTH_PX);
+    }
+
+    #[test]
+    fn a_card_partly_off_screen_keeps_the_bar_in_the_window() {
+        // Right edge past the window: the bar stops at the window's edge.
+        let (left, _, width) = find_bar_place((900., 100., 1200., 600.), VIEW, 320., 16., 0.);
+        assert_eq!(left + width, VIEW.0);
+        // Top edge above the window: the bar stays at the top.
+        let (_, top, _) = find_bar_place((100., -500., 800., 600.), VIEW, 320., 16., 0.);
+        assert_eq!(top, 0.);
     }
 }

@@ -71,6 +71,15 @@ impl Animator {
         }
     }
 
+    /// The corner the in-flight pan is heading for, so a held pan key adds
+    /// its step to where the view is going, not to where it has got to.
+    pub fn pending_pan(&self) -> Option<Point> {
+        match &self.anim {
+            Some(Anim::Pan { to, .. }) => Some(*to),
+            _ => None,
+        }
+    }
+
     /// Eased position, unlike the multiplicative zoom.
     pub fn pan(&mut self, vp: &mut Viewport, to: Point, now: f64) {
         if !self.animations_on {

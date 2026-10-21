@@ -1,0 +1,7 @@
+[
+  {"tag_name": "v0.1.0-310", "published_at": "2026-09-20T00:00:00Z", "draft": false,
+   "assets": [{"name": "latest.json", "download_count": 90}, {"name": "infiniterm-0.1.0-310-arm64.zip", "download_count": 5}, {"name": "infiniterm-0.1.0-310-arm64.dmg", "download_count": 2}]},
+  {"tag_name": "v0.2.0-356", "published_at": "2026-09-26T00:00:00Z", "draft": false,
+   "assets": [{"name": "latest.json", "download_count": 80}, {"name": "infiniterm-0.2.0-356-arm64.zip", "download_count": 7}, {"name": "infiniterm-0.2.0-356-arm64.dmg", "download_count": 3}]},
+  {"tag_name": "v9.9.9-999", "published_at": "2026-09-30T00:00:00Z", "draft": true, "assets": []}
+]

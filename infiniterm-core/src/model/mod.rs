@@ -20,7 +20,9 @@
 //! and `register_commands` fills it.
 pub mod canvas_cmd;
 pub mod cards_cmd;
+pub mod color_cmd;
 pub mod context;
+pub mod cover;
 pub mod dev_cmd;
 pub mod find_cmd;
 pub mod focus_cmd;
@@ -31,6 +33,7 @@ pub mod lifecycle;
 pub mod omni_cmd;
 pub mod palette_state;
 pub mod persist;
+pub mod reading_cmd;
 pub mod register;
 pub mod settings_in;
 pub mod tabs_cmd;
@@ -38,12 +41,12 @@ pub mod workspaces_cmd;
 
 use crate::agent_state::AgentState;
 use crate::backend::PaneId;
-use crate::cards::{default_size, GUTTER};
+use crate::cards::default_size;
 use crate::config::{default_config, Config};
 use crate::grid::{Point, Rect, Size, HALF_CELL};
-use crate::groups::{group_bounds, GROUP_PAD, UNGROUPED};
+use crate::groups::{group_bounds, UNGROUPED};
 use crate::keymap::{default_keymap, Keymap};
-use crate::layout::nearest_free_slot;
+use crate::layout::block_slot;
 use crate::palette_usage::Usage;
 use crate::saved_layout::CardKind;
 use crate::slots::Slot;
@@ -104,6 +107,9 @@ pub struct Card {
     /// `claude --resume <id>` ready to paste. Never cleared by the app;
     /// the next hook event overwrites it.
     pub agent_session: Option<String>,
+    /// The agent that session belongs to, by its adapter's name; `None` is
+    /// Claude Code. SAVED (`agentKind`) beside `agent_session`.
+    pub agent_kind: Option<String>,
     /// `card.protect` (Cmd+Shift+L): the card cannot be closed, by Cmd+W,
     /// by its workspace closing, or by its shell exiting (a fresh shell
     /// takes the pane instead). SAVED (`protected`); the label wears a lock
@@ -179,6 +185,16 @@ pub struct Card {
     pub split_from: Option<String>,
 }
 
+impl Card {
+    /// An agent has run here: this session's hooks gave a transcript, or
+    /// the save file kept its session id. The transcript alone is runtime,
+    /// so after a relaunch an idle Claude card lost its name to the
+    /// directory until its next hook (2026-09-25); the saved id holds.
+    pub fn runs_agent(&self) -> bool {
+        self.transcript_path.is_some() || self.agent_session.is_some()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Group {
     pub id: String,
@@ -248,9 +264,16 @@ pub enum Effect {
     /// Direct manipulation or a fit began; any in-flight animation stops.
     CancelAnimation,
     KillPane(PaneId),
+    /// A parked card was reopened: let go of its pane (it stays running)
+    /// and list its session as live, so the new body adopts it and the
+    /// ring's replay redraws the screen the card missed while closed.
+    ReleasePane(PaneId),
     KillAllPanes,
     /// `app.keycast`: the ui owns the overlay and its clock.
     ToggleKeycast,
+    /// `app.fullscreen`: the ui sends `toggleFullScreen:` to the window,
+    /// the message the green button sends, so both take one path.
+    ToggleFullScreen,
     /// `app.update.check`: ask the updater thread for a check now.
     CheckForUpdate,
     /// `app.update.install`: swap in the staged update and restart.
@@ -265,11 +288,48 @@ pub enum Effect {
         text: String,
     },
     ClearPane(PaneId),
+    /// `terminal.redraw` (#447): ask the program in this pane to repaint,
+    /// through `Panes::redraw`; the ui knows the card's size and, in a
+    /// viewer, joins the session again.
+    RedrawPane(PaneId),
     WritePane(PaneId, Vec<u8>),
     DraftDelete(String),
     /// These cards are about to move: their rects as they are now, so the
     /// ui can glide each from there to wherever the command put it.
     MarkSwap(Vec<(String, Rect)>),
+    /// Cmd+E on a terminal: the ui reads its selection and calls
+    /// `Model::find_with`.
+    FindSelection(String),
+    /// "Editor: open a file…": the ui shows the macOS open panel (#64) and
+    /// hands the pick to `Model::open_picked`, beside `from`.
+    PickFile {
+        from: Option<String>,
+    },
+    /// Cmd+Shift+C: visual mode on this terminal card; the grid is the
+    /// body's, so the ui turns it on (`Grid::visual_enter`).
+    Visual(String),
+    /// The window's colour changed (`window.color`): the ui redraws the Dock
+    /// icon (no colour is the plain icon) and, in a remote instance, for
+    /// `Save` or `Forget`, writes or removes `remote.json`. A local choice is
+    /// saved by the model as the setting `ui.windowColor`.
+    WindowColor {
+        color: Option<crate::remote_identity::Rgb>,
+        save: WindowColorSave,
+    },
+    /// `ift read`: the ui answers request `request_id` with the card's text,
+    /// since only the terminal body holds its grid (#127).
+    ReadCard {
+        request_id: u64,
+        card_id: String,
+        last: Option<usize>,
+        scrollback: bool,
+    },
+    /// The late answer to an `ift` request (`edit`, when its cover closes).
+    CliReply {
+        id: u64,
+        ok: bool,
+        text: String,
+    },
     OpenUrl(String),
     /// Written into settings.json through `patch_json_text`.
     SaveSetting {
@@ -291,6 +351,12 @@ pub enum Effect {
     Editor {
         card_id: String,
         action: EditorAction,
+    },
+    /// An action on a terminal's selection or the clipboard, which only the
+    /// ui can reach (the right-click menu's Copy, Paste and Search).
+    Terminal {
+        card_id: String,
+        action: TerminalAction,
     },
     /// An action the page owns, for the same reason.
     Browser {
@@ -328,13 +394,70 @@ pub enum Effect {
     LogDims,
 }
 
+/// The parts of a `when`'s context only a card body can answer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UiContext {
+    pub suggest_widget_visible: bool,
+    pub find_widget_visible: bool,
+    pub editor_has_selection: bool,
+    pub terminal_has_selection: bool,
+}
+
+/// What a terminal card's context menu asks of the ui.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalAction {
+    /// The selection to the clipboard.
+    Copy,
+    /// The clipboard into the program, bracketed when it asked.
+    Paste,
+    /// The selection as a web search in a browser card.
+    SearchSelection,
+}
+
+/// What the file tree's context menu does to the row it was opened on (#281).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TreeAct {
+    /// A file opens in a tab; a folder opens or closes.
+    Open,
+    RevealInFinder,
+    CopyPath,
+    CopyRelativePath,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditorAction {
+    /// A file tree row's menu action; the ui knows which row.
+    Tree(TreeAct),
     Save,
     Find,
     GoToLine,
     ToggleBlame,
     ToggleExplorer,
+    /// Leave the text: the lock is dropped and the card is an ordinary card
+    /// on the canvas again (`browser.leave`, #265).
+    Unlock,
+    /// A palette-only text transform (Batch 1, 2026-09-24): no chord of its
+    /// own, reachable only through the command palette, `cards_cmd.rs`'s
+    /// `editor.transform.*` entries.
+    Transform(TextTransform),
+}
+
+/// A pure function in `infiniterm_editor::transforms`, picked by name here
+/// since the model crate cannot depend on the ui crate that runs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextTransform {
+    Upper,
+    Lower,
+    Title,
+    Snake,
+    Kebab,
+    Camel,
+    SortLines,
+    UniqueLines,
+    ReverseLines,
+    TrimTrailingWhitespace,
+    IndentTabsToSpaces,
+    IndentSpacesToTabs,
 }
 
 /// What a browser card's page is asked to do. History is the page's own,
@@ -344,6 +467,9 @@ pub enum BrowserAction {
     Back,
     Forward,
     Reload,
+    /// Open DevTools for this page in a card beside it (the ui owns the
+    /// port and the page's target id).
+    DevTools,
 }
 
 /// Find in page. `next` false is a new search, true steps through the one
@@ -370,19 +496,69 @@ pub enum Pending {
         id: String,
         reclaim: bool,
     },
-    OpenFile {
-        from: Option<String>,
+    /// Closing cards with unsaved changes: the ids and `reclaim` to close
+    /// with, after a save or without one.
+    UnsavedClose {
+        ids: Vec<String>,
+        reclaim: bool,
     },
     NavigateBrowser(String),
-    /// An untitled editor's first save: the path typed becomes the card's,
-    /// then the save runs.
-    SaveAs(String),
+    /// Naming an untitled buffer (`open_save_as`); `then_close` is the
+    /// close the save sheet's Save is waiting to finish.
+    SaveAs {
+        id: String,
+        then_close: Option<(Vec<String>, bool)>,
+    },
+    /// The typed path is a file already: replace it?
+    SaveAsReplace {
+        id: String,
+        path: String,
+        then_close: Option<(Vec<String>, bool)>,
+    },
+    /// The About window (`app.about`): yes is "Check for Updates".
+    About,
+    /// The custom hex colour of a window (`window.color`).
+    WindowColor,
     /// `editor.goToLine`: the number typed lands in `card.line` for the body.
     GoToLine(String),
 }
 
-/// How long a notice stays up after the last one.
+/// What a colour change asks to be saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowColorSave {
+    /// A preview while the picker is open: nothing is written.
+    No,
+    Save,
+    /// Back to the default: the host's hashed colour, or none.
+    Forget,
+}
+
+/// How long the "what's new" sheet flashes when a key is typed into it.
+pub const WHATS_NEW_FLASH_MS: f64 = 450.;
+
+/// How long a short notice stays up after the last one.
 pub const NOTICE_MS: f64 = 5000.;
+/// A notice longer than this many characters gets `NOTICE_MS_PER_CHAR` more
+/// for each one, up to `NOTICE_MAX_MS`: "infiniterm 0.5.12 (884) is ready:
+/// restart to install (Cmd+Ctrl+Shift+R)" is a sentence to read, and five
+/// seconds was too short for it (Ekin, 2026-10-14).
+const NOTICE_FREE_CHARS: usize = 40;
+const NOTICE_MS_PER_CHAR: f64 = 60.;
+const NOTICE_MAX_MS: f64 = 12000.;
+/// A result sent with `notify_after_read` waits this long behind the notice
+/// on screen: a quick result ("up to date") must not wipe the line before "checking for
+/// updates…" could be read. The newer one waits its turn.
+pub const NOTICE_MIN_SHOW_MS: f64 = 1500.;
+
+/// How long `text` stays in the status bar.
+pub fn notice_duration_ms(text: &str) -> f64 {
+    let extra = text.chars().count().saturating_sub(NOTICE_FREE_CHARS) as f64 * NOTICE_MS_PER_CHAR;
+    (NOTICE_MS + extra).min(NOTICE_MAX_MS)
+}
+
+/// How long a done card is looked at before it counts as seen: the
+/// switcher's dwell, so a card walked past is not a card read.
+pub const SEEN_MS: f64 = crate::switcher::TRAIL_DWELL_MS;
 
 /// Every card's rect on one canvas at one moment. Cards closed since are
 /// skipped on the way back; cards made since are left where they are.
@@ -393,17 +569,21 @@ pub struct LayoutSnapshot {
 }
 
 /// One step of the canvas's undo trail (Cmd+Z / Cmd+Shift+Z): a move or
-/// resize, a close, a card made. Undoing a close reopens the card in its
-/// slot (a fresh shell there, the way `card.reopen` does); undoing a new
-/// card or a split closes it. One trail for all three, in the order they
-/// happened, because a close among moves is the thing worth walking back.
+/// resize, or a close. Undoing a close reopens the card in its slot (a
+/// fresh shell there, the way `card.reopen` does). One trail, in the order
+/// things happened, because a close among moves is the thing worth walking
+/// back.
+///
+/// Undo never CLOSES a card. Making a card was a step from 2026-09-21 to
+/// 09-26, so Cmd+Z on a card you had opened and started working in closed
+/// it, shell and all (Ekin: "pretty dangerous"); an unwanted new card is a
+/// Cmd+W away. For the same reason there is no redo of a close.
 #[derive(Clone, Debug, PartialEq)]
 pub enum UndoStep {
     Rects(LayoutSnapshot),
     /// The card as `close_card` kept it: runtime facts stripped. Boxed
     /// because a Card is ten times a snapshot and the trail is a Vec.
     Closed(Box<Card>),
-    Created(String),
 }
 
 /// How many layout changes Cmd+Z can walk back.
@@ -418,14 +598,35 @@ pub struct Model {
     /// The card last focused inside each group (`UNGROUPED` for the loose
     /// set), so stepping back into a group returns to where you were.
     pub last_focused: HashMap<String, String>,
-    /// When each workspace was last left (`now_ms`), so its tab can show
-    /// the turns that finished while you were elsewhere and stop once you
-    /// have been back. Not saved: after a restart nothing is unseen.
-    pub left_at: HashMap<String, f64>,
+    /// The window is the key window; the ui sets it before each tick. A
+    /// done card is only SEEN while the app is in front.
+    pub app_active: bool,
+    /// The focused done card and since when it has been watched, with the
+    /// app in front (`clear_seen_done`). Session-only.
+    pub done_watch: Option<(String, f64)>,
     /// Every card focused this session, oldest first, each once. Closing
     /// the focused card goes back along it; not saved, a restart has no
     /// "before".
     pub focus_trail: Vec<String>,
+    /// In-place editors (`cover.rs`): cover card id to the terminal card it
+    /// lies over, where each pair was last synced, and the `ift` request
+    /// each one answers when it closes. Session-only.
+    pub covers: HashMap<String, String>,
+    pub cover_at: HashMap<String, Rect>,
+    pub edit_waiters: HashMap<String, u64>,
+    /// Set by an `ift` verb that answers later (`edit`): the ui must not
+    /// reply to this request now.
+    pub reply_deferred: bool,
+    /// A close waiting for its Save to land (`save_then_close`): the ids,
+    /// `reclaim`, and when to give up.
+    pub close_after_save: Option<(Vec<String>, bool, f64)>,
+    /// Each terminal card's escape-sequence scanner and the command in
+    /// flight (`program_state`), by card id. Session-only: a command
+    /// running across a restart is simply not known about.
+    pub programs: std::collections::HashMap<
+        String,
+        (crate::program_state::Scanner, crate::program_state::Track),
+    >,
     /// The focus as it stands: which card, when it took the focus, and
     /// whether that visit has earned a place in the trail yet
     /// (`switcher::earns_trail`). A card crossed with Cmd+Alt+Arrow on the
@@ -434,8 +635,6 @@ pub struct Model {
     pub focus_visit: Option<FocusVisit>,
     /// The card switcher (Ctrl+Tab), while it is up.
     pub switcher: Option<Switcher>,
-    /// The next card's `number`; set past the highest loaded one.
-    pub next_number: u32,
     /// Layout undo (Cmd+Z / Cmd+Shift+Z): every card's rect on the active
     /// canvas as it was before each move, swap, drop, split or resize.
     /// Session-only. A snapshot is taken by `remember_layout` at the top
@@ -452,14 +651,30 @@ pub struct Model {
     /// Whether the view is FRAMING one card (`canvas.zoom.fitCard`): while
     /// it holds, moving focus re-fits the view instead of nudging.
     pub framing: bool,
+    /// The card `canvas.zoom.fitCard` framed, while framing holds: Cmd+1 on
+    /// it again enters reading mode.
+    pub framed_card: Option<String>,
+    /// Reading mode (`reading_cmd.rs`), set only while the view is on one
+    /// terminal card's bottom at `ui.readZoom`.
+    pub reading: Option<reading_cmd::Reading>,
     /// The scale an in-flight zoom is heading for, set by the animator, so a
     /// held key ramps from the target rather than the passing scale.
     pub pending_scale: Option<f64>,
+    /// The same for a keyboard pan (`canvas.pan.*`, #398): the corner the
+    /// animation in flight is heading for.
+    pub pending_pan: Option<crate::grid::Point>,
     pub ui_scale: f64,
     pub usage: Usage,
     pub palette: PaletteState,
     pub prompt: crate::prompt::Prompt<Pending>,
     pub shortcuts_open: bool,
+    /// The "what's new" overlay (#402) is up, and until when it is flashing
+    /// because a key was typed into it (`whats_new_flash_until`, ms).
+    pub whats_new_open: bool,
+    pub whats_new_flash_until: f64,
+    /// Set when this instance runs its cards on a host (`ift connect`, #118):
+    /// what the window shows, and the reason browser cards are refused.
+    pub remote: Option<crate::remote_identity::RemoteIdentity>,
     pub omni: omni_cmd::OmniState,
     pub find: find_cmd::FindState,
     /// Where browser cards have been. Loaded once at startup and written
@@ -467,20 +682,56 @@ pub struct Model {
     pub history: crate::omni::history::History,
     pub notice: Option<String>,
     notice_until: f64,
+    /// When the notice on screen first appeared, and the one waiting for
+    /// `NOTICE_MIN_SHOW_MS` to pass before it replaces it.
+    notice_since: f64,
+    notice_pending: Option<String>,
     /// Saved-layout state: nothing is saved until `loaded`; nothing is ever
     /// saved while `read_only` (the file was written by a newer build).
     pub loaded: bool,
+    /// No save file existed at load: the very first launch on this Mac (or
+    /// in this data dir). It is what makes the first seed the welcome canvas
+    /// rather than one bare terminal (`seed_first_card`, `welcome.rs`).
+    pub first_run: bool,
     pub read_only: bool,
     pub dirty_layout: bool,
+    /// A viewer has applied at least one host snapshot, so its viewport,
+    /// zoom, focus and workspace are its own from here on.
+    pub snapshot_seen: bool,
+    /// The revision of the canvas a viewer and its host share (#423). On the
+    /// host: the number of the last layout it published. On a viewer: the
+    /// revision of the last snapshot it applied, which an edit it sends up
+    /// names, so the host can tell an edit made on an old canvas from one made
+    /// on the current one.
+    pub layout_rev: u64,
+    /// The last canvases the host published, by revision (#423). A viewer's
+    /// edit names the revision it was made on; the host works out WHAT the
+    /// viewer changed by comparing the edit with that canvas, and applies only
+    /// that to its current state.
+    pub published: std::collections::VecDeque<(u64, crate::saved_layout::SavedLayout)>,
     pub config: Config,
     pub keymap: Keymap,
+    /// Bindings with a `when` from keybindings.json (#269); the last one whose
+    /// clause holds wins over `keymap` (`conditional_for`).
+    pub conditional_keys: Vec<crate::keymap::CondBinding>,
+    /// What only the ui knows about the keyboard's context, written by it each
+    /// frame (the completion popup, the editor's find panel and selection).
+    pub ui_context: UiContext,
     pub settings_error: Option<String>,
+    /// theme.json's chrome overrides (#425), kept while a later edit is bad.
+    pub chrome_theme: crate::theme_file::ChromeTheme,
     pub theme_names: Vec<String>,
     /// the snippets folder's files, read by the ui when the picker opens
     /// (`Effect::RefreshSnippets`), the way `theme_names` is.
     pub snippets: Vec<crate::snippets::Snippet>,
     pub theme_current: Option<String>,
     pub theme_before_preview: Option<String>,
+    /// The colour the window had when its colour picker opened (`Some(None)`:
+    /// none), which a dismissed picker puts back (`color_cmd.rs`).
+    pub window_color_before_preview: Option<Option<crate::remote_identity::Rgb>>,
+    /// The local instance's colour, from `ui.windowColor` (`None`: the normal
+    /// title bar). A remote instance wears its host's instead.
+    pub local_color: Option<crate::remote_identity::Rgb>,
     /// Where the FIRST card starts; every card after inherits from the one it
     /// was opened next to. The home directory, or `startingDir`.
     pub start_dir: String,
@@ -493,8 +744,13 @@ pub struct Model {
     /// as every other runtime fact. Cheap closing is what keeps a canvas
     /// from silting up, and it is only cheap if it is undoable.
     pub closed: Vec<Card>,
-    /// Closing a dirty editor takes two presses; the first says why.
-    discard_armed: Option<(String, f64)>,
+    /// Closed terminal cards whose program is still running and watched
+    /// (lifecycle.rs, `Parked`). Runtime-only: a relaunch's orphan sweep
+    /// ends whatever is left.
+    pub parked: Vec<lifecycle::Parked>,
+    /// The backend can keep a closed card's program for a reopen (the
+    /// daemon); set by the ui at startup. False in tests unless set.
+    pub can_park: bool,
     /// `dev.stress.zoom` in progress: the step taken so far and when the
     /// next is due. Steps run from `tick`, which is the model's only clock.
     pub stress_zoom: Option<(u32, f64)>,
@@ -518,6 +774,12 @@ impl Default for Model {
     }
 }
 
+/// The lowest card number from 1 up that `used` does not hold. Pure, for
+/// `Model::take_number`, the load and a reopened card.
+pub fn lowest_free_number(used: &[u32]) -> u32 {
+    (1..).find(|n| !used.contains(n)).unwrap_or(1)
+}
+
 impl Model {
     /// What to call the app's modifier and the terminal's when a chord is
     /// shown to somebody: the panel, the palette's hints, the keycast. A
@@ -534,44 +796,68 @@ impl Model {
             active_workspace: None,
             selection: Selection::default(),
             last_focused: HashMap::new(),
-            left_at: HashMap::new(),
+            app_active: true,
+            done_watch: None,
             focus_trail: Vec::new(),
+            covers: HashMap::new(),
+            cover_at: HashMap::new(),
+            edit_waiters: HashMap::new(),
+            reply_deferred: false,
+            close_after_save: None,
+            programs: std::collections::HashMap::new(),
             focus_visit: None,
             switcher: None,
-            next_number: 1,
             layout_undo: Vec::new(),
             layout_redo: Vec::new(),
             undoing: false,
             viewport: INITIAL_VIEWPORT,
             view_size: Size { w: 0., h: 0. },
             framing: false,
+            framed_card: None,
+            reading: None,
             pending_scale: None,
+            pending_pan: None,
             ui_scale: 1.,
             usage: Usage::default(),
             palette: PaletteState::default(),
             prompt: crate::prompt::Prompt::default(),
             shortcuts_open: false,
+            whats_new_open: false,
+            whats_new_flash_until: 0.,
+            remote: None,
             omni: omni_cmd::OmniState::default(),
             find: find_cmd::FindState::default(),
             history: crate::omni::history::History::default(),
             notice: None,
             notice_until: 0.,
+            notice_since: 0.,
+            notice_pending: None,
             loaded: false,
+            first_run: false,
             read_only: false,
             dirty_layout: false,
+            snapshot_seen: false,
+            layout_rev: 0,
+            published: std::collections::VecDeque::new(),
             config: default_config(),
             keymap: default_keymap(),
+            conditional_keys: vec![],
+            ui_context: UiContext::default(),
             settings_error: None,
+            chrome_theme: Default::default(),
             theme_names: vec![],
             snippets: vec![],
             theme_current: None,
             theme_before_preview: None,
+            window_color_before_preview: None,
+            local_color: None,
             start_dir: "/".into(),
             home: String::new(),
             dev_build: cfg!(debug_assertions),
             config_pairs: vec![],
             closed: vec![],
-            discard_armed: None,
+            parked: vec![],
+            can_park: false,
             stress_zoom: None,
             now_ms: 0.,
             effects: vec![],
@@ -585,15 +871,18 @@ impl Model {
         // A card sat in earns its place without waiting for the focus to
         // leave it: the trail is read by the switcher and by a close.
         self.promote_focus();
+        self.promote_programs();
+        self.clear_seen_done();
+        self.end_parked();
+        self.sync_covers();
+        self.close_when_saved();
+        if self.pending_notice_due(now_ms) {
+            if let Some(text) = self.notice_pending.take() {
+                self.show_notice(text);
+            }
+        }
         if self.notice.is_some() && now_ms >= self.notice_until {
             self.notice = None;
-        }
-        if self
-            .discard_armed
-            .as_ref()
-            .is_some_and(|(_, until)| now_ms >= *until)
-        {
-            self.discard_armed = None;
         }
         if let Some((n, due)) = self.stress_zoom {
             if now_ms >= due {
@@ -605,7 +894,19 @@ impl Model {
     /// The notice's time is up: the next tick clears it, so a frame is due.
     /// A notice on screen needs no other frame; it does not move.
     pub fn notice_expired(&self, now_ms: f64) -> bool {
-        self.notice.is_some() && now_ms >= self.notice_until
+        (self.notice.is_some() && now_ms >= self.notice_until) || self.pending_notice_due(now_ms)
+    }
+
+    fn pending_notice_due(&self, now_ms: f64) -> bool {
+        self.notice_pending.is_some() && now_ms >= self.notice_since + NOTICE_MIN_SHOW_MS
+    }
+
+    fn show_notice(&mut self, text: String) {
+        if self.notice.as_deref() != Some(text.as_str()) {
+            self.notice_since = self.now_ms;
+        }
+        self.notice_until = self.now_ms + notice_duration_ms(&text);
+        self.notice = Some(text);
     }
 
     pub fn take_effects(&mut self) -> Vec<Effect> {
@@ -617,8 +918,23 @@ impl Model {
     /// indistinguishable from an unbound key. The timer restarts, so holding
     /// a key leaves the notice up throughout.
     pub fn notify(&mut self, text: impl Into<String>) {
-        self.notice = Some(text.into());
-        self.notice_until = self.now_ms + NOTICE_MS;
+        self.notice_pending = None;
+        self.show_notice(text.into());
+    }
+
+    /// Like `notify`, but a notice younger than `NOTICE_MIN_SHOW_MS` is not
+    /// wiped: this one waits its turn. For a result that follows a progress
+    /// line ("checking for updates…" then "up to date"), which a quick
+    /// answer erased before it could be read. A refusal after a keypress
+    /// must NOT wait, so `notify` stays immediate.
+    pub fn notify_after_read(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        let young = self.notice.is_some() && self.now_ms < self.notice_since + NOTICE_MIN_SHOW_MS;
+        if young && self.notice.as_deref() != Some(text.as_str()) {
+            self.notice_pending = Some(text);
+        } else {
+            self.notify(text);
+        }
     }
 
     /// Arms a move animation for `ids`, BEFORE their rects change.
@@ -659,8 +975,35 @@ impl Model {
         }
     }
 
+    /// The cards on the active canvas you can see: a terminal under an
+    /// in-place editor (`cover.rs`) is left out, so navigation, tidy and
+    /// fit-all treat the pair as the one card on screen.
+    /// The number the status bar shows: every card, or this workspace's
+    /// with `ui.workspaceIsolation` (#101).
+    pub fn card_count(&self) -> usize {
+        if self.config.ui.workspace_isolation {
+            self.here().len()
+        } else {
+            self.cards.len()
+        }
+    }
+
+    /// A browser card in a remote instance: its page would load on THIS Mac,
+    /// not through the host, which is not what the window says it is. Off
+    /// until browsing through the server is built. True when it was refused.
+    pub(super) fn browser_refused(&mut self) -> bool {
+        if self.remote.is_none() {
+            return false;
+        }
+        self.notify("browser cards are off in a remote instance");
+        true
+    }
+
     pub fn here(&self) -> Vec<&Card> {
         self.cards_on(self.active_workspace.as_deref())
+            .into_iter()
+            .filter(|c| self.covered_by(&c.id).is_none())
+            .collect()
     }
 
     pub fn placed(&self, cards: &[&Card]) -> Vec<crate::cards::PlacedCard> {
@@ -683,26 +1026,21 @@ impl Model {
                 h: self.config.cards.height,
             },
             self.view_size,
+            crate::cards::parse_shape(&self.config.cards.shape).unwrap_or(Some(16. / 9.)),
         )
     }
 
-    /// The free slot nearest the active card (`after`), so a new card opens
-    /// beside the one it came from wherever that is; the window's shape
-    /// decides when a row ends (`layout::nearest_free_slot`). `origin`
-    /// moves the grid's anchor (a card joining a group starts from its
-    /// siblings). Only cards on the SAME canvas are in the way.
-    fn next_slot(
-        &self,
-        origin: Option<Point>,
-        avoid: &[Rect],
-        workspace_id: &str,
-        after: Option<Rect>,
-    ) -> Rect {
+    /// The first free slot in block order (`layout::block_slot`): a square
+    /// block grown from the top-left, the same place whatever card is
+    /// focused, holes first. `origin` moves the grid's anchor (a card
+    /// joining a group starts from its siblings). Only cards on the SAME
+    /// canvas are in the way.
+    fn next_slot(&self, origin: Option<Point>, avoid: &[Rect], workspace_id: &str) -> Rect {
         let size = self.default_size();
-        let origin = origin.unwrap_or(Point {
+        let anchor = Point {
             x: HALF_CELL,
             y: HALF_CELL,
-        });
+        };
         let mut taken: Vec<Rect> = self
             .cards
             .iter()
@@ -710,12 +1048,11 @@ impl Model {
             .map(|c| c.rect)
             .collect();
         taken.extend_from_slice(avoid);
-        let aspect = if self.view_size.h > 0. {
-            self.view_size.w / self.view_size.h
-        } else {
-            1.8
-        };
-        nearest_free_slot(&taken, size, origin, GUTTER, after, aspect)
+        match origin {
+            // A card joining a group starts from its siblings.
+            Some(origin) => block_slot(&taken, size, origin, self.gap()),
+            None => crate::layout::fill_slot(&taken, size, anchor, self.gap()),
+        }
     }
 
     pub fn add_card(&mut self, cwd: &str, opts: NewCard) -> String {
@@ -734,7 +1071,7 @@ impl Model {
         let origin = bounding_rect(&siblings).map(|b| Point { x: b.x, y: b.y });
         let rect = opts
             .rect
-            .unwrap_or_else(|| self.next_slot(origin, &opts.avoid, &workspace_id, opts.after));
+            .unwrap_or_else(|| self.next_slot(origin, &opts.avoid, &workspace_id));
         let card = Card {
             id: opts.id.unwrap_or_else(new_id),
             kind: opts.kind,
@@ -752,6 +1089,7 @@ impl Model {
             command: opts.command,
             transcript_path: None,
             agent_session: None,
+            agent_kind: None,
             number: self.take_number(),
             session: None,
             kitty_keys: false,
@@ -782,20 +1120,18 @@ impl Model {
         };
         let id = card.id.clone();
         self.cards.push(card);
-        // Every card made after the layout loaded is a step on the undo
-        // trail; the ones the load itself makes are not.
-        if self.loaded {
-            self.record_undo(UndoStep::Created(id.clone()));
-        }
         self.dirty_layout = true;
         id
     }
 
-    /// The next card number, never handed out twice in a session.
-    pub fn take_number(&mut self) -> u32 {
-        let n = self.next_number;
-        self.next_number += 1;
-        n
+    /// The number a new card gets: the lowest one no card has. It counted
+    /// up forever until 2026-09-24, so a week of cards on Ekin's canvas
+    /// would have read #2332; a closed card's number goes back into use.
+    /// The price, taken knowingly: `#7` from last week may be another card
+    /// now.
+    pub fn take_number(&self) -> u32 {
+        let used: Vec<u32> = self.cards.iter().map(|c| c.number).collect();
+        lowest_free_number(&used)
     }
 
     /// The one door for a mask. The ui reconciles its decoy panes from
@@ -859,6 +1195,61 @@ impl Model {
             v.typed = true;
         }
         self.promote_focus();
+        // Typing while reading: the view goes back to the bottom, where the
+        // prompt is.
+        self.read_to_bottom();
+        // Typing into a done card is reading it.
+        if let Some(id) = self
+            .focused()
+            .filter(|c| c.agent == AgentState::Done)
+            .map(|c| c.id.clone())
+        {
+            self.mark_seen(&id);
+        }
+    }
+
+    /// Done means "finished and you have not looked": once the focused done
+    /// card has been watched `SEEN_MS` with the app in front, it goes grey.
+    /// Before 2026-09-27 a done card stayed green until its next turn, and
+    /// seven green cards on one canvas said nothing (Ekin). The dwell is
+    /// the switcher's (`TRAIL_DWELL_MS`), so walking past a card with
+    /// Cmd+Alt+Arrow does not count as reading it.
+    fn clear_seen_done(&mut self) {
+        let watched = self
+            .focused()
+            .filter(|c| self.app_active && c.agent == AgentState::Done)
+            .map(|c| c.id.clone());
+        let Some(id) = watched else {
+            self.done_watch = None;
+            return;
+        };
+        match &self.done_watch {
+            Some((w, since)) if *w == id => {
+                if self.now_ms - since >= SEEN_MS {
+                    self.mark_seen(&id);
+                }
+            }
+            _ => self.done_watch = Some((id, self.now_ms)),
+        }
+    }
+
+    fn mark_seen(&mut self, id: &str) {
+        self.done_watch = None;
+        if let Some(c) = self.card_mut(id) {
+            c.agent = AgentState::None;
+        }
+        self.effects.push(Effect::AgentLog(format!(
+            "{}  seen -> none",
+            &id[..8.min(id.len())]
+        )));
+    }
+
+    /// A seen done card is due to go grey: the ui asks for a frame then,
+    /// since nothing else may be drawing.
+    pub fn done_seen_due(&self, now_ms: f64) -> bool {
+        self.done_watch
+            .as_ref()
+            .is_some_and(|(_, since)| now_ms - since >= SEEN_MS)
     }
 
     /// Put the current visit in the trail if it has earned its place. Run
@@ -945,6 +1336,13 @@ impl Model {
         .collect()
     }
 
+    /// Whether `id` is one of several selected cards: a right-click on it keeps
+    /// the selection and the menu acts on all of it (#346), as in Finder.
+    pub fn in_multi_selection(&self, id: &str) -> bool {
+        let selected = self.selected_ids();
+        selected.len() > 1 && selected.iter().any(|s| s == id)
+    }
+
     pub fn selected_ids(&self) -> Vec<String> {
         self.selected().into_iter().map(|c| c.id.clone()).collect()
     }
@@ -966,6 +1364,17 @@ impl Model {
     }
 
     /// A group's frame, derived from its members on `workspace_id`.
+    /// The space between cards (`cards.gap`).
+    pub fn gap(&self) -> f64 {
+        self.config.cards.gap
+    }
+
+    /// A group's frame sits half a gap outside its cards, so two frames fit
+    /// in one gap and groups line up on the grid like cards.
+    pub fn group_pad(&self) -> f64 {
+        self.gap() / 2.
+    }
+
     pub fn group_frame(&self, group_id: &str, workspace_id: &str) -> Option<Rect> {
         let rects: Vec<Rect> = self
             .cards
@@ -973,7 +1382,7 @@ impl Model {
             .filter(|c| c.group_id.as_deref() == Some(group_id) && c.workspace_id == workspace_id)
             .map(|c| c.rect)
             .collect();
-        group_bounds(&rects, GROUP_PAD)
+        group_bounds(&rects, self.group_pad())
     }
 
     /// Every group's frame except one, on one canvas: what placement treats
@@ -1056,7 +1465,6 @@ impl Model {
         {
             leaving.viewport = vp;
             leaving.focused = leaving_focus;
-            self.left_at.insert(leaving.id.clone(), self.now_ms);
         }
         let Some(entering) = self.workspaces.iter().find(|w| w.id == id) else {
             return;
@@ -1064,7 +1472,7 @@ impl Model {
         self.viewport = entering.viewport;
         let remembered = entering.focused.clone();
         self.active_workspace = Some(id.to_string());
-        self.framing = false;
+        self.stop_framing();
         self.effects.push(Effect::CancelAnimation);
         let here = self.focused().is_some_and(|c| c.workspace_id == id);
         if !here {
@@ -1162,8 +1570,6 @@ pub struct NewCard {
     pub zoom: Option<f64>,
     pub command: Option<String>,
     pub line: Option<u64>,
-    /// The card this one is opened from: placement starts just past it.
-    pub after: Option<Rect>,
 }
 
 #[cfg(test)]

@@ -16,9 +16,14 @@ pub enum AgentState {
     None,
     /// Mid-turn. Nothing is needed from you.
     Working,
-    /// Blocked on you: a permission prompt, a question, or a turn that
-    /// ended badly. The only state worth interrupting yourself for.
+    /// Blocked on you: a permission prompt, a question. The only state
+    /// worth interrupting yourself for.
     Waiting,
+    /// Something failed: a command that exited non-zero, a turn that ended
+    /// in error, a program reporting an error. Its own state and colour
+    /// since 2026-09-25 (Ekin: "asking" and "broke" are different news);
+    /// before, both were Waiting.
+    Failed,
     /// The turn finished. Its result is there when you want it.
     Done,
 }
@@ -33,12 +38,26 @@ pub enum AgentState {
 pub const STALE_MS: f64 = 300_000.;
 
 impl AgentState {
+    /// The other way round, for a viewer reading the host's states (#423).
+    /// A word it does not know is no state: a newer host with a new state
+    /// must not break an older viewer.
+    pub fn from_name(name: &str) -> AgentState {
+        match name {
+            "working" => AgentState::Working,
+            "waiting" => AgentState::Waiting,
+            "failed" => AgentState::Failed,
+            "done" => AgentState::Done,
+            _ => AgentState::None,
+        }
+    }
+
     /// For the log, and for `ift ls`.
     pub fn name(self) -> &'static str {
         match self {
             AgentState::None => "none",
             AgentState::Working => "working",
             AgentState::Waiting => "waiting",
+            AgentState::Failed => "failed",
             AgentState::Done => "done",
         }
     }
@@ -47,8 +66,8 @@ pub fn apply_hook_event(prev: AgentState, event: &str) -> AgentState {
     match event {
         "UserPromptSubmit" | "PreToolUse" | "PostToolUse" => AgentState::Working,
         // A turn that ended in failure is exactly when you want to look, so
-        // it waits for you rather than reporting itself done.
-        "StopFailure" => AgentState::Waiting,
+        // it says so rather than reporting itself done.
+        "StopFailure" => AgentState::Failed,
         // Claude Code sends Notification for two different things: it wants
         // permission MID-TURN, and it has been waiting on your input for a
         // minute. Only the first is the agent being blocked on you; the
@@ -57,9 +76,28 @@ pub fn apply_hook_event(prev: AgentState, event: &str) -> AgentState {
         // A permission prompt can only happen while a turn is running.
         "Notification" if prev == AgentState::Working => AgentState::Waiting,
         "Notification" => prev,
+        // Codex's approval prompt (and Claude's, where it sends one): an
+        // explicit request, blocked on you whenever it comes.
+        "PermissionRequest" => AgentState::Waiting,
         "Stop" => AgentState::Done,
         "SessionStart" | "SessionEnd" => AgentState::None,
         _ => prev,
+    }
+}
+/// The command that resumes an agent's session in a fresh shell, offered
+/// as a lost session's last history line (terminals.rs). `kind` is the
+/// card's `agent_kind`; none is Claude Code. Checked against each CLI:
+/// `codex resume <SESSION_ID>`, `opencode --session <id>`,
+/// `cursor agent --resume <id>`, `agy --conversation <id>`.
+pub fn resume_command(kind: Option<&str>, session: &str) -> Option<String> {
+    match kind {
+        None | Some("claude") => Some(format!("claude --resume {session}")),
+        Some("codex") => Some(format!("codex resume {session}")),
+        Some("opencode") => Some(format!("opencode --session {session}")),
+        Some("cursor") => Some(format!("cursor agent --resume {session}")),
+        Some("antigravity") => Some(format!("agy --conversation {session}")),
+        // Pi reports a session file, not an id it resumes by.
+        _ => None,
     }
 }
 pub fn staleness(
@@ -77,6 +115,42 @@ pub fn staleness(
 
 #[cfg(test)]
 mod tests {
+    // Each agent's own resume command, and none for an agent without one.
+    #[test]
+    fn the_resume_command_is_the_agents_own() {
+        assert_eq!(
+            resume_command(Option::None, "a1").as_deref(),
+            Some("claude --resume a1")
+        );
+        assert_eq!(
+            resume_command(Some("codex"), "a1").as_deref(),
+            Some("codex resume a1")
+        );
+        assert_eq!(
+            resume_command(Some("opencode"), "a1").as_deref(),
+            Some("opencode --session a1")
+        );
+        assert_eq!(
+            resume_command(Some("cursor"), "a1").as_deref(),
+            Some("cursor agent --resume a1")
+        );
+        assert_eq!(
+            resume_command(Some("antigravity"), "a1").as_deref(),
+            Some("agy --conversation a1")
+        );
+        assert_eq!(resume_command(Some("pi"), "a1"), Option::None);
+    }
+
+    #[test]
+    fn a_permission_request_is_waiting_whenever_it_comes() {
+        use super::AgentState as S;
+        assert_eq!(
+            apply_hook_event(S::Working, "PermissionRequest"),
+            S::Waiting
+        );
+        assert_eq!(apply_hook_event(S::Done, "PermissionRequest"), S::Waiting);
+    }
+
     use super::*;
     use AgentState::*;
     #[test]
@@ -91,7 +165,7 @@ mod tests {
     fn being_blocked_on_you_is_not_the_same_as_being_finished() {
         assert_eq!(apply_hook_event(Working, "Stop"), Done);
         assert_eq!(apply_hook_event(Working, "Notification"), Waiting);
-        assert_eq!(apply_hook_event(Working, "StopFailure"), Waiting);
+        assert_eq!(apply_hook_event(Working, "StopFailure"), Failed);
     }
 
     // Claude Code nags a minute after every turn ends. That is not the agent

@@ -59,6 +59,12 @@ pub fn encode_with(k: &Key, app_cursor: bool, kitty: bool) -> Option<Vec<u8>> {
             (true, false, "delete") => return Some(b"\x1bd".to_vec()),
             (false, true, "left") => return Some(vec![0x01]),
             (false, true, "right") => return Some(vec![0x05]),
+            // Cmd+Backspace / Cmd+Delete delete to the line's start / end,
+            // a Mac field's keys, as iTerm2 and Ghostty send them: Ctrl+U
+            // and Ctrl+K. Our zsh integration binds Ctrl+U to readline's
+            // meaning (to the start), not zsh's (the whole line).
+            (false, true, "backspace") => return Some(vec![0x15]),
+            (false, true, "delete") => return Some(vec![0x0b]),
             _ => {}
         }
     }
@@ -241,6 +247,31 @@ mod tests {
         let mut k = key("s", Some("s"));
         k.alt = true;
         assert_eq!(encode(&k, false), Some(b"\x1bs".to_vec()));
+    }
+
+    // A Mac field's delete-to-the-ends, and the Shift moves our zsh
+    // integration selects with (shell/infiniterm.zsh binds these bytes).
+    #[test]
+    fn line_editing_keys_send_what_the_zsh_integration_binds() {
+        let cmd = |name| Key {
+            cmd: true,
+            ..key(name, None)
+        };
+        assert_eq!(encode(&cmd("backspace"), false), Some(vec![0x15]));
+        assert_eq!(encode(&cmd("delete"), false), Some(vec![0x0b]));
+        let shift = |name| Key {
+            shift: true,
+            ..key(name, None)
+        };
+        assert_eq!(encode(&shift("left"), false), Some(b"\x1b[1;2D".to_vec()));
+        assert_eq!(encode(&shift("home"), false), Some(b"\x1b[1;2H".to_vec()));
+        assert_eq!(encode(&shift("end"), false), Some(b"\x1b[1;2F".to_vec()));
+        let word = Key {
+            shift: true,
+            alt: true,
+            ..key("right", None)
+        };
+        assert_eq!(encode(&word, false), Some(b"\x1b[1;4C".to_vec()));
     }
 
     // Alt+Backspace deletes the word behind; Alt+Delete must delete the

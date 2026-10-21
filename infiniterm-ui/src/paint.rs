@@ -9,6 +9,31 @@
 //! SCREEN pixels then divided by the scale, so a 2 px border is 2 px at 25%
 //! and at 400%. Maximise paints the focused card alone, filling the view.
 use crate::{now_ms, AppView, SWAP_MS};
+
+/// Big text centred on a slot that stands for a card that is somewhere else:
+/// the card in its own window (#356), a host's card a viewer cannot show (#423).
+fn paint_slot_text(
+    window: &mut Window,
+    cx: &mut App,
+    b: Bounds<Pixels>,
+    text: &str,
+    fp: Pixels,
+    font: &gpui::Font,
+    color: gpui::Hsla,
+) {
+    let line = crate::text::shape(window, text, fp, font, color);
+    let tb = Bounds::new(
+        point(
+            b.origin.x + b.size.width / 2. - line.width / 2.,
+            b.origin.y + b.size.height / 2. - fp * 0.6,
+        ),
+        size(line.width, fp * 1.4),
+    );
+    crate::text::paint_in(window, cx, &line, tb, px(0.));
+}
+
+/// Font size, in world points, of the text on a card that is in its own window.
+const EXTRACTED_TEXT_PT: f32 = 36.;
 use gpui::{fill, outline, point, px, size, App, BorderStyle, Bounds, Pixels, Window};
 use infiniterm_core::agent_state::AgentState;
 use infiniterm_core::card_label::split_label;
@@ -88,6 +113,9 @@ fn paint_hover_band(
     }
 }
 
+/// The grid's slots drawn around a dragged ghost: there to be seen, never
+/// louder than the cards.
+const GHOST_SLOT_ALPHA: f32 = 0.35;
 /// The ghost's fill: enough to read as a slot, not enough to hide what is
 /// under it.
 const GHOST_FILL_ALPHA: f32 = 0.08;
@@ -135,19 +163,15 @@ impl AppView {
     /// element's paint callback with the content area's bounds.
     pub fn frame(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
         let now = now_ms();
-        self.frames += 1;
+        self.frame_rate.frame(now);
         // Cleared first: anything drained below that changes the chrome sets
         // it again, and `needs_frame` is asked right after this returns.
         self.redraw = false;
-        if self.fps_window.elapsed().as_secs_f32() >= 1. {
-            self.fps = self.frames as f32 / self.fps_window.elapsed().as_secs_f32();
-            self.frames = 0;
-            self.fps_window = std::time::Instant::now();
-        }
         self.model.view_size = Size {
             w: f32::from(bounds.size.width) as f64,
             h: f32::from(bounds.size.height) as f64,
         };
+        self.model.app_active = window.is_window_active();
         self.model.tick(now);
         self.last_paint_ms = now;
         self.note_window(window.window_bounds(), now);
@@ -160,9 +184,13 @@ impl AppView {
         self.animator
             .step(&mut self.model.viewport, self.model.view_size, now);
         self.model.pending_scale = self.animator.pending_scale();
-        let mut seeded = self.seeded;
-        self.model.seed_first_card(&mut seeded);
-        self.seeded = seeded;
+        self.model.pending_pan = self.animator.pending_pan();
+        // A viewer's canvas is the host's: nothing is seeded onto it.
+        if !self.viewer {
+            let mut seeded = self.seeded;
+            self.model.seed_first_card(&mut seeded);
+            self.seeded = seeded;
+        }
         self.perform_effects();
         if std::mem::take(&mut self.show_character_palette) {
             window.show_character_palette();
@@ -171,8 +199,13 @@ impl AppView {
         self.reconcile_bodies(window);
         self.reconcile_terminals(window);
         self.reconcile_decoys(window);
-        self.reconcile_editors(window);
-        self.reconcile_browsers();
+        // A viewer builds no body for a card that is not a terminal: its file
+        // or page is on the host, and this Mac must not read a path of its own
+        // and show it as the host's (#423).
+        if !self.viewer {
+            self.reconcile_editors(window);
+            self.reconcile_browsers();
+        }
         let t0 = std::time::Instant::now();
         self.feed_terminals(now, cx);
         let t1 = std::time::Instant::now();
@@ -183,7 +216,11 @@ impl AppView {
         self.apply_hover_cursor(window);
         // Over a frame band the cursor says what a press would do: arrows
         // on an edge or corner, a hand on the band that moves the card.
-        if let Some((_, edge)) = &self.hover_edge {
+        if let Some((_, edge)) = self
+            .hover_edge
+            .as_ref()
+            .filter(|_| !self.model.modal_open())
+        {
             use infiniterm_core::resize::Edge;
             let style = match edge {
                 None => gpui::CursorStyle::OpenHand,
@@ -194,20 +231,12 @@ impl AppView {
             };
             window.set_window_cursor_style(style);
         }
-        if self.gesture.is_some() {
+        // Holding something: a card, a group, a selection, or the canvas
+        // itself while a Cmd+drag or a middle-button drag pans it (#60; a
+        // pan kept the arrow, as if nothing were held). A press that has
+        // not moved yet is not a pan: a Cmd+click is still a link click.
+        if self.gesture.is_some() || matches!(self.pan, Some(crate::Pan::Dragging(_))) {
             window.set_window_cursor_style(gpui::CursorStyle::ClosedHand);
-        }
-        // Another app is in front: a wash over everything, so a glance says
-        // keys are going elsewhere. Over the cards and their labels, under
-        // the overlays gpui draws after this canvas, which are not open
-        // when the window is not active anyway. gpui refreshes the window
-        // on every activation change, so this needs no observer of its own.
-        let dim = self.model.config.ui.unfocused_dim;
-        if dim > 0. && !window.is_window_active() {
-            window.paint_quad(fill(
-                bounds,
-                crate::chrome::with_alpha(self.chrome.canvas_bg, dim as f32),
-            ));
         }
         let t2 = std::time::Instant::now();
         self.schedule_save(now);
@@ -281,13 +310,43 @@ impl AppView {
         }
     }
 
+    /// `ui.cardRadius` in screen pixels at this zoom.
+    fn card_radius(&self, scale: f64) -> Pixels {
+        px((self.model.config.ui.card_radius * scale) as f32)
+    }
+
     fn paint_world(&mut self, bounds: Bounds<Pixels>, now: f64, window: &mut Window, cx: &mut App) {
         self.label_hits.clear();
+        // Bars off (`ui.textAsBars`): no glyph is too small to draw.
+        let ui = &self.model.config.ui;
+        crate::chrome::set_legible_device_px(if ui.text_as_bars {
+            ui.min_text_px as f32
+        } else {
+            0.
+        });
         let origin = bounds.origin;
         let vp = self.model.viewport;
         let view = self.model.view_size;
         let chrome = self.chrome.clone();
-        window.paint_quad(fill(bounds, chrome.canvas_bg));
+        // With a `ui.backgroundImage` the fill is the first layer under this
+        // element (`background_show.rs`), so the pictures can sit over it.
+        if !self.background.active() {
+            window.paint_quad(fill(bounds, self.window_fill(chrome.canvas_bg)));
+        }
+        let opacity = crate::chrome::CardOpacity(self.model.config.ui.card_opacity as f32);
+        if cx.try_global::<crate::chrome::CardOpacity>() != Some(&opacity) {
+            cx.set_global(opacity);
+        }
+        // Another app is in front: a glance must say keys are going
+        // elsewhere. Every card ends up washed ONCE: the canvas here, under
+        // the cards; the focused card over its body, below; an unfocused
+        // card already wears its own `ui.inactiveDim` scrim, and a wash over
+        // the whole window on top of that dimmed those cards twice (Ekin,
+        // 2026-09-24). gpui refreshes on every activation change, so this
+        // needs no observer of its own.
+        let away_dim = self.model.config.ui.unfocused_dim;
+        let away = (away_dim > 0. && !window.is_window_active())
+            .then(|| crate::chrome::with_alpha(chrome.canvas_bg, away_dim as f32));
 
         let maximized = self.model.selection.maximized && self.model.selection.focused_id.is_some();
         if maximized {
@@ -307,13 +366,16 @@ impl AppView {
                     body.paint(bounds, 1., focused, now, window, cx)
                 });
             }
+            if let Some(wash) = away {
+                window.paint_quad(fill(bounds, wash));
+            }
             self.paint_labels(&card, bounds, 1., window, cx);
             return;
         }
 
         // The grid, one line per world coordinate, +0.5 so a 1 px stroke sits
         // on a pixel rather than straddling two.
-        if is_grid_visible(vp.scale) {
+        if self.model.config.ui.show_grid && is_grid_visible(vp.scale) {
             let hairline = px(crate::chrome::HAIRLINE_PX as f32);
             for x in grid_line_offsets(vp.x, view.w, vp.scale) {
                 let sx = origin.x + px(x.round() as f32 + GRID_LINE_SNAP_OFFSET);
@@ -331,6 +393,10 @@ impl AppView {
             }
         }
 
+        if let Some(wash) = away {
+            window.paint_quad(fill(bounds, wash));
+        }
+
         let ws = self.model.active_workspace.clone().unwrap_or_default();
         let at = |r: Rect| -> Bounds<Pixels> {
             let b = screen_rect(r, vp);
@@ -338,6 +404,14 @@ impl AppView {
         };
         let inv = inverse_scale(vp.scale, self.model.ui_scale) as f32;
         let border_w = px((card_border_world_px(vp.scale) * vp.scale) as f32);
+        // Rounded cards (`ui.cardRadius`, 0 = square): every outline of a
+        // card takes it, and the bodies read it from the global.
+        let radius = self.card_radius(vp.scale);
+        if cx.try_global::<crate::chrome::CardRadius>()
+            != Some(&crate::chrome::CardRadius(f32::from(radius)))
+        {
+            cx.set_global(crate::chrome::CardRadius(f32::from(radius)));
+        }
 
         // Groups render BEFORE cards so they paint behind them.
         for group in self.model.groups.clone() {
@@ -364,14 +438,18 @@ impl AppView {
                 chrome.group_border
             };
             let b = at(rect);
-            window.paint_quad(outline(b, color, BorderStyle::Solid).border_widths(border_w));
+            window.paint_quad(
+                outline(b, color, BorderStyle::Solid)
+                    .border_widths(border_w)
+                    .corner_radii(radius + px(self.model.group_pad() as f32 * vp.scale as f32)),
+            );
             // The name tab above the frame's top-left corner.
             let label_px = px(self.model.config.ui.group_label_size as f32 * inv * vp.scale as f32);
             let line = crate::text::shape(
                 window,
                 &group.name,
                 label_px,
-                &chrome.ui_font,
+                &chrome.typography.regular,
                 chrome.group_label_fg,
             );
             let h = label_px * GROUP_LABEL_TAB_HEIGHT_RATIO;
@@ -424,7 +502,7 @@ impl AppView {
             .and_then(|g| g.ghost.map(|r| (g.card.clone(), r)));
         let moving: Vec<String> = match &self.gesture {
             Some(g) => match &g.kind {
-                crate::GestureKind::MoveGroup(_) => {
+                crate::GestureKind::MoveGroup(_) | crate::GestureKind::MoveSelection => {
                     g.start_rects.iter().map(|(id, _)| id.clone()).collect()
                 }
                 _ if ghost.is_some() => vec![],
@@ -445,23 +523,57 @@ impl AppView {
             .collect();
         cards.sort_by_key(|c| moving.contains(&c.id));
         let visible = Bounds::new(origin, bounds.size);
-        // The frame's glyph budget: what every visible card together would
-        // cost in glyphs. Over it, nothing under `FAR_FONT_PX` paints any
-        // (`chrome::GLYPH_BUDGET_CELLS`), because the cost is the total,
-        // not any one card's size. Decided before a body paints, so every
-        // card this frame agrees.
-        let on_screen: Vec<String> = cards
+        // The frame's glyph budget: what every visible card together costs
+        // in glyphs, counting only the part of each card the window shows
+        // (the painter skips the rows outside it). Over it, every card
+        // draws bars (`chrome::GLYPH_BUDGET_CELLS`), because the cost is
+        // the total, not any one card's size. Decided before a body paints,
+        // so every card this frame agrees.
+        let on_screen: Vec<(String, f32)> = cards
             .iter()
-            .filter(|c| visible.intersects(&at(self.drawn_rect(&c.id, c.rect, now))))
-            .map(|c| c.id.clone())
+            .filter_map(|c| {
+                let b = at(self.drawn_rect(&c.id, c.rect, now));
+                let shown = b.intersect(&visible);
+                let area = f32::from(b.size.width) * f32::from(b.size.height);
+                (visible.intersects(&b) && area > 0.).then(|| {
+                    let part = f32::from(shown.size.width) * f32::from(shown.size.height);
+                    (c.id.clone(), part / area)
+                })
+            })
             .collect();
         let cells: usize = on_screen
             .iter()
-            .filter_map(|id| self.bodies.get(id))
-            .map(|b| b.text_cells())
+            .filter_map(|(id, part)| {
+                self.bodies
+                    .get(id)
+                    .map(|b| (b.text_cells() as f32 * part) as usize)
+            })
             .sum();
-        let crowded = crate::chrome::over_glyph_budget(cells);
-        for id in &on_screen {
+        // What the window would hold at 100%, from the densest visible
+        // card: its cells per screen pixel now, times the window's area,
+        // times the zoom squared (a card's grid does not change with zoom,
+        // its pixels do).
+        let density = on_screen
+            .iter()
+            .filter_map(|(id, _)| {
+                let card = cards.iter().find(|c| &c.id == id)?;
+                let b = at(self.drawn_rect(id, card.rect, now));
+                let area = f32::from(b.size.width) * f32::from(b.size.height);
+                let cells = self.bodies.get(id)?.text_cells() as f32;
+                (area > 0.).then_some(cells / area)
+            })
+            .fold(0., f32::max);
+        let window_area = f32::from(visible.size.width) * f32::from(visible.size.height);
+        let scale = vp.scale as f32;
+        let window_cells = (density * window_area * scale * scale) as usize;
+        let crowded = self.model.config.ui.text_as_bars
+            && crate::chrome::over_glyph_budget(
+                cells,
+                window_cells,
+                self.model.config.ui.glyph_budget,
+            );
+        self.crowded = crowded;
+        for (id, _) in &on_screen {
             if let Some(b) = self.bodies.get_mut(id) {
                 b.set_crowded(crowded);
             }
@@ -474,26 +586,68 @@ impl AppView {
             }
             let focused = sel.focused_id.as_deref() == Some(&card.id);
             let selected = sel.extra.contains(&card.id);
-            // A masked card shows its decoy in its place (decoys.rs).
-            let body = if card.masked {
-                self.decoys
-                    .get_mut(&card.id)
-                    .map(|d| d as &mut dyn crate::body::CardBody)
+            // A card in its own window (#356 spike) keeps its slot as an
+            // empty card; its body paints in that window.
+            if self.extracted.contains_key(&card.id) {
+                window.paint_quad(fill(b, chrome.card_bg));
+                // Big and centred, scaled with the zoom like the card: it
+                // has to read across a fit-all canvas (#356 spike).
+                paint_slot_text(
+                    window,
+                    cx,
+                    b,
+                    "In its own window",
+                    px(EXTRACTED_TEXT_PT * vp.scale as f32),
+                    &chrome.typography.regular,
+                    chrome.card_fg,
+                );
             } else {
-                self.bodies.get_mut(&card.id).map(|b| b.as_mut())
-            };
-            if let Some(body) = body {
-                // Clipped to the card: a long line or a wash must not
-                // paint over the neighbour.
-                window.with_content_mask(Some(gpui::ContentMask { bounds: b }), |window| {
-                    body.paint(b, vp.scale, focused, now, window, cx)
-                });
+                // A masked card shows its decoy in its place (decoys.rs).
+                let body = if card.masked {
+                    self.decoys
+                        .get_mut(&card.id)
+                        .map(|d| d as &mut dyn crate::body::CardBody)
+                } else {
+                    self.bodies.get_mut(&card.id).map(|b| b.as_mut())
+                };
+                if let Some(body) = body {
+                    // Clipped to the card: a long line or a wash must not
+                    // paint over the neighbour.
+                    window.with_content_mask(Some(gpui::ContentMask { bounds: b }), |window| {
+                        body.paint(b, vp.scale, focused, now, window, cx)
+                    });
+                }
+                // A viewer's card that is not a terminal (#423) is a real card
+                // with no body (its file or page is on the host): its slot says
+                // where, and it moves, groups and closes like any card.
+                if self.viewer && card.kind != infiniterm_core::saved_layout::CardKind::Terminal {
+                    let host = self
+                        .model
+                        .remote
+                        .as_ref()
+                        .map_or("the host", |r| r.name.as_str());
+                    paint_slot_text(
+                        window,
+                        cx,
+                        b,
+                        &format!("{} on {host}", card.kind.as_str()),
+                        px(EXTRACTED_TEXT_PT * vp.scale as f32),
+                        &chrome.typography.regular,
+                        chrome.card_fg,
+                    );
+                }
+            }
+            // The focused card has no scrim of its own, so the away wash is
+            // laid on it here; the rest are already dimmed once.
+            if let (Some(wash), true) = (away, focused) {
+                window.paint_quad(fill(b, wash));
             }
             // The state border: agent state, else the card's resting colour.
             let state_color = match card.agent {
                 _ if overlapping && moving.contains(&card.id) => chrome.remote_bg,
                 AgentState::Working => chrome.agent_working,
                 AgentState::Waiting => chrome.agent_waiting,
+                AgentState::Failed => chrome.agent_failed,
                 AgentState::Done => chrome.agent_done,
                 AgentState::None => chrome.card_border,
             };
@@ -505,7 +659,11 @@ impl AppView {
             } else {
                 px(state_border_screen_px(vp.scale) as f32)
             };
-            window.paint_quad(outline(b, state_color, BorderStyle::Solid).border_widths(state_w));
+            window.paint_quad(
+                outline(b, state_color, BorderStyle::Solid)
+                    .border_widths(state_w)
+                    .corner_radii(radius),
+            );
             // The frame band under the pointer lights up: the whole band
             // for a move, the one edge or the two edges of a corner for a
             // resize, in the focus ring's colour at a hint's strength.
@@ -539,7 +697,7 @@ impl AppView {
                 // `card.locked` — the ring is the one place on the card
                 // itself that shows it, since nothing else changes there.
                 let locked = focused
-                    && matches!(card.kind, CardKind::Browser | CardKind::Editor)
+                    && (card.kind.has_editor_body() || card.kind == CardKind::Browser)
                     && card.locked;
                 let ring_color = if locked {
                     chrome.warn
@@ -567,19 +725,20 @@ impl AppView {
                         crate::chrome::with_alpha(ring_color, alpha),
                         BorderStyle::Solid,
                     )
-                    .border_widths(ring),
+                    .border_widths(ring)
+                    .corner_radii(radius + off),
                 );
             }
             self.paint_labels(card, b, vp.scale, window, cx);
             if let Some(hint) = sel.hints.get(&card.id) {
                 // Big enough to read from across the canvas, over the body
                 // rather than in a corner.
-                let hp = px(SLOT_HINT_FONT_PX * inv * vp.scale as f32);
+                let hp = px(chrome.typography.size(SLOT_HINT_FONT_PX) * inv * vp.scale as f32);
                 let line = crate::text::shape(
                     window,
                     &hint.to_string(),
                     hp,
-                    &chrome.mono_font,
+                    &chrome.typography.regular,
                     chrome.sel_fg,
                 );
                 let hb = Bounds::new(
@@ -601,13 +760,40 @@ impl AppView {
         // focus ring's colour when the space is free and the warning colour
         // when a card is in the way, so the answer is known before the drop.
         if let Some((id, r)) = &ghost {
+            // The grid's slots for a card this size, faint, so where it
+            // belongs is visible before the drop (slot_snap.rs).
+            let slot_color = crate::chrome::with_alpha(chrome.focus_ring, GHOST_SLOT_ALPHA);
+            for s in self.model.ghost_slots(*r) {
+                window.paint_quad(
+                    outline(at(s), slot_color, BorderStyle::Dashed)
+                        .border_widths(px(crate::chrome::HAIRLINE_PX as f32)),
+                );
+            }
             let free = self
                 .model
                 .rect_free_for(id, infiniterm_core::grid::snap_rect(*r));
             let color = if free { chrome.focus_ring } else { chrome.warn };
             let b = at(*r);
-            window.paint_quad(outline(b, color, BorderStyle::Solid).border_widths(border_w));
-            window.paint_quad(fill(b, crate::chrome::with_alpha(color, GHOST_FILL_ALPHA)));
+            window.paint_quad(
+                outline(b, color, BorderStyle::Solid)
+                    .border_widths(border_w)
+                    .corner_radii(radius),
+            );
+            window.paint_quad(
+                fill(b, crate::chrome::with_alpha(color, GHOST_FILL_ALPHA)).corner_radii(radius),
+            );
+        }
+
+        // The selection rectangle being dragged: the selection's blue, a
+        // hairline and a faint fill, like the ghost.
+        if let Some(mq) = self.marquee.as_ref().filter(|m| m.active) {
+            let b = at(mq.rect());
+            let blue = chrome.selection_ring;
+            window.paint_quad(fill(b, crate::chrome::with_alpha(blue, GHOST_FILL_ALPHA)));
+            window.paint_quad(
+                outline(b, blue, BorderStyle::Solid)
+                    .border_widths(px(crate::chrome::HAIRLINE_PX as f32)),
+            );
         }
 
         // Alignment guides, over everything: one screen pixel, the focus
@@ -666,7 +852,11 @@ impl AppView {
         } else {
             chrome.phantom
         };
-        window.paint_quad(outline(b, color, BorderStyle::Solid).border_widths(border_w));
+        window.paint_quad(
+            outline(b, color, BorderStyle::Solid)
+                .border_widths(border_w)
+                .corner_radii(self.card_radius(scale)),
+        );
         let text = match key {
             Some(k) if current => format!("{k}  or Enter"),
             Some(k) => k.to_string(),
@@ -676,7 +866,7 @@ impl AppView {
             * PHANTOM_LABEL_SCALE
             * inv
             * scale as f32);
-        let line = crate::text::shape(window, &text, fp, &chrome.mono_font, color);
+        let line = crate::text::shape(window, &text, fp, &chrome.typography.regular, color);
         let tb = Bounds::new(
             point(
                 b.origin.x + b.size.width / 2. - line.width / 2.,
@@ -707,6 +897,13 @@ impl AppView {
         ) {
             return;
         }
+        let ui = &self.model.config.ui;
+        // A maximised card fills the window and the status bar names it, so
+        // its chips can go (#71). The ssh warning below them stays.
+        let hide = ui.hide_label_when_maximised
+            && self.model.selection.maximized
+            && self.model.selection.focused_id.as_deref() == Some(card.id.as_str());
+        let corner = ui.card_label_position;
         let chrome = &self.chrome;
         let inv = inverse_scale(scale, self.model.ui_scale) as f32;
         // Screen-sized, so it never shrinks with the canvas, and stepped
@@ -729,6 +926,7 @@ impl AppView {
         let state_chip = match card.agent {
             AgentState::Working => Some(chrome.agent_working),
             AgentState::Waiting => Some(chrome.agent_waiting),
+            AgentState::Failed => Some(chrome.agent_failed),
             AgentState::Done => Some(chrome.agent_done),
             AgentState::None => None,
         };
@@ -754,15 +952,70 @@ impl AppView {
             (label_bg, label_fg)
         };
         let h = label_px * LABEL_BADGE_HEIGHT_RATIO;
-        let mut right = b.origin.x + b.size.width - border;
-        if !label.is_empty() {
+        // The chips run inward from `ui.cardLabelPosition`'s corner (#71):
+        // the name first, then the kind badges, leftward from a right corner
+        // and rightward from a left one, along the top or the bottom edge.
+        let top = if corner.bottom() {
+            b.origin.y + b.size.height - border - h
+        } else {
+            b.origin.y + border
+        };
+        let mut edge = if corner.left() {
+            b.origin.x + border
+        } else {
+            b.origin.x + b.size.width - border
+        };
+        let mut place = |w: Pixels| -> Pixels {
+            if corner.left() {
+                let x = edge;
+                edge += w;
+                x
+            } else {
+                edge -= w;
+                edge
+            }
+        };
+        // With rounded cards the chip that sits in the card's corner is
+        // rounded to the border's inner edge there, or its square corner
+        // covers the card's. Only that one corner of that one chip.
+        let inner = (self.card_radius(scale) - border).max(px(0.));
+        let corner_radii = |left: bool| gpui::Corners {
+            top_left: if left && !corner.bottom() {
+                inner
+            } else {
+                px(0.)
+            },
+            top_right: if !left && !corner.bottom() {
+                inner
+            } else {
+                px(0.)
+            },
+            bottom_left: if left && corner.bottom() {
+                inner
+            } else {
+                px(0.)
+            },
+            bottom_right: if !left && corner.bottom() {
+                inner
+            } else {
+                px(0.)
+            },
+        };
+        let mut in_corner = true;
+        if !label.is_empty() && !hide {
             // The head ellipsises from the left, the tail never does: the last
             // segment is what tells cards apart, and half the directories
             // anyone works in are called `src`.
             let (head, tail) = split_label(&label);
             let room = b.size.width - border * 2. - label_px;
             let mut text = format!("{head}{tail}");
-            let mut line = crate::text::shape(window, &text, label_px, &chrome.ui_font, label_fg);
+            let mut line = crate::text::shape(
+                window,
+                &text,
+                label_px,
+                &chrome.typography.regular,
+                label_fg,
+            );
             let mut keep = head.chars().count();
             while line.width > room && keep > 0 {
                 keep /= 2;
@@ -775,7 +1028,13 @@ impl AppView {
                     .rev()
                     .collect();
                 text = format!("\u{2026}{cut}{tail}");
-                line = crate::text::shape(window, &text, label_px, &chrome.ui_font, label_fg);
+                line = crate::text::shape(
+                    window,
+                    &text,
+                    label_px,
+                    &chrome.typography.regular,
+                    label_fg,
+                );
             }
             // The tail alone can still be wider than the card: a label with
             // no slash in it is ALL tail, and an agent's session name has
@@ -783,13 +1042,26 @@ impl AppView {
             if line.width > room {
                 text = crate::text::elide(&text, f32::from(room), |t| {
                     f32::from(
-                        crate::text::shape(window, t, label_px, &chrome.ui_font, label_fg).width,
+                        crate::text::shape(
+                            window,
+                            t,
+                            label_px,
+                            &chrome.typography.regular,
+                            label_fg,
+                        )
+                        .width,
                     )
                 });
-                line = crate::text::shape(window, &text, label_px, &chrome.ui_font, label_fg);
+                line = crate::text::shape(
+                    window,
+                    &text,
+                    label_px,
+                    &chrome.typography.regular,
+                    label_fg,
+                );
             }
             let w = line.width + label_px;
-            let lb = Bounds::new(point(right - w, b.origin.y + border), size(w, h));
+            let lb = Bounds::new(point(place(w), top), size(w, h));
             // Remembered for the hit test, in the content coordinates the
             // mouse arrives in (the title bar is above the canvas).
             self.label_hits.push((
@@ -801,9 +1073,13 @@ impl AppView {
                     h: f32::from(lb.size.height) as f64,
                 },
             ));
-            window.paint_quad(fill(lb, label_bg));
+            let radii = if std::mem::take(&mut in_corner) {
+                corner_radii(corner.left())
+            } else {
+                gpui::Corners::default()
+            };
+            window.paint_quad(fill(lb, label_bg).corner_radii(radii));
             crate::text::paint_in(window, cx, &line, lb, label_px / 2.);
-            right -= w;
         }
         // What kind of card, as its own badge in the chrome's muted colour:
         // the name says WHICH, this says WHAT. Terminals carry no badge.
@@ -821,26 +1097,46 @@ impl AppView {
             CardKind::Diff => badges.push("diff".into()),
             CardKind::Browser => badges.push("browser".into()),
             CardKind::Transcript => badges.push("transcript".into()),
+            CardKind::Page => badges.push("page".into()),
             CardKind::Terminal => {}
         }
-        for badge in badges {
-            let line =
-                crate::text::shape(window, &badge, label_px, &chrome.ui_font, chrome.text_muted);
+        for badge in badges.into_iter().filter(|_| !hide) {
+            let line = crate::text::shape(
+                window,
+                &badge,
+                label_px,
+                &chrome.typography.regular,
+                chrome.text_muted,
+            );
             let w = line.width + label_px;
-            let bb = Bounds::new(point(right - w, b.origin.y + border), size(w, h));
-            window.paint_quad(fill(bb, chrome.badge_bg));
+            let bb = Bounds::new(point(place(w), top), size(w, h));
+            let radii = if std::mem::take(&mut in_corner) {
+                corner_radii(corner.left())
+            } else {
+                gpui::Corners::default()
+            };
+            window.paint_quad(fill(bb, chrome.badge_bg).corner_radii(radii));
             crate::text::paint_in(window, cx, &line, bb, label_px / 2.);
-            right -= w;
         }
         // Red: the one thing on a card that changes what a keystroke does.
         if let Some(remote) = &card.remote {
-            let line =
-                crate::text::shape(window, remote, label_px, &chrome.ui_font, chrome.remote_fg);
-            let rb = Bounds::new(
-                point(b.origin.x + border, b.origin.y + border),
-                size(line.width + label_px, h),
+            let line = crate::text::shape(
+                window,
+                remote,
+                label_px,
+                &chrome.typography.regular,
+                chrome.remote_fg,
             );
-            window.paint_quad(fill(rb, chrome.remote_bg));
+            // The other end of the label's edge, so the two never overlap.
+            let w = line.width + label_px;
+            let x = if corner.left() {
+                b.origin.x + b.size.width - border - w
+            } else {
+                b.origin.x + border
+            };
+            let rb = Bounds::new(point(x, top), size(w, h));
+            window
+                .paint_quad(fill(rb, chrome.remote_bg).corner_radii(corner_radii(!corner.left())));
             crate::text::paint_in(window, cx, &line, rb, label_px / 2.);
         }
     }

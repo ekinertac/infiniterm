@@ -5,11 +5,11 @@
 use super::palette_state::Source;
 use super::palette_state::{CARD_ROW, SIZES, WORKSPACE_ROW};
 use super::{
-    BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending, UndoStep,
-    LAYOUT_UNDO_DEPTH,
+    BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
+    TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
 };
-use crate::card_label::{card_label, Labelled};
-use crate::cards::GUTTER;
+use super::{TerminalAction, TreeAct};
+use crate::card_label::{card_label, tilde_path, Labelled};
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
 use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
 use crate::ift::{diff_plan, open_plan, transcript_plan, PathKind};
@@ -23,8 +23,13 @@ use crate::sidebar::{clamp_sidebar, sidebar_extent, sidebar_width};
 use crate::split::{split_rect, SplitSide};
 use crate::swap::swap_with_neighbour;
 
-/// How long the second close press has to arrive.
-const DISCARD_ARM_MS: f64 = 3000.;
+/// How many full slots around a dragged ghost show their slots: enough to
+/// see where the card could go next, not the whole canvas.
+const GHOST_SLOT_REACH: i64 = 2;
+
+/// How long a Save from the unsaved-changes sheet may take before the close
+/// it holds is dropped: a save is one frame when it works.
+const SAVE_CLOSE_MS: f64 = 2000.;
 
 pub const ZOOM_STEP: f64 = 1.1;
 
@@ -40,7 +45,7 @@ impl Model {
             let Some(card) = m.card(&id).cloned() else {
                 return;
             };
-            let next = sized(card.rect, m.default_size(), w, h, GUTTER);
+            let next = sized(card.rect, m.default_size(), w, h, m.gap());
             if next == card.rect {
                 return;
             }
@@ -56,6 +61,43 @@ impl Model {
                 m.notify("no room: a card is in the way");
                 return;
             }
+            m.mark_swap(std::slice::from_ref(&id));
+            if let Some(c) = m.card_mut(&id) {
+                c.rect = next;
+                c.soft_group_id = None;
+            }
+            m.dirty_layout = true;
+            m.reveal_focused();
+        })
+    }
+
+    /// The active card slid toward `dir` into the gap beside it
+    /// (`slide::slide`): the keyboard's way to close the space a resize left.
+    /// Cards may not overlap, so what is in the way is the end of the slide;
+    /// the card stops being half of a split pair, as a resize does.
+    pub fn slide_active(&mut self, dir: Direction) {
+        self.with_active_card(|m, id| {
+            let Some(card) = m.card(&id).cloned() else {
+                return;
+            };
+            let mut taken: Vec<Rect> = m
+                .here()
+                .iter()
+                .filter(|c| c.id != id)
+                .map(|c| c.rect)
+                .collect();
+            taken.extend(m.other_frames(Some(&id), &card.workspace_id));
+            let origin = Point {
+                x: HALF_CELL,
+                y: HALF_CELL,
+            };
+            let Some(next) =
+                crate::slide::slide(card.rect, dir, &taken, m.default_size(), origin, m.gap())
+            else {
+                m.notify("nowhere to slide");
+                return;
+            };
+            m.remember_layout();
             m.mark_swap(std::slice::from_ref(&id));
             if let Some(c) = m.card_mut(&id) {
                 c.rect = next;
@@ -83,13 +125,12 @@ impl Model {
             &Labelled {
                 title: &card.title,
                 // Only an agent's title is trusted: a card running Claude
-                // Code or Pi has a transcript, and that title IS the
-                // session's name. A plain shell's title is its own idea of
-                // the directory or the last command, which is what the
-                // label already says better.
+                // Code or Pi has a transcript or a saved session, and that
+                // title IS the session's name. A plain shell's title is its
+                // own idea of the directory or the last command, which is
+                // what the label already says better.
                 session: card
-                    .transcript_path
-                    .is_some()
+                    .runs_agent()
                     .then_some(card.osc_title.as_deref())
                     .flatten(),
                 proc: card.proc.as_deref(),
@@ -131,7 +172,6 @@ impl Model {
                     avoid: self.other_frames(group_id.as_deref(), &ws),
                     group_id,
                     workspace_id: Some(ws),
-                    after: from.as_ref().map(|c| c.rect),
                     ..Default::default()
                 },
             );
@@ -148,6 +188,9 @@ impl Model {
         command: Option<&str>,
         url: Option<String>,
     ) {
+        if kind == CardKind::Browser && self.browser_refused() {
+            return;
+        }
         let from = self.focused().cloned();
         let group_id = from.as_ref().and_then(|c| c.group_id.clone());
         let ws = self.active_workspace.clone().unwrap_or_default();
@@ -161,7 +204,6 @@ impl Model {
                 avoid: self.other_frames(group_id.as_deref(), &ws),
                 group_id,
                 workspace_id: Some(ws),
-                after: from.as_ref().map(|c| c.rect),
                 ..Default::default()
             },
         );
@@ -178,7 +220,7 @@ impl Model {
             let Some(card) = m.card(&id).cloned() else {
                 return;
             };
-            let Some(split) = split_rect(card.rect, side, GUTTER) else {
+            let Some(split) = split_rect(card.rect, side, m.gap()) else {
                 m.notify("too small to split");
                 return;
             };
@@ -249,10 +291,11 @@ impl Model {
                 }
             }
         }
-        self.close_selected_confirmed(ids, reclaim);
+        self.close_selected_confirmed(ids, reclaim, false);
     }
 
-    fn close_selected_confirmed(&mut self, mut ids: Vec<String>, reclaim: bool) {
+    /// `discard`: the unsaved-changes question was already answered yes.
+    fn close_selected_confirmed(&mut self, mut ids: Vec<String>, reclaim: bool, discard: bool) {
         let pair = if ids.len() == 1 {
             self.config_pairs
                 .iter()
@@ -269,18 +312,27 @@ impl Model {
                 .cloned()
                 .collect();
         }
-        if let Some(dirty) = ids
-            .iter()
-            .find(|id| self.card(id).is_some_and(|c| c.dirty))
-            .cloned()
-        {
-            if self.discard_armed.as_ref().map(|(id, _)| id) != Some(&dirty) {
-                self.discard_armed = Some((dirty, self.now_ms + DISCARD_ARM_MS));
-                self.notify("unsaved changes: save first, or close again to discard");
+        // Unsaved changes get the macOS save sheet, not a second Cmd+W: a
+        // double press discarded work without the second press being meant
+        // (Ekin, 2026-09-26). Enter saves and closes; Don't Save (Cmd+D)
+        // discards; a Cmd+W while it is up asks the same question again.
+        if !discard {
+            if let Some(dirty) = ids
+                .iter()
+                .find(|id| self.card(id).is_some_and(|c| c.dirty))
+                .and_then(|id| self.card(id))
+                .cloned()
+            {
+                let label = format!("save changes to {}?", self.label_of(&dirty));
+                self.prompt.confirm3(
+                    &label,
+                    "Save",
+                    "Don't Save",
+                    Pending::UnsavedClose { ids, reclaim },
+                );
                 return;
             }
         }
-        self.discard_armed = None;
         for id in ids.iter().skip(1).rev() {
             self.close_card_with(id, false, reclaim);
         }
@@ -293,6 +345,76 @@ impl Model {
                 self.set_focus(Some(&back));
                 self.reveal_focused();
             }
+        }
+    }
+
+    /// Save, then close once every card is clean. The save runs in the
+    /// editor, a frame away, and can fail (a read-only file) or need a
+    /// name (untitled), so the close waits for the dirty flags the editor
+    /// mirrors back (`tick`), and gives up with a notice rather than
+    /// closing on a save that did not happen.
+    fn save_then_close(&mut self, ids: Vec<String>, reclaim: bool) {
+        for id in &ids {
+            let Some(card) = self.card(id) else { continue };
+            if !card.dirty {
+                continue;
+            }
+            // Untitled: name it first; the close follows the save.
+            if card.path.is_none() {
+                self.open_save_as(id.clone(), Some((ids.clone(), reclaim)));
+                return;
+            }
+            self.effects.push(Effect::Editor {
+                card_id: id.clone(),
+                action: EditorAction::Save,
+            });
+        }
+        self.close_after_save = Some((ids, reclaim, self.now_ms + SAVE_CLOSE_MS));
+    }
+
+    /// The "save as" field for an untitled buffer, starting on its
+    /// directory and `untitled.txt` with the stem selected (`save_as.rs`).
+    pub fn open_save_as(&mut self, id: String, then_close: Option<(Vec<String>, bool)>) {
+        // A card made from nothing may have no directory: home, not `/`.
+        let dir = self
+            .card(&id)
+            .map(|c| c.cwd.clone())
+            .filter(|d| !d.is_empty())
+            .unwrap_or_else(|| self.home.clone());
+        let (text, select) = crate::save_as::suggestion(&dir, &self.home);
+        self.prompt
+            .ask_selecting("save as", &text, select, Pending::SaveAs { id, then_close });
+    }
+
+    /// The buffer gets its path and is written; a close the save sheet
+    /// asked for follows once the editor reports it clean.
+    fn save_as(&mut self, id: String, full: String, then_close: Option<(Vec<String>, bool)>) {
+        if let Some(card) = self.card_mut(&id) {
+            card.cwd = crate::paths::parent_dir(&full);
+            card.path = Some(full);
+            self.dirty_layout = true;
+        }
+        self.effects.push(Effect::Editor {
+            card_id: id,
+            action: EditorAction::Save,
+        });
+        if let Some((ids, reclaim)) = then_close {
+            self.close_after_save = Some((ids, reclaim, self.now_ms + SAVE_CLOSE_MS));
+        }
+    }
+
+    /// The close `save_then_close` is waiting on, run from `tick`.
+    pub(super) fn close_when_saved(&mut self) {
+        let Some((ids, reclaim, until)) = self.close_after_save.clone() else {
+            return;
+        };
+        let clean = ids.iter().all(|id| self.card(id).is_none_or(|c| !c.dirty));
+        if clean {
+            self.close_after_save = None;
+            self.close_selected_confirmed(ids, reclaim, true);
+        } else if self.now_ms >= until {
+            self.close_after_save = None;
+            self.notify("not saved, so not closed");
         }
     }
 
@@ -326,7 +448,6 @@ impl Model {
     }
 
     /// A prompt's answer, for the questions the card commands ask.
-    /// `exists` is asked of the filesystem by the caller for `OpenFile`.
     pub fn answer(
         &mut self,
         pending: Pending,
@@ -379,16 +500,15 @@ impl Model {
                     self.close_card_with(&id, false, reclaim);
                 }
             }
-            Pending::OpenFile { from } => {
-                let Some(raw) = text else { return };
-                let from_card = from.as_deref().and_then(|id| self.card(id)).cloned();
-                let full = self.resolve_typed_path(&raw, from_card.as_ref());
-                if !exists(&full) {
-                    self.notify(format!("{raw}: no such file"));
-                    return;
-                }
-                self.open_in_card(open_plan(&full, PathKind::File, None), from.as_deref());
-            }
+            Pending::UnsavedClose { ids, reclaim } => match text.as_deref() {
+                None => {}
+                Some(crate::prompt::ALT) => self.close_selected_confirmed(ids, reclaim, true),
+                Some(_) => self.save_then_close(ids, reclaim),
+            },
+            Pending::WindowColor => self.window_color_answer(text),
+            // Closing it is the whole answer; the update check is the app
+            // menu's (`app.update.check`).
+            Pending::About => {}
             Pending::NavigateBrowser(id) => {
                 if let (Some(url), Some(card)) =
                     (Model::normalise_url(text.as_deref()), self.card_mut(&id))
@@ -400,21 +520,46 @@ impl Model {
             // The typed path is relative to the card's directory, `~`
             // allowed, and the card becomes that file: its directory follows
             // so "beside" and the label do.
-            Pending::SaveAs(id) => {
+            Pending::SaveAs { id, then_close } => {
                 let Some(raw) = text.filter(|t| !t.trim().is_empty()) else {
                     return;
                 };
                 let from = self.card(&id).cloned();
                 let full = self.resolve_typed_path(raw.trim(), from.as_ref());
-                if let Some(card) = self.card_mut(&id) {
-                    card.cwd = crate::paths::parent_dir(&full);
-                    card.path = Some(full);
-                    self.dirty_layout = true;
+                match crate::save_as::target(&full, &exists) {
+                    crate::save_as::Target::New => self.save_as(id, full, then_close),
+                    crate::save_as::Target::Replace => {
+                        let name = full.rsplit('/').next().unwrap_or(&full).to_string();
+                        self.prompt.confirm(
+                            &format!("{name} exists. Replace it?"),
+                            "Replace",
+                            Pending::SaveAsReplace {
+                                id,
+                                path: full,
+                                then_close,
+                            },
+                        );
+                    }
+                    // Back to the field with what was typed, so the fix is
+                    // one edit, not a retype.
+                    crate::save_as::Target::NoDirectory(dir) => {
+                        self.prompt
+                            .ask("save as", raw.trim(), Pending::SaveAs { id, then_close });
+                        self.notify(format!(
+                            "no such directory: {}",
+                            tilde_path(&dir, &self.home)
+                        ));
+                    }
                 }
-                self.effects.push(Effect::Editor {
-                    card_id: id,
-                    action: EditorAction::Save,
-                });
+            }
+            Pending::SaveAsReplace {
+                id,
+                path,
+                then_close,
+            } => {
+                if text.is_some() {
+                    self.save_as(id, path, then_close);
+                }
             }
             Pending::GoToLine(id) => {
                 let Some(n) = text
@@ -441,17 +586,26 @@ impl Model {
     /// the move stood.
     pub fn end_gesture(&mut self, ids: &[String], start: &[(String, Rect)]) -> bool {
         let ws = self.active_workspace.clone().unwrap_or_default();
-        let group = ids
-            .first()
-            .and_then(|id| self.card(id))
-            .and_then(|c| c.group_id.clone());
+        // The frames of every group a moved card belongs to follow the
+        // move, so none of them is in the way: a selection dragged across
+        // two groups' cards bounced back on its own frames when only the
+        // first card's group was spared.
+        let moved_groups: Vec<String> = ids
+            .iter()
+            .filter_map(|id| self.card(id).and_then(|c| c.group_id.clone()))
+            .collect();
         let mut occupied: Vec<Rect> = self
             .cards
             .iter()
             .filter(|c| c.workspace_id == ws && !ids.contains(&c.id))
             .map(|c| c.rect)
             .collect();
-        occupied.extend(self.other_frames(group.as_deref(), &ws));
+        occupied.extend(
+            self.groups
+                .iter()
+                .filter(|g| !moved_groups.contains(&g.id))
+                .filter_map(|g| self.group_frame(&g.id, &ws)),
+        );
         let moved: Vec<Rect> = ids
             .iter()
             .filter_map(|id| self.card(id))
@@ -559,28 +713,16 @@ impl Model {
         self.undoing = true;
         let inverse = match step {
             UndoStep::Rects(snap) => self.apply_rects(snap),
+            // Reopened, and nothing to redo: redoing a close would close
+            // a card you may already be working in again.
             UndoStep::Closed(card) => {
                 let card = *card;
                 let id = card.id.clone();
                 // Out of the reopen ring too, or Cmd+Ctrl+T brings a twin.
                 self.closed.retain(|c| c.id != id);
                 self.reopen_card(card);
-                Some(UndoStep::Created(id))
+                None
             }
-            UndoStep::Created(id) => match self.card(&id).cloned() {
-                Some(card) => {
-                    self.close_card(&id, false);
-                    Some(UndoStep::Closed(Box::new(Card {
-                        pane_id: None,
-                        agent: crate::agent_state::AgentState::None,
-                        dirty: false,
-                        command: None,
-                        transcript_path: None,
-                        ..card
-                    })))
-                }
-                None => None,
-            },
         };
         self.undoing = false;
         if let Some(inverse) = inverse {
@@ -627,6 +769,11 @@ impl Model {
     /// still free, else beside whatever is there now (the old rect is a
     /// preference, not a claim). `card.reopen` and an undone close share it.
     pub fn reopen_card(&mut self, mut card: Card) {
+        // Already back (Alt+T reopened it, then an undo step names it too):
+        // a second copy would be a twin on one session.
+        if self.card(&card.id).is_some() {
+            return;
+        }
         let ws = self.active_workspace.clone().unwrap_or_default();
         card.workspace_id = ws.clone();
         let taken: Vec<Rect> = self
@@ -636,7 +783,7 @@ impl Model {
             .map(|c| c.rect)
             .collect();
         if taken.iter().any(|r| rects_overlap(*r, card.rect)) {
-            card.rect = self.next_slot(None, &[], &ws, Some(card.rect));
+            card.rect = self.next_slot(None, &[], &ws);
         }
         let id = card.id.clone();
         // A group that was dissolved while the card was away is not a group.
@@ -647,34 +794,48 @@ impl Model {
         {
             card.group_id = None;
         }
+        // Its number may have gone to a newer card while it was away
+        // (numbers are reused, `take_number`); two #7s would make the
+        // number useless, so it takes a free one.
+        if card.number == 0 || self.cards.iter().any(|c| c.number == card.number) {
+            card.number = self.take_number();
+        }
+        self.unpark(&mut card);
         self.cards.push(card);
         self.set_focus(Some(&id));
         self.reveal_focused();
         self.dirty_layout = true;
     }
 
-    /// The ghost of a dragged card, snapped to the slots the cards around
-    /// it offer (`slot_snap`), for the ui to draw and to drop.
+    /// The ghost of a dragged card, snapped to the grid's nearest slot of
+    /// its own size (`slot_snap`), for the ui to draw and to drop.
     pub fn snap_ghost(&self, id: &str, free: Rect) -> Rect {
-        let Some(card) = self.card(id) else {
+        if self.card(id).is_none() {
             return free;
-        };
-        let ws = card.workspace_id.clone();
-        let others: Vec<Rect> = self
-            .cards
-            .iter()
-            .filter(|c| c.workspace_id == ws && c.id != id)
-            .map(|c| c.rect)
-            .collect();
+        }
         crate::slot_snap::snap_ghost(
             free,
-            &others,
             self.default_size(),
             Point {
                 x: HALF_CELL,
                 y: HALF_CELL,
             },
-            GUTTER,
+            self.gap(),
+        )
+    }
+
+    /// The slots of the ghost's size around it, for the drag to draw
+    /// (`slot_snap::slots_near`).
+    pub fn ghost_slots(&self, ghost: Rect) -> Vec<Rect> {
+        crate::slot_snap::slots_near(
+            ghost,
+            self.default_size(),
+            Point {
+                x: HALF_CELL,
+                y: HALF_CELL,
+            },
+            self.gap(),
+            GHOST_SLOT_REACH,
         )
     }
 
@@ -688,7 +849,7 @@ impl Model {
         let mut occupied: Vec<Rect> = self
             .cards
             .iter()
-            .filter(|c| c.workspace_id == ws && c.id != id)
+            .filter(|c| c.workspace_id == ws && c.id != id && !self.paired(id, &c.id))
             .map(|c| c.rect)
             .collect();
         occupied.extend(self.other_frames(card.group_id.as_deref(), &ws));
@@ -729,6 +890,7 @@ impl Model {
             .find(|c| {
                 c.workspace_id == card.workspace_id
                     && c.id != id
+                    && !self.paired(id, &c.id)
                     && centre.x >= c.rect.x
                     && centre.x < c.rect.x + c.rect.w
                     && centre.y >= c.rect.y
@@ -762,7 +924,11 @@ impl Model {
         let mut occupied: Vec<Rect> = self
             .cards
             .iter()
-            .filter(|c| c.workspace_id == ws && !ids.contains(&c.id))
+            .filter(|c| {
+                c.workspace_id == ws
+                    && !ids.contains(&c.id)
+                    && !ids.iter().any(|i| self.paired(i, &c.id))
+            })
             .map(|c| c.rect)
             .collect();
         occupied.extend(self.other_frames(group.as_deref(), &ws));
@@ -819,6 +985,11 @@ impl Model {
     /// stays on the card that moved, so pressing the same key twice walks
     /// one card past two neighbours.
     pub fn swap(&mut self, dir: Direction) {
+        // Several cards selected: the whole selection moves as one block.
+        if self.selected_ids().len() > 1 {
+            self.move_selection(dir);
+            return;
+        }
         self.with_active_card(|m, id| {
             let Some(card) = m.card(&id).cloned() else {
                 return;
@@ -831,7 +1002,7 @@ impl Model {
                 &placed,
                 &id,
                 dir,
-                GUTTER,
+                m.gap(),
                 &m.other_frames(card.group_id.as_deref(), &ws),
             ) else {
                 return;
@@ -853,6 +1024,45 @@ impl Model {
             m.dirty_layout = true;
             m.reveal_focused(); // the card may have swapped off screen
         });
+    }
+
+    /// The selection as one block, a block-width over (`swap::move_block`):
+    /// into free space, or trading places with the cards there. A move that
+    /// would split a card, or land in another group's frame, says so and
+    /// changes nothing. Focus stays on the card that had it.
+    fn move_selection(&mut self, dir: Direction) {
+        let selected = self.selected_ids();
+        let here = self.here();
+        let placed = self.placed(&here);
+        let ws = self.active_workspace.clone().unwrap_or_default();
+        // A frame is foreign when none of the moving cards belong to its group.
+        let own: Vec<String> = placed
+            .iter()
+            .filter(|c| selected.contains(&c.id))
+            .filter_map(|c| c.group_id.clone())
+            .collect();
+        let occupied: Vec<crate::grid::Rect> = self
+            .groups
+            .iter()
+            .filter(|g| !own.contains(&g.id))
+            .filter_map(|g| self.group_frame(&g.id, &ws))
+            .collect();
+        let Some(moves) = crate::swap::move_block(&placed, &selected, dir, self.gap(), &occupied)
+        else {
+            self.notify("no room to move the selection that way");
+            return;
+        };
+        self.remember_layout();
+        // Armed BEFORE the rects change, so the move animates.
+        let ids: Vec<String> = moves.iter().map(|m| m.id.clone()).collect();
+        self.mark_swap(&ids);
+        for m in moves {
+            if let Some(c) = self.card_mut(&m.id) {
+                c.rect = m.rect;
+            }
+        }
+        self.dirty_layout = true;
+        self.reveal_focused();
     }
 
     fn sidebar_by(&mut self, delta: f64) {
@@ -976,6 +1186,9 @@ impl Model {
                 }
             }
             Source::Snippets => self.paste_snippet(id),
+            Source::MoveTo => self.move_selection_to(id),
+            Source::MoveGroupTo => self.move_group_to(id),
+            Source::WindowColor => self.window_color_run(id),
             Source::SlotKind => match id {
                 "terminal" => {
                     self.fill_phantom(CardKind::Terminal, None);
@@ -1028,7 +1241,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             }
             // Untitled: ask where first. The answer re-enters as a save.
             if card.path.is_none() {
-                m.prompt.ask("save as", "", Pending::SaveAs(id));
+                m.open_save_as(id, None);
                 return;
             }
             m.effects.push(Effect::Editor {
@@ -1037,9 +1250,12 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             })
         })
     });
-    r.register("card.open.file", "Editor: open a file", |m| {
+    // The macOS open panel, not a typed path: typing paths was tiring and
+    // the panel has search, recents and the sidebar (#64). `ift <path>`
+    // still opens a typed one.
+    r.register("card.open.file", "Editor: open a file…", |m| {
         let from = m.selection.focused_id.clone();
-        m.prompt.ask("file to open", "", Pending::OpenFile { from });
+        m.effects.push(Effect::PickFile { from });
     });
     // The agents with an adapter: each gets a new-card entry, in the active
     // card's directory like any new card.
@@ -1075,15 +1291,18 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     });
     // Cmd+L. Not a prompt: the omnibox ranks history, open cards and what
     // you typed.
-    r.register("card.omnibox", "Browser: address bar", Model::open_omnibox);
+    r.register("card.omnibox", "Browser: address bar…", Model::open_omnibox);
     // The placement menu's "browser": a NEW card beside the active one,
     // never editing it even when the active card is itself a browser
     // (`open_omnibox`'s own rule, and wrong here), so this is its own
     // entry point rather than `card.omnibox` with different arguments.
-    r.register("card.new.browser", "Browser: open a URL", |m| {
+    r.register("card.new.browser", "Browser: open a URL…", |m| {
+        if m.browser_refused() {
+            return;
+        }
         m.open_omnibox_for_new_card(false);
     });
-    r.register("browser.navigate", "Browser: go to a URL", |m| {
+    r.register("browser.navigate", "Browser: go to a URL…", |m| {
         m.with_active_card(|m, id| {
             let Some(card) = m.card(&id).cloned() else {
                 return;
@@ -1120,13 +1339,88 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             })
         },
     );
+    // The file tree's menu (#281). They act on the row the menu was opened on,
+    // else the tree's cursor row; only an editor card has a tree.
+    for (id, label, act) in [
+        (
+            "editor.tree.open",
+            "Editor: open the tree's file",
+            TreeAct::Open,
+        ),
+        (
+            "editor.tree.reveal",
+            "Editor: reveal the tree's file in Finder",
+            TreeAct::RevealInFinder,
+        ),
+        (
+            "editor.tree.copyPath",
+            "Editor: copy the tree file's path",
+            TreeAct::CopyPath,
+        ),
+        (
+            "editor.tree.copyRelativePath",
+            "Editor: copy the tree file's relative path",
+            TreeAct::CopyRelativePath,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.with_active_card(|m, card_id| {
+                if m.card(&card_id).is_some_and(|c| c.kind == CardKind::Editor) {
+                    m.effects.push(Effect::Editor {
+                        card_id,
+                        action: EditorAction::Tree(act),
+                    });
+                }
+            })
+        });
+    }
+    // The terminal's own Cmd+C and Cmd+V are the body's keys; these are the same
+    // acts as commands so a menu can name them (#278). Only a terminal card.
+    for (id, label, action) in [
+        (
+            "terminal.copy",
+            "Terminal: copy the selection",
+            TerminalAction::Copy,
+        ),
+        ("terminal.paste", "Terminal: paste", TerminalAction::Paste),
+        (
+            "terminal.searchSelection",
+            "Terminal: search the web for the selection",
+            TerminalAction::SearchSelection,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.with_active_card(|m, card_id| {
+                if m.card(&card_id)
+                    .is_some_and(|c| c.kind == CardKind::Terminal)
+                {
+                    m.effects.push(Effect::Terminal { card_id, action });
+                }
+            })
+        });
+    }
     // A focused browser card gives every key to the page; this is the one
     // chord that comes back out, to the nearest other card.
-    r.register("browser.leave", "Browser: leave the page", |m| {
+    r.register("browser.leave", "Card: leave the page or the editor", |m| {
         m.with_active_card(|m, id| {
             let Some(card) = m.card(&id).cloned() else {
                 return;
             };
+            // A locked editor: the lock is dropped and focus stays on the
+            // card. Escape does it too when it has nothing else to close
+            // (`input.rs`); this is the chord you can rebind (#265).
+            if card.kind.has_editor_body() {
+                if card.locked {
+                    if let Some(c) = m.card_mut(&id) {
+                        c.locked = false;
+                    }
+                    m.effects.push(Effect::Editor {
+                        card_id: id,
+                        action: EditorAction::Unlock,
+                    });
+                }
+                return;
+            }
             if card.kind != CardKind::Browser {
                 return;
             }
@@ -1161,18 +1455,66 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.notify("nothing to reopen");
             return;
         };
-        // Reopened by hand: the close leaves the trail (or a later Cmd+Z
-        // would reopen it a second time) and the reopen joins it, so Cmd+Z
-        // right after undoes the reopen.
+        // Reopened by hand: the close leaves the trail, or a later Cmd+Z
+        // would reopen it a second time.
         let id = card.id.clone();
         m.layout_undo
             .retain(|s| !matches!(s, UndoStep::Closed(c) if c.id == id));
         m.reopen_card(card);
-        m.record_undo(UndoStep::Created(id));
     });
-    r.register("browser.find", "Browser: find in page", Model::open_find);
+    r.register("browser.find", "Browser: find in page…", Model::open_find);
+    r.register("card.find", "Card: find in this card…", Model::find_in_card);
+    r.register("terminal.font.bigger", "Terminal: bigger font", |m| {
+        m.step_terminal_font(1.)
+    });
+    r.register("terminal.font.smaller", "Terminal: smaller font", |m| {
+        m.step_terminal_font(-1.)
+    });
+    r.register("terminal.font.reset", "Terminal: default font size", |m| {
+        let d = crate::config::default_config().terminal.font_size;
+        m.set_terminal_font(d)
+    });
+    r.register(
+        "terminal.visual",
+        "Terminal: visual mode, a cursor over the output",
+        |m| {
+            m.with_active_card(|m, id| {
+                if m.card(&id).map(|c| c.kind) == Some(CardKind::Terminal) {
+                    m.effects.push(Effect::Visual(id));
+                } else {
+                    m.notify("visual mode works in terminals");
+                }
+            })
+        },
+    );
+    // Cmd+R (#447; it was the development-only reload). A Claude card's
+    // screen can come out scrambled after a replay cut in the wrong place or
+    // a repaint that never came; this asks the program for a fresh one. It
+    // does not touch the grid: `card.clear` is the one that empties it.
+    r.register("terminal.redraw", "Terminal: redraw", |m| {
+        m.with_active_card(|m, id| {
+            let Some(card) = m.card(&id) else { return };
+            match (card.kind, card.pane_id) {
+                (CardKind::Terminal, Some(pane)) => m.effects.push(Effect::RedrawPane(pane)),
+                (CardKind::Terminal, None) => {}
+                _ => m.notify("redraw works on terminal cards"),
+            }
+        })
+    });
+    r.register(
+        "card.findSelection",
+        "Find: use selection for find",
+        Model::find_selection,
+    );
     r.register("browser.reload", "Browser: reload the page", |m| {
         m.browser_history(BrowserAction::Reload)
+    });
+    r.register("browser.devtools", "Browser: open DevTools", |m| {
+        if !m.config.browser.devtools {
+            m.notify("DevTools is off: set browser.devtools to true and restart");
+            return;
+        }
+        m.browser_history(BrowserAction::DevTools)
     });
     // The only way a page's address leaves the app without being retyped.
     r.register("browser.copyUrl", "Browser: copy the page's address", |m| {
@@ -1204,13 +1546,82 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("editor.find", "Editor: find", |m| {
         m.editor_action(EditorAction::Find)
     });
-    r.register("editor.goToLine", "Editor: go to a line", |m| {
+    r.register("editor.goToLine", "Editor: go to a line…", |m| {
         m.with_active_card(|m, id| {
             if m.card(&id).is_some_and(|c| c.kind == CardKind::Editor) {
                 m.prompt.ask("go to line", "", Pending::GoToLine(id));
             }
         })
     });
+    // Palette-only: no chord of its own (Batch 1, 2026-09-24). Each runs
+    // over the selection, or the whole document when there is none
+    // (`EditorBody::apply_transform`).
+    for (id, label, t) in [
+        (
+            "editor.transform.upper",
+            "Editor: UPPERCASE",
+            TextTransform::Upper,
+        ),
+        (
+            "editor.transform.lower",
+            "Editor: lowercase",
+            TextTransform::Lower,
+        ),
+        (
+            "editor.transform.title",
+            "Editor: Title Case",
+            TextTransform::Title,
+        ),
+        (
+            "editor.transform.snake",
+            "Editor: snake_case",
+            TextTransform::Snake,
+        ),
+        (
+            "editor.transform.kebab",
+            "Editor: kebab-case",
+            TextTransform::Kebab,
+        ),
+        (
+            "editor.transform.camel",
+            "Editor: camelCase",
+            TextTransform::Camel,
+        ),
+        (
+            "editor.transform.sortLines",
+            "Editor: Sort Lines",
+            TextTransform::SortLines,
+        ),
+        (
+            "editor.transform.uniqueLines",
+            "Editor: Unique Lines",
+            TextTransform::UniqueLines,
+        ),
+        (
+            "editor.transform.reverseLines",
+            "Editor: Reverse Lines",
+            TextTransform::ReverseLines,
+        ),
+        (
+            "editor.transform.trimTrailingWhitespace",
+            "Editor: Trim Trailing Whitespace",
+            TextTransform::TrimTrailingWhitespace,
+        ),
+        (
+            "editor.transform.indentTabsToSpaces",
+            "Editor: Indentation to Spaces",
+            TextTransform::IndentTabsToSpaces,
+        ),
+        (
+            "editor.transform.indentSpacesToTabs",
+            "Editor: Indentation to Tabs",
+            TextTransform::IndentSpacesToTabs,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.editor_action(EditorAction::Transform(t))
+        });
+    }
     for (dir, dx, dy) in [
         (Direction::Left, -MOVE_STEP, 0.),
         (Direction::Right, MOVE_STEP, 0.),
@@ -1236,6 +1647,22 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // from its corner into whatever is free beside and below it, up to
     // the default size. A quarter next to a half becomes the other half.
     r.register("card.size.reset", "Card: fill the free space", |m| {
+        // An empty slot the arrows landed on grows the same way, so the card
+        // made from it is as big as the room allows (Ekin, 2026-10-04: a slot
+        // beside a card is that card's size, and this is the way to change it).
+        if m.selection.focused_id.is_none() && m.selection.phantom_extra.is_empty() {
+            if let (Some(p), Some(ws)) = (m.selection.phantom.clone(), m.active_workspace.clone()) {
+                let mut taken: Vec<Rect> = m.here().iter().map(|c| c.rect).collect();
+                taken.extend(m.other_frames(None, &ws));
+                let next = fill_from_corner(p.rect, m.default_size(), &taken, m.gap());
+                if next == p.rect {
+                    m.notify("no room to grow");
+                } else {
+                    m.show_phantom(next, p.group_id, false);
+                }
+                return;
+            }
+        }
         m.with_active_card(|m, id| {
             let Some(card) = m.card(&id).cloned() else {
                 return;
@@ -1247,7 +1674,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
                 .map(|c| c.rect)
                 .collect();
             taken.extend(m.other_frames(Some(&id), &card.workspace_id));
-            let next = fill_from_corner(card.rect, m.default_size(), &taken, GUTTER);
+            let next = fill_from_corner(card.rect, m.default_size(), &taken, m.gap());
             if next == card.rect {
                 m.notify("no room to grow");
                 return;
@@ -1314,6 +1741,11 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         Direction::Down,
     ] {
         r.register(
+            &format!("card.slide.{}", dir_name(dir)),
+            &format!("Card: slide {} to the next card or slot", dir_name(dir)),
+            move |m| m.slide_active(dir),
+        );
+        r.register(
             &format!("card.swap.{}", dir_name(dir)),
             &format!("Card: swap with the one {}", super::context::where_(dir)),
             move |m| m.swap(dir),
@@ -1347,6 +1779,27 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // A maximised card is the one most worth masking, so not `for_selected`.
     // The card that must not go: a long job, a session you keep coming
     // back to. Every selected card, so a split pair locks as one.
+    // You have seen it: the ring and the tab dot go grey until the card
+    // has something new to say (the next hook, a long or failed command).
+    // Palette only, as Ekin asked (2026-09-27).
+    r.register("card.clearState", "Card: clear the state colour", |m| {
+        let ids = m.selected_ids();
+        let mut cleared = 0;
+        for id in &ids {
+            if let Some(c) = m.card_mut(id) {
+                if c.agent != crate::agent_state::AgentState::None {
+                    c.agent = crate::agent_state::AgentState::None;
+                    cleared += 1;
+                }
+            }
+        }
+        if cleared > 0 {
+            m.effects.push(Effect::AgentLog(format!(
+                "{} card(s)  cleared by hand -> none",
+                cleared
+            )));
+        }
+    });
     r.register("card.protect", "Card: lock against closing / unlock", |m| {
         for id in m.selected_ids() {
             let on = !m.card(&id).is_some_and(|c| c.protected);
@@ -1362,7 +1815,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.set_mask(&id, on);
         }
     });
-    r.register("card.place", "Card: new… (choose where)", |m| {
+    r.register("card.place", "Card: new (choose where)…", |m| {
         if m.palette.source == Some(Source::Placement) {
             m.close_palette(false);
         } else {
@@ -1398,6 +1851,16 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.open_in_card(plan, Some(&id));
         })
     });
+    // The diff's twin (#373): an editor card on the folder this card is in,
+    // its tree rooted there, the plan `ift <dir>` makes.
+    r.register("card.open.editor", "Editor: open this card's folder", |m| {
+        m.with_active_card(|m, id| {
+            let Some(card) = m.card(&id).cloned() else {
+                return;
+            };
+            m.open_in_card(open_plan(&card.cwd, PathKind::Directory, None), Some(&id));
+        })
+    });
     r.register("editor.blame", "Diff: show or hide git blame", |m| {
         m.with_active_card(|m, id| match m.card(&id).map(|c| c.kind) {
             Some(CardKind::Diff) => m.effects.push(Effect::Editor {
@@ -1414,7 +1877,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     );
     // The card is captured in the pending value, so a rename still lands on
     // the right one if focus moves while the prompt is open.
-    r.register("card.rename", "Card: rename", |m| {
+    r.register("card.rename", "Card: rename…", |m| {
         let Some(card) = m.focused().cloned() else {
             return;
         };
@@ -1430,5 +1893,47 @@ pub fn dir_name(dir: Direction) -> &'static str {
         Direction::Right => "right",
         Direction::Up => "up",
         Direction::Down => "down",
+    }
+}
+
+/// The smallest and largest terminal font a key can reach: `config.rs`
+/// clamps `terminal.fontSize` to the same range.
+const TERMINAL_FONT_MIN: f64 = 6.;
+const TERMINAL_FONT_MAX: f64 = 96.;
+
+impl Model {
+    /// Cmd+= / Cmd+-: one point at a time, for every terminal card, written
+    /// to settings.json so it survives a relaunch. The ui measures the cell
+    /// from the config each frame, so the cards refit at once.
+    pub fn step_terminal_font(&mut self, by: f64) {
+        let next = (self.config.terminal.font_size + by).round();
+        self.set_terminal_font(next);
+    }
+
+    fn set_terminal_font(&mut self, size: f64) {
+        let size = size.clamp(TERMINAL_FONT_MIN, TERMINAL_FONT_MAX);
+        if size == self.config.terminal.font_size {
+            return;
+        }
+        self.config.terminal.font_size = size;
+        self.effects.push(Effect::SaveSetting {
+            path: "terminal.fontSize".into(),
+            value: serde_json::json!(size),
+        });
+        self.notify(format!("terminal font {size} pt"));
+    }
+}
+
+impl Model {
+    /// What the open panel picked (`Effect::PickFile`): a file opens in an
+    /// editor card, a folder in one with its tree, beside `from`, exactly as
+    /// `ift <path>` would.
+    pub fn open_picked(&mut self, path: &str, from: Option<&str>) -> Option<String> {
+        let kind = if std::path::Path::new(path).is_dir() {
+            PathKind::Directory
+        } else {
+            PathKind::File
+        };
+        self.open_in_card(open_plan(path, kind, None), from)
     }
 }

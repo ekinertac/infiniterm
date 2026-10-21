@@ -7,14 +7,13 @@
 //! you were to where you landed. `open_in_card` is the one path for `ift
 //! <path>`, the placement menu and Cmd+click, so the three cannot drift.
 use super::{Card, Effect, Model, NewCard};
-use crate::cards::GUTTER;
 use crate::grid::{snap_rect, Point, Rect, Size, HALF_CELL};
-use crate::groups::{group_bounds, group_slot_size, GROUP_PAD};
+use crate::groups::{group_bounds, group_slot_size};
 use crate::ift::OpenPlan;
 use crate::layout::{best_cols, first_free_slot};
 use crate::navigate::{ensure_visible, REVEAL_PADDING};
 use crate::saved_layout::CardKind;
-use crate::viewport::{bounding_rect, fit_rect, Viewport};
+use crate::viewport::{bounding_rect, fit_rect_with, Viewport, MAX_FIT_SCALE, MAX_SCALE};
 
 /// Direction words that read as English in a command label: "Swap card
 /// with the one to the up" is what the raw direction gives, and labels are
@@ -134,7 +133,7 @@ impl Model {
     /// of maximise rather than changing something you cannot see.
     pub fn apply_viewport(&mut self, next: Viewport) {
         self.selection.maximized = false;
-        self.framing = false;
+        self.stop_framing();
         self.effects.push(Effect::AnimateFit(next));
     }
 
@@ -152,6 +151,10 @@ impl Model {
     /// canvas is no longer part of a slot, and framing the pair would zoom
     /// out to nothing.
     pub fn slot_bounds(&self, cards: &[Rect], soft_groups: &[Option<String>]) -> Option<Rect> {
+        // `ui.fitSplitSlot` off: the card itself, whether it was split or not.
+        if !self.config.ui.fit_split_slot {
+            return bounding_rect(cards);
+        }
         let mut rects: Vec<Rect> = cards.to_vec();
         for group in soft_groups.iter().flatten() {
             for card in &self.cards {
@@ -165,15 +168,28 @@ impl Model {
         let widened = bounding_rect(&rects)?;
         let one = self.default_size();
         // Still one slot? Then the pieces belong together.
-        if widened.w <= one.w + GUTTER && widened.h <= one.h + GUTTER {
+        if widened.w <= one.w + self.gap() && widened.h <= one.h + self.gap() {
             return Some(widened);
         }
         bounding_rect(cards)
     }
 
+    /// The viewport every fit lands on, with the margin and the magnify
+    /// ceiling from `ui.fitPadding` / `ui.fitMagnify` (#87).
+    pub fn fit_viewport(&self, rect: Rect) -> Viewport {
+        let ui = &self.config.ui;
+        let ceiling = if ui.fit_magnify {
+            MAX_SCALE
+        } else {
+            MAX_FIT_SCALE
+        };
+        fit_rect_with(rect, self.view_size, ui.fit_padding, ceiling)
+    }
+
     pub fn frame_card(&mut self, rect: Rect) {
-        self.apply_viewport(fit_rect(rect, self.view_size));
+        self.apply_viewport(self.fit_viewport(rect));
         self.framing = true;
+        self.framed_card = self.selection.focused_id.clone();
     }
 
     pub fn fit_group(&mut self, group_id: &str) {
@@ -183,8 +199,49 @@ impl Model {
             .filter(|c| c.group_id.as_deref() == Some(group_id))
             .map(|c| c.rect)
             .collect();
-        if let Some(bounds) = group_bounds(&rects, GROUP_PAD) {
-            self.apply_viewport(fit_rect(bounds, self.view_size));
+        if let Some(bounds) = group_bounds(&rects, self.group_pad()) {
+            self.apply_viewport(self.fit_viewport(bounds));
+        }
+    }
+
+    /// Cmd+3: the unit the focused card belongs to. A group is its frame;
+    /// a loose card is every loose card reachable through gutter-wide gaps
+    /// (`cluster_of`), which takes in a split's pieces and a hand-laid grid.
+    /// Groups alone left a loose card with no key that framed its block.
+    pub fn fit_cluster(&mut self) {
+        let Some(card) = self.focused().cloned() else {
+            return;
+        };
+        // A selection of several cards is the unit you named: fit them.
+        if !self.selection.extra.is_empty() {
+            let rects: Vec<Rect> = self
+                .selected_ids()
+                .iter()
+                .filter_map(|id| self.card(id).map(|c| c.rect))
+                .collect();
+            if let Some(bounds) = bounding_rect(&rects) {
+                self.apply_viewport(self.fit_viewport(bounds));
+            }
+            return;
+        }
+        if let Some(g) = &card.group_id {
+            return self.fit_group(g);
+        }
+        let loose: Vec<Rect> = self
+            .cards
+            .iter()
+            .filter(|c| c.workspace_id == card.workspace_id && c.group_id.is_none())
+            .map(|c| c.rect)
+            .collect();
+        let Some(start) = loose.iter().position(|r| *r == card.rect) else {
+            return;
+        };
+        let rects: Vec<Rect> = crate::layout::cluster_of(&loose, start, self.gap())
+            .into_iter()
+            .map(|i| loose[i])
+            .collect();
+        if let Some(bounds) = bounding_rect(&rects) {
+            self.apply_viewport(self.fit_viewport(bounds));
         }
     }
 
@@ -208,10 +265,12 @@ impl Model {
             OpenPlan::Diff { cwd, path, root } => {
                 (CardKind::Diff, cwd, path, Some(root), None, None)
             }
+            OpenPlan::Browser { .. } if self.browser_refused() => return None,
             OpenPlan::Browser { cwd, url } => (CardKind::Browser, cwd, None, None, None, Some(url)),
             OpenPlan::Transcript { cwd, path } => {
                 (CardKind::Transcript, cwd, Some(path), None, None, None)
             }
+            OpenPlan::Page { cwd, path } => (CardKind::Page, cwd, Some(path), None, None, None),
             OpenPlan::Refused { text } => {
                 self.notify(text);
                 return None;
@@ -220,8 +279,10 @@ impl Model {
         let group_id = from.as_ref().and_then(|c| c.group_id.clone());
         let opts = NewCard {
             kind,
-            // An editor on a directory shows its tree; a diff always shows its list.
-            explorer: root.is_some() && (kind == CardKind::Diff || path.is_none()),
+            // An editor given a root shows its tree (a directory, or the
+            // in-app docs: a page with the folder beside it); a diff always
+            // shows its list.
+            explorer: root.is_some(),
             path,
             root,
             line,
@@ -232,7 +293,6 @@ impl Model {
             avoid: self.other_frames(group_id.as_deref(), &workspace_id),
             group_id,
             workspace_id: Some(workspace_id),
-            after: from.as_ref().map(|c| c.rect),
             ..Default::default()
         };
         let id = self.add_card(&cwd, opts);
@@ -240,6 +300,35 @@ impl Model {
         self.set_focus(Some(&id));
         self.reveal_focused();
         Some(id)
+    }
+
+    /// A terminal card whose shell starts in `dir`, on the workspace on
+    /// screen, ungrouped, focused and revealed. The path for the Finder
+    /// service and `ift terminal`; unlike `open_in_card` it never looks at the
+    /// focused card, because the caller is not in the app. Only an absolute
+    /// directory: a relative path would mean the app's working directory, and
+    /// a file is `ift <file>`'s business. Returns the new card's id.
+    pub fn open_terminal_at(&mut self, dir: &str) -> Result<String, String> {
+        let path = std::path::Path::new(dir);
+        if !path.is_absolute() {
+            return Err(format!("not an absolute path: {dir}"));
+        }
+        if !path.is_dir() {
+            return Err(format!("not a directory: {dir}"));
+        }
+        let ws = self.active_workspace.clone().unwrap_or_default();
+        self.selection.maximized = false;
+        let id = self.add_card(
+            dir,
+            NewCard {
+                avoid: self.other_frames(None, &ws),
+                workspace_id: Some(ws),
+                ..Default::default()
+            },
+        );
+        self.set_focus(Some(&id));
+        self.reveal_focused();
+        Ok(id)
     }
 
     /// Moves a card, or a selection as one block, into open canvas with room
@@ -255,12 +344,12 @@ impl Model {
             .collect();
         let Some(card) = movers.first() else { return };
         let size = self.default_size();
-        let reserve = group_slot_size(size, GUTTER, GROUP_PAD);
+        let reserve = group_slot_size(size, self.gap(), self.group_pad());
         let bounds =
             bounding_rect(&movers.iter().map(|c| c.rect).collect::<Vec<_>>()).expect("movers");
         let block = Size {
-            w: reserve.w.max(bounds.w + GROUP_PAD * 2.),
-            h: reserve.h.max(bounds.h + GROUP_PAD * 2.),
+            w: reserve.w.max(bounds.w + self.group_pad() * 2.),
+            h: reserve.h.max(bounds.h + self.group_pad() * 2.),
         };
         let mut taken: Vec<Rect> = self
             .cards
@@ -278,7 +367,7 @@ impl Model {
         let cluster_right = taken.iter().map(|r| r.x + r.w).fold(HALF_CELL, f64::max);
         // A wider gap than between two cards, so the groups read as a region
         // of their own rather than as more cards.
-        let group_gap = GUTTER * 4.;
+        let group_gap = self.gap() * 4.;
         let spot = first_free_slot(
             &taken,
             block,
@@ -286,12 +375,12 @@ impl Model {
                 x: cluster_right + group_gap,
                 y: HALF_CELL,
             },
-            GUTTER,
+            self.gap(),
             best_cols(
                 crate::cards::TYPICAL_CARDS,
                 block.w,
                 block.h,
-                GUTTER,
+                self.gap(),
                 self.view_size.w,
                 self.view_size.h,
             ),
@@ -300,7 +389,10 @@ impl Model {
         );
         // Inset by the frame padding, so the block is the FRAME's footprint.
         // Every mover shifts by the same delta, keeping the selection's shape.
-        let (dx, dy) = (spot.x + GROUP_PAD - bounds.x, spot.y + GROUP_PAD - bounds.y);
+        let (dx, dy) = (
+            spot.x + self.group_pad() - bounds.x,
+            spot.y + self.group_pad() - bounds.y,
+        );
         for id in moving {
             if let Some(c) = self.card_mut(id) {
                 c.rect = snap_rect(Rect {
@@ -311,5 +403,60 @@ impl Model {
             }
         }
         self.dirty_layout = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn two_workspaces() -> (Model, String, String) {
+        let mut m = Model::new();
+        let a = m.add_workspace(Some("a"));
+        let b = m.add_workspace(Some("b"));
+        m.show_workspace(&a);
+        (m, a, b)
+    }
+
+    // The Finder service's folder: a terminal in that directory, on the
+    // workspace on screen and not another, and the one focused.
+    #[test]
+    fn open_terminal_at_makes_a_focused_terminal_in_the_active_workspace() {
+        let (mut m, a, b) = two_workspaces();
+        let dir = std::env::temp_dir().canonicalize().unwrap();
+        let dir = dir.to_string_lossy().into_owned();
+        let id = m.open_terminal_at(&dir).unwrap();
+        let card = m.card(&id).unwrap();
+        assert_eq!(card.kind, CardKind::Terminal);
+        assert_eq!(card.cwd, dir);
+        assert_eq!(card.workspace_id, a);
+        assert_ne!(card.workspace_id, b);
+        assert!(card.group_id.is_none());
+        assert_eq!(m.focused().map(|c| c.id.clone()), Some(id));
+    }
+
+    #[test]
+    fn open_terminal_at_refuses_a_relative_path_and_a_file() {
+        let (mut m, _a, _b) = two_workspaces();
+        assert!(m.open_terminal_at("relative/dir").is_err());
+        assert!(m.open_terminal_at("/no/such/folder/anywhere").is_err());
+        let file = std::env::temp_dir().join(format!("ift-term-{}", std::process::id()));
+        std::fs::write(&file, "x").unwrap();
+        let refused = m.open_terminal_at(&file.to_string_lossy());
+        let _ = std::fs::remove_file(&file);
+        assert!(refused.is_err());
+        assert!(m.cards.is_empty(), "a refusal makes no card");
+    }
+
+    #[test]
+    fn two_folders_make_two_cards_and_the_last_is_focused() {
+        let (mut m, _a, _b) = two_workspaces();
+        let tmp = std::env::temp_dir().canonicalize().unwrap();
+        let (d1, d2) = (tmp.clone(), tmp.join("."));
+        let first = m.open_terminal_at(&d1.to_string_lossy()).unwrap();
+        let second = m.open_terminal_at(&d2.to_string_lossy()).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(m.cards.len(), 2);
+        assert_eq!(m.focused().map(|c| c.id.clone()), Some(second));
     }
 }

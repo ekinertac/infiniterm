@@ -17,6 +17,7 @@ use infiniterm_core::model::settings_in::{EMPTY_KEYBINDINGS, EMPTY_SETTINGS};
 use infiniterm_core::model::Effect;
 use infiniterm_core::paths::{home_dir, socket_path};
 use infiniterm_core::settings_doc::default_settings_text;
+use infiniterm_core::theme_file::EMPTY_THEME;
 use infiniterm_core::themes_files::{ensure_themes_dir, list_themes, read_theme};
 use std::path::PathBuf;
 
@@ -25,7 +26,18 @@ const SWEEP_MS: f64 = 5000.;
 
 impl AppView {
     pub fn new(focus: FocusHandle, scale_factor: f32) -> AppView {
-        let mut registry = CommandRegistry::new(|line| eprintln!("[infiniterm] {line}"));
+        let mut registry = CommandRegistry::new(|line| {
+            eprintln!("[infiniterm] {line}");
+            // Every command that runs, however it was asked for, for
+            // `ift usage` (usage_log.rs). Local only.
+            if let Some(id) = line.strip_prefix("cmd ").and_then(|r| r.split(' ').next()) {
+                let _ = infiniterm_core::usage_log::record(
+                    &infiniterm_core::paths::usage_log_path(),
+                    id,
+                    crate::now_ms() as u64,
+                );
+            }
+        });
         register_commands(&mut registry);
         registry.set_context(describe_context);
         // The settings are read here rather than in `startup`, which runs
@@ -48,6 +60,11 @@ impl AppView {
             label_hits: Vec::new(),
             show_character_palette: false,
             pan: None,
+            scroll_nav: Default::default(),
+            left_on_canvas: false,
+            middle_press: None,
+            marquee: None,
+            crowded: false,
             gesture: None,
             body_drag: None,
             hover_body: None,
@@ -56,15 +73,30 @@ impl AppView {
             prompt_field: Default::default(),
             query_field: Default::default(),
             shortcuts_field: Default::default(),
+            shortcuts_index: 0,
+            pick_request: None,
+            join: None,
+            last_agents: String::new(),
+            join_updates: None,
+            uplink: None,
+            viewer: false,
+            viewer_poke: false,
+            canvas_rx: None,
+            read_requests: vec![],
+            shortcuts_scroll: gpui::ScrollHandle::new(),
+            whats_new_body: None,
             omni_field: crate::field::Field::default(),
             find_field: crate::field::Field::default(),
             redraw: false,
+            window_bg: None,
+            window_titled: false,
             keycast_on: false,
             keycasts: Vec::new(),
             last_paint_ms: 0.,
             clipboard_out: None,
             live_sessions: vec![],
             prompt_was_open: false,
+            prompt_serial: 0,
             suggestions: std::sync::mpsc::channel(),
             samples: vec![],
             mouse: infiniterm_core::grid::Point { x: 0., y: 0. },
@@ -75,13 +107,18 @@ impl AppView {
             glides: Default::default(),
             marked: Default::default(),
             body_sizes: Default::default(),
-            frames: 0,
-            fps_window: std::time::Instant::now(),
             timing: (0., 0., 0, 0.),
             window_seen: None,
             window_save_due: None,
-            fps: 0.,
+            frame_rate: Default::default(),
             themes_dir: PathBuf::new(),
+            backgrounds_dir: AppView::bundled_backgrounds(),
+            paste_request: None,
+            extracted: Default::default(),
+            extracted_size: Default::default(),
+            extract_request: None,
+            page_menu_open: false,
+            background: Default::default(),
             scale_factor,
             cef_running: false,
             reduce_motion: false,
@@ -124,6 +161,21 @@ impl AppView {
         dev.is_dir().then_some(dev)
     }
 
+    /// The bundle's `backgrounds`, else this checkout's while developing.
+    fn bundled_backgrounds() -> Option<PathBuf> {
+        let exe = std::env::current_exe().ok()?;
+        let in_bundle = exe
+            .parent()?
+            .parent()?
+            .join("Resources")
+            .join("backgrounds");
+        if in_bundle.is_dir() {
+            return Some(in_bundle);
+        }
+        let dev = home_dir().join("Code/infiniterm/assets/backgrounds");
+        dev.is_dir().then_some(dev)
+    }
+
     fn load_theme(&mut self, name: &str) {
         match read_theme(&self.themes_dir, name) {
             Ok(xml) => {
@@ -158,6 +210,7 @@ impl AppView {
                 theme,
                 hex3(&self.model.config.editor.selection_color),
                 hex3(&self.model.config.editor.selection_text_color),
+                hex3(&self.model.config.terminal.cursor_color),
             ),
             None => infiniterm_term::palette::Palette::default_palette(),
         };
@@ -236,7 +289,7 @@ impl AppView {
     /// A snippet into a card the way Cmd+V goes: the terminal's paste path
     /// (bracketed when the program asked), any other body's `insert_text`.
     /// A masked or displaced card has no live body and gets nothing.
-    fn paste_text(&mut self, card_id: &str, text: &str) {
+    pub(crate) fn paste_text(&mut self, card_id: &str, text: &str) {
         let Some(body) = self.live_body(card_id) else {
             return;
         };
@@ -285,15 +338,104 @@ impl AppView {
                     });
                 }
                 Effect::KillPane(pane) => self.backend.pty.kill(pane),
+                // A parked card reopened: the session keeps running and is
+                // listed as live, so its new body adopts it and the ring's
+                // replay redraws what it missed (`reconcile_terminals`).
+                Effect::ReleasePane(pane) => {
+                    let session = self.backend.pty.session_id(pane);
+                    if self.backend.pty.release(pane) {
+                        if let Some(s) = session {
+                            self.live_sessions.push(s);
+                        }
+                    }
+                }
                 Effect::KillAllPanes => self.backend.pty.kill_all(),
                 Effect::ClearPane(pane) => {
                     if let Some(body) = self.terminal_for_pane(pane) {
                         body.grid.clear();
                     }
                 }
+                Effect::RedrawPane(pane) => {
+                    let (cols, rows) = self
+                        .terminal_for_pane(pane)
+                        .map(|b| (b.cols(), b.rows()))
+                        .unwrap_or((0, 0));
+                    if self.backend.pty.redraw(pane, cols, rows)
+                        == infiniterm_core::backend::Redraw::Rejoin
+                    {
+                        // A viewer's card: its connection is gone on purpose.
+                        // The card is read as one waiting for a session (no
+                        // pane), the grid stays as it is until the new
+                        // join's replay resets it (`reconcile_terminals`).
+                        let id = self
+                            .model
+                            .cards
+                            .iter()
+                            .find(|c| c.pane_id == Some(pane))
+                            .map(|c| c.id.clone());
+                        if let Some(id) = id {
+                            if let Some(c) = self.model.card_mut(&id) {
+                                c.pane_id = None;
+                            }
+                            if let Some(body) = self.bodies.get_mut(&id).and_then(|b| {
+                                b.as_any_mut()
+                                    .downcast_mut::<crate::terminal_body::TerminalBody>()
+                            }) {
+                                body.pane = None;
+                                body.lost =
+                                    Some(crate::terminal_body::LostLink::redraw(crate::now_ms()));
+                                body.mark_dirty();
+                            }
+                        }
+                    }
+                }
                 Effect::WritePane(pane, bytes) => self.backend.pty.write(pane, &bytes),
                 Effect::DraftDelete(id) => {
                     let _ = infiniterm_core::files::draft_delete(&id);
+                }
+                Effect::WindowColor { color, save } => {
+                    // The title bar reads the model; the Dock tile is ours.
+                    match color {
+                        Some(c) => crate::instance_icon::set_badge(c),
+                        None => crate::instance_icon::clear_badge(),
+                    }
+                    // A remote window keeps its colour in its folder; a local
+                    // one was saved by the model, as a setting.
+                    if self.model.remote.is_some() {
+                        use infiniterm_core::model::WindowColorSave as Save;
+                        let dir = infiniterm_core::paths::app_support_dir();
+                        let saved = match (save, color) {
+                            (Save::Save, Some(c)) => {
+                                infiniterm_core::remote_identity::save_color(&dir, Some(c))
+                            }
+                            (Save::Forget, _) => {
+                                infiniterm_core::remote_identity::save_color(&dir, None)
+                            }
+                            _ => Ok(()),
+                        };
+                        if let Err(e) = saved {
+                            self.model.notify(format!("could not save the colour: {e}"));
+                        }
+                    }
+                }
+                Effect::ReadCard {
+                    request_id,
+                    card_id,
+                    last,
+                    scrollback,
+                } => {
+                    // Answered by the poll timer after the card's pending
+                    // output is parsed (`answer_reads`), not here: a window
+                    // that is not drawing has not parsed it.
+                    self.read_requests.push(crate::terminals::ReadRequest {
+                        request_id,
+                        card_id,
+                        last,
+                        scrollback,
+                    });
+                }
+                Effect::CliReply { id, ok, text } => {
+                    self.backend.cli.reply(id, ok, text);
                 }
                 Effect::MarkSwap(rects) => {
                     for (id, from) in rects {
@@ -305,6 +447,14 @@ impl AppView {
                         self.model.notify(format!("could not open {url}"));
                         eprintln!("[infiniterm] {e}");
                     }
+                }
+                // The settings in a joined window are the host's, shown
+                // read only for now: writing one here would put a file in the
+                // viewer's own folder that nothing reads.
+                Effect::SaveSetting { path, .. } if self.viewer => {
+                    self.model.notify(format!(
+                        "{path}: the settings in this window are the host's; change them on the host"
+                    ));
                 }
                 Effect::SaveSetting { path, value } => {
                     let existing = config_read(ConfigFile::Settings);
@@ -322,14 +472,68 @@ impl AppView {
                 Effect::RefreshThemes => self.refresh_themes(),
                 Effect::RefreshSnippets => self.refresh_snippets(),
                 Effect::PasteText { card_id, text } => self.paste_text(&card_id, &text),
+                // The right-click menu's terminal acts (#278). The clipboard is
+                // read in the poll task, where there is an app context.
+                Effect::Terminal { card_id, action } => {
+                    use infiniterm_core::model::TerminalAction;
+                    match action {
+                        TerminalAction::Copy => {
+                            if let Some(text) = self
+                                .terminal_body(&card_id)
+                                .and_then(|b| b.grid.selection_text())
+                            {
+                                self.clipboard_out = Some(text);
+                            }
+                        }
+                        TerminalAction::Paste => self.paste_request = Some(card_id),
+                        TerminalAction::SearchSelection => {
+                            if let Some(text) = self
+                                .terminal_body(&card_id)
+                                .and_then(|b| b.grid.selection_text())
+                            {
+                                self.model.open_web_search(&text);
+                            }
+                        }
+                    }
+                }
                 Effect::Editor { card_id, action } => self.editor_effect(&card_id, action),
                 Effect::Browser { card_id, action } => self.browser_effect(&card_id, action),
-                Effect::Find { card_id, request } => self.find_effect(&card_id, request),
+                // A terminal's scrollback is ours to search; a page is
+                // Chromium's (browsers.rs).
+                Effect::Find { card_id, request } => {
+                    if self.terminal_body(&card_id).is_some() {
+                        self.terminal_find(&card_id, request);
+                    } else {
+                        self.find_effect(&card_id, request);
+                    }
+                }
+                Effect::FindSelection(card_id) => {
+                    // The first line of the selection: a query is one line.
+                    let text = self
+                        .terminal_body(&card_id)
+                        .and_then(|b| b.grid.selection_text())
+                        .and_then(|t| t.lines().next().map(str::to_string))
+                        .filter(|t| !t.trim().is_empty());
+                    match text {
+                        Some(t) => {
+                            self.find_field = crate::field::Field::open(&t, false);
+                            self.model.find_with(&t);
+                        }
+                        None => self.model.notify("select some text first"),
+                    }
+                }
                 // Held rather than written: perform_effects has no App to
                 // write through, and threading one into sixteen call sites
                 // for a clipboard is the wrong trade. The frame flushes it,
                 // the same way a terminal's OSC 52 text is flushed.
                 Effect::Copy(text) => self.clipboard_out = Some(text),
+                Effect::PickFile { from } => self.pick_request = Some(from),
+                Effect::Visual(card_id) => {
+                    if let Some(b) = self.terminal_body(&card_id) {
+                        b.grid.visual_enter();
+                        b.dirty = true;
+                    }
+                }
                 Effect::Log(line) => eprintln!("[infiniterm] {line}"),
                 Effect::Warn(line) => eprintln!("[infiniterm/warn] {line}"),
                 Effect::AgentLog(line) => append_agent_log(&line),
@@ -340,6 +544,7 @@ impl AppView {
                 // Needs the Window, which effects do not have; the frame
                 // makes the call. Same shape as the owed-frame flag.
                 Effect::ShowCharacterPalette => self.show_character_palette = true,
+                Effect::ToggleFullScreen => crate::fullscreen::toggle(),
                 Effect::ToggleKeycast => {
                     self.keycast_on = !self.keycast_on;
                     self.keycasts.clear();
@@ -387,7 +592,10 @@ impl AppView {
                     }
                 }
                 Effect::RunCommand(id) => self.run_command(&id),
-                Effect::LogFps(n) => eprintln!("[infiniterm] stress zoom {n}: {:.0} fps", self.fps),
+                Effect::LogFps(n) => eprintln!(
+                    "[infiniterm] stress zoom {n}: {:.0} fps",
+                    self.frame_rate.shown(now_ms()).unwrap_or(0.)
+                ),
                 Effect::LogDims => {
                     for (id, body) in self.bodies.iter_mut() {
                         if let Some(t) = body
@@ -435,19 +643,21 @@ impl AppView {
                 .any(|d| crate::body::CardBody::wants_frame(d, now))
         {
             "body"
+        } else if self.model.whats_new_wants_frame(now) {
+            "whats-new"
         } else if self.model.notice_expired(now) {
             "notice"
+        } else if self.model.done_seen_due(now) {
+            "seen"
         } else {
             "idle"
         }
     }
 
-    /// Whether the text is in the band where a frame is expensive (glyphs,
-    /// not bars) and too small to be worth one per change: see
-    /// `chrome::FAR_FONT_PX`.
+    /// Whether content frames are rationed (`chrome::FAR_REFRESH_MS`): only
+    /// while the last frame was over its glyph budget and drew bars.
     pub fn far(&self) -> bool {
-        let font = self.model.config.terminal.font_size * self.model.viewport.scale;
-        (crate::chrome::LEGIBLE_FONT_PX..crate::chrome::FAR_FONT_PX).contains(&font)
+        self.crowded
     }
 
     pub fn needs_frame(&self) -> bool {
@@ -456,6 +666,7 @@ impl AppView {
             || self.pan.is_some()
             || self.gesture.is_some()
             || !self.glides.is_empty()
+            || self.background.needs_frame(crate::now_ms())
             || {
                 let now = crate::now_ms();
                 // Content frames (output, blink) are gated when far: at
@@ -470,6 +681,9 @@ impl AppView {
                 let due = !self.far() || now - self.last_paint_ms >= crate::chrome::FAR_REFRESH_MS;
                 (content && due)
                     || self.model.notice_expired(now)
+                    || self.model.whats_new_wants_frame(now)
+                    || self.model.done_seen_due(now)
+                    || self.frame_rate.expired(now)
                     || self
                         .keycasts
                         .iter()
@@ -495,8 +709,12 @@ impl AppView {
                 // fallback exists so a byte is never dropped, not because
                 // it is expected to run.
                 PaneEvent::Replay(bytes) => {
+                    let host_size = self.backend.pty.viewer_pane_size(pane);
                     let fed = match self.terminal_for_pane(pane) {
                         Some(body) => {
+                            if let Some((c, r)) = host_size {
+                                body.fit_host_cells(c as usize, r as usize);
+                            }
                             body.feed_replay(bytes);
                             true
                         }
@@ -522,23 +740,50 @@ impl AppView {
             // what the state WAS: "the card went colourless and I do not
             // know which event did it" is not answerable from a screenshot.
             let before = self.model.card(&report.card_id).map(|c| c.agent);
+            let waiting = self.model.waiting_parked().map(|c| c.id.clone());
             self.model.apply_hook(&report);
             let after = self.model.card(&report.card_id).map(|c| c.agent);
             log_agent_event(&report, before, after);
-            self.redraw |= before != after;
+            // A closed card's agent starting to wait changes the status bar.
+            self.redraw |=
+                before != after || waiting != self.model.waiting_parked().map(|c| c.id.clone());
         }
         while let Ok(statuses) = self.backend.pane_status.try_recv() {
             self.model.apply_pane_statuses(&statuses);
         }
         while let Ok(change) = self.backend.config_changes.try_recv() {
+            // A joined window runs on the HOST's files, which arrive on the
+            // canvas stream (#433); its own folder is empty and stays so.
+            if self.viewer {
+                continue;
+            }
             match change.file {
                 ConfigFile::Settings => {
-                    self.model.apply_settings_text(&change.contents);
-                    self.animator.animations_on =
-                        self.model.config.ui.animations && !self.reduce_motion;
+                    self.apply_settings_text(&change.contents);
+                    if let Some(hub) = &self.join {
+                        hub.publish_config(
+                            infiniterm_core::backend::join::KIND_SETTINGS,
+                            &change.contents,
+                        );
+                    }
                 }
-                _ => self.model.apply_keymap_text(&change.contents),
+                // theme.json is this window's own look (#425): the chrome stays
+                // per client, so it is never published to a joined viewer.
+                ConfigFile::Theme => self.model.apply_theme_file_text(&change.contents),
+                _ => {
+                    self.model.apply_keymap_text(&change.contents);
+                    if let Some(hub) = &self.join {
+                        hub.publish_config(
+                            infiniterm_core::backend::join::KIND_KEYBINDINGS,
+                            &change.contents,
+                        );
+                    }
+                }
             }
+            // An edit made outside the app arrives while the window idles:
+            // without this the new settings were applied and never drawn
+            // until something else asked for a frame (#216).
+            self.redraw = true;
         }
         self.drain_updates();
         while let Ok(req) = self.backend.cli_requests.try_recv() {
@@ -549,7 +794,11 @@ impl AppView {
                 .map(|c| (c.id.as_str(), c.label.as_str()))
                 .collect();
             let reply = self.model.run_ift(&req, &commands);
-            self.backend.cli.reply(req.id, reply.ok, reply.text);
+            // An `edit` is answered when its in-place editor closes
+            // (Effect::CliReply), which is what the `ift` is waiting for.
+            if !std::mem::take(&mut self.model.reply_deferred) {
+                self.backend.cli.reply(req.id, reply.ok, reply.text);
+            }
             // An ift verb arrives from the socket, after the element tree
             // for this frame was built, and several of them change chrome
             // rather than anything that draws itself: `ift name` sets a
@@ -559,6 +808,14 @@ impl AppView {
             // Claude Code renames its card at the END of a turn, which is
             // exactly when the card stops producing the output that would
             // have forced a frame, so it looked like the rename was refused.
+            self.redraw = true;
+        }
+        // Folders sent by Finder's service: a terminal card each, the last
+        // focused. A refused one (gone since) is a notice, not a card.
+        for dir in crate::finder_service::take() {
+            if let Err(e) = self.model.open_terminal_at(&dir) {
+                self.model.notify(e);
+            }
             self.redraw = true;
         }
         self.perform_effects();
@@ -609,7 +866,21 @@ impl AppView {
 
     /// The frame changed: write it half a second after it stops changing.
     pub fn note_window(&mut self, bounds: gpui::WindowBounds, now: f64) {
-        let state = crate::window_state::WindowState::of(bounds);
+        let mut state = crate::window_state::WindowState::of(bounds);
+        // Covering, gpui sees a window the size of the screen. What is kept
+        // is the frame from before, marked full screen, so a quit reopens
+        // covered at launch and un-covering has somewhere to return.
+        if crate::fullscreen::covering() {
+            match &self.window_seen {
+                Some(before) => {
+                    state = crate::window_state::WindowState {
+                        mode: "fullscreen".into(),
+                        ..before.clone()
+                    }
+                }
+                None => return,
+            }
+        }
         if self.window_seen.as_ref() != Some(&state) {
             let first = self.window_seen.is_none();
             self.window_seen = Some(state);
@@ -630,11 +901,66 @@ impl AppView {
     }
 
     fn write_layout(&mut self) {
+        // A viewer saves nothing of its own: what it edited goes up to the
+        // host, which makes it so (#423).
+        if self.viewer {
+            self.send_up();
+            return;
+        }
         if let Some(text) = self.model.save_text() {
             if let Err(e) = infiniterm_core::layout_file::write_layout(&text) {
                 eprintln!("[infiniterm] could not save the layout: {e}");
             }
+            // The same text, to every viewer that joined, with the revision
+            // it is. The viewer keeps its own viewport and focus; nothing is
+            // stripped here.
+            if let Some(hub) = &self.join {
+                // Remembered by revision, so a viewer's edit can be compared
+                // with the canvas it started from and merged field by field.
+                let rev = self.model.record_published(&text);
+                hub.publish_layout(&text, rev);
+            }
         }
+    }
+
+    /// A viewer's canvas, to the host, on the revision it was edited on.
+    fn send_up(&mut self) {
+        // Nothing to say before the host's own canvas has arrived.
+        if !self.model.snapshot_seen {
+            return;
+        }
+        let Some(up) = &self.uplink else {
+            return;
+        };
+        let layout = self.model.layout_snapshot();
+        let _ = up.send(infiniterm_core::backend::join::RemoteUpdate {
+            base: self.model.layout_rev,
+            layout,
+        });
+    }
+
+    /// What the viewers sent up since the last tick (#423), applied to this
+    /// canvas in place. An edit made on an old canvas is dropped and the host
+    /// republishes its own, which is how that viewer finds out. True when the
+    /// canvas changed, so the next frame starts any shell it now needs.
+    pub fn apply_remote_updates(&mut self) -> bool {
+        use infiniterm_core::model::persist::RemoteApply;
+        let Some(rx) = &self.join_updates else {
+            return false;
+        };
+        let updates: Vec<_> = rx.try_iter().collect();
+        let mut changed = false;
+        for u in updates {
+            match self.model.apply_remote_layout(&u.layout, u.base) {
+                Ok(RemoteApply::Applied) => changed = true,
+                Ok(RemoteApply::Stale) => {
+                    self.write_layout();
+                    changed = true;
+                }
+                Err(why) => eprintln!("[infiniterm] a viewer's canvas was refused: {why}"),
+            }
+        }
+        changed
     }
 
     /// Immediately, for a quit: anything done in the last half second would
@@ -649,7 +975,80 @@ impl AppView {
         }
     }
 
+    /// A settings file's text applied to the model and the chrome that
+    /// follows it. The same for the app's own file and, in a joined window,
+    /// the host's.
+    fn apply_settings_text(&mut self, text: &str) {
+        self.model.apply_settings_text(text);
+        self.chrome.apply_ui_typography(&self.model.config.ui);
+        self.animator.animations_on = self.model.config.ui.animations && !self.reduce_motion;
+    }
+
+    /// What the host's canvas said since the last tick (a viewer, #423): a
+    /// layout is applied in place, agent states on top of it, and a status
+    /// (joined, lost, refused) is shown as a notice.
+    pub fn drain_canvas(&mut self) {
+        use infiniterm_core::backend::join_client::CanvasEvent;
+        let Some(rx) = &self.canvas_rx else {
+            return;
+        };
+        let events: Vec<CanvasEvent> = rx.try_iter().collect();
+        for event in events {
+            match event {
+                CanvasEvent::Layout(text) => {
+                    // An edit still waiting for its debounce would be
+                    // overwritten by this snapshot (a closed card comes
+                    // back, a move is undone) and the next send would carry
+                    // the host's own state. Send it first, on the revision
+                    // it was made on; the host's next canvas has it applied.
+                    if self.save_due.is_some() || self.model.dirty_layout {
+                        self.flush_save();
+                    }
+                    if let Err(why) = self.model.apply_snapshot(&text) {
+                        self.model.notify(&why);
+                    }
+                }
+                CanvasEvent::Revision(rev) => self.model.layout_rev = rev,
+                CanvasEvent::Agents(text) => self.model.apply_agent_states(&text),
+                CanvasEvent::Connected => {
+                    self.viewer_poke = true;
+                    self.redraw = true;
+                }
+                CanvasEvent::Settings(text) => {
+                    self.apply_settings_text(&text);
+                    self.redraw = true;
+                }
+                CanvasEvent::Keybindings(text) => {
+                    self.model.apply_keymap_text(&text);
+                    self.redraw = true;
+                }
+                CanvasEvent::Status(text) => self.model.notify(&text),
+                CanvasEvent::Fatal(text) => {
+                    eprintln!("[infiniterm] {text}");
+                    self.model.notify(&text);
+                }
+            }
+        }
+    }
+
+    /// The host sends viewers the agent states when they change (#423).
+    pub fn publish_agents(&mut self) {
+        let Some(hub) = &self.join else {
+            return;
+        };
+        let text = self.model.agent_states_text();
+        if text != self.last_agents {
+            hub.publish_agents(&text);
+            self.last_agents = text;
+        }
+    }
+
     pub fn maybe_sweep(&mut self, now: f64) {
+        // A viewer's states are the host's; a local sweep would end a working
+        // card the host still has working.
+        if self.viewer {
+            return;
+        }
         if now - self.last_sweep >= SWEEP_MS {
             self.last_sweep = now;
             self.model.sweep_stale();
@@ -671,6 +1070,49 @@ fn startup_terminal() -> (infiniterm_core::config::TerminalBackend, usize) {
     (terminal.backend, terminal.session_buffer as usize)
 }
 
+/// Opens the socket `ift join` viewers reach through ssh, and gives them the
+/// canvas as it is now (#423). A failure is said and costs nothing else: the
+/// app runs without joining.
+fn start_join(app: &mut AppView) {
+    // A viewer is a window onto the host's canvas, never a host: it would
+    // relay sessions that are not its own (found in the #423 drive, which
+    // showed a viewer binding its own j.sock).
+    let Some((relay, write, nudge)) = app.backend.pty.join_parts() else {
+        return;
+    };
+    if !app.model.config.join.enabled || app.viewer {
+        // No server, so nothing is kept for one.
+        relay.lock().unwrap().set_enabled(false);
+        return;
+    }
+    let hub = infiniterm_core::backend::join::JoinHub::new(relay, write).with_nudge(nudge);
+    // The host's files as they are now, for a viewer that joins before the
+    // first change (#433).
+    for (file, kind) in [
+        (
+            ConfigFile::Settings,
+            infiniterm_core::backend::join::KIND_SETTINGS,
+        ),
+        (
+            ConfigFile::Keybindings,
+            infiniterm_core::backend::join::KIND_KEYBINDINGS,
+        ),
+    ] {
+        if let Some(text) = config_read(file) {
+            hub.publish_config(kind, &text);
+        }
+    }
+    match hub.serve(&infiniterm_core::paths::join_socket()) {
+        Ok(()) => {
+            app.join_updates = hub.take_updates();
+            app.join = Some(hub);
+        }
+        Err(e) => eprintln!("[infiniterm/warn] ift join is off: {e}"),
+    }
+    // Viewers that join before the first save still get a canvas.
+    app.write_layout();
+}
+
 pub fn startup(app: &mut AppView) {
     let now = now_ms();
     app.model.tick(now);
@@ -683,6 +1125,13 @@ pub fn startup(app: &mut AppView) {
             "[infiniterm] moved your old ~/.config/infiniterm.json to {}",
             moved.display()
         );
+    }
+    // The zsh integration every new card's shell loads (command marks for
+    // program_state.rs), rewritten so an update's version wins.
+    if let Err(e) = infiniterm_core::shell_integration::install(
+        &infiniterm_core::paths::shell_integration_dir(),
+    ) {
+        eprintln!("[infiniterm/warn] could not write the zsh integration: {e}");
     }
     // Always rewritten, which is what makes them read-only in practice; also
     // how a new setting reaches an existing install.
@@ -706,15 +1155,128 @@ pub fn startup(app: &mut AppView) {
         let _ = config_write(ConfigFile::Keybindings, EMPTY_KEYBINDINGS);
         EMPTY_KEYBINDINGS.to_string()
     });
+    let theme = config_read(ConfigFile::Theme).unwrap_or_else(|| {
+        let _ = config_write(ConfigFile::Theme, EMPTY_THEME);
+        EMPTY_THEME.to_string()
+    });
+    app.model.apply_theme_file_text(&theme);
     app.themes_dir = ensure_themes_dir(AppView::bundled_themes().as_deref());
     app.refresh_themes();
     app.model.apply_settings_text(&settings);
+    app.chrome.apply_ui_typography(&app.model.config.ui);
     app.model.apply_keymap_text(&keys);
+    // The "Start here" card's file, rewritten every launch like the defaults
+    // so its keys follow the keymap in force and its agent list follows what
+    // is installed now. A first launch opens it (`seed_first_card`).
+    {
+        use infiniterm_core::welcome;
+        let env_path = |k: &str| std::env::var_os(k).map(std::path::PathBuf::from);
+        let home = infiniterm_core::paths::home_dir();
+        let agents = welcome::agents_on_this_mac(
+            &home,
+            env_path("XDG_CONFIG_HOME").as_deref(),
+            env_path("CODEX_HOME").as_deref(),
+        );
+        let path = welcome::welcome_path();
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| {
+                std::fs::write(
+                    &path,
+                    welcome::render(&app.model.keymap, &agents, app.model.modifier_labels()),
+                )
+            });
+        if let Err(e) = written {
+            eprintln!("[infiniterm/warn] could not write {}: {e}", path.display());
+        }
+        // The changelog card's file (`help.changelog`), this build's own text.
+        let path = infiniterm_core::changelog::changelog_path();
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&path, infiniterm_core::changelog::text()));
+        if let Err(e) = written {
+            eprintln!("[infiniterm/warn] could not write {}: {e}", path.display());
+        }
+        // The first launch after an update shows what changed (#402): the
+        // overlay's file is this build's released changelog, and it opens
+        // when the version last run is older than this one. A first install,
+        // a scratch data dir and a remote window have no stored version, or
+        // none worth showing, and only record it.
+        let whats_new = infiniterm_core::changelog::whats_new_path();
+        let written = whats_new
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&whats_new, infiniterm_core::changelog::released_text()));
+        if let Err(e) = written {
+            eprintln!(
+                "[infiniterm/warn] could not write {}: {e}",
+                whats_new.display()
+            );
+        }
+        let running = env!("CARGO_PKG_VERSION");
+        let updated = infiniterm_core::changelog::read_last_version()
+            .is_some_and(|stored| infiniterm_core::changelog::version_newer(&stored, running));
+        if updated && app.model.config.ui.show_whats_new && app.model.remote.is_none() {
+            app.model.open_whats_new();
+        }
+        if let Err(e) = infiniterm_core::changelog::write_last_version(running) {
+            eprintln!("[infiniterm/warn] could not record the version: {e}");
+        }
+        // The in-app docs (`help.docs`), the same pages as infiniterm.app,
+        // rewritten every launch so they match this build.
+        let dir = infiniterm_core::help_docs::docs_dir();
+        let written = std::fs::create_dir_all(&dir).and_then(|()| {
+            infiniterm_core::help_docs::files()
+                .into_iter()
+                .try_for_each(|(name, text)| std::fs::write(dir.join(name), text))
+        });
+        if let Err(e) = written {
+            eprintln!(
+                "[infiniterm/warn] could not write the docs to {}: {e}",
+                dir.display()
+            );
+        }
+    }
     app.animator.animations_on = app.model.config.ui.animations && !app.reduce_motion;
     // Before any card exists: which sessions the last launch left running.
-    app.live_sessions = app.backend.pty.live_sessions();
-    app.model
-        .load_layout(infiniterm_core::layout_file::read_layout().as_deref());
+    // A remote instance (`ift connect`): what it is called, its colour, and
+    // a Dock icon badged with it. Before any card, since the model refuses
+    // browser cards once this is set.
+    app.model.remote = infiniterm_core::remote_identity::RemoteIdentity::from_env();
+    crate::instance_icon::init();
+    if let Some(r) = &app.model.remote {
+        crate::instance_icon::set_badge(r.color);
+        // The settings were applied before this, with the Mac's folder.
+        app.model.start_dir = "~".into();
+    }
+    let join_host = infiniterm_core::backend::remote::join_from_env();
+    app.viewer = join_host.is_some();
+    // A viewer asks the host nothing at launch: the canvas arrives from the
+    // client thread, and every session on it is adoptable through the host.
+    app.live_sessions = if app.viewer {
+        vec![]
+    } else {
+        app.backend.pty.live_sessions()
+    };
+    app.model.can_park = app.backend.pty.can_park();
+    if let Some(host) = join_host {
+        // An empty, read-only canvas; the first snapshot fills it in place.
+        app.model.load_layout(None);
+        app.model.first_run = false;
+        app.model.read_only = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (edit_tx, edit_rx) = std::sync::mpsc::channel();
+        app.canvas_rx = Some(rx);
+        app.uplink = Some(edit_tx);
+        std::thread::spawn(move || {
+            infiniterm_core::backend::join_client::run_canvas_client(host, tx, edit_rx)
+        });
+    } else {
+        app.model
+            .load_layout(infiniterm_core::layout_file::read_layout().as_deref());
+    }
     // The omnibox ranks against this; a missing file is an empty history.
     app.model.history =
         infiniterm_core::omni::history::History::load(&infiniterm_core::paths::history_path());
@@ -736,6 +1298,7 @@ pub fn startup(app: &mut AppView) {
         infiniterm_core::files::draft_prune(&keep);
     }
     start_updater(app);
+    start_join(app);
     app.perform_effects();
     if !app.backend.socket_ok {
         app.model
@@ -942,7 +1505,9 @@ impl AppView {
             });
         }
         if let Some(text) = said {
-            self.model.notify(text);
+            // After the "checking for updates…" line, which a fast answer
+            // would otherwise wipe before it could be read.
+            self.model.notify_after_read(text);
             self.redraw = true;
         }
     }
@@ -956,6 +1521,22 @@ impl AppView {
         let Some(staged) = u.staged.clone() else {
             return;
         };
+        // The app on disk may be newer than what was staged (installed
+        // since): then this is a plain restart, and the stale download goes.
+        let on_disk = std::fs::read_to_string(u.bundle.join("Contents/Info.plist"))
+            .ok()
+            .and_then(|t| infiniterm_core::update::plist_build(&t));
+        if !infiniterm_core::update::staged_is_newer(staged.build, on_disk) {
+            let _ = std::fs::remove_dir_all(&staged.app);
+            if let Some(u) = self.updater.as_mut() {
+                u.staged = None;
+            }
+            self.flush_save();
+            if relaunch_after_exit().is_ok() {
+                std::process::exit(0);
+            }
+            return;
+        }
         let parent = u.bundle.parent().unwrap_or(std::path::Path::new("/"));
         let probe = parent.join(".infiniterm-update-probe");
         if std::fs::write(&probe, b"").is_err() {

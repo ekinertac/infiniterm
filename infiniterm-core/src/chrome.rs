@@ -41,9 +41,15 @@ pub const STATE_BORDER_FAR: f64 = 9.;
 /// saying the same word. The corner label grows instead, on the focus
 /// ring's steps and for the focus ring's reason: the further out you are,
 /// the more of the card has to be label for the name to register.
-pub const CORNER_LABEL_NEAR: f64 = 1.2;
-pub const CORNER_LABEL_MID: f64 = 1.8;
-pub const CORNER_LABEL_FAR: f64 = 2.4;
+///
+/// Gentler since 2026-09-25: at 1.2 / 1.8 / 2.4 a 15 px label was 36 px
+/// zoomed out, and Ekin shrank the whole interface to 60% to get smaller
+/// labels, which made every other piece of chrome too small. The sizes he
+/// liked at 60% (about 16 px mid, 22 px far) are these steps at 100%; near,
+/// the label is exactly `ui.cardLabelSize`.
+pub const CORNER_LABEL_NEAR: f64 = 1.0;
+pub const CORNER_LABEL_MID: f64 = 1.1;
+pub const CORNER_LABEL_FAR: f64 = 1.45;
 pub fn corner_label_scale(scale: f64) -> f64 {
     if scale >= 0.6 {
         CORNER_LABEL_NEAR
@@ -112,6 +118,14 @@ mod tests {
     // The same steps as the ring, because it replaced a separate mid-zoom
     // label drawn in the middle of the card: one label, growing, rather
     // than two saying the same thing.
+    // What Ekin picked by eye with the whole interface at 60%, now at 100%:
+    // a 15 px label is 15 near, about 16 mid and about 22 far.
+    #[test]
+    fn a_15px_label_stays_modest_zoomed_out() {
+        close(15. * corner_label_scale(1.), 15.);
+        assert!((15. * corner_label_scale(0.4) - 16.2).abs() < 0.5);
+        assert!((15. * corner_label_scale(0.1) - 21.6).abs() < 0.5);
+    }
     #[test]
     fn the_corner_label_grows_zooming_out() {
         for (s, e) in [

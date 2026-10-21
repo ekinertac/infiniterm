@@ -49,6 +49,9 @@ pub enum CardKind {
     Diff,
     Browser,
     Transcript,
+    /// A Markdown document rendered read-only (page.rs, #42): the welcome
+    /// card, and later the docs and "what's new".
+    Page,
 }
 
 impl CardKind {
@@ -59,7 +62,16 @@ impl CardKind {
             CardKind::Diff => "diff",
             CardKind::Browser => "browser",
             CardKind::Transcript => "transcript",
+            CardKind::Page => "page",
         }
+    }
+
+    /// Whether the card's body is the editor's, so the editor's keyboard
+    /// lock, chords and Cmd+F apply: an editor, and a diff, which is the
+    /// editor in a read-only diff mode (2026-10-20). Saved kinds stay apart
+    /// ("diff" still loads as a diff), only the runtime treats them alike.
+    pub fn has_editor_body(self) -> bool {
+        matches!(self, CardKind::Editor | CardKind::Diff)
     }
 }
 
@@ -115,6 +127,15 @@ pub struct SavedCard {
     /// The last Claude Code session the card ran, for `claude --resume`
     /// after a reboot. Written only when there is one.
     pub agent_session: Option<String>,
+    /// Which agent that session belongs to (`codex`, `opencode`, `pi`), as
+    /// its adapter names itself; none is Claude Code, whose hooks predate
+    /// the name. Picks the resume command (`agent_state::resume_command`).
+    pub agent_kind: Option<String>,
+    /// The name the agent gave its session (its terminal title), for the
+    /// label after a relaunch: the title escape is sent when the name is
+    /// set, and a long session's ring no longer holds it. Written only for
+    /// a card with an agent session.
+    pub agent_title: Option<String>,
     /// The card's `#7`. Zero when the file predates it; written when set.
     pub number: u32,
     /// `card.protect`: cannot be closed. Written only when true.
@@ -216,6 +237,20 @@ fn card_value(c: &SavedCard) -> Value {
     if let Some(agent) = &c.agent_session {
         if let Some(map) = card.as_object_mut() {
             map.insert("agentSession".into(), Value::String(agent.clone()));
+            if let Some(kind) = &c.agent_kind {
+                map.insert("agentKind".into(), Value::String(kind.clone()));
+            }
+        }
+    }
+    // Not an empty one: some sessions set an empty title, and the reader
+    // takes "" for none, so writing it broke the byte-for-byte round trip.
+    if let Some(t) = c
+        .agent_title
+        .as_ref()
+        .filter(|t| !t.is_empty() && c.agent_session.is_some())
+    {
+        if let Some(map) = card.as_object_mut() {
+            map.insert("agentTitle".into(), Value::String(t.clone()));
         }
     }
     if c.number > 0 {
@@ -326,6 +361,8 @@ fn as_card(v: &Value) -> Option<SavedCard> {
     let session = non_empty(c.get("session")).or_else(|| non_empty(c.get("tmuxWindow")));
     let kitty_keys = c.get("kittyKeys").and_then(Value::as_bool).unwrap_or(false);
     let agent_session = non_empty(c.get("agentSession"));
+    let agent_kind = non_empty(c.get("agentKind"));
+    let agent_title = non_empty(c.get("agentTitle"));
     let number = c.get("number").and_then(Value::as_u64).unwrap_or(0) as u32;
     let protected = c.get("protected").and_then(Value::as_bool).unwrap_or(false);
     let tabs: Vec<String> = c
@@ -353,6 +390,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         Some("editor") => CardKind::Editor,
         Some("diff") => CardKind::Diff,
         Some("transcript") if path.is_some() => CardKind::Transcript,
+        Some("page") if path.is_some() => CardKind::Page,
         Some("browser") if url.is_some() => CardKind::Browser,
         _ => CardKind::Terminal,
     };
@@ -376,7 +414,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         soft_group_id: non_empty(c.get("softGroupId")),
         split_from: non_empty(c.get("splitFrom")),
         kind,
-        path: if file_kind || kind_str == Some("transcript") {
+        path: if file_kind || matches!(kind_str, Some("transcript" | "page")) {
             path
         } else {
             None
@@ -404,6 +442,8 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         session,
         kitty_keys,
         agent_session,
+        agent_kind,
+        agent_title,
         number,
         protected,
     })
@@ -487,6 +527,20 @@ pub fn is_newer_than_this_build(text: &str) -> bool {
 /// cards left after validation. A layout with no cards is the same as no
 /// layout; letting it through would be indistinguishable from a first run.
 pub fn parse_layout(text: &str) -> Option<SavedLayout> {
+    parse_layout_with(text, false)
+}
+
+/// `parse_layout` for a canvas that travels between a host and a viewer
+/// (#438): a canvas with no cards is a real canvas there. A host with no
+/// shells yet (a fresh Linux server) publishes one, and a viewer that closed
+/// every card sends one; reading either as "unreadable" left the viewer empty
+/// with an error and every edit it made stale. A file on disk keeps the
+/// stricter rule.
+pub fn parse_layout_allowing_empty(text: &str) -> Option<SavedLayout> {
+    parse_layout_with(text, true)
+}
+
+fn parse_layout_with(text: &str, allow_empty: bool) -> Option<SavedLayout> {
     let raw: Value = serde_json::from_str(text).ok()?;
     let root = raw.as_object()?;
     // Forward compatibility only goes one way: a newer file may contain
@@ -504,7 +558,7 @@ pub fn parse_layout(text: &str) -> Option<SavedLayout> {
             cards.push(card);
         }
     }
-    if cards.is_empty() {
+    if cards.is_empty() && !allow_empty {
         return None;
     }
 
@@ -589,6 +643,8 @@ mod tests {
             z: 0.,
             kitty_keys: false,
             agent_session: None,
+            agent_kind: None,
+            agent_title: None,
             number: 0,
             protected: false,
             title: "api".into(),
@@ -684,7 +740,7 @@ mod tests {
             &[c],
             &[SavedGroup {
                 id: "g1".into(),
-                name: "humbl.ai".into(),
+                name: "acme.dev".into(),
             }],
         )
         .unwrap();
@@ -692,7 +748,7 @@ mod tests {
             saved.groups,
             [SavedGroup {
                 id: "g1".into(),
-                name: "humbl.ai".into()
+                name: "acme.dev".into()
             }]
         );
         assert_eq!(saved.cards[0].group_id.as_deref(), Some("g1"));
@@ -756,6 +812,22 @@ mod tests {
             .contains_key("number"));
     }
 
+    // Whose session it is travels with the id, so a Codex card offers
+    // `codex resume` after a reboot.
+    #[test]
+    fn the_agent_kind_rides_with_the_session() {
+        let saved = round_trip(
+            &[SavedCard {
+                agent_session: Some("c0ffee".into()),
+                agent_kind: Some("codex".into()),
+                ..card()
+            }],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(saved.cards[0].agent_kind.as_deref(), Some("codex"));
+    }
+
     // After a reboot the shell is new and the ring is all that is left of
     // the agent; the id is what turns that into `claude --resume`.
     #[test]
@@ -773,6 +845,46 @@ mod tests {
             .as_object()
             .unwrap()
             .contains_key("agentSession"));
+    }
+
+    // The session's name comes back with it, so the label does not fall
+    // back to the directory after a relaunch; a card with no agent session
+    // never writes one.
+    #[test]
+    fn the_agent_title_round_trips_only_beside_an_agent_session() {
+        let saved = round_trip(
+            &[SavedCard {
+                agent_session: Some("c0ffee".into()),
+                agent_title: Some("fix the tab dots".into()),
+                ..card()
+            }],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            saved.cards[0].agent_title.as_deref(),
+            Some("fix the tab dots")
+        );
+        let empty = SavedCard {
+            agent_session: Some("c0ffee".into()),
+            agent_title: Some(String::new()),
+            ..card()
+        };
+        assert!(
+            !card_value(&empty)
+                .as_object()
+                .unwrap()
+                .contains_key("agentTitle"),
+            "an empty title is not written"
+        );
+        let shell = SavedCard {
+            agent_title: Some("zsh".into()),
+            ..card()
+        };
+        assert!(!card_value(&shell)
+            .as_object()
+            .unwrap()
+            .contains_key("agentTitle"));
     }
 
     // Same rule as session, kittyKeys and agentSession: a card that never
@@ -912,6 +1024,11 @@ mod tests {
     #[test]
     fn a_layout_with_no_cards_is_the_same_as_no_layout() {
         assert!(parse_layout(&file(1, vec![])).is_none());
+        // ...but between a host and a viewer an empty canvas is a canvas.
+        let empty = parse_layout_allowing_empty(&file(1, vec![])).expect("readable");
+        assert!(empty.cards.is_empty());
+        // Everything else is still checked: a version from the future is not.
+        assert!(parse_layout_allowing_empty(&file(99, vec![])).is_none());
     }
 
     // A newer file may hold fields this build would drop. Older ones are still read.
@@ -1127,7 +1244,7 @@ mod tests {
     fn workspaces_survive_a_round_trip_viewport_and_all() {
         let ws = vec![SavedWorkspace {
             id: "w1".into(),
-            name: "humbl.ai".into(),
+            name: "acme.dev".into(),
             viewport: vp(10., 20., 0.5),
             focused: None,
         }];
@@ -1297,6 +1414,27 @@ mod tests {
     }
 
     #[test]
+    fn a_page_card_keeps_its_file_and_one_without_a_path_comes_back_as_a_terminal() {
+        let page = SavedCard {
+            kind: CardKind::Page,
+            path: Some("/d/welcome/Start here.md".into()),
+            ..card()
+        };
+        let blank = SavedCard {
+            id: "c2".into(),
+            kind: CardKind::Page,
+            ..card()
+        };
+        let saved = round_trip(&[page, blank], &[]).unwrap();
+        assert_eq!(saved.cards[0].kind, CardKind::Page);
+        assert_eq!(
+            saved.cards[0].path.as_deref(),
+            Some("/d/welcome/Start here.md")
+        );
+        assert_eq!(saved.cards[1].kind, CardKind::Terminal);
+    }
+
+    #[test]
     fn a_sidebar_width_round_trips_and_garbage_means_the_default() {
         let wide = SavedCard {
             sidebar: Some(340.),
@@ -1376,7 +1514,15 @@ mod tests {
             &layout.workspaces,
             layout.active_workspace_id.as_deref(),
         ));
-        let expected = text.trim_end().replace("\"tmuxWindow\":", "\"session\":");
+        // Builds 347 to 353 wrote an empty `agentTitle` (now skipped); a
+        // file saved by one of them is normalised the same way.
+        let expected: String = text
+            .trim_end()
+            .replace("\"tmuxWindow\":", "\"session\":")
+            .lines()
+            .filter(|l| l.trim() != "\"agentTitle\": \"\",")
+            .collect::<Vec<_>>()
+            .join("\n");
         assert_eq!(again, expected);
     }
 }

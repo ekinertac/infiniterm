@@ -42,6 +42,10 @@ pub struct EditorTabs {
     /// one from `locked` above (the keyboard's), shown beside `#N`.
     pub protected: bool,
     pub style: StripStyle,
+    /// Whether the strip is drawn. A diff card is one body in this wrapper
+    /// with no tabs and no strip (`new_diff`): it takes the editor's lock and
+    /// key routing from here, which is the point of hosting it.
+    strip: bool,
     /// Bounds of the last paint, for the strip's hit test.
     world: Size,
     dirty: bool,
@@ -49,6 +53,49 @@ pub struct EditorTabs {
 }
 
 impl EditorTabs {
+    /// Escape still has something to close in the active tab (a popup, the
+    /// find panel, extra cursors, a selection); see `EditorBody::escape_has_work`.
+    pub fn escape_has_work(&self) -> bool {
+        self.active_body_ref().is_some_and(|b| b.escape_has_work())
+    }
+
+    /// The tab under a point of the card (a right-click's), `None` off the
+    /// tabs, on the "+" and below the strip.
+    pub fn tab_at(&self, local: Point) -> Option<usize> {
+        if !self.strip {
+            return None;
+        }
+        match strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
+            Some(crate::body::TabClick::Switch(i) | crate::body::TabClick::Close(i)) => Some(i),
+            _ => None,
+        }
+    }
+
+    /// The tree row at a point of the card body, in the active tab.
+    pub fn tree_row_at(&self, local: Point) -> Option<usize> {
+        let below = self.below_strip(local);
+        self.active_body_ref().and_then(|b| b.tree_row_at(below))
+    }
+
+    /// Lights (or clears) the tree row a menu is open on.
+    pub fn set_menu_row(&mut self, row: Option<usize>) {
+        if let Some(b) = self.active_body() {
+            b.set_menu_row(row);
+        }
+    }
+
+    /// The editor's part of a keybinding's context (`EditorBody::context_flags`).
+    pub fn context_flags(&self) -> infiniterm_core::model::UiContext {
+        self.active_body_ref()
+            .map(|b| b.context_flags())
+            .unwrap_or_default()
+    }
+
+    /// The resize cursor while the tree's divider is under the pointer or held.
+    pub fn divider_cursor(&self) -> Option<gpui::CursorStyle> {
+        self.active_body_ref().and_then(|b| b.divider_cursor())
+    }
+
     pub fn new(card_id: &str, metrics: &Metrics, world: Size, style: StripStyle) -> EditorTabs {
         EditorTabs {
             card_id: card_id.to_string(),
@@ -61,9 +108,37 @@ impl EditorTabs {
             card_number: 0,
             protected: false,
             style,
+            strip: true,
             world,
             dirty: true,
             metrics: metrics.clone(),
+        }
+    }
+
+    /// A diff card's body: one `EditorBody` in diff mode and no strip. The
+    /// card's `Card.tabs` stays empty; `rebuild_tabs` is never called on it.
+    pub fn new_diff(
+        card_id: &str,
+        root: &str,
+        metrics: &Metrics,
+        world: Size,
+        style: StripStyle,
+    ) -> EditorTabs {
+        let mut tabs = EditorTabs::new(card_id, metrics, world, style);
+        tabs.strip = false;
+        tabs.tabs = vec![(
+            String::new(),
+            EditorBody::new_diff(card_id, root, metrics, world),
+        )];
+        tabs
+    }
+
+    /// The strip's height in world px: none for a diff.
+    fn strip_h(&self) -> f64 {
+        if self.strip {
+            strip_world_h(self.style.font_px, self.ui_scale)
+        } else {
+            0.
         }
     }
 
@@ -122,7 +197,7 @@ impl EditorTabs {
     fn text_world(&self) -> Size {
         Size {
             w: self.world.w,
-            h: (self.world.h - strip_world_h(self.style.font_px, self.ui_scale)).max(1.),
+            h: (self.world.h - self.strip_h()).max(1.),
         }
     }
 
@@ -248,7 +323,7 @@ impl EditorTabs {
     fn below_strip(&self, local: Point) -> Point {
         Point {
             x: local.x,
-            y: local.y - strip_world_h(self.style.font_px, self.ui_scale),
+            y: local.y - self.strip_h(),
         }
     }
 }
@@ -268,19 +343,23 @@ impl CardBody for EditorTabs {
             w: f32::from(bounds.size.width) as f64 / scale,
             h: f32::from(bounds.size.height) as f64 / scale,
         };
-        let labels = self.labels();
-        let strip_h = paint_strip(
-            bounds,
-            scale,
-            self.ui_scale,
-            &labels,
-            self.active,
-            self.card_number,
-            self.protected,
-            &self.style,
-            window,
-            cx,
-        );
+        let strip_h = if self.strip {
+            let labels = self.labels();
+            paint_strip(
+                bounds,
+                scale,
+                self.ui_scale,
+                &labels,
+                self.active,
+                self.card_number,
+                self.protected,
+                &self.style,
+                window,
+                cx,
+            )
+        } else {
+            gpui::px(0.)
+        };
         let below = Bounds::new(
             point(bounds.origin.x, bounds.origin.y + strip_h),
             size(
@@ -305,11 +384,10 @@ impl CardBody for EditorTabs {
     }
 
     fn insert_text(&mut self, text: &str) {
-        // The emoji panel or an input method's commit is deliberate text:
-        // it locks the card the way the first key does, and goes in.
+        // Text from the emoji panel or an input method reaches only an
+        // editor you are in, like every key.
         if !self.locked {
-            self.locked = true;
-            self.dirty = true;
+            return;
         }
         if let Some(b) = self.active_body() {
             b.insert_text(text);
@@ -321,24 +399,49 @@ impl CardBody for EditorTabs {
     }
 
     fn key(&mut self, k: &Keystroke, now: f64, cx: &mut App) -> BodyAction {
-        // The keyboard's way in: a key without Cmd or Ctrl on a
-        // focused-but-unlocked card locks it and is swallowed. The
-        // browser's rule was a bare Enter; here it is every plain key,
-        // because a letter typed at an unlocked editor went into the file
-        // while the ring said the keyboard was the canvas's, and Ekin found
-        // edits he had not meant to make. Escape stays out of it (nothing
-        // to lock for), and a chord is the app's or the lock table's.
-        let m = &k.modifiers;
-        if !self.locked && !m.platform && !m.control && k.key != "escape" {
-            self.locked = true;
-            self.dirty = true;
+        // An editor you are not IN takes no keys at all. Bare Enter is the
+        // one way in from the keyboard (a click in the text is the mouse's),
+        // the browser card's rule. It used to be every plain key, which
+        // locked and swallowed whatever you pressed; Ekin found that too
+        // loose: an arrowed-to editor is a card on the canvas, drawn dimmed,
+        // and nothing typed at the canvas may end up in a file.
+        // Swallowed rather than ignored, so macOS neither repeats a Cmd key
+        // nor hands a letter to the input context behind our back.
+        if !self.locked {
+            if enters(k) {
+                self.locked = true;
+                self.dirty = true;
+            }
             return BodyAction::None;
         }
         if k.key != "escape" {
             self.last_escape_ms = None;
         }
+        // The word popup draws on the card's other tabs too; their word
+        // lists are cached per tab and rebuilt only when that tab's text
+        // changes.
+        let active = self.active;
+        let others: Vec<(String, std::sync::Arc<Vec<String>>)> = if self.tabs.len() > 1 {
+            self.tabs
+                .iter_mut()
+                .enumerate()
+                .filter(|(i, _)| *i != active)
+                .map(|(_, (handle, b))| {
+                    let name = match handle.rsplit('/').next() {
+                        Some(n) if !n.is_empty() => n.to_string(),
+                        _ => "untitled".to_string(),
+                    };
+                    (name, b.word_set())
+                })
+                .collect()
+        } else {
+            vec![]
+        };
         match self.active_body() {
-            Some(b) => b.key(k, now, cx),
+            Some(b) => {
+                b.other_words = others;
+                b.key(k, now, cx)
+            }
             None => BodyAction::None,
         }
     }
@@ -350,9 +453,17 @@ impl CardBody for EditorTabs {
         modifiers: &gpui::Modifiers,
         clicks: usize,
     ) -> BodyAction {
-        if let Some(hit) = strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
+        if let Some(hit) = self
+            .strip
+            .then(|| strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()))
+            .flatten()
+        {
             if button == gpui::MouseButton::Left {
                 return BodyAction::BrowserTab(hit);
+            }
+            // Middle-click closes a tab, as in every browser.
+            if let (gpui::MouseButton::Middle, crate::body::TabClick::Switch(i)) = (button, hit) {
+                return BodyAction::BrowserTab(crate::body::TabClick::Close(i));
             }
             return BodyAction::None;
         }
@@ -409,8 +520,32 @@ impl CardBody for EditorTabs {
     }
 }
 
+/// Whether a key pressed at an editor you are not in puts you in it: a bare
+/// Enter, and nothing else (`EditorTabs::key`).
+fn enters(k: &Keystroke) -> bool {
+    let m = &k.modifiers;
+    k.key == "enter" && !m.platform && !m.control && !m.alt && !m.shift
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_bare_enter_gets_you_into_an_editor() {
+        let k = |s: &str| gpui::Keystroke::parse(s).unwrap();
+        assert!(enters(&k("enter")));
+        for other in [
+            "a",
+            "cmd-/",
+            "cmd-z",
+            "shift-enter",
+            "cmd-enter",
+            "escape",
+            "space",
+        ] {
+            assert!(!enters(&k(other)), "{other} must not enter the editor");
+        }
+    }
+
     use super::*;
     use gpui::FontWeight;
 
@@ -429,7 +564,12 @@ mod tests {
             active_bg: gpui::black(),
             text_bright: gpui::white(),
             text_muted: gpui::white(),
-            font_family: "Menlo".into(),
+            regular: gpui::font("Menlo"),
+            bold: {
+                let mut font = gpui::font("Menlo");
+                font.weight = FontWeight::BOLD;
+                font
+            },
             font_px: 14.,
         };
         EditorTabs::new("c1", &metrics, Size { w: 800., h: 600. }, style)
@@ -498,6 +638,40 @@ mod tests {
         assert_eq!(t.tabs[0].1.buffer.text(), "a2", "the active tab");
         assert_eq!(t.tabs[1].1.buffer.text(), "b2", "the background tab too");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A diff card is one body with no strip: nothing at the card's top is a
+    // tab, a click there is the text (and locks), and the body gets the whole
+    // card. It locks the editor's way, since this is the editor's wrapper.
+    #[test]
+    fn a_diff_has_no_strip_and_locks_like_an_editor() {
+        let m = Metrics {
+            family: "Menlo".into(),
+            font_px: 13.,
+            line_height: 1.4,
+            cell_w: 8.,
+            weight: FontWeight::NORMAL,
+            bold_weight: FontWeight::BOLD,
+        };
+        let style = tabs().style.clone();
+        let mut t = EditorTabs::new_diff("c1", "/tmp", &m, Size { w: 800., h: 600. }, style);
+        assert_eq!(t.tab_count(), 1);
+        assert_eq!(t.tab_at(Point { x: 10., y: 10. }), None);
+        assert_eq!(t.text_world().h, 600., "the body gets the whole card");
+        assert!(t.active_body().unwrap().is_diff());
+        assert!(!t.locked);
+        // Clicking where the strip would be reaches the body and locks.
+        let hit = t.mouse_down(
+            Point { x: 400., y: 10. },
+            gpui::MouseButton::Left,
+            &gpui::Modifiers::default(),
+            1,
+        );
+        assert_ne!(
+            hit,
+            BodyAction::BrowserTab(crate::body::TabClick::Switch(0))
+        );
+        assert!(t.locked);
     }
 
     // Enter locks a focused card; the strip is never the text.

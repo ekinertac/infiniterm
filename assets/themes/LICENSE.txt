@@ -1,0 +1,5 @@
+These .itermcolors files are from iTerm2-Color-Schemes
+(https://github.com/mbadolato/iTerm2-Color-Schemes), MIT licensed.
+Each scheme is the work of its original author, credited in that repository.
+The whole collection is copied into the app's themes directory on first
+launch, so every scheme the picker can show is there without a download.

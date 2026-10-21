@@ -2,7 +2,8 @@
 # The build that leaves this Mac: target/dist/ gets the notarized, stapled
 # DMG friends install from, the notarized, stapled zip the updater
 # downloads (updater.rs), and latest.json, the manifest the updater polls.
-# `tools/publish.sh` puts all three on ekinertac/infiniterm-releases.
+# `tools/publish.sh` puts all three on ekinertac/infiniterm (#52; on
+# ekinertac/infiniterm-releases before, which it can still bridge to).
 #
 # Order matters. The app is notarized and stapled FIRST, because both the
 # zip and the DMG must carry a stapled app (a Mac offline at first launch
@@ -27,15 +28,20 @@ plist="$app/Contents/Info.plist"
 version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist")
 build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$plist")
 name="infiniterm-$version-$build-arm64"
-tag="v$version-$build"
+# Semver, the open source convention (#19); the build rides in the
+# release title and notes. Was v<version>-<build>.
+tag="v$version"
 out=target/dist
 rm -rf "$out"
 mkdir -p "$out"
 
 # notarytool's exit status is 0 for an Invalid submission too; the status
-# line is the answer, and the log is what says why.
+# line is the answer, and the log is what says why. Its status is caught
+# with `|| true`: under `set -e` a failing `$(...)` ended the script before
+# the result was printed, and an expired Apple agreement (HTTP 403) showed
+# as nothing but "Error 1" (#35).
 notarize() {
-    result=$(xcrun notarytool submit "$1" --keychain-profile AC_PASSWORD --wait 2>&1)
+    result=$(xcrun notarytool submit "$1" --keychain-profile AC_PASSWORD --wait 2>&1) || true
     echo "$result" | tail -3
     if ! echo "$result" | grep -q "status: Accepted"; then
         id=$(echo "$result" | sed -n 's/^ *id: //p' | head -1)
@@ -74,7 +80,7 @@ xcrun stapler validate -q "$out/$name.dmg"
 
 echo "--- latest.json"
 sha=$(shasum -a 256 "$out/$name.zip" | cut -d' ' -f1)
-base="https://github.com/ekinertac/infiniterm-releases/releases/download/$tag"
+base="https://github.com/ekinertac/infiniterm/releases/download/$tag"
 cat > "$out/latest.json" <<JSON
 {
   "version": "$version",

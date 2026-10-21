@@ -24,22 +24,34 @@
 use std::path::Path;
 
 /// Where the running app looks. GitHub points `releases/latest/download`
-/// at the newest release's asset of that name, so this never changes.
+/// at the newest release's asset of that name. The main repo since #52:
+/// releases lived on `ekinertac/infiniterm-releases` while the source was
+/// private, and builds up to 0.4.0 still poll that one (a bridge release
+/// there carries them over, `tools/publish.sh BRIDGE=1`).
 ///
 /// A SEPARATE file per platform rather than one manifest with a key each.
 /// An already-shipped Mac app parses this with `parse_manifest` and a shape
 /// it does not expect is a refusal on somebody else's machine, so the
 /// Windows release gets its own name (`tools/dist.ps1` writes it).
 pub const LATEST_URL: &str = if cfg!(windows) {
-    "https://github.com/ekinertac/infiniterm-releases/releases/latest/download/latest-windows.json"
+    "https://github.com/ekinertac/infiniterm/releases/latest/download/latest-windows.json"
 } else {
-    "https://github.com/ekinertac/infiniterm-releases/releases/latest/download/latest.json"
+    "https://github.com/ekinertac/infiniterm/releases/latest/download/latest.json"
 };
 
-/// How often a running app looks again after the check at launch. Six
-/// hours: a friend who leaves it open all week still hears about a fix the
-/// same day, and GitHub sees four requests a day per Mac.
-pub const CHECK_EVERY_MS: f64 = 6. * 60. * 60. * 1000.;
+/// Where an update's zip may come from, whatever a manifest says: the
+/// main repo, and the old releases repo, which the bridge release serves.
+pub const DOWNLOAD_PREFIXES: [&str; 2] = [
+    "https://github.com/ekinertac/infiniterm/releases/download/",
+    "https://github.com/ekinertac/infiniterm-releases/releases/download/",
+];
+
+/// How often a running app looks again after the check at launch. One hour
+/// (Ekin, 2026-10-15: six hours let a release go unseen for most of a
+/// working day). `latest.json` is a small file on GitHub's CDN, so GitHub
+/// sees up to 24 requests a day per Mac. `tools/usage-stats.py` divides by
+/// this number of fetches, so it changes together with this.
+pub const CHECK_EVERY_MS: f64 = 60. * 60. * 1000.;
 
 /// What a downloaded app must satisfy before it replaces this one: signed
 /// by Apple's chain, leaf certificate of Ekin's team. The same team id
@@ -72,12 +84,12 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
         .and_then(|b| b.as_u64())
         .ok_or("latest.json has no build number")?;
     let url = s("url")?;
-    // Only from the releases repo, whatever the manifest says: a manifest
-    // is not trusted to send the app elsewhere even though the code
-    // signature check would catch a foreign build anyway.
-    if !url.starts_with("https://github.com/ekinertac/infiniterm-releases/") {
+    // Only from our release downloads, whatever the manifest says: a
+    // manifest is not trusted to send the app elsewhere even though the
+    // code signature check would catch a foreign build anyway.
+    if !DOWNLOAD_PREFIXES.iter().any(|p| url.starts_with(p)) {
         return Err(format!(
-            "latest.json points outside the releases repo: {url}"
+            "latest.json points outside the release downloads: {url}"
         ));
     }
     Ok(Manifest {
@@ -143,6 +155,24 @@ pub fn swap_script(pid: u32, folder: &str, staged: &str, aside: &str) -> String 
     format!(
         "Wait-Process -Id {pid} -ErrorAction SilentlyContinue;          try {{ Move-Item -LiteralPath {f} -Destination {a} -Force -ErrorAction Stop;          try {{ Move-Item -LiteralPath {s} -Destination {f} -Force -ErrorAction Stop }}          catch {{ Move-Item -LiteralPath {a} -Destination {f} -Force }} }} catch {{}};          Start-Process -FilePath {exe}"
     )
+}
+
+/// `CFBundleVersion` from an Info.plist in XML (what `tools/bundle.sh`
+/// writes): the build of the app on disk.
+pub fn plist_build(text: &str) -> Option<u64> {
+    let after = text.split("<key>CFBundleVersion</key>").nth(1)?;
+    let value = after.split("<string>").nth(1)?.split("</string>").next()?;
+    value.trim().parse().ok()
+}
+
+/// Whether a staged update should replace the app on disk NOW. An update
+/// staged while an older build ran can be older than what is installed by
+/// the time of the restart (a `make install`, a DMG); swapping it in then
+/// is a downgrade. It happened on 2026-09-26: 0.2.0 (356), staged by 355,
+/// replaced a freshly installed 359 on the next restart, and two fixes
+/// seemed not to work. Unknown on-disk build: the swap goes ahead, as before.
+pub fn staged_is_newer(staged: u64, on_disk: Option<u64>) -> bool {
+    on_disk.is_none_or(|d| staged > d)
 }
 
 /// The waiter that replaces the bundle after this process has exited, and
@@ -220,7 +250,15 @@ mod tests {
         } else {
             assert!(LATEST_URL.ends_with("/latest.json"), "{LATEST_URL}");
         }
-        assert!(LATEST_URL.starts_with("https://github.com/ekinertac/infiniterm-releases/"));
+        assert!(LATEST_URL.starts_with("https://github.com/ekinertac/infiniterm/releases/"));
+    }
+
+    // The usage estimate (tools/usage-stats.py) assumes this many fetches a
+    // day per Mac that stays up; change them together.
+    #[test]
+    fn the_check_interval_is_an_hour() {
+        assert_eq!(CHECK_EVERY_MS, 3_600_000.);
+        assert_eq!(24. * 3_600_000. / CHECK_EVERY_MS, 24.);
     }
 
     use super::*;
@@ -231,6 +269,21 @@ mod tests {
       "url": "https://github.com/ekinertac/infiniterm-releases/releases/download/v0.1.0-1301/infiniterm-0.1.0-1301-arm64.zip",
       "sha256": "00ff", "dmg": "x"
     }"#;
+
+    // A staged update never downgrades the app on disk.
+    #[test]
+    fn a_staged_update_older_than_the_installed_app_is_not_swapped_in() {
+        let plist = "<?xml version=\"1.0\"?><plist><dict>\n\t<key>CFBundleVersion</key>\n\t<string>359</string>\n</dict></plist>";
+        assert_eq!(plist_build(plist), Some(359));
+        assert!(
+            !staged_is_newer(356, plist_build(plist)),
+            "356 over 359 is a downgrade"
+        );
+        assert!(!staged_is_newer(359, Some(359)));
+        assert!(staged_is_newer(360, Some(359)));
+        assert!(staged_is_newer(360, None), "unknown: as before");
+        assert_eq!(plist_build("<dict></dict>"), None);
+    }
 
     #[test]
     fn the_manifest_parses_and_newer_is_a_higher_build() {
@@ -251,6 +304,24 @@ mod tests {
         assert!(parse_manifest(&elsewhere).is_err());
         assert!(parse_manifest(r#"{"version": "0.1.0"}"#).is_err());
         assert!(parse_manifest("not json").is_err());
+    }
+
+    // The main repo's downloads are accepted as the old releases repo's
+    // were; a lookalike path on github.com is not.
+    #[test]
+    fn downloads_come_from_either_release_repo_and_nowhere_else() {
+        let main = GOOD.replace(
+            "https://github.com/ekinertac/infiniterm-releases/",
+            "https://github.com/ekinertac/infiniterm/",
+        );
+        assert!(parse_manifest(&main).is_ok());
+        assert!(parse_manifest(GOOD).is_ok());
+        let lookalike = GOOD.replace(
+            "https://github.com/ekinertac/infiniterm-releases/",
+            "https://github.com/ekinertac/infiniterm-evil/",
+        );
+        assert!(parse_manifest(&lookalike).is_err());
+        assert!(LATEST_URL.starts_with("https://github.com/ekinertac/infiniterm/releases/"));
     }
 
     // An Applications folder is a macOS idea; Windows has its own rule and

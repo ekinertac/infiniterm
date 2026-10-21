@@ -39,6 +39,15 @@ struct Edit {
     when: f64,
 }
 
+/// One cursor's own state, standing in for the primary's three fields
+/// (`cursor`, `anchor`, `goal_col`) when there is more than one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CursorState {
+    cursor: usize,
+    anchor: Option<usize>,
+    goal_col: Option<usize>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Buffer {
     text: Rope,
@@ -46,6 +55,21 @@ pub struct Buffer {
     anchor: Option<usize>,
     /// The column an up/down keeps aiming at across short lines.
     goal_col: Option<usize>,
+    /// Cursors beyond the primary (Batch 2, 2026-09-25). Empty in the
+    /// overwhelmingly common single-cursor case, so every method written
+    /// before multi-cursor existed keeps working exactly as it did as
+    /// long as nothing has added one: `for_each_cursor` is the only place
+    /// in this file that knows this field exists.
+    extra: Vec<CursorState>,
+    /// Folded blocks (2026-09-29), each the hidden char range from the end
+    /// of the header line to the end of the block's last line; edits shift
+    /// them (`shift_folds`) and an edit that touches one drops it.
+    folds: Vec<(usize, usize)>,
+    /// The only blocks that CAN fold, when the text is a read-only diff
+    /// (`set_fixed_folds`): same hidden char ranges as `folds`. Empty for an
+    /// ordinary buffer, which folds by indentation. Never shifted by edits,
+    /// because a buffer that has them is never edited.
+    fixed_folds: Vec<(usize, usize)>,
     undo: Vec<Edit>,
     redo: Vec<Edit>,
     /// Bumped by every change, so a view can cache against it.
@@ -63,6 +87,9 @@ impl Buffer {
             cursor: 0,
             anchor: None,
             goal_col: None,
+            extra: vec![],
+            folds: vec![],
+            fixed_folds: vec![],
             undo: vec![],
             redo: vec![],
             version: 0,
@@ -87,6 +114,11 @@ impl Buffer {
             now,
         );
         self.anchor = None;
+        // A whole-document replace (a save, a disk reload) invalidates
+        // whatever the extra cursors and the folds pointed at.
+        self.extra.clear();
+        self.folds.clear();
+        self.fixed_folds.clear();
     }
 
     pub fn text(&self) -> String {
@@ -240,7 +272,21 @@ impl Buffer {
             self.place(self.len_chars(), select);
             return;
         }
-        let target = target as usize;
+        let mut target = target as usize;
+        // A folded block's lines are not there to land on: keep going the
+        // same way until one is, or the document ends.
+        while self.is_line_hidden(target) {
+            let next = target as i64 + delta.signum();
+            if next < 0 {
+                self.place(0, select);
+                return;
+            }
+            if next as usize >= self.line_count() {
+                self.place(self.len_chars(), select);
+                return;
+            }
+            target = next as usize;
+        }
         let len = self.line(target).chars().count();
         let idx = self.line_start(target) + col.min(len);
         self.place(idx, select);
@@ -320,6 +366,9 @@ impl Buffer {
     pub fn go_to_line(&mut self, n: usize) {
         let line = n.max(1).min(self.line_count()) - 1;
         self.set_cursor(self.line_start(line));
+        // A jump to an absolute line is a reset, not a multi-cursor
+        // operation, and is never called per cursor from `for_each_cursor`.
+        self.extra.clear();
     }
 
     /// The word around `idx`, for a double click.
@@ -363,6 +412,7 @@ impl Buffer {
         let old_len = old.chars().count();
         self.text.remove(at..at + old_len);
         self.text.insert(at, &new);
+        self.shift_folds(at, old_len, new.chars().count());
         let cursor_before = self.cursor;
         self.cursor = cursor_after.min(self.len_chars());
         self.anchor = None;
@@ -409,8 +459,20 @@ impl Buffer {
 
     /// A key with a character. Brackets and quotes come in pairs and the
     /// cursor lands between them; typing the closing half over one that is
-    /// already there steps past it (CodeMirror's `closeBrackets`).
+    /// already there steps past it (CodeMirror's `closeBrackets`). Over a
+    /// selection, an opening half wraps it.
     pub fn type_char(&mut self, c: char, now: f64) {
+        // An opening bracket or a quote over a selection wraps it instead of
+        // replacing it, and the inner text stays selected, so a second press
+        // wraps again (Sublime and VS Code both do this).
+        if let (Some(r), Some(close)) = (self.selection(), closing_of(c)) {
+            let inner = self.slice(r.clone());
+            let new = format!("{c}{inner}{close}");
+            let after = r.start + 1 + inner.chars().count();
+            self.apply(r.start, inner, new, after, false, now);
+            self.select_range(r.start + 1..after);
+            return;
+        }
         let next = (self.cursor < self.len_chars()).then(|| self.text.char(self.cursor));
         if self.selection().is_none() {
             if let Some(close) = closing_of(c) {
@@ -435,7 +497,10 @@ impl Buffer {
     }
 
     /// Return: a newline plus the current line's indentation, the part of
-    /// `indentOnInput` a plain editor needs.
+    /// `indentOnInput` a plain editor needs. Between an auto-closed pair
+    /// (the cursor right after `{` and right before its `}`) it opens the
+    /// pair out onto three lines instead, caret indented on the middle one,
+    /// CodeMirror's `closeBrackets` handler for Return.
     pub fn newline(&mut self, now: f64) {
         let line = self.line(self.line_of(self.cursor));
         let indent: String = line
@@ -446,7 +511,750 @@ impl Buffer {
             .chars()
             .take(self.col_of(self.cursor).min(indent.chars().count()))
             .collect();
+        if self.selection().is_none() && self.cursor > 0 && self.cursor < self.len_chars() {
+            let before = self.text.char(self.cursor - 1);
+            let after = self.text.char(self.cursor);
+            let pair = matches!((before, after), ('(', ')') | ('[', ']') | ('{', '}'));
+            if pair {
+                let inner = format!("{indent}{INDENT}");
+                let inner_len = inner.chars().count();
+                let new = format!("\n{inner}\n{indent}");
+                let cursor_after = self.cursor + 1 + inner_len;
+                self.apply(self.cursor, String::new(), new, cursor_after, false, now);
+                return;
+            }
+        }
         self.insert(&format!("\n{indent}"), now);
+    }
+
+    /// Cmd+Shift+D: a copy of the current line inserted right below it,
+    /// caret on the copy at the same column.
+    pub fn duplicate_line(&mut self, now: f64) {
+        let line = self.line_of(self.cursor);
+        let col = self.col_of(self.cursor);
+        let text = self.line(line);
+        let last = line + 1 >= self.line_count();
+        let at = if last {
+            self.len_chars()
+        } else {
+            self.line_start(line + 1)
+        };
+        let new = if last {
+            format!("\n{text}")
+        } else {
+            format!("{text}\n")
+        };
+        let cursor_after = at + usize::from(last) + col.min(text.chars().count());
+        self.apply(at, String::new(), new, cursor_after, false, now);
+    }
+
+    /// Ctrl+Cmd+Up: the current line trades places with the one above it.
+    pub fn swap_line_up(&mut self, now: f64) {
+        let line = self.line_of(self.cursor);
+        if line == 0 {
+            return;
+        }
+        let col = self.col_of(self.cursor);
+        let start = self.line_start(line - 1);
+        let last = line + 1 >= self.line_count();
+        let end = if last {
+            self.len_chars()
+        } else {
+            self.line_start(line + 1)
+        };
+        let old = self.slice(start..end);
+        let cur = self.line(line);
+        let prev = self.line(line - 1);
+        let new = if last {
+            format!("{cur}\n{prev}")
+        } else {
+            format!("{cur}\n{prev}\n")
+        };
+        let cursor_after = start + col.min(cur.chars().count());
+        self.apply(start, old, new, cursor_after, false, now);
+    }
+
+    /// Ctrl+Cmd+Down: the current line trades places with the one below it.
+    pub fn swap_line_down(&mut self, now: f64) {
+        let line = self.line_of(self.cursor);
+        if line + 1 >= self.line_count() {
+            return;
+        }
+        let col = self.col_of(self.cursor);
+        let start = self.line_start(line);
+        let last = line + 2 >= self.line_count();
+        let end = if last {
+            self.len_chars()
+        } else {
+            self.line_start(line + 2)
+        };
+        let old = self.slice(start..end);
+        let cur = self.line(line);
+        let next = self.line(line + 1);
+        let new = if last {
+            format!("{next}\n{cur}")
+        } else {
+            format!("{next}\n{cur}\n")
+        };
+        let cur_start_after = start + next.chars().count() + 1;
+        let cursor_after = cur_start_after + col.min(cur.chars().count());
+        self.apply(start, old, new, cursor_after, false, now);
+    }
+
+    /// The char just past line `line`'s own text: where the next line's
+    /// text starts, or the end of the document on the last line.
+    fn line_span_end(&self, line: usize) -> usize {
+        if line + 1 < self.line_count() {
+            self.line_start(line + 1)
+        } else {
+            self.len_chars()
+        }
+    }
+
+    /// Ctrl+Shift+K: the whole current line, newline included, so the
+    /// lines below step up. On the last line the newline ABOVE it goes
+    /// instead, since there is none below.
+    pub fn delete_line(&mut self, now: f64) {
+        let line = self.line_of(self.cursor);
+        let col = self.col_of(self.cursor);
+        let count = self.line_count();
+        let (start, end) = if line + 1 < count {
+            (self.line_start(line), self.line_start(line + 1))
+        } else if line > 0 {
+            (self.line_start(line) - 1, self.len_chars())
+        } else {
+            (0, self.len_chars())
+        };
+        let old = self.slice(start..end);
+        self.apply(start, old, String::new(), start, false, now);
+        let target = line.min(self.line_count().saturating_sub(1));
+        let len = self.line(target).chars().count();
+        self.set_cursor(self.line_start(target) + col.min(len));
+    }
+
+    /// Cmd+Enter: a new line below the current one, indented the way
+    /// Enter at the line's end would.
+    pub fn add_line_below(&mut self, now: f64) {
+        self.move_line_end(false);
+        self.newline(now);
+    }
+
+    /// Cmd+Shift+Enter: a new blank line above the current one, matching
+    /// its indent, caret at the end of it.
+    pub fn add_line_above(&mut self, now: f64) {
+        let line = self.line_of(self.cursor);
+        let start = self.line_start(line);
+        let indent: String = self
+            .line(line)
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let indent_len = indent.chars().count();
+        let new = format!("{indent}\n");
+        self.apply(start, String::new(), new, start + indent_len, false, now);
+    }
+
+    /// Cmd+Shift+J: the next line joins this one, its leading whitespace
+    /// collapsed to a single space, caret at the join.
+    pub fn join_lines(&mut self, now: f64) {
+        let line = self.line_of(self.cursor);
+        if line + 1 >= self.line_count() {
+            return;
+        }
+        let end_of_line = self.line_end(line);
+        let next_start = self.line_start(line + 1);
+        let next = self.line(line + 1);
+        let ws = next.chars().take_while(|c| c.is_whitespace()).count();
+        let remove_end = next_start + ws;
+        let old = self.slice(end_of_line..remove_end);
+        self.apply(
+            end_of_line,
+            old,
+            " ".to_string(),
+            end_of_line + 1,
+            false,
+            now,
+        );
+    }
+
+    /// Cmd+]: indent the current line (or every selected line), unlike Tab
+    /// which inserts the unit at the cursor when nothing is selected.
+    pub fn indent_line(&mut self, now: f64) {
+        let r = self.selection().unwrap_or(self.cursor..self.cursor);
+        self.indent_lines(r, true, now);
+    }
+
+    /// Cmd+L, called again on an already-whole-line selection: grows it by
+    /// one more line. A fresh call selects the cursor's own line.
+    pub fn expand_line_selection(&mut self) {
+        let (first, last) = match self.selection() {
+            Some(r) => (
+                self.line_of(r.start),
+                self.line_of(r.end.saturating_sub(1).max(r.start)),
+            ),
+            None => (self.line_of(self.cursor), self.line_of(self.cursor)),
+        };
+        let exact = self.selection().is_some_and(|r| {
+            r.start == self.line_start(first) && r.end == self.line_span_end(last)
+        });
+        let last = if exact {
+            (last + 1).min(self.line_count().saturating_sub(1))
+        } else {
+            last
+        };
+        let start = self.line_start(first);
+        let end = self.line_span_end(last);
+        self.select_range(start..end);
+    }
+
+    /// Cmd+D: the word under the cursor, or, called again on a selection,
+    /// ANOTHER cursor on the next occurrence of the same text not already
+    /// covered (wrapping) — Sublime's real multi-cursor Cmd+D, not the
+    /// single roaming selection this was before there was a second cursor
+    /// to add (Batch 1, 2026-09-24).
+    pub fn select_word_or_next(&mut self) {
+        if self.selection().is_none() && self.extra.is_empty() {
+            let r = self.word_at(self.cursor);
+            if !r.is_empty() {
+                self.select_range(r);
+            }
+            return;
+        }
+        let Some(primary) = self.selection() else {
+            return;
+        };
+        let text = self.slice(primary);
+        if text.is_empty() {
+            return;
+        }
+        let matches = crate::search::find_all(&self.text(), &text);
+        if matches.is_empty() {
+            return;
+        }
+        let states = self.all_cursor_states();
+        let covered: std::collections::HashSet<usize> = states
+            .iter()
+            .filter_map(|c| c.anchor.map(|a| a.min(c.cursor)))
+            .collect();
+        let rightmost = states
+            .iter()
+            .map(|c| c.cursor.max(c.anchor.unwrap_or(c.cursor)))
+            .max()
+            .unwrap_or(0);
+        let next = matches
+            .iter()
+            .find(|(s, _)| *s >= rightmost && !covered.contains(s))
+            .or_else(|| matches.iter().find(|(s, _)| !covered.contains(s)))
+            .copied();
+        if let Some((a, b)) = next {
+            self.extra.push(CursorState {
+                cursor: b,
+                anchor: Some(a),
+                goal_col: None,
+            });
+        }
+    }
+
+    // ----- folding (Batch 2, 2026-09-29) -----
+
+    /// Leading blanks of a line: what "deeper" means for a fold. A tab
+    /// counts as one, so a file that mixes tabs and spaces folds oddly.
+    fn indent_of(text: &str) -> usize {
+        text.chars().take_while(|c| *c == ' ' || *c == '\t').count()
+    }
+
+    /// The hidden range a fold starting at `line` would have: the line's
+    /// end to the end of the last following line indented deeper than it
+    /// (blank lines inside a block belong to it; blank lines after it do
+    /// not). `None` when nothing is indented under it.
+    fn fold_range_at(&self, line: usize) -> Option<(usize, usize)> {
+        if !self.fixed_folds.is_empty() {
+            let end = self.line_end(line);
+            return self.fixed_folds.iter().find(|(s, _)| *s == end).copied();
+        }
+        let text = self.line(line);
+        if text.trim().is_empty() {
+            return None;
+        }
+        let base = Self::indent_of(&text);
+        let mut last = None;
+        for l in line + 1..self.line_count() {
+            let t = self.line(l);
+            if t.trim().is_empty() {
+                continue;
+            }
+            if Self::indent_of(&t) > base {
+                last = Some(l);
+            } else {
+                break;
+            }
+        }
+        Some((self.line_end(line), self.line_end(last?)))
+    }
+
+    /// The nearest line at or above `line` that can fold: itself when a
+    /// block starts there, else the header of the block it sits in.
+    fn enclosing_fold_line(&self, line: usize) -> Option<usize> {
+        if self.fold_range_at(line).is_some() {
+            return Some(line);
+        }
+        if !self.fixed_folds.is_empty() {
+            // Inside an opened block: its header, by position.
+            let at = self.line_start(line);
+            return self
+                .fixed_folds
+                .iter()
+                .find(|(s, e)| at > *s && at <= *e)
+                .map(|(s, _)| self.line_of(*s));
+        }
+        let mut want = Self::indent_of(&self.line(line));
+        for l in (0..line).rev() {
+            let t = self.line(l);
+            if t.trim().is_empty() {
+                continue;
+            }
+            let ind = Self::indent_of(&t);
+            if ind < want {
+                if self.fold_range_at(l).is_some() {
+                    return Some(l);
+                }
+                want = ind;
+            }
+        }
+        None
+    }
+
+    /// Whether `line` is inside a folded block, so not drawn or landed on.
+    pub fn is_line_hidden(&self, line: usize) -> bool {
+        if self.folds.is_empty() {
+            return false;
+        }
+        let ls = self.line_start(line);
+        self.folds.iter().any(|(s, e)| ls > *s && ls <= *e)
+    }
+
+    /// Whether a fold starts on `line`, for the marker after its text.
+    pub fn is_fold_header(&self, line: usize) -> bool {
+        self.folds.iter().any(|(s, _)| self.line_of(*s) == line)
+    }
+
+    /// Whether anything is folded at all, the painter's cheap way out.
+    pub fn has_folds(&self) -> bool {
+        !self.folds.is_empty()
+    }
+
+    /// Makes these the only blocks that can fold, all folded now: for a
+    /// read-only diff, whose unchanged stretches are folds that have nothing
+    /// to do with indentation. Each is (header line, last hidden line),
+    /// 0-based; the header stays visible. Call after the text is set, which
+    /// forgets them.
+    pub fn set_fixed_folds(&mut self, blocks: &[(usize, usize)]) {
+        self.fixed_folds = blocks
+            .iter()
+            .filter(|(h, last)| h < last)
+            .map(|(h, last)| (self.line_end(*h), self.line_end(*last)))
+            .collect();
+        self.folds = self.fixed_folds.clone();
+        self.extra.clear();
+    }
+
+    /// Cmd+Alt+[: fold the block the caret's line starts or sits in, and
+    /// leave the caret on its header so it does not land in what it hid.
+    pub fn fold_at_cursor(&mut self) {
+        let line = self.line_of(self.cursor);
+        let Some(header) = self.enclosing_fold_line(line) else {
+            return;
+        };
+        let Some(range) = self.fold_range_at(header) else {
+            return;
+        };
+        if !self.folds.contains(&range) {
+            self.folds.push(range);
+        }
+        self.extra.clear();
+        self.set_cursor(range.0);
+    }
+
+    /// A click in the gutter: fold the block `line` starts, or open the one
+    /// it heads. A line with nothing under it does nothing (unlike
+    /// `fold_at_cursor`, which finds the block around it).
+    pub fn toggle_fold_line(&mut self, line: usize) {
+        let end = self.line_end(line);
+        if self.folds.iter().any(|(s, _)| *s == end) {
+            self.folds.retain(|(s, _)| *s != end);
+        } else if let Some(range) = self.fold_range_at(line) {
+            self.folds.push(range);
+            let c = self.cursor;
+            if c > range.0 && c <= range.1 {
+                self.set_cursor(range.0);
+            }
+        }
+    }
+
+    /// Cmd+Alt+]: open the fold the caret's line heads or hides in.
+    pub fn unfold_at_cursor(&mut self) {
+        let c = self.cursor;
+        let line = self.line_of(c);
+        let end = self.line_end(line);
+        self.folds
+            .retain(|(s, e)| !(*s == end || (c > *s && c <= *e)));
+    }
+
+    pub fn unfold_all(&mut self) {
+        self.folds.clear();
+    }
+
+    /// Folds every outermost block: the lines at the file's smallest
+    /// indent that have something under them.
+    pub fn fold_all(&mut self) {
+        if !self.fixed_folds.is_empty() {
+            self.folds = self.fixed_folds.clone();
+            let c = self.cursor;
+            if let Some((s, _)) = self.folds.iter().find(|(s, e)| c > *s && c <= *e).copied() {
+                self.set_cursor(s);
+            }
+            self.extra.clear();
+            return;
+        }
+        let count = self.line_count();
+        let base = (0..count)
+            .map(|l| self.line(l))
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| Self::indent_of(&t))
+            .min()
+            .unwrap_or(0);
+        let mut folds = vec![];
+        let mut l = 0;
+        while l < count {
+            let t = self.line(l);
+            if !t.trim().is_empty() && Self::indent_of(&t) == base {
+                if let Some(range) = self.fold_range_at(l) {
+                    l = self.line_of(range.1);
+                    folds.push(range);
+                }
+            }
+            l += 1;
+        }
+        self.folds = folds;
+        let c = self.cursor;
+        if self.folds.iter().any(|(s, e)| c > *s && c <= *e) {
+            let s = self
+                .folds
+                .iter()
+                .find(|(s, e)| c > *s && c <= *e)
+                .unwrap()
+                .0;
+            self.set_cursor(s);
+        }
+        self.extra.clear();
+    }
+
+    /// A caret or selection end inside a folded block opens it: whatever
+    /// moved there (a search match, an undo, a click) meant to see it.
+    pub fn reveal_cursors(&mut self) {
+        if self.folds.is_empty() {
+            return;
+        }
+        let points: Vec<usize> = self
+            .all_cursor_states()
+            .iter()
+            .flat_map(|c| [Some(c.cursor), c.anchor])
+            .flatten()
+            .collect();
+        self.folds
+            .retain(|(s, e)| !points.iter().any(|p| *p > *s && *p <= *e));
+    }
+
+    /// An edit replaced `old_len` chars at `at` with `new_len`: folds
+    /// wholly before it stay, folds wholly after it move by the length
+    /// change, and one the edit touches is dropped.
+    fn shift_folds(&mut self, at: usize, old_len: usize, new_len: usize) {
+        if self.folds.is_empty() {
+            return;
+        }
+        let delta = new_len as i64 - old_len as i64;
+        self.folds.retain_mut(|(s, e)| {
+            if at + old_len <= *s {
+                *s = (*s as i64 + delta) as usize;
+                *e = (*e as i64 + delta) as usize;
+                true
+            } else {
+                at >= *e
+            }
+        });
+    }
+
+    // ----- multi-cursor (Batch 2, 2026-09-25) -----
+
+    fn all_cursor_states(&self) -> Vec<CursorState> {
+        let mut v = vec![CursorState {
+            cursor: self.cursor,
+            anchor: self.anchor,
+            goal_col: self.goal_col,
+        }];
+        v.extend(self.extra.iter().copied());
+        v
+    }
+
+    pub fn cursor_count(&self) -> usize {
+        1 + self.extra.len()
+    }
+
+    /// Every cursor's position and selection anchor, sorted by position,
+    /// for the view to paint: a caret and a selection highlight per
+    /// cursor instead of the one `cursor`/`selection` describe.
+    pub fn all_selections(&self) -> Vec<(usize, Option<usize>)> {
+        let mut v: Vec<(usize, Option<usize>)> = self
+            .all_cursor_states()
+            .iter()
+            .map(|c| (c.cursor, c.anchor))
+            .collect();
+        v.sort_by_key(|(c, _)| *c);
+        v
+    }
+
+    /// Cmd+Click: a new cursor at `idx`, or, clicking exactly where one
+    /// already sits (and it is not the last one left), that cursor gone —
+    /// Sublime's toggle.
+    pub fn add_cursor_at(&mut self, idx: usize) {
+        if idx == self.cursor && self.anchor.is_none() && self.extra.is_empty() {
+            return;
+        }
+        if let Some(i) = self
+            .extra
+            .iter()
+            .position(|c| c.cursor == idx && c.anchor.is_none())
+        {
+            self.extra.remove(i);
+            return;
+        }
+        if idx == self.cursor && self.anchor.is_none() {
+            return;
+        }
+        self.extra.push(CursorState {
+            cursor: idx,
+            anchor: None,
+            goal_col: None,
+        });
+    }
+
+    /// Ctrl+Shift+Down / Ctrl+Shift+Up: one more cursor, a line beyond
+    /// whichever existing cursor is furthest in that direction, at its
+    /// column. Building a column of cursors from a single one, called
+    /// repeatedly, is the case this is for; starting from a scattered set
+    /// it grows from the extreme one only, not each in turn, which is
+    /// simpler than Sublime's own `select_lines` and enough for that case.
+    pub fn add_cursor_line(&mut self, forward: bool) {
+        let states = self.all_cursor_states();
+        let edge = if forward {
+            states.iter().max_by_key(|c| c.cursor)
+        } else {
+            states.iter().min_by_key(|c| c.cursor)
+        };
+        let Some(edge) = edge.copied() else {
+            return;
+        };
+        let line = self.line_of(edge.cursor) as i64 + if forward { 1 } else { -1 };
+        if line < 0 || line as usize >= self.line_count() {
+            return;
+        }
+        let line = line as usize;
+        let col = edge.goal_col.unwrap_or_else(|| self.col_of(edge.cursor));
+        let len = self.line(line).chars().count();
+        let idx = self.line_start(line) + col.min(len);
+        if states.iter().any(|c| c.cursor == idx) {
+            return;
+        }
+        self.extra.push(CursorState {
+            cursor: idx,
+            anchor: None,
+            goal_col: Some(col),
+        });
+    }
+
+    /// Ctrl+Cmd+G: every occurrence of the current selection (or the word
+    /// under the cursor) becomes its own cursor, replacing whatever set
+    /// there was before.
+    pub fn select_all_occurrences(&mut self) {
+        let r = self
+            .selection()
+            .unwrap_or_else(|| self.word_at(self.cursor));
+        if r.is_empty() {
+            return;
+        }
+        let text = self.slice(r);
+        let matches = crate::search::find_all(&self.text(), &text);
+        let mut matches = matches.into_iter();
+        let Some((a, b)) = matches.next() else {
+            return;
+        };
+        self.anchor = Some(a);
+        self.cursor = b;
+        self.goal_col = None;
+        self.extra = matches
+            .map(|(a, b)| CursorState {
+                cursor: b,
+                anchor: Some(a),
+                goal_col: None,
+            })
+            .collect();
+    }
+
+    /// Escape: back to one cursor, the primary's.
+    pub fn collapse_to_primary(&mut self) {
+        self.extra.clear();
+    }
+
+    /// Cmd+Shift+L: a selection spanning several lines becomes one
+    /// selection per line, each the original's own slice of it — Sublime's
+    /// Split into Lines, the shape Cmd+A then this is asked for most: type
+    /// over the lot and every line takes the same edit at once. A line
+    /// the selection reaches only at its very boundary (nothing of the
+    /// line itself selected) still gets a point cursor there, not a gap in
+    /// the middle of the set. Nothing to split (no selection, or one
+    /// line) is a no-op.
+    pub fn split_into_lines(&mut self) {
+        let Some(r) = self.selection() else {
+            return;
+        };
+        let first = self.line_of(r.start);
+        let last = self.line_of(r.end.saturating_sub(1).max(r.start));
+        if first == last {
+            return;
+        }
+        let ranges: Vec<(usize, usize)> = (first..=last)
+            .map(|line| {
+                let start = r.start.max(self.line_start(line));
+                let end = r.end.min(self.line_end(line));
+                (start, end)
+            })
+            .collect();
+        let mut iter = ranges.into_iter();
+        let (a, b) = iter.next().expect("first..=last is never empty");
+        self.cursor = b;
+        self.anchor = (a != b).then_some(a);
+        self.goal_col = None;
+        self.extra = iter
+            .map(|(a, b)| CursorState {
+                cursor: b,
+                anchor: (a != b).then_some(a),
+                goal_col: None,
+            })
+            .collect();
+    }
+
+    /// Runs `f` once per cursor, right to left by position so an edit at
+    /// one cannot shift a still-unprocessed cursor further left; every
+    /// buffer method stays written for exactly one cursor and this is the
+    /// only place that knows there can be more. With a single cursor
+    /// (`extra` empty, overwhelmingly the common case) it is one direct
+    /// call, no allocation.
+    ///
+    /// Known limit (v1, 2026-09-25): each cursor's edit still goes through
+    /// `apply` on its own, so a multi-cursor edit is several undo steps,
+    /// not one; Cmd+Z undoes them one cursor at a time, right to left,
+    /// rather than the whole set at once.
+    pub fn for_each_cursor(&mut self, mut f: impl FnMut(&mut Self)) {
+        if self.extra.is_empty() {
+            f(self);
+            return;
+        }
+        let mut states = self.all_cursor_states();
+        states.sort_by_key(|c| std::cmp::Reverse(c.cursor.max(c.anchor.unwrap_or(c.cursor))));
+        let mut updated: Vec<CursorState> = Vec::with_capacity(states.len());
+        for s in states {
+            // The low end of what this cursor could touch: an edit here
+            // can still shift a cursor already recorded (further right,
+            // processed earlier) whose OWN position sits at or past it.
+            let edit_at = s.cursor.min(s.anchor.unwrap_or(s.cursor));
+            let before = self.len_chars() as i64;
+            self.cursor = s.cursor;
+            self.anchor = s.anchor;
+            self.goal_col = s.goal_col;
+            f(self);
+            let delta = self.len_chars() as i64 - before;
+            if delta != 0 {
+                for u in &mut updated {
+                    if u.cursor >= edit_at {
+                        u.cursor = (u.cursor as i64 + delta).max(0) as usize;
+                    }
+                    if u.anchor.is_some_and(|a| a >= edit_at) {
+                        u.anchor = Some((u.anchor.unwrap() as i64 + delta).max(0) as usize);
+                    }
+                }
+            }
+            updated.push(CursorState {
+                cursor: self.cursor,
+                anchor: self.anchor,
+                goal_col: self.goal_col,
+            });
+        }
+        // Left to right now, so two cursors an edit collapsed onto the
+        // same spot (backspace at the start of a line the previous
+        // cursor sits at the end of) dedupe instead of doubling up.
+        updated.sort_by_key(|c| c.cursor);
+        updated.dedup_by_key(|c| c.cursor);
+        let mut iter = updated.into_iter();
+        let primary = iter.next().expect("at least the primary itself ran");
+        self.cursor = primary.cursor;
+        self.anchor = primary.anchor;
+        self.goal_col = primary.goal_col;
+        self.extra = iter.collect();
+    }
+
+    /// Ctrl+Shift+M: the contents of the nearest enclosing bracket pair.
+    /// Called again on a selection that already sits just inside one pair,
+    /// it walks out to the pair around that one.
+    pub fn expand_to_brackets(&mut self) {
+        let scan_from = match self.selection() {
+            Some(r) if r.start > 0 && matches!(self.text.char(r.start - 1), '(' | '[' | '{') => {
+                r.start - 1
+            }
+            Some(r) => r.start,
+            None => self.cursor,
+        };
+        if let Some((open, close)) = self.enclosing_brackets(scan_from) {
+            self.select_range(open + 1..close);
+        }
+    }
+
+    /// Scans outward from `from`: the nearest unmatched opener before it,
+    /// then that opener's own match, the pair `expand_to_brackets` selects
+    /// inside of.
+    fn enclosing_brackets(&self, from: usize) -> Option<(usize, usize)> {
+        let mut depth = 0i32;
+        let mut i = from;
+        let open = loop {
+            if i == 0 {
+                return None;
+            }
+            i -= 1;
+            match self.text.char(i) {
+                ')' | ']' | '}' => depth += 1,
+                '(' | '[' | '{' if depth == 0 => break i,
+                '(' | '[' | '{' => depth -= 1,
+                _ => {}
+            }
+        };
+        let open_char = self.text.char(open);
+        let close_char = match open_char {
+            '(' => ')',
+            '[' => ']',
+            _ => '}',
+        };
+        let mut depth = 0i32;
+        for j in open + 1..self.len_chars() {
+            let c = self.text.char(j);
+            if c == open_char {
+                depth += 1;
+            } else if c == close_char {
+                if depth == 0 {
+                    return Some((open, j));
+                }
+                depth -= 1;
+            }
+        }
+        None
     }
 
     /// Tab: indent every selected line, or insert the unit at the cursor.
@@ -547,7 +1355,11 @@ impl Buffer {
             self.select_range(start..start + new_len);
             return;
         }
-        let target = if line + 1 < self.line_count() { line + 1 } else { line };
+        let target = if line + 1 < self.line_count() {
+            line + 1
+        } else {
+            line
+        };
         let len = self.line(target).chars().count();
         self.set_cursor(self.line_start(target) + col.min(len));
     }
@@ -628,6 +1440,7 @@ impl Buffer {
         let new_len = e.new.chars().count();
         self.text.remove(e.at..e.at + new_len);
         self.text.insert(e.at, &e.old);
+        self.shift_folds(e.at, new_len, e.old.chars().count());
         self.cursor = e.cursor_before.min(self.len_chars());
         self.anchor = None;
         self.goal_col = None;
@@ -642,6 +1455,7 @@ impl Buffer {
         let old_len = e.old.chars().count();
         self.text.remove(e.at..e.at + old_len);
         self.text.insert(e.at, &e.new);
+        self.shift_folds(e.at, old_len, e.new.chars().count());
         self.cursor = e.cursor_after.min(self.len_chars());
         self.anchor = None;
         self.goal_col = None;
@@ -898,6 +1712,435 @@ mod tests {
         assert_eq!(b.matching_bracket(), Some((1, 8)));
         b.set_cursor(6);
         assert_eq!(b.matching_bracket(), Some((5, 7)));
+    }
+
+    #[test]
+    fn duplicate_line_copies_below_and_keeps_the_column() {
+        let mut b = Buffer::new("abc\ndef");
+        b.set_cursor(1);
+        b.duplicate_line(0.);
+        assert_eq!(b.text(), "abc\nabc\ndef");
+        assert_eq!(b.cursor(), 5); // col 1 of the new middle line
+        let mut b = Buffer::new("abc");
+        b.set_cursor(2);
+        b.duplicate_line(0.);
+        assert_eq!(b.text(), "abc\nabc");
+        assert_eq!(b.cursor(), 6);
+    }
+
+    #[test]
+    fn swap_line_trades_places_and_the_caret_follows() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.set_cursor(2); // on "b"
+        b.swap_line_up(0.);
+        assert_eq!(b.text(), "b\na\nc");
+        assert_eq!(b.line_of(b.cursor()), 0);
+        b.swap_line_down(1.);
+        assert_eq!(b.text(), "a\nb\nc");
+        assert_eq!(b.line_of(b.cursor()), 1);
+        // The doc's edges refuse rather than losing a line.
+        b.set_cursor(0);
+        b.swap_line_up(2.);
+        assert_eq!(b.text(), "a\nb\nc");
+        b.set_cursor(4); // on "c", the last line
+        b.swap_line_down(3.);
+        assert_eq!(b.text(), "a\nb\nc");
+    }
+
+    #[test]
+    fn delete_line_takes_the_newline_that_keeps_the_rest_together() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.set_cursor(2); // "b"
+        b.delete_line(0.);
+        assert_eq!(b.text(), "a\nc");
+        assert_eq!(b.cursor(), 2); // "c" took its place
+                                   // The last line has no newline of its own; the one before it goes.
+        let mut b = Buffer::new("a\nb");
+        b.set_cursor(2);
+        b.delete_line(0.);
+        assert_eq!(b.text(), "a");
+        // The only line: everything goes.
+        let mut b = Buffer::new("solo");
+        b.delete_line(0.);
+        assert_eq!(b.text(), "");
+    }
+
+    #[test]
+    fn add_line_below_and_above_keep_the_indent() {
+        let mut b = Buffer::new("  foo");
+        b.set_cursor(3);
+        b.add_line_below(0.);
+        assert_eq!(b.text(), "  foo\n  ");
+        let mut b = Buffer::new("  foo");
+        b.set_cursor(3);
+        b.add_line_above(0.);
+        assert_eq!(b.text(), "  \n  foo");
+        assert_eq!(b.cursor(), 2);
+    }
+
+    #[test]
+    fn join_lines_collapses_the_next_lines_indent_to_one_space() {
+        let mut b = Buffer::new("foo\n  bar");
+        b.set_cursor(0);
+        b.join_lines(0.);
+        assert_eq!(b.text(), "foo bar");
+        assert_eq!(b.cursor(), 4);
+        // The last line has nothing to join.
+        b.set_cursor(b.len_chars());
+        b.join_lines(1.);
+        assert_eq!(b.text(), "foo bar");
+    }
+
+    #[test]
+    fn indent_line_indents_the_whole_line_regardless_of_the_caret() {
+        let mut b = Buffer::new("x");
+        b.set_cursor(1);
+        b.indent_line(0.);
+        assert_eq!(b.text(), "  x");
+    }
+
+    #[test]
+    fn a_quote_or_bracket_over_a_selection_wraps_it_and_keeps_it_selected() {
+        for (typed, wrapped) in [
+            ('\'', "a 'foo' b"),
+            ('"', "a \"foo\" b"),
+            ('(', "a (foo) b"),
+            ('[', "a [foo] b"),
+            ('{', "a {foo} b"),
+            ('`', "a `foo` b"),
+        ] {
+            let mut b = Buffer::new("a foo b");
+            b.select_range(2..5);
+            b.type_char(typed, 0.);
+            assert_eq!(b.text(), wrapped, "{typed}");
+            assert_eq!(b.selected_text().as_deref(), Some("foo"), "{typed}");
+        }
+        // A second press wraps again, around the same word.
+        let mut b = Buffer::new("foo");
+        b.select_all();
+        b.type_char('(', 0.);
+        b.type_char('[', 1.);
+        assert_eq!(b.text(), "([foo])");
+        // One undo takes the wrap back.
+        b.undo();
+        assert_eq!(b.text(), "(foo)");
+        // A closing half is not a wrap: it replaces, as before.
+        let mut b = Buffer::new("a foo b");
+        b.select_range(2..5);
+        b.type_char(')', 0.);
+        assert_eq!(b.text(), "a ) b");
+        // A backwards selection (anchor after the caret) wraps the same.
+        let mut b = Buffer::new("a foo b");
+        b.set_cursor(5);
+        b.select_to(2);
+        b.type_char('"', 0.);
+        assert_eq!(b.text(), "a \"foo\" b");
+    }
+
+    #[test]
+    fn newline_between_a_closed_pair_opens_it_onto_three_lines() {
+        let mut b = Buffer::new("fn a() {}");
+        b.set_cursor(8); // between { and }
+        b.newline(0.);
+        assert_eq!(b.text(), "fn a() {\n  \n}");
+        assert_eq!(b.cursor(), 11);
+        // A quote pair does not get this treatment.
+        let mut b = Buffer::new("\"\"");
+        b.set_cursor(1);
+        b.newline(0.);
+        assert_eq!(b.text(), "\"\n\"");
+    }
+
+    #[test]
+    fn expand_line_selection_grows_by_one_line_each_call() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.set_cursor(0);
+        b.expand_line_selection();
+        assert_eq!(b.selected_text().as_deref(), Some("a\n"));
+        b.expand_line_selection();
+        assert_eq!(b.selected_text().as_deref(), Some("a\nb\n"));
+        b.expand_line_selection();
+        assert_eq!(b.selected_text().as_deref(), Some("a\nb\nc"));
+        b.expand_line_selection();
+        assert_eq!(b.selected_text().as_deref(), Some("a\nb\nc"));
+    }
+
+    #[test]
+    fn expand_to_brackets_selects_the_nearest_pair_then_the_next_one_out() {
+        let mut b = Buffer::new("f(a, (b))");
+        b.set_cursor(7); // on "b"
+        b.expand_to_brackets();
+        assert_eq!(b.selected_text().as_deref(), Some("b"));
+        b.expand_to_brackets();
+        assert_eq!(b.selected_text().as_deref(), Some("a, (b)"));
+    }
+
+    #[test]
+    fn add_cursor_at_adds_and_toggles_off_on_a_second_click() {
+        let mut b = Buffer::new("abc\ndef\nghi");
+        b.set_cursor(1);
+        b.add_cursor_at(6); // second line
+        assert_eq!(b.cursor_count(), 2);
+        b.add_cursor_at(6); // the same spot again: gone
+        assert_eq!(b.cursor_count(), 1);
+        // Clicking exactly on the sole primary is a no-op, not a second
+        // cursor stacked on top of the first.
+        b.add_cursor_at(1);
+        assert_eq!(b.cursor_count(), 1);
+    }
+
+    #[test]
+    fn add_cursor_line_builds_a_column_from_the_extreme_cursor() {
+        let mut b = Buffer::new("one\ntwo\nthree\nfour");
+        b.set_cursor(1); // "one", col 1
+        b.add_cursor_line(true);
+        assert_eq!(b.cursor_count(), 2);
+        b.add_cursor_line(true);
+        assert_eq!(b.cursor_count(), 3);
+        let mut cols: Vec<usize> = b
+            .all_selections()
+            .iter()
+            .map(|(c, _)| b.col_of(*c))
+            .collect();
+        cols.sort_unstable();
+        assert_eq!(cols, vec![1, 1, 1], "same column on every added line");
+        // The doc's last line refuses rather than dropping off the end.
+        let mut b = Buffer::new("a\nb");
+        b.set_cursor(2);
+        b.add_cursor_line(true);
+        assert_eq!(b.cursor_count(), 1);
+    }
+
+    #[test]
+    fn select_all_occurrences_turns_every_match_into_a_cursor() {
+        let mut b = Buffer::new("foo bar foo baz foo");
+        b.select_range(0..3); // "foo"
+        b.select_all_occurrences();
+        assert_eq!(b.cursor_count(), 3);
+        assert_eq!(
+            b.all_selections(),
+            vec![(3, Some(0)), (11, Some(8)), (19, Some(16))]
+        );
+    }
+
+    #[test]
+    fn select_word_or_next_adds_a_cursor_on_repeat_instead_of_moving() {
+        let mut b = Buffer::new("foo bar foo baz foo");
+        b.set_cursor(1);
+        b.select_word_or_next(); // selects the first "foo", still one cursor
+        assert_eq!(b.cursor_count(), 1);
+        b.select_word_or_next(); // adds the second
+        assert_eq!(b.cursor_count(), 2);
+        b.select_word_or_next(); // adds the third
+        assert_eq!(b.cursor_count(), 3);
+        assert_eq!(
+            b.all_selections(),
+            vec![(3, Some(0)), (11, Some(8)), (19, Some(16))]
+        );
+        // A fourth press wraps rather than adding a duplicate.
+        b.select_word_or_next();
+        assert_eq!(b.cursor_count(), 3);
+    }
+
+    #[test]
+    fn collapse_to_primary_drops_every_extra_cursor() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.set_cursor(0);
+        b.add_cursor_line(true);
+        b.add_cursor_line(true);
+        assert_eq!(b.cursor_count(), 3);
+        b.collapse_to_primary();
+        assert_eq!(b.cursor_count(), 1);
+    }
+
+    #[test]
+    fn split_into_lines_gives_one_selection_per_line_of_the_original() {
+        // Cmd+A then Cmd+Shift+L: the whole buffer, one cursor per line,
+        // each selecting that whole line (Ekin's own most-used case).
+        let mut b = Buffer::new("one\ntwo\nthree");
+        b.select_all();
+        b.split_into_lines();
+        assert_eq!(b.cursor_count(), 3);
+        assert_eq!(
+            b.all_selections(),
+            vec![(3, Some(0)), (7, Some(4)), (13, Some(8))]
+        );
+        // A partial multi-line selection keeps only each line's own slice.
+        let mut b = Buffer::new("one\ntwo\nthree");
+        b.select_range(1..10); // "ne\ntwo\nth"
+        b.split_into_lines();
+        assert_eq!(
+            b.all_selections(),
+            vec![(3, Some(1)), (7, Some(4)), (10, Some(8))]
+        );
+        // A selection that never leaves one line is a no-op: nothing to split.
+        let mut b = Buffer::new("one\ntwo");
+        b.select_range(0..2);
+        b.split_into_lines();
+        assert_eq!(b.cursor_count(), 1);
+        assert_eq!(b.selection(), Some(0..2));
+        // No selection at all is a no-op too.
+        let mut b = Buffer::new("one\ntwo");
+        b.set_cursor(1);
+        b.split_into_lines();
+        assert_eq!(b.cursor_count(), 1);
+        assert_eq!(b.selection(), None);
+    }
+
+    #[test]
+    fn for_each_cursor_types_at_every_cursor_without_the_others_shifting() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.set_cursor(0);
+        b.add_cursor_line(true);
+        b.add_cursor_line(true);
+        assert_eq!(b.cursor_count(), 3);
+        b.for_each_cursor(|buf| buf.type_char('x', 0.));
+        assert_eq!(b.text(), "xa\nxb\nxc");
+        // Every cursor landed right after its own inserted "x".
+        let cols: Vec<usize> = b
+            .all_selections()
+            .iter()
+            .map(|(c, _)| b.col_of(*c))
+            .collect();
+        assert_eq!(cols, vec![1, 1, 1]);
+    }
+
+    #[test]
+    fn for_each_cursor_backspaces_at_every_cursor() {
+        let mut b = Buffer::new("xa\nxb\nxc");
+        b.set_cursor(1); // right after the first "x"
+        b.add_cursor_at(4); // right after the second "x"
+        b.add_cursor_at(7); // right after the third "x"
+        b.for_each_cursor(|buf| buf.backspace(0.));
+        assert_eq!(b.text(), "a\nb\nc");
+    }
+
+    #[test]
+    fn for_each_cursor_with_one_cursor_is_a_single_direct_call() {
+        let mut b = Buffer::new("abc");
+        b.set_cursor(1);
+        b.for_each_cursor(|buf| buf.type_char('x', 0.));
+        assert_eq!(b.text(), "axbc");
+        assert_eq!(b.cursor(), 2);
+    }
+
+    const CODE: &str = "fn a() {\n    x();\n\n    y();\n}\nfn b() {\n    z();\n}";
+
+    #[test]
+    fn folding_hides_the_block_under_a_line_and_lands_the_caret_on_its_header() {
+        let mut b = Buffer::new(CODE);
+        b.set_cursor(2); // in "fn a() {"
+        b.fold_at_cursor();
+        assert!(b.is_fold_header(0));
+        assert!(b.is_line_hidden(1) && b.is_line_hidden(2) && b.is_line_hidden(3));
+        assert!(
+            !b.is_line_hidden(4),
+            "the closing brace is at the header's indent"
+        );
+        assert!(!b.is_line_hidden(5));
+        // From inside the block, the block folds and the caret goes up to its header.
+        let mut b = Buffer::new(CODE);
+        b.set_cursor(b.line_start(3) + 4); // in "y();"
+        b.fold_at_cursor();
+        assert!(b.is_fold_header(0));
+        assert_eq!(b.line_of(b.cursor()), 0);
+        // A line with nothing under it does not fold.
+        let mut b = Buffer::new("a\nb");
+        b.fold_at_cursor();
+        assert!(!b.has_folds());
+    }
+
+    // A diff's unchanged stretches fold by their own ranges, not by indent:
+    // the placeholder line heads a fold from the start, a click or the fold
+    // keys open it and fold it again, and nothing else can fold.
+    #[test]
+    fn fixed_folds_replace_the_indent_rule() {
+        // Line 0 is a placeholder over lines 1-3; lines 4-5 are indented code.
+        let mut b = Buffer::new("p\na\nb\nc\nfn x() {\n    y();\n}");
+        b.set_fixed_folds(&[(0, 3)]);
+        assert!(b.is_fold_header(0));
+        assert!(b.is_line_hidden(1) && b.is_line_hidden(3));
+        assert!(!b.is_line_hidden(4));
+        // The click on the header opens it, the next one closes it again.
+        b.toggle_fold_line(0);
+        assert!(!b.has_folds());
+        b.toggle_fold_line(0);
+        assert!(b.is_line_hidden(2));
+        // Indented code does not fold: it is not a fixed block.
+        b.toggle_fold_line(4);
+        assert!(!b.is_fold_header(4));
+        b.set_cursor(b.line_start(4));
+        b.fold_at_cursor();
+        assert!(!b.is_fold_header(4));
+        // From inside an opened block, Cmd+Alt+[ folds it again.
+        b.unfold_all();
+        b.set_cursor(b.line_start(2));
+        b.fold_at_cursor();
+        assert!(b.is_fold_header(0) && b.is_line_hidden(2));
+        assert_eq!(b.line_of(b.cursor()), 0, "the caret goes up to the header");
+        b.unfold_all();
+        b.fold_all();
+        assert!(b.is_fold_header(0));
+        // Replacing the text forgets them.
+        b.set_text("q\nr", 0.);
+        b.toggle_fold_line(0);
+        assert!(!b.has_folds());
+    }
+
+    #[test]
+    fn vertical_movement_steps_over_folded_lines() {
+        let mut b = Buffer::new(CODE);
+        b.set_cursor(0);
+        b.fold_at_cursor();
+        b.move_down(false);
+        assert_eq!(
+            b.line_of(b.cursor()),
+            4,
+            "from the header to the brace after the block"
+        );
+        b.move_up(false);
+        assert_eq!(b.line_of(b.cursor()), 0);
+    }
+
+    #[test]
+    fn folds_follow_edits_above_them_and_die_when_touched() {
+        let mut b = Buffer::new(CODE);
+        b.set_cursor(0);
+        b.fold_at_cursor();
+        // A line added above: the fold now heads line 1 and hides the same lines.
+        b.set_cursor(0);
+        b.insert("// new\n", 0.);
+        assert!(b.is_fold_header(1));
+        assert!(b.is_line_hidden(2) && b.is_line_hidden(4));
+        assert!(!b.is_line_hidden(5));
+        // Undo puts the text back and the fold with it.
+        b.undo();
+        assert!(b.is_fold_header(0) && b.is_line_hidden(1));
+        // An edit across the hidden text drops the fold.
+        b.replace_range(9..20, "", 1.);
+        assert!(!b.has_folds());
+    }
+
+    #[test]
+    fn unfold_reveal_and_the_all_versions() {
+        let mut b = Buffer::new(CODE);
+        b.fold_all();
+        assert!(b.is_fold_header(0) && b.is_fold_header(5));
+        assert!(b.is_line_hidden(1) && b.is_line_hidden(6));
+        // The caret ends up on a header, not inside a block.
+        assert!(!b.is_line_hidden(b.line_of(b.cursor())));
+        b.unfold_all();
+        assert!(!b.has_folds());
+        // Opening at the caret: only the fold it heads.
+        b.fold_all();
+        b.set_cursor(0);
+        b.unfold_at_cursor();
+        assert!(!b.is_fold_header(0) && b.is_fold_header(5));
+        // A caret that arrives inside a fold opens it.
+        b.fold_all();
+        b.set_cursor(b.line_start(6) + 2);
+        b.reveal_cursors();
+        assert!(!b.is_fold_header(5));
     }
 
     #[test]
