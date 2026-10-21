@@ -6,7 +6,9 @@
 //! whose rect or metrics changed re-counts its grid and tells the PTY.
 //! Port of `paneRegistry.ts`'s routing and `TerminalCard.svelte`'s start.
 use crate::fonts::weight_of;
-use crate::terminal_body::{LostLink, Metrics, TerminalBody, READOPT_POLL_MS};
+#[cfg(unix)]
+use crate::terminal_body::LostLink;
+use crate::terminal_body::{Metrics, TerminalBody, READOPT_POLL_MS};
 use crate::AppView;
 use gpui::{font, px, TextRun, Window};
 use infiniterm_core::backend::Panes;

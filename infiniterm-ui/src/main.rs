@@ -54,9 +54,7 @@ mod native_menu;
 #[cfg(not(target_os = "macos"))]
 mod not_macos;
 #[cfg(not(target_os = "macos"))]
-use not_macos::{
-    finder_service, fullscreen, icon_font, instance_icon, middle_drag, native_menu, title_drag,
-};
+use not_macos::{finder_service, fullscreen, icon_font, instance_icon, native_menu, title_drag};
 mod omnibox;
 mod overlays;
 mod own_window;

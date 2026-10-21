@@ -920,6 +920,7 @@ impl AppView {
             // The same text, to every viewer that joined, with the revision
             // it is. The viewer keeps its own viewport and focus; nothing is
             // stripped here.
+            #[cfg(unix)]
             if let Some(hub) = &self.join {
                 // Remembered by revision, so a viewer's edit can be compared
                 // with the canvas it started from and merged field by field.
@@ -1053,6 +1054,11 @@ impl AppView {
     }
 
     /// The host sends viewers the agent states when they change (#423).
+    /// There are no viewers on Windows.
+    #[cfg(windows)]
+    pub fn publish_agents(&mut self) {}
+
+    #[cfg(unix)]
     pub fn publish_agents(&mut self) {
         let Some(hub) = &self.join else {
             return;

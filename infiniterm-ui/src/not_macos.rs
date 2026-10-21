@@ -19,8 +19,8 @@
 //!   fallbacks by family name and gpui's `add_fonts` is the way in.
 //! - `instance_icon`: no Dock badge; Windows has taskbar overlays instead.
 //! - `finder_service`: no "open folder in infiniterm" service.
-//! - `middle_drag`, `title_drag`: AppKit view patches; Windows needs neither
-//!   (the system draws the caption and gpui handles the middle button).
+//! - `title_drag`: an AppKit view patch; Windows draws its own caption.
+//! - `middle_drag` has no stand-in at all: its one call is macOS-only.
 //!
 //! Related: the real modules beside this file; docs/windows-handoff.md.
 
@@ -75,10 +75,6 @@ pub mod instance_icon {
     pub fn init() {}
     pub fn clear_badge() {}
     pub fn set_badge(_color: Rgb) {}
-}
-
-pub mod middle_drag {
-    pub fn install() {}
 }
 
 pub mod title_drag {
