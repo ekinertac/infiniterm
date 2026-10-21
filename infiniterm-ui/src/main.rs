@@ -113,7 +113,7 @@ fn statusbar_base_h(font_size: f32) -> f32 {
     STATUSBAR_H.max(font_size * 2.)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "browser"))]
 mod cef_start_tests {
     use super::starts_cef;
 
