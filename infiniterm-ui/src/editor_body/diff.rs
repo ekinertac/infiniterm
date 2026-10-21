@@ -123,6 +123,20 @@ impl DiffView {
     }
 }
 
+/// `path` below `repo`, as git spells it (`/` between names), or `None` when
+/// it is not below it.
+///
+/// Both sides are compared with either separator: git answers the repo root
+/// as `C:/Users/x/repo` on Windows while a card's paths are `C:\Users\x\repo\...`,
+/// and a plain `starts_with` called them different places.
+fn relative_to(repo: &str, path: &str) -> Option<String> {
+    let repo = repo.replace('\\', "/");
+    let path = path.replace('\\', "/");
+    let rest = path.strip_prefix(repo.trim_end_matches('/'))?;
+    let rest = rest.strip_prefix('/')?;
+    (!rest.is_empty()).then(|| rest.to_string())
+}
+
 impl EditorBody {
     /// A diff card's body: an empty read-only editor that `diff_start` fills.
     pub fn new_diff(card_id: &str, root: &str, metrics: &Metrics, world: Size) -> EditorBody {
@@ -144,14 +158,11 @@ impl EditorBody {
         let Some(d) = self.diff.as_ref() else { return };
         let repo = d.repo.clone();
         let file = target.filter(|t| {
-            !repo.is_empty() && t.starts_with(&repo) && std::path::Path::new(t).is_file()
+            !repo.is_empty() && relative_to(&repo, t).is_some() && std::path::Path::new(t).is_file()
         });
         match file {
             Some(t) => {
-                // Git names files with `/` whatever the platform's separator is.
-                let rel = t[repo.len()..]
-                    .trim_start_matches(['/', '\\'])
-                    .replace('\\', "/");
+                let rel = relative_to(&repo, t).unwrap_or_default();
                 self.diff_show(&rel);
                 if list_shown {
                     self.diff_show_list(false);
@@ -328,10 +339,7 @@ impl EditorBody {
         let Some(d) = self.diff.as_ref() else {
             return BodyAction::None;
         };
-        let rel = path
-            .strip_prefix(d.repo.trim_end_matches(['/', '\\']))
-            .map(|r| r.trim_start_matches(['/', '\\']).replace('\\', "/"))
-            .unwrap_or_else(|| path.to_string());
+        let rel = relative_to(&d.repo, path).unwrap_or_else(|| path.to_string());
         if d.shown.as_deref() != Some(rel.as_str()) {
             self.diff_show(&rel);
         }
