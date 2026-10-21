@@ -488,7 +488,7 @@ impl EditorBody {
                 self.buffer = Buffer::new(draft.as_deref().unwrap_or(""));
                 self.events.push(EditorEvent::Notice(format!(
                     "new file: {}",
-                    path.rsplit('/').next().unwrap_or(path)
+                    infiniterm_core::paths::base_name(path)
                 )));
             }
             Err(e) => {

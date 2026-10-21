@@ -183,7 +183,7 @@ impl EditorBody {
                 eprintln!("[infiniterm/warn] git: {e}");
                 self.events.push(EditorEvent::Notice(format!(
                     "not a git repository: {}",
-                    d.root.rsplit('/').next().unwrap_or(&d.root)
+                    infiniterm_core::paths::base_name(&d.root)
                 )));
                 d.files.clear();
             }
@@ -707,7 +707,9 @@ mod tests {
         let after = before.replace("let v10 = 10;\n", "let v10 = 100;\nlet extra = 1;\n");
         std::fs::write(dir.join("a.rs"), after).unwrap();
         std::fs::write(dir.join("b.txt"), "new\nfile\n").unwrap();
-        let root = dir.canonicalize().unwrap();
+        // Not `canonicalize`: on Windows that returns a `\\?\` path, in which
+        // a `/` is not a separator and the tests below join with one.
+        let root = infiniterm_core::paths::canonical(&dir).unwrap();
         let body = EditorBody::new_diff(
             "c1",
             &root.to_string_lossy(),

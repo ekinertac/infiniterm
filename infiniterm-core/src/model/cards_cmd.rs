@@ -529,7 +529,7 @@ impl Model {
                 match crate::save_as::target(&full, &exists) {
                     crate::save_as::Target::New => self.save_as(id, full, then_close),
                     crate::save_as::Target::Replace => {
-                        let name = full.rsplit('/').next().unwrap_or(&full).to_string();
+                        let name = crate::paths::base_name(&full).to_string();
                         self.prompt.confirm(
                             &format!("{name} exists. Replace it?"),
                             "Replace",
