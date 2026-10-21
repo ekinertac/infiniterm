@@ -780,7 +780,7 @@ impl Surface {
         // Cmd is for the mouse only: a key sent with it would reach the page
         // as a shortcut the app already took.
         let command = if mods.command {
-            sys::cef_event_flags_t::EVENTFLAG_COMMAND_DOWN.0
+            sys::cef_event_flags_t::EVENTFLAG_COMMAND_DOWN.0 as u32
         } else {
             0
         };
@@ -832,7 +832,7 @@ impl Surface {
             // from the event's button: without this a middle press on a link
             // was a plain click.
             if !up && button == Button::Middle {
-                event.modifiers |= sys::cef_event_flags_t::EVENTFLAG_MIDDLE_MOUSE_BUTTON.0;
+                event.modifiers |= sys::cef_event_flags_t::EVENTFLAG_MIDDLE_MOUSE_BUTTON.0 as u32;
             }
             if std::env::var_os("INFINITERM_KEYLOG").is_some() {
                 eprintln!(
