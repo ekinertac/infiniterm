@@ -806,6 +806,13 @@ pub fn lowest_free_number(used: &[u32]) -> u32 {
 }
 
 impl Model {
+    /// What to call the app's modifier and the terminal's when a chord is
+    /// shown to somebody: the panel, the palette's hints, the keycast. A
+    /// function of `keyboard.commandModifier`, which is why it lives here
+    /// rather than being a constant in `shortcuts.rs`.
+    pub fn modifier_labels(&self) -> crate::shortcuts::ModifierLabels {
+        crate::shortcuts::ModifierLabels::new(self.config.keyboard.command_modifier)
+    }
     pub fn new() -> Model {
         Model {
             cards: vec![],

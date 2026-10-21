@@ -12,7 +12,11 @@ publish.workspace = true
 name = "iftd"
 path = "src/main.rs"
 
-[dependencies]
+# unix only: see src/main.rs. On Windows the crate builds to an empty
+# binary rather than being dropped from the workspace, because workspace
+# members cannot be cfg'd and a member that is simply absent breaks
+# `cargo test` at the root.
+[target.'cfg(unix)'.dependencies]
 infiniterm-core = { path = "../infiniterm-core" }
 portable-pty = "0.9"
 # fork/setsid, and nothing else. A daemon that must survive its parent has
@@ -25,5 +29,5 @@ libc = "0.2"
 # lockfile via infiniterm-core, so this adds no new crate to the tree.
 serde_json = "1"
 
-[dev-dependencies]
+[target.'cfg(unix)'.dev-dependencies]
 infiniterm-core = { path = "../infiniterm-core" }

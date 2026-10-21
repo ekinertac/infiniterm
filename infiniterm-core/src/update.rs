@@ -28,8 +28,16 @@ use std::path::Path;
 /// releases lived on `ekinertac/infiniterm-releases` while the source was
 /// private, and builds up to 0.4.0 still poll that one (a bridge release
 /// there carries them over, `tools/publish.sh BRIDGE=1`).
-pub const LATEST_URL: &str =
-    "https://github.com/ekinertac/infiniterm/releases/latest/download/latest.json";
+///
+/// A SEPARATE file per platform rather than one manifest with a key each.
+/// An already-shipped Mac app parses this with `parse_manifest` and a shape
+/// it does not expect is a refusal on somebody else's machine, so the
+/// Windows release gets its own name (`tools/dist.ps1` writes it).
+pub const LATEST_URL: &str = if cfg!(windows) {
+    "https://github.com/ekinertac/infiniterm/releases/latest/download/latest-windows.json"
+} else {
+    "https://github.com/ekinertac/infiniterm/releases/latest/download/latest.json"
+};
 
 /// Where an update's zip may come from, whatever a manifest says: the
 /// main repo, and the old releases repo, which the bridge release serves.
@@ -99,15 +107,54 @@ pub fn is_newer(running_build: u64, m: &Manifest) -> bool {
     m.build > running_build
 }
 
-/// Whether an updater may act on this bundle: an app installed into an
-/// Applications folder. A bundle under the source tree's `target/` is a
-/// development build, and replacing it with a release would be a surprise;
-/// a scratch instance (`INFINITERM_DATA_DIR`) is the caller's to exclude.
+/// Whether an updater may act on what it is running from.
+///
+/// macOS: an app installed into an Applications folder. A bundle under the
+/// source tree's `target/` is a development build, and replacing it with a
+/// release would be a surprise; a scratch instance (`INFINITERM_DATA_DIR`)
+/// is the caller's to exclude.
+///
+/// Windows: the folder the exe sits in, wherever somebody unpacked it,
+/// because there is no install location to name. The one refusal is a
+/// folder under `target`, which is a `cargo build` and not a release, and
+/// where an update would replace what the next build is about to write.
+#[cfg(windows)]
+pub fn applies_to(folder: &Path, _home: &Path) -> bool {
+    !folder
+        .components()
+        .any(|c| c.as_os_str().eq_ignore_ascii_case("target"))
+}
+
+#[cfg(not(windows))]
 pub fn applies_to(bundle: &Path, home: &Path) -> bool {
     bundle.extension().is_some_and(|e| e == "app")
         && bundle
             .parent()
             .is_some_and(|p| p == Path::new("/Applications") || p == home.join("Applications"))
+}
+
+/// The Windows waiter, as one PowerShell command line.
+///
+/// The same shape as the unix one and for the same reasons: wait for this
+/// process to be gone, move the old folder aside, move the staged one in,
+/// put the old one back if that fails, then start the app again. A running
+/// exe cannot be overwritten on Windows but its FOLDER can be renamed, so
+/// moving is what makes this possible at all.
+///
+/// `Wait-Process` rather than a poll: it takes the pid and returns when the
+/// process ends, and a pid that is already gone is not an error worth
+/// stopping for.
+#[cfg(windows)]
+pub fn swap_script(pid: u32, folder: &str, staged: &str, aside: &str) -> String {
+    let q = |s: &str| crate::drop::quote_for(s, crate::shell_cmd::ShellKind::PowerShell);
+    let (f, s, a) = (q(folder), q(staged), q(aside));
+    let exe = q(&format!(
+        "{folder}{}infiniterm.exe",
+        std::path::MAIN_SEPARATOR
+    ));
+    format!(
+        "Wait-Process -Id {pid} -ErrorAction SilentlyContinue;          try {{ Move-Item -LiteralPath {f} -Destination {a} -Force -ErrorAction Stop;          try {{ Move-Item -LiteralPath {s} -Destination {f} -Force -ErrorAction Stop }}          catch {{ Move-Item -LiteralPath {a} -Destination {f} -Force }} }} catch {{}};          Start-Process -FilePath {exe}"
+    )
 }
 
 /// `CFBundleVersion` from an Info.plist in XML (what `tools/bundle.sh`
@@ -133,8 +180,9 @@ pub fn staged_is_newer(staged: u64, on_disk: Option<u64>) -> bool {
 /// launch, `updater::clean`), the staged one moved into its place, and if
 /// the second move fails the old one goes back, so a failed update is a
 /// plain restart rather than no app at all.
+#[cfg(not(windows))]
 pub fn swap_script(pid: u32, bundle: &str, staged: &str, aside: &str) -> String {
-    let q = crate::drop::shell_quote;
+    let q = crate::drop::posix_quote;
     let (b, s, a) = (q(bundle), q(staged), q(aside));
     format!(
         "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; \
@@ -145,6 +193,66 @@ pub fn swap_script(pid: u32, bundle: &str, staged: &str, aside: &str) -> String 
 
 #[cfg(test)]
 mod tests {
+
+    // Windows has no install location to name, so the rule is the opposite
+    // shape: anywhere a person unpacked it, except a build tree.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_release_folder_may_update_unless_it_is_a_build_tree() {
+        let home = Path::new(r"C:\Users\PC");
+        assert!(applies_to(Path::new(r"C:\Users\PC\infiniterm"), home));
+        assert!(applies_to(Path::new(r"C:\Program Files\infiniterm"), home));
+        assert!(applies_to(
+            Path::new(r"D:\tools\infiniterm-0.1.0-337-x86_64"),
+            home
+        ));
+        // A cargo build is not a release, whatever the case of the folder.
+        assert!(!applies_to(
+            Path::new(r"C:\Users\PC\Code\infiniterm\target\release"),
+            home
+        ));
+        assert!(!applies_to(Path::new(r"C:\x\Target\debug"), home));
+    }
+
+    // The waiter has to survive a path with a space in it, which on Windows
+    // is where programs live.
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_waiter_quotes_every_path_and_names_the_exe() {
+        let script = swap_script(
+            4321,
+            r"C:\Program Files\infiniterm",
+            r"C:\staged\v1",
+            r"C:\staged\aside",
+        );
+        assert!(script.contains("Wait-Process -Id 4321"), "{script}");
+        // Quoted, so the space does not split the argument.
+        assert!(
+            script.contains(r"'C:\Program Files\infiniterm'"),
+            "{script}"
+        );
+        // It starts the app again from the folder it just put back.
+        assert!(
+            script
+                .contains(r"Start-Process -FilePath 'C:\Program Files\infiniterm\infiniterm.exe'"),
+            "{script}"
+        );
+        // The rollback is there: if the second move fails the old one returns.
+        assert!(script.contains("catch"), "{script}");
+    }
+
+    // One manifest per platform, so a shipped Mac app never sees a shape it
+    // does not expect.
+    #[test]
+    fn the_manifest_url_names_this_platforms_file() {
+        if cfg!(windows) {
+            assert!(LATEST_URL.ends_with("/latest-windows.json"), "{LATEST_URL}");
+        } else {
+            assert!(LATEST_URL.ends_with("/latest.json"), "{LATEST_URL}");
+        }
+        assert!(LATEST_URL.starts_with("https://github.com/ekinertac/infiniterm/releases/"));
+    }
+
     // The usage estimate (tools/usage-stats.py) assumes this many fetches a
     // day per Mac that stays up; change them together.
     #[test]
@@ -216,6 +324,9 @@ mod tests {
         assert!(LATEST_URL.starts_with("https://github.com/ekinertac/infiniterm/releases/"));
     }
 
+    // An Applications folder is a macOS idea; Windows has its own rule and
+    // its own test above.
+    #[cfg(not(windows))]
     #[test]
     fn only_an_installed_app_updates_itself() {
         let home = Path::new("/Users/me");
@@ -234,6 +345,8 @@ mod tests {
         ));
     }
 
+    // The sh waiter. The PowerShell one has its own test above.
+    #[cfg(not(windows))]
     #[test]
     fn the_swap_waits_moves_aside_puts_back_on_failure_and_opens() {
         let s = swap_script(

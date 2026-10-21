@@ -30,7 +30,10 @@ use std::os::unix::net::UnixStream;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use crate::drop::shell_quote;
+// Every command built here runs on the HOST, through ssh, in a POSIX shell,
+// whichever platform this app runs on; so it is POSIX quoting, not the
+// card's shell's (`drop::quote_for`).
+use crate::drop::posix_quote as shell_quote;
 
 /// How much of ssh's stderr to keep: enough for a reason, not a log.
 const STDERR_KEEP: usize = 2048;

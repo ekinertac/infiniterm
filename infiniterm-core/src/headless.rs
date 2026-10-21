@@ -428,7 +428,7 @@ impl Host {
                         if card.command.is_none() && integration.join(".zshenv").exists() {
                             let sh = shell
                                 .clone()
-                                .unwrap_or_else(crate::backend::local_pty::default_shell);
+                                .unwrap_or_else(crate::shell_cmd::default_shell);
                             env.extend(crate::shell_integration::zsh_env(
                                 &sh,
                                 &integration,

@@ -74,12 +74,16 @@ impl AppView {
             shortcuts_field: Default::default(),
             shortcuts_index: 0,
             pick_request: None,
+            #[cfg(unix)]
             join: None,
             last_agents: String::new(),
+            #[cfg(unix)]
             join_updates: None,
+            #[cfg(unix)]
             uplink: None,
             viewer: false,
             viewer_poke: false,
+            #[cfg(unix)]
             canvas_rx: None,
             read_requests: vec![],
             shortcuts_scroll: gpui::ScrollHandle::new(),
@@ -132,14 +136,29 @@ impl AppView {
         self.perform_effects();
     }
 
-    /// Something to draw a theme's colours from. The app bundle's resources
-    /// when running from one; the reference checkout beside this repo while
-    /// developing.
+    /// Something to draw a theme's colours from, in the order a build is
+    /// most likely to have one: where this build ships them, then the
+    /// reference checkout somebody developing has beside this repo.
+    ///
+    /// The 521 schemes live in the archived Tauri app
+    /// (`ekinertac/infiniterm-tauri`), not in this repo, which is why the
+    /// second rung is a path into a sibling checkout rather than an asset
+    /// directory. `tools/bundle.sh` copies them into the Mac bundle from
+    /// there; a Windows release will put them beside the exe, which is the
+    /// first rung's Windows half and is also why a debug build on Windows
+    /// finds nothing until that checkout exists.
     fn bundled_themes() -> Option<PathBuf> {
         let exe = std::env::current_exe().ok()?;
-        let in_bundle = exe.parent()?.parent()?.join("Resources").join("themes");
-        if in_bundle.is_dir() {
-            return Some(in_bundle);
+        let dir = exe.parent()?;
+        let shipped = if cfg!(target_os = "macos") {
+            // infiniterm.app/Contents/MacOS/infiniterm -> Contents/Resources
+            dir.parent()?.join("Resources").join("themes")
+        } else {
+            // An unpacked release folder: the exe with its resources beside it.
+            dir.join("themes")
+        };
+        if shipped.is_dir() {
+            return Some(shipped);
         }
         let dev = home_dir().join("Code/infiniterm-tauri/src-tauri/resources/themes");
         dev.is_dir().then_some(dev)
@@ -565,7 +584,7 @@ impl AppView {
                 Effect::AgentLog(line) => append_agent_log(&line),
                 Effect::Reload => {
                     self.flush_save();
-                    std::process::exit(0);
+                    leave_now();
                 }
                 // Needs the Window, which effects do not have; the frame
                 // makes the call. Same shape as the owed-frame flag.
@@ -611,7 +630,7 @@ impl AppView {
                         // left to do but go, and it opens the bundle once
                         // we are gone. Cards come back to their sessions
                         // and the frame comes back from window.json.
-                        Ok(()) => std::process::exit(0),
+                        Ok(()) => leave_now(),
                         // Still here, so say why rather than quitting into
                         // nothing and looking like a crash.
                         Err(e) => self.model.notify(format!("could not restart: {e}")),
@@ -804,6 +823,7 @@ impl AppView {
             match change.file {
                 ConfigFile::Settings => {
                     self.apply_settings_text(&change.contents);
+                    #[cfg(unix)]
                     if let Some(hub) = &self.join {
                         hub.publish_config(
                             infiniterm_core::backend::join::KIND_SETTINGS,
@@ -821,6 +841,7 @@ impl AppView {
                 }
                 _ => {
                     self.model.apply_keymap_text(&change.contents);
+                    #[cfg(unix)]
                     if let Some(hub) = &self.join {
                         hub.publish_config(
                             infiniterm_core::backend::join::KIND_KEYBINDINGS,
@@ -963,6 +984,7 @@ impl AppView {
             // The same text, to every viewer that joined, with the revision
             // it is. The viewer keeps its own viewport and focus; nothing is
             // stripped here.
+            #[cfg(unix)]
             if let Some(hub) = &self.join {
                 // Remembered by revision, so a viewer's edit can be compared
                 // with the canvas it started from and merged field by field.
@@ -973,6 +995,11 @@ impl AppView {
     }
 
     /// A viewer's canvas, to the host, on the revision it was edited on.
+    /// Joining is unix-only, so there is no host to send to elsewhere.
+    #[cfg(windows)]
+    fn send_up(&mut self) {}
+
+    #[cfg(unix)]
     fn send_up(&mut self) {
         // Nothing to say before the host's own canvas has arrived.
         if !self.model.snapshot_seen {
@@ -992,6 +1019,12 @@ impl AppView {
     /// canvas in place. An edit made on an old canvas is dropped and the host
     /// republishes its own, which is how that viewer finds out. True when the
     /// canvas changed, so the next frame starts any shell it now needs.
+    #[cfg(windows)]
+    pub fn apply_remote_updates(&mut self) -> bool {
+        false
+    }
+
+    #[cfg(unix)]
     pub fn apply_remote_updates(&mut self) -> bool {
         use infiniterm_core::model::persist::RemoteApply;
         let Some(rx) = &self.join_updates else {
@@ -1046,6 +1079,10 @@ impl AppView {
     /// What the host's canvas said since the last tick (a viewer, #423): a
     /// layout is applied in place, agent states on top of it, and a status
     /// (joined, lost, refused) is shown as a notice.
+    #[cfg(windows)]
+    pub fn drain_canvas(&mut self) {}
+
+    #[cfg(unix)]
     pub fn drain_canvas(&mut self) {
         use infiniterm_core::backend::join_client::CanvasEvent;
         let Some(rx) = &self.canvas_rx else {
@@ -1091,6 +1128,11 @@ impl AppView {
     }
 
     /// The host sends viewers the agent states when they change (#423).
+    /// There are no viewers on Windows.
+    #[cfg(windows)]
+    pub fn publish_agents(&mut self) {}
+
+    #[cfg(unix)]
     pub fn publish_agents(&mut self) {
         let Some(hub) = &self.join else {
             return;
@@ -1131,7 +1173,11 @@ fn startup_terminal() -> (infiniterm_core::config::TerminalBackend, usize) {
 
 /// Opens the socket `ift join` viewers reach through ssh, and gives them the
 /// canvas as it is now (#423). A failure is said and costs nothing else: the
-/// app runs without joining.
+/// app runs without joining. Unix only: the hub rides on a unix socket.
+#[cfg(windows)]
+fn start_join(_app: &mut AppView) {}
+
+#[cfg(unix)]
 fn start_join(app: &mut AppView) {
     // A viewer is a window onto the host's canvas, never a host: it would
     // relay sessions that are not its own (found in the #423 drive, which
@@ -1210,7 +1256,12 @@ pub fn startup(app: &mut AppView) {
     // ui-themes/default.json BEFORE the settings are read (#511), and that
     // file is created when missing. A joined viewer has no files of its own
     // to move (its look is whatever its folder holds).
-    if infiniterm_core::backend::remote::join_from_env().is_none() {
+    // (There is no joined viewer on Windows, so the move always runs there.)
+    #[cfg(unix)]
+    let is_viewer = infiniterm_core::backend::remote::join_from_env().is_some();
+    #[cfg(windows)]
+    let is_viewer = false;
+    if !is_viewer {
         match infiniterm_core::config_files::migrate_look_keys() {
             Ok(keys) if !keys.is_empty() => eprintln!(
                 "[infiniterm] moved {} look settings from settings.json to ui-themes/default.json: {}",
@@ -1257,7 +1308,12 @@ pub fn startup(app: &mut AppView) {
         let written = path
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&path, welcome::render(&app.model.keymap, &agents)));
+            .and_then(|()| {
+                std::fs::write(
+                    &path,
+                    welcome::render(&app.model.keymap, &agents, app.model.modifier_labels()),
+                )
+            });
         if let Err(e) = written {
             eprintln!("[infiniterm/warn] could not write {}: {e}", path.display());
         }
@@ -1322,7 +1378,11 @@ pub fn startup(app: &mut AppView) {
         // The settings were applied before this, with the Mac's folder.
         app.model.start_dir = "~".into();
     }
+    #[cfg(unix)]
     let join_host = infiniterm_core::backend::remote::join_from_env();
+    // No joining on Windows (unix sockets and ssh), so never a viewer.
+    #[cfg(windows)]
+    let join_host: Option<()> = None;
     app.viewer = join_host.is_some();
     // A viewer asks the host nothing at launch: the canvas arrives from the
     // client thread, and every session on it is adoptable through the host.
@@ -1337,13 +1397,18 @@ pub fn startup(app: &mut AppView) {
         app.model.load_layout(None);
         app.model.first_run = false;
         app.model.read_only = true;
-        let (tx, rx) = std::sync::mpsc::channel();
-        let (edit_tx, edit_rx) = std::sync::mpsc::channel();
-        app.canvas_rx = Some(rx);
-        app.uplink = Some(edit_tx);
-        std::thread::spawn(move || {
-            infiniterm_core::backend::join_client::run_canvas_client(host, tx, edit_rx)
-        });
+        #[cfg(unix)]
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (edit_tx, edit_rx) = std::sync::mpsc::channel();
+            app.canvas_rx = Some(rx);
+            app.uplink = Some(edit_tx);
+            std::thread::spawn(move || {
+                infiniterm_core::backend::join_client::run_canvas_client(host, tx, edit_rx)
+            });
+        }
+        #[cfg(windows)]
+        let _ = host;
     } else {
         app.model
             .load_layout(infiniterm_core::layout_file::read_layout().as_deref());
@@ -1380,12 +1445,32 @@ pub fn startup(app: &mut AppView) {
 }
 
 /// One instance, as the reference's single-instance plugin enforced it:
-/// the socket path is the lock. A second launch on the same data dir
-/// activates the first through its bundle id and exits before it could
-/// race the first for the save file.
+/// the endpoint is the lock (`infiniterm-core`'s `transport`, a unix socket
+/// or a named pipe). A second launch on the same data dir activates the
+/// first and exits before it could race it for the save file.
+#[cfg(not(windows))]
 pub fn another_instance_holds_the_socket() -> bool {
-    let path = infiniterm_core::paths::socket_path();
-    std::os::unix::net::UnixStream::connect(&path).is_ok()
+    infiniterm_core::transport::is_live(&infiniterm_core::paths::socket_path())
+}
+
+/// Two questions on Windows, not one: something is listening AND the process
+/// that claimed the endpoint still exists.
+///
+/// A terminated process is not reaped while a thread of it is stuck in the
+/// kernel, and CEF leaves one that is, so the pipe goes on accepting
+/// connections for about forty seconds after the app has gone. A relaunch
+/// inside that window was told the endpoint was held and exited, which reads
+/// as "infiniterm will not start" (measured 2026-09-25). See
+/// `infiniterm_core::instance` for why this cannot let two instances onto
+/// one save file, which an earlier attempt at the same problem did.
+#[cfg(windows)]
+pub fn another_instance_holds_the_socket() -> bool {
+    let data = infiniterm_core::paths::app_support_dir();
+    infiniterm_core::instance::holds_the_endpoint(
+        infiniterm_core::transport::is_live(&infiniterm_core::paths::socket_path()),
+        infiniterm_core::instance::owner(&data),
+        infiniterm_core::instance::process_alive,
+    )
 }
 
 /// curl, not an HTTP crate: one endpoint, off by default, and this app
@@ -1464,10 +1549,20 @@ const AGENT_LOG_MAX_BYTES: u64 = 512 * 1024;
 /// The `.app` an executable lives in: `.../x.app/Contents/MacOS/x` is three
 /// ancestors up. `None` for a bare binary, which is what `cargo run` and
 /// every test is, and which must not be "restarted" into anything.
+#[cfg(not(windows))]
 fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
     exe.ancestors()
         .nth(3)
         .filter(|p| p.extension().is_some_and(|e| e == "app"))
+}
+
+/// What an update replaces on Windows: the folder the exe sits in, which is
+/// what `tools/dist.ps1` produces and what somebody unpacks. There is no
+/// bundle to walk up to and no install location to insist on; whether that
+/// folder may be updated at all is `update::applies_to`.
+#[cfg(windows)]
+fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
+    exe.parent()
 }
 
 /// Arranges for this app bundle to be reopened once this process is gone.
@@ -1486,9 +1581,20 @@ fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
 /// The staging dir from the last run is emptied first: it holds the bundle
 /// the last update moved aside, or a download nobody installed.
 fn start_updater(app: &mut AppView) {
-    app.build = std::env::current_exe()
-        .ok()
-        .and_then(|exe| bundle_of(&exe).and_then(crate::updater::build_of));
+    // The status bar's build number, which is the whole of the updater that
+    // Windows has so far. It is stamped into the binary there rather than
+    // read back out of a bundle, so there is nothing to find first; see
+    // `updater::build_of`.
+    #[cfg(windows)]
+    {
+        app.build = crate::updater::build_of(std::path::Path::new(""));
+    }
+    #[cfg(not(windows))]
+    {
+        app.build = std::env::current_exe()
+            .ok()
+            .and_then(|exe| bundle_of(&exe).and_then(crate::updater::build_of));
+    }
     if std::env::var_os("INFINITERM_DATA_DIR").is_some() {
         return;
     }
@@ -1504,7 +1610,10 @@ fn start_updater(app: &mut AppView) {
     let dir = infiniterm_core::paths::app_support_dir().join("update");
     crate::updater::clean(&dir);
     let Some(running) = crate::updater::build_of(bundle) else {
-        eprintln!("[infiniterm] no build number in the bundle; updates are off");
+        // Windows stamps this at compile time, so a build without one is a
+        // `cargo build` rather than a release; macOS reads it from the
+        // bundle's plist.
+        eprintln!("[infiniterm] no build number in this build; updates are off");
         return;
     };
     app.updater = Some(crate::updater::start(bundle.to_path_buf(), running, dir));
@@ -1574,7 +1683,14 @@ impl AppView {
             return;
         }
         let _ = std::fs::remove_file(&probe);
-        let aside = u.dir.join(format!("old-{}.app", std::process::id()));
+        // The old app moved out of the way, deleted at the next launch by
+        // `updater::clean`. A bundle on macOS; on Windows the release is a
+        // plain folder, and a `.app` suffix there would only be confusing.
+        let aside = if cfg!(windows) {
+            u.dir.join(format!("old-{}", std::process::id()))
+        } else {
+            u.dir.join(format!("old-{}.app", std::process::id()))
+        };
         let script = infiniterm_core::update::swap_script(
             std::process::id(),
             &u.bundle.to_string_lossy(),
@@ -1582,12 +1698,14 @@ impl AppView {
             &aside.to_string_lossy(),
         );
         self.flush_save();
-        match std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(script)
-            .spawn()
-        {
-            Ok(_) => std::process::exit(0),
+        // `spawn_waiter`, not a bare `/bin/sh`, which is what this used to
+        // be on both platforms: Windows has no /bin/sh, so every Windows
+        // update got as far as downloading, verifying and staging and then
+        // failed at the last step with "could not start the update". It
+        // also has to break away from the job, or it would be killed by the
+        // exit below before it could do anything.
+        match spawn_waiter(&script) {
+            Ok(()) => leave_now(),
             Err(e) => self
                 .model
                 .notify(format!("could not start the update: {e}")),
@@ -1595,14 +1713,40 @@ impl AppView {
     }
 }
 
-fn relaunch_after_exit() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let bundle = bundle_of(&exe).ok_or("not running from an .app bundle")?;
-    let script = format!(
-        "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; exec open {bundle}",
-        pid = std::process::id(),
-        bundle = infiniterm_core::drop::shell_quote(&bundle.to_string_lossy()),
-    );
+/// End the app, from anywhere that means to.
+///
+/// Four callers: the window closing, Reload, Restart, and installing an
+/// update. They all have the same two obligations and it is not obvious
+/// that they do, which is why this is one function and not four exits.
+///
+/// Give up the endpoint claim, because the named pipe outlives the process
+/// by about half a minute on Windows and the claim file is what tells the
+/// next launch nobody is behind it (`infiniterm_core::instance`).
+///
+/// Then leave WITHOUT running teardown. `std::process::exit` runs every
+/// DLL's detach and libcef's does not return, which hung a Restart with the
+/// waiter already running and the app still on screen (2026-09-26). The job
+/// object takes the subprocesses; see `infiniterm_core::job::exit_now`.
+///
+/// Callers must have flushed anything they care about first: this does not
+/// come back.
+pub fn leave_now() -> ! {
+    #[cfg(windows)]
+    {
+        infiniterm_core::instance::release(&infiniterm_core::paths::app_support_dir());
+        infiniterm_core::job::exit_now()
+    }
+    #[cfg(not(windows))]
+    std::process::exit(0)
+}
+
+/// Starts a script that must OUTLIVE this process: the waiter that reopens
+/// the app, or the one that swaps an update in once the exe is unlocked.
+///
+/// The one place that knowledge lives, because getting it wrong is silent
+/// on both platforms — the waiter dies and Restart simply does nothing.
+#[cfg(not(windows))]
+fn spawn_waiter(script: &str) -> Result<(), String> {
     std::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(script)
@@ -1611,12 +1755,73 @@ fn relaunch_after_exit() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// PowerShell, the only shell Windows is sure to have.
+///
+/// CREATE_BREAKAWAY_FROM_JOB is what makes this work at all: every process
+/// infiniterm starts is in the job that kills the tree when the app ends
+/// (`infiniterm_core::job`), and a waiter for the app's exit that dies with
+/// the app is a waiter that never runs. The job allows the breakaway; this
+/// asks for it. CREATE_NO_WINDOW keeps the console from flashing over
+/// whatever is on screen, which `-WindowStyle Hidden` alone does not.
+#[cfg(windows)]
+fn spawn_waiter(script: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new(infiniterm_core::shell_cmd::default_shell())
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", script])
+        .creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+fn relaunch_after_exit() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let bundle = bundle_of(&exe).ok_or("not running from an .app bundle")?;
+    spawn_waiter(&format!(
+        "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; exec open {bundle}",
+        pid = std::process::id(),
+        bundle = infiniterm_core::drop::posix_quote(&bundle.to_string_lossy()),
+    ))
+}
+
+#[cfg(windows)]
+fn relaunch_after_exit() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    spawn_waiter(&format!(
+        "Wait-Process -Id {pid} -ErrorAction SilentlyContinue; Start-Process -FilePath {exe}",
+        pid = std::process::id(),
+        exe = infiniterm_core::drop::quote_for(
+            &exe.to_string_lossy(),
+            infiniterm_core::shell_cmd::ShellKind::PowerShell
+        ),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
+
+    // What an update replaces on Windows: the folder somebody unpacked,
+    // whatever it is called and wherever it is.
+    #[cfg(windows)]
+    #[test]
+    fn the_folder_is_the_one_the_executable_sits_in() {
+        use std::path::Path;
+        assert_eq!(
+            bundle_of(Path::new(r"C:\Program Files\infiniterm\infiniterm.exe")),
+            Some(Path::new(r"C:\Program Files\infiniterm"))
+        );
+        assert_eq!(bundle_of(Path::new("infiniterm.exe")), Some(Path::new("")));
+    }
     use super::*;
 
     // Three up and it must be the bundle, or `open` gets handed a path
-    // that is not an app and the restart quits into nothing.
+    // that is not an app and the restart quits into nothing. macOS only:
+    // Windows has no bundle to walk up to and `bundle_of` is the exe's own
+    // folder there.
+    #[cfg(not(windows))]
     #[test]
     fn the_bundle_is_three_above_the_executable() {
         use std::path::Path;

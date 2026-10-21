@@ -256,7 +256,7 @@ pub fn write_askpass_helper(
         .parent()
         .expect("a control path has a folder")
         .join("askpass.sh");
-    let quoted = crate::drop::shell_quote(&ift.display().to_string());
+    let quoted = crate::drop::posix_quote(&ift.display().to_string());
     std::fs::write(&path, format!("#!/bin/sh\nexec {quoted} askpass \"$@\"\n"))?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
     Ok(path)

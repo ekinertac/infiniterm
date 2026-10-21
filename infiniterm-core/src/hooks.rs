@@ -1,10 +1,12 @@
-//! The unix socket: hook reports in, and `ift` requests in and out. From
+//! The local socket: hook reports in, and `ift` requests in and out. From
 //! the Tauri app's hooks.rs.
 //!
-//! A unix socket rather than TCP: no port negotiation, no auth layer, and
-//! filesystem permissions are the access control. The sender is the
-//! separate zero-dependency `infiniterm-hook` binary, because hook programs
-//! are executed by the agent harness, not by this app.
+//! A local socket rather than TCP: no port negotiation, no auth layer, and
+//! the OS's own permissions are the access control. `transport.rs` is what
+//! it actually is (a unix socket on unix, a named pipe on Windows); this
+//! file only serves it. The sender is the separate zero-dependency
+//! `infiniterm-hook` binary, because hook programs are executed by the
+//! agent harness, not by this app.
 //!
 //! ONE socket serves both. A second would need its own path, stale-file
 //! handling and lifetime for nothing, and the socket's existence is already
@@ -14,8 +16,8 @@
 //! forwarded to the UI thread over a channel it drains each frame;
 //! `agent_state.rs` turns them into card state.
 use crate::cli::CliState;
+use crate::transport;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
@@ -64,22 +66,27 @@ pub fn parse_hook_line(line: &str) -> Option<HookReport> {
 }
 
 /// Binds `path` and serves it on a thread for the life of the process.
-/// A stale socket file from a previous run is removed first, or bind fails.
-/// Fails only when the bind does; the app then runs with hooks and `ift`
-/// disabled rather than not at all.
+/// `transport::bind` clears whatever a previous run left behind. Fails only
+/// when the bind does; the app then runs with hooks and `ift` disabled
+/// rather than not at all.
 pub fn listen(path: &Path, reports: Sender<HookReport>, cli: Arc<CliState>) -> Result<(), String> {
     // A live socket means another infiniterm owns it: a second copy would
     // steal the path and leave the first unreachable by `ift` and hooks
     // until restart (the reference enforces one instance for this reason).
-    if std::os::unix::net::UnixStream::connect(path).is_ok() {
+    if transport::is_live(path) {
         return Err(format!(
             "{} is in use: another infiniterm is running",
             path.display()
         ));
     }
-    let _ = std::fs::remove_file(path);
     let listener =
-        UnixListener::bind(path).map_err(|e| format!("could not bind {}: {e}", path.display()))?;
+        transport::bind(path).map_err(|e| format!("could not bind {}: {e}", path.display()))?;
+    // Ours now, and on record. Windows only: there a lingering endpoint is
+    // told from a running instance by this file rather than by the pipe,
+    // which goes on answering for half a minute after its owner has gone.
+    // See `instance`.
+    #[cfg(windows)]
+    crate::instance::claim(&crate::paths::app_support_dir());
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let reports = reports.clone();
@@ -115,6 +122,7 @@ pub fn listen(path: &Path, reports: Sender<HookReport>, cli: Arc<CliState>) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::endpoint;
 
     // The hook binary's second argument names the agent; Claude's hooks
     // send none.
@@ -130,8 +138,7 @@ mod tests {
     // A second copy must not steal a live socket from the first.
     #[test]
     fn refuses_a_socket_another_instance_holds() {
-        let path =
-            std::env::temp_dir().join(format!("infiniterm-test-live-{}.sock", std::process::id()));
+        let path = endpoint("live");
         let (tx, _rx) = std::sync::mpsc::channel();
         let cli = Arc::new(CliState::default());
         listen(&path, tx.clone(), cli.clone()).unwrap();

@@ -1,15 +1,20 @@
 //! Talking to a running infiniterm.
 //!
-//! The socket's existence IS the answer to "is infiniterm running", which is why
-//! there is no pid file, no port and no handshake: if the connect fails, it is not
-//! running, and that is a different exit code from a verb that failed.
+//! The endpoint's existence IS the answer to "is infiniterm running", which is
+//! why there is no pid file, no port and no handshake: if the connect fails, it
+//! is not running, and that is a different exit code from a verb that failed.
+//!
+//! WHAT the endpoint is (a unix socket, a named pipe) is `infiniterm-core`'s
+//! `transport`, and where it is is its `paths::socket_path`. This file kept its
+//! own copy of both until Windows arrived and the two could no longer agree by
+//! looking the same.
 //!
 //! One request, one response line, then close. `ift` is a dumb pipe — every
 //! decision about what a command means is made in the app, so the two surfaces
 //! cannot drift.
 
+use infiniterm_core::{paths, transport};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 /// Longer than the app's own reply timeout, so a verb that timed out in there
@@ -21,21 +26,10 @@ pub struct Reply {
     pub text: String,
 }
 
-fn socket_path() -> std::path::PathBuf {
-    // Must match the app's socket_path. Both run as the same user, so the
-    // per-user TMPDIR macOS hands out resolves identically. A side-by-side
-    // instance on INFINITERM_DATA_DIR keeps its socket there, and an `ift`
-    // run with the same variable set talks to that one.
-    if let Some(dir) = std::env::var_os("INFINITERM_DATA_DIR") {
-        return std::path::PathBuf::from(dir).join("infiniterm.sock");
-    }
-    std::env::temp_dir().join("infiniterm.sock")
-}
-
 /// Whether an app is listening: a connect that succeeds, the same test
 /// `exchange` makes. A stale socket file from a crash fails it.
 pub fn running() -> bool {
-    UnixStream::connect(socket_path()).is_ok()
+    transport::is_live(&paths::socket_path())
 }
 
 /// Polls until `running()` or `limit` passes; for an app just launched.
@@ -55,6 +49,26 @@ fn card_id() -> String {
     std::env::var("INFINITERM_CARD_ID").unwrap_or_default()
 }
 
+/// One reply line, or the timeout (none: wait for as long as it takes).
+///
+/// On a thread rather than through a socket option: a named pipe handle has no
+/// read timeout to set, and keeping the guarantee matters more than the
+/// mechanism it used to come from. `ift` exits right after this, so a thread
+/// still blocked on a wedged app goes with the process.
+fn read_reply(stream: &transport::Stream, timeout: Option<Duration>) -> Result<String, String> {
+    let reply = stream.try_clone().map_err(|e| format!("no answer: {e}"))?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = tx.send(BufReader::new(reply).read_line(&mut line).map(|_| line));
+    });
+    let got = match timeout {
+        Some(t) => rx.recv_timeout(t).map_err(|_| "infiniterm did not answer".to_string())?,
+        None => rx.recv().map_err(|_| "infiniterm closed the connection".to_string())?,
+    };
+    got.map_err(|e| format!("no answer: {e}"))
+}
+
 /// Run from a shell inside an infiniterm card.
 pub fn in_a_card() -> bool {
     !card_id().is_empty()
@@ -70,19 +84,15 @@ pub fn request_waiting(cmd: &str, args: Vec<String>) -> Result<Reply, String> {
 }
 
 fn exchange(cmd: &str, args: Vec<String>, timeout: Option<Duration>) -> Result<Reply, String> {
-    let path = socket_path();
+    let path = paths::socket_path();
     let mut stream =
-        UnixStream::connect(&path).map_err(|_| "infiniterm is not running".to_string())?;
-    let _ = stream.set_read_timeout(timeout);
+        transport::connect(&path).map_err(|_| "infiniterm is not running".to_string())?;
 
     let body = serde_json::json!({ "cmd": cmd, "args": args, "card_id": card_id() });
     writeln!(stream, "{body}").map_err(|e| format!("could not send: {e}"))?;
     stream.flush().map_err(|e| format!("could not send: {e}"))?;
 
-    let mut line = String::new();
-    BufReader::new(&stream)
-        .read_line(&mut line)
-        .map_err(|e| format!("no answer: {e}"))?;
+    let line = read_reply(&stream, timeout)?;
     if line.trim().is_empty() {
         return Err("infiniterm closed the connection without answering".into());
     }

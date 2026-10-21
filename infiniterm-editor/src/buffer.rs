@@ -534,7 +534,11 @@ impl Buffer {
         let col = self.col_of(self.cursor);
         let text = self.line(line);
         let last = line + 1 >= self.line_count();
-        let at = if last { self.len_chars() } else { self.line_start(line + 1) };
+        let at = if last {
+            self.len_chars()
+        } else {
+            self.line_start(line + 1)
+        };
         let new = if last {
             format!("\n{text}")
         } else {
@@ -663,7 +667,14 @@ impl Buffer {
         let ws = next.chars().take_while(|c| c.is_whitespace()).count();
         let remove_end = next_start + ws;
         let old = self.slice(end_of_line..remove_end);
-        self.apply(end_of_line, old, " ".to_string(), end_of_line + 1, false, now);
+        self.apply(
+            end_of_line,
+            old,
+            " ".to_string(),
+            end_of_line + 1,
+            false,
+            now,
+        );
     }
 
     /// Cmd+]: indent the current line (or every selected line), unlike Tab
@@ -927,7 +938,12 @@ impl Buffer {
         self.folds = folds;
         let c = self.cursor;
         if self.folds.iter().any(|(s, e)| c > *s && c <= *e) {
-            let s = self.folds.iter().find(|(s, e)| c > *s && c <= *e).unwrap().0;
+            let s = self
+                .folds
+                .iter()
+                .find(|(s, e)| c > *s && c <= *e)
+                .unwrap()
+                .0;
             self.set_cursor(s);
         }
         self.extra.clear();
@@ -1060,7 +1076,9 @@ impl Buffer {
     /// under the cursor) becomes its own cursor, replacing whatever set
     /// there was before.
     pub fn select_all_occurrences(&mut self) {
-        let r = self.selection().unwrap_or_else(|| self.word_at(self.cursor));
+        let r = self
+            .selection()
+            .unwrap_or_else(|| self.word_at(self.cursor));
         if r.is_empty() {
             return;
         }
@@ -1337,7 +1355,11 @@ impl Buffer {
             self.select_range(start..start + new_len);
             return;
         }
-        let target = if line + 1 < self.line_count() { line + 1 } else { line };
+        let target = if line + 1 < self.line_count() {
+            line + 1
+        } else {
+            line
+        };
         let len = self.line(target).chars().count();
         self.set_cursor(self.line_start(target) + col.min(len));
     }
@@ -1732,7 +1754,7 @@ mod tests {
         b.delete_line(0.);
         assert_eq!(b.text(), "a\nc");
         assert_eq!(b.cursor(), 2); // "c" took its place
-        // The last line has no newline of its own; the one before it goes.
+                                   // The last line has no newline of its own; the one before it goes.
         let mut b = Buffer::new("a\nb");
         b.set_cursor(2);
         b.delete_line(0.);
@@ -1895,7 +1917,10 @@ mod tests {
         b.select_range(0..3); // "foo"
         b.select_all_occurrences();
         assert_eq!(b.cursor_count(), 3);
-        assert_eq!(b.all_selections(), vec![(3, Some(0)), (11, Some(8)), (19, Some(16))]);
+        assert_eq!(
+            b.all_selections(),
+            vec![(3, Some(0)), (11, Some(8)), (19, Some(16))]
+        );
     }
 
     #[test]
@@ -1908,7 +1933,10 @@ mod tests {
         assert_eq!(b.cursor_count(), 2);
         b.select_word_or_next(); // adds the third
         assert_eq!(b.cursor_count(), 3);
-        assert_eq!(b.all_selections(), vec![(3, Some(0)), (11, Some(8)), (19, Some(16))]);
+        assert_eq!(
+            b.all_selections(),
+            vec![(3, Some(0)), (11, Some(8)), (19, Some(16))]
+        );
         // A fourth press wraps rather than adding a duplicate.
         b.select_word_or_next();
         assert_eq!(b.cursor_count(), 3);
@@ -1941,7 +1969,10 @@ mod tests {
         let mut b = Buffer::new("one\ntwo\nthree");
         b.select_range(1..10); // "ne\ntwo\nth"
         b.split_into_lines();
-        assert_eq!(b.all_selections(), vec![(3, Some(1)), (7, Some(4)), (10, Some(8))]);
+        assert_eq!(
+            b.all_selections(),
+            vec![(3, Some(1)), (7, Some(4)), (10, Some(8))]
+        );
         // A selection that never leaves one line is a no-op: nothing to split.
         let mut b = Buffer::new("one\ntwo");
         b.select_range(0..2);
@@ -2002,7 +2033,10 @@ mod tests {
         b.fold_at_cursor();
         assert!(b.is_fold_header(0));
         assert!(b.is_line_hidden(1) && b.is_line_hidden(2) && b.is_line_hidden(3));
-        assert!(!b.is_line_hidden(4), "the closing brace is at the header's indent");
+        assert!(
+            !b.is_line_hidden(4),
+            "the closing brace is at the header's indent"
+        );
         assert!(!b.is_line_hidden(5));
         // From inside the block, the block folds and the caret goes up to its header.
         let mut b = Buffer::new(CODE);
@@ -2059,7 +2093,11 @@ mod tests {
         b.set_cursor(0);
         b.fold_at_cursor();
         b.move_down(false);
-        assert_eq!(b.line_of(b.cursor()), 4, "from the header to the brace after the block");
+        assert_eq!(
+            b.line_of(b.cursor()),
+            4,
+            "from the header to the brace after the block"
+        );
         b.move_up(false);
         assert_eq!(b.line_of(b.cursor()), 0);
     }

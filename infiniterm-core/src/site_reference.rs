@@ -25,7 +25,7 @@ use crate::keymap::{Keymap, DEFAULT_KEYMAP};
 use crate::model::register::register_commands;
 use crate::model::Model;
 use crate::settings_doc::SETTINGS_DOC;
-use crate::shortcuts::{chord_keys, shortcut_sections, GESTURES};
+use crate::shortcuts::{chord_keys, shortcut_sections, ModifierLabels, GESTURES};
 use serde_json::Value;
 
 /// A generated page: its file name under `reference/` and its Markdown.
@@ -88,7 +88,9 @@ fn cell(text: &str) -> String {
 /// box per key. `<kbd>` rather than backticks: the backtick key would close
 /// a code span.
 fn kbd(chord: &str) -> String {
-    chord_keys(chord)
+    // The site documents the Mac keyboard; the Windows spelling is the
+    // app's own panel's business.
+    chord_keys(chord, ModifierLabels::MAC)
         .iter()
         .map(|k| format!("<kbd>{}</kbd>", cell(k)))
         .collect::<Vec<_>>()
@@ -114,7 +116,7 @@ fn sections(commands: &[(String, String)]) -> Vec<Section> {
         .map(|(i, l)| (i.as_str(), l.as_str()))
         .collect();
     let map = keymap();
-    shortcut_sections(&map, &pairs)
+    shortcut_sections(&map, &pairs, ModifierLabels::MAC)
         .into_iter()
         .map(|s| {
             let rows = s

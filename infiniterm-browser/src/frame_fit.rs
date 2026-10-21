@@ -29,7 +29,13 @@ pub const SNAP_PX: f64 = 1.5;
 ///
 /// Unknown layout size: the available size (the old behaviour; only a frame
 /// from before CEF has ever asked for a view rect).
-pub fn frame_draw_size(css_w: i32, css_h: i32, scale: f64, avail_w: f64, avail_h: f64) -> (f64, f64) {
+pub fn frame_draw_size(
+    css_w: i32,
+    css_h: i32,
+    scale: f64,
+    avail_w: f64,
+    avail_h: f64,
+) -> (f64, f64) {
     if css_w <= 0 || css_h <= 0 || scale <= 0. {
         return (avail_w, avail_h);
     }
@@ -76,7 +82,11 @@ pub fn frame_layout_size(
             }
         }
     }
-    let scale = if fallback_scale > 0. { fallback_scale as f64 } else { 1. };
+    let scale = if fallback_scale > 0. {
+        fallback_scale as f64
+    } else {
+        1.
+    };
     (
         (px_w as f64 / scale).round() as i32,
         (px_h as f64 / scale).round() as i32,
@@ -141,21 +151,36 @@ mod tests {
         assert_eq!(frame_layout_size(1600, 1200, &asked, &[2.], 2.), (800, 600));
         // The scale changed in between: the older scale still explains an
         // older frame.
-        assert_eq!(frame_layout_size(800, 600, &asked, &[1., 2.], 2.), (800, 600));
-        assert_eq!(frame_layout_size(1600, 1200, &asked, &[1., 2.], 2.), (800, 600));
+        assert_eq!(
+            frame_layout_size(800, 600, &asked, &[1., 2.], 2.),
+            (800, 600)
+        );
+        assert_eq!(
+            frame_layout_size(1600, 1200, &asked, &[1., 2.], 2.),
+            (800, 600)
+        );
     }
 
     #[test]
     fn a_frame_no_ask_explains_falls_back_to_the_pixels_over_the_scale() {
         assert_eq!(frame_layout_size(1000, 500, &[], &[], 2.), (500, 250));
-        assert_eq!(frame_layout_size(1000, 500, &[(333, 333)], &[1.], 0.), (1000, 500));
+        assert_eq!(
+            frame_layout_size(1000, 500, &[(333, 333)], &[1.], 0.),
+            (1000, 500)
+        );
     }
 
     #[test]
     fn rounding_of_one_pixel_still_matches() {
         // 1475 css at 1.5 is 2212.5 pixels: CEF paints 2212 or 2213.
-        assert_eq!(frame_layout_size(2212, 1200, &[(1475, 800)], &[1.5], 1.5), (1475, 800));
-        assert_eq!(frame_layout_size(2213, 1200, &[(1475, 800)], &[1.5], 1.5), (1475, 800));
+        assert_eq!(
+            frame_layout_size(2212, 1200, &[(1475, 800)], &[1.5], 1.5),
+            (1475, 800)
+        );
+        assert_eq!(
+            frame_layout_size(2213, 1200, &[(1475, 800)], &[1.5], 1.5),
+            (1475, 800)
+        );
     }
 
     #[test]

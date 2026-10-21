@@ -1,3 +1,4 @@
+#![cfg(unix)] // headless hosts are unix-only
 //! A host with no canvas file but running sessions (#439: a Linux server that
 //! never had an app) builds its canvas from them. Real `iftd`s, a scratch data
 //! dir set for the whole process (a unix socket path holds 104 bytes), and the

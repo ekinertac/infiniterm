@@ -390,11 +390,7 @@ impl Model {
     /// asked for follows once the editor reports it clean.
     fn save_as(&mut self, id: String, full: String, then_close: Option<(Vec<String>, bool)>) {
         if let Some(card) = self.card_mut(&id) {
-            card.cwd = full
-                .rsplit_once('/')
-                .map(|(dir, _)| if dir.is_empty() { "/" } else { dir })
-                .unwrap_or("/")
-                .to_string();
+            card.cwd = crate::paths::parent_dir(&full);
             card.path = Some(full);
             self.dirty_layout = true;
         }
@@ -434,18 +430,20 @@ impl Model {
     /// The typed path, resolved against the active card's directory with `~`
     /// for home. The caller has checked it exists.
     pub fn resolve_typed_path(&self, raw: &str, from: Option<&Card>) -> String {
-        let home = self.home.trim_end_matches('/');
+        let home = self.home.trim_end_matches(['/', '\\']);
         let cwd = from
             .map(|c| c.cwd.clone())
             .unwrap_or_else(|| self.cwd_beside(None));
-        if raw.starts_with('/') {
+        // Rooted either way round: `C:\Users\PC` has no leading slash and
+        // is still not relative to anything. See `paths::is_rooted`.
+        if crate::paths::is_rooted(raw) {
             raw.to_string()
         } else if raw == "~" {
             home.to_string()
-        } else if let Some(rest) = raw.strip_prefix("~/") {
+        } else if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix(r"~\")) {
             format!("{home}/{rest}")
         } else {
-            format!("{}/{raw}", cwd.trim_end_matches('/'))
+            format!("{}/{raw}", cwd.trim_end_matches(['/', '\\']))
         }
     }
 
@@ -531,7 +529,7 @@ impl Model {
                 match crate::save_as::target(&full, &exists) {
                     crate::save_as::Target::New => self.save_as(id, full, then_close),
                     crate::save_as::Target::Replace => {
-                        let name = full.rsplit('/').next().unwrap_or(&full).to_string();
+                        let name = crate::paths::base_name(&full).to_string();
                         self.prompt.confirm(
                             &format!("{name} exists. Replace it?"),
                             "Replace",

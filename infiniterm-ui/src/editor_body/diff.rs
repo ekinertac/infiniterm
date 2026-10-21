@@ -107,7 +107,7 @@ impl DiffView {
     }
 
     fn full(&self, rel: &str) -> String {
-        format!("{}/{rel}", self.repo.trim_end_matches('/'))
+        format!("{}/{rel}", self.repo.trim_end_matches(['/', '\\']))
     }
 
     /// The list's rows: flat, the name is the path in the repo.
@@ -121,6 +121,20 @@ impl DiffView {
             })
             .collect()
     }
+}
+
+/// `path` below `repo`, as git spells it (`/` between names), or `None` when
+/// it is not below it.
+///
+/// Both sides are compared with either separator: git answers the repo root
+/// as `C:/Users/x/repo` on Windows while a card's paths are `C:\Users\x\repo\...`,
+/// and a plain `starts_with` called them different places.
+fn relative_to(repo: &str, path: &str) -> Option<String> {
+    let repo = repo.replace('\\', "/");
+    let path = path.replace('\\', "/");
+    let rest = path.strip_prefix(repo.trim_end_matches('/'))?;
+    let rest = rest.strip_prefix('/')?;
+    (!rest.is_empty()).then(|| rest.to_string())
 }
 
 impl EditorBody {
@@ -144,11 +158,11 @@ impl EditorBody {
         let Some(d) = self.diff.as_ref() else { return };
         let repo = d.repo.clone();
         let file = target.filter(|t| {
-            !repo.is_empty() && t.starts_with(&repo) && std::path::Path::new(t).is_file()
+            !repo.is_empty() && relative_to(&repo, t).is_some() && std::path::Path::new(t).is_file()
         });
         match file {
             Some(t) => {
-                let rel = t[repo.len()..].trim_start_matches('/').to_string();
+                let rel = relative_to(&repo, t).unwrap_or_default();
                 self.diff_show(&rel);
                 if list_shown {
                     self.diff_show_list(false);
@@ -183,7 +197,7 @@ impl EditorBody {
                 eprintln!("[infiniterm/warn] git: {e}");
                 self.events.push(EditorEvent::Notice(format!(
                     "not a git repository: {}",
-                    d.root.rsplit('/').next().unwrap_or(&d.root)
+                    infiniterm_core::paths::base_name(&d.root)
                 )));
                 d.files.clear();
             }
@@ -325,10 +339,7 @@ impl EditorBody {
         let Some(d) = self.diff.as_ref() else {
             return BodyAction::None;
         };
-        let rel = path
-            .strip_prefix(d.repo.trim_end_matches('/'))
-            .map(|r| r.trim_start_matches('/').to_string())
-            .unwrap_or_else(|| path.to_string());
+        let rel = relative_to(&d.repo, path).unwrap_or_else(|| path.to_string());
         if d.shown.as_deref() != Some(rel.as_str()) {
             self.diff_show(&rel);
         }
@@ -707,7 +718,9 @@ mod tests {
         let after = before.replace("let v10 = 10;\n", "let v10 = 100;\nlet extra = 1;\n");
         std::fs::write(dir.join("a.rs"), after).unwrap();
         std::fs::write(dir.join("b.txt"), "new\nfile\n").unwrap();
-        let root = dir.canonicalize().unwrap();
+        // Not `canonicalize`: on Windows that returns a `\\?\` path, in which
+        // a `/` is not a separator and the tests below join with one.
+        let root = infiniterm_core::paths::canonical(&dir).unwrap();
         let body = EditorBody::new_diff(
             "c1",
             &root.to_string_lossy(),
@@ -743,7 +756,12 @@ mod tests {
             2
         );
         assert!(b.read_only && !b.is_dirty(), "a diff is never unsaved");
-        assert_eq!(b.path.as_deref(), Some(a_rs.as_str()));
+        // The path is git's spelling of the root (`C:/...` on Windows), the
+        // same file as the test's `C:\...`.
+        assert_eq!(
+            b.path.as_deref().map(|p| p.replace('\\', "/")),
+            Some(a_rs.replace('\\', "/"))
+        );
         assert!(b.buffer.has_folds(), "the unchanged stretches start folded");
         assert!(b.buffer.text().contains("let v10 = 10;"), "removed text");
         assert!(!b.buffer.text().contains("+let"), "no diff prefixes");

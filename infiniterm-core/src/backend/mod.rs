@@ -14,19 +14,38 @@
 //! docs/superpowers/specs/2026-09-10-infiniterm-design.md, "SessionBackend".
 
 use crate::config::TerminalBackend;
+// Only the daemon arm of `Panes::start` needs it, and that arm is unix-only.
+#[cfg(unix)]
 use crate::paths;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 
+// The daemon is unix-only: `iftd` is fork/setsid and a unix socket, and
+// there is nothing on Windows to fork into. tmux compiles everywhere (it
+// only shells out) but there is no tmux to talk to on Windows, so both are
+// refused there and `Panes::start` falls back to local shells. See
+// docs/windows-handoff.md, "No daemon", for why iftd is not being ported.
+#[cfg(unix)]
 pub mod daemon;
+// Join (`ift join`), the relay behind it, remote instances and the ssh login
+// step all ride on unix sockets and ssh; none of them has a Windows
+// counterpart yet.
+#[cfg(unix)]
 pub mod join;
+#[cfg(unix)]
 pub mod join_client;
 pub mod local_pty;
+#[cfg(unix)]
 pub mod relay;
+#[cfg(unix)]
 pub mod remote;
+#[cfg(unix)]
 pub mod session_protocol;
+#[cfg(unix)]
 pub mod ssh_login;
+#[cfg(unix)]
 pub mod tmux;
+#[cfg(unix)]
 pub mod tmux_protocol;
 
 pub type PaneId = u32;
@@ -103,10 +122,35 @@ pub trait SessionBackend: Send + Sync {
 /// call sites do not know or care which one they have.
 pub enum Panes {
     Local(local_pty::LocalPtyBackend),
+    #[cfg(unix)]
     Tmux(tmux::TmuxBackend),
+    #[cfg(unix)]
     Daemon(daemon::DaemonBackend),
 }
 
+/// Whether quitting DETACHES a card's shell instead of ending it.
+///
+/// Not the same question as which variant the setting names, which is why
+/// this exists rather than a comparison at the call site. On Windows
+/// `Panes::start` falls back to local shells for both Daemon and Tmux
+/// (neither exists there), so a canvas whose settings ask for the daemon
+/// still has shells that die with the app.
+///
+/// `app.restart` is the caller. It offers a restart only when the shells
+/// will survive it, and comparing the enum meant a Windows machine with
+/// `"terminal.backend": "daemon"` in its settings was offered a restart
+/// that killed every shell, the exact thing the guard exists to prevent.
+///
+/// Tmux detaches too, and is still excluded: that is the rule `app.restart`
+/// already had, and widening it is a macOS decision rather than a Windows
+/// one.
+pub fn detaches_on_quit(backend: TerminalBackend) -> bool {
+    !cfg!(windows) && matches!(backend, TerminalBackend::Daemon)
+}
+
+// On Windows only the `Local` arm survives, so the session handles every
+// other arm reads (pane ids, session ids, the orphan list) go unread here.
+#[cfg_attr(windows, allow(unused_variables))]
 impl Panes {
     /// tmux or the daemon when asked for AND there is one to talk to (a
     /// `tmux` binary on PATH, an `iftd` sidecar beside the app or on PATH).
@@ -120,6 +164,7 @@ impl Panes {
             // A viewer window (`ift join`, #423): the cards are the host
             // app's, reached through it, never through its `iftd`. No
             // forward: the host's hooks have nothing to say to this window.
+            #[cfg(unix)]
             _ if remote::join_from_env().is_some() => {
                 let host = remote::join_from_env().expect("checked by the guard");
                 let (backend, rx) = daemon::DaemonBackend::new_viewer(host, buffer_mib);
@@ -128,6 +173,7 @@ impl Panes {
             // A remote instance (`ift connect`) runs its cards on the host
             // `INFINITERM_REMOTE` names, whatever the setting says, and needs no
             // `iftd` on THIS Mac: the daemons are on the server.
+            #[cfg(unix)]
             _ if remote::from_env().is_some() => {
                 let host = remote::from_env().expect("checked by the guard");
                 // Hooks and `ift` on the server reach this instance through it.
@@ -142,6 +188,7 @@ impl Panes {
                 let (pty, rx) = local_pty::LocalPtyBackend::new();
                 (Panes::Local(pty), rx, None)
             }
+            #[cfg(unix)]
             TerminalBackend::Tmux => {
                 if !tmux::available() {
                     let (pty, rx) = local_pty::LocalPtyBackend::new();
@@ -163,6 +210,7 @@ impl Panes {
                     }
                 }
             }
+            #[cfg(unix)]
             TerminalBackend::Daemon => {
                 if !daemon::available() {
                     let (pty, rx) = local_pty::LocalPtyBackend::new();
@@ -175,6 +223,18 @@ impl Panes {
                 let (backend, rx) = daemon::DaemonBackend::new(paths::sessions_dir(), buffer_mib);
                 (Panes::Daemon(backend), rx, None)
             }
+            // Neither exists here: iftd is not built for Windows and tmux
+            // does not run on it. A setting carried over from a Mac canvas
+            // must still give the user a terminal, so say so and go local.
+            #[cfg(windows)]
+            TerminalBackend::Tmux | TerminalBackend::Daemon => {
+                let (pty, rx) = local_pty::LocalPtyBackend::new();
+                (
+                    Panes::Local(pty),
+                    rx,
+                    Some("that backend is macOS only; cards use local shells".into()),
+                )
+            }
         }
     }
 
@@ -183,15 +243,25 @@ impl Panes {
     /// device queries before we can; our second answer then reaches the program
     /// as keystrokes. See `TerminalBody::replies` and tmux bug 9.
     pub fn we_are_the_terminal(&self) -> bool {
-        !matches!(self, Panes::Tmux(_))
+        match self {
+            Panes::Local(_) => true,
+            #[cfg(unix)]
+            Panes::Daemon(_) => true,
+            #[cfg(unix)]
+            Panes::Tmux(_) => false,
+        }
     }
 
     /// The host's columns and rows for a viewer's pane (#423); `None` for any
     /// other pane, whose size is its card's.
     pub fn viewer_pane_size(&self, pane: PaneId) -> Option<(u16, u16)> {
         match self {
+            #[cfg(unix)]
             Panes::Daemon(b) => b.viewer_pane_size(pane),
-            _ => None,
+            _ => {
+                let _ = pane;
+                None
+            }
         }
     }
 
@@ -203,11 +273,13 @@ impl Panes {
     /// that join replays the ring and the host jogs the program itself.
     pub fn redraw(&self, pane: PaneId, cols: u16, rows: u16) -> Redraw {
         match self {
+            #[cfg(unix)]
             Panes::Daemon(b) => b.redraw_now(pane),
             Panes::Local(b) => {
                 jog(|c, r| b.resize_now(pane, c, r), cols, rows);
                 Redraw::Asked
             }
+            #[cfg(unix)]
             Panes::Tmux(b) => {
                 jog(|c, r| b.resize_now(pane, c, r), cols, rows);
                 Redraw::Asked
@@ -217,6 +289,7 @@ impl Panes {
 
     /// A viewer card's session joined again on a thread of its own (#442);
     /// the answer comes from `take_reconnected`. Nothing for any other pane.
+    #[cfg(unix)]
     pub fn begin_reconnect(&self, session: &str) {
         if let Panes::Daemon(b) = self {
             b.begin_reconnect(session);
@@ -224,6 +297,7 @@ impl Panes {
     }
 
     /// The reconnects that ended: a new pane, or why not (#442).
+    #[cfg(unix)]
     pub fn take_reconnected(&self) -> Vec<(String, Result<PaneId, remote::JoinFailure>)> {
         match self {
             Panes::Daemon(b) => b.take_reconnected(),
@@ -234,6 +308,7 @@ impl Panes {
     /// What the join server (#423) needs from this backend: the relay and a
     /// way to write a viewer's keys to a session. Only the daemon backend has
     /// them; under local and tmux a card has no session a viewer could join.
+    #[cfg(unix)]
     pub fn join_parts(
         &self,
     ) -> Option<(
@@ -253,7 +328,9 @@ impl Panes {
     pub fn session_id(&self, pane: PaneId) -> Option<String> {
         match self {
             Panes::Local(_) => None,
+            #[cfg(unix)]
             Panes::Tmux(b) => b.window_id(pane),
+            #[cfg(unix)]
             Panes::Daemon(b) => b.session_id(pane),
         }
     }
@@ -264,7 +341,9 @@ impl Panes {
     pub fn adopt(&self, session: &str) -> Option<PaneId> {
         match self {
             Panes::Local(_) => None,
+            #[cfg(unix)]
             Panes::Tmux(b) => Some(b.adopt(session)),
+            #[cfg(unix)]
             Panes::Daemon(b) => b.adopt(session),
         }
     }
@@ -275,7 +354,9 @@ impl Panes {
     pub fn kill_orphans(&self, claimed: &[String]) {
         match self {
             Panes::Local(_) => {}
+            #[cfg(unix)]
             Panes::Tmux(b) => b.kill_orphans(claimed),
+            #[cfg(unix)]
             Panes::Daemon(b) => b.kill_orphans(claimed),
         }
     }
@@ -285,8 +366,11 @@ impl Panes {
     /// meta file; `None` when there is no such session or no daemon backend.
     pub fn session_attached(&self, session_id: &str) -> Option<bool> {
         match self {
+            #[cfg(unix)]
             Panes::Daemon(b) => b.session_attached(session_id),
-            Panes::Local(_) | Panes::Tmux(_) => None,
+            Panes::Local(_) => None,
+            #[cfg(unix)]
+            Panes::Tmux(_) => None,
         }
     }
 
@@ -294,15 +378,20 @@ impl Panes {
     /// local pty has no daemon to have written one and tmux keeps its own.
     pub fn take_ring(&self, session_id: &str) -> Option<(Vec<u8>, String)> {
         match self {
+            #[cfg(unix)]
             Panes::Daemon(b) => b.take_ring(session_id),
-            Panes::Local(_) | Panes::Tmux(_) => None,
+            Panes::Local(_) => None,
+            #[cfg(unix)]
+            Panes::Tmux(_) => None,
         }
     }
 
     pub fn live_sessions(&self) -> Vec<String> {
         match self {
             Panes::Local(_) => vec![],
+            #[cfg(unix)]
             Panes::Tmux(_) => tmux::TmuxBackend::live_windows(),
+            #[cfg(unix)]
             Panes::Daemon(b) => b.live_sessions_now(),
         }
     }
@@ -315,7 +404,9 @@ impl Panes {
     ) -> anyhow::Result<PaneId> {
         match self {
             Panes::Local(b) => b.spawn_now(cwd, cmd, env),
+            #[cfg(unix)]
             Panes::Tmux(b) => b.spawn_now(cwd, cmd, env),
+            #[cfg(unix)]
             Panes::Daemon(b) => b.spawn_now(cwd, cmd, env),
         }
     }
@@ -323,7 +414,9 @@ impl Panes {
     pub fn write_now(&self, pane: PaneId, bytes: &[u8]) {
         match self {
             Panes::Local(b) => b.write_now(pane, bytes),
+            #[cfg(unix)]
             Panes::Tmux(b) => b.write_now(pane, bytes),
+            #[cfg(unix)]
             Panes::Daemon(b) => b.write_now(pane, bytes),
         }
     }
@@ -331,7 +424,9 @@ impl Panes {
     pub fn resize_now(&self, pane: PaneId, cols: u16, rows: u16) {
         match self {
             Panes::Local(b) => b.resize_now(pane, cols, rows),
+            #[cfg(unix)]
             Panes::Tmux(b) => b.resize_now(pane, cols, rows),
+            #[cfg(unix)]
             Panes::Daemon(b) => b.resize_now(pane, cols, rows),
         }
     }
@@ -339,7 +434,9 @@ impl Panes {
     pub fn ack_now(&self, pane: PaneId, bytes: usize) {
         match self {
             Panes::Local(b) => b.ack_now(pane, bytes),
+            #[cfg(unix)]
             Panes::Tmux(b) => b.ack_now(pane, bytes),
+            #[cfg(unix)]
             Panes::Daemon(b) => b.ack_now(pane, bytes),
         }
     }
@@ -347,7 +444,9 @@ impl Panes {
     pub fn kill(&self, pane: PaneId) {
         match self {
             Panes::Local(b) => b.kill(pane),
+            #[cfg(unix)]
             Panes::Tmux(b) => b.kill_now(pane),
+            #[cfg(unix)]
             Panes::Daemon(b) => b.kill_now(pane),
         }
     }
@@ -356,18 +455,29 @@ impl Panes {
     /// reopened one (`Model::can_park`): the local backend has no session
     /// to adopt, and tmux was left as it was.
     pub fn can_park(&self) -> bool {
-        matches!(self, Panes::Daemon(_))
+        #[cfg(unix)]
+        {
+            matches!(self, Panes::Daemon(_))
+        }
+        #[cfg(windows)]
+        {
+            false
+        }
     }
 
     /// Lets go of a parked card's pane so its reopened card can adopt the
     /// session again. True when the session is left running for that.
     pub fn release(&self, pane: PaneId) -> bool {
         match self {
+            #[cfg(unix)]
             Panes::Daemon(b) => {
                 b.detach_now(pane);
                 true
             }
-            _ => false,
+            _ => {
+                let _ = pane;
+                false
+            }
         }
     }
 
@@ -381,7 +491,9 @@ impl Panes {
     pub fn kill_all(&self) {
         match self {
             Panes::Local(b) => b.kill_all(),
+            #[cfg(unix)]
             Panes::Tmux(b) => b.kill_all(),
+            #[cfg(unix)]
             Panes::Daemon(b) => b.kill_all(),
         }
     }
@@ -392,7 +504,9 @@ impl Panes {
     pub fn leave(&self) {
         match self {
             Panes::Local(b) => b.kill_all(),
+            #[cfg(unix)]
             Panes::Tmux(b) => b.detach(),
+            #[cfg(unix)]
             Panes::Daemon(b) => b.detach(),
         }
     }
@@ -405,7 +519,9 @@ impl Panes {
     pub fn pids_source(&self) -> Box<dyn Fn() -> Vec<(PaneId, u32)> + Send + 'static> {
         match self {
             Panes::Local(b) => Box::new(b.pids_source()),
+            #[cfg(unix)]
             Panes::Tmux(_) => Box::new(Vec::new),
+            #[cfg(unix)]
             Panes::Daemon(b) => Box::new(b.pids_source()),
         }
     }
@@ -413,6 +529,19 @@ impl Panes {
 
 #[cfg(test)]
 mod panes_tests {
+
+    #[test]
+    fn only_a_backend_that_really_detaches_allows_a_restart() {
+        // The daemon is the one that detaches, and only where it exists.
+        assert_eq!(
+            detaches_on_quit(TerminalBackend::Daemon),
+            cfg!(not(windows))
+        );
+        // Local shells never survive, anywhere.
+        assert!(!detaches_on_quit(TerminalBackend::Pty));
+        // Tmux detaches but is not what `app.restart` allows; see the doc.
+        assert!(!detaches_on_quit(TerminalBackend::Tmux));
+    }
     use super::*;
 
     // The jog for a backend that does not know its pane's size: one column
@@ -447,6 +576,8 @@ mod panes_tests {
         assert!(Panes::start(TerminalBackend::Daemon, 4)
             .0
             .we_are_the_terminal());
+        // On Windows that call lands on `Panes::Local` through the refusal
+        // arm above, which is the same answer for the same reason.
         // tmux's arm is asserted in tmux's own tests, which have a tmux to
         // talk to; this crate's tests must not depend on one being installed.
     }

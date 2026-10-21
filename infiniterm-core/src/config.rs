@@ -45,6 +45,40 @@ pub struct Config {
     pub browser: Browser,
     pub join: Join,
     pub ui: Ui,
+    pub keyboard: Keyboard,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Keyboard {
+    /// Which key plays Cmd's part. Read on Windows only; macOS has a Cmd
+    /// key and reads this nowhere.
+    pub command_modifier: CommandModifier,
+}
+
+/// Where the app's modifier lives when the keyboard has no Cmd key.
+///
+/// The Mac's whole keyboard story rests on Cmd being a modifier terminals
+/// ignore, so the app can claim all of it with no prefix key and no modal
+/// state. Windows has no such modifier: Ctrl is the shell's, Alt is Meta,
+/// and Win is the OS's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CommandModifier {
+    /// The two SIDES of Ctrl carry the two roles: left is the app's, right
+    /// is the terminal's. The default, because a keyboard remapped into Mac
+    /// order already puts left Ctrl where Cmd sits and right Ctrl on Caps
+    /// Lock, so every binding lands under the finger that reaches for it
+    /// and Caps Lock plus C is still a real `^C`. Without such a remap it
+    /// still works, it just is not muscle memory: app chords on the left
+    /// Ctrl, the shell's Ctrl on the right.
+    LeftControl,
+    /// The Windows key, and Ctrl stays entirely the terminal's. Honest, and
+    /// the closest thing to Cmd in position, but Windows takes Win+L (which
+    /// LOCKS THE MACHINE), Win+D, Win+E, Win+R, Win+S, Win+T, Win+digit,
+    /// Win+arrows and Win+= before any application sees them, so the
+    /// bindings on those keys simply will not arrive.
+    Win,
 }
 
 /// `ift join` (#423): whether this app opens the socket a viewer on another
@@ -430,13 +464,25 @@ pub fn default_config() -> Config {
         starting_dir: String::new(),
         terminal: Terminal {
             shell: String::new(),
+            // There is no iftd on Windows and no tmux to talk to, and
+            // `Panes::start` refuses both there (backend/mod.rs). Defaulting
+            // to the backend that exists keeps a fresh install from opening
+            // on a notice explaining why its setting was ignored.
+            #[cfg(windows)]
+            backend: TerminalBackend::Pty,
+            #[cfg(unix)]
             backend: TerminalBackend::Daemon,
             cursor_style: CursorStyle::Block,
             cursor_blink: true,
             cursor_color: String::new(),
-            // What every Mac has. A Nerd Font is one you install, and a
-            // default that renders tofu on a fresh machine is worse than one
-            // that renders plain ASCII.
+            // What every machine of that kind already has. A Nerd Font is
+            // one you install, and a default that renders tofu on a fresh
+            // machine is worse than one that renders plain ASCII. Cascadia
+            // Mono ships with Windows Terminal and recent Windows; Consolas
+            // has been there since Vista.
+            #[cfg(windows)]
+            font_family: "Cascadia Mono, Consolas, monospace".into(),
+            #[cfg(unix)]
             font_family: "ui-monospace, Menlo, monospace".into(),
             font_size: 14.,
             font_weight: "normal".into(),
@@ -457,7 +503,25 @@ pub fn default_config() -> Config {
             // always checks builtins before PATH), which otherwise takes
             // the args meant for /usr/bin/log and answers "too many
             // arguments": the decoy showed an error instead of the log.
+            #[cfg(unix)]
             decoy_command: "command log stream --style compact".into(),
+            // The same idea with what Windows has: a process list that moves
+            // on its own and says nothing. `Get-Process` is a PowerShell
+            // cmdlet, so this only makes sense while the card's shell is a
+            // PowerShell, which on Windows it is unless `terminal.shell`
+            // says otherwise (`shell_cmd::default_shell`).
+            //
+            // Written in FULL cmdlet names, no aliases. A card's command runs
+            // with the user's profile loaded, deliberately, and a profile may
+            // define anything: `Sort` here was a function of Ekin's that ran
+            // Git's sort.exe, so the decoy showed "Input file specified two
+            // times" instead of a process list. The same trap the macOS
+            // default dodges with `command log`, zsh having a builtin `log`.
+            #[cfg(windows)]
+            decoy_command: "while ($true) { Get-Process | Sort-Object -Property CPU \
+                 -Descending | Select-Object -First 30 | Format-Table -AutoSize; \
+                 Start-Sleep 2 }"
+                .into(),
         },
         cards: Cards {
             // From the window: 69 by 80 cells, portrait, was the default
@@ -532,6 +596,10 @@ pub fn default_config() -> Config {
             // Native full screen on a notched MacBook leaves the strip
             // beside the camera black; cover puts the title bar there.
             fullscreen: FullscreenMode::Cover,
+        },
+        keyboard: Keyboard {
+            // See `CommandModifier`. Ignored on macOS.
+            command_modifier: CommandModifier::LeftControl,
         },
     }
 }
@@ -665,6 +733,7 @@ pub fn merge_config(raw: &Value) -> Config {
     let v = group(r, "canvas");
     let e = group(r, "editor");
     let b = group(r, "browser");
+    let k = group(r, "keyboard");
     let j = group(r, "join");
 
     Config {
@@ -886,6 +955,16 @@ pub fn merge_config(raw: &Value) -> Config {
                 &[
                     ("native", FullscreenMode::Native),
                     ("cover", FullscreenMode::Cover),
+                ],
+            ),
+        },
+        keyboard: Keyboard {
+            command_modifier: one(
+                k.get("commandModifier"),
+                d.keyboard.command_modifier,
+                &[
+                    ("leftControl", CommandModifier::LeftControl),
+                    ("win", CommandModifier::Win),
                 ],
             ),
         },

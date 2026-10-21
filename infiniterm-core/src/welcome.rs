@@ -15,7 +15,7 @@
 //! opens it on a first launch and `help.welcome` opens it any time.
 use crate::keymap::Keymap;
 use crate::paths::app_support_dir;
-use crate::shortcuts::format_chord;
+use crate::shortcuts::{format_chord, ModifierLabels};
 use std::path::{Path, PathBuf};
 
 /// Where the file lives: under the data dir, so a scratch instance has its
@@ -53,14 +53,16 @@ const KEYS: &[(&str, &str)] = &[
 ];
 
 /// A command's first chord as the card shows it, or `None` when unbound.
-fn key(keymap: &Keymap, id: &str) -> Option<String> {
+fn key(keymap: &Keymap, id: &str, labels: ModifierLabels) -> Option<String> {
     keymap
         .iter()
         .find(|(_, bound)| bound == id)
-        .map(|(chord, _)| format!("`{}`", format_chord(chord)))
+        .map(|(chord, _)| format!("`{}`", format_chord(chord, labels)))
 }
 
-pub fn render(keymap: &Keymap, agents: &[Agent]) -> String {
+/// `labels` names the two modifiers as this machine's keyboard has them
+/// (`ModifierLabels::new`), so the card never says Cmd where there is none.
+pub fn render(keymap: &Keymap, agents: &[Agent], labels: ModifierLabels) -> String {
     let mut out = String::from(
         "# Start here\n\n\
          Welcome to infiniterm. It puts your terminals, editors and browsers on one canvas. Zoom out to see every card, zoom in to work in one. A card's border turns yellow when the agent in it is waiting for you.\n\n",
@@ -68,14 +70,14 @@ pub fn render(keymap: &Keymap, agents: &[Agent]) -> String {
     // The first steps, in the keys this keymap has. A newcomer starts on
     // this card alone (`Model::seed_first_card`), so the first thing to
     // learn is how to make a terminal and how to come back here.
-    if let Some(new) = key(keymap, "card.new.terminal") {
+    if let Some(new) = key(keymap, "card.new.terminal", labels) {
         out.push_str(&format!(
             "Press {new} for your first terminal. It opens beside this card."
         ));
-        if let Some(back) = key(keymap, "focus.move.left") {
+        if let Some(back) = key(keymap, "focus.move.left", labels) {
             out.push_str(&format!(" {back} brings you back here."));
         }
-        if let Some(all) = key(keymap, "canvas.zoom.fitAll") {
+        if let Some(all) = key(keymap, "canvas.zoom.fitAll", labels) {
             out.push_str(&format!(" {all} shows every card at once."));
         }
         out.push_str("\n\n");
@@ -87,7 +89,7 @@ pub fn render(keymap: &Keymap, agents: &[Agent]) -> String {
          ## Keys to start with\n\n",
     );
     for (id, does) in KEYS {
-        if let Some(chord) = key(keymap, id) {
+        if let Some(chord) = key(keymap, id, labels) {
             out.push_str(&format!("- {chord}: {does}\n"));
         }
     }
@@ -198,6 +200,18 @@ pub fn agents_on_this_mac(
 mod tests {
     use super::*;
     use crate::keymap::default_keymap;
+
+    // Every expectation below is written in the Mac spelling, as in
+    // shortcuts.rs, so the tests read the same on any platform.
+    fn render(keymap: &Keymap, agents: &[Agent]) -> String {
+        super::render(keymap, agents, ModifierLabels::MAC)
+    }
+    fn key(keymap: &Keymap, id: &str) -> Option<String> {
+        super::key(keymap, id, ModifierLabels::MAC)
+    }
+    fn format_chord(chord: &str) -> String {
+        super::format_chord(chord, ModifierLabels::MAC)
+    }
 
     // The opening names the live chords for the first steps: a terminal,
     // the way back here, every card at once.

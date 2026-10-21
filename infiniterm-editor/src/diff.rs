@@ -309,11 +309,7 @@ mod tests {
         assert_eq!(kinds(&m), vec![Context, Added, Context]);
         assert_eq!(
             numbers(&m),
-            vec![
-                (Some(1), Some(1)),
-                (None, Some(2)),
-                (Some(2), Some(3)),
-            ]
+            vec![(Some(1), Some(1)), (None, Some(2)), (Some(2), Some(3)),]
         );
         assert!(m.folds.is_empty());
         assert_one_line_each(&m);
@@ -326,11 +322,7 @@ mod tests {
         assert_eq!(kinds(&m), vec![Context, Removed, Context]);
         assert_eq!(
             numbers(&m),
-            vec![
-                (Some(1), Some(1)),
-                (Some(2), None),
-                (Some(3), Some(2)),
-            ]
+            vec![(Some(1), Some(1)), (Some(2), None), (Some(3), Some(2)),]
         );
         assert_one_line_each(&m);
     }
@@ -427,7 +419,11 @@ mod tests {
             .filter(|(_, l)| l.kind == Placeholder)
             .map(|(i, _)| i)
             .collect();
-        assert_eq!(placeholders, vec![0, 15], "every fold heads on a placeholder");
+        assert_eq!(
+            placeholders,
+            vec![0, 15],
+            "every fold heads on a placeholder"
+        );
         assert_eq!(m.text.split('\n').nth(15).unwrap(), "⋯ 7 unchanged lines");
         assert_eq!(m.lines.len(), 23);
         assert_one_line_each(&m);
@@ -504,6 +500,9 @@ mod tests {
         let first_line_len = "⋯ 7 unchanged lines".len();
         let got = merged_spans(&m, &[], &[span(0, 4, "keyword")]);
         // "line 1" is the first hidden line, right after the placeholder.
-        assert_eq!(got, vec![span(first_line_len + 1, first_line_len + 5, "keyword")]);
+        assert_eq!(
+            got,
+            vec![span(first_line_len + 1, first_line_len + 5, "keyword")]
+        );
     }
 }

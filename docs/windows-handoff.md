@@ -2,6 +2,286 @@
 
 For a Claude session on Ekin's Windows desktop (the "gpu box", RTX 4070 Ti), starting from nothing but this repo. Written 2026-09-23 on the Mac by the session that built most of the tree. Read `CLAUDE.md` first: it holds the rules and the traps, and most of them still apply. This file is only what is different about Windows.
 
+## Merged with master, 2026-10-21
+
+The port was merged with master (about 750 commits since it forked at
+e4802dc: `ift join`, `ift serve`, the diff card as a read-only editor, native
+context menus, theme.json). What was checked on the gpu box after the merge,
+with the browser feature OFF (CEF is not in these builds): `cargo check` and
+`cargo test` for core, term, editor, hook and cli (about 1,390 tests, all
+passing), and `cargo check` plus `cargo test` for the ui crate (112 passing).
+Not checked on Windows after the merge: a build with CEF on, and anything on
+screen. The Mac side passed `make check`.
+
+Master's new code is Mac or unix only and stays that way here, each behind a
+`cfg` with a one-line answer rather than a port:
+
+- **Join, remote instances, `ift serve`, the ssh login step.** `backend::join`,
+  `join_client`, `relay`, `remote`, `ssh_login` and `headless` are unix-only
+  modules (unix sockets, ssh stdio, `iftd`). `ift connect`, `join`, `serve`,
+  `proxy` and `askpass` answer "not available on Windows" and exit 2. The ui
+  has no join hub, no viewer links and no uplink on Windows.
+- **Seven AppKit/CoreText ui modules** (finder_service, fullscreen, icon_font,
+  instance_icon, middle_drag, native_menu, title_drag) have same-named
+  stand-ins in `infiniterm-ui/src/not_macos.rs`. What each leaves undone is
+  in that file's header. The visible gaps are: **no right-click menu** (the
+  native menu is the only one), no full-screen toggle, and the bundled Nerd
+  Font is not registered, so prompt icons need an installed Nerd Font.
+- **Daemon-only features** (parking a closed card, `ift sessions`/`attach`)
+  are absent as before: there is no `iftd`.
+
+Two rules for the next merge: a new `std::os::unix` or `libc` call in a crate
+the box builds fails the Windows build, and a test that writes `/tmp`, uses a
+symlink, checks a mode bit or canonicalises with `std::fs::canonicalize`
+(use `paths::canonical`) fails on Windows only.
+
+## Where this stands
+
+**Every phase is done, 2026-09-23 to -25.** Every crate builds and passes
+its tests on Windows with the browser feature ON (787 core, 72 ui, 44 term,
+34 editor, 28 cli, 8 browser; clippy clean), the window opens, a card runs
+PowerShell, Claude Code runs in a card with its hooks reaching the app, the
+app chords work (cards, workspaces, the omnibox, focus, fit-all), a card
+names itself from the process table, and `tools/dist.ps1` makes an unpacked
+release folder, a zip and a manifest that the app updates itself from.
+
+Phase 5, browser cards, landed on 2026-09-25 and was checked on screen
+rather than only compiled: a CEF card renders a real page with its images
+and mixed scripts, the omnibox navigates it, a click lands where the
+screenshot says and focuses the field under it, typing and the named keys
+reach the page, the wheel scrolls it, and the right-click menu opens. What
+that cost is under "What phase 5 changed" below.
+
+**The modifier question under "Keys" below is answered.** Windows gets its
+Cmd from the SIDE of Ctrl: left is the app's, right is the terminal's, so a
+keyboard remapped into Mac order (Ekin's is; the key where Cmd sits emits
+left Ctrl and Caps Lock emits right Ctrl) puts all 79 bindings under the
+finger that already reaches for them, and Caps Lock plus C is still a real
+`^C`. The keymap needs no Windows edition at all. It is a setting,
+`keyboard.commandModifier`, with `win` as the alternative for an un-remapped
+machine. Rejected: the Win key alone (the OS takes Win+L, D, E, R, S, T, the
+digits, the arrows and =, and Win+L locks the box), Ctrl+Alt (that is AltGr,
+which is how Turkish Q types `{ [ ] } \ @`), bare Ctrl (the carve-out list
+differs per program in a card), and Ctrl+Shift (collides with itself on the
+eighteen bindings that already carry Shift).
+
+There IS a small GUI driver now, `tools/drive/win/`, and it is how every
+claim above was checked. `run.ps1` launches on a scratch data dir,
+`shot.ps1` screenshots the window, `post.ps1` types into it and `click.ps1`
+clicks or scrolls in it without taking the foreground, `type.ps1` and
+`chord.ps1` send real OS input when the question is about the keyboard
+itself, `kill.ps1` stops it, `awake.ps1` keeps the box from blanking, and
+`window.ps1` is the one handle lookup they share.
+
+Three things about it are worth knowing before trusting a result:
+
+- **`window.ps1` exists because `Get-Process infiniterm` returns seven
+  processes** once a browser card is open. Windows re-executes the same exe
+  for every Chromium subprocess, and `.MainWindowHandle` on that array is
+  whichever one PowerShell listed first.
+- **`post.ps1` posts WM_CHAR, and must keep doing so.** Posting key messages
+  looks right and is not: the app's pump calls TranslateMessage, which turns
+  a posted WM_KEYDOWN into a character anyway, and whether it lands twice
+  depends on where the frame loop is. A quarter of the characters doubled,
+  so short strings usually came out right and the driver looked honest while
+  a URL arrived as nonsense. `chord.ps1` is the cross-check: real hardware
+  input, and it typed the same string cleanly.
+- **`click.ps1` takes shot.ps1's coordinates**, not the client area's, so a
+  session can read a pixel off a screenshot and click it.
+
+What phase 1 actually changed, beyond the plan below:
+
+- `infiniterm-core/src/transport.rs` is the one IPC channel, a unix socket on
+  unix and a named pipe on Windows. `paths::socket_path` answers a pipe name
+  there, with the data dir hashed into it so `INFINITERM_DATA_DIR` still
+  isolates a scratch instance. `ift` dropped its own copy of both; the hook
+  binary keeps one, and keeps its zero dependencies (the CLIENT half of a
+  named pipe is std).
+- `infiniterm-core/src/shell_cmd.rs` holds which shell a card gets and how to
+  hand it one command, decided from the shell's file NAME, not the OS. Git
+  Bash on Windows is still POSIX and takes `-lc`.
+- `infiniterm-ui` grew a `browser` feature, on by default. Off, it compiles
+  CEF out and `browser_stub.rs` IS the browsers module (`#[path]`), so every
+  call site stays as it is. This is also the Lite/Pro split's shape
+  (ekinertac/notes#50); the `ift-browser` session has not been told yet.
+- `infiniterm-session` builds on Windows to a binary that refuses, because a
+  workspace member cannot be cfg'd out and the root's `cargo test` builds
+  every one. Its body moved to `daemon.rs`.
+- Two real bugs, not Windows-only in principle: fifteen places took a file's
+  name by splitting on `/` alone, and three derived a parent directory the
+  same way (`C:\a` gave `C:`, which names a drive's cursor rather than its
+  root). Both are `paths::base_name` and `paths::parent_dir` now.
+- `tree-sitter-scss` cannot build on MSVC at all (see the traps below), so
+  `.scss` opens without highlighting on Windows.
+
+What phase 2 changed:
+
+- Windows gets a real caption bar. `appears_transparent` means "we draw the
+  whole title bar" and gpui on Windows takes it literally, which left the
+  window with no close, minimise or maximise button: the traffic lights we
+  leave room for are macOS's and we never drew any others.
+- The 84-pixel inset that keeps the workspace tabs clear of those traffic
+  lights is 8 on Windows, where it was that much empty space.
+
+What phase 5 changed:
+
+- **Windows has no helper binary, and needs none.** macOS runs each Chromium
+  subprocess from an `infiniterm Helper.app`; Windows re-executes the main
+  exe, which `process::early` already handles by calling `execute_process`
+  before gpui starts. So `bin/helper.rs`, the framework loader and
+  `app_protocol` (CEF's two methods on gpui's NSApplication) are all gated
+  to macOS. `early` now tells a subprocess apart by Chromium's own `--type=`
+  switch and skips the profile seeding, or half a dozen children would each
+  copy the same directories over each other at launch.
+- `no_sandbox` is set on Windows, because we hand `initialize` a null
+  `sandbox_info`. On macOS the helper bundles carry the sandbox instead.
+- `native_key_code` is now two tables. It is the physical key in the
+  platform's own codeset: Carbon's on macOS, where Cocoa resolves Backspace
+  and the arrows from it, and the SCAN CODE on Windows, where Chromium turns
+  it into the `code` a page's key handler reads. Left at the macOS value, a
+  page heard `code: "Comma"` for every Backspace — the key still worked,
+  which is why it could have sat there for a long time. The arrows and the
+  navigation block carry the E0 prefix that tells them from the keypad keys
+  they share a code with.
+- `objc` moved to a macOS-only dependency of `infiniterm-browser`; as an
+  unconditional one it put `objc.lib` on the Windows link line.
+- CEF is set up with `CEF_PATH` pointing at a Windows distribution (see
+  "Setting up the box"); the `cef` crate downloads it and its build script
+  copies libcef.dll and the rest into `target/debug` beside the exe.
+
+NOTE the ownership rule in CLAUDE.md: `infiniterm-browser/`,
+`browser_body.rs`, `browsers.rs` and `omnibox.rs` are the `ift-browser`
+session's files. That rule is about ONE shared checkout on the Mac and this
+is a separate clone, so there is no shared index to sweep, but these changes
+still have to merge. `surface.rs` and `process.rs` are the two that carry
+real edits.
+
+Quitting, which is Windows's own chapter (2026-09-26):
+
+- **`on_app_quit` is never reached** once CEF has started, so the quit lives
+  in `on_window_should_close`, which runs on WM_CLOSE with everything still
+  alive. It writes the canvas and the window frame, releases the shells,
+  gives up the endpoint claim, and ends the process.
+- **CEF's `shutdown()` is skipped on Windows.** It measured nineteen seconds
+  with nothing open and never returned at all with one browser card: with
+  an external message pump, the loop that would finish the work is the one
+  the quit just stopped driving. macOS still calls it.
+- **`std::process::exit` is not enough to leave.** It runs every DLL's
+  detach and libcef's does not come back, which is the same hang by a
+  shorter road. `job::exit_now` uses `TerminateProcess` on ourselves, which
+  runs nothing.
+- **What makes that honest is a job object.** Chromium's subprocesses do not
+  follow their parent out: killing only the main process left all eight
+  running eight seconds later. `job::adopt_this_process` runs before CEF
+  starts, so they are all in it, and the kernel takes them down when it
+  closes the handle at exit. This is also why a force-kill no longer strands
+  eight processes.
+- **The endpoint outlives the process, so it is claimed in a file.**
+  `instance.rs`: the owner writes its pid at bind and removes it at quit, and
+  the launch check asks both whether something is listening and whether the
+  claimant still exists. Read that file's header before touching it — the
+  obvious-looking fix (ask the pipe who serves it) was tried before and let
+  two instances onto one save file.
+
+Measured after all of it: window gone about 30 ms after the close, every
+process terminated within nine seconds, and the app relaunches in five.
+
+- **One child is meant to outlive the app**, and the job nearly killed it:
+  the waiter that reopens infiniterm or swaps an update in once the exe is
+  unlocked (`runtime::spawn_waiter`). The job allows a breakaway
+  (`JOB_OBJECT_LIMIT_BREAKAWAY_OK`) and the waiter asks for one
+  (`CREATE_BREAKAWAY_FROM_JOB`). Not the SILENT variant, which would let
+  Chromium's processes out too and empty the job of its purpose. If a
+  future change adds something else that must survive the app, this is the
+  pattern; anything spawned without the flag dies with us, by design.
+- Every way out of the app goes through `runtime::leave_now`, which gives up
+  the endpoint claim and ends the process without teardown. Four callers:
+  the window closing, Reload, Restart, and installing an update. Adding a
+  fifth exit that calls `std::process::exit` directly will hang.
+
+## The daemon, and what stands in for it
+
+There is NO daemon on Windows and there is not meant to be. `iftd` is unix
+only, `terminal.backend` defaults to `pty` there, and `Panes::start` falls
+back to local shells for both `daemon` and `tmux` with a notice. So a card's
+shell dies with the app, every time, and there is nothing to keep alive and
+no keep-alive test to write — `ift attach`, `ift sessions` and scrollback
+across a restart do not exist on Windows. A Claude session comes back with
+`claude --resume`, which is what the "goal, and what it is not" section
+above promises.
+
+Two consequences worth knowing:
+
+- **`app.restart` refuses on Windows**, and should. A restart is only
+  offered when the shells survive it, and they never do here. The guard asks
+  `backend::detaches_on_quit`, not the setting: it used to compare the
+  configured backend, so a machine with `"terminal.backend": "daemon"` in
+  its settings was offered a restart while its shells were local pty ones,
+  which is the exact thing the guard exists to prevent.
+- **Installing an update is not guarded**, because it is an explicit
+  request and restarting is the whole point of it. It ends every shell. That
+  is the same on macOS under the pty backend, so it is not a Windows rule.
+
+What is still open:
+
+- **The Mac has not seen any of this.** `make check` on macOS is the gate
+  before a merge, and only the Mac session can run it. Everything here is
+  `cfg`-gated, but a `#[cfg(not(windows))]` arm is only as good as the
+  compiler that saw it.
+- **A terminated CEF process is not reaped for about forty seconds**, and
+  everything below is a consequence. One thread of it stays alive in the
+  kernel, so the process stays enumerable with `HasExited` true and goes on
+  holding its own exe, the Chromium dlls and its named pipe. The two
+  user-facing consequences are fixed (see "Quitting" below); what is left is
+  a build-time nuisance: a build that re-runs cef-dll-sys's build script
+  inside that window fails on "Access is denied". `kill.ps1 -FreeLocks`
+  moves a stuck exe aside. It deliberately leaves the dlls alone: moving
+  libcef.dll aside does not get a new one, because cargo will not re-run a
+  build script whose inputs have not changed, and the app then starts and
+  dies instantly with no Chromium beside it. The way out of that is
+  `cargo clean -p cef-dll-sys` and a minute.
+- **"A cold CEF start takes over thirty seconds" was wrong**, and is
+  recorded because the wrong diagnosis is instructive. Measured properly,
+  time to window is 1.5 to 2 seconds cold OR warm. Every slow start seen
+  was contention with a PREVIOUS instance that had not been reaped and was
+  still holding the profile directory and the pipe. The startup order is
+  fine; nothing needs moving out of gpui's run closure.
+- The omnibox history is not flushed on quit, so a page visited in the last
+  half second of the save debounce is not recorded. Pre-existing and
+  identical on macOS (`flush_save` writes the canvas and the window frame,
+  not `history.json`), so it is not a Windows item; noted because the
+  Windows quit exits abruptly and someone will suspect it.
+- The omnibox's `file:///C:/...` reading. It navigates correctly, but the
+  suggestion row shows the address as the path `/C:/Users/...`. Cosmetic,
+  and the omnibox is the `ift-browser` session's file.
+
+  **The hash is the only check on Windows, deliberately.** Ekin decided
+  against Authenticode on 2026-09-25 knowing what it costs: the Mac requires
+  a download to be signed by his team and notarized, so a zip somebody else
+  built is refused even when the manifest names its hash; here the manifest
+  is the authority, and whoever can write the releases repo can run code on
+  a Windows machine. `parse_manifest` refusing a url outside that repo, over
+  TLS, is the floor it rests on. Do not quietly widen this: a manifest field
+  that could point the download elsewhere would remove the last of it.
+
+- Transcript cards are the one card kind never opened on Windows. Ekin is
+  testing that (2026-09-25). The Claude card this session ran had transcript
+  saving off because it inherited `CLAUDE_CODE_CHILD_SESSION` from the
+  agent that launched the app, which is not a Windows fault: `local_pty`
+  scrubs the parent TERMINAL's identity variables and not an agent's, so
+  launching the app from inside a Claude card does the same on a Mac.
+- A card's DIRECTORY never changes on Windows. A process's cwd cannot be
+  read from outside it without debug privileges, so `inspect::cwds` answers
+  nothing there and a card keeps the directory it opened in. The fix is not
+  a Windows one: `PaneEvent::CwdChanged` exists and NOTHING emits or
+  consumes it on either platform, while oh-my-posh already writes OSC 7. A
+  Mac change, so the Mac session's to make, and it would answer the
+  directory on both at once.
+- A card can say `ssh` but never which host: Toolhelp gives an exe's file
+  name, not a command line. `ssh_destination` is unreachable on Windows.
+- End-to-end backpressure (`HIGH_WATER`) has no Windows test, for the ConPTY
+  reason below. The credit machinery itself is tested directly.
+
 ## The goal, and what it is not
 
 Claude Code running in terminal cards on the infinite canvas, on Windows, with the editor, diff and transcript cards, the palette, workspaces, groups and agent colours from hooks. A lesser app than the Mac one, on purpose:
@@ -9,15 +289,15 @@ Claude Code running in terminal cards on the infinite canvas, on Windows, with t
 - **No daemon.** On macOS every card's shell lives in its own `iftd` process so it outlives the app. On Windows the terminal backend is `pty`: the card owns its shell directly through `portable-pty`, which uses ConPTY. Quitting, restarting or updating the app ends every shell; a card comes back as a fresh shell in its saved directory, and Claude sessions come back with `claude --resume`.
 - Why not port `iftd`: ConPTY is itself a terminal emulator that re-renders the program's output before we see it. `iftd` exists so that nothing stands between Claude and our own parser and a reattach can replay the exact bytes; ConPTY is precisely the second emulator that design routes around. It needs a design of its own, later, if ever.
 - No `ift attach`, no `ift sessions`, no scrollback on disk across a power cut.
-- Browser cards come last (CEF on Windows is a phase of its own), and signing, packaging and the updater after that.
+- Browser cards came last (CEF on Windows was a phase of its own), then packaging and the updater. All three are done; Authenticode is the one piece deliberately skipped, see the hash note above.
 
 ## Ground rules for this session
 
 - **macOS must keep building and working.** Every Windows change goes behind `#[cfg(windows)]` / `#[cfg(unix)]` (or `target_os = "macos"` where the thing is Mac-specific rather than Unix-specific). Never delete a Mac path to make Windows compile.
 - **Work on the `windows` branch**, push it, never force-push master, never merge into master yourself. The Mac session merges after `make check` passes on macOS, because only the Mac can check the Mac. Rebase `windows` onto master often; two other sessions (the Mac port session and `ift-browser`) commit to master daily.
 - Commit messages say why, no attribution trailers of any kind, stage files by name. Every new file starts with a header block (responsibility, where it fits, callers, constraints). Tests always: logic is a pure function in its own file with tests, the gpui side is wiring.
-- `infiniterm-browser/`, `browser_body.rs`, `browsers.rs` and `omnibox.rs` belong to the `ift-browser` session. For phases 1 to 4 you compile the browser OUT (see phase 1), so you should not need to touch them; phase 5 is coordinated with that session through Ekin.
-- There is no GUI driver on Windows. Verifying on screen means Ekin at the desktop. Say what to look at, and wait.
+- `infiniterm-browser/`, `browser_body.rs`, `browsers.rs` and `omnibox.rs` belong to the `ift-browser` session. Phase 5 touched `surface.rs` and `process.rs` there, at Ekin's word; anything further is coordinated with that session through him.
+- **Verify on screen with `tools/drive/win/`, not by compiling.** Every bug phase 5 found was invisible to the compiler and the tests: a page hearing the wrong key, the driver itself doubling characters. A screenshot is the evidence.
 
 ## Setting up the box
 
@@ -25,7 +305,7 @@ The remote shell over `ssh win-gpu-box` is PowerShell 7; use pwsh syntax and quo
 
 1. Rust via rustup with the MSVC toolchain, and the Visual Studio Build Tools "Desktop development with C++" workload (gpui and tree-sitter compile C and C++).
 2. `gh auth login`, then `gh repo clone ekinertac/infiniterm` (the repo is private).
-3. `.cargo/config.toml` sets `CEF_PATH` to a macOS path with `force = false`, so an environment variable wins. You need CEF only from phase 5; until then the browser is compiled out.
+3. `.cargo/config.toml` sets `CEF_PATH` to a macOS path with `force = false`, so an environment variable wins. On the box set `$env:CEF_PATH = "$env:LOCALAPPDATA\cef"` and build once: the `cef` crate downloads the Windows distribution under it and its build script copies libcef.dll, the paks and the rest into `target/debug`. Without that variable the build picks up the macOS path and fails; with `--no-default-features` no CEF is needed at all.
 4. The Makefile is macOS-only (`make bundle`, signing, notarization, the driver). On Windows use cargo directly: `cargo test -p infiniterm-core -p infiniterm-term -p infiniterm-editor`, `cargo build -p infiniterm-ui`, `cargo clippy -- -D warnings` on what you touch. Never `cargo fmt --all` (it rewrites the cli and hook crates; see CLAUDE.md's traps); format only the crates you change.
 
 ## What is Mac or Unix specific, file by file
@@ -64,16 +344,79 @@ Recommended: a small transport module in core with one API (listen, connect, the
 
 ## Phases, each with its done line
 
+**All six are done as of 2026-09-25.** This is the plan as it was written on
+the Mac, kept because the "Done:" lines say what each phase was actually
+being judged on. What happened instead of the plan is under "Where this
+stands" above; where the two disagree, that section is the record.
+
 1. **The core crates build and pass their tests on Windows.** `infiniterm-core`, `infiniterm-term`, `infiniterm-editor`: the daemon and tmux backends gated unix, the socket behind the transport module, `/tmp` in tests replaced. A `browser` cargo feature on `infiniterm-ui` (default on, so macOS is unchanged) that compiles `infiniterm-browser` and CEF out and draws a stub card ("browser cards are not in this build") in their place; this is also the build-time Lite/Pro split planned in ekinertac/notes#50, so build it the way that plan says (the stub card, no runtime key) and tell Ekin, because the `ift-browser` session owns that crate. Done: `cargo test` green for the three crates on Windows, and `make check` still green on the Mac (the Mac session runs it when merging).
 2. **A window opens and a terminal card runs pwsh.** `cargo build -p infiniterm-ui --no-default-features` (browser off), then run it. Keys typed reach the shell, Enter runs a command, output draws, a resize reflows. Done: Ekin types `dir` in a card and sees the listing.
 3. **The canvas and the app keys.** The modifier decision from "Keys" above, then pan, zoom, new card, focus movement, the palette, workspaces. Done: Ekin can do a morning's work on the canvas without reaching for a Mac-only chord.
 4. **Claude in a card with hooks.** The named-pipe transport, the hook binary on Windows, `ift install-claude-hooks` writing the Windows path of `infiniterm-hook.exe` into `%USERPROFILE%\.claude\settings.json`. Check that Claude Code's Shift+Enter still makes a line break through ConPTY (the kitty keyboard protocol; recent ConPTY passes it through, older ones swallow it). Done: a Claude card turns working, waiting and done colours as it runs.
 5. **Browser cards.** CEF for Windows through cef-rs (its README has the PowerShell steps), with the `ift-browser` session. Done: a browser card loads a page.
-6. **Shipping.** A zip or MSI, Authenticode signing (a paid certificate; SmartScreen warns until it has reputation), and the updater's Windows half (the manifest and "newer is a higher build" logic in `update.rs` carry over; the signature check becomes WinVerifyTrust, and the swap has to wait for the exe to unlock). Ekin decides when; not before phases 1 to 4 are real.
+6. **Shipping.** A zip or MSI, Authenticode signing (a paid certificate; SmartScreen warns until it has reputation), and the updater's Windows half (the manifest and "newer is a higher build" logic in `update.rs` carry over; the signature check becomes WinVerifyTrust, and the swap has to wait for the exe to unlock). Ekin decides when; not before phases 1 to 4 are real. **Shipped as a zip, and Authenticode is out**: Ekin decided on 2026-09-25 that the SHA-256 in the manifest is the only check, so there is no WinVerifyTrust. See the hash note above for what that trades away.
 
 ## Things that will bite
 
 - ConPTY rewrites what the program writes, redraws on resize, and older builds of it swallow escape sequences newer programs rely on. When something renders wrong, check whether Windows Terminal shows the same program correctly before blaming our parser.
+- **ConPTY writes NOTHING until the terminal answers its cursor probe.** It
+  opens with `ESC [ ? 9001 h`, `ESC [ ? 1004 h` and then `ESC [ 6 n`, and
+  blocks there. The app is fine (alacritty answers, and
+  `Panes::we_are_the_terminal` is true for this backend), but any test that
+  only reads sees the probe and then silence forever. `local_pty.rs`'s
+  `answer_conpty_probe` is what that cost.
+- **ConPTY caps a pane's output rate at roughly its own render rate.**
+  Measured 2026-09-23: about 9 KiB a second for a program writing flat out,
+  against a pty that does megabytes. It renders the pane and emits what
+  changed, so a `yes`-shaped flood mostly never reaches us. Nothing is wrong
+  when a flood looks slow; the 256 KiB backpressure mark is half a minute
+  away at that rate, which is why the flood test stayed unix.
+- **PSReadLine redraws a typed line a character at a time**, with cursor
+  moves between, so a string typed at an interactive prompt never comes back
+  as one run of bytes. A test that matches output from an interactive shell
+  has to ask a one-shot command instead.
+- **A shell is not listening the moment its pty exists.** PowerShell runs the
+  profile first, which took the best part of twenty seconds under a loaded
+  test suite here. A line typed before then is gone, not queued.
+- **`ChildKiller::kill` does not kill a ConPTY tree.** It ends the process
+  portable-pty spawned and nothing else: the shell sits beside an
+  OpenConsole of its own and its own children are untouched. Lifting a
+  card's mask left the decoy running after the app had quit, and a
+  force-killed app left pwsh and OpenConsole behind. Each pane holds a job
+  object with KILL_ON_JOB_CLOSE now, which covers the kill and the crash.
+- **A card's command runs with the user's PROFILE loaded**, deliberately,
+  and a profile may redefine anything. `Sort` on this box is a function that
+  runs Git's sort.exe, so the decoy default showed "Input file specified two
+  times" instead of a process list. Anything the app puts in a card's
+  command line wants full cmdlet names, never aliases.
+- **Claude Code runs a hook through `/usr/bin/bash` on Windows**, where a
+  backslash is an escape character, so an absolute path written into
+  settings.json arrives as `C:UsersPCCode...` and the hook is never found.
+  `ift install-claude-hooks` writes forward slashes there. The only sign is
+  a non-blocking notice inside Claude's own startup output, so it is easy to
+  install a setup that looks fine and never lights a border.
+- **`std::fs::canonicalize` returns the VERBATIM form**, `\?\C:\...`, which
+  turns off path parsing: right for an API call, wrong for a card's cwd, a
+  shell command line and anything a person reads. `paths::canonical` is the
+  one that strips it; three call sites had leaked it before that existed.
+- **A force-killed instance's endpoint answers for a couple of seconds**
+  while Windows tears its handles down, so a relaunch inside that window is
+  told another infiniterm holds it and exits. Asking the pipe which process
+  serves it (`GetNamedPipeServerProcessId`) and whether that process lives
+  looks like the fix and is not: while a dying instance's handle lingers
+  beside a live one's, a client lands on either, and landing on the dead one
+  lets a SECOND instance start on the same save file. It was tried, it did
+  exactly that, and it was withdrawn. `tools/drive/win/run.ps1` waits the
+  window out instead.
+- **gpui names a Windows key through the current layout** and hands back the
+  SHIFTED character with shift cleared for punctuation and digits, which is
+  the macOS trap word for word. `keycode.rs`'s Windows half takes the SCAN
+  CODE from a thread-local `WH_KEYBOARD` hook instead. Thread-local and not
+  `WH_KEYBOARD_LL` on purpose: the low-level hook is global and would have
+  this process watching every key typed in every other application.
+- **tree-sitter-scss 1.0.0 cannot build on MSVC**: its build script hands cc
+  an unconditional `-Wno-unused-parameter` and cl refuses it (D8021). It is
+  the crate's only release. It is `cfg(not(windows))` now.
 - Line endings: set `core.autocrlf false` on the clone, or `.gitattributes` fights begin; the Mac side commits LF.
 - A path in a card label, a drop, or `ift <path>` has backslashes and a drive letter; `shell_quote` (`drop.rs`) is POSIX quoting and must get a PowerShell twin before a dropped file reaches a pwsh prompt, because that function is the whole security story for a file named `; rm -rf ~`.
 - The single-instance lock is the socket today; on Windows it is the named pipe, and a crashed instance leaves no stale file to clean (unlike the Unix socket), which is simpler.

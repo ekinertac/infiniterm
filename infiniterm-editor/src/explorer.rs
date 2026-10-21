@@ -115,7 +115,13 @@ impl Tree {
             // Directories no longer shown are re-listed when next opened.
             let expanded: Vec<String> = self.expanded.keys().cloned().collect();
             for dir in expanded {
-                if !self.listed.values().flatten().any(|e| e.is_dir && e.path == dir) && dir != self.root {
+                if !self
+                    .listed
+                    .values()
+                    .flatten()
+                    .any(|e| e.is_dir && e.path == dir)
+                    && dir != self.root
+                {
                     self.listed.remove(&dir);
                     self.expanded.remove(&dir);
                 }
@@ -311,7 +317,10 @@ mod tests {
         t.key("down", &mut list);
         t.set_flat(vec![file("b.rs")]);
         assert_eq!(t.cursor, 0);
-        assert_eq!(t.key("enter", &mut list), TreeAction::Open("/r/b.rs".into()));
+        assert_eq!(
+            t.key("enter", &mut list),
+            TreeAction::Open("/r/b.rs".into())
+        );
     }
 
     #[test]

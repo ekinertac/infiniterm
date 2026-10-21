@@ -420,6 +420,8 @@ mod tests {
         assert!(at("{\"other\": {\"h").is_none());
     }
 
+    // Built around a symlink, which Windows lets only a privileged user make.
+    #[cfg(unix)]
     #[test]
     fn which_files_have_a_provider() {
         let base = std::env::temp_dir().join(format!("infiniterm-complete-{}", std::process::id()));

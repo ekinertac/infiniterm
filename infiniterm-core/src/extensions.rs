@@ -75,7 +75,7 @@ pub fn parse_extension_id(input: &str) -> Option<String> {
         return Some(trimmed.to_string());
     }
     let path = trimmed.split('?').next().unwrap_or(trimmed);
-    let last = path.rsplit('/').next()?;
+    let last = crate::paths::base_name(path);
     looks_like_id(last).then(|| last.to_string())
 }
 

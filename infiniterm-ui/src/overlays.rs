@@ -40,8 +40,13 @@ const TAB_IDLE_DOT_ALPHA: f32 = 0.45;
 /// The working dot is dimmer than the waiting one, so a card still running
 /// doesn't visually shout as loud as one already asking for you.
 const TAB_WORKING_DOT_ALPHA: f32 = 0.6;
-/// The title bar's tabs start clear of the traffic lights.
+/// The title bar's tabs start clear of the traffic lights. Zero where
+/// there are none: on Windows the system draws its own caption above this
+/// row, so the inset would be 84 pixels of nothing at the left of the tabs.
+#[cfg(target_os = "macos")]
 const TITLE_BAR_TRAFFIC_LIGHT_INSET_PX: f32 = 84.;
+#[cfg(not(target_os = "macos"))]
+const TITLE_BAR_TRAFFIC_LIGHT_INSET_PX: f32 = 8.;
 /// Below this the status bar's fps reads as a stall, not a frame rate.
 const LOW_FPS_THRESHOLD: f32 = 50.;
 /// A key cap: the panel's own ground for ink on a near-white cap, which
@@ -245,7 +250,11 @@ impl AppView {
             .map(|(i, l)| (i.as_str(), l.as_str()))
             .collect();
         let sections = filter_shortcuts(
-            &shortcut_sections(&self.model.keymap, &labels_ref),
+            &shortcut_sections(
+                &self.model.keymap,
+                &labels_ref,
+                self.model.modifier_labels(),
+            ),
             &self.shortcuts_field.text,
         );
         let mut rows = vec![];
@@ -495,8 +504,13 @@ impl Render for AppView {
             // Ctrl coming up commits the card switcher, the way letting go
             // of Cmd commits Cmd+Tab. gpui reports modifier changes to the
             // focused element like keys, so no NSEvent monitor is needed.
+            // Through `roles` like every other modifier read: on Windows the
+            // switcher is held with the Ctrl the terminal owns (Caps Lock on
+            // a Mac-order keyboard), and letting go of the OTHER one must
+            // not commit it.
             .on_modifiers_changed(cx.listener(|this, e: &gpui::ModifiersChangedEvent, _, cx| {
-                if this.model.switcher.is_some() && !e.modifiers.control {
+                let modifiers = this.modifier_roles(e.modifiers);
+                if this.model.switcher.is_some() && !modifiers.control {
                     this.model.switcher_commit();
                     this.perform_effects();
                     this.redraw = true;
@@ -1528,8 +1542,14 @@ impl AppView {
             .map(|(i, l)| (i.as_str(), l.as_str()))
             .collect();
         let query = self.shortcuts_field.text.clone();
-        let sections =
-            filter_shortcuts(&shortcut_sections(&self.model.keymap, &labels_ref), &query);
+        let sections = filter_shortcuts(
+            &shortcut_sections(
+                &self.model.keymap,
+                &labels_ref,
+                self.model.modifier_labels(),
+            ),
+            &query,
+        );
         let key_box = |key: &str| key_cap_box(key, chrome, ui);
         let mut row_ix = 0usize;
         let highlighted = self.shortcuts_index;

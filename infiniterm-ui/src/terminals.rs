@@ -6,7 +6,9 @@
 //! whose rect or metrics changed re-counts its grid and tells the PTY.
 //! Port of `paneRegistry.ts`'s routing and `TerminalCard.svelte`'s start.
 use crate::fonts::{installed_families, terminal_family_of, weight_of};
-use crate::terminal_body::{LostLink, Metrics, TerminalBody, READOPT_POLL_MS};
+#[cfg(unix)]
+use crate::terminal_body::LostLink;
+use crate::terminal_body::{Metrics, TerminalBody, READOPT_POLL_MS};
 use crate::AppView;
 use gpui::{font, px, TextRun, Window};
 use infiniterm_core::backend::Panes;
@@ -67,6 +69,13 @@ impl AppView {
     /// the frame alone never ran in a window behind others, which drew
     /// nothing, so a card the host's app had taken over stayed lost until the
     /// window was brought forward. True when a card got its session back.
+    #[cfg(windows)]
+    pub fn drive_viewer_links(&mut self) -> bool {
+        // Joining is unix-only, so there are no viewer cards to drive.
+        false
+    }
+
+    #[cfg(unix)]
     pub fn drive_viewer_links(&mut self) -> bool {
         if !self.viewer {
             return false;
@@ -466,7 +475,7 @@ impl AppView {
                 ) {
                     let sh = shell
                         .clone()
-                        .unwrap_or_else(infiniterm_core::backend::local_pty::default_shell);
+                        .unwrap_or_else(infiniterm_core::shell_cmd::default_shell);
                     env.extend(infiniterm_core::shell_integration::zsh_env(
                         &sh,
                         &integration,

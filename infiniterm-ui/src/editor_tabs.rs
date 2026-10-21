@@ -309,7 +309,7 @@ impl EditorTabs {
                 let name = if h.is_empty() {
                     "untitled".to_string()
                 } else {
-                    h.rsplit('/').next().unwrap_or(h).to_string()
+                    infiniterm_core::paths::base_name(h).to_string()
                 };
                 if b.is_dirty() {
                     format!("{name} •")
@@ -427,8 +427,8 @@ impl CardBody for EditorTabs {
                 .enumerate()
                 .filter(|(i, _)| *i != active)
                 .map(|(_, (handle, b))| {
-                    let name = match handle.rsplit('/').next() {
-                        Some(n) if !n.is_empty() => n.to_string(),
+                    let name = match infiniterm_core::paths::base_name(handle) {
+                        n if !n.is_empty() => n.to_string(),
                         _ => "untitled".to_string(),
                     };
                     (name, b.word_set())

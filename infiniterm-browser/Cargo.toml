@@ -12,5 +12,10 @@ publish.workspace = true
 [dependencies]
 infiniterm-core = { path = "../infiniterm-core" }
 cef = "152.3.0"
-# The objc crate gpui itself uses; for patching CefAppProtocol onto its NSApplication.
+
+# The objc crate gpui itself uses; for patching CefAppProtocol onto its
+# NSApplication. macOS only, and not merely unused elsewhere: an
+# unconditional dependency put `objc.lib` on the Windows link line and
+# nothing could link.
+[target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"

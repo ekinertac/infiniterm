@@ -1,3 +1,4 @@
+#![cfg(unix)] // making a symlink needs a privilege on Windows
 //! `ift install-claude-hooks` against a settings.json that is a symlink into a
 //! dotfiles repo (#219): the file the link points at gets the hooks and the
 //! link stays a link. Before, the install renamed a temp file over the link

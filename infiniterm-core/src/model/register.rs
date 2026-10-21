@@ -825,11 +825,16 @@ mod tests {
         let effects = h.run("app.restart");
         assert!(!effects.iter().any(|e| matches!(e, Effect::Restart)));
 
+        // The daemon keeps the shells, so it may — WHERE IT EXISTS. On
+        // Windows `Panes::start` falls back to local shells for it, so
+        // asking for the daemon in settings must not unlock a restart that
+        // would kill every one of them (`backend::detaches_on_quit`).
         h.m.config.terminal.backend = TerminalBackend::Daemon;
         let effects = h.run("app.restart");
-        assert!(
+        assert_eq!(
             effects.iter().any(|e| matches!(e, Effect::Restart)),
-            "the daemon keeps the shells, so it may"
+            cfg!(not(windows)),
+            "the daemon restarts where it runs, and nowhere else"
         );
     }
 
@@ -1273,7 +1278,8 @@ mod tests {
                 .filter(|c| c.kind == CardKind::Editor)
                 .collect();
         assert_eq!(editors.len(), 1);
-        assert!(editors[0].root.as_deref().unwrap().ends_with("/snippets"));
+        // As a path: the separator is not the same on every platform.
+        assert!(std::path::Path::new(editors[0].root.as_deref().unwrap()).ends_with("snippets"));
         let editor = editors[0].id.clone();
         h.m.set_focus(Some(&id));
         h.m.palette_run(Source::Snippets, EDIT_ROW);
@@ -4760,7 +4766,12 @@ mod tests {
         let items = h.m.palette_items(Source::Commands, &labels);
         assert!(items.iter().all(|i| i.id != "app.palette"));
         let close = items.iter().find(|i| i.id == "card.close").unwrap();
-        assert_eq!(close.hint.as_deref(), Some("Cmd W"));
+        // Spelled through the same labels the app would use, because what
+        // the app's modifier is CALLED is per platform and per setting
+        // (`shortcuts::ModifierLabels`); the question here is that the hint
+        // is the chord for this command, not what that key is named.
+        let expected = crate::shortcuts::format_chord("cmd+w", h.m.modifier_labels());
+        assert_eq!(close.hint.as_deref(), Some(expected.as_str()));
     }
 
     // The emoji panel has one owner: our chord, our command, one effect

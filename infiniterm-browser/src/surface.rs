@@ -6,8 +6,20 @@
 //! card can raise when drawn above 100%, popups turned into urls for the
 //! ui to open as cards, and the title and address for the label and the
 //! save file.
+// CEF's flag enums wrap a `u32` on macOS and an `i32` on Windows, and the
+// casts to `u32` below are what make one source line right on both. On the
+// Mac they are the same type, which clippy calls unnecessary.
+#![allow(clippy::unnecessary_cast)]
 use crate::moat;
 use cef::*;
+
+/// CEF's native cursor handle, which is `HCURSOR` on Windows and an opaque
+/// pointer elsewhere. Nothing here reads it — the cursor is chosen from
+/// `type_` — but a trait method's signature has to match the platform's.
+#[cfg(windows)]
+type CursorHandle = *mut sys::HICON__;
+#[cfg(not(windows))]
+type CursorHandle = *mut u8;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 /// `[browser]` lines on stderr under INFINITERM_KEYLOG: the size handshake with
@@ -279,7 +291,7 @@ wrap_display_handler! {
         fn on_cursor_change(
             &self,
             _browser: Option<&mut Browser>,
-            _cursor: *mut u8,
+            _cursor: CursorHandle,
             type_: CursorType,
             _custom_cursor_info: Option<&CursorInfo>,
         ) -> ::std::os::raw::c_int {
@@ -406,7 +418,8 @@ wrap_context_menu_handler! {
         ) -> ::std::os::raw::c_int {
             if let Some(params) = params {
                 let link = CefStringUtf16::from(&params.link_url()).to_string();
-                let flags = params.type_flags().as_ref().0;
+                // i32 on Windows, u32 on macOS; `has_flag` takes one width.
+                let flags = params.type_flags().as_ref().0 as u32;
                 self.handler.shared.borrow_mut().context_menu = Some(ContextMenuRequest {
                     x: params.xcoord(),
                     y: params.ycoord(),
@@ -414,7 +427,7 @@ wrap_context_menu_handler! {
                     editable: params.is_editable() != 0,
                     has_selection: has_flag(
                         flags,
-                        sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0,
+                        sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0 as u32,
                     ),
                     can_go_back: browser.as_ref().is_some_and(|b| b.can_go_back() == 1),
                     can_go_forward: browser.as_ref().is_some_and(|b| b.can_go_forward() == 1),
@@ -689,7 +702,10 @@ impl Surface {
         if let Some(host) = self.host() {
             if keylog() {
                 let s = self.shared.borrow();
-                eprintln!("[browser] kick: repaint at css {}x{} @{}", s.width, s.height, s.scale);
+                eprintln!(
+                    "[browser] kick: repaint at css {}x{} @{}",
+                    s.width, s.height, s.scale
+                );
             }
             host.notify_screen_info_changed();
             host.was_resized();
@@ -749,13 +765,13 @@ impl Surface {
     fn flags(mods: Mods) -> u32 {
         let mut flags = 0u32;
         if mods.shift {
-            flags |= sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0;
+            flags |= sys::cef_event_flags_t::EVENTFLAG_SHIFT_DOWN.0 as u32;
         }
         if mods.control {
-            flags |= sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN.0;
+            flags |= sys::cef_event_flags_t::EVENTFLAG_CONTROL_DOWN.0 as u32;
         }
         if mods.alt {
-            flags |= sys::cef_event_flags_t::EVENTFLAG_ALT_DOWN.0;
+            flags |= sys::cef_event_flags_t::EVENTFLAG_ALT_DOWN.0 as u32;
         }
         flags
     }
@@ -819,14 +835,12 @@ impl Surface {
                 event.modifiers |= sys::cef_event_flags_t::EVENTFLAG_MIDDLE_MOUSE_BUTTON.0;
             }
             if std::env::var_os("INFINITERM_KEYLOG").is_some() {
-                eprintln!("[mouse] {button:?} up={up} flags={:#x} at {},{}", event.modifiers, event.x, event.y);
+                eprintln!(
+                    "[mouse] {button:?} up={up} flags={:#x} at {},{}",
+                    event.modifiers, event.x, event.y
+                );
             }
-            host.send_mouse_click_event(
-                Some(&event),
-                b,
-                up as i32,
-                clicks.max(1) as i32,
-            );
+            host.send_mouse_click_event(Some(&event), b, up as i32, clicks.max(1) as i32);
         }
     }
 
@@ -968,10 +982,60 @@ pub fn virtual_key(name: &str) -> i32 {
     }
 }
 
-/// macOS virtual key codes (Carbon `kVK_*`) for the same named keys, the
-/// codeset Cocoa's `interpretKeyEvents:` resolves editing commands from.
+/// The PHYSICAL key, in whatever codeset this platform's CEF reads it in.
+///
+/// Two different jobs behind one name, which is why there are two tables.
+/// On macOS it is the Carbon `kVK_*` code and Cocoa resolves the editing
+/// commands from it, so Backspace and the arrows do nothing in a text field
+/// without it. On Windows it is the scan code, and Chromium turns it into
+/// the `code` a page's key handler reads: left at the macOS value, a
+/// Backspace arrived at the page as `code: "Comma"`, because 0x33 is the
+/// comma key in scan code set 1 (measured in a card, 2026-09-25). The value
+/// is wrong in a quiet way on both platforms — the key still works, a page
+/// that reads `event.code` just hears a different key — so it is worth a
+/// test each rather than trusting the tables to look right.
+///
 /// Only meaningful alongside `virtual_key`, which is why an unnamed key (0)
 /// never reaches here: `key()` skips this table for the CHAR-only path.
+#[cfg(windows)]
+fn native_key_code(name: &str) -> i32 {
+    match name {
+        "enter" => 0x1C,
+        "backspace" => 0x0E,
+        "tab" => 0x0F,
+        "escape" => 0x01,
+        "space" => 0x39,
+        // The grey navigation block and the arrows are the extended keys:
+        // the same scan codes as the numeric keypad, told apart by the E0
+        // prefix. Chromium wants that prefix as bit 8 of the scan code
+        // (`0xE0xx` in its own tables), not as the lParam's extended bit,
+        // which a synthetic event has no room for.
+        "pageup" => 0xE049,
+        "pagedown" => 0xE051,
+        "end" => 0xE04F,
+        "home" => 0xE047,
+        "left" => 0xE04B,
+        "up" => 0xE048,
+        "right" => 0xE04D,
+        "down" => 0xE050,
+        "delete" => 0xE053,
+        "f1" => 0x3B,
+        "f2" => 0x3C,
+        "f3" => 0x3D,
+        "f4" => 0x3E,
+        "f5" => 0x3F,
+        "f6" => 0x40,
+        "f7" => 0x41,
+        "f8" => 0x42,
+        "f9" => 0x43,
+        "f10" => 0x44,
+        "f11" => 0x57,
+        "f12" => 0x58,
+        _ => 0,
+    }
+}
+
+#[cfg(not(windows))]
 fn native_key_code(name: &str) -> i32 {
     match name {
         "enter" => 0x24,
@@ -1015,6 +1079,7 @@ mod tests {
         assert_eq!(virtual_key("a"), 0);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn backspace_carries_the_real_macos_keycode_not_the_a_key() {
         // Cocoa resolves deleteBackward: from the native code; left at the
@@ -1023,6 +1088,38 @@ mod tests {
         assert_eq!(native_key_code("left"), 0x7B);
         assert_eq!(native_key_code("home"), 0x73);
         assert_eq!(native_key_code("a"), 0);
+    }
+
+    // The Windows table is scan codes, and the macOS one read as scan codes
+    // is what sent `code: "Comma"` to a page for Backspace. The three that
+    // would collide if the wrong table were compiled in are the check.
+    #[cfg(windows)]
+    #[test]
+    fn backspace_carries_the_scan_code_a_page_reads_as_backspace() {
+        assert_eq!(native_key_code("backspace"), 0x0E);
+        assert_eq!(native_key_code("escape"), 0x01);
+        assert_eq!(native_key_code("a"), 0);
+    }
+
+    // An arrow shares its scan code with the keypad key printed beside it;
+    // without the E0 prefix a page hears Numpad4 for Left.
+    #[cfg(windows)]
+    #[test]
+    fn the_navigation_keys_carry_their_extended_prefix() {
+        for name in [
+            "left", "up", "right", "down", "home", "end", "pageup", "pagedown", "delete",
+        ] {
+            let code = native_key_code(name);
+            assert_eq!(code & 0xFF00, 0xE000, "{name} is missing its E0 prefix");
+        }
+        // And the ones that are not extended do not carry it.
+        for name in ["enter", "backspace", "tab", "escape", "space", "f1", "f12"] {
+            assert_eq!(
+                native_key_code(name) & 0xFF00,
+                0,
+                "{name} must not be extended"
+            );
+        }
     }
 
     #[test]
@@ -1036,8 +1133,8 @@ mod tests {
 
     #[test]
     fn has_flag_reads_one_bit_out_of_a_combined_mask() {
-        let selection = sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0;
-        let link = sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_LINK.0;
+        let selection = sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_SELECTION.0 as u32;
+        let link = sys::cef_context_menu_type_flags_t::CM_TYPEFLAG_LINK.0 as u32;
         assert!(has_flag(selection | link, selection));
         assert!(!has_flag(link, selection));
     }

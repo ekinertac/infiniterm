@@ -109,7 +109,10 @@ mod every_grammar {
         let samples = [
             (Language::Rust, "fn main() { let s = \"x\"; } // c"),
             (Language::JavaScript, "function f() { return 'x'; } // c"),
-            (Language::TypeScript, "function f(): string { return 'x'; } // c"),
+            (
+                Language::TypeScript,
+                "function f(): string { return 'x'; } // c",
+            ),
             (Language::Tsx, "const a = <div>{'x'}</div>; // c"),
             (Language::Python, "def f():\n    return 'x'  # c"),
             (Language::Json, "{\n  \"a\": 1\n}"),
@@ -118,11 +121,21 @@ mod every_grammar {
             (Language::Bash, "echo \"x\" # c\nif true; then :; fi"),
             (Language::Css, "a { color: red; } /* c */"),
             (Language::Html, "<div class=\"a\">x</div><!-- c -->"),
-            (Language::Go, "package main\nfunc main() { s := \"x\" } // c"),
+            (
+                Language::Go,
+                "package main\nfunc main() { s := \"x\" } // c",
+            ),
             (Language::C, "int main() { return 1; } // c"),
             (Language::Markdown, "# Title\n\nsome *text* and `code`\n"),
-            (Language::Svelte, "<script>let a = 1;</script>\n<div>{a}</div>"),
-            (Language::Sql, "SELECT id, name FROM users WHERE id = 1; -- c"),
+            (
+                Language::Svelte,
+                "<script>let a = 1;</script>\n<div>{a}</div>",
+            ),
+            (
+                Language::Sql,
+                "SELECT id, name FROM users WHERE id = 1; -- c",
+            ),
+            #[cfg(not(windows))]
             (Language::Scss, "$c: red;\n.a { .b { color: $c; } } // c"),
         ];
         let mut h = Highlighting::default();
