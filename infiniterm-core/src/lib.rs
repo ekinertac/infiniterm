@@ -124,6 +124,7 @@ pub mod transcript;
 pub mod transport;
 pub mod ui_theme;
 pub mod update;
+pub mod update_sign;
 
 pub mod sidebar;
 

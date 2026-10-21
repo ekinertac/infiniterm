@@ -257,14 +257,37 @@ What is still open:
   suggestion row shows the address as the path `/C:/Users/...`. Cosmetic,
   and the omnibox is the `ift-browser` session's file.
 
-  **The hash is the only check on Windows, deliberately.** Ekin decided
-  against Authenticode on 2026-09-25 knowing what it costs: the Mac requires
-  a download to be signed by his team and notarized, so a zip somebody else
-  built is refused even when the manifest names its hash; here the manifest
-  is the authority, and whoever can write the releases repo can run code on
-  a Windows machine. `parse_manifest` refusing a url outside that repo, over
-  TLS, is the floor it rests on. Do not quietly widen this: a manifest field
-  that could point the download elsewhere would remove the last of it.
+  **The hash is the only check on Windows until a key is committed.** Ekin
+  decided against Authenticode on 2026-09-25 knowing what it costs: the Mac
+  requires a download to be signed by his team and notarized, so a zip
+  somebody else built is refused even when the manifest names its hash; here
+  the manifest is the authority, and whoever can write the releases repo can
+  run code on a Windows machine. `parse_manifest` refusing a url outside that
+  repo, over TLS, is the floor it rests on. Do not quietly widen this: a
+  manifest field that could point the download elsewhere would remove the
+  last of it.
+
+  **The second check, built but off (#470).** `latest-windows.json` can carry
+  an Ed25519 `signature` over its tag, build and hash
+  (`infiniterm-core/src/update_sign.rs`). `update::UPDATE_PUBLIC_KEY` is
+  EMPTY, and while it is the updater behaves exactly as above. To turn it on:
+
+  1. `ift update-key new <file>` somewhere OUTSIDE the repo. It prints the
+     public key and writes the private key to `<file>`, which it will not
+     overwrite. Keep the private key in a Bitwarden item (a secure note,
+     named for the update key) AND as a local file that `tools/dist.ps1` can
+     read (`-SigningKey <file>` or `INFINITERM_UPDATE_KEY`). Never commit it.
+  2. Put the public key in `UPDATE_PUBLIC_KEY` and ship a Windows build with
+     it. Builds that exist already have no key and keep accepting unsigned
+     manifests, so nothing breaks for them; from that build on, a manifest
+     without a valid signature is refused before anything is downloaded.
+  3. Sign every release from then on (`dist.ps1` does, given the key). An
+     unsigned one is refused by every app that has the key.
+
+  There is one key and no rotation: a lost private key means an app with the
+  public half cannot be updated again until somebody installs a build with a
+  new one by hand. Back it up before step 2. `ift update-key public <file>`
+  prints the public half of a key file, to check it against the constant.
 
 - Transcript cards are the one card kind never opened on Windows. Ekin is
   testing that (2026-09-25). The Claude card this session ran had transcript

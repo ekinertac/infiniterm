@@ -27,6 +27,9 @@ anyhow = "1"
 # Card, group and workspace ids, as the reference makes them (crypto.randomUUID).
 uuid = { version = "1", features = ["v4"] }
 pulldown-cmark = { version = "0.13.4", default-features = false }
+# update_sign.rs: the Ed25519 signature on a Windows release manifest. Already
+# in the tree through the http stack, so this adds an edge, not a crate.
+ring = "0.17"
 
 [dev-dependencies]
 # The PTY tests are async because SessionBackend::spawn is (tmux assigns ids
