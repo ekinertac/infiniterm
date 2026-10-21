@@ -30,6 +30,9 @@ pub enum Source {
     MoveGroupTo,
     /// `window.color` (#157, #160): named colours previewed live, then a hex code.
     WindowColor,
+    /// `uitheme.pick` (#511): the files in `ui-themes/`, previewed live like
+    /// `Themes`, and a pick is written as the setting `ui.theme`.
+    UiThemes,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
@@ -52,6 +55,7 @@ impl Source {
             Source::MoveTo => "moveTo",
             Source::MoveGroupTo => "moveGroupTo",
             Source::WindowColor => "windowColor",
+            Source::UiThemes => "uiThemes",
         }
     }
 
@@ -76,6 +80,7 @@ impl Source {
                 | Source::MoveGroupTo
                 | Source::Themes
                 | Source::WindowColor
+                | Source::UiThemes
         )
     }
 
@@ -83,7 +88,7 @@ impl Source {
     /// not: it previews each theme on the cards as you move, and a dim sheet
     /// over them hid the very colours being chosen.
     pub fn dims_canvas(self) -> bool {
-        self != Source::Themes
+        !matches!(self, Source::Themes | Source::UiThemes)
     }
 
     /// Prompt text in the empty input.
@@ -98,6 +103,7 @@ impl Source {
             Source::MoveTo => "Move to workspace…",
             Source::MoveGroupTo => "Move the group to workspace…",
             Source::WindowColor => "Window colour…",
+            Source::UiThemes => "Switch UI theme",
         }
     }
 }
@@ -276,6 +282,29 @@ impl Model {
                     .collect()
             }
             Source::WindowColor => self.window_color_items(),
+            // The same shape as `Themes`: what you had when the picker opened
+            // leads, under the "active" hint, and the rest keep the folder's order.
+            Source::UiThemes => {
+                let current = self
+                    .ui_theme_before_preview
+                    .clone()
+                    .or_else(|| Some(self.ui_theme_name.clone()))
+                    .filter(|c| self.ui_theme_names.contains(c));
+                current
+                    .iter()
+                    .chain(
+                        self.ui_theme_names
+                            .iter()
+                            .filter(|n| Some(*n) != current.as_ref()),
+                    )
+                    .map(|name| PaletteItem {
+                        id: name.clone(),
+                        label: name.clone(),
+                        hint: (Some(name) == current.as_ref())
+                            .then(|| ACTIVE_THEME_HINT.to_string()),
+                    })
+                    .collect()
+            }
             Source::Placement => {
                 let chord = |id: &str| {
                     self.keymap
@@ -395,6 +424,14 @@ impl Model {
             // Nothing to put back on cancel if no theme was loaded to begin with.
             if let Some(name) = target {
                 self.effects.push(super::Effect::LoadTheme(name));
+            }
+        }
+        if source == Source::UiThemes {
+            let target = id
+                .map(String::from)
+                .or_else(|| self.ui_theme_before_preview.clone());
+            if let Some(name) = target {
+                self.effects.push(super::Effect::LoadUiTheme(name));
             }
         }
     }

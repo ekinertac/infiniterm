@@ -140,6 +140,48 @@ pub fn patch_json_text(text: &str, path: &str, value: &Value) -> Option<String> 
     Some(insert_key(text, &mask, object, path, &encoded))
 }
 
+/// Cuts one entry out of JSON text, leaving everything else byte for byte:
+/// the inverse of `patch_json_text`, for moving a setting to another file
+/// (#511). `path` is found flat (`"ui.cardRadius"`) or one level down
+/// (`"ui": { "cardRadius" }`), flat first. The entry's own line goes with it
+/// when nothing else is on that line, a `//` note after it included, since the
+/// note described this entry; comments on lines above stay. A comma left
+/// behind a last entry is a trailing comma, which the dialect allows. `None`
+/// when the key is not there.
+pub fn remove_key(text: &str, path: &str) -> Option<String> {
+    let mask = strip_comments(text);
+    let object = find_object(&mask, 0)?;
+    let (key_start, value) = find_entry(&mask, object, path).or_else(|| {
+        let (head, tail) = path.split_once('.')?;
+        let outer = find_key(&mask, object, head)?;
+        let inner = find_object(&mask, outer.start)?;
+        find_entry(&mask, inner, tail)
+    })?;
+    let b = mask.as_bytes();
+    let mut end = value.end;
+    let mut after = end;
+    while after < b.len() && (b[after] == b' ' || b[after] == b'\t') {
+        after += 1;
+    }
+    if b.get(after) == Some(&b',') {
+        end = after + 1;
+    }
+    let line_start = text[..key_start].rfind('\n').map_or(0, |n| n + 1);
+    let line_end = text[end..].find('\n').map_or(text.len(), |n| end + n);
+    let alone_before = text[line_start..key_start].trim().is_empty();
+    // The mask has comments blanked, so "only a note follows" reads as blank.
+    let alone_after = mask[end..line_end].trim().is_empty();
+    if alone_before && alone_after {
+        let cut_to = (line_end + 1).min(text.len());
+        return Some(format!("{}{}", &text[..line_start], &text[cut_to..]));
+    }
+    let mut cut_to = end;
+    while cut_to < b.len() && (b[cut_to] == b' ' || b[cut_to] == b'\t') {
+        cut_to += 1;
+    }
+    Some(format!("{}{}", &text[..key_start], &text[cut_to..]))
+}
+
 fn replace_value(text: &str, span: Span, encoded: &str) -> Option<String> {
     if text[span.start..span.end].trim() == encoded {
         return None;
@@ -199,6 +241,12 @@ fn skip_string(b: &[u8], mut i: usize) -> usize {
 
 /// A key directly inside `object`, as the span of its value.
 fn find_key(mask: &str, object: Span, key: &str) -> Option<Span> {
+    find_entry(mask, object, key).map(|(_, value)| value)
+}
+
+/// A key directly inside `object`: where its opening quote is, and the span
+/// of its value.
+fn find_entry(mask: &str, object: Span, key: &str) -> Option<(usize, Span)> {
     let b = mask.as_bytes();
     let mut depth = 0i32;
     let mut i = object.start;
@@ -210,10 +258,13 @@ fn find_key(mask: &str, object: Span, key: &str) -> Option<Span> {
                 if depth == 1 && b.get(i + 1..close) == Some(key.as_bytes()) {
                     if let Some(colon) = b[close..].iter().position(|&c| c == b':') {
                         let start = first_non_space(b, close + colon + 1);
-                        return Some(Span {
-                            start,
-                            end: value_end_at(b, start),
-                        });
+                        return Some((
+                            i,
+                            Span {
+                                start,
+                                end: value_end_at(b, start),
+                            },
+                        ));
                     }
                 }
                 i = close;
@@ -544,5 +595,62 @@ mod tests {
         );
         let out = patch_json_text("{\n  \"a\": 1\n}\n", "b", &json!(2)).unwrap();
         assert_eq!(p(&out), json!({"a": 1, "b": 2}));
+    }
+
+    // remove_key (#511): the entry's line goes, the other lines stay as written.
+    #[test]
+    fn removes_a_middle_entry_with_its_line_and_its_note() {
+        let before = "{\n  // font\n  \"a\": 1,\n  \"b\": 2, // my opacity\n  \"c\": 3\n}\n";
+        let out = remove_key(before, "b").unwrap();
+        assert_eq!(out, "{\n  // font\n  \"a\": 1,\n  \"c\": 3\n}\n");
+    }
+
+    #[test]
+    fn removing_the_last_entry_leaves_a_trailing_comma_the_dialect_allows() {
+        let out = remove_key("{\n  \"a\": 1,\n  \"b\": 2\n}\n", "b").unwrap();
+        assert_eq!(p(&out), json!({"a": 1}));
+        let out = remove_key("{\n  \"a\": 1,\n  \"b\": 2,\n}\n", "b").unwrap();
+        assert_eq!(p(&out), json!({"a": 1}));
+    }
+
+    #[test]
+    fn removes_one_entry_from_a_crowded_line() {
+        let out = remove_key("{ \"a\": 1, \"b\": 2, \"c\": 3 }", "b").unwrap();
+        assert_eq!(p(&out), json!({"a": 1, "c": 3}));
+        let out = remove_key("{ \"a\": [1, 2], \"b\": 2 }", "a").unwrap();
+        assert_eq!(p(&out), json!({"b": 2}));
+    }
+
+    #[test]
+    fn removes_a_multi_line_list_value() {
+        let before =
+            "{\n  \"ui.backgroundImage\": [\n    \"dusk\",\n    \"ember\",\n  ],\n  \"x\": 1\n}\n";
+        assert_eq!(
+            remove_key(before, "ui.backgroundImage").unwrap(),
+            "{\n  \"x\": 1\n}\n"
+        );
+    }
+
+    #[test]
+    fn removes_a_nested_leaf_and_keeps_the_group() {
+        let before = "{\n  \"ui\": {\n    // the counter\n    \"showFps\": true,\n    \"cardRadius\": 8\n  }\n}";
+        let out = remove_key(before, "ui.cardRadius").unwrap();
+        assert!(out.contains("// the counter"));
+        assert_eq!(p(&out), json!({"ui": {"showFps": true}}));
+    }
+
+    #[test]
+    fn ignores_a_key_that_is_only_in_a_comment_or_one_object_deeper() {
+        assert_eq!(remove_key("{\n  // \"a\": 1\n  \"b\": 2\n}", "a"), None);
+        assert_eq!(remove_key("{\"o\": {\"a\": 1}}", "a"), None);
+        assert_eq!(remove_key("{\"a\": 1}", "zzz"), None);
+    }
+
+    #[test]
+    fn a_url_with_slashes_in_another_value_does_not_confuse_it() {
+        let before = "{\n  \"u\": \"https://x.test/a\", // site\n  \"a\": 1\n}\n";
+        let out = remove_key(before, "a").unwrap();
+        assert!(out.contains("https://x.test/a"));
+        assert_eq!(p(&out), json!({"u": "https://x.test/a"}));
     }
 }

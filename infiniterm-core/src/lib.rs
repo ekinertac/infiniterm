@@ -88,6 +88,7 @@ pub mod layout_file;
 pub mod licence;
 pub mod links;
 pub mod links_fs;
+pub mod look_migration;
 pub mod model;
 pub mod omni;
 pub mod page;
@@ -109,9 +110,9 @@ pub mod slide;
 pub mod slot_snap;
 pub mod snippets;
 pub mod switcher;
-pub mod theme_file;
 pub mod themes_files;
 pub mod transcript;
+pub mod ui_theme;
 pub mod update;
 
 pub mod sidebar;
