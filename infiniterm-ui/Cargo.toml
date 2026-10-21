@@ -67,3 +67,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Threading",
 ] }
+
+# `keycode.rs` on Linux: the X11 `QueryKeymap` that gives the chord its
+# PHYSICAL key, on a connection of our own. Already in the tree as gpui's
+# own X11 dependency, so this adds no crate.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+x11rb = "0.13"
