@@ -17,6 +17,7 @@ use infiniterm_core::model::settings_in::{EMPTY_KEYBINDINGS, EMPTY_SETTINGS};
 use infiniterm_core::model::Effect;
 use infiniterm_core::paths::{home_dir, socket_path};
 use infiniterm_core::settings_doc::default_settings_text;
+use infiniterm_core::theme_file::EMPTY_THEME;
 use infiniterm_core::themes_files::{ensure_themes_dir, list_themes, read_theme};
 use std::path::PathBuf;
 
@@ -751,6 +752,9 @@ impl AppView {
                         );
                     }
                 }
+                // theme.json is this window's own look (#425): the chrome stays
+                // per client, so it is never published to a joined viewer.
+                ConfigFile::Theme => self.model.apply_theme_file_text(&change.contents),
                 _ => {
                     self.model.apply_keymap_text(&change.contents);
                     if let Some(hub) = &self.join {
@@ -1136,6 +1140,11 @@ pub fn startup(app: &mut AppView) {
         let _ = config_write(ConfigFile::Keybindings, EMPTY_KEYBINDINGS);
         EMPTY_KEYBINDINGS.to_string()
     });
+    let theme = config_read(ConfigFile::Theme).unwrap_or_else(|| {
+        let _ = config_write(ConfigFile::Theme, EMPTY_THEME);
+        EMPTY_THEME.to_string()
+    });
+    app.model.apply_theme_file_text(&theme);
     app.themes_dir = ensure_themes_dir(AppView::bundled_themes().as_deref());
     app.refresh_themes();
     app.model.apply_settings_text(&settings);

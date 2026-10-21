@@ -718,6 +718,8 @@ pub struct Model {
     /// frame (the completion popup, the editor's find panel and selection).
     pub ui_context: UiContext,
     pub settings_error: Option<String>,
+    /// theme.json's chrome overrides (#425), kept while a later edit is bad.
+    pub chrome_theme: crate::theme_file::ChromeTheme,
     pub theme_names: Vec<String>,
     /// the snippets folder's files, read by the ui when the picker opens
     /// (`Effect::RefreshSnippets`), the way `theme_names` is.
@@ -835,6 +837,7 @@ impl Model {
             conditional_keys: vec![],
             ui_context: UiContext::default(),
             settings_error: None,
+            chrome_theme: Default::default(),
             theme_names: vec![],
             snippets: vec![],
             theme_current: None,

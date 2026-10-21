@@ -650,6 +650,8 @@ impl AppView {
             idle_faint,
             chosen_fill,
         } = crate::chrome::tab_colors(chrome, wear, REMOTE_BAR_TINT);
+        // theme.json (#425) wins over the tint for the ground and sets the edge.
+        let bar_style = chrome.bar_style(&self.model.chrome_theme.titlebar, bar);
         let mut tabs = div().flex().items_center().gap_1();
         for (index, ws) in self.model.workspaces.iter().enumerate() {
             let cards = self.model.cards_on(Some(&ws.id));
@@ -829,9 +831,9 @@ impl AppView {
             .justify_between()
             .pl(px(TITLE_BAR_TRAFFIC_LIGHT_INSET_PX))
             .pr_2()
-            .bg(self.window_fill(bar))
+            .bg(self.window_fill(bar_style.bg))
             .border_b_1()
-            .border_color(chrome.bar_border)
+            .border_color(bar_style.border.unwrap_or(gpui::transparent_black()))
             .font_family(chrome.typography.family.clone())
             .font_weight(chrome.typography.regular.weight)
             // A press that reaches the bar itself (not a tab or the "+", which
@@ -916,6 +918,7 @@ impl AppView {
         } else {
             chrome.text_faint
         };
+        let bar_style = chrome.bar_style(&m.chrome_theme.statusbar, chrome.bar_bg);
         div()
             .h(px(self.statusbar_h()))
             .w_full()
@@ -923,9 +926,9 @@ impl AppView {
             .items_center()
             .justify_between()
             .px_2()
-            .bg(self.window_fill(chrome.bar_bg))
+            .bg(self.window_fill(bar_style.bg))
             .border_t_1()
-            .border_color(chrome.bar_border)
+            .border_color(bar_style.border.unwrap_or(gpui::transparent_black()))
             .font_family(chrome.typography.family.clone())
             .font_weight(chrome.typography.regular.weight)
             .text_size(size)

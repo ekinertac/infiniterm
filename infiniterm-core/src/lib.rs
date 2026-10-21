@@ -109,6 +109,7 @@ pub mod slide;
 pub mod slot_snap;
 pub mod snippets;
 pub mod switcher;
+pub mod theme_file;
 pub mod themes_files;
 pub mod transcript;
 pub mod update;

@@ -48,6 +48,17 @@ pub const EMPTY_KEYBINDINGS: &str = concat!(
 );
 
 impl Model {
+    /// theme.json changed (#425). A file with a mistake is not applied and
+    /// the theme in force stays, the rule settings.json follows (#246).
+    pub fn apply_theme_file_text(&mut self, text: &str) {
+        match crate::theme_file::parse(text) {
+            Ok(theme) => self.chrome_theme = theme,
+            Err(e) => self.effects.push(Effect::Warn(format!(
+                "theme.json not applied, the theme you had stays: {e}"
+            ))),
+        }
+    }
+
     pub fn apply_settings_text(&mut self, text: &str) {
         // Checked BEFORE it is applied: a file with an error is not accepted,
         // and the settings in force stay (#246). It used to fall back to the

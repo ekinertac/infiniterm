@@ -28,6 +28,8 @@ pub enum ConfigFile {
     /// `snippets.json`: the snippet picker's rows for one day, 2026-09-22.
     /// Read once to move its entries into `snippets_dir()`, then left alone.
     Snippets,
+    /// `theme.json`: the chrome theme (#425), yours only, no default twin.
+    Theme,
 }
 
 impl ConfigFile {
@@ -38,6 +40,7 @@ impl ConfigFile {
             Self::Keybindings => "keybindings.json",
             Self::KeybindingsDefault => "keybindings.default.json",
             Self::Snippets => "snippets.json",
+            Self::Theme => "theme.json",
         }
     }
 
@@ -113,14 +116,18 @@ pub struct ConfigChange {
 }
 
 /// Re-sends a user file whenever its mtime changes, so edits apply without
-/// a restart. Only the two files a person edits are watched: the generated
+/// a restart. Only the files a person edits are watched: the generated
 /// ones change on every launch by definition. Polling at 1 s rather than a
-/// watcher dependency: two files, edited by hand, and a second of latency is
-/// invisible while tuning. The thread ends when the receiver is dropped.
+/// watcher dependency: three files, edited by hand, and a second of latency
+/// is invisible while tuning. The thread ends when the receiver is dropped.
 pub fn config_watch(tx: Sender<ConfigChange>) {
     std::thread::spawn(move || {
-        let watched = [ConfigFile::Settings, ConfigFile::Keybindings];
-        let mut last: [Option<SystemTime>; 2] = [None, None];
+        let watched = [
+            ConfigFile::Settings,
+            ConfigFile::Keybindings,
+            ConfigFile::Theme,
+        ];
+        let mut last: [Option<SystemTime>; 3] = [None; 3];
         loop {
             for (i, file) in watched.iter().enumerate() {
                 let path = config_path(*file);
@@ -155,6 +162,7 @@ mod tests {
             ConfigFile::SettingsDefault,
             ConfigFile::Keybindings,
             ConfigFile::KeybindingsDefault,
+            ConfigFile::Theme,
         ] {
             assert_eq!(config_path(file).parent(), Some(config_dir().as_path()));
         }
@@ -166,6 +174,7 @@ mod tests {
         assert!(ConfigFile::KeybindingsDefault.is_generated());
         assert!(!ConfigFile::Settings.is_generated());
         assert!(!ConfigFile::Keybindings.is_generated());
+        assert!(!ConfigFile::Theme.is_generated());
     }
 
     // Opening a file whose edits are discarded next launch invites losing work.
