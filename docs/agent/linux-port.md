@@ -30,6 +30,12 @@ Not tested: Wayland, a real GPU, IME (`ime.rs` compiles because it is gpui's gen
 
 ## How to repeat it
 
+The driver does all of this (2026-10-22): `tools/drive/linux/box.sh up` (droplet and packages), then `tools/drive/linux/smoke.sh` (copy this checkout, build, check the first frame, a shell in a card and the Turkish Q chord, screenshots in `.scratchpad/linux-shots/`), then `box.sh down`. Each step by hand: `box.sh sync`, `box.sh build`, `box.sh r start`, `box.sh r chord super t`, `box.sh r ift ls`, `box.sh shot <name>`. `box.sh` copies the working tree with rsync, so uncommitted changes are what gets built. `LINUX_HOST=user@host` drives any Linux machine instead. Run with no verb, each script prints its verbs.
+
+Three things the first driver run found, each now handled in `remote.sh`: a fresh droplet runs its own apt at boot and a second apt corrupts the cache (wait for `cloud-init status --wait`); a process started over ssh keeps the session open unless it and every subshell around it has no ssh descriptor (`setsid`, stdin from `/dev/null`, redirects on the whole subshell); under `set -e` and `pipefail`, `lsof` on a missing socket ends the script silently, so "not running" is answered explicitly.
+
+The commands underneath, for a machine the driver does not reach:
+
 ```
 doctl --context ekinertac compute droplet create ift-linux-spike --image ubuntu-24-04-x64 --size s-8vcpu-16gb --region fra1 --ssh-keys 23752258 --wait
 apt-get install -y gcc g++ libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev make cmake clang lld llvm git curl pkg-config build-essential mesa-vulkan-drivers vulkan-tools xvfb imagemagick xdotool fonts-dejavu-core x11-utils openbox x11-xkb-utils
@@ -81,6 +87,6 @@ The `app` job in `.github/workflows/linux.yml` runs `cargo clippy -p infiniterm-
 
 1. Base the Linux work on the Windows branch's seam, not a second seam. Done: #513 put it on master.
 2. `keycode.rs` Linux functions, the Linux default fonts, the first-frame fix: the app is then usable on X11. Done: the fonts in #515, the keycode with this paragraph's PR, the first frame was the missing window manager.
-3. A `tools/drive/linux/` driver (the commands above as a script on a droplet) so each change is checked with a screenshot.
+3. A `tools/drive/linux/` driver (the commands above as a script on a droplet) so each change is checked with a screenshot. Done: `box.sh`, `remote.sh`, `smoke.sh`.
 4. Context menu drawn by gpui, title bar drag, the icon font.
 5. Packaging, then CEF.
