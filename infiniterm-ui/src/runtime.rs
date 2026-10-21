@@ -1066,6 +1066,8 @@ impl AppView {
     }
 
     /// The host's file in a joined window: everything but the look (#511).
+    /// Joining is unix-only, so nothing on Windows calls it.
+    #[cfg(unix)]
     fn apply_host_settings_text(&mut self, text: &str) {
         self.model.apply_host_settings_text(text);
         self.after_settings();
