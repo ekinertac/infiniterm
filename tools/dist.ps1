@@ -25,8 +25,10 @@
 #     LICENSE.txt
 param(
     [string]$Out = "target/dist-win",
-    # Where the updater would fetch from; only the manifest carries it.
-    [string]$Base = "https://github.com/ekinertac/infiniterm-releases/releases/latest/download"
+    # Where the updater would fetch from; only the manifest carries it. The
+    # main repo's tagged download, the shape tools/dist.sh writes: the app's
+    # manifest check accepts a url only under `.../releases/download/`.
+    [string]$Base = "https://github.com/ekinertac/infiniterm/releases/download"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -80,7 +82,7 @@ $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
     tag      = $tag
     pub_date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     commit   = $commit
-    url      = "$Base/$name.zip"
+    url      = "$Base/$tag/$name.zip"
     sha256   = $sha
 } | ConvertTo-Json | Set-Content (Join-Path $Out 'latest-windows.json')
 
