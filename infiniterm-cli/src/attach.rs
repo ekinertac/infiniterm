@@ -715,6 +715,9 @@ mod tests {
     // A daemon killed by a signal leaves meta AND socket behind; the shell it
     // named is gone, so the listing must not call it a session. This is also
     // what the app's live list on a remote host is built from.
+    // These six need a live pid in a meta file, which only an `iftd` owns;
+    // there is none on Windows, where `pid_alive` is always false.
+    #[cfg(unix)]
     #[test]
     fn a_session_whose_shell_is_gone_is_not_listed_even_with_its_socket() {
         let dir = tempdir();
@@ -737,6 +740,7 @@ mod tests {
     }
 
     // It must work with no app running: that is the entire reason it exists.
+    #[cfg(unix)]
     #[test]
     fn sessions_are_listed_from_the_meta_files_alone() {
         let dir = tempdir();
@@ -759,6 +763,7 @@ mod tests {
     // socket was gone, offering an attach that could only fail. The app
     // sweeps these, but only while it is running, and this command's whole
     // reason to exist is working when it is not.
+    #[cfg(unix)]
     #[test]
     fn a_meta_with_no_socket_is_not_a_session() {
         let dir = tempdir();
@@ -792,6 +797,7 @@ mod tests {
     }
 
     // One malformed file must not hide the sessions that parsed fine.
+    #[cfg(unix)]
     #[test]
     fn a_malformed_file_does_not_hide_the_good_ones() {
         let dir = tempdir();
@@ -808,6 +814,7 @@ mod tests {
         assert_eq!(rows[0].id, "good");
     }
 
+    #[cfg(unix)]
     #[test]
     fn rows_come_back_sorted_by_id() {
         let dir = tempdir();
@@ -854,6 +861,7 @@ mod tests {
 
     // `ift attach <id-nobody-has>`: a usage error, not "nothing is running" —
     // the daemon layer is never touched to find this out.
+    #[cfg(unix)]
     #[test]
     fn attaching_an_unknown_id_never_touches_a_socket() {
         let dir = tempdir();

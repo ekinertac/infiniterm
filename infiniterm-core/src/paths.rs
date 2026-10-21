@@ -133,7 +133,10 @@ pub fn default_data_dir(
     if linux {
         xdg_data_home
             .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
+            // `has_root`, not `is_absolute`: the rule is "not relative", and
+            // on Windows `/data` has no drive letter, so it is not absolute
+            // there although it is plainly not a relative path either.
+            .filter(|p| p.has_root())
             .unwrap_or_else(|| home.join(".local").join("share"))
             .join(BUNDLE_ID)
     } else {
@@ -481,8 +484,14 @@ mod tests {
         use std::ffi::OsStr;
         let (cfg, data) = (OsStr::new("/c"), OsStr::new("/d"));
         assert_eq!(config_dir_for(Some(cfg), Some(data)), PathBuf::from("/c"));
-        assert_eq!(config_dir_for(None, Some(data)), PathBuf::from("/d/config"));
+        assert_eq!(
+            config_dir_for(None, Some(data)),
+            PathBuf::from("/d").join("config")
+        );
+        #[cfg(unix)]
         assert!(config_dir_for(None, None).ends_with(".config/infiniterm"));
+        #[cfg(windows)]
+        assert!(config_dir_for(None, None).ends_with("infiniterm/config"));
     }
 
     // The config is hand-edited and this is not; they must never collide.

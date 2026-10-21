@@ -1287,7 +1287,9 @@ mod tests {
     fn a_new_file_needs_its_directory() {
         let dir = std::env::temp_dir().join(format!("ift-resolve-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let dir = std::fs::canonicalize(&dir).unwrap();
+        // The same canonicalisation `resolve` uses: on Windows the std one
+        // adds a `\\?\` prefix that `resolve` takes off.
+        let dir = infiniterm_core::paths::canonical(&dir).unwrap();
         let new = dir.join("notes.txt");
         assert_eq!(resolve(new.to_str().unwrap()).unwrap(), new);
         let missing = dir.join("nope/notes.txt");

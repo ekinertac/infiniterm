@@ -559,7 +559,9 @@ mod tests {
     fn terminal_opens_a_card_per_directory() {
         let (mut m, _a, _b) = two_cards();
         let before = m.cards.len();
-        let r = ask(&mut m, "terminal", &["/tmp", "/"]);
+        // Two directories that exist on any platform: `/tmp` is not one on Windows.
+        let tmp = std::env::temp_dir().to_string_lossy().into_owned();
+        let r = ask(&mut m, "terminal", &[tmp.as_str(), "/"]);
         assert!(r.ok, "{}", r.text);
         assert_eq!(m.cards.len(), before + 2);
         let r = ask(&mut m, "terminal", &["relative"]);
