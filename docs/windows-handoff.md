@@ -10,8 +10,10 @@ context menus, theme.json). What was checked on the gpu box after the merge,
 with the browser feature OFF (CEF is not in these builds): `cargo check` and
 `cargo test` for core, term, editor, hook and cli (about 1,390 tests, all
 passing), and `cargo check` plus `cargo test` for the ui crate (112 passing).
-Not checked on Windows after the merge: a build with CEF on, and anything on
-screen. The Mac side passed `make check`.
+A build with CEF on was checked on 2026-10-22: `cargo build` of ui, cli and
+hook links and `cargo test` for ui and browser passes (136 and 21 tests); the
+blockers were two `u32` casts in `surface.rs`. Not checked on Windows after
+the merge: anything on screen. The Mac side passed `make check`.
 
 Master's new code is Mac or unix only and stays that way here, each behind a
 `cfg` with a one-line answer rather than a port:
@@ -305,7 +307,7 @@ The remote shell over `ssh win-gpu-box` is PowerShell 7; use pwsh syntax and quo
 
 1. Rust via rustup with the MSVC toolchain, and the Visual Studio Build Tools "Desktop development with C++" workload (gpui and tree-sitter compile C and C++).
 2. `gh auth login`, then `gh repo clone ekinertac/infiniterm` (the repo is private).
-3. `.cargo/config.toml` sets `CEF_PATH` to a macOS path with `force = false`, so an environment variable wins. On the box set `$env:CEF_PATH = "$env:LOCALAPPDATA\cef"` and build once: the `cef` crate downloads the Windows distribution under it and its build script copies libcef.dll, the paks and the rest into `target/debug`. Without that variable the build picks up the macOS path and fails; with `--no-default-features` no CEF is needed at all.
+3. `.cargo/config.toml` sets `CEF_PATH` to a macOS path with `force = false`, so an environment variable wins. On the box set `$env:CEF_PATH = "$env:LOCALAPPDATA\cef"` and build once: the `cef` crate downloads the Windows distribution under it and its build script copies libcef.dll, the paks and the rest into `target/debug`. Without that variable the build picks up the macOS path and fails; with `--no-default-features` no CEF is needed at all. From a job that has no interactive prompt (ssh, `Win32_Process Create`) also dot-source `tools/drive/win/cef-env.ps1`: it adds the compiler environment and gets scoop's ninja shim out of CMake's way (its header says why), and after a failed first try `cargo clean -p cef-dll-sys`.
 4. The Makefile is macOS-only (`make bundle`, signing, notarization, the driver). On Windows use cargo directly: `cargo test -p infiniterm-core -p infiniterm-term -p infiniterm-editor`, `cargo build -p infiniterm-ui`, `cargo clippy -- -D warnings` on what you touch. Never `cargo fmt --all` (it rewrites the cli and hook crates; see CLAUDE.md's traps); format only the crates you change.
 
 ## What is Mac or Unix specific, file by file
