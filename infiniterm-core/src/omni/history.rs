@@ -162,6 +162,7 @@ mod tests {
     use super::*;
 
     // A history.json kept in a dotfiles repo stays a link (#219).
+    #[cfg(unix)]
     #[test]
     fn saving_through_a_symlink_keeps_the_link() {
         use std::os::unix::fs::symlink;

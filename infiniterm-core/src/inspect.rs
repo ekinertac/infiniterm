@@ -361,6 +361,9 @@ fn snapshot() -> Vec<Proc> {
             ppid: entry.th32ParentProcessID,
             pgid: entry.th32ProcessID,
             foreground: true,
+            // The process table has no CPU figure; `busy` stays false here,
+            // which only the daemon's park rule reads, and Windows has none.
+            cpu: 0.,
             args: String::from_utf16_lossy(&entry.szExeFile[..end]),
         });
         more = unsafe { Process32NextW(snap, &mut entry) } != 0;
@@ -465,6 +468,7 @@ mod tests {
                 ppid: 1,
                 pgid: 100,
                 foreground: true,
+                cpu: 0.,
                 args: "pwsh.exe".into(),
             },
             super::Proc {
@@ -472,6 +476,7 @@ mod tests {
                 ppid: 100,
                 pgid: 200,
                 foreground: true,
+                cpu: 0.,
                 args: "claude.exe".into(),
             },
             // An MCP server claude spawned: deeper, and not the answer.
@@ -480,6 +485,7 @@ mod tests {
                 ppid: 200,
                 pgid: 300,
                 foreground: true,
+                cpu: 0.,
                 args: "python.exe".into(),
             },
         ];

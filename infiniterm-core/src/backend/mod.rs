@@ -164,6 +164,7 @@ impl Panes {
             // A viewer window (`ift join`, #423): the cards are the host
             // app's, reached through it, never through its `iftd`. No
             // forward: the host's hooks have nothing to say to this window.
+            #[cfg(unix)]
             _ if remote::join_from_env().is_some() => {
                 let host = remote::join_from_env().expect("checked by the guard");
                 let (backend, rx) = daemon::DaemonBackend::new_viewer(host, buffer_mib);
@@ -172,6 +173,7 @@ impl Panes {
             // A remote instance (`ift connect`) runs its cards on the host
             // `INFINITERM_REMOTE` names, whatever the setting says, and needs no
             // `iftd` on THIS Mac: the daemons are on the server.
+            #[cfg(unix)]
             _ if remote::from_env().is_some() => {
                 let host = remote::from_env().expect("checked by the guard");
                 // Hooks and `ift` on the server reach this instance through it.
@@ -254,8 +256,12 @@ impl Panes {
     /// other pane, whose size is its card's.
     pub fn viewer_pane_size(&self, pane: PaneId) -> Option<(u16, u16)> {
         match self {
+            #[cfg(unix)]
             Panes::Daemon(b) => b.viewer_pane_size(pane),
-            _ => None,
+            _ => {
+                let _ = pane;
+                None
+            }
         }
     }
 
@@ -267,11 +273,13 @@ impl Panes {
     /// that join replays the ring and the host jogs the program itself.
     pub fn redraw(&self, pane: PaneId, cols: u16, rows: u16) -> Redraw {
         match self {
+            #[cfg(unix)]
             Panes::Daemon(b) => b.redraw_now(pane),
             Panes::Local(b) => {
                 jog(|c, r| b.resize_now(pane, c, r), cols, rows);
                 Redraw::Asked
             }
+            #[cfg(unix)]
             Panes::Tmux(b) => {
                 jog(|c, r| b.resize_now(pane, c, r), cols, rows);
                 Redraw::Asked
@@ -281,6 +289,7 @@ impl Panes {
 
     /// A viewer card's session joined again on a thread of its own (#442);
     /// the answer comes from `take_reconnected`. Nothing for any other pane.
+    #[cfg(unix)]
     pub fn begin_reconnect(&self, session: &str) {
         if let Panes::Daemon(b) = self {
             b.begin_reconnect(session);
@@ -288,6 +297,7 @@ impl Panes {
     }
 
     /// The reconnects that ended: a new pane, or why not (#442).
+    #[cfg(unix)]
     pub fn take_reconnected(&self) -> Vec<(String, Result<PaneId, remote::JoinFailure>)> {
         match self {
             Panes::Daemon(b) => b.take_reconnected(),
@@ -298,6 +308,7 @@ impl Panes {
     /// What the join server (#423) needs from this backend: the relay and a
     /// way to write a viewer's keys to a session. Only the daemon backend has
     /// them; under local and tmux a card has no session a viewer could join.
+    #[cfg(unix)]
     pub fn join_parts(
         &self,
     ) -> Option<(
@@ -444,18 +455,29 @@ impl Panes {
     /// reopened one (`Model::can_park`): the local backend has no session
     /// to adopt, and tmux was left as it was.
     pub fn can_park(&self) -> bool {
-        matches!(self, Panes::Daemon(_))
+        #[cfg(unix)]
+        {
+            matches!(self, Panes::Daemon(_))
+        }
+        #[cfg(windows)]
+        {
+            false
+        }
     }
 
     /// Lets go of a parked card's pane so its reopened card can adopt the
     /// session again. True when the session is left running for that.
     pub fn release(&self, pane: PaneId) -> bool {
         match self {
+            #[cfg(unix)]
             Panes::Daemon(b) => {
                 b.detach_now(pane);
                 true
             }
-            _ => false,
+            _ => {
+                let _ = pane;
+                false
+            }
         }
     }
 
