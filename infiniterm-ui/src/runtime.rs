@@ -1256,7 +1256,12 @@ pub fn startup(app: &mut AppView) {
     // ui-themes/default.json BEFORE the settings are read (#511), and that
     // file is created when missing. A joined viewer has no files of its own
     // to move (its look is whatever its folder holds).
-    if infiniterm_core::backend::remote::join_from_env().is_none() {
+    // (There is no joined viewer on Windows, so the move always runs there.)
+    #[cfg(unix)]
+    let is_viewer = infiniterm_core::backend::remote::join_from_env().is_some();
+    #[cfg(windows)]
+    let is_viewer = false;
+    if !is_viewer {
         match infiniterm_core::config_files::migrate_look_keys() {
             Ok(keys) if !keys.is_empty() => eprintln!(
                 "[infiniterm] moved {} look settings from settings.json to ui-themes/default.json: {}",
