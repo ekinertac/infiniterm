@@ -91,6 +91,7 @@ impl CardWindow {
     }
 
     fn key_down(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        crate::keycode::note_key_down();
         let k = &e.keystroke;
         let m = &k.modifiers;
         // A dead key is composed by macOS through `replace_text_in_range`,

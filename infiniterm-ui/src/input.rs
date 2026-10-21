@@ -852,6 +852,9 @@ impl AppView {
     }
 
     pub fn key_down(&mut self, e: &KeyDownEvent, cx: &mut gpui::App) -> bool {
+        // Linux reads this key's physical code now; elsewhere it is already
+        // recorded (`keycode::note_key_down`).
+        crate::keycode::note_key_down();
         let mut owned = e.clone();
         owned.keystroke.modifiers = self.modifier_roles(owned.keystroke.modifiers);
         let e = &owned;

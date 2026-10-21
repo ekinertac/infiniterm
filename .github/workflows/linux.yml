@@ -1,7 +1,8 @@
 # Linux builds of the three binaries a server needs (#118): `iftd` (the
-# session daemon), `ift` (the CLI) and `infiniterm-hook`. The app itself is
-# macOS only; this proves the rest still compiles and runs on Linux, and
-# packages static musl binaries for the remote-instance work.
+# session daemon), `ift` (the CLI) and `infiniterm-hook`. This proves the rest
+# still compiles and runs on Linux, and packages static musl binaries for the
+# remote-instance work. The `app` job checks that the desktop app compiles
+# on Linux too (#464); there is no Linux app package yet.
 #
 # When a release is published (`make publish`, from the Mac) the same build
 # runs on the release's tag and attaches `infiniterm-server-<tag>-linux-
@@ -23,6 +24,8 @@ on:
       - "infiniterm-session/**"
       - "infiniterm-cli/**"
       - "infiniterm-hook/**"
+      - "infiniterm-ui/**"
+      - "infiniterm-editor/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/linux.yml"
@@ -102,6 +105,25 @@ jobs:
           ls -la assets
           gh release upload "${{ github.event.release.tag_name }}" assets/* \
             --repo "${{ github.repository }}" --clobber
+
+  # The desktop app compiles on Linux (#464), without browser cards: a Mac-only
+  # call added without a gate would otherwise break it silently, since every
+  # session builds on a Mac. glibc, not musl, because the app links the X11,
+  # Wayland and Vulkan system libraries; the package list is the one in
+  # docs/agent/linux-port.md. Clippy, not a build: it checks the same code in
+  # a fraction of the time.
+  app:
+    name: app compiles on linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev clang
+      - run: cargo clippy --locked -p infiniterm-ui --no-default-features -- -D warnings
 
   test:
     name: test

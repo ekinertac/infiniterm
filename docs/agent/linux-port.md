@@ -32,16 +32,8 @@ Not tested: Wayland, a real GPU, IME (`ime.rs` compiles because it is gpui's gen
 
 ```
 doctl --context ekinertac compute droplet create ift-linux-spike --image ubuntu-24-04-x64 --size s-8vcpu-16gb --region fra1 --ssh-keys 23752258 --wait
-apt-get install -y gcc g++ libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev make cmake clang lld llvm git curl pkg-config build-essential mesa-vulkan-drivers vulkan-tools xvfb imagemagick xdotool fonts-dejavu-core x11-utils openbox
-git clone https://github.com/ekinertac/infiniterm.git && cd infiniterm && git checkout windows-merge-master
-cat >> infiniterm-ui/src/keycode.rs <<'R'
-#[cfg(all(unix, not(target_os = "macos")))]
-pub fn install() {}
-#[cfg(all(unix, not(target_os = "macos")))]
-pub fn dom_code(_code: u16) -> Option<&'static str> { None }
-#[cfg(all(unix, not(target_os = "macos")))]
-pub fn last_dead() -> bool { false }
-R
+apt-get install -y gcc g++ libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev make cmake clang lld llvm git curl pkg-config build-essential mesa-vulkan-drivers vulkan-tools xvfb imagemagick xdotool fonts-dejavu-core x11-utils openbox x11-xkb-utils
+git clone https://github.com/ekinertac/infiniterm.git && cd infiniterm      # master builds on Linux since #464's keycode PR
 cargo build -p infiniterm-ui --no-default-features && cargo build -p infiniterm-cli -p infiniterm-session -p infiniterm-hook
 Xvfb :99 -screen 0 1920x1080x24 &
 DISPLAY=:99 openbox &                          # without a window manager the first frame stays black
@@ -49,7 +41,7 @@ DISPLAY=:99 INFINITERM_DATA_DIR=/tmp/ift-spike PATH=$PWD/target/debug:$PATH infi
 DISPLAY=:99 import -window root shot.png
 ```
 
-The package list is most of zed's `script/linux` (the set for gpui; libgit2, libva, sqlite, pipewire and the portal were left out and were not needed) plus Mesa, Xvfb, ImageMagick and xdotool. Package install, rustup and a first debug build of the ui crate took about 15 minutes together on 8 vCPU. `iftd` is found on PATH. `xdotool windowactivate` fails without a window manager; `windowfocus` and plain `type` / `key` work. The `default` context of doctl is the employer's production: always pass `--context ekinertac`, and delete the droplet afterwards (`droplet delete` has no `--wait`; poll `droplet list`).
+The package list is most of zed's `script/linux` (the set for gpui; libgit2, libva, sqlite, pipewire and the portal were left out and were not needed) plus Mesa, Xvfb, ImageMagick and xdotool. Package install, rustup and a first debug build of the ui crate took about 15 minutes together on 8 vCPU. `iftd` is found on PATH. `xdotool windowactivate` fails without a window manager; `windowfocus` and plain `type` / `key` work. A CHORD is sent held, `xdotool keydown super minus; sleep 0.1; xdotool keyup minus super`: `xdotool key` releases the key before the app asks the X server which key is down, and the chord falls back to gpui's layout name (see the keycode paragraph below). `INFINITERM_KEYLOG=1` prints each chord with its physical code (`[chord] cmd+= (key "-", code Some("Equal"))`). The `default` context of doctl is the employer's production: always pass `--context ekinertac`, and delete the droplet afterwards (`droplet delete` has no `--wait`; poll `droplet list`).
 
 ## The macOS-only pieces and a plan for each
 
@@ -57,7 +49,7 @@ The Windows branch already put the seam in: Cocoa crates under `[target.'cfg(tar
 
 | Piece | On macOS | Linux plan |
 |---|---|---|
-| `keycode.rs` | NSEvent monitor gives the physical key code and the real Shift flag | Required to build. gpui's X11/Wayland keystroke comes from xkb; the physical key is the evdev/xkb keycode, which gpui does not pass on. First version: the three no-op functions (chords from gpui's key name, so Turkish Q has the old Cmd+= bug). Real fix: read the keycode in gpui's event or an XInput2 / xkb state query, a table like the Windows scan-code one. |
+| `keycode.rs` | NSEvent monitor gives the physical key code and the real Shift flag | Done on X11 (2026-10-22), see the paragraph below. Native Wayland still gets gpui's layout names. |
 | Cmd key | `platform` is Cmd | gpui maps Super to `platform`, which the spike confirmed. Desktops take many Super chords themselves (GNOME: Super+number, Super+A). Decide: Super as is, or the Windows branch's `keyboard.commandModifier` (left Ctrl for the app, right Ctrl for the terminal); `roles` is `cfg(windows)` today and would need an xkb read of which Ctrl is down. Ekin's choice. |
 | `ime.rs`, `composing.rs` | the macOS text input system | Compile as they are (gpui's generic input handler). gpui's Linux backends speak XIM and Wayland text-input. Dead keys: `last_dead` returns false until tested with a compose key. |
 | `native_menu.rs` | NSMenu for the right-click menus | gpui has no native context menu on Linux. Draw the menu with gpui from the same `context_menu.rs` data; that also serves Windows. |
@@ -75,10 +67,20 @@ The Windows branch already put the seam in: Cocoa crates under `[target.'cfg(tar
 | Updater, `ift install`, `/Applications` paths | bundle swap, `codesign`, `spctl` | Off for the first version (the updater already refuses anything outside an Applications folder). Packaging (AppImage or .deb) decides the paths. |
 | Themes and assets | copied into the bundle by `tools/bundle.sh` | Ship `assets/themes` beside the binary or under `share/infiniterm/`, and look there. |
 
+## The physical key on Linux (2026-10-22)
+
+gpui's Linux keystroke has the Mac's problem word for word: `Keystroke::from_xkb` names the key through the layout, clears Shift on a symbol, and drops the key code. There is no local event monitor to hook, so `keycode.rs` reads the key the other way round: the first thing every `key_down` does is `keycode::note_key_down()`, which on Linux sends one `QueryKeymap` on an X connection of our own (`x11rb`, already in the tree as gpui's dependency) and keeps the one key down that the scan code table names (`pressed_scan`; modifiers are not in the table, so a chord leaves one key; two named keys at once is ambiguous and answers `None`). Shift comes from the same bitmap (`shift_down`). A Linux evdev code is the set 1 scan code for every key in the Windows table, and an X11 key code is the evdev code plus 8, so Windows and Linux share `set1_dom_code`; its tests now run on every platform, the Mac included. Elsewhere `note_key_down` does nothing.
+
+Checked on the droplet with `setxkbmap tr`: Super plus the key US prints `=` on (Turkish Q prints `-` there) logged `cmd+= (key "-", code Some("Equal"))` and `terminal.fontSize` went from 14 to 15; with Shift it was `cmd+shift+=` although gpui reported `_` with Shift cleared; Turkish letters typed into a card unchanged.
+
+Limits, stated: (1) native Wayland: gpui picks Wayland whenever `WAYLAND_DISPLAY` is set, our connection then reaches XWayland, which sees no keys while a Wayland window has focus, so every query answers `None` and the keymap gets gpui's layout names (the Turkish Q `Cmd+=` bug, on Wayland only); a fix needs the key code from gpui's Wayland client or the X11 backend forced. (2) The query runs when the app handles the key, not when the server got it: a press released before that answers `None`, the same fallback. On the droplet (software rendering, so a slow main thread) holds of 40 ms and more were named 20 of 20 times, 20 ms 8 of 10; human presses last 70 to 150 ms. (3) Dead keys need nothing: gpui composes them itself with xkbcommon's compose state, so `last_dead()` is `false` on Linux. Checked with `setxkbmap us -variant intl`: the dead key arrived as a keystroke with no character (`key: "'", key_char: None`), the terminal sent nothing for it, the next key arrived as `é`, and the card read `café`. (4) Super is Cmd (`roles` is the identity off Windows); desktops take many Super chords themselves, and whether Linux gets the Windows `keyboard.commandModifier` split is Ekin's choice.
+
+The `app` job in `.github/workflows/linux.yml` runs `cargo clippy -p infiniterm-ui --no-default-features -- -D warnings` on Ubuntu for every PR that touches the ui or editor crates, so a Mac-only call added without a gate is caught; the Mac's `make check` compiles none of the Linux code.
+
 ## Order
 
-1. Base the Linux work on the Windows branch's seam (or wait for it on master), not a second seam.
-2. `keycode.rs` Linux functions, the Linux default fonts, the first-frame fix: the app is then usable on X11.
+1. Base the Linux work on the Windows branch's seam, not a second seam. Done: #513 put it on master.
+2. `keycode.rs` Linux functions, the Linux default fonts, the first-frame fix: the app is then usable on X11. Done: the fonts in #515, the keycode with this paragraph's PR, the first frame was the missing window manager.
 3. A `tools/drive/linux/` driver (the commands above as a script on a droplet) so each change is checked with a screenshot.
 4. Context menu drawn by gpui, title bar drag, the icon font.
 5. Packaging, then CEF.

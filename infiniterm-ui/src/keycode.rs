@@ -14,6 +14,11 @@
 //! of Ctrl is down. See `windows_hook` at the bottom of this file, and
 //! `ctrl_sides` for why the side is the whole answer to "Windows has no
 //! Cmd key".
+//!
+//! Linux has the same problem and no event monitor: `x11_keys` asks the X
+//! server which key is down when the key-down arrives (`note_key_down`) and
+//! shares the Windows scan code table. Native Wayland is not covered; see
+//! that module and docs/agent/linux-port.md.
 #![allow(unexpected_cfgs, clippy::missing_transmute_annotations)]
 use infiniterm_core::config::CommandModifier;
 #[cfg(target_os = "macos")]
@@ -148,8 +153,8 @@ pub fn dom_code(code: u16) -> Option<&'static str> {
     })
 }
 
-// The numbers here are Carbon virtual key codes; Windows has its own table
-// and its own tests at the bottom of this file.
+// The numbers here are Carbon virtual key codes; Windows and Linux share the
+// set 1 table, tested at the bottom of this file.
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
@@ -232,69 +237,197 @@ mod windows_hook {
             );
         }
     }
+}
 
-    /// Scan code set 1 to DOM `code` names, for the keys the keymap binds:
-    /// the letters, the digit row and the punctuation around it. Anything
-    /// else answers `None` and keeps gpui's name.
-    pub fn dom_code(scan: u16) -> Option<&'static str> {
-        Some(match scan {
-            0x02 => "Digit1",
-            0x03 => "Digit2",
-            0x04 => "Digit3",
-            0x05 => "Digit4",
-            0x06 => "Digit5",
-            0x07 => "Digit6",
-            0x08 => "Digit7",
-            0x09 => "Digit8",
-            0x0A => "Digit9",
-            0x0B => "Digit0",
-            0x0C => "Minus",
-            0x0D => "Equal",
-            0x10 => "KeyQ",
-            0x11 => "KeyW",
-            0x12 => "KeyE",
-            0x13 => "KeyR",
-            0x14 => "KeyT",
-            0x15 => "KeyY",
-            0x16 => "KeyU",
-            0x17 => "KeyI",
-            0x18 => "KeyO",
-            0x19 => "KeyP",
-            0x1A => "BracketLeft",
-            0x1B => "BracketRight",
-            0x1E => "KeyA",
-            0x1F => "KeyS",
-            0x20 => "KeyD",
-            0x21 => "KeyF",
-            0x22 => "KeyG",
-            0x23 => "KeyH",
-            0x24 => "KeyJ",
-            0x25 => "KeyK",
-            0x26 => "KeyL",
-            0x27 => "Semicolon",
-            0x28 => "Quote",
-            0x29 => "Backquote",
-            0x2B => "Backslash",
-            0x2C => "KeyZ",
-            0x2D => "KeyX",
-            0x2E => "KeyC",
-            0x2F => "KeyV",
-            0x30 => "KeyB",
-            0x31 => "KeyN",
-            0x32 => "KeyM",
-            0x33 => "Comma",
-            0x34 => "Period",
-            0x35 => "Slash",
-            // The extra key a 102-key European board has beside the left
-            // Shift, which Turkish Q uses for `<` and `>`.
-            0x56 => "IntlBackslash",
-            _ => return None,
-        })
+/// Scan code set 1 to DOM `code` names, for the keys the keymap binds: the
+/// letters, the digit row and the punctuation around it. Anything else
+/// answers `None` and keeps gpui's name.
+///
+/// Windows and Linux share it: a Linux evdev key code is the set 1 scan code
+/// for every key in this table (KEY_Q is 16, KEY_EQUAL 13, KEY_102ND 86),
+/// and an X11 key code is the evdev code plus 8 (`x11_keys`). Compiled on
+/// the Mac too, unused, so its tests run on every platform.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn set1_dom_code(scan: u16) -> Option<&'static str> {
+    Some(match scan {
+        0x02 => "Digit1",
+        0x03 => "Digit2",
+        0x04 => "Digit3",
+        0x05 => "Digit4",
+        0x06 => "Digit5",
+        0x07 => "Digit6",
+        0x08 => "Digit7",
+        0x09 => "Digit8",
+        0x0A => "Digit9",
+        0x0B => "Digit0",
+        0x0C => "Minus",
+        0x0D => "Equal",
+        0x10 => "KeyQ",
+        0x11 => "KeyW",
+        0x12 => "KeyE",
+        0x13 => "KeyR",
+        0x14 => "KeyT",
+        0x15 => "KeyY",
+        0x16 => "KeyU",
+        0x17 => "KeyI",
+        0x18 => "KeyO",
+        0x19 => "KeyP",
+        0x1A => "BracketLeft",
+        0x1B => "BracketRight",
+        0x1E => "KeyA",
+        0x1F => "KeyS",
+        0x20 => "KeyD",
+        0x21 => "KeyF",
+        0x22 => "KeyG",
+        0x23 => "KeyH",
+        0x24 => "KeyJ",
+        0x25 => "KeyK",
+        0x26 => "KeyL",
+        0x27 => "Semicolon",
+        0x28 => "Quote",
+        0x29 => "Backquote",
+        0x2B => "Backslash",
+        0x2C => "KeyZ",
+        0x2D => "KeyX",
+        0x2E => "KeyC",
+        0x2F => "KeyV",
+        0x30 => "KeyB",
+        0x31 => "KeyN",
+        0x32 => "KeyM",
+        0x33 => "Comma",
+        0x34 => "Period",
+        0x35 => "Slash",
+        // The extra key a 102-key European board has beside the left
+        // Shift, which Turkish Q uses for `<` and `>`.
+        0x56 => "IntlBackslash",
+        _ => return None,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+pub use self::set1_dom_code as dom_code;
+
+/// An X11 key code is the evdev code plus this (the X protocol reserves
+/// codes 0 to 7).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+const X11_KEYCODE_OFFSET: u16 = 8;
+/// Left and right Shift as X11 key codes (evdev 42 and 54).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+const X11_SHIFT_KEYS: [u16; 2] = [50, 62];
+
+/// The one key the table names among the keys down in an X11 `QueryKeymap`
+/// bitmap (bit `k` of the 32 bytes is key code `k`), as a set 1 scan code.
+/// Modifiers are not in the table, so a chord leaves exactly one key. Two
+/// named keys down at once (typing fast) is ambiguous and answers `None`,
+/// which hands the keymap gpui's own name, as for a key the table lacks.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn pressed_scan(keys: &[u8; 32]) -> Option<u16> {
+    let mut found = None;
+    for code in X11_KEYCODE_OFFSET..256 {
+        if !key_down_in(keys, code) {
+            continue;
+        }
+        let scan = code - X11_KEYCODE_OFFSET;
+        if set1_dom_code(scan).is_some() {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(scan);
+        }
+    }
+    found
+}
+
+/// Whether either Shift is down in a `QueryKeymap` bitmap.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn shift_down(keys: &[u8; 32]) -> bool {
+    X11_SHIFT_KEYS.iter().any(|&code| key_down_in(keys, code))
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn key_down_in(keys: &[u8; 32], code: u16) -> bool {
+    keys[(code / 8) as usize] & (1 << (code % 8)) != 0
+}
+
+/// The Linux half. gpui's X11 and Wayland keystrokes come from xkb with the
+/// key code dropped (`Keystroke::from_xkb` names the key through the layout
+/// and clears Shift on a symbol), so the Mac's trap is here word for word.
+/// There is no local event monitor to hook, so the key is read the other
+/// way round: when a key-down reaches the app (`note_key_down`, called at
+/// the top of `input.rs` and `own_window.rs`), ask the X server which keys
+/// are down right now (`QueryKeymap`, one round trip on a connection of our
+/// own) and keep the one the table names.
+///
+/// Native Wayland has no such query: there our connection, if any, reaches
+/// XWayland, which sees no keys while a Wayland window has focus, so every
+/// query answers `None` and the keymap gets gpui's layout names (the
+/// Turkish Q `Cmd+=` bug comes back there). A key sent with no time between
+/// press and release (`xdotool key`) can be released before the query runs
+/// and also answers `None`; a test holds the key (`keydown`, `keyup`).
+#[cfg(all(unix, not(target_os = "macos")))]
+mod x11_keys {
+    use super::{pressed_scan, shift_down, LAST, LAST_SHIFT};
+    use std::sync::atomic::Ordering;
+    use std::sync::OnceLock;
+    use x11rb::protocol::xproto::ConnectionExt;
+    use x11rb::rust_connection::RustConnection;
+
+    static CONN: OnceLock<Option<RustConnection>> = OnceLock::new();
+
+    /// Opens the connection once, from `DISPLAY`. No display (a Wayland
+    /// session without XWayland) is one line on stderr and every later
+    /// query answering `None`, never a failure.
+    pub fn install() {
+        CONN.get_or_init(|| match x11rb::connect(None) {
+            Ok((conn, _screen)) => Some(conn),
+            Err(err) => {
+                eprintln!("[infiniterm] no X display for physical keys ({err}): layout key names are used");
+                None
+            }
+        });
+    }
+
+    pub fn note_key_down() {
+        let keys = CONN
+            .get()
+            .and_then(Option::as_ref)
+            .and_then(|conn| conn.query_keymap().ok()?.reply().ok())
+            .map(|reply| reply.keys);
+        let (scan, shift) = match keys {
+            Some(keys) => (pressed_scan(&keys), shift_down(&keys)),
+            None => (None, false),
+        };
+        LAST.store(scan.map_or(-1, i32::from), Ordering::Relaxed);
+        LAST_SHIFT.store(shift, Ordering::Relaxed);
     }
 }
 
-#[cfg(windows)]
-pub use windows_hook::dom_code;
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn install() {
+    x11_keys::install();
+}
+
+/// Reads the physical key of the key-down being handled, where a platform
+/// cannot record it before gpui sees it (Linux, `x11_keys`). Called first
+/// thing in every `key_down`; the Mac's monitor and the Windows hook have
+/// already recorded it, so it does nothing there.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn note_key_down() {
+    x11_keys::note_key_down();
+}
+
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+pub fn note_key_down() {}
+
+/// gpui composes dead keys itself on Linux (xkbcommon's compose state in its
+/// X11 and Wayland clients) and delivers the finished character, so nothing
+/// here has to refuse a key for the composition to happen: on US
+/// International the dead key arrives with no character and the next key as
+/// the composed letter (checked, docs/agent/linux-port.md).
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn last_dead() -> bool {
+    false
+}
 
 #[cfg(windows)]
 pub fn install() {
@@ -355,9 +488,55 @@ pub fn last_dead() -> bool {
     false
 }
 
-#[cfg(all(test, windows))]
-mod windows_tests {
-    use super::dom_code;
+// The set 1 table and the X11 bitmap rules, which Windows and Linux use; on
+// every platform, so a Mac run checks them too.
+#[cfg(test)]
+mod set1_tests {
+    use super::{pressed_scan, set1_dom_code as dom_code, shift_down};
+
+    /// A `QueryKeymap` bitmap with these X11 key codes down.
+    fn keymap(down: &[u16]) -> [u8; 32] {
+        let mut keys = [0u8; 32];
+        for &code in down {
+            keys[(code / 8) as usize] |= 1 << (code % 8);
+        }
+        keys
+    }
+
+    #[test]
+    fn the_key_under_a_chord_is_found_with_its_modifiers_down() {
+        // Super (133) + Shift (50) + the key US prints `=` on (evdev 13,
+        // X 21), which Turkish Q prints `-` on: the physical key wins.
+        let keys = keymap(&[133, 50, 21]);
+        assert_eq!(pressed_scan(&keys).and_then(dom_code), Some("Equal"));
+        assert!(shift_down(&keys));
+        // Right Shift counts too; Control (37) is not Shift.
+        assert!(shift_down(&keymap(&[62])));
+        assert!(!shift_down(&keymap(&[37, 21])));
+    }
+
+    #[test]
+    fn no_named_key_or_two_of_them_hands_the_keymap_gpuis_name() {
+        assert_eq!(pressed_scan(&keymap(&[])), None);
+        // Modifiers alone, and keys the table does not name (Return 36,
+        // Left 113).
+        assert_eq!(pressed_scan(&keymap(&[133, 50, 36, 113])), None);
+        // Q (24) and W (25) at once: which one this event is cannot be told.
+        assert_eq!(pressed_scan(&keymap(&[24, 25])), None);
+        assert_eq!(
+            pressed_scan(&keymap(&[24])).and_then(dom_code),
+            Some("KeyQ")
+        );
+    }
+
+    #[test]
+    fn the_european_key_beside_left_shift_is_named() {
+        // KEY_102ND is evdev 86, X 94: Turkish Q's `<` and `>`.
+        assert_eq!(
+            pressed_scan(&keymap(&[94])).and_then(dom_code),
+            Some("IntlBackslash")
+        );
+    }
 
     /// Every key the default keymap can bind must have a scan code here, or
     /// that binding silently falls back to gpui's layout-dependent name and
