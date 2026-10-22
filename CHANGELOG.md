@@ -6,6 +6,14 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-22
+
+- A ui theme can paint cards as a gradient: `ui.cardGradient` takes two colours (`#rgb`, `#rrggbb` or `#rrggbbaa`) and `ui.cardGradientAngle` the direction in degrees (180, the default, runs top to bottom). `ui.cardOpacity` still applies to both colours, so the gradient stays translucent over the window. Off unless the theme sets it; browser cards stay flat. With a gradient on, the gradient reaches the focus ring (no dark strip between them) and a resting card has no dark hairline border; a card with an agent in it keeps its coloured border.
+- A ui theme can style the workspace tabs: `tab.background` and `tab.activeBackground` (fills, `#rrggbbaa` allowed), `tab.gradient` (two colours for the chosen tab, top to bottom), `tab.opacity` (multiplies every tab fill's alpha), `tab.border` and `tab.activeBorder` (a one pixel outline), `tab.separator` (a thin line between idle tabs, never next to the chosen one) and `tab.radius` (0 to 40). Bar colours accept `#rrggbbaa` too. A theme without the keys draws the tabs as before.
+- A ui theme can put an icon on each workspace tab for the program running in the workspace's focused card (the first card when none is focused; a shell at its prompt shows the shell). `tab.icons: true` turns it on, `tab.iconStyle` picks `"glyph"` (a Nerd Font glyph, built in for common shells, runtimes and coding agents) or `"image"` (a logo from `ui-themes/<theme name>/icons/<program>.svg` or `.png`, `default.svg` or `.png` for the rest, a glyph for a program with none), and `tab.iconMap` maps a program name to a glyph or a file name. Off unless the theme sets it.
+- A ui theme can give terminal, transcript and page cards a header row inside the card: `card.header: true` turns it on, `card.headerIcons: true` shows the program's icon (the same icon as the workspace tab, from `tab.iconStyle` and `tab.iconMap`), and `card.headerButtons` lists the buttons, left to right, from `"split-right"`, `"split-down"`, `"maximise"` and `"close"`. Each runs the command of that name. The header takes its height from the body, so a terminal has fewer rows; the name moves from the corner chip into the header, and dragging the header moves the card. Editor, diff and browser cards keep their own tab strip. Off unless the theme sets it. `card.headerButtonsActiveOnly: true` shows the buttons only on the focused card; the other cards' headers show the icon and the name, and nothing is clickable where the buttons would be.
+- New `ui.focusRingWidth` theme key sets the focus ring's width in screen pixels at every zoom (0 to 10). 0, the default, keeps the built-in 3, 4 or 5 pixels by zoom. The gap between a card and its ring is as wide as the ring, so a thinner ring also closes the gap.
+
 ## 0.6.3 (build 1196), 2026-10-22
 
 ### Settings files

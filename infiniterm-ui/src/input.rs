@@ -27,8 +27,20 @@ use infiniterm_core::viewport::{anchored_viewport, world_pos_of, MAX_SCALE, MIN_
 /// What is under a screen point, in hit order: handles before bodies,
 /// corners before edges.
 pub enum Hit {
-    CardEdge { id: String, edge: Option<Edge> },
-    CardBody { id: String, local: Point },
+    CardEdge {
+        id: String,
+        edge: Option<Edge>,
+    },
+    /// `local` is under the card header, if the card wears one.
+    CardBody {
+        id: String,
+        local: Point,
+    },
+    /// A button of the card header (`card.header`).
+    HeaderButton {
+        id: String,
+        button: infiniterm_core::card_header::HeaderButton,
+    },
     GroupTab(String),
     Nothing,
 }
@@ -42,13 +54,71 @@ impl AppView {
         }
     }
 
+    /// World units the card header takes from the top of this card.
+    fn header_inset_of(&self, id: &str) -> f64 {
+        self.model.card(id).map_or(0., |c| {
+            infiniterm_core::card_header::inset(self.model.ui_theme.card.header_on(), c.kind)
+        })
+    }
+
+    /// The header button under a card-local point, if the card has a header.
+    fn header_button_at(
+        &self,
+        card: &infiniterm_core::model::Card,
+        local: Point,
+    ) -> Option<infiniterm_core::card_header::HeaderButton> {
+        let inset =
+            infiniterm_core::card_header::inset(self.model.ui_theme.card.header_on(), card.kind);
+        if inset <= 0. {
+            return None;
+        }
+        infiniterm_core::card_header::button_at(
+            card.rect.w,
+            self.model
+                .ui_theme
+                .card
+                .buttons_for(self.model.selection.focused_id.as_deref() == Some(&card.id)),
+            local.x,
+            local.y,
+        )
+    }
+
+    /// A card-local point as the header and the body see it: in the header it
+    /// moves the card (its buttons are `Hit::HeaderButton`, found first), below
+    /// it the point is the body's, shifted up by the header's height.
+    fn under_header(&self, id: String, local: Point, width: f64) -> Hit {
+        let inset = self.header_inset_of(&id);
+        if infiniterm_core::card_header::in_header(inset, local.y) {
+            let focused = self.model.selection.focused_id.as_deref() == Some(id.as_str());
+            let button = self.model.card(&id).and_then(|_| {
+                infiniterm_core::card_header::button_at(
+                    width,
+                    self.model.ui_theme.card.buttons_for(focused),
+                    local.x,
+                    local.y,
+                )
+            });
+            return match button {
+                Some(button) => Hit::HeaderButton { id, button },
+                None => Hit::CardEdge { id, edge: None },
+            };
+        }
+        Hit::CardBody {
+            id,
+            local: Point {
+                x: local.x,
+                y: local.y - inset,
+            },
+        }
+    }
+
     pub fn hit(&self, screen: Point) -> Hit {
         // A maximised card is painted over the whole content area at scale
         // 1 (paint.rs), so every point is its body in screen coordinates.
         // Without this a click "missed every card", cleared the focus and
         // took the maximise with it.
         if let Some(id) = self.maximized_id() {
-            return Hit::CardBody { id, local: screen };
+            return self.under_header(id, screen, self.model.view_size.w);
         }
         // The label chip first, as the frame it is: painted over the body,
         // last painted wins.
@@ -85,6 +155,18 @@ impl AppView {
             if std::env::var_os("INFINITERM_KEYLOG").is_some() {
                 eprintln!("[hit] screen={screen:?} world={world:?} r={r:?} band={band} vp={vp:?}");
             }
+            // A header button wins over the frame band it overlaps at the
+            // card's top edge.
+            let local = Point {
+                x: world.x - r.x,
+                y: world.y - r.y,
+            };
+            if let Some(button) = self.header_button_at(c, local) {
+                return Hit::HeaderButton {
+                    id: c.id.clone(),
+                    button,
+                };
+            }
             let n = world.y < r.y + band;
             let s = world.y > r.y + r.h - band;
             let w = world.x < r.x + band;
@@ -98,15 +180,7 @@ impl AppView {
                 (_, true, ..) => Some(Edge::S),
                 (_, _, true, _) => Some(Edge::W),
                 (_, _, _, true) => Some(Edge::E),
-                _ => {
-                    return Hit::CardBody {
-                        id: c.id.clone(),
-                        local: Point {
-                            x: world.x - r.x,
-                            y: world.y - r.y,
-                        },
-                    }
-                }
+                _ => return self.under_header(c.id.clone(), local, r.w),
             };
             return Hit::CardEdge {
                 id: c.id.clone(),
@@ -351,6 +425,18 @@ impl AppView {
                     start_rects,
                     ghost: None,
                 });
+            }
+            Hit::HeaderButton { id, button: which } => {
+                // A left click only; the button acts on the card it sits on,
+                // so that card is focused first, the way the frame's click
+                // does, and the command is the registered one the palette
+                // and the keymap reach too.
+                if button == 0 {
+                    self.model.set_focus(Some(&id));
+                    self.note_use("mouse.cardHeader");
+                    self.run_command(which.command());
+                    self.perform_effects();
+                }
             }
             Hit::CardEdge { id, edge } => {
                 // Shift+click on the frame or the label chip, the parts of a
@@ -628,15 +714,20 @@ impl AppView {
             .flatten()
     }
 
+    /// A screen point in the card's BODY: under the header, if it has one.
     fn local_in(&self, id: &str, screen: Point) -> Option<Point> {
+        let inset = self.header_inset_of(id);
         if self.maximized_id().as_deref() == Some(id) {
-            return Some(screen);
+            return Some(Point {
+                x: screen.x,
+                y: screen.y - inset,
+            });
         }
         let r = self.model.card(id)?.rect;
         let world = world_pos_of(screen, self.model.viewport);
         Some(Point {
             x: world.x - r.x,
-            y: world.y - r.y,
+            y: world.y - r.y - inset,
         })
     }
 

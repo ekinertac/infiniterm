@@ -56,7 +56,66 @@ pub struct BarTheme {
     pub border: Option<BorderSpec>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The workspace tabs' look (#544). Every field is `None` until the file sets
+/// it, and `None` is the tab as it was drawn before.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TabTheme {
+    /// An idle tab's fill (drawn as nothing today).
+    pub background: Option<ColorSpec>,
+    /// The chosen tab's fill.
+    pub active_background: Option<ColorSpec>,
+    /// The chosen tab's fill as a gradient (two stops, may carry alpha): it
+    /// replaces `active_background`.
+    pub gradient: Option<[String; 2]>,
+    /// Multiplies the alpha of every tab fill, 0.1 to 1.
+    pub opacity: Option<f64>,
+    /// An idle tab's outline.
+    pub border: Option<BorderSpec>,
+    /// The chosen tab's outline.
+    pub active_border: Option<BorderSpec>,
+    /// The line between two neighbouring idle tabs.
+    pub separator: Option<BorderSpec>,
+    /// Corner radius in pixels, 0 to 40.
+    pub radius: Option<f64>,
+    /// Show the focused card's program as an icon on the tab. Off unless set.
+    pub icons: Option<bool>,
+    /// What the icon is made of (`tab_icon::IconStyle`); unset is a glyph.
+    pub icon_style: Option<crate::tab_icon::IconStyle>,
+    /// Program name to a glyph or a logo file name (`tab_icon::choose`).
+    pub icon_map: std::collections::BTreeMap<String, String>,
+}
+
+/// The card header's keys (#544); see `card_header.rs`. Unset is no header.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CardTheme {
+    /// A header row inside terminal, transcript and page cards.
+    pub header: Option<bool>,
+    /// Which buttons it carries, in order; none unless listed.
+    pub header_buttons: Vec<crate::card_header::HeaderButton>,
+    /// Show the buttons only on the focused card. Off unless set.
+    pub header_buttons_active_only: Option<bool>,
+    /// The program's icon at the header's left, from the tab icon keys
+    /// (`tab.iconStyle`, `tab.iconMap`).
+    pub header_icons: Option<bool>,
+}
+
+impl CardTheme {
+    pub fn header_on(&self) -> bool {
+        self.header == Some(true)
+    }
+
+    /// The buttons a card wears: the listed ones, or none on a card that is
+    /// not the focused one while `card.headerButtonsActiveOnly` is on.
+    pub fn buttons_for(&self, focused: bool) -> &[crate::card_header::HeaderButton] {
+        if self.header_buttons_active_only == Some(true) && !focused {
+            &[]
+        } else {
+            &self.header_buttons
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct UiTheme {
     /// The look keys the file set, as written (`"ui.cardRadius": 8`). Range
     /// clamping and defaults are `config::merge_config`'s, the same code
@@ -64,6 +123,8 @@ pub struct UiTheme {
     pub look: Map<String, Value>,
     pub titlebar: BarTheme,
     pub statusbar: BarTheme,
+    pub tab: TabTheme,
+    pub card: CardTheme,
 }
 
 /// What kind of JSON value a look key holds.
@@ -73,13 +134,24 @@ pub enum Kind {
     Bool,
     Text,
     TextOrList,
+    /// A list of exactly two gradient stops, or an empty list (off).
+    ColorPair,
+}
+
+/// A gradient stop: `#rgb`, `#rrggbb` or `#rrggbbaa`. Unlike a bar colour it
+/// may carry its own alpha, which the card opacity then multiplies (#544).
+pub fn is_gradient_stop(s: &str) -> bool {
+    let Some(h) = s.strip_prefix('#') else {
+        return false;
+    };
+    matches!(h.len(), 3 | 6 | 8) && h.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Every look key the file accepts, with its value kind. These are the keys
 /// that left settings.json in #511. The `settings_doc` rule applies here too:
 /// a key someone can write is a key in this list, in `Ui::take_look_from`
 /// and in the docs; a test holds each of the three.
-pub const LOOK_KEYS: [(&str, Kind); 17] = [
+pub const LOOK_KEYS: [(&str, Kind); 20] = [
     ("ui.windowOpacity", Kind::Number),
     ("ui.windowBlur", Kind::Bool),
     ("ui.windowColor", Kind::Text),
@@ -89,6 +161,9 @@ pub const LOOK_KEYS: [(&str, Kind); 17] = [
     ("ui.backgroundImageFit", Kind::Text),
     ("ui.cardRadius", Kind::Number),
     ("ui.cardOpacity", Kind::Number),
+    ("ui.cardGradient", Kind::ColorPair),
+    ("ui.cardGradientAngle", Kind::Number),
+    ("ui.focusRingWidth", Kind::Number),
     ("ui.showGrid", Kind::Bool),
     ("ui.inactiveDim", Kind::Number),
     ("ui.unfocusedDim", Kind::Number),
@@ -99,8 +174,9 @@ pub const LOOK_KEYS: [(&str, Kind); 17] = [
     ("ui.hideLabelWhenFitted", Kind::Bool),
 ];
 
-/// The four bar keys (#425), with their docs. They exist only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 4] = [
+/// The bar keys (#425) and the tab keys (#544), with their docs. They exist
+/// only in a ui theme.
+pub const BAR_KEYS: [(&str, &[&str], &str); 19] = [
     (
         "titlebar.background",
         &[
@@ -123,6 +199,120 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 4] = [
         "statusbar.border",
         &["The status bar's edge: a colour, or \"none\"."],
         "\"none\"",
+    ),
+    (
+        "tab.background",
+        &[
+            "A workspace tab's fill while it is not the chosen one: #rgb, #rrggbb or #rrggbbaa,",
+            "or \"canvas\", \"card\", \"bar\", \"transparent\". Unset, idle tabs have no fill.",
+        ],
+        "\"#ffffff14\"",
+    ),
+    (
+        "tab.activeBackground",
+        &["The chosen workspace tab's fill. Same values as tab.background."],
+        "\"#ffffff29\"",
+    ),
+    (
+        "tab.gradient",
+        &[
+            "The chosen workspace tab's fill as a gradient: two colours, top to bottom, either",
+            "may carry an alpha. It replaces tab.activeBackground. [] keeps the flat fill.",
+        ],
+        "[\"#5a4a42\", \"#2b2320\"]",
+    ),
+    (
+        "tab.opacity",
+        &[
+            "Multiplies the alpha of every tab fill, 0.1 to 1, so tabs stay translucent over",
+            "ui.windowBlur. Default 1.",
+        ],
+        "1",
+    ),
+    (
+        "tab.border",
+        &["A workspace tab's one pixel outline while it is not the chosen one: a colour, or \"none\"."],
+        "\"none\"",
+    ),
+    (
+        "tab.activeBorder",
+        &["The chosen workspace tab's outline: a colour, or \"none\"."],
+        "\"none\"",
+    ),
+    (
+        "tab.separator",
+        &[
+            "A thin line between two neighbouring idle workspace tabs: a colour, or \"none\".",
+            "No line touches the chosen tab.",
+        ],
+        "\"none\"",
+    ),
+    (
+        "tab.radius",
+        &["Round the corners of workspace tabs, in pixels, 0 to 40. Unset keeps the small default."],
+        "6",
+    ),
+    (
+        "tab.icons",
+        &[
+            "Show an icon on each workspace tab for the program running in that workspace's",
+            "focused card (the first card, when none is focused). Off by default.",
+        ],
+        "false",
+    ),
+    (
+        "tab.iconStyle",
+        &[
+            "\"glyph\" draws a Nerd Font glyph. \"image\" draws a logo from ui-themes/<name>/icons/",
+            "(<program>.svg or .png, default.svg or .png for the rest) and a glyph for a",
+            "program with none. <name> is this theme's file name without .json.",
+        ],
+        "\"glyph\"",
+    ),
+    (
+        "tab.iconMap",
+        &[
+            "Program name to icon: a glyph (any text) or a file name in the theme's folder",
+            "ending in .svg or .png. The key \"default\" covers programs not listed. Built-in",
+            "glyphs cover common shells, runtimes and coding agents.",
+        ],
+        "{\"bun\": \"bun.svg\", \"default\": \"\\uf120\"}",
+    ),
+    (
+        "card.header",
+        &[
+            "A header row inside terminal, transcript and page cards, above the body: the",
+            "program's icon (card.headerIcons), the card's name and card.headerButtons. The body",
+            "gets the rest, so a terminal has fewer rows. Editor, diff and browser cards keep",
+            "their own tab strip. Off, the name is a chip in the card's corner as before.",
+        ],
+        "false",
+    ),
+    (
+        "card.headerButtons",
+        &[
+            "The header's buttons, left to right: \"split-right\", \"split-down\", \"maximise\",",
+            "\"close\". Each runs the command of that name (card.split.right, card.split.down,",
+            "card.maximize.toggle, card.close). None unless listed.",
+        ],
+        "[\"split-right\", \"split-down\", \"maximise\", \"close\"]",
+    ),
+    (
+        "card.headerButtonsActiveOnly",
+        &[
+            "Show the header's buttons only on the focused card. The other cards' headers show",
+            "just the icon and the name, and nothing is clickable where the buttons would be.",
+            "Default false.",
+        ],
+        "false",
+    ),
+    (
+        "card.headerIcons",
+        &[
+            "Show the program's icon at the header's left. It uses tab.iconStyle and",
+            "tab.iconMap, so the card and its workspace tab agree. Default false.",
+        ],
+        "false",
     ),
 ];
 
@@ -197,7 +387,7 @@ fn is_hex(s: &str) -> bool {
     let Some(h) = s.strip_prefix('#') else {
         return false;
     };
-    matches!(h.len(), 3 | 6) && h.chars().all(|c| c.is_ascii_hexdigit())
+    matches!(h.len(), 3 | 6 | 8) && h.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn color(key: &str, v: &Value) -> Result<ColorSpec, String> {
@@ -211,7 +401,7 @@ fn color(key: &str, v: &Value) -> Result<ColorSpec, String> {
         "transparent" => Ok(ColorSpec::Transparent),
         _ if is_hex(s) => Ok(ColorSpec::Hex(s.to_string())),
         _ => Err(format!(
-            "\"{key}\": \"{s}\" is not #rgb, #rrggbb, \"canvas\", \"card\", \"bar\" or \"transparent\""
+            "\"{key}\": \"{s}\" is not #rgb, #rrggbb, #rrggbbaa, \"canvas\", \"card\", \"bar\" or \"transparent\""
         )),
     }
 }
@@ -225,6 +415,75 @@ fn border(key: &str, v: &Value) -> Result<BorderSpec, String> {
         .map_err(|e| format!("{e} (or \"none\")"))
 }
 
+/// `tab.gradient`: two stops, or `[]` for none.
+fn gradient(key: &str, v: &Value) -> Result<Option<[String; 2]>, String> {
+    let stops: Option<Vec<&str>> = v
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect());
+    match (v.as_array().map(Vec::len), stops.as_deref()) {
+        (Some(0), _) => Ok(None),
+        (Some(2), Some([a, b])) if is_gradient_stop(a) && is_gradient_stop(b) => {
+            Ok(Some([a.to_string(), b.to_string()]))
+        }
+        _ => Err(format!(
+            "\"{key}\" must be [] or two colours like [\"#5a4a42\", \"#2b2320\"] (#rgb, #rrggbb or #rrggbbaa)"
+        )),
+    }
+}
+
+/// `tab.iconMap`: program name to a glyph or a logo file name. A value that
+/// names a file must be a plain file name (`tab_icon::safe_file`).
+fn icon_map(key: &str, v: &Value) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let obj = v
+        .as_object()
+        .ok_or_else(|| format!("\"{key}\" must be an object of \"program\": \"icon\""))?;
+    let mut map = std::collections::BTreeMap::new();
+    for (program, icon) in obj {
+        let icon = icon
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| format!("\"{key}\": \"{program}\" must be a glyph or a file name"))?;
+        let looks_like_file = icon.rsplit_once('.').is_some_and(|(_, e)| {
+            crate::tab_icon::IMAGE_EXTENSIONS.contains(&e.to_lowercase().as_str())
+        });
+        if looks_like_file && !crate::tab_icon::safe_file(icon) {
+            return Err(format!(
+                "\"{key}\": \"{icon}\" must be a plain file name in the theme's folder"
+            ));
+        }
+        map.insert(crate::tab_icon::program_key(program), icon.to_string());
+    }
+    Ok(map)
+}
+
+/// `card.headerButtons`: a list of button names (`card_header::HeaderButton`).
+fn header_buttons(key: &str, v: &Value) -> Result<Vec<crate::card_header::HeaderButton>, String> {
+    let names: Option<Vec<String>> = v.as_array().and_then(|a| {
+        a.iter()
+            .map(|n| n.as_str().map(String::from))
+            .collect::<Option<Vec<_>>>()
+    });
+    names
+        .and_then(|n| crate::card_header::parse_buttons(&n))
+        .ok_or_else(|| {
+            format!(
+                "\"{key}\" must be a list of {}",
+                crate::card_header::HeaderButton::NAMES
+                    .iter()
+                    .map(|n| format!("\"{n}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+}
+
+/// A number clamped to `min..=max`, like `merge_config` does for the look keys.
+fn number(key: &str, v: &Value, min: f64, max: f64) -> Result<f64, String> {
+    v.as_f64()
+        .map(|n| n.clamp(min, max))
+        .ok_or_else(|| format!("\"{key}\" must be a number"))
+}
+
 fn check_kind(key: &str, kind: Kind, v: &Value) -> Result<(), String> {
     let (ok, want) = match kind {
         Kind::Number => (v.is_number(), "a number"),
@@ -233,6 +492,13 @@ fn check_kind(key: &str, kind: Kind, v: &Value) -> Result<(), String> {
         Kind::TextOrList => (
             v.is_string() || v.as_array().is_some_and(|a| a.iter().all(Value::is_string)),
             "text or a list of text",
+        ),
+        Kind::ColorPair => (
+            v.as_array().is_some_and(|a| {
+                a.is_empty()
+                    || (a.len() == 2 && a.iter().all(|s| s.as_str().is_some_and(is_gradient_stop)))
+            }),
+            "[] or two colours like [\"#3a2c27\", \"#1f1a18\"] (#rgb, #rrggbb or #rrggbbaa)",
         ),
     };
     if ok {
@@ -260,6 +526,42 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
             "titlebar.border" => theme.titlebar.border = Some(border(key, v)?),
             "statusbar.background" => theme.statusbar.background = Some(color(key, v)?),
             "statusbar.border" => theme.statusbar.border = Some(border(key, v)?),
+            "tab.background" => theme.tab.background = Some(color(key, v)?),
+            "tab.activeBackground" => theme.tab.active_background = Some(color(key, v)?),
+            "tab.gradient" => theme.tab.gradient = gradient(key, v)?,
+            "tab.opacity" => theme.tab.opacity = Some(number(key, v, 0.1, 1.)?),
+            "tab.border" => theme.tab.border = Some(border(key, v)?),
+            "tab.activeBorder" => theme.tab.active_border = Some(border(key, v)?),
+            "tab.separator" => theme.tab.separator = Some(border(key, v)?),
+            "tab.radius" => theme.tab.radius = Some(number(key, v, 0., 40.)?),
+            "tab.icons" => {
+                theme.tab.icons = Some(v.as_bool().ok_or("\"tab.icons\" must be true or false")?)
+            }
+            "tab.iconStyle" => {
+                theme.tab.icon_style = Some(
+                    v.as_str()
+                        .and_then(crate::tab_icon::IconStyle::parse)
+                        .ok_or("\"tab.iconStyle\" must be \"glyph\" or \"image\"")?,
+                )
+            }
+            "tab.iconMap" => theme.tab.icon_map = icon_map(key, v)?,
+            "card.header" => {
+                theme.card.header =
+                    Some(v.as_bool().ok_or("\"card.header\" must be true or false")?)
+            }
+            "card.headerIcons" => {
+                theme.card.header_icons = Some(
+                    v.as_bool()
+                        .ok_or("\"card.headerIcons\" must be true or false")?,
+                )
+            }
+            "card.headerButtons" => theme.card.header_buttons = header_buttons(key, v)?,
+            "card.headerButtonsActiveOnly" => {
+                theme.card.header_buttons_active_only = Some(
+                    v.as_bool()
+                        .ok_or("\"card.headerButtonsActiveOnly\" must be true or false")?,
+                )
+            }
             _ => match LOOK_KEYS.iter().find(|(k, _)| *k == key) {
                 Some((_, kind)) => {
                     check_kind(key, *kind, v)?;
@@ -369,6 +671,184 @@ mod tests {
         }
     }
 
+    #[test]
+    fn tab_keys_parse_and_an_unset_tab_is_the_default_look() {
+        assert_eq!(parse("{}").unwrap().tab, TabTheme::default());
+        let t = parse(
+            r##"{
+              "tab.background": "#ffffff14",
+              "tab.activeBackground": "canvas",
+              "tab.gradient": ["#5a4a42", "#2b2320cc"],
+              "tab.opacity": 0.8,
+              "tab.border": "none",
+              "tab.activeBorder": "#fff",
+              "tab.separator": "#ffffff22",
+              "tab.radius": 9,
+            }"##,
+        )
+        .unwrap()
+        .tab;
+        assert_eq!(t.background, Some(ColorSpec::Hex("#ffffff14".into())));
+        assert_eq!(t.active_background, Some(ColorSpec::Canvas));
+        assert_eq!(t.gradient, Some(["#5a4a42".into(), "#2b2320cc".into()]));
+        assert_eq!(t.opacity, Some(0.8));
+        assert_eq!(t.border, Some(BorderSpec::None));
+        assert_eq!(
+            t.active_border,
+            Some(BorderSpec::Color(ColorSpec::Hex("#fff".into())))
+        );
+        assert_eq!(
+            t.separator,
+            Some(BorderSpec::Color(ColorSpec::Hex("#ffffff22".into())))
+        );
+        assert_eq!(t.radius, Some(9.));
+        assert_eq!(parse(r#"{"tab.gradient": []}"#).unwrap().tab.gradient, None);
+    }
+
+    #[test]
+    fn tab_icon_keys_parse_and_are_off_unless_set() {
+        let none = parse("{}").unwrap().tab;
+        assert_eq!((none.icons, none.icon_style), (None, None));
+        assert!(none.icon_map.is_empty());
+        let t = parse(
+            r#"{
+              "tab.icons": true,
+              "tab.iconStyle": "image",
+              "tab.iconMap": {"Bun": "bun.svg", "-fish": "F", "default": "default.png"},
+            }"#,
+        )
+        .unwrap()
+        .tab;
+        assert_eq!(t.icons, Some(true));
+        assert_eq!(t.icon_style, Some(crate::tab_icon::IconStyle::Image));
+        assert_eq!(t.icon_map["bun"], "bun.svg");
+        assert_eq!(t.icon_map["fish"], "F", "keyed like a process name");
+        assert_eq!(t.icon_map["default"], "default.png");
+    }
+
+    #[test]
+    fn card_header_keys_parse_and_the_header_is_off_unless_set() {
+        let none = parse("{}").unwrap().card;
+        assert_eq!(none, CardTheme::default());
+        assert!(!none.header_on());
+        let c = parse(
+            r#"{
+              "card.header": true,
+              "card.headerIcons": true,
+              "card.headerButtons": ["close", "split-right"],
+            }"#,
+        )
+        .unwrap()
+        .card;
+        assert!(c.header_on());
+        assert_eq!(c.header_icons, Some(true));
+        use crate::card_header::HeaderButton::*;
+        assert_eq!(c.header_buttons, vec![Close, SplitRight]);
+        assert!(!parse(r#"{"card.header": false}"#).unwrap().card.header_on());
+    }
+
+    #[test]
+    fn the_buttons_can_be_limited_to_the_focused_card() {
+        use crate::card_header::HeaderButton::*;
+        let all = parse(r#"{"card.headerButtons": ["split-right", "close"]}"#)
+            .unwrap()
+            .card;
+        assert_eq!(all.buttons_for(false), &[SplitRight, Close]);
+        assert_eq!(all.buttons_for(true), &[SplitRight, Close]);
+        let only =
+            parse(r#"{"card.headerButtons": ["close"], "card.headerButtonsActiveOnly": true}"#)
+                .unwrap()
+                .card;
+        assert_eq!(only.buttons_for(true), &[Close]);
+        assert!(only.buttons_for(false).is_empty());
+        let off =
+            parse(r#"{"card.headerButtons": ["close"], "card.headerButtonsActiveOnly": false}"#)
+                .unwrap()
+                .card;
+        assert_eq!(off.buttons_for(false), &[Close]);
+    }
+
+    #[test]
+    fn bad_card_header_values_name_the_key() {
+        for (bad, key) in [
+            (
+                r#"{"card.headerButtonsActiveOnly": "yes"}"#,
+                "card.headerButtonsActiveOnly",
+            ),
+            (r#"{"card.header": "yes"}"#, "card.header"),
+            (r#"{"card.headerIcons": 1}"#, "card.headerIcons"),
+            (r#"{"card.headerButtons": "close"}"#, "card.headerButtons"),
+            (
+                r#"{"card.headerButtons": ["minimise"]}"#,
+                "card.headerButtons",
+            ),
+            (r#"{"card.headerButtons": [1]}"#, "card.headerButtons"),
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains(key), "{e}");
+        }
+    }
+
+    #[test]
+    fn bad_tab_icon_values_name_the_key() {
+        for (bad, key) in [
+            (r#"{"tab.icons": "yes"}"#, "tab.icons"),
+            (r#"{"tab.iconStyle": "svg"}"#, "tab.iconStyle"),
+            (r#"{"tab.iconStyle": 1}"#, "tab.iconStyle"),
+            (r#"{"tab.iconMap": ["bun"]}"#, "tab.iconMap"),
+            (r#"{"tab.iconMap": {"bun": 3}}"#, "tab.iconMap"),
+            (r#"{"tab.iconMap": {"bun": ""}}"#, "tab.iconMap"),
+            (r#"{"tab.iconMap": {"bun": "../bun.svg"}}"#, "tab.iconMap"),
+            (r#"{"tab.iconMap": {"bun": "a/b.png"}}"#, "tab.iconMap"),
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains(key), "{e}");
+        }
+    }
+
+    #[test]
+    fn tab_numbers_clamp_and_bad_tab_values_name_the_key() {
+        let t = parse(r#"{"tab.opacity": 0, "tab.radius": 99}"#)
+            .unwrap()
+            .tab;
+        assert_eq!((t.opacity, t.radius), (Some(0.1), Some(40.)));
+        for (bad, key) in [
+            (r#"{"tab.background": "none"}"#, "tab.background"),
+            (r#"{"tab.activeBackground": 3}"#, "tab.activeBackground"),
+            (r##"{"tab.gradient": ["#fff"]}"##, "tab.gradient"),
+            (r##"{"tab.gradient": ["#fff", "red"]}"##, "tab.gradient"),
+            (r##"{"tab.gradient": "#fff"}"##, "tab.gradient"),
+            (r#"{"tab.opacity": "half"}"#, "tab.opacity"),
+            (r#"{"tab.radius": true}"#, "tab.radius"),
+            (r#"{"tab.separator": "thin"}"#, "tab.separator"),
+            (r#"{"tab.shadow": 1}"#, "tab.shadow"),
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains(key), "{e}");
+        }
+    }
+
+    #[test]
+    fn a_card_gradient_is_two_stops_or_off() {
+        let t = parse(
+            r##"{"ui.cardGradient": ["#3a2c27", "#1f1a18cc"], "ui.cardGradientAngle": 170}"##,
+        )
+        .unwrap();
+        assert_eq!(t.look["ui.cardGradient"], json!(["#3a2c27", "#1f1a18cc"]));
+        assert!(parse(r#"{"ui.cardGradient": []}"#).is_ok());
+        for bad in [
+            r##"{"ui.cardGradient": ["#fff"]}"##,
+            r##"{"ui.cardGradient": ["#fff", "#000", "#123"]}"##,
+            r##"{"ui.cardGradient": ["#fff", "red"]}"##,
+            r##"{"ui.cardGradient": ["#fff", "#12345"]}"##,
+            r##"{"ui.cardGradient": "#fff"}"##,
+            r##"{"ui.cardGradientAngle": "up"}"##,
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains("ui.cardGradient"), "{e}");
+        }
+    }
+
     // A behaviour key is not a look key: it stays in settings.json.
     #[test]
     fn a_behaviour_key_or_a_typo_rejects_the_file() {
@@ -409,6 +889,7 @@ mod tests {
                 (_, Kind::Number) => json!(0.5),
                 (_, Kind::Text) => json!("x"),
                 (_, Kind::TextOrList) => json!(["dusk"]),
+                (_, Kind::ColorPair) => json!(["#112233", "#445566ff"]),
             };
             let look = merge_config(&json!({ key: sample })).ui;
             let mut ui = default_config().ui;

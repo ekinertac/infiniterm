@@ -77,6 +77,15 @@ pub fn focus_ring_screen_px(scale: f64) -> f64 {
         RING_FAR
     }
 }
+/// The ring's width in screen pixels: `ui.focusRingWidth` when a theme set it
+/// (above 0), else the stepped width for the zoom (#544).
+pub fn focus_ring_width_px(scale: f64, set: f64) -> f64 {
+    if set > 0. {
+        set
+    } else {
+        focus_ring_screen_px(scale)
+    }
+}
 pub fn focus_ring_alpha(scale: f64) -> f64 {
     if scale >= 0.6 {
         RING_ALPHA_NEAR
@@ -162,6 +171,13 @@ mod tests {
             (0.05, RING_FAR),
         ] {
             assert_eq!(focus_ring_screen_px(s), e);
+        }
+    }
+    #[test]
+    fn a_set_ring_width_beats_the_zoom_bands_and_zero_keeps_them() {
+        for s in [1., 0.5, 0.1] {
+            assert_eq!(focus_ring_width_px(s, 1.5), 1.5);
+            assert_eq!(focus_ring_width_px(s, 0.), focus_ring_screen_px(s));
         }
     }
     #[test]
