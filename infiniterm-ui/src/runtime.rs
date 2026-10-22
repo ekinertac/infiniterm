@@ -153,14 +153,11 @@ impl AppView {
     /// finds nothing until that checkout exists.
     fn bundled_themes() -> Option<PathBuf> {
         let exe = std::env::current_exe().ok()?;
-        let dir = exe.parent()?;
-        let shipped = if cfg!(target_os = "macos") {
-            // infiniterm.app/Contents/MacOS/infiniterm -> Contents/Resources
-            dir.parent()?.join("Resources").join("themes")
-        } else {
-            // An unpacked release folder: the exe with its resources beside it.
-            dir.join("themes")
-        };
+        let shipped = infiniterm_core::paths::shipped_resource(
+            exe.parent()?,
+            "themes",
+            cfg!(target_os = "macos"),
+        );
         if shipped.is_dir() {
             return Some(shipped);
         }
@@ -168,16 +165,18 @@ impl AppView {
         dev.is_dir().then_some(dev)
     }
 
-    /// The bundle's `backgrounds`, else this checkout's while developing.
+    /// The release's `backgrounds` (the Mac bundle's, or beside the binary
+    /// in the Windows folder and the Linux tarball), else this checkout's
+    /// while developing.
     fn bundled_backgrounds() -> Option<PathBuf> {
         let exe = std::env::current_exe().ok()?;
-        let in_bundle = exe
-            .parent()?
-            .parent()?
-            .join("Resources")
-            .join("backgrounds");
-        if in_bundle.is_dir() {
-            return Some(in_bundle);
+        let shipped = infiniterm_core::paths::shipped_resource(
+            exe.parent()?,
+            "backgrounds",
+            cfg!(target_os = "macos"),
+        );
+        if shipped.is_dir() {
+            return Some(shipped);
         }
         let dev = home_dir().join("Code/infiniterm/assets/backgrounds");
         dev.is_dir().then_some(dev)

@@ -13,6 +13,7 @@
 #   r <verb ...>   runs remote.sh on the box: start, stop, chord, type, ...
 #   shot <name>    a screenshot, copied to $SHOTS/<name>.png; prints the path.
 #   ssh            an interactive shell on the box.
+#   x <cmd ...>    a command in the box's checkout (install-test.sh uses it).
 #   down           deletes the droplet and waits until it is gone.
 #
 # LINUX_HOST=<user@host> drives any machine instead of a droplet (up and down
@@ -105,6 +106,11 @@ shot)
     ;;
 ssh)
     ssh "${SSH_OPTS[@]}" "$(host)"
+    ;;
+x)
+    # Any command in the box's checkout, with cargo on PATH.
+    shift
+    on_box ". ~/.cargo/env && cd $DIR && $(quoted "$@")"
     ;;
 down)
     [ -z "${LINUX_HOST:-}" ] || { echo "LINUX_HOST is set: nothing to delete" >&2; exit 2; }
