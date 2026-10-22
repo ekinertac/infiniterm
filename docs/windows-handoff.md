@@ -6,14 +6,48 @@ For a Claude session on Ekin's Windows desktop (the "gpu box", RTX 4070 Ti), sta
 
 The port was merged with master (about 750 commits since it forked at
 e4802dc: `ift join`, `ift serve`, the diff card as a read-only editor, native
-context menus, theme.json). What was checked on the gpu box after the merge,
-with the browser feature OFF (CEF is not in these builds): `cargo check` and
-`cargo test` for core, term, editor, hook and cli (about 1,390 tests, all
-passing), and `cargo check` plus `cargo test` for the ui crate (112 passing).
-A build with CEF on was checked on 2026-10-22: `cargo build` of ui, cli and
-hook links and `cargo test` for ui and browser passes (136 and 21 tests); the
-blockers were two `u32` casts in `surface.rs`. Not checked on Windows after
-the merge: anything on screen. The Mac side passed `make check`.
+context menus, theme.json), and has been merged again with every change since.
+Where it stands on 2026-10-22, on master 6d649cf (through #527):
+
+- Mac: `make check` has passed on every merge. It stays the gate.
+- gpu box, with CEF on: `cargo check` and `cargo build` of ui, cli and hook
+  work, and `cargo test` passes: core 1263, ui 142, cli 49 plus 2 in
+  `update_sign`, hook 6, browser 21.
+- On screen, with the browser-less build (`--no-default-features`), from an ssh
+  session (see "Looking at the screen from ssh"): the welcome card, a terminal
+  card with the real oh-my-posh prompt, full screen and back.
+- NOT on screen: anything with CEF, which does not start when launched into
+  a session this way (#524).
+
+## Known gaps, 2026-10-22
+
+What a person on Windows would hit, most visible first. Each is a decision or
+a piece of work, not a mystery.
+
+1. **The CEF build dies about two seconds after start when launched by a
+   scheduled task** (#524, exit `0x80000003` in `libcef.dll`). Whether it also
+   dies when started by hand from the desktop is not known; that decides
+   whether browser cards work for Ekin today. Everything below that needs the
+   browser is unverified since the merge for this reason.
+2. **A Windows release has no browser cards.** `tools/dist.ps1` still builds
+   with `--no-default-features` although CEF builds now (#516). Shipping the
+   browser means putting `libcef.dll`, its data files and the helper in the
+   folder and zip. Waiting for Ekin.
+3. **The browser page's right-click menu does nothing** (see below).
+4. **The welcome card says `Cmd` in four places on Windows**
+   (`infiniterm-core/src/welcome.rs`: "`Cmd` belongs to infiniterm", the two
+   mouse lines, "Close this card with `Cmd W`"). Its keys list is right
+   (LCtrl on Windows) because it goes through `ModifierLabels`; these four
+   sentences are literal text. Small to fix; not done.
+5. **The modifier for Windows and Linux is with Ekin again** (side of Ctrl,
+   as under "Keys", or another). The code does what "Keys" describes until
+   he decides.
+6. **Update signatures are built and off**: `UPDATE_PUBLIC_KEY` is empty until
+   Ekin generates a key (see #470 below).
+7. A card's directory never changes, and transcript cards have not been opened
+   on Windows (both described under "What is still open").
+8. No `ift connect`, `join`, `serve`, `proxy`, `sessions` or `attach`, and no
+   parking of closed cards: they need unix sockets or `iftd`.
 
 Master's new code is Mac or unix only and stays that way here, each behind a
 `cfg` with a one-line answer rather than a port:
@@ -26,18 +60,20 @@ Master's new code is Mac or unix only and stays that way here, each behind a
 - **Seven AppKit/CoreText ui modules** (finder_service, fullscreen, icon_font,
   instance_icon, middle_drag, native_menu, title_drag) have same-named
   stand-ins in `infiniterm-ui/src/not_macos.rs`. What each leaves undone is
-  in that file's header. The one visible gap that remains is **the browser
-  page's right-click menu, which does nothing**. Full screen works (gpui's,
-  `app.fullscreen` and the Window menu; checked on screen 2026-10-22: the
-  window fills the display, toggles back to its frame, and a quit in full
-  screen reopens in it). There is no taskbar badge and none is needed: the
-  Dock badge marks a remote or joined instance, which are unix-only, and a
-  Windows instance is single by design. The menu: since #522 the app's own menus are drawn by gpui where there is
-  no `NSMenu` (`menu_view.rs`), so Windows has them, but
-  `browsers.rs::show_page_menu` still calls the `native_menu::pop_up` stub,
-  which answers "dismissed". It needs the same gpui drawing; not done.
-  The bundled Nerd Font is registered and its icons draw (see "Prompt icons"
-  below).
+  in that file's header. What each one does on Windows now:
+  - **Full screen works** (gpui's, through `app.fullscreen` and the Window
+    menu; checked on screen 2026-10-22: the window fills the display,
+    toggles back to its frame, and a quit in full screen reopens in it).
+  - **The bundled Nerd Font is registered and its icons draw** (see "Prompt
+    icons" below).
+  - **The app's own right-click menus work**: since #522 they are drawn by
+    gpui where there is no `NSMenu` (`menu_view.rs`). The browser page's menu
+    does not: `browsers.rs::show_page_menu` still calls the
+    `native_menu::pop_up` stub, which answers "dismissed". It needs the same
+    gpui drawing; not done.
+  - **No taskbar badge, and none is needed**: the Dock badge marks a remote or
+    joined instance, which are unix-only, and a Windows instance is single by
+    design.
 - **Daemon-only features** (parking a closed card, `ift sessions`/`attach`)
   are absent as before: there is no `iftd`.
 
@@ -76,9 +112,10 @@ bundled font lacks draws nothing.
 
 ## Where this stands
 
-**Every phase is done, 2026-09-23 to -25.** Every crate builds and passes
-its tests on Windows with the browser feature ON (787 core, 72 ui, 44 term,
-34 editor, 28 cli, 8 browser; clippy clean), the window opens, a card runs
+**Every phase is done, 2026-09-23 to -25** (the test counts here are that
+week's; today's are under "Merged with master" above). Every crate builds and
+passes its tests on Windows with the browser feature ON (787 core, 72 ui, 44
+term, 34 editor, 28 cli, 8 browser; clippy clean), the window opens, a card runs
 PowerShell, Claude Code runs in a card with its hooks reaching the app, the
 app chords work (cards, workspaces, the omnibox, focus, fit-all), a card
 names itself from the process table, and `tools/dist.ps1` makes an unpacked
@@ -295,10 +332,11 @@ Two consequences worth knowing:
 
 What is still open:
 
-- **The Mac has not seen any of this.** `make check` on macOS is the gate
-  before a merge, and only the Mac session can run it. Everything here is
-  `cfg`-gated, but a `#[cfg(not(windows))]` arm is only as good as the
-  compiler that saw it.
+- **The Mac gate.** `make check` on macOS has passed on every merge since
+  #513, and stays the gate before a merge: everything here is `cfg`-gated, and
+  a `#[cfg(not(windows))]` arm is only as good as the compiler that saw it.
+  (Until 2026-10-18 the Mac had not seen any of the port, which is why this
+  line used to say so.)
 - **A terminated CEF process is not reaped for about forty seconds**, and
   everything below is a consequence. One thread of it stays alive in the
   kernel, so the process stays enumerable with `HasExited` true and goes on
