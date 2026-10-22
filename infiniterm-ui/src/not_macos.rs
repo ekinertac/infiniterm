@@ -23,7 +23,9 @@
 //!   live here.
 //! - `instance_icon`: no Dock badge; Windows has taskbar overlays instead.
 //! - `finder_service`: no "open folder in infiniterm" service.
-//! - `title_drag`: an AppKit view patch; Windows draws its own caption.
+//! - `title_drag`: an AppKit view patch on the Mac. Here: Linux moves and
+//!   maximises the window through gpui from the bare bar; Windows draws its
+//!   own caption.
 //! - `middle_drag` has no stand-in at all: its one call is macOS-only.
 //!
 //! Related: the real modules beside this file; docs/windows-handoff.md.
@@ -99,9 +101,85 @@ pub mod instance_icon {
     pub fn set_badge(_color: Rgb) {}
 }
 
+/// A press on the bare title bar (`overlays.rs`; a tab or the "+" stop the
+/// press before it gets here). macOS drags by hand through AppKit
+/// (`title_drag.rs`); off macOS gpui has the calls.
+///
+/// Linux (#464): the window manager moves the window (`start_window_move`:
+/// X11 `_NET_WM_MOVERESIZE`, Wayland `xdg_toplevel.move`) and a double-click
+/// maximises or restores it (`zoom_window`), the usual title bar action
+/// there. gpui's `titlebar_double_click` is macOS only and does nothing here.
+/// The move starts once the pointer has travelled `MOVE_SLOP_PX` with the
+/// button held, not on the press: the window manager takes the pointer for
+/// the move, and a move started on the first press ate the second click of a
+/// double-click (found with the Linux driver), which is why GTK waits too.
+/// Windows keeps what it had: the system draws its caption, which moves the
+/// window, and the press does nothing.
 pub mod title_drag {
     pub fn install() {}
-    pub fn begin() {}
+
+    /// How far the pointer travels, in window pixels, before a press on the
+    /// bar becomes a window move; under it the press is still a click.
+    pub const MOVE_SLOP_PX: f32 = 4.;
+
+    /// Whether a press at `from` has become a move with the pointer at `to`.
+    pub fn starts_move(from: (f32, f32), to: (f32, f32)) -> bool {
+        (to.0 - from.0).abs() > MOVE_SLOP_PX || (to.1 - from.1).abs() > MOVE_SLOP_PX
+    }
+
+    /// A press on the bar: a double-click maximises or restores the window
+    /// and answers `None`; a single press answers its point, which the
+    /// caller keeps until the pointer moves past the slop (`moved`) or the
+    /// button comes up.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    pub fn press(window: &gpui::Window, click_count: usize, at: (f32, f32)) -> Option<(f32, f32)> {
+        if click_count >= 2 {
+            window.zoom_window();
+            None
+        } else {
+            Some(at)
+        }
+    }
+
+    /// The pointer moved with a press kept: past the slop the window manager
+    /// takes over the move and the press is spent (`true`).
+    #[cfg(all(unix, not(target_os = "macos")))]
+    pub fn moved(window: &gpui::Window, from: (f32, f32), to: (f32, f32)) -> bool {
+        let start = starts_move(from, to);
+        if start {
+            window.start_window_move();
+        }
+        start
+    }
+
+    #[cfg(windows)]
+    pub fn press(window: &gpui::Window, click_count: usize, _at: (f32, f32)) -> Option<(f32, f32)> {
+        if click_count >= 2 {
+            window.titlebar_double_click();
+        }
+        None
+    }
+
+    #[cfg(windows)]
+    pub fn moved(_window: &gpui::Window, _from: (f32, f32), _to: (f32, f32)) -> bool {
+        false
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::starts_move;
+
+        #[test]
+        fn a_press_becomes_a_move_only_past_the_slop() {
+            assert!(!starts_move((100., 10.), (100., 10.)));
+            assert!(
+                !starts_move((100., 10.), (103., 13.)),
+                "a shaky click stays a click"
+            );
+            assert!(starts_move((100., 10.), (105., 10.)));
+            assert!(starts_move((100., 10.), (100., 4.)));
+        }
+    }
 }
 
 pub mod native_menu {
