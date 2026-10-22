@@ -1,0 +1,264 @@
+diff --git BUILD.gn BUILD.gn
+index 3e7b547..4a8cbbc 100644
+--- BUILD.gn
++++ BUILD.gn
+@@ -577,6 +577,8 @@ source_set("libcef_static") {
+     "libcef/browser/chrome/extensions/chrome_extension_util.h",
+     "libcef/browser/chrome/extensions/chrome_mime_handler_view_guest_delegate_cef.cc",
+     "libcef/browser/chrome/extensions/chrome_mime_handler_view_guest_delegate_cef.h",
++    "libcef/browser/chrome/extensions/alloy_extension_create_tab.cc",
++    "libcef/browser/chrome/extensions/alloy_extension_create_tab.h",
+     "libcef/browser/chrome/views/browser_platform_delegate_chrome_child_window.cc",
+     "libcef/browser/chrome/views/browser_platform_delegate_chrome_child_window.h",
+     "libcef/browser/chrome/views/browser_platform_delegate_chrome_views.cc",
+diff --git include/cef_life_span_handler.h include/cef_life_span_handler.h
+index 44819f4..9579d15 100644
+--- include/cef_life_span_handler.h
++++ include/cef_life_span_handler.h
+@@ -113,6 +113,43 @@ class CefLifeSpanHandler : public virtual CefBaseRefCounted {
+     return false;
+   }
+ 
++#if CEF_API_ADDED(CEF_EXPERIMENTAL)
++  ///
++  /// Called on the UI thread when an extension calls chrome.tabs.create or
++  /// chrome.windows.create. CEF does not open a native window for these calls.
++  /// The |browser| value is an Alloy style browser of the same request context
++  /// (the one that sent the call when it is a browser, else the active tab of
++  /// the requested or the last focused window). |extension_id| is the calling
++  /// extension and |url| the address to open, which may be empty for
++  /// windows.create. |window_id| is the requested window id (the value given
++  /// to CefBrowserHost::SetExtensionTabInfo) or -1 if the extension gave none.
++  /// |active| is the requested activation. |new_window| is true for
++  /// windows.create and false for tabs.create.
++  ///
++  /// Return true if the request is handled. Create the browser (for example
++  /// with CefBrowserHost::CreateBrowserSync) before returning, call
++  /// CefBrowserHost::SetExtensionTabInfo on it, and set |new_browser| so that
++  /// the extension gets an accurate Tab or Window object. If |new_browser| is
++  /// left empty the extension gets a placeholder and learns of the real tab
++  /// through chrome.tabs.onCreated. Return false to refuse; the extension call
++  /// then fails with an error. The default returns false.
++  ///
++  /// Only the |url|, |window_id|, |active| and |new_window| values of the
++  /// request are passed on. Other create properties (index, pinned, bounds,
++  /// state, focused, incognito) are ignored.
++  ///
++  /*--cef(added=experimental,optional_param=url)--*/
++  virtual bool OnExtensionCreateTab(CefRefPtr<CefBrowser> browser,
++                                    const CefString& extension_id,
++                                    const CefString& url,
++                                    int window_id,
++                                    bool active,
++                                    bool new_window,
++                                    CefRefPtr<CefBrowser>& new_browser) {
++    return false;
++  }
++#endif
++
+   ///
+   /// Called on the UI thread if a new popup browser is aborted. This only
+   /// occurs if the popup is allowed in OnBeforePopup and creation fails before
+diff --git libcef/browser/chrome/extensions/alloy_extension_create_tab.cc libcef/browser/chrome/extensions/alloy_extension_create_tab.cc
+new file mode 100644
+index 0000000..6def8db
+--- /dev/null
++++ libcef/browser/chrome/extensions/alloy_extension_create_tab.cc
+@@ -0,0 +1,117 @@
++// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++//
++// See alloy_extension_create_tab.h.
++//
++// Which browser is asked: the sender's browser if it is Alloy style, else the
++// active tab of the requested window (or of the last focused window), else the
++// first top-level Alloy browser of the profile. All of them share the
++// application's CefClient in practice; the choice only decides which
++// |browser| the handler receives.
++
++#include "cef/libcef/browser/chrome/extensions/alloy_extension_create_tab.h"
++
++#include "cef/include/cef_client.h"
++#include "cef/include/cef_life_span_handler.h"
++#include "cef/libcef/browser/browser_host_base.h"
++#include "cef/libcef/browser/browser_info.h"
++#include "cef/libcef/browser/browser_info_manager.h"
++#include "cef/libcef/browser/chrome/extensions/alloy_extension_tabs.h"
++#include "cef/libcef/browser/thread_util.h"
++#include "chrome/browser/profiles/profile.h"
++#include "content/public/browser/web_contents.h"
++#include "url/gurl.h"
++
++namespace cef {
++
++namespace {
++
++bool BelongsToProfile(const CefRefPtr<CefBrowserHostBase>& browser,
++                      Profile* profile) {
++  if (!browser || !browser->IsAlloyStyle() || !browser->GetBrowserContext()) {
++    return false;
++  }
++  Profile* browser_profile =
++      Profile::FromBrowserContext(browser->GetBrowserContext());
++  return browser_profile->GetOriginalProfile() == profile->GetOriginalProfile();
++}
++
++CefRefPtr<CefBrowserHostBase> FindBrowser(Profile* profile,
++                                          int window_id,
++                                          content::WebContents* sender) {
++  if (sender) {
++    auto browser = CefBrowserHostBase::GetBrowserForContents(sender);
++    if (BelongsToProfile(browser, profile)) {
++      return browser;
++    }
++  }
++  if (content::WebContents* active = GetAlloyActiveTab(window_id)) {
++    auto browser = CefBrowserHostBase::GetBrowserForContents(active);
++    if (BelongsToProfile(browser, profile)) {
++      return browser;
++    }
++  }
++  for (const auto& info :
++       CefBrowserInfoManager::GetInstance()->GetBrowserInfoList()) {
++    auto browser = info->browser();
++    if (!info->is_popup() && BelongsToProfile(browser, profile)) {
++      return browser;
++    }
++  }
++  return nullptr;
++}
++
++}  // namespace
++
++bool HasAlloyBrowser(Profile* profile) {
++  CEF_REQUIRE_UIT();
++  return FindBrowser(profile, /*window_id=*/-1, /*sender=*/nullptr) != nullptr;
++}
++
++ExtensionCreateTabResult RequestExtensionCreateTab(
++    Profile* profile,
++    const std::string& extension_id,
++    const GURL& url,
++    int window_id,
++    bool active,
++    bool new_window,
++    content::WebContents* sender) {
++  CEF_REQUIRE_UIT();
++
++  ExtensionCreateTabResult result;
++  auto browser = FindBrowser(profile, window_id, sender);
++  if (!browser) {
++    return result;  // kNotApplicable
++  }
++
++  CefRefPtr<CefClient> client = browser->client();
++  CefRefPtr<CefLifeSpanHandler> handler =
++      client ? client->GetLifeSpanHandler() : nullptr;
++  if (!handler) {
++    result.status = ExtensionCreateTabStatus::kRefused;
++    result.error =
++        "The application cannot open tabs or windows for extensions.";
++    return result;
++  }
++
++  CefRefPtr<CefBrowser> new_browser;
++  const bool handled = handler->OnExtensionCreateTab(
++      browser, extension_id, url.spec(), window_id < 0 ? -1 : window_id, active,
++      new_window, new_browser);
++  if (!handled) {
++    result.status = ExtensionCreateTabStatus::kRefused;
++    result.error = "The application did not open the tab.";
++    return result;
++  }
++
++  result.status = ExtensionCreateTabStatus::kHandled;
++  if (new_browser) {
++    if (auto new_host = CefBrowserHostBase::FromBrowser(new_browser)) {
++      result.contents = new_host->GetWebContents();
++    }
++  }
++  return result;
++}
++
++}  // namespace cef
+diff --git libcef/browser/chrome/extensions/alloy_extension_create_tab.h libcef/browser/chrome/extensions/alloy_extension_create_tab.h
+new file mode 100644
+index 0000000..36c4174
+--- /dev/null
++++ libcef/browser/chrome/extensions/alloy_extension_create_tab.h
+@@ -0,0 +1,74 @@
++// Copyright 2026 The Chromium Embedded Framework Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++//
++// Hands chrome.tabs.create and chrome.windows.create to the client
++// application when the calling profile has Alloy style browsers.
++//
++// Without this, both calls open a native Chromium window outside the
++// application's UI. The patched TabsCreateFunction and WindowsCreateFunction
++// (tabs_api.cc, patch p2-no-native-windows) call RequestExtensionCreateTab()
++// first. It finds an Alloy browser, calls
++// CefLifeSpanHandler::OnExtensionCreateTab on that browser's client, and the
++// extension function answers from the result. If no client handles the call it
++// is refused; it never falls back to a native window.
++//
++// Related files: alloy_extension_tabs.h (the tab model used to pick the
++// browser, from patch p1), include/cef_life_span_handler.h (the handler
++// method).
++//
++// UI thread only.
++
++#ifndef CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_ALLOY_EXTENSION_CREATE_TAB_H_
++#define CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_ALLOY_EXTENSION_CREATE_TAB_H_
++#pragma once
++
++#include <string>
++
++class GURL;
++class Profile;
++
++namespace content {
++class WebContents;
++}  // namespace content
++
++namespace cef {
++
++enum class ExtensionCreateTabStatus {
++  // The profile has no Alloy style browser. The caller runs Chromium's own
++  // code.
++  kNotApplicable,
++  // The client handled the request.
++  kHandled,
++  // The request is refused; ExtensionCreateTabResult::error says why.
++  kRefused,
++};
++
++struct ExtensionCreateTabResult {
++  ExtensionCreateTabStatus status = ExtensionCreateTabStatus::kNotApplicable;
++  // Message for the extension when |status| is kRefused.
++  std::string error;
++  // The browser's contents that the client returned, if any, when |status| is
++  // kHandled.
++  content::WebContents* contents = nullptr;
++};
++
++// True if |profile| (or the profile it is related to) has an Alloy style
++// browser.
++bool HasAlloyBrowser(Profile* profile);
++
++// Asks the client to open |url|. |window_id| is the requested window or -1.
++// |sender| is the WebContents the extension call came from, or null for a
++// service worker; it is used to pick the browser whose client is asked.
++ExtensionCreateTabResult RequestExtensionCreateTab(
++    Profile* profile,
++    const std::string& extension_id,
++    const GURL& url,
++    int window_id,
++    bool active,
++    bool new_window,
++    content::WebContents* sender);
++
++}  // namespace cef
++
++#endif  // CEF_LIBCEF_BROWSER_CHROME_EXTENSIONS_ALLOY_EXTENSION_CREATE_TAB_H_
