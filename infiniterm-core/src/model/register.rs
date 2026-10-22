@@ -4851,7 +4851,10 @@ mod tests {
 
     #[test]
     fn the_command_source_lists_every_command_but_the_palette_with_its_chord() {
-        let h = Harness::new();
+        let mut h = Harness::new();
+        // The ui syncs the platform table each frame; off the Mac the hint
+        // is read through it (`Model::shown_chord`).
+        h.m.sync_platform_keys();
         let labels: Vec<(&str, &str)> =
             h.r.all()
                 .iter()
@@ -4860,11 +4863,12 @@ mod tests {
         let items = h.m.palette_items(Source::Commands, &labels);
         assert!(items.iter().all(|i| i.id != "app.palette"));
         let close = items.iter().find(|i| i.id == "card.close").unwrap();
-        // Spelled through the same labels the app would use, because what
-        // the app's modifier is CALLED is per platform and per setting
-        // (`shortcuts::ModifierLabels`); the question here is that the hint
-        // is the chord for this command, not what that key is named.
-        let expected = crate::shortcuts::format_chord("cmd+w", h.m.modifier_labels());
+        // Spelled through the same labels and chord the app would show,
+        // because what the key is CALLED is per platform and per setting
+        // (`shortcuts::ModifierLabels`, `platform_keys.rs`); the question
+        // here is that the hint is the chord for this command.
+        let shown = h.m.shown_chord("cmd+w").unwrap();
+        let expected = crate::shortcuts::format_chord(&shown, h.m.modifier_labels());
         assert_eq!(close.hint.as_deref(), Some(expected.as_str()));
     }
 
