@@ -697,6 +697,9 @@ impl AppView {
         } = crate::chrome::tab_colors(chrome, wear, REMOTE_BAR_TINT);
         // The ui theme (#425, #511) wins over the tint for the ground and sets the edge.
         let bar_style = chrome.bar_style(&self.model.ui_theme.titlebar, bar);
+        // The tab keys of the same file (#544); unset keys are the tab as it was.
+        let tab_style = chrome.tab_style(&self.model.ui_theme.tab, chosen_fill);
+        let tab_radius = tab_style.radius.map(|r| px(r * ui));
         let mut tabs = div().flex().items_center().gap_1();
         for (index, ws) in self.model.workspaces.iter().enumerate() {
             let cards = self.model.cards_on(Some(&ws.id));
@@ -726,7 +729,10 @@ impl AppView {
                 .border_color(gpui::transparent_black())
                 .px(px(6.))
                 .py_1()
-                .rounded_sm()
+                .map(|d| match tab_radius {
+                    Some(r) => d.rounded(r),
+                    None => d.rounded_sm(),
+                })
                 .text_size(px(tab_font_px))
                 .font_weight(if is_active {
                     chrome.typography.bold.weight
@@ -738,7 +744,14 @@ impl AppView {
                 } else {
                     idle_text
                 })
-                .when(is_active, |d| d.bg(chosen_fill))
+                .when_some(
+                    if is_active {
+                        Some(tab_style.active_fill)
+                    } else {
+                        tab_style.idle_fill
+                    },
+                    |d, fill| d.bg(fill.background()),
+                )
                 .cursor_pointer()
                 .when(!is_active, |d| {
                     d.hover(|s| s.bg(crate::chrome::hover_fill(chosen_fill)))
@@ -822,6 +835,38 @@ impl AppView {
                         .rounded_full()
                         .bg(color),
                 );
+            }
+            // A one pixel outline over the tab's edge. It is a child, not the
+            // tab's own border, so the drop line's side borders stay put.
+            let outline = if is_active {
+                tab_style.active_border
+            } else {
+                tab_style.idle_border
+            };
+            if let Some(color) = outline {
+                tab = tab.relative().child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .map(|d| match tab_radius {
+                            Some(r) => d.rounded(r),
+                            None => d.rounded_sm(),
+                        })
+                        .border_1()
+                        .border_color(color),
+                );
+            }
+            // A line between two idle neighbours; none touches the chosen tab.
+            let after_active = index > 0
+                && active.as_deref() == self.model.workspaces.get(index - 1).map(|w| w.id.as_str());
+            if let (Some(color), true) = (
+                tab_style.separator,
+                index > 0 && !is_active && !after_active,
+            ) {
+                tabs = tabs.child(div().w(px(1.)).h(px(14. * ui)).bg(color));
             }
             tabs = tabs.child(tab);
         }

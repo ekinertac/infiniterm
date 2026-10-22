@@ -56,7 +56,30 @@ pub struct BarTheme {
     pub border: Option<BorderSpec>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The workspace tabs' look (#544). Every field is `None` until the file sets
+/// it, and `None` is the tab as it was drawn before.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TabTheme {
+    /// An idle tab's fill (drawn as nothing today).
+    pub background: Option<ColorSpec>,
+    /// The chosen tab's fill.
+    pub active_background: Option<ColorSpec>,
+    /// The chosen tab's fill as a gradient (two stops, may carry alpha): it
+    /// replaces `active_background`.
+    pub gradient: Option<[String; 2]>,
+    /// Multiplies the alpha of every tab fill, 0.1 to 1.
+    pub opacity: Option<f64>,
+    /// An idle tab's outline.
+    pub border: Option<BorderSpec>,
+    /// The chosen tab's outline.
+    pub active_border: Option<BorderSpec>,
+    /// The line between two neighbouring idle tabs.
+    pub separator: Option<BorderSpec>,
+    /// Corner radius in pixels, 0 to 40.
+    pub radius: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct UiTheme {
     /// The look keys the file set, as written (`"ui.cardRadius": 8`). Range
     /// clamping and defaults are `config::merge_config`'s, the same code
@@ -64,6 +87,7 @@ pub struct UiTheme {
     pub look: Map<String, Value>,
     pub titlebar: BarTheme,
     pub statusbar: BarTheme,
+    pub tab: TabTheme,
 }
 
 /// What kind of JSON value a look key holds.
@@ -113,8 +137,9 @@ pub const LOOK_KEYS: [(&str, Kind); 20] = [
     ("ui.hideLabelWhenFitted", Kind::Bool),
 ];
 
-/// The four bar keys (#425), with their docs. They exist only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 4] = [
+/// The bar keys (#425) and the tab keys (#544), with their docs. They exist
+/// only in a ui theme.
+pub const BAR_KEYS: [(&str, &[&str], &str); 12] = [
     (
         "titlebar.background",
         &[
@@ -137,6 +162,58 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 4] = [
         "statusbar.border",
         &["The status bar's edge: a colour, or \"none\"."],
         "\"none\"",
+    ),
+    (
+        "tab.background",
+        &[
+            "A workspace tab's fill while it is not the chosen one: #rgb, #rrggbb or #rrggbbaa,",
+            "or \"canvas\", \"card\", \"bar\", \"transparent\". Unset, idle tabs have no fill.",
+        ],
+        "\"#ffffff14\"",
+    ),
+    (
+        "tab.activeBackground",
+        &["The chosen workspace tab's fill. Same values as tab.background."],
+        "\"#ffffff29\"",
+    ),
+    (
+        "tab.gradient",
+        &[
+            "The chosen workspace tab's fill as a gradient: two colours, top to bottom, either",
+            "may carry an alpha. It replaces tab.activeBackground. [] keeps the flat fill.",
+        ],
+        "[\"#5a4a42\", \"#2b2320\"]",
+    ),
+    (
+        "tab.opacity",
+        &[
+            "Multiplies the alpha of every tab fill, 0.1 to 1, so tabs stay translucent over",
+            "ui.windowBlur. Default 1.",
+        ],
+        "1",
+    ),
+    (
+        "tab.border",
+        &["A workspace tab's one pixel outline while it is not the chosen one: a colour, or \"none\"."],
+        "\"none\"",
+    ),
+    (
+        "tab.activeBorder",
+        &["The chosen workspace tab's outline: a colour, or \"none\"."],
+        "\"none\"",
+    ),
+    (
+        "tab.separator",
+        &[
+            "A thin line between two neighbouring idle workspace tabs: a colour, or \"none\".",
+            "No line touches the chosen tab.",
+        ],
+        "\"none\"",
+    ),
+    (
+        "tab.radius",
+        &["Round the corners of workspace tabs, in pixels, 0 to 40. Unset keeps the small default."],
+        "6",
     ),
 ];
 
@@ -211,7 +288,7 @@ fn is_hex(s: &str) -> bool {
     let Some(h) = s.strip_prefix('#') else {
         return false;
     };
-    matches!(h.len(), 3 | 6) && h.chars().all(|c| c.is_ascii_hexdigit())
+    matches!(h.len(), 3 | 6 | 8) && h.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn color(key: &str, v: &Value) -> Result<ColorSpec, String> {
@@ -225,7 +302,7 @@ fn color(key: &str, v: &Value) -> Result<ColorSpec, String> {
         "transparent" => Ok(ColorSpec::Transparent),
         _ if is_hex(s) => Ok(ColorSpec::Hex(s.to_string())),
         _ => Err(format!(
-            "\"{key}\": \"{s}\" is not #rgb, #rrggbb, \"canvas\", \"card\", \"bar\" or \"transparent\""
+            "\"{key}\": \"{s}\" is not #rgb, #rrggbb, #rrggbbaa, \"canvas\", \"card\", \"bar\" or \"transparent\""
         )),
     }
 }
@@ -237,6 +314,29 @@ fn border(key: &str, v: &Value) -> Result<BorderSpec, String> {
     color(key, v)
         .map(BorderSpec::Color)
         .map_err(|e| format!("{e} (or \"none\")"))
+}
+
+/// `tab.gradient`: two stops, or `[]` for none.
+fn gradient(key: &str, v: &Value) -> Result<Option<[String; 2]>, String> {
+    let stops: Option<Vec<&str>> = v
+        .as_array()
+        .map(|a| a.iter().filter_map(Value::as_str).collect());
+    match (v.as_array().map(Vec::len), stops.as_deref()) {
+        (Some(0), _) => Ok(None),
+        (Some(2), Some([a, b])) if is_gradient_stop(a) && is_gradient_stop(b) => {
+            Ok(Some([a.to_string(), b.to_string()]))
+        }
+        _ => Err(format!(
+            "\"{key}\" must be [] or two colours like [\"#5a4a42\", \"#2b2320\"] (#rgb, #rrggbb or #rrggbbaa)"
+        )),
+    }
+}
+
+/// A number clamped to `min..=max`, like `merge_config` does for the look keys.
+fn number(key: &str, v: &Value, min: f64, max: f64) -> Result<f64, String> {
+    v.as_f64()
+        .map(|n| n.clamp(min, max))
+        .ok_or_else(|| format!("\"{key}\" must be a number"))
 }
 
 fn check_kind(key: &str, kind: Kind, v: &Value) -> Result<(), String> {
@@ -281,6 +381,14 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
             "titlebar.border" => theme.titlebar.border = Some(border(key, v)?),
             "statusbar.background" => theme.statusbar.background = Some(color(key, v)?),
             "statusbar.border" => theme.statusbar.border = Some(border(key, v)?),
+            "tab.background" => theme.tab.background = Some(color(key, v)?),
+            "tab.activeBackground" => theme.tab.active_background = Some(color(key, v)?),
+            "tab.gradient" => theme.tab.gradient = gradient(key, v)?,
+            "tab.opacity" => theme.tab.opacity = Some(number(key, v, 0.1, 1.)?),
+            "tab.border" => theme.tab.border = Some(border(key, v)?),
+            "tab.activeBorder" => theme.tab.active_border = Some(border(key, v)?),
+            "tab.separator" => theme.tab.separator = Some(border(key, v)?),
+            "tab.radius" => theme.tab.radius = Some(number(key, v, 0., 40.)?),
             _ => match LOOK_KEYS.iter().find(|(k, _)| *k == key) {
                 Some((_, kind)) => {
                     check_kind(key, *kind, v)?;
@@ -384,6 +492,62 @@ mod tests {
             (r#"{"ui.windowColor": 5}"#, "ui.windowColor"),
             (r#"{"ui.backgroundImage": [1]}"#, "ui.backgroundImage"),
             (r#"{"ui.backgroundImage": 3}"#, "ui.backgroundImage"),
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains(key), "{e}");
+        }
+    }
+
+    #[test]
+    fn tab_keys_parse_and_an_unset_tab_is_the_default_look() {
+        assert_eq!(parse("{}").unwrap().tab, TabTheme::default());
+        let t = parse(
+            r##"{
+              "tab.background": "#ffffff14",
+              "tab.activeBackground": "canvas",
+              "tab.gradient": ["#5a4a42", "#2b2320cc"],
+              "tab.opacity": 0.8,
+              "tab.border": "none",
+              "tab.activeBorder": "#fff",
+              "tab.separator": "#ffffff22",
+              "tab.radius": 9,
+            }"##,
+        )
+        .unwrap()
+        .tab;
+        assert_eq!(t.background, Some(ColorSpec::Hex("#ffffff14".into())));
+        assert_eq!(t.active_background, Some(ColorSpec::Canvas));
+        assert_eq!(t.gradient, Some(["#5a4a42".into(), "#2b2320cc".into()]));
+        assert_eq!(t.opacity, Some(0.8));
+        assert_eq!(t.border, Some(BorderSpec::None));
+        assert_eq!(
+            t.active_border,
+            Some(BorderSpec::Color(ColorSpec::Hex("#fff".into())))
+        );
+        assert_eq!(
+            t.separator,
+            Some(BorderSpec::Color(ColorSpec::Hex("#ffffff22".into())))
+        );
+        assert_eq!(t.radius, Some(9.));
+        assert_eq!(parse(r#"{"tab.gradient": []}"#).unwrap().tab.gradient, None);
+    }
+
+    #[test]
+    fn tab_numbers_clamp_and_bad_tab_values_name_the_key() {
+        let t = parse(r#"{"tab.opacity": 0, "tab.radius": 99}"#)
+            .unwrap()
+            .tab;
+        assert_eq!((t.opacity, t.radius), (Some(0.1), Some(40.)));
+        for (bad, key) in [
+            (r#"{"tab.background": "none"}"#, "tab.background"),
+            (r#"{"tab.activeBackground": 3}"#, "tab.activeBackground"),
+            (r##"{"tab.gradient": ["#fff"]}"##, "tab.gradient"),
+            (r##"{"tab.gradient": ["#fff", "red"]}"##, "tab.gradient"),
+            (r##"{"tab.gradient": "#fff"}"##, "tab.gradient"),
+            (r#"{"tab.opacity": "half"}"#, "tab.opacity"),
+            (r#"{"tab.radius": true}"#, "tab.radius"),
+            (r#"{"tab.separator": "thin"}"#, "tab.separator"),
+            (r#"{"tab.shadow": 1}"#, "tab.shadow"),
         ] {
             let e = parse(bad).unwrap_err();
             assert!(e.contains(key), "{e}");
