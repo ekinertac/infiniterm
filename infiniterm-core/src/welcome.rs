@@ -111,7 +111,7 @@ pub fn render(keymap: &Keymap, agents: &[Agent], labels: ModifierLabels) -> Stri
     // a few plain Ctrl ones that a terminal never uses.
     out.push_str(match kind {
         Kind::Mac => "`Cmd` belongs to infiniterm. Every other key goes to the terminal, so vim, tmux and your shell work as usual.\n\n",
-        Kind::CtrlShift => "`Ctrl+Shift` with a letter belongs to infiniterm, and so do the few plain Ctrl keys a terminal never uses (the digits, `Ctrl+Tab`). Every other key goes to the terminal, so vim, tmux and your shell work as usual.\n\n",
+        Kind::CtrlShift => "`Ctrl Shift` with a letter belongs to infiniterm. So do the few plain Ctrl keys a terminal never uses, such as the digits and `Ctrl Tab`. Every other key goes to the terminal, so vim, tmux and your shell work as usual.\n\n",
         Kind::Super => "`Super` belongs to infiniterm. Every other key goes to the terminal, so vim, tmux and your shell work as usual.\n\n",
     });
     out.push_str(
@@ -297,7 +297,8 @@ mod tests {
     fn off_the_mac_the_card_has_no_cmd_and_teaches_the_platform_chords() {
         let text = super::render(&platform_keymap(), &[], CTRL);
         assert!(!text.contains("Cmd"), "{text}");
-        assert!(text.contains("`Ctrl+Shift` with a letter belongs to infiniterm"));
+        assert!(text.contains("`Ctrl Shift` with a letter belongs to infiniterm."));
+        assert!(text.contains("such as the digits and `Ctrl Tab`."));
         assert!(text.contains("`Ctrl` + scroll, or a pinch: zoom"));
         assert!(text.contains("`Ctrl` + drag, or a middle-button drag: pan"));
         // The first steps are the platform's chords: a terminal is Ctrl+Shift+T,
