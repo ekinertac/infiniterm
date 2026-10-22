@@ -15,7 +15,8 @@
 #      from it by keyboard closes the card;
 #   5. a drag on the bare title bar moves the window and a double-click
 #      maximises it.
-# The terminal font being monospace is in screenshot 2, by eye.
+# The terminal font being monospace and the Nerd Font icons drawing as icons
+# are in screenshot 2, by eye.
 # Exit 0 only when every check held. SKIP_BUILD=1 skips sync and build.
 #
 # Related: box.sh, remote.sh, docs/agent/linux-port.md.
@@ -48,6 +49,10 @@ for _ in $(seq 30); do r ift read 2 >/dev/null 2>&1 && break; sleep 0.5; done
 r ift send 2 'echo smoke-$((6*7))' --enter >/dev/null
 sleep 1
 r ift read 2 | grep -q '^smoke-42' || fail "no shell output in card 2: $(r ift read 2 | tail -3)"
+# Nerd Font icons from the bundled font (folder, git branch, powerline
+# arrow), for screenshot 2: drawn as icons, not boxes, by eye.
+r ift send 2 "printf 'icons: \\uf07c \\ue0a0 \\ue0b0\\n'" --enter >/dev/null
+sleep 1
 "$BOX" shot 2-terminal >/dev/null
 echo "ok 2: a terminal card runs a shell"
 

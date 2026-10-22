@@ -125,18 +125,17 @@ pub mod fullscreen {
 }
 
 pub mod icon_font {
-    /// Windows bundles the font and hands it to gpui at start-up
-    /// (`main.rs`, `add_fonts`); icons are then painted from glyphs shaped
-    /// by `ICON_FONT_FAMILY` on their own (`terminal_body::icon_glyph`),
-    /// because gpui's Windows fallback list looks in the SYSTEM font
-    /// collection only and cannot see a font added this way, and a line
-    /// that mixes the two collections loses one of them. Other platforms
-    /// have no bundled copy.
-    #[cfg(windows)]
+    /// Windows and Linux bundle the font and hand it to gpui at start-up
+    /// (`main.rs`, `add_fonts`). On Windows icons are then painted from
+    /// glyphs shaped by `ICON_FONT_FAMILY` on their own
+    /// (`terminal_body::icon_glyph`), because gpui's Windows fallback list
+    /// looks in the SYSTEM font collection only and cannot see a font added
+    /// this way, and a line that mixes the two collections loses one of
+    /// them. On Linux nothing more is needed (#464): gpui's Linux text
+    /// system ignores `FontFallbacks` and leaves fallback to cosmic-text,
+    /// which looks through every font in its database, the added one too.
     pub const ICON_FONT_TTF: &[u8] =
         include_bytes!("../../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
-    #[cfg(not(windows))]
-    pub const ICON_FONT_TTF: &[u8] = &[];
     pub const ICON_FONT_POSTSCRIPT: &str = "SymbolsNFM";
     /// The family name in the font's own name table, which is what gpui's
     /// DirectWrite lookup matches (the PostScript name above is CoreText's).
@@ -151,6 +150,27 @@ pub mod icon_font {
 
     pub fn resolves() -> bool {
         true
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::ICON_FONT_TTF;
+
+        /// The bytes `main.rs` hands to `add_fonts` are a real TrueType
+        /// font, not the empty stand-in Linux had before #464.
+        #[test]
+        fn the_icon_font_is_bundled() {
+            assert!(
+                ICON_FONT_TTF.len() > 100_000,
+                "{} bytes",
+                ICON_FONT_TTF.len()
+            );
+            assert_eq!(
+                &ICON_FONT_TTF[..4],
+                &[0, 1, 0, 0],
+                "TrueType's sfnt version"
+            );
+        }
     }
 }
 

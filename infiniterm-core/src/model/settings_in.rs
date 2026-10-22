@@ -13,7 +13,7 @@ use crate::keymap::{default_keymap, merge_keymap, parse_keymap};
 use crate::settings_doc::default_settings_text;
 
 /// The first thing a new `settings.json` says, since an empty file explains nothing.
-pub const EMPTY_SETTINGS: &str = "// Your settings. Anything here overrides settings.default.json beside it,\n// which lists everything that can be set, with comments.\n//\n// Comments and trailing commas are allowed.\n{\n}\n";
+pub const EMPTY_SETTINGS: &str = "// Your settings. Anything here overrides settings.default.json beside it,\n// which lists everything that can be set, with comments.\n// Docs: https://infiniterm.app/reference/settings/\n//\n// Comments and trailing commas are allowed.\n{\n}\n";
 
 /// What a new `keybindings.json` says: the file's job, then commented examples
 /// to switch on by deleting the `//` (every example line starts with
@@ -21,6 +21,7 @@ pub const EMPTY_SETTINGS: &str = "// Your settings. Anything here overrides sett
 /// rot). The `when` examples are the part nobody finds on their own (#269).
 pub const EMPTY_KEYBINDINGS: &str = concat!(
     "// Your keybindings. Anything here overrides keybindings.default.json beside it.\n",
+    "// Docs: https://infiniterm.app/reference/commands/\n",
     "// Set a chord to null to unbind it and give the key back to the terminal.\n",
     "// A binding can carry a \"when\" (see keybindings.default.json for the shape and the keys).\n",
     "//\n",

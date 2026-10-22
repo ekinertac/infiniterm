@@ -659,10 +659,11 @@ fn main() {
         if !icon_font::register() {
             eprintln!("[infiniterm/warn] the bundled icon font is not resolvable; prompt icons may draw as boxes");
         }
-        // Windows: the same font, through gpui's own store. Its fallback
-        // list cannot reach a font added this way, so the terminal names the
-        // family in the runs that hold icons (`terminal_body::shape_row`).
-        #[cfg(windows)]
+        // Windows and Linux: the same font, through gpui's own store. On
+        // Windows its fallback list cannot reach a font added this way, so
+        // the terminal paints icons apart (`terminal_body::icon_glyph`); on
+        // Linux cosmic-text's own fallback finds it (`not_macos.rs`).
+        #[cfg(not(target_os = "macos"))]
         if let Err(e) = cx
             .text_system()
             .add_fonts(vec![std::borrow::Cow::Borrowed(icon_font::ICON_FONT_TTF)])
