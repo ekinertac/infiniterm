@@ -27,6 +27,14 @@
 //! check now; a staged update is applied by the restart waiter
 //! (`update::swap_script`), which `app.restart` and `app.update.install`
 //! both reach.
+//!
+//! LINUX ONLY NOTIFIES (#464, docs/agent/linux-port.md "Packaging"):
+//! install.sh or `brew upgrade` is the update there, so `start_notifier`
+//! polls `latest-linux.json` and says a newer build is out, with the one
+//! command that installs it; nothing is downloaded or swapped. The
+//! downloader below is the Mac's and Windows's and is not reached on Linux,
+//! hence the dead-code allowance there rather than a cfg on every item.
+#![cfg_attr(all(unix, not(target_os = "macos")), allow(dead_code))]
 use infiniterm_core::update::{is_newer, parse_manifest, Manifest, CHECK_EVERY_MS, LATEST_URL};
 // The signature requirement is the macOS half of the check; Windows has
 // only the hash (see this file's header).
@@ -47,6 +55,12 @@ pub struct Staged {
 
 pub enum UpdateEvent {
     Ready(Staged),
+    /// Linux: a newer build is out; `hint` is the command that installs it.
+    Available {
+        version: String,
+        build: u64,
+        hint: &'static str,
+    },
     /// Only for a check somebody asked for; the timer's are silent.
     UpToDate,
     Failed(String),
@@ -56,6 +70,8 @@ pub struct Updater {
     pub events: Receiver<UpdateEvent>,
     wake: Sender<()>,
     pub staged: Option<Staged>,
+    /// Linux: the newer build `start_notifier` found, and its command.
+    pub available: Option<(u64, &'static str)>,
     /// The installed bundle the swap replaces.
     pub bundle: PathBuf,
     /// Where downloads unpack and the old bundle is moved aside.
@@ -78,18 +94,19 @@ pub fn clean(dir: &Path) {
 
 /// The build number this binary was made at.
 ///
-/// Windows has no bundle to read it back out of, so `tools/dist.ps1` stamps
-/// it at COMPILE time and a dev build simply has none. The status bar
-/// already draws nothing when there is none; that line exists so a friend's
-/// bug report says which build they are on, and a dev build is not one
-/// anybody reports.
-#[cfg(windows)]
+/// Windows and Linux have no bundle to read it back out of, so
+/// `tools/dist.ps1` and the Linux `desktop` job (`linux.yml`) stamp it at
+/// COMPILE time and a dev build simply has none. The status bar already
+/// draws nothing when there is none; that line exists so a friend's bug
+/// report says which build they are on, and a dev build is not one anybody
+/// reports.
+#[cfg(not(target_os = "macos"))]
 pub fn build_of(_bundle: &Path) -> Option<u64> {
     option_env!("INFINITERM_BUILD").and_then(|b| b.trim().parse().ok())
 }
 
 /// The build number of a bundle, from its Info.plist.
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 pub fn build_of(bundle: &Path) -> Option<u64> {
     let out = Command::new("/usr/libexec/PlistBuddy")
         .arg("-c")
@@ -133,8 +150,63 @@ pub fn start(bundle: PathBuf, running: u64, dir: PathBuf) -> Updater {
         events,
         wake,
         staged: None,
+        available: None,
         bundle,
         dir,
+    }
+}
+
+/// Linux: the same hourly poll, of `latest-linux.json`, telling the ui once
+/// per newer build that it is out (`UpdateEvent::Available`); a check
+/// somebody asked for also says when there is nothing new or the check
+/// failed. Downloads nothing (see the header).
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn start_notifier(running: u64, install: infiniterm_core::update::LinuxInstall) -> Updater {
+    use infiniterm_core::update::{linux_update_hint, parse_linux_manifest};
+    let (tx, events) = channel();
+    let (wake, woken) = channel::<()>();
+    // A manifest elsewhere, for tools/drive/linux/update-test.sh (curl takes
+    // a file:// URL). Honoured here only: this path downloads nothing, so a
+    // redirected manifest can change a notice and nothing else.
+    let url = std::env::var("INFINITERM_LATEST_URL").unwrap_or_else(|_| LATEST_URL.to_string());
+    std::thread::spawn(move || {
+        let mut told: Option<u64> = None;
+        let mut asked = false;
+        loop {
+            let found = run("curl", &["-fsSL", "--max-time", "30", &url])
+                .and_then(|text| parse_linux_manifest(&text, std::env::consts::ARCH));
+            match found {
+                Ok(r) if r.build > running && told != Some(r.build) => {
+                    told = Some(r.build);
+                    let _ = tx.send(UpdateEvent::Available {
+                        version: r.version,
+                        build: r.build,
+                        hint: linux_update_hint(install),
+                    });
+                }
+                Ok(r) if asked && r.build <= running => {
+                    let _ = tx.send(UpdateEvent::UpToDate);
+                }
+                Ok(_) => {}
+                Err(e) if asked => {
+                    let _ = tx.send(UpdateEvent::Failed(e));
+                }
+                Err(e) => eprintln!("[infiniterm] update check: {e}"),
+            }
+            match woken.recv_timeout(Duration::from_millis(CHECK_EVERY_MS as u64)) {
+                Ok(()) => asked = true,
+                Err(RecvTimeoutError::Timeout) => asked = false,
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    });
+    Updater {
+        events,
+        wake,
+        staged: None,
+        available: None,
+        bundle: PathBuf::new(),
+        dir: PathBuf::new(),
     }
 }
 

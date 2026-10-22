@@ -1590,11 +1590,11 @@ fn start_updater(app: &mut AppView) {
     // Windows has so far. It is stamped into the binary there rather than
     // read back out of a bundle, so there is nothing to find first; see
     // `updater::build_of`.
-    #[cfg(windows)]
+    #[cfg(not(target_os = "macos"))]
     {
         app.build = crate::updater::build_of(std::path::Path::new(""));
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
         app.build = std::env::current_exe()
             .ok()
@@ -1603,25 +1603,41 @@ fn start_updater(app: &mut AppView) {
     if std::env::var_os("INFINITERM_DATA_DIR").is_some() {
         return;
     }
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let Some(bundle) = bundle_of(&exe) else {
-        return;
-    };
-    if !infiniterm_core::update::applies_to(bundle, &home_dir()) {
-        return;
+    // Linux tells, never swaps: an install.sh or Homebrew install learns a
+    // newer build is out and the command that installs it (`updater.rs`).
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let install = std::env::current_exe()
+            .ok()
+            .and_then(|exe| infiniterm_core::paths::canonical(exe).ok())
+            .and_then(|exe| infiniterm_core::update::linux_install(exe.parent()?, &home_dir()));
+        if let (Some(install), Some(running)) = (install, app.build) {
+            app.updater = Some(crate::updater::start_notifier(running, install));
+        }
     }
-    let dir = infiniterm_core::paths::app_support_dir().join("update");
-    crate::updater::clean(&dir);
-    let Some(running) = crate::updater::build_of(bundle) else {
-        // Windows stamps this at compile time, so a build without one is a
-        // `cargo build` rather than a release; macOS reads it from the
-        // bundle's plist.
-        eprintln!("[infiniterm] no build number in this build; updates are off");
-        return;
-    };
-    app.updater = Some(crate::updater::start(bundle.to_path_buf(), running, dir));
+    // macOS and Windows: download, check, stage, swap at the next restart.
+    #[cfg(any(target_os = "macos", windows))]
+    {
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let Some(bundle) = bundle_of(&exe) else {
+            return;
+        };
+        if !infiniterm_core::update::applies_to(bundle, &home_dir()) {
+            return;
+        }
+        let dir = infiniterm_core::paths::app_support_dir().join("update");
+        crate::updater::clean(&dir);
+        let Some(running) = crate::updater::build_of(bundle) else {
+            // Windows stamps this at compile time, so a build without one is
+            // a `cargo build` rather than a release; macOS reads it from the
+            // bundle's plist.
+            eprintln!("[infiniterm] no build number in this build; updates are off");
+            return;
+        };
+        app.updater = Some(crate::updater::start(bundle.to_path_buf(), running, dir));
+    }
 }
 
 impl AppView {
@@ -1640,6 +1656,14 @@ impl AppView {
                     );
                     u.staged = Some(s);
                     text
+                }
+                crate::updater::UpdateEvent::Available {
+                    version,
+                    build,
+                    hint,
+                } => {
+                    u.available = Some((build, hint));
+                    format!("infiniterm {version} ({build}) is out. To install it: {hint}")
                 }
                 crate::updater::UpdateEvent::UpToDate => "infiniterm is up to date".into(),
                 crate::updater::UpdateEvent::Failed(e) => format!("update check failed: {e}"),
