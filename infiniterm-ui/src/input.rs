@@ -863,6 +863,12 @@ impl AppView {
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
             eprintln!("[key] {k:?} dead={}", crate::keycode::last_dead());
         }
+        // A drawn right-click menu (off macOS) takes every key first, before
+        // Escape's own rules and every chord: `menus.rs::menu_key`.
+        if self.model.menu.is_some() {
+            self.menu_key(&k.key);
+            return true;
+        }
         // What a `when` in keybindings.json can ask that only a body knows.
         self.sync_ui_context();
         // A dead key (Option+E on a US layout, waiting for its vowel) is

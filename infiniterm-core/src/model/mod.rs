@@ -647,6 +647,9 @@ pub struct Model {
     pub focus_visit: Option<FocusVisit>,
     /// The card switcher (Ctrl+Tab), while it is up.
     pub switcher: Option<Switcher>,
+    /// A right-click menu the app draws itself, while it is up (Linux and
+    /// Windows; the Mac's is an `NSMenu` and never sets this). `menu_nav.rs`.
+    pub menu: Option<crate::menu_nav::OpenMenu>,
     /// Layout undo (Cmd+Z / Cmd+Shift+Z): every card's rect on the active
     /// canvas as it was before each move, swap, drop, split or resize.
     /// Session-only. A snapshot is taken by `remember_layout` at the top
@@ -832,6 +835,7 @@ impl Model {
             programs: std::collections::HashMap::new(),
             focus_visit: None,
             switcher: None,
+            menu: None,
             layout_undo: Vec::new(),
             layout_redo: Vec::new(),
             undoing: false,

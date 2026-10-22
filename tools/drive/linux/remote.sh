@@ -13,6 +13,8 @@
 #   mean <file>       mean brightness of a screenshot, 0 for all black.
 #   chord <keys...>   a HELD chord: `chord super minus` presses super then
 #                     minus, waits HOLD seconds, releases in reverse.
+#   click <b> <x> <y> a held click at x, y (screen pixels); b is 1 left,
+#                     2 middle, 3 right.
 #   type <text>       types text into the focused window.
 #   layout <xkb>      the keyboard layout, `layout tr` or `layout us intl`.
 #   ift <args...>     `ift` against the scratch instance.
@@ -98,6 +100,14 @@ chord)
     # Reverse order, so the modifier is released last.
     keys=("$@")
     for ((i = ${#keys[@]} - 1; i >= 0; i--)); do xdotool keyup "${keys[i]}"; done
+    sleep 0.3
+    ;;
+click)
+    # A held click: `click <button> <x> <y>`, button 1 left, 3 right.
+    xdotool mousemove "${3:?click <button> <x> <y>}" "${4:?}"
+    xdotool mousedown "$2"
+    sleep "$HOLD"
+    xdotool mouseup "$2"
     sleep 0.3
     ;;
 type)

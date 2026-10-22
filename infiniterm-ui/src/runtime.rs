@@ -121,6 +121,8 @@ impl AppView {
             extracted_size: Default::default(),
             extract_request: None,
             page_menu_open: false,
+            menu_anchor: (0., 0.),
+            menu_pending: None,
             background: Default::default(),
             scale_factor,
             cef_running: false,

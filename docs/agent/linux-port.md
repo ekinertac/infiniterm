@@ -58,7 +58,7 @@ The Windows branch already put the seam in: Cocoa crates under `[target.'cfg(tar
 | `keycode.rs` | NSEvent monitor gives the physical key code and the real Shift flag | Done on X11 (2026-10-22), see the paragraph below. Native Wayland still gets gpui's layout names. |
 | Cmd key | `platform` is Cmd | gpui maps Super to `platform`, which the spike confirmed. Desktops take many Super chords themselves (GNOME: Super+number, Super+A). Decide: Super as is, or the Windows branch's `keyboard.commandModifier` (left Ctrl for the app, right Ctrl for the terminal); `roles` is `cfg(windows)` today and would need an xkb read of which Ctrl is down. Ekin's choice. |
 | `ime.rs`, `composing.rs` | the macOS text input system | Compile as they are (gpui's generic input handler). gpui's Linux backends speak XIM and Wayland text-input. Dead keys: `last_dead` returns false until tested with a compose key. |
-| `native_menu.rs` | NSMenu for the right-click menus | gpui has no native context menu on Linux. Draw the menu with gpui from the same `context_menu.rs` data; that also serves Windows. |
+| `native_menu.rs` | NSMenu for the right-click menus | Done (2026-10-22): the app draws the menu, see the paragraph below. Serves Windows too. |
 | `title_drag.rs` | AppKit drag of a transparent title bar | gpui's `start_window_move` on Linux (X11 `_NET_WM_MOVERESIZE`, Wayland `xdg_toplevel.move`) from the bare bar; window decorations through gpui's client-side decorations on Wayland. |
 | `fullscreen.rs` | `toggleFullScreen:` patch | gpui's `toggle_fullscreen` on the window. |
 | `icon_font.rs` | CoreText registration of the bundled Nerd Font | Load the font into gpui's text system with `add_fonts` and check that cosmic-text's fallback finds it (on the Mac it did not, which is why CoreText is used there). |
@@ -83,10 +83,14 @@ Limits, stated: (1) native Wayland: gpui picks Wayland whenever `WAYLAND_DISPLAY
 
 The `app` job in `.github/workflows/linux.yml` runs `cargo clippy -p infiniterm-ui --no-default-features -- -D warnings` on Ubuntu for every PR that touches the ui or editor crates, so a Mac-only call added without a gate is caught; the Mac's `make check` compiles none of the Linux code.
 
+## The right-click menu off macOS (2026-10-22)
+
+gpui has no native context menu on Linux or Windows, and the Mac's `native_menu::pop_up` is a blocking call that returns the chosen row, which a menu the app draws cannot be. So `menus.rs::show_menu` builds the same rows as before and hands them to `present_menu`: on macOS the `NSMenu` as it was, elsewhere `Model::menu` (an `OpenMenu`: the rows, a `MenuNav` and the window point it opened at). Both end in `finish_menu`, which runs the command on the tab's workspace and puts out a lit tree row. Walking the menu is pure (`infiniterm-core/src/menu_nav.rs`, tested on every platform against the real terminal menu): a stack of open submenus and one selected row, separators and disabled rows never selected, moves wrap, hovering a submenu opens it without selecting inside it. `menu_nav::place` and `place_submenu` keep it in the window (upward near the bottom edge, a submenu to the left near the right edge). `menu_view.rs` draws it over the whole window (the root element is `relative` so a tab menu from the title bar and a card menu share window pixels): one panel per open level, the shortcut on the right through `shortcuts::chord_keys`, rows measured in the chrome font. While it is up it is an overlay (`overlay_open`, so the wheel and chords are gated) without a dim sheet, `input.rs` hands it EVERY key before anything else (arrows, Enter, Escape; any other key closes it and is swallowed, so a Cmd+W aimed at the menu cannot close the card behind it), and a press of any button outside the panels closes it and goes no further. The browser page's own menu (`browsers.rs::show_page_menu`) still calls `pop_up`: its rows carry actions, not commands, and browser cards are not built on Linux; on a Windows build with CEF it is still the stub. `smoke.sh` check 4 right-clicks a terminal card, screenshots the menu, chooses Close by keyboard and asserts the card is gone.
+
 ## Order
 
 1. Base the Linux work on the Windows branch's seam, not a second seam. Done: #513 put it on master.
 2. `keycode.rs` Linux functions, the Linux default fonts, the first-frame fix: the app is then usable on X11. Done: the fonts in #515, the keycode with this paragraph's PR, the first frame was the missing window manager.
 3. A `tools/drive/linux/` driver (the commands above as a script on a droplet) so each change is checked with a screenshot. Done: `box.sh`, `remote.sh`, `smoke.sh`.
-4. Context menu drawn by gpui, title bar drag, the icon font.
+4. Context menu drawn by gpui (done), title bar drag, the icon font.
 5. Packaging, then CEF.
