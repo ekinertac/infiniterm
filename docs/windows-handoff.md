@@ -39,9 +39,13 @@ a piece of work, not a mystery.
    mouse lines, "Close this card with `Cmd W`"). Its keys list is right
    (LCtrl on Windows) because it goes through `ModifierLabels`; these four
    sentences are literal text. Small to fix; not done.
-5. **The modifier for Windows and Linux is with Ekin again** (side of Ctrl,
-   as under "Keys", or another). The code does what "Keys" describes until
-   he decides.
+5. **The command key is being changed (decided by Ekin, 2026-10-22).** The
+   "side of Ctrl" design under "The modifier question" below is REPLACED:
+   Ctrl+Shift for the chords that clash with terminal control codes (Ctrl+Shift+C
+   copy, Ctrl+Shift+V paste, and so on), and plain Ctrl where the Ctrl chord is
+   free in a terminal (Ctrl+0 to 9, Ctrl+=, Ctrl+Tab). `ift-linux-port` owns
+   the shared design and the keymap change; the code still does the old design
+   until that lands.
 6. **Update signatures are built and off**: `UPDATE_PUBLIC_KEY` is empty until
    Ekin generates a key (see #470 below).
 7. A card's directory never changes, and transcript cards have not been opened
@@ -128,7 +132,17 @@ screenshot says and focuses the field under it, typing and the named keys
 reach the page, the wheel scrolls it, and the right-click menu opens. What
 that cost is under "What phase 5 changed" below.
 
-**The modifier question under "Keys" below is answered.** Windows gets its
+**The modifier question under "Keys" below was answered once and has been
+answered again.** The answer in this paragraph (2026-09-24) is REPLACED by
+Ekin's of 2026-10-22: Ctrl+Shift for the clashing chords, plain Ctrl where it
+is free in a terminal (see "Known gaps" item 5). It is kept because the code
+still does it until the keymap change lands, and because what it rejected
+still constrains the new one: the OS takes Win+L, D, E, R, S, T, the digits,
+the arrows and = (and Win+L locks the box), and Ctrl+Alt is AltGr, which is
+how Turkish Q types `{ [ ] } \ @`, so no binding may sit on Ctrl+Alt plus a
+key AltGr types.
+
+What the old design was: Windows gets its
 Cmd from the SIDE of Ctrl: left is the app's, right is the terminal's, so a
 keyboard remapped into Mac order (Ekin's is; the key where Cmd sits emits
 left Ctrl and Caps Lock emits right Ctrl) puts all 79 bindings under the
