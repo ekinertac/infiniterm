@@ -71,6 +71,22 @@ pub fn ui_themes_dir() -> PathBuf {
     config_dir().join(crate::ui_theme::DIR_NAME)
 }
 
+/// Where a ui theme's logo files live: `ui-themes/<name>/icons/` (#544), or
+/// `None` for a name that is not one plain file name. An empty name is the
+/// built-in `default` theme.
+pub fn ui_theme_icons_dir(name: &str) -> Option<PathBuf> {
+    icons_dir_in(&ui_themes_dir(), name)
+}
+
+fn icons_dir_in(themes: &std::path::Path, name: &str) -> Option<PathBuf> {
+    let name = if name.is_empty() {
+        crate::ui_theme::DEFAULT_NAME
+    } else {
+        name
+    };
+    crate::ui_theme::valid_name(name).then(|| themes.join(name).join("icons"))
+}
+
 /// Where a ui theme lives, or `None` for a name that is not one plain file
 /// name (`ui.theme` is typed by hand and must not reach outside the folder).
 pub fn ui_theme_path(name: &str) -> Option<PathBuf> {
@@ -275,6 +291,20 @@ pub fn config_watch(tx: Sender<ConfigChange>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_themes_logos_live_in_its_own_icons_folder_and_a_bad_name_has_none() {
+        let themes = std::path::Path::new("/cfg/ui-themes");
+        assert_eq!(
+            icons_dir_in(themes, "glass"),
+            Some(PathBuf::from("/cfg/ui-themes/glass/icons"))
+        );
+        assert_eq!(
+            icons_dir_in(themes, ""),
+            Some(PathBuf::from("/cfg/ui-themes/default/icons"))
+        );
+        assert_eq!(icons_dir_in(themes, "../x"), None);
+    }
 
     #[test]
     fn every_file_lives_in_the_config_directory() {

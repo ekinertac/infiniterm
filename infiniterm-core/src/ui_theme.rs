@@ -77,6 +77,12 @@ pub struct TabTheme {
     pub separator: Option<BorderSpec>,
     /// Corner radius in pixels, 0 to 40.
     pub radius: Option<f64>,
+    /// Show the focused card's program as an icon on the tab. Off unless set.
+    pub icons: Option<bool>,
+    /// What the icon is made of (`tab_icon::IconStyle`); unset is a glyph.
+    pub icon_style: Option<crate::tab_icon::IconStyle>,
+    /// Program name to a glyph or a logo file name (`tab_icon::choose`).
+    pub icon_map: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -139,7 +145,7 @@ pub const LOOK_KEYS: [(&str, Kind); 20] = [
 
 /// The bar keys (#425) and the tab keys (#544), with their docs. They exist
 /// only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 12] = [
+pub const BAR_KEYS: [(&str, &[&str], &str); 15] = [
     (
         "titlebar.background",
         &[
@@ -214,6 +220,32 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 12] = [
         "tab.radius",
         &["Round the corners of workspace tabs, in pixels, 0 to 40. Unset keeps the small default."],
         "6",
+    ),
+    (
+        "tab.icons",
+        &[
+            "Show an icon on each workspace tab for the program running in that workspace's",
+            "focused card (the first card, when none is focused). Off by default.",
+        ],
+        "false",
+    ),
+    (
+        "tab.iconStyle",
+        &[
+            "\"glyph\" draws a Nerd Font glyph. \"image\" draws a logo from ui-themes/<name>/icons/",
+            "(<program>.svg or .png, default.svg or .png for the rest) and a glyph for a",
+            "program with none. <name> is this theme's file name without .json.",
+        ],
+        "\"glyph\"",
+    ),
+    (
+        "tab.iconMap",
+        &[
+            "Program name to icon: a glyph (any text) or a file name in the theme's folder",
+            "ending in .svg or .png. The key \"default\" covers programs not listed. Built-in",
+            "glyphs cover common shells, runtimes and coding agents.",
+        ],
+        "{\"bun\": \"bun.svg\", \"default\": \"\\uf120\"}",
     ),
 ];
 
@@ -332,6 +364,31 @@ fn gradient(key: &str, v: &Value) -> Result<Option<[String; 2]>, String> {
     }
 }
 
+/// `tab.iconMap`: program name to a glyph or a logo file name. A value that
+/// names a file must be a plain file name (`tab_icon::safe_file`).
+fn icon_map(key: &str, v: &Value) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let obj = v
+        .as_object()
+        .ok_or_else(|| format!("\"{key}\" must be an object of \"program\": \"icon\""))?;
+    let mut map = std::collections::BTreeMap::new();
+    for (program, icon) in obj {
+        let icon = icon
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| format!("\"{key}\": \"{program}\" must be a glyph or a file name"))?;
+        let looks_like_file = icon.rsplit_once('.').is_some_and(|(_, e)| {
+            crate::tab_icon::IMAGE_EXTENSIONS.contains(&e.to_lowercase().as_str())
+        });
+        if looks_like_file && !crate::tab_icon::safe_file(icon) {
+            return Err(format!(
+                "\"{key}\": \"{icon}\" must be a plain file name in the theme's folder"
+            ));
+        }
+        map.insert(crate::tab_icon::program_key(program), icon.to_string());
+    }
+    Ok(map)
+}
+
 /// A number clamped to `min..=max`, like `merge_config` does for the look keys.
 fn number(key: &str, v: &Value, min: f64, max: f64) -> Result<f64, String> {
     v.as_f64()
@@ -389,6 +446,17 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
             "tab.activeBorder" => theme.tab.active_border = Some(border(key, v)?),
             "tab.separator" => theme.tab.separator = Some(border(key, v)?),
             "tab.radius" => theme.tab.radius = Some(number(key, v, 0., 40.)?),
+            "tab.icons" => {
+                theme.tab.icons = Some(v.as_bool().ok_or("\"tab.icons\" must be true or false")?)
+            }
+            "tab.iconStyle" => {
+                theme.tab.icon_style = Some(
+                    v.as_str()
+                        .and_then(crate::tab_icon::IconStyle::parse)
+                        .ok_or("\"tab.iconStyle\" must be \"glyph\" or \"image\"")?,
+                )
+            }
+            "tab.iconMap" => theme.tab.icon_map = icon_map(key, v)?,
             _ => match LOOK_KEYS.iter().find(|(k, _)| *k == key) {
                 Some((_, kind)) => {
                     check_kind(key, *kind, v)?;
@@ -530,6 +598,44 @@ mod tests {
         );
         assert_eq!(t.radius, Some(9.));
         assert_eq!(parse(r#"{"tab.gradient": []}"#).unwrap().tab.gradient, None);
+    }
+
+    #[test]
+    fn tab_icon_keys_parse_and_are_off_unless_set() {
+        let none = parse("{}").unwrap().tab;
+        assert_eq!((none.icons, none.icon_style), (None, None));
+        assert!(none.icon_map.is_empty());
+        let t = parse(
+            r#"{
+              "tab.icons": true,
+              "tab.iconStyle": "image",
+              "tab.iconMap": {"Bun": "bun.svg", "-fish": "F", "default": "default.png"},
+            }"#,
+        )
+        .unwrap()
+        .tab;
+        assert_eq!(t.icons, Some(true));
+        assert_eq!(t.icon_style, Some(crate::tab_icon::IconStyle::Image));
+        assert_eq!(t.icon_map["bun"], "bun.svg");
+        assert_eq!(t.icon_map["fish"], "F", "keyed like a process name");
+        assert_eq!(t.icon_map["default"], "default.png");
+    }
+
+    #[test]
+    fn bad_tab_icon_values_name_the_key() {
+        for (bad, key) in [
+            (r#"{"tab.icons": "yes"}"#, "tab.icons"),
+            (r#"{"tab.iconStyle": "svg"}"#, "tab.iconStyle"),
+            (r#"{"tab.iconStyle": 1}"#, "tab.iconStyle"),
+            (r#"{"tab.iconMap": ["bun"]}"#, "tab.iconMap"),
+            (r#"{"tab.iconMap": {"bun": 3}}"#, "tab.iconMap"),
+            (r#"{"tab.iconMap": {"bun": ""}}"#, "tab.iconMap"),
+            (r#"{"tab.iconMap": {"bun": "../bun.svg"}}"#, "tab.iconMap"),
+            (r#"{"tab.iconMap": {"bun": "a/b.png"}}"#, "tab.iconMap"),
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains(key), "{e}");
+        }
     }
 
     #[test]

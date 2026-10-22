@@ -123,6 +123,7 @@ pub mod slide;
 pub mod slot_snap;
 pub mod snippets;
 pub mod switcher;
+pub mod tab_icon;
 pub mod themes_files;
 pub mod transcript;
 pub mod transport;
