@@ -35,9 +35,82 @@ use std::path::Path;
 /// Windows release gets its own name (`tools/dist.ps1` writes it).
 pub const LATEST_URL: &str = if cfg!(windows) {
     "https://github.com/ekinertac/infiniterm/releases/latest/download/latest-windows.json"
+} else if cfg!(target_os = "linux") {
+    "https://github.com/ekinertac/infiniterm/releases/latest/download/latest-linux.json"
 } else {
     "https://github.com/ekinertac/infiniterm/releases/latest/download/latest.json"
 };
+
+/// What `latest-linux.json` says about the newest Linux release, for the
+/// notice. Linux never swaps itself (docs/agent/linux-port.md,
+/// "Packaging"): install.sh or `brew upgrade` is the update, so only the
+/// version and build matter here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinuxRelease {
+    pub version: String,
+    pub build: u64,
+    pub tag: String,
+}
+
+/// `latest-linux.json`, written by `tools/publish-linux.sh`: flat keys so
+/// install.sh can read it with `sed`, one URL and sha256 pair per
+/// architecture (`x86_64_url`, `x86_64_sha256`, `aarch64_...`). A release
+/// with no build for `arch` is an error, so a machine is never told about an
+/// update it cannot install; a URL outside the release downloads is refused
+/// as for the other manifests.
+pub fn parse_linux_manifest(text: &str, arch: &str) -> Result<LinuxRelease, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let s = |k: &str| -> Result<String, String> {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .map(String::from)
+            .ok_or_else(|| format!("latest-linux.json has no {k}"))
+    };
+    let build = v
+        .get("build")
+        .and_then(|b| b.as_u64())
+        .ok_or("latest-linux.json has no build number")?;
+    let url = s(&format!("{arch}_url"))?;
+    if !DOWNLOAD_PREFIXES.iter().any(|p| url.starts_with(p)) {
+        return Err(format!(
+            "latest-linux.json points outside the release downloads: {url}"
+        ));
+    }
+    s(&format!("{arch}_sha256"))?;
+    Ok(LinuxRelease {
+        version: s("version")?,
+        build,
+        tag: s("tag")?,
+    })
+}
+
+/// How a Linux build got where it runs from: by install.sh (under
+/// `~/.local/share/infiniterm/<version>/`, `paths::LINUX_INSTALL_ROOT`) or
+/// by Homebrew (a `Cellar` folder). Anything else (a `cargo build`, an
+/// unpacked tarball somewhere) gets no update notice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinuxInstall {
+    Script,
+    Brew,
+}
+
+pub fn linux_install(exe_dir: &Path, home: &Path) -> Option<LinuxInstall> {
+    if exe_dir.starts_with(home.join(crate::paths::LINUX_INSTALL_ROOT)) {
+        return Some(LinuxInstall::Script);
+    }
+    exe_dir
+        .components()
+        .any(|c| c.as_os_str() == "Cellar")
+        .then_some(LinuxInstall::Brew)
+}
+
+/// The one line that updates that kind of install.
+pub fn linux_update_hint(install: LinuxInstall) -> &'static str {
+    match install {
+        LinuxInstall::Script => "curl -fsSL https://infiniterm.app/install.sh | sh",
+        LinuxInstall::Brew => "brew upgrade infiniterm-linux",
+    }
+}
 
 /// Where an update's zip may come from, whatever a manifest says: the
 /// main repo, and the old releases repo, which the bridge release serves.
@@ -284,10 +357,56 @@ mod tests {
     fn the_manifest_url_names_this_platforms_file() {
         if cfg!(windows) {
             assert!(LATEST_URL.ends_with("/latest-windows.json"), "{LATEST_URL}");
+        } else if cfg!(target_os = "linux") {
+            assert!(LATEST_URL.ends_with("/latest-linux.json"), "{LATEST_URL}");
         } else {
             assert!(LATEST_URL.ends_with("/latest.json"), "{LATEST_URL}");
         }
         assert!(LATEST_URL.starts_with("https://github.com/ekinertac/infiniterm/releases/"));
+    }
+
+    const LINUX_MANIFEST: &str = r#"{
+        "version": "0.6.3", "build": 1100, "tag": "v0.6.3",
+        "x86_64_url": "https://github.com/ekinertac/infiniterm/releases/download/v0.6.3/infiniterm-linux-x86_64.tar.gz",
+        "x86_64_sha256": "aa",
+        "aarch64_url": "https://github.com/ekinertac/infiniterm/releases/download/v0.6.3/infiniterm-linux-aarch64.tar.gz",
+        "aarch64_sha256": "bb"
+    }"#;
+
+    #[test]
+    fn the_linux_manifest_names_a_build_per_architecture() {
+        let r = parse_linux_manifest(LINUX_MANIFEST, "x86_64").unwrap();
+        assert_eq!(
+            (r.version.as_str(), r.build, r.tag.as_str()),
+            ("0.6.3", 1100, "v0.6.3")
+        );
+        assert!(parse_linux_manifest(LINUX_MANIFEST, "aarch64").is_ok());
+        // No build for this machine: no notice about it.
+        assert!(parse_linux_manifest(LINUX_MANIFEST, "riscv64").is_err());
+        let elsewhere =
+            LINUX_MANIFEST.replace("https://github.com/ekinertac", "https://evil.example");
+        assert!(parse_linux_manifest(&elsewhere, "x86_64").is_err());
+        assert!(parse_linux_manifest("{}", "x86_64").is_err());
+    }
+
+    #[test]
+    fn a_linux_install_is_told_its_own_update_command() {
+        let home = Path::new("/home/ekin");
+        let script = Path::new("/home/ekin/.local/share/infiniterm/0.6.3");
+        assert_eq!(linux_install(script, home), Some(LinuxInstall::Script));
+        let brew = Path::new("/home/linuxbrew/.linuxbrew/Cellar/infiniterm-linux/0.6.3/libexec");
+        assert_eq!(linux_install(brew, home), Some(LinuxInstall::Brew));
+        // A source build or a tarball unpacked anywhere else: no notice.
+        assert_eq!(
+            linux_install(Path::new("/home/ekin/Code/infiniterm/target/release"), home),
+            None
+        );
+        assert_eq!(linux_install(Path::new("/opt/infiniterm"), home), None);
+        assert!(linux_update_hint(LinuxInstall::Script).contains("install.sh"));
+        assert_eq!(
+            linux_update_hint(LinuxInstall::Brew),
+            "brew upgrade infiniterm-linux"
+        );
     }
 
     // The usage estimate (tools/usage-stats.py) assumes this many fetches a

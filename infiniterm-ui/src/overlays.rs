@@ -1076,6 +1076,29 @@ impl AppView {
                                     )
                             }),
                     )
+                    // Linux tells rather than installs (`updater.rs`): the
+                    // newer build stays said here, and a click says again
+                    // the command that installs it.
+                    .children(self.updater.as_ref().and_then(|u| u.available).map(
+                        |(build, hint)| {
+                            div()
+                                .id("update-available")
+                                .cursor_pointer()
+                                .px_1()
+                                .rounded_sm()
+                                .bg(chrome.warn)
+                                .text_color(chrome.bar_bg)
+                                .child(format!("Build {build} is out"))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                                        this.model.notify(format!("To install it: {hint}"));
+                                        this.redraw = true;
+                                        cx.notify();
+                                    }),
+                                )
+                        },
+                    ))
                     .child(div().text_color(fps_color).child(right))
                     // Which build this is, for a bug report from a friend.
                     .children(self.build.map(|b| {
