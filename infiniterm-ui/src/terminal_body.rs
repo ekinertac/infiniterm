@@ -262,9 +262,29 @@ pub const ICON_FONT: &str = crate::icon_font::ICON_FONT_POSTSCRIPT;
 /// configured family lacks is looked for there before anywhere else.
 pub fn term_font(family: &str) -> gpui::Font {
     let mut f = font(family.to_string());
-    f.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![ICON_FONT.to_string()]));
+    // Not on Windows: its fallback list is matched by family name in the
+    // system collection, where the bundled font is not, so naming it only
+    // logged an error. Icons get runs of their own there instead.
+    #[cfg(not(windows))]
+    {
+        f.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![ICON_FONT.to_string()]));
+    }
     f
 }
+
+/// Whether a row's icon characters are shaped in runs that name the icon
+/// font's family. True where gpui cannot fall back to a font the app bundled
+/// (Windows, see `icon_chars.rs`); elsewhere the fallback list does it.
+#[cfg(windows)]
+const ICON_RUNS: bool = true;
+#[cfg(not(windows))]
+const ICON_RUNS: bool = false;
+
+/// The bundled font's family, for the runs above.
+#[cfg(windows)]
+const ICON_FAMILY: &str = crate::icon_font::ICON_FONT_FAMILY;
+#[cfg(not(windows))]
+const ICON_FAMILY: &str = "Symbols Nerd Font Mono";
 
 impl TerminalBody {
     pub fn new(
@@ -1520,6 +1540,18 @@ fn shape_row(
     // The row's zero-width characters, in column order, taken as the
     // columns are walked.
     let mut zerowidth = row.zerowidth.iter().peekable();
+    // The icon font, normal weight and style whatever the run is: a Nerd Font
+    // symbol has no bold. Named by family, which gpui finds among the fonts
+    // the app added (`ICON_RUNS` says when this is used).
+    let icon_font = font(ICON_FAMILY.to_string());
+    let text_run = |len: usize, font: &gpui::Font, color: Hsla| TextRun {
+        len,
+        font: font.clone(),
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
     for run in &row.runs {
         let color = if run.dim {
             crate::chrome::with_alpha(rgb(run.fg), TERM_DIM_ALPHA)
@@ -1535,6 +1567,9 @@ fn shape_row(
         }
         let run_start_col = col;
         let mut run_len = 0usize;
+        // Where ICON_RUNS is on, this run's text is cut into stretches that
+        // are icons and stretches that are not, each its own TextRun.
+        let mut cutter = infiniterm_core::icon_chars::Cutter::new();
         for ch in run.text.chars() {
             // A wide character's second cell: a column, not a character.
             if ch == infiniterm_term::grid::SPACER {
@@ -1560,20 +1595,26 @@ fn shape_row(
             });
             run_len += len;
             col += 1;
+            if ICON_RUNS {
+                if let Some((bytes, icon)) =
+                    cutter.push(infiniterm_core::icon_chars::is_icon(ch), len)
+                {
+                    runs.push(text_run(bytes, if icon { &icon_font } else { &f }, color));
+                }
+            }
         }
         if run_len == 0 {
             continue;
         }
-        // A run's text shares one font and colour; gpui splits fallback
-        // fonts inside it on its own.
-        runs.push(TextRun {
-            len: run_len,
-            font: f,
-            color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        });
+        if ICON_RUNS {
+            if let Some((bytes, icon)) = cutter.finish() {
+                runs.push(text_run(bytes, if icon { &icon_font } else { &f }, color));
+            }
+        } else {
+            // A run's text shares one font and colour; gpui splits fallback
+            // fonts inside it on its own.
+            runs.push(text_run(run_len, &f, color));
+        }
         let cells = col - run_start_col;
         if run.underline {
             decorations.push((run_start_col, cells, color, Decoration::Underline));
@@ -1813,8 +1854,19 @@ mod tests {
         assert!(l.note.contains("joining"));
     }
 
+    // On Windows the icons are runs that name the family instead.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_icons_are_runs_of_their_own_and_the_font_has_no_fallback_list() {
+        assert!(ICON_RUNS);
+        assert!(term_font("Cascadia Mono").fallbacks.is_none());
+        // The family gpui must find is the one in the bundled font's name table.
+        assert_eq!(ICON_FAMILY, "Symbols Nerd Font Mono");
+    }
+
     /// Every terminal font carries the bundled icon font behind it, whatever
     /// family the settings name, or a Mac without a Nerd Font draws boxes.
+    #[cfg(not(windows))]
     #[test]
     fn every_terminal_font_falls_back_to_the_icon_font() {
         for family in ["Menlo", "IosevkaTerm Nerd Font Mono"] {

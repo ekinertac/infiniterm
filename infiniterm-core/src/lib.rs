@@ -81,6 +81,7 @@ pub mod git_repo;
 #[cfg(unix)]
 pub mod headless;
 pub mod hooks;
+pub mod icon_chars;
 pub mod ift;
 pub mod inspect;
 // Who owns the single-instance endpoint; the other half of `transport`.

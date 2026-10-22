@@ -643,6 +643,16 @@ fn main() {
         if !icon_font::register() {
             eprintln!("[infiniterm/warn] the bundled icon font is not resolvable; prompt icons may draw as boxes");
         }
+        // Windows: the same font, through gpui's own store. Its fallback
+        // list cannot reach a font added this way, so the terminal names the
+        // family in the runs that hold icons (`terminal_body::shape_row`).
+        #[cfg(windows)]
+        if let Err(e) = cx
+            .text_system()
+            .add_fonts(vec![std::borrow::Cow::Borrowed(icon_font::ICON_FONT_TTF)])
+        {
+            eprintln!("[infiniterm/warn] the bundled icon font would not load: {e}");
+        }
         // A window that quit full screen opens at its old frame and goes
         // full screen once it exists, through the same toggle as the green
         // button, so `ui.fullscreen` picks the kind; left to gpui it would

@@ -58,12 +58,25 @@ pub mod fullscreen {
 }
 
 pub mod icon_font {
-    /// Empty: nothing is registered, so nothing can be drawn from it.
+    /// Windows bundles the font and hands it to gpui at start-up
+    /// (`main.rs`, `add_fonts`); icons are then drawn from runs that name
+    /// `ICON_FONT_FAMILY` (`terminal_body::shape_row`, `core::icon_chars`),
+    /// because gpui's Windows fallback list looks in the SYSTEM font
+    /// collection only and cannot see a font added this way. Other
+    /// platforms have no bundled copy.
+    #[cfg(windows)]
+    pub const ICON_FONT_TTF: &[u8] =
+        include_bytes!("../../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
+    #[cfg(not(windows))]
     pub const ICON_FONT_TTF: &[u8] = &[];
     pub const ICON_FONT_POSTSCRIPT: &str = "SymbolsNFM";
+    /// The family name in the font's own name table, which is what gpui's
+    /// DirectWrite lookup matches (the PostScript name above is CoreText's).
+    pub const ICON_FONT_FAMILY: &str = "Symbols Nerd Font Mono";
 
     /// True, so the start-up warning about a missing bundled font does not
-    /// fire on a platform where the font is not bundled yet.
+    /// fire on a platform where the font is not bundled yet. On Windows the
+    /// real work is `add_fonts` in `main.rs`, which has the `App` this lacks.
     pub fn register() -> bool {
         true
     }
