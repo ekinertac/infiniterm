@@ -171,6 +171,10 @@ impl AppView {
     ) -> Keystroke {
         use infiniterm_core::config::CommandModifier;
         use infiniterm_core::platform_keys::PlatformKeys;
+        // AltGr typing (Windows) arrives as Ctrl+Alt: take that off before a
+        // chord is built or a key reaches a terminal, so `@` typed with
+        // AltGr+Q is a plain key and no Ctrl+Alt row can fire on it.
+        let k = &crate::keycode::without_altgr(k);
         if cfg!(target_os = "macos")
             || self.model.config.keyboard.command_modifier == CommandModifier::Super
         {

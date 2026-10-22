@@ -34,18 +34,20 @@ a piece of work, not a mystery.
    browser means putting `libcef.dll`, its data files and the helper in the
    folder and zip. Waiting for Ekin.
 3. **The browser page's right-click menu does nothing** (see below).
-4. **The welcome card says `Cmd` in four places on Windows**
-   (`infiniterm-core/src/welcome.rs`: "`Cmd` belongs to infiniterm", the two
-   mouse lines, "Close this card with `Cmd W`"). Its keys list is right
-   (LCtrl on Windows) because it goes through `ModifierLabels`; these four
-   sentences are literal text. Small to fix; not done.
-5. **The command key is being changed (decided by Ekin, 2026-10-22).** The
-   "side of Ctrl" design under "The modifier question" below is REPLACED:
-   Ctrl+Shift for the chords that clash with terminal control codes (Ctrl+Shift+C
-   copy, Ctrl+Shift+V paste, and so on), and plain Ctrl where the Ctrl chord is
-   free in a terminal (Ctrl+0 to 9, Ctrl+=, Ctrl+Tab). `ift-linux-port` owns
-   the shared design and the keymap change; the code still does the old design
-   until that lands.
+4. **Ctrl+Esc, which `browser.leave` uses, is dead on Windows**: the Start menu
+   takes it before the app sees it. A double Escape still unlocks a locked
+   browser or editor, and Ctrl+Shift+Esc (Task Manager's) is not assigned.
+5. **The command key (decided by Ekin, 2026-10-22; code in #537, the Windows
+   half in the PR after it).** The "side of Ctrl" design under "The modifier
+   question" below is REPLACED: Ctrl+Shift for the chords that clash with
+   terminal control codes (Ctrl+Shift+C copy, Ctrl+Shift+V paste, and so on),
+   and plain Ctrl where the Ctrl chord is free in a terminal (Ctrl+0 to 9,
+   Ctrl+=, Ctrl+Tab). `ift-linux-port` owns the shared design
+   (`docs/agent/command-key.md`, `platform_keys.rs`); the Windows half is the
+   AltGr rule (`core::altgr`, `keycode::without_altgr`), the scan-code walk of
+   the platform table (`every_key_the_platform_chords_use_has_a_scan_code`) and
+   the welcome card's wording. Not yet checked with real keystrokes: see the
+   PR for what was and was not.
 6. **Update signatures are built and off**: `UPDATE_PUBLIC_KEY` is empty until
    Ekin generates a key (see #470 below).
 7. A card's directory never changes, and transcript cards have not been opened
@@ -135,9 +137,9 @@ that cost is under "What phase 5 changed" below.
 **The modifier question under "Keys" below was answered once and has been
 answered again.** The answer in this paragraph (2026-09-24) is REPLACED by
 Ekin's of 2026-10-22: Ctrl+Shift for the clashing chords, plain Ctrl where it
-is free in a terminal (see "Known gaps" item 5). It is kept because the code
-still does it until the keymap change lands, and because what it rejected
-still constrains the new one: the OS takes Win+L, D, E, R, S, T, the digits,
+is free in a terminal (see "Known gaps" item 5), and the code no longer does
+what this paragraph describes. It is kept as history, and because what it
+rejected still constrains the new one: the OS takes Win+L, D, E, R, S, T, the digits,
 the arrows and = (and Win+L locks the box), and Ctrl+Alt is AltGr, which is
 how Turkish Q types `{ [ ] } \ @`, so no binding may sit on Ctrl+Alt plus a
 key AltGr types.
