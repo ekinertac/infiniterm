@@ -251,7 +251,8 @@ impl AppView {
             .collect();
         let sections = filter_shortcuts(
             &shortcut_sections(
-                &self.model.keymap,
+                // As this platform shows its chords (`Model::shown_keymap`).
+                &self.model.shown_keymap(),
                 &labels_ref,
                 self.model.modifier_labels(),
             ),
@@ -429,6 +430,9 @@ impl AppView {
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_fields();
+        // Chords are drawn as the platform shows them; the table follows a
+        // changed keymap before anything below draws one.
+        self.sync_platform_keys();
         self.sync_window_background(window);
         if !self.window_titled {
             if let Some(r) = &self.model.remote {
@@ -1628,7 +1632,8 @@ impl AppView {
         let query = self.shortcuts_field.text.clone();
         let sections = filter_shortcuts(
             &shortcut_sections(
-                &self.model.keymap,
+                // As this platform shows its chords (`Model::shown_keymap`).
+                &self.model.shown_keymap(),
                 &labels_ref,
                 self.model.modifier_labels(),
             ),

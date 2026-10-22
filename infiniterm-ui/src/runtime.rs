@@ -121,8 +121,6 @@ impl AppView {
             extracted_size: Default::default(),
             extract_request: None,
             page_menu_open: false,
-            platform_keys: Default::default(),
-            platform_keys_for: Vec::new(),
             #[cfg(not(target_os = "macos"))]
             title_press: None,
             menu_anchor: (0., 0.),
@@ -1304,6 +1302,8 @@ pub fn startup(app: &mut AppView) {
     // is installed now. A first launch opens it (`seed_first_card`).
     {
         use infiniterm_core::welcome;
+        // The keys it names are the platform's (`Model::shown_keymap`).
+        app.sync_platform_keys();
         let env_path = |k: &str| std::env::var_os(k).map(std::path::PathBuf::from);
         let home = infiniterm_core::paths::home_dir();
         let agents = welcome::agents_on_this_mac(
@@ -1318,7 +1318,11 @@ pub fn startup(app: &mut AppView) {
             .and_then(|()| {
                 std::fs::write(
                     &path,
-                    welcome::render(&app.model.keymap, &agents, app.model.modifier_labels()),
+                    welcome::render(
+                        &app.model.shown_keymap(),
+                        &agents,
+                        app.model.modifier_labels(),
+                    ),
                 )
             });
         if let Err(e) = written {

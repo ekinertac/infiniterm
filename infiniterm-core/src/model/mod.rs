@@ -729,6 +729,10 @@ pub struct Model {
     /// Bindings with a `when` from keybindings.json (#269); the last one whose
     /// clause holds wins over `keymap` (`conditional_for`).
     pub conditional_keys: Vec<crate::keymap::CondBinding>,
+    /// Off the Mac: the two-way chord table for `keymap`, and the keymap it
+    /// was built from (`sync_platform_keys`, `platform_keys.rs`).
+    pub platform_keys: crate::platform_keys::PlatformKeys,
+    pub platform_keys_for: Keymap,
     /// What only the ui knows about the keyboard's context, written by it each
     /// frame (the completion popup, the editor's find panel and selection).
     pub ui_context: UiContext,
@@ -802,6 +806,12 @@ impl Default for Model {
     }
 }
 
+/// The rule behind `Model::uses_platform_keys`, apart so it is tested for
+/// every platform on any one.
+pub fn uses_platform_keys(macos: bool, choice: crate::config::CommandModifier) -> bool {
+    !macos && choice == crate::config::CommandModifier::Ctrl
+}
+
 /// The lowest card number from 1 up that `used` does not hold. Pure, for
 /// `Model::take_number`, the load and a reopened card.
 pub fn lowest_free_number(used: &[u32]) -> u32 {
@@ -815,6 +825,66 @@ impl Model {
     /// rather than being a constant in `shortcuts.rs`.
     pub fn modifier_labels(&self) -> crate::shortcuts::ModifierLabels {
         crate::shortcuts::ModifierLabels::new(self.config.keyboard.command_modifier)
+    }
+
+    /// Whether chords are shown and read through the platform table: off
+    /// the Mac with `keyboard.commandModifier` = `ctrl` (`platform_keys.rs`).
+    pub fn uses_platform_keys(&self) -> bool {
+        uses_platform_keys(
+            cfg!(target_os = "macos"),
+            self.config.keyboard.command_modifier,
+        )
+    }
+
+    /// Rebuilds the two-way chord table when the keymap changed since it was
+    /// built; what could not be mapped comes back, for a notice. The ui
+    /// calls it before reading keys and before drawing chords.
+    pub fn sync_platform_keys(&mut self) -> Vec<String> {
+        if self.platform_keys_for == self.keymap {
+            return vec![];
+        }
+        let chords = self
+            .keymap
+            .iter()
+            .map(|(c, _)| c.as_str())
+            .chain(self.conditional_keys.iter().map(|b| b.chord.as_str()));
+        let (table, problems) = crate::platform_keys::PlatformKeys::build(chords);
+        self.platform_keys = table;
+        self.platform_keys_for = self.keymap.clone();
+        problems
+    }
+
+    /// A Mac chord as this platform shows it: itself on the Mac and with
+    /// `super`; the platform chord with `ctrl` (Ctrl+Shift+T for Cmd+T);
+    /// `None` for one with no key here (palette only). Every place a chord
+    /// is drawn goes through this or `shown_keymap`.
+    pub fn shown_chord(&self, mac: &str) -> Option<String> {
+        self.shown_chord_with(self.uses_platform_keys(), mac)
+    }
+
+    /// `shown_chord` with the platform rule given, so either side is tested
+    /// on any machine.
+    pub fn shown_chord_with(&self, platform_keys: bool, mac: &str) -> Option<String> {
+        if platform_keys {
+            self.platform_keys.platform(mac).map(String::from)
+        } else {
+            Some(mac.to_string())
+        }
+    }
+
+    /// The keymap as this platform shows it, chords with no key here left
+    /// out (`shown_chord`).
+    pub fn shown_keymap(&self) -> Keymap {
+        self.shown_keymap_with(self.uses_platform_keys())
+    }
+
+    pub fn shown_keymap_with(&self, platform_keys: bool) -> Keymap {
+        self.keymap
+            .iter()
+            .filter_map(|(chord, id)| {
+                Some((self.shown_chord_with(platform_keys, chord)?, id.clone()))
+            })
+            .collect()
     }
     pub fn new() -> Model {
         Model {
@@ -871,6 +941,8 @@ impl Model {
             config: default_config(),
             keymap: default_keymap(),
             conditional_keys: vec![],
+            platform_keys: Default::default(),
+            platform_keys_for: Vec::new(),
             ui_context: UiContext::default(),
             settings_error: None,
             ui_theme: Default::default(),

@@ -375,8 +375,13 @@ pub struct Source<'a> {
     pub context: &'a Context,
     /// The command's label, `None` for an unknown id (the row is dropped).
     pub label: &'a dyn Fn(&str) -> Option<String>,
-    /// The first chord the keymap binds to a command.
+    /// The first chord the keymap binds to a command, as the platform shows
+    /// it.
     pub chord: &'a dyn Fn(&str) -> Option<String>,
+    /// A row's own chord from the table (a body's, like the terminal's copy)
+    /// as the platform shows it: `Model::shown_chord`, so off the Mac the
+    /// terminal's Cmd+C is drawn Ctrl+Shift+C (#464).
+    pub shown: &'a dyn Fn(&str) -> Option<String>,
 }
 
 /// "Card: rename\u{2026}" to "Rename\u{2026}": the part after the domain, its first
@@ -406,8 +411,11 @@ fn build(defs: &[Def], src: &Source) -> Vec<Row> {
                 let Some(label) = (src.label)(c.id) else {
                     continue;
                 };
-                let chord =
-                    (src.chord)(c.id).or_else(|| (!c.chord.is_empty()).then(|| c.chord.into()));
+                let chord = (src.chord)(c.id).or_else(|| {
+                    (!c.chord.is_empty())
+                        .then(|| (src.shown)(c.chord))
+                        .flatten()
+                });
                 rows.push(Row::Item {
                     command: c.id.into(),
                     title: c.title.map_or_else(|| short_title(&label), String::from),
@@ -500,8 +508,36 @@ mod tests {
                 context: ctx,
                 label: &|id| Some(format!("Card: {id}")),
                 chord: &|id| (id == "card.close").then(|| "cmd+w".to_string()),
+                shown: &|c| Some(c.to_string()),
             },
         )
+    }
+
+    // A body chord in the table is drawn as the platform shows it, through
+    // `shown`; one with no key there is drawn without a chord.
+    #[test]
+    fn a_table_chord_goes_through_the_platform_view() {
+        let ctx = ctx();
+        let built = rows(
+            Area::Terminal,
+            &Source {
+                context: &ctx,
+                label: &|id| Some(format!("Card: {id}")),
+                chord: &|_| None,
+                shown: &|c| (c == "cmd+v").then(|| "ctrl+shift+v".to_string()),
+            },
+        );
+        let chord_of = |id: &str| {
+            built.iter().find_map(|r| match r {
+                Row::Item { command, chord, .. } if command == id => Some(chord.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            chord_of("terminal.paste"),
+            Some(Some("ctrl+shift+v".into()))
+        );
+        assert_eq!(chord_of("terminal.copy"), Some(None));
     }
 
     #[test]
@@ -599,6 +635,7 @@ mod tests {
                 context: &ctx(),
                 label: &|_| None,
                 chord: &|_| None,
+                shown: &|_| None,
             },
         );
         assert!(rows.is_empty(), "{rows:?}");
