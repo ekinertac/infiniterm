@@ -74,7 +74,10 @@ impl AppView {
         }
         infiniterm_core::card_header::button_at(
             card.rect.w,
-            &self.model.ui_theme.card.header_buttons,
+            self.model
+                .ui_theme
+                .card
+                .buttons_for(self.model.selection.focused_id.as_deref() == Some(&card.id)),
             local.x,
             local.y,
         )
@@ -86,10 +89,11 @@ impl AppView {
     fn under_header(&self, id: String, local: Point, width: f64) -> Hit {
         let inset = self.header_inset_of(&id);
         if infiniterm_core::card_header::in_header(inset, local.y) {
+            let focused = self.model.selection.focused_id.as_deref() == Some(id.as_str());
             let button = self.model.card(&id).and_then(|_| {
                 infiniterm_core::card_header::button_at(
                     width,
-                    &self.model.ui_theme.card.header_buttons,
+                    self.model.ui_theme.card.buttons_for(focused),
                     local.x,
                     local.y,
                 )

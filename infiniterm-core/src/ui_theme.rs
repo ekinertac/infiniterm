@@ -92,6 +92,8 @@ pub struct CardTheme {
     pub header: Option<bool>,
     /// Which buttons it carries, in order; none unless listed.
     pub header_buttons: Vec<crate::card_header::HeaderButton>,
+    /// Show the buttons only on the focused card. Off unless set.
+    pub header_buttons_active_only: Option<bool>,
     /// The program's icon at the header's left, from the tab icon keys
     /// (`tab.iconStyle`, `tab.iconMap`).
     pub header_icons: Option<bool>,
@@ -100,6 +102,16 @@ pub struct CardTheme {
 impl CardTheme {
     pub fn header_on(&self) -> bool {
         self.header == Some(true)
+    }
+
+    /// The buttons a card wears: the listed ones, or none on a card that is
+    /// not the focused one while `card.headerButtonsActiveOnly` is on.
+    pub fn buttons_for(&self, focused: bool) -> &[crate::card_header::HeaderButton] {
+        if self.header_buttons_active_only == Some(true) && !focused {
+            &[]
+        } else {
+            &self.header_buttons
+        }
     }
 }
 
@@ -164,7 +176,7 @@ pub const LOOK_KEYS: [(&str, Kind); 20] = [
 
 /// The bar keys (#425) and the tab keys (#544), with their docs. They exist
 /// only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 18] = [
+pub const BAR_KEYS: [(&str, &[&str], &str); 19] = [
     (
         "titlebar.background",
         &[
@@ -284,6 +296,15 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 18] = [
             "card.maximize.toggle, card.close). None unless listed.",
         ],
         "[\"split-right\", \"split-down\", \"maximise\", \"close\"]",
+    ),
+    (
+        "card.headerButtonsActiveOnly",
+        &[
+            "Show the header's buttons only on the focused card. The other cards' headers show",
+            "just the icon and the name, and nothing is clickable where the buttons would be.",
+            "Default false.",
+        ],
+        "false",
     ),
     (
         "card.headerIcons",
@@ -535,6 +556,12 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
                 )
             }
             "card.headerButtons" => theme.card.header_buttons = header_buttons(key, v)?,
+            "card.headerButtonsActiveOnly" => {
+                theme.card.header_buttons_active_only = Some(
+                    v.as_bool()
+                        .ok_or("\"card.headerButtonsActiveOnly\" must be true or false")?,
+                )
+            }
             _ => match LOOK_KEYS.iter().find(|(k, _)| *k == key) {
                 Some((_, kind)) => {
                     check_kind(key, *kind, v)?;
@@ -721,8 +748,33 @@ mod tests {
     }
 
     #[test]
+    fn the_buttons_can_be_limited_to_the_focused_card() {
+        use crate::card_header::HeaderButton::*;
+        let all = parse(r#"{"card.headerButtons": ["split-right", "close"]}"#)
+            .unwrap()
+            .card;
+        assert_eq!(all.buttons_for(false), &[SplitRight, Close]);
+        assert_eq!(all.buttons_for(true), &[SplitRight, Close]);
+        let only =
+            parse(r#"{"card.headerButtons": ["close"], "card.headerButtonsActiveOnly": true}"#)
+                .unwrap()
+                .card;
+        assert_eq!(only.buttons_for(true), &[Close]);
+        assert!(only.buttons_for(false).is_empty());
+        let off =
+            parse(r#"{"card.headerButtons": ["close"], "card.headerButtonsActiveOnly": false}"#)
+                .unwrap()
+                .card;
+        assert_eq!(off.buttons_for(false), &[Close]);
+    }
+
+    #[test]
     fn bad_card_header_values_name_the_key() {
         for (bad, key) in [
+            (
+                r#"{"card.headerButtonsActiveOnly": "yes"}"#,
+                "card.headerButtonsActiveOnly",
+            ),
             (r#"{"card.header": "yes"}"#, "card.header"),
             (r#"{"card.headerIcons": 1}"#, "card.headerIcons"),
             (r#"{"card.headerButtons": "close"}"#, "card.headerButtons"),

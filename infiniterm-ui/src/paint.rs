@@ -1042,7 +1042,7 @@ impl AppView {
             x += h + h * HEADER_ICON_GAP_RATIO - pad / 2.;
         }
         // The buttons, right-aligned; the title gets what is left.
-        let buttons = self.model.ui_theme.card.header_buttons.clone();
+        let buttons = self.model.ui_theme.card.buttons_for(focused).to_vec();
         let rects = infiniterm_core::card_header::button_rects(
             f32::from(b.size.width) as f64 / scale,
             &buttons,
