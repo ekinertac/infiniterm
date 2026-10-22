@@ -635,6 +635,7 @@ pub fn undocumented(config: &Value) -> Vec<String> {
 
 const HEADER: &[&str] = &[
     "Every setting infiniterm has, with its default value.",
+    "Docs: https://infiniterm.app/reference/settings/",
     "",
     "THIS FILE IS REWRITTEN EVERY LAUNCH. Editing it does nothing.",
     "Put your changes in settings.json beside it, which overrides what is here and",

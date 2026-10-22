@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-22
 
+- `settings.json` and `settings.default.json` now start with a link to the settings reference (infiniterm.app/reference/settings/), and `keybindings.json` and `keybindings.default.json` with a link to the commands reference (infiniterm.app/reference/commands/). A `settings.json` or `keybindings.json` you already have is not changed; the two default files pick the link up at the next launch.
 - Fixed: `terminal.fontFamily` is now read as a list. A family that is not installed is skipped and the next one is used; before, the first name was used even when it was missing, and the system's default font drew the terminal. A list that ends with `monospace` gets an installed monospace font when no named family is there.
 
 ### 2026-10-21
