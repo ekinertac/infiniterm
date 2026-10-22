@@ -3116,6 +3116,7 @@ dependencies = [
  "portable-pty",
  "pulldown-cmark",
  "regex",
+ "ring",
  "serde",
  "serde_json",
  "tokio",

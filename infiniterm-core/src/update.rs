@@ -69,6 +69,39 @@ pub struct Manifest {
     /// The zip of the notarized, stapled app.
     pub url: String,
     pub sha256: String,
+    /// Hex of an Ed25519 signature over the tag, build and hash
+    /// (`update_sign`). Written by `ift update-sign`; the Windows updater
+    /// requires it once `UPDATE_PUBLIC_KEY` is set. The Mac manifest has none.
+    pub signature: Option<String>,
+}
+
+/// The public half of the key that signs Windows release manifests, as hex
+/// of its 32 bytes (`ift update-key new` prints it).
+///
+/// EMPTY until Ekin generates a key and commits the public half here. While
+/// it is empty a Windows update is checked by its SHA-256 alone, as it was
+/// before signatures existed, so merging the code changes nothing for anyone
+/// until he turns it on. Once it is set, a manifest with no valid signature
+/// is refused before anything is downloaded. Windows only: the Mac's check is
+/// its Developer ID signature and notarization.
+pub const UPDATE_PUBLIC_KEY: &str = "";
+
+/// The rule `UPDATE_PUBLIC_KEY` makes: with no key set, nothing is required;
+/// with one, the manifest must carry a signature that verifies. Taking the
+/// key as an argument keeps the rule testable with a key made on the spot.
+pub fn check_manifest_signature(public_key_hex: &str, m: &Manifest) -> Result<(), String> {
+    if public_key_hex.trim().is_empty() {
+        return Ok(());
+    }
+    let signature = m
+        .signature
+        .as_deref()
+        .ok_or("the manifest is not signed, and this build requires a signature")?;
+    crate::update_sign::verify(
+        public_key_hex,
+        &crate::update_sign::signed_message(&m.tag, m.build, &m.sha256),
+        signature,
+    )
 }
 
 pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
@@ -98,6 +131,10 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
         tag: s("tag")?,
         url,
         sha256: s("sha256")?,
+        signature: v
+            .get("signature")
+            .and_then(|x| x.as_str())
+            .map(String::from),
     })
 }
 
@@ -269,6 +306,79 @@ mod tests {
       "url": "https://github.com/ekinertac/infiniterm-releases/releases/download/v0.1.0-1301/infiniterm-0.1.0-1301-arm64.zip",
       "sha256": "00ff", "dmg": "x"
     }"#;
+
+    /// The fixture's manifest, signed by a key made for the test, returning
+    /// the public key and the manifest text with its `signature` field.
+    fn signed_manifest() -> (String, String) {
+        let (private, public) = crate::update_sign::generate().unwrap();
+        let m = parse_manifest(GOOD).unwrap();
+        let sig = crate::update_sign::sign(
+            &private,
+            &crate::update_sign::signed_message(&m.tag, m.build, &m.sha256),
+        )
+        .unwrap();
+        let text = GOOD.replacen('{', &format!("{{\"signature\": \"{sig}\","), 1);
+        (public, text)
+    }
+
+    #[test]
+    fn a_manifest_with_no_signature_parses_and_a_signed_one_keeps_it() {
+        assert_eq!(parse_manifest(GOOD).unwrap().signature, None);
+        let (_, text) = signed_manifest();
+        assert_eq!(parse_manifest(&text).unwrap().signature.unwrap().len(), 128);
+    }
+
+    // The switch is the constant: empty means today's behaviour, so nothing
+    // changes until a key is committed.
+    #[test]
+    fn with_no_key_set_nothing_is_required() {
+        assert_eq!(UPDATE_PUBLIC_KEY, "", "the key is Ekin's to commit");
+        let m = parse_manifest(GOOD).unwrap();
+        assert!(check_manifest_signature("", &m).is_ok());
+        assert!(check_manifest_signature("  ", &m).is_ok());
+        let (_, signed) = signed_manifest();
+        assert!(check_manifest_signature("", &parse_manifest(&signed).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn with_a_key_set_a_valid_signature_is_required() {
+        let (public, text) = signed_manifest();
+        let m = parse_manifest(&text).unwrap();
+        assert!(check_manifest_signature(&public, &m).is_ok());
+        // Not signed at all.
+        let unsigned = parse_manifest(GOOD).unwrap();
+        let err = check_manifest_signature(&public, &unsigned).unwrap_err();
+        assert!(err.contains("not signed"), "{err}");
+        // Signed, then changed: another build, another hash, another tag.
+        for tampered in [
+            Manifest {
+                build: m.build + 1,
+                ..m.clone()
+            },
+            Manifest {
+                sha256: "ffff".into(),
+                ..m.clone()
+            },
+            Manifest {
+                tag: "v9.9.9-9999".into(),
+                ..m.clone()
+            },
+        ] {
+            assert!(
+                check_manifest_signature(&public, &tampered).is_err(),
+                "{tampered:?}"
+            );
+        }
+        // Somebody else's key.
+        let (other, _) = crate::update_sign::generate().unwrap();
+        assert!(check_manifest_signature(&other, &m).is_err());
+        // The same text with its signature cut short.
+        let broken = Manifest {
+            signature: Some("abcd".into()),
+            ..m
+        };
+        assert!(check_manifest_signature(&public, &broken).is_err());
+    }
 
     // A staged update never downgrades the app on disk.
     #[test]
