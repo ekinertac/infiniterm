@@ -6,18 +6,20 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-22
+## 0.6.3 (build 1196), 2026-10-22
+
+### Settings files
 
 - `settings.json` and `settings.default.json` now start with a link to the settings reference (infiniterm.app/reference/settings/), and `keybindings.json` and `keybindings.default.json` with a link to the commands reference (infiniterm.app/reference/commands/). A `settings.json` or `keybindings.json` you already have is not changed; the two default files pick the link up at the next launch.
 - Fixed: `terminal.fontFamily` is now read as a list. A family that is not installed is skipped and the next one is used; before, the first name was used even when it was missing, and the system's default font drew the terminal. A list that ends with `monospace` gets an installed monospace font when no named family is there.
 
-### 2026-10-21
+### Look and themes
 
 - New: UI themes. The look of the app (window opacity and blur, window colour, background pictures, card corners and opacity, grid, dimming, the chrome font) and the title and status bar styling now live in `ui-themes/<name>.json` in the config folder (`~/.config/infiniterm/`), one file per look. `ui.theme` in `settings.json` picks the file (default `default`), and "UI theme: switch…" in the palette lists them and previews each one live; Escape puts the old look back. A file applies as you save it, and a file with a mistake is not applied (a notice says why and the look you had stays). Copy `default.json` to make another look; it lists every key with its default. The bars are `titlebar.background`, `titlebar.border`, `statusbar.background` and `statusbar.border`: a background is `#rgb`, `#rrggbb`, `canvas`, `card`, `bar` or `transparent`, a border is a colour or `none`.
 - Changed: the look keys are no longer settings. The first launch of this version moves the ones in your `settings.json` into `ui-themes/default.json` (your comments stay, a note in `settings.json` says where they went): `ui.windowOpacity`, `ui.windowBlur`, `ui.windowColor`, `ui.backgroundImage`, `ui.backgroundImageInterval`, `ui.backgroundImageFade`, `ui.backgroundImageFit`, `ui.cardRadius`, `ui.cardOpacity`, `ui.showGrid`, `ui.inactiveDim`, `ui.unfocusedDim`, `ui.fontFamily`, `ui.fontSize`, `ui.fontWeight` and `ui.fontWeightBold`. A look key typed into `settings.json` afterwards is ignored with a notice. "Window: change the title bar and Dock colour" now writes to the ui theme in force. In a joined window the host's settings still apply, but the look is your own.
 - New: `ui.hideLabelWhenFitted` in a ui theme hides the card label on the card that Cmd+1 fitted to the window, as `ui.hideLabelWhenMaximised` does for a maximised card.
 
-### 2026-10-20
+### Diff card
 
 - Changed: a diff card is now a read-only editor. It has a real cursor and selection, Cmd+C copies, Cmd+F finds, long lines can wrap, Cmd+D, Cmd+L, the word and line moves and the fold keys all work, and the code has the same syntax colours as in an editor card (added lines and removed lines are coloured by their own file). Nothing in it can be typed or saved.
 - Changed: a diff card locks like an editor card. Press Enter on the focused card (or click in the text) to use the keys, Escape or Cmd+Escape to give them back. Before, a diff card took arrow keys at once; now the first Enter goes in, and in a diff opened on a folder a second Enter opens the file under the list's cursor.
