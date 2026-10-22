@@ -10,7 +10,9 @@
 #   2. a terminal card runs a shell under iftd and `ift read` shows its output;
 #   3. on Turkish Q, Super + the key US prints `=` on (Turkish prints `-`)
 #      makes the terminal font BIGGER: the chord took the physical key
-#      (keycode.rs); gpui's layout name would have made it smaller.
+#      (keycode.rs); gpui's layout name would have made it smaller;
+#   4. a right-click on the card opens the drawn menu, and choosing Close
+#      from it by keyboard closes the card.
 # The terminal font being monospace is in screenshot 2, by eye.
 # Exit 0 only when every check held. SKIP_BUILD=1 skips sync and build.
 #
@@ -57,6 +59,22 @@ echo "$settings" | grep -Eq '"terminal.fontSize": *15' ||
     fail "Super + physical Equal on Turkish Q did not make the font bigger: $settings"
 "$BOX" shot 3-turkish-bigger >/dev/null
 echo "ok 3: a Turkish Q chord took the physical key"
+
+# 4. The right-click menu the app draws (menu_view.rs): a right-click on
+# card 2 opens its menu; Up from nothing selected is the last row, Close;
+# Enter runs it and the card is gone.
+r click 3 960 540
+sleep 1
+"$BOX" shot 4-menu-open >/dev/null
+cards_before=$(r ift ls | wc -l)
+r chord Up
+r chord Return
+sleep 1
+cards_after=$(r ift ls | wc -l)
+[ "$cards_after" -eq $((cards_before - 1)) ] ||
+    fail "the menu's Close did not close card 2 ($cards_before cards, then $cards_after)"
+"$BOX" shot 4-menu-closed >/dev/null
+echo "ok 4: the right-click menu opens and runs a command"
 
 r stop >/dev/null
 echo "smoke passed; screenshots in ${SHOTS:-.scratchpad/linux-shots}"

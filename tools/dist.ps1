@@ -2,9 +2,11 @@
 # zip of it, and latest-windows.json, the manifest an updater polls.
 #
 # The Mac's equivalent is tools/dist.sh, and this is deliberately smaller.
-# There is no signing step: Authenticode needs a paid certificate and Ekin
-# has not bought one, so SmartScreen will warn on a first run until a
-# download has reputation. Nothing here pretends otherwise.
+# There is no Authenticode step: it needs a paid certificate and Ekin has not
+# bought one, so SmartScreen will warn on a first run until a download has
+# reputation. Nothing here pretends otherwise. What it does have is a
+# signature on the MANIFEST (`ift update-sign`, see the end), which the app
+# checks once a public key is committed.
 #
 # A SEPARATE manifest from the Mac's `latest.json`, not a platform key
 # inside it: an already-shipped Mac app polls that file and parses it with
@@ -28,7 +30,10 @@ param(
     # Where the updater would fetch from; only the manifest carries it. The
     # main repo's tagged download, the shape tools/dist.sh writes: the app's
     # manifest check accepts a url only under `.../releases/download/`.
-    [string]$Base = "https://github.com/ekinertac/infiniterm/releases/download"
+    [string]$Base = "https://github.com/ekinertac/infiniterm/releases/download",
+    # The file holding the private update key (`ift update-key new`), or set
+    # INFINITERM_UPDATE_KEY. Signs the manifest; see below.
+    [string]$SigningKey = $env:INFINITERM_UPDATE_KEY
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,6 +91,20 @@ $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
     sha256   = $sha
 } | ConvertTo-Json | Set-Content (Join-Path $Out 'latest-windows.json')
 
+# The manifest's signature (#470): an Ed25519 signature over the tag, build
+# and hash, which the app requires once `update::UPDATE_PUBLIC_KEY` holds the
+# matching public key. Signed with the `ift` just built, so nothing else is
+# needed on this machine. A build with no key still produces a manifest, and
+# an app whose key is empty accepts it; one whose key is set will refuse it.
+$manifest = Join-Path $Out 'latest-windows.json'
+if ($SigningKey) {
+    & (Join-Path $folder 'ift.exe') update-sign $manifest --key $SigningKey
+    if ($LASTEXITCODE -ne 0) { throw "dist: signing the manifest failed" }
+    "dist: manifest signed"
+} else {
+    Write-Warning "dist: manifest NOT signed (no -SigningKey and no INFINITERM_UPDATE_KEY); an app with an update key set will refuse this release"
+}
+
 Get-ChildItem $Out | Select-Object Name, Length | Format-Table -AutoSize
 "dist: $tag ready in $Out"
-"dist: unsigned, so SmartScreen warns until the download has reputation"
+"dist: no Authenticode, so SmartScreen warns until the download has reputation"

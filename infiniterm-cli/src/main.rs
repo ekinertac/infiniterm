@@ -34,6 +34,7 @@ mod install;
 #[cfg(unix)]
 mod join;
 mod licence_cmd;
+mod update_sign_cmd;
 #[cfg(unix)]
 mod proxy;
 #[cfg(unix)]
@@ -130,6 +131,14 @@ ift — drive infiniterm from a shell
                              key (optional; asks Lemon Squeezy once, then
                              the About window says who it is licensed to);
                              bare, says whether it is registered
+  ift update-key new <file>  make the key that signs Windows releases: the
+                             private half goes to <file> (never over an
+                             existing one), the public half is printed;
+                             update-key public <file> prints it again
+  ift update-sign <manifest> --key <file>
+                             sign a release manifest's tag, build and hash
+                             and write the signature into it (the key file
+                             can also be named by INFINITERM_UPDATE_KEY)
   ift install                put ift on $PATH (a symlink in ~/.local/bin) and
                              its zsh completion on fpath
   ift completion zsh         print the zsh completion function
@@ -160,7 +169,7 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 27] = [
+pub const SUBCOMMANDS: [&str; 29] = [
     "diff",
     "ls",
     "sessions",
@@ -180,6 +189,8 @@ pub const SUBCOMMANDS: [&str; 27] = [
     "group",
     "install",
     "licence",
+    "update-key",
+    "update-sign",
     "install-claude-hooks",
     "install-codex-hooks",
     "install-opencode-hooks",
@@ -219,6 +230,8 @@ fn main() -> ExitCode {
         Some("install-extension") => install_extension(args.get(1).map(String::as_str)),
         Some("install") => install_self(),
         Some("licence") => licence_cmd::run(&args[1..]),
+        Some("update-key") => update_sign_cmd::key(&args[1..]),
+        Some("update-sign") => update_sign_cmd::sign(&args[1..]),
         Some(verb @ ("connect" | "join" | "serve" | "proxy" | "askpass")) => {
             unix_only_verb(verb, &args[1..])
         }

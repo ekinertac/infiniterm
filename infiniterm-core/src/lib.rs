@@ -76,6 +76,7 @@ pub mod fullscreen;
 pub mod fuzzy;
 pub mod git;
 pub mod git_repo;
+pub mod menu_nav;
 // `ift serve` (a Linux host running `iftd`) rides on the daemon, the join hub
 // and unix sockets; none of it exists on Windows.
 #[cfg(unix)]
@@ -125,6 +126,7 @@ pub mod transcript;
 pub mod transport;
 pub mod ui_theme;
 pub mod update;
+pub mod update_sign;
 
 pub mod sidebar;
 

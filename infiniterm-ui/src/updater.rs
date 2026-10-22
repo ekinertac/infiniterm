@@ -11,12 +11,15 @@
 //! then `spctl` for the notarization, which is a stronger check than the
 //! minisign signature Tauri's updater carries for platforms without one.
 //!
-//! WINDOWS CHECKS ONLY THE HASH. Authenticode needs a paid certificate and
-//! there is none, so the manifest is the authority there: a download that
-//! matches the SHA-256 it names is installed. That makes whoever can write
-//! the releases repo able to run code on a Windows machine, where the Mac
-//! keeps the signature as a second factor. Ekin decided that trade
-//! knowingly, 2026-09-25. `stage` says it again where it happens.
+//! WINDOWS CHECKS THE HASH, AND A SIGNATURE ONCE A KEY IS SET. Authenticode
+//! needs a paid certificate and there is none, so the manifest is the
+//! authority there: a download that matches the SHA-256 it names is
+//! installed. That makes whoever can write the releases repo able to run
+//! code on a Windows machine, where the Mac keeps the signature as a second
+//! factor. Ekin decided that trade knowingly, 2026-09-25. The second factor
+//! that costs nothing is an Ed25519 signature on the manifest
+//! (`update_sign`), required once `update::UPDATE_PUBLIC_KEY` holds a key
+//! and ignored while it is empty. `stage` says it again where it happens.
 //!
 //! Started by `runtime::startup` only for an installed app
 //! (`update::applies_to`) and never for a scratch instance. The ui drains
@@ -148,20 +151,30 @@ fn check(running: u64, dir: &Path, staged: Option<u64>) -> Result<Option<Staged>
 /// Download, check the hash, unpack, check the build. Any failure leaves
 /// nothing staged.
 ///
-/// THE HASH IS THE WHOLE CHECK on Windows, which is a real difference from
-/// the Mac and worth saying plainly: there a download must also be signed
-/// by Ekin's team and notarized, so a zip somebody else built is refused
-/// even if the manifest names its hash. Authenticode needs a paid
+/// THE HASH IS THE WHOLE CHECK on Windows UNTIL A KEY IS SET, which is a real
+/// difference from the Mac and worth saying plainly: there a download must
+/// also be signed by Ekin's team and notarized, so a zip somebody else built
+/// is refused even if the manifest names its hash. Authenticode needs a paid
 /// certificate and there is none, so here the manifest is the authority and
-/// whoever can write the releases repo decides what runs. The manifest
+/// whoever can write the releases repo decides what runs. With
+/// `UPDATE_PUBLIC_KEY` set, the repo's write access is no longer enough: the
+/// manifest must also carry Ekin's signature, checked first. The manifest
 /// itself comes over TLS from that repo and `parse_manifest` refuses a url
-/// pointing anywhere else, which is the floor this rests on.
+/// pointing anywhere else, which is the floor the hash rests on.
 ///
 /// `curl.exe` and `tar.exe` ship with Windows 10 1803 and later, and
 /// `certutil` with every Windows, so no crate is added for any of it — the
 /// same reasoning the macOS side uses for curl, ditto and shasum.
 #[cfg(windows)]
 fn stage(m: &Manifest, dir: &Path) -> Result<Staged, String> {
+    // The second factor, before a byte is downloaded: with a public key
+    // committed (`update::UPDATE_PUBLIC_KEY`) a manifest must carry a valid
+    // Ed25519 signature over its tag, build and hash. With none committed
+    // this passes and the hash below is the whole check, as before.
+    infiniterm_core::update::check_manifest_signature(
+        infiniterm_core::update::UPDATE_PUBLIC_KEY,
+        m,
+    )?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let zip = dir.join(format!("{}.zip", m.tag));
     let out = dir.join(&m.tag);
