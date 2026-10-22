@@ -15,13 +15,18 @@
 //!   gpui, `menu_view.rs`), but the browser page's menu
 //!   (`browsers.rs::show_page_menu`) still does, so on Windows that one
 //!   does nothing until it is drawn the same way.
-//! - `fullscreen`: the app menu's toggle and `ui.fullscreen` do nothing; gpui's
-//!   own `toggle_fullscreen` on the window would do it.
+//! - `fullscreen`: on Windows the toggle works (gpui's own full screen, asked
+//!   for through a request the poll loop carries out, see `toggle`);
+//!   `ui.fullscreen` ("cover" or "native") is a Mac notch setting and does
+//!   nothing here. Elsewhere the toggle is still a no-op.
 //! - `icon_font`: the bundled Nerd Font is handed to gpui at start-up
 //!   (`main.rs`, `add_fonts`) and the terminal paints icons from it
 //!   (`terminal_body::icon_glyph`); only `ICON_FONT_FAMILY` and the bytes
 //!   live here.
-//! - `instance_icon`: no Dock badge; Windows has taskbar overlays instead.
+//! - `instance_icon`: no Dock badge, and none wanted on Windows: it marks a
+//!   remote or joined instance (both unix-only) or a local one with
+//!   `ui.windowColor`, and a Windows instance is single by design (the pipe
+//!   is the lock). A taskbar overlay would be the way if that ever changes.
 //! - `finder_service`: no "open folder in infiniterm" service.
 //! - `title_drag`: an AppKit view patch on the Mac. Here: Linux moves and
 //!   maximises the window through gpui from the bare bar; Windows draws its

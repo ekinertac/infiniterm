@@ -26,9 +26,13 @@ Master's new code is Mac or unix only and stays that way here, each behind a
 - **Seven AppKit/CoreText ui modules** (finder_service, fullscreen, icon_font,
   instance_icon, middle_drag, native_menu, title_drag) have same-named
   stand-ins in `infiniterm-ui/src/not_macos.rs`. What each leaves undone is
-  in that file's header. The visible gaps that remain: no full-screen toggle,
-  no taskbar badge, and **the browser page's right-click menu does
-  nothing**: since #522 the app's own menus are drawn by gpui where there is
+  in that file's header. The one visible gap that remains is **the browser
+  page's right-click menu, which does nothing**. Full screen works (gpui's,
+  `app.fullscreen` and the Window menu; checked on screen 2026-10-22: the
+  window fills the display, toggles back to its frame, and a quit in full
+  screen reopens in it). There is no taskbar badge and none is needed: the
+  Dock badge marks a remote or joined instance, which are unix-only, and a
+  Windows instance is single by design. The menu: since #522 the app's own menus are drawn by gpui where there is
   no `NSMenu` (`menu_view.rs`), so Windows has them, but
   `browsers.rs::show_page_menu` still calls the `native_menu::pop_up` stub,
   which answers "dismissed". It needs the same gpui drawing; not done.
