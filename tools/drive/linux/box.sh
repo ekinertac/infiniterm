@@ -44,7 +44,7 @@ SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliv
 # The packages: most of zed's script/linux (the set for gpui) plus Mesa's
 # software Vulkan, the virtual display, a window manager and the tools the
 # driver calls. docs/agent/linux-port.md has the reasoning.
-PACKAGES="gcc g++ libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev make cmake clang lld llvm git curl pkg-config build-essential rsync lsof mesa-vulkan-drivers vulkan-tools xvfb x11-utils x11-xkb-utils imagemagick xdotool openbox fonts-dejavu-core"
+PACKAGES="gcc g++ libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev make cmake clang lld llvm git curl pkg-config build-essential rsync lsof mesa-vulkan-drivers vulkan-tools xvfb x11-utils x11-xkb-utils imagemagick xdotool openbox xfwm4 fonts-dejavu-core"
 
 host() {
     if [ -n "${LINUX_HOST:-}" ]; then echo "$LINUX_HOST"; return; fi

@@ -14,7 +14,9 @@
 #   4. a right-click on the card opens the drawn menu, and choosing Close
 #      from it by keyboard closes the card;
 #   5. a drag on the bare title bar moves the window and a double-click
-#      maximises it.
+#      maximises it;
+#   6. under xfwm4 (client-side decorations), the drawn frame's buttons
+#      maximise, restore and close, and its corner resizes the window.
 # The terminal font being monospace and the Nerd Font icons drawing as icons
 # are in screenshot 2, by eye.
 # Exit 0 only when every check held. SKIP_BUILD=1 skips sync and build.
@@ -86,18 +88,48 @@ echo "ok 4: the right-click menu opens and runs a command"
 # 5. The title bar (not_macos.rs::title_drag): a drag on its bare part moves
 # the window, a double-click maximises it. The point is right of the tabs,
 # inside the app's own bar (the window manager's bar is above the window).
+# From a known place, so the drag has room on every side; the double-click
+# goes where the window WAS measured after the drag, not where it should be.
+r move 200 100
 read -r wx wy ww _ <<<"$(r win)"
 bx=$((wx + ww - 300)) by=$((wy + 15))
 r drag "$bx" "$by" $((bx - 100)) $((by + 80))
 read -r mx my _ _ <<<"$(r win)"
 [ $((wx - mx)) -ge 80 ] && [ $((my - wy)) -ge 60 ] ||
     fail "a drag on the title bar did not move the window: $wx,$wy then $mx,$my"
-r dblclick $((bx - 100)) $((by + 80))
+r dblclick $((mx + ww - 300)) $((my + 15))
 read -r _ _ zw _ <<<"$(r win)"
 [ "$zw" -ge 1900 ] || fail "a double-click on the title bar did not maximise the window (width $zw)"
 "$BOX" shot 5-maximised >/dev/null
 r dblclick 960 15
 echo "ok 5: the title bar moves and maximises the window"
 
+# 6. The frame the app draws (window_frame.rs), where gpui gives it
+# client-side decorations: xfwm4 with its compositor. The buttons sit at the
+# bar's right end, close last; their centres are measured from the window's
+# right edge (8 px of padding, 22 px circles 6 px apart).
 r stop >/dev/null
+r wm xfwm4
+r start >/dev/null
+read -r wx wy ww wh <<<"$(r win)"
+r click 1 $((wx + ww - 47)) $((wy + 21))
+read -r _ _ mw _ <<<"$(r win)"
+[ "$mw" -ge 1900 ] || fail "the maximise button did not maximise the window (width $mw)"
+"$BOX" shot 6-frame-maximised >/dev/null
+read -r mx my mw _ <<<"$(r win)"
+r click 1 $((mx + mw - 47)) $((my + 21))
+read -r wx wy ww wh <<<"$(r win)"
+[ "$ww" -lt 1900 ] || fail "the restore button did not restore the window (width $ww)"
+r drag $((wx + ww - 2)) $((wy + wh - 2)) $((wx + ww - 302)) $((wy + wh - 202))
+read -r _ _ rw rh <<<"$(r win)"
+[ $((ww - rw)) -ge 250 ] && [ $((wh - rh)) -ge 150 ] ||
+    fail "a drag on the bottom-right corner did not resize the window: ${ww}x$wh then ${rw}x$rh"
+"$BOX" shot 6-frame >/dev/null
+read -r wx wy ww _ <<<"$(r win)"
+r click 1 $((wx + ww - 19)) $((wy + 21))
+sleep 2
+[ -z "$(r pid)" ] || fail "the close button did not quit the app"
+r wm openbox
+echo "ok 6: the drawn frame maximises, restores, resizes and closes"
+
 echo "smoke passed; screenshots in ${SHOTS:-.scratchpad/linux-shots}"
