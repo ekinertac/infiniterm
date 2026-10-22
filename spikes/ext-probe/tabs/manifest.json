@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "ift probe",
+  "version": "1.1",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "scripting",
+    "storage",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ift probe"
+  },
+  "background": {
+    "service_worker": "bg.js"
+  }
+}
