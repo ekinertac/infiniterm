@@ -102,6 +102,18 @@ cards_after=$(r ift ls | wc -l)
 r chord alt 2
 r logged '\[platform\] alt\+2 -> ctrl\+2' || fail "Alt+2 was not read as the workspace chord"
 r chord alt 1
+# Shifted punctuation: gpui reports Ctrl+Shift+[ as `{`, which would read
+# back as Shift and pick workspace.prev (Cmd+Shift+[) instead of focus.prev.
+# Ctrl+Shift+] then moves the focus back, and is itself shifted punctuation.
+r chord ctrl shift bracketleft
+r logged '\[chord\] cmd\+\[ \(' || fail "Ctrl+Shift+[ was not read as cmd+["
+r chord ctrl shift bracketright
+r logged '\[chord\] cmd\+\] \(' || fail "Ctrl+Shift+] was not read as cmd+]"
+# Ctrl+1 is Cmd+1, fit the focused card: the menu check below right-clicks
+# the middle of the window and needs a card there.
+r chord ctrl 1
+r logged '\[chord\] cmd\+1 \(' || fail "Ctrl+1 was not read as cmd+1"
+sleep 1
 echo "ok 3b: plain Ctrl+C is the shell's, Alt+Shift+D is kill-word, Ctrl+Shift+T makes a card, Alt+2 is a workspace"
 
 # 4. The right-click menu the app draws (menu_view.rs): a right-click on

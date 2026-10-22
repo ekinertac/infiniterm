@@ -218,22 +218,14 @@ impl AppView {
             eprintln!("[platform] {physical} -> {mac}");
         }
         let parts: Vec<&str> = mac.split('+').collect();
-        let (mods, key) = parts.split_at(parts.len() - 1);
-        let key = key[0];
+        let mods = &parts[..parts.len() - 1];
         let has = |name: &str| mods.contains(&name);
-        let physical_key = physical.rsplit('+').next().unwrap_or("");
-        let shift_changed = has("shift") != physical.split('+').any(|p| p == "shift");
-        if shift_changed || key != physical_key {
+        // Shift or the key changed: the physical record would put them back,
+        // and so would gpui's key (see `rewritten_key`). Both go.
+        let new_key = infiniterm_core::platform_keys::rewritten_key(&physical, &mac);
+        if new_key.is_some() {
             crate::keycode::forget_last();
         }
-        // gpui's names for the keys the chord spells the DOM way.
-        let gpui_key = match key {
-            "arrowleft" => "left",
-            "arrowright" => "right",
-            "arrowup" => "up",
-            "arrowdown" => "down",
-            other => other,
-        };
         Keystroke {
             modifiers: gpui::Modifiers {
                 platform: has("cmd"),
@@ -242,11 +234,7 @@ impl AppView {
                 shift: has("shift"),
                 function: m.function,
             },
-            key: if key == physical_key {
-                k.key.clone()
-            } else {
-                gpui_key.to_string()
-            },
+            key: new_key.map_or_else(|| k.key.clone(), str::to_string),
             // A chord the app takes types nothing.
             key_char: None,
         }

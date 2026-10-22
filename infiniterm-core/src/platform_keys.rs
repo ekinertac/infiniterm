@@ -205,6 +205,26 @@ impl PlatformKeys {
     }
 }
 
+/// The key a rewritten keystroke must carry, in gpui's names, or `None` to
+/// keep the key gpui reported. A new key is needed when the Mac chord's key
+/// or Shift differs from the physical chord's: gpui reports shifted
+/// punctuation as the SHIFTED character (`{` for Ctrl+Shift+[), which reads
+/// back as Shift and picks the Cmd+Shift+[ command instead of Cmd+[.
+pub fn rewritten_key<'a>(physical: &str, mac: &'a str) -> Option<&'a str> {
+    let (p_mods, p_key) = split(physical);
+    let (m_mods, m_key) = split(mac);
+    if p_key == m_key && p_mods.contains("shift") == m_mods.contains("shift") {
+        return None;
+    }
+    Some(match m_key {
+        "arrowleft" => "left",
+        "arrowright" => "right",
+        "arrowup" => "up",
+        "arrowdown" => "down",
+        other => other,
+    })
+}
+
 /// The default keymap as a markdown table, macOS chord beside the Linux and
 /// Windows chord, for docs/agent/command-key.md (a test holds the doc to
 /// this, so the doc cannot drift from the code).
@@ -390,5 +410,23 @@ mod tests {
             problems.iter().any(|p| p.contains("cmd+ctrl+k")),
             "{problems:?}"
         );
+    }
+
+    #[test]
+    fn a_rewrite_that_drops_shift_or_changes_the_key_carries_the_mac_key() {
+        // Ctrl+Shift+[ is Cmd+[: gpui's `{` would read back as Shift.
+        assert_eq!(rewritten_key("ctrl+shift+[", "cmd+["), Some("["));
+        assert_eq!(rewritten_key("ctrl+shift+/", "cmd+/"), Some("/"));
+        // Alt+Shift twin to Cmd+Shift: same key, same Shift.
+        assert_eq!(rewritten_key("ctrl+alt+shift+k", "cmd+shift+k"), None);
+        // Free keys keep gpui's key.
+        assert_eq!(rewritten_key("ctrl+=", "cmd+="), None);
+        assert_eq!(rewritten_key("alt+2", "ctrl+2"), None);
+        // A changed key comes in gpui's name.
+        assert_eq!(
+            rewritten_key("ctrl+alt+f", "cmd+ctrl+arrowleft"),
+            Some("left")
+        );
+        assert_eq!(rewritten_key("f11", "cmd+ctrl+f"), Some("f"));
     }
 }
