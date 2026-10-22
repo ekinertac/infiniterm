@@ -273,7 +273,7 @@ pub fn term_font(family: &str) -> gpui::Font {
 /// font's family. True where gpui cannot fall back to a font the app bundled
 /// (Windows, see `icon_chars.rs`); elsewhere the fallback list does it.
 #[cfg(windows)]
-const ICON_RUNS: bool = true;
+const ICON_RUNS: bool = false; // EXPERIMENT: is it the splitting or add_fonts?
 #[cfg(not(windows))]
 const ICON_RUNS: bool = false;
 
