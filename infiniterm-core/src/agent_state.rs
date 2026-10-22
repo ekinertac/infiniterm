@@ -38,6 +38,19 @@ pub enum AgentState {
 pub const STALE_MS: f64 = 300_000.;
 
 impl AgentState {
+    /// The other way round, for a viewer reading the host's states (#423).
+    /// A word it does not know is no state: a newer host with a new state
+    /// must not break an older viewer.
+    pub fn from_name(name: &str) -> AgentState {
+        match name {
+            "working" => AgentState::Working,
+            "waiting" => AgentState::Waiting,
+            "failed" => AgentState::Failed,
+            "done" => AgentState::Done,
+            _ => AgentState::None,
+        }
+    }
+
     /// For the log, and for `ift ls`.
     pub fn name(self) -> &'static str {
         match self {

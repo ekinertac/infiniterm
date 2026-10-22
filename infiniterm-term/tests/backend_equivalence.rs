@@ -24,6 +24,10 @@
 //! (the on-screen version, which still wants a human), and the spec at
 //! docs/superpowers/specs/2026-09-17-session-daemon-design.md.
 
+//! Unix only: there is no `iftd` on Windows to compare the local pty
+//! against (see docs/windows-handoff.md, "No daemon").
+#![cfg(unix)]
+
 use infiniterm_core::backend::daemon::DaemonBackend;
 use infiniterm_core::backend::local_pty::LocalPtyBackend;
 use infiniterm_core::backend::{PaneEvent, PaneId};

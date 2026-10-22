@@ -12,6 +12,11 @@
 //! Related: main.rs (USAGE,
 //! the dispatch), attach.rs (the columns the pipe form prints).
 
+// `ift completion zsh` still PRINTS on Windows (the text is the same, and
+// a Windows box can be feeding a zsh on another machine), but nothing
+// there installs it: `ift install` has no fpath to write into.
+#![cfg_attr(windows, allow(dead_code))]
+
 /// The `_ift` function. `#compdef` first, so it works from an fpath dir.
 pub const ZSH: &str = r#"#compdef ift
 # zsh completion for ift, from `ift completion zsh`. Do not edit: the next
@@ -70,6 +75,8 @@ _ift() {
     'sessions:session daemons still running, app or no app'
     'attach:connect a session'\''s shell to this terminal'
     'connect:open a second infiniterm for a host'
+    'serve:hold this Mac'\''s canvas for viewers with the app closed'
+    'join:a viewer window on the canvas running on a host'
     'terminal:a terminal card in each folder'
     'send:type into a card'\''s shell'
     'read:print what a card shows'
@@ -79,6 +86,8 @@ _ift() {
     'commands:every command the app registers, with its key'
     'usage:the commands and gestures you used, and the ones you never did'
     'licence:register this Mac with its commercial licence key'
+    'update-key:make the key that signs Windows releases'
+    'update-sign:sign a release manifest'
     'name:name the card this is run from'
     'group:put this card in a group'
     'install:put ift on $PATH and this completion on fpath'
@@ -97,7 +106,9 @@ _ift() {
     return
   fi
   case $words[2] in
+    serve) _arguments '--detach[run in the background]' '--stop[end the running one]' ;;
     attach) (( CURRENT == 3 )) && _ift_sessions ;;
+    join) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_hosts' ;;
     connect) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_hosts' ;;
     send) (( CURRENT == 3 )) && _ift_cards ;;
     read) (( CURRENT == 3 )) && _ift_cards || _arguments '--lines[the last N lines only]:lines:' '--all[include the history]' ;;
@@ -171,6 +182,10 @@ mod tests {
         assert_eq!(got, expected);
     }
 
+    // unix only: `$FPATH` is a colon-separated zsh variable, and a Windows
+    // path has a colon two characters in. The feature is zsh's anyway;
+    // `ift install` on Windows writes no completion at all.
+    #[cfg(unix)]
     #[test]
     fn install_writes_the_function_and_names_the_fpath_line_only_when_needed() {
         let tmp = std::env::temp_dir().join(format!("ift-completion-{}", std::process::id()));

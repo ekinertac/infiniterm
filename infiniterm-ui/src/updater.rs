@@ -11,15 +11,27 @@
 //! then `spctl` for the notarization, which is a stronger check than the
 //! minisign signature Tauri's updater carries for platforms without one.
 //!
+//! WINDOWS CHECKS THE HASH, AND A SIGNATURE ONCE A KEY IS SET. Authenticode
+//! needs a paid certificate and there is none, so the manifest is the
+//! authority there: a download that matches the SHA-256 it names is
+//! installed. That makes whoever can write the releases repo able to run
+//! code on a Windows machine, where the Mac keeps the signature as a second
+//! factor. Ekin decided that trade knowingly, 2026-09-25. The second factor
+//! that costs nothing is an Ed25519 signature on the manifest
+//! (`update_sign`), required once `update::UPDATE_PUBLIC_KEY` holds a key
+//! and ignored while it is empty. `stage` says it again where it happens.
+//!
 //! Started by `runtime::startup` only for an installed app
 //! (`update::applies_to`) and never for a scratch instance. The ui drains
 //! `events` in `drain_backend`; `app.update.check` wakes the thread for a
 //! check now; a staged update is applied by the restart waiter
 //! (`update::swap_script`), which `app.restart` and `app.update.install`
 //! both reach.
-use infiniterm_core::update::{
-    is_newer, parse_manifest, Manifest, CHECK_EVERY_MS, LATEST_URL, TEAM_REQUIREMENT,
-};
+use infiniterm_core::update::{is_newer, parse_manifest, Manifest, CHECK_EVERY_MS, LATEST_URL};
+// The signature requirement is the macOS half of the check; Windows has
+// only the hash (see this file's header).
+#[cfg(not(windows))]
+use infiniterm_core::update::TEAM_REQUIREMENT;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -64,7 +76,20 @@ pub fn clean(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The build number this binary was made at.
+///
+/// Windows has no bundle to read it back out of, so `tools/dist.ps1` stamps
+/// it at COMPILE time and a dev build simply has none. The status bar
+/// already draws nothing when there is none; that line exists so a friend's
+/// bug report says which build they are on, and a dev build is not one
+/// anybody reports.
+#[cfg(windows)]
+pub fn build_of(_bundle: &Path) -> Option<u64> {
+    option_env!("INFINITERM_BUILD").and_then(|b| b.trim().parse().ok())
+}
+
 /// The build number of a bundle, from its Info.plist.
+#[cfg(not(windows))]
 pub fn build_of(bundle: &Path) -> Option<u64> {
     let out = Command::new("/usr/libexec/PlistBuddy")
         .arg("-c")
@@ -123,7 +148,91 @@ fn check(running: u64, dir: &Path, staged: Option<u64>) -> Result<Option<Staged>
     stage(&m, dir).map(Some)
 }
 
+/// Download, check the hash, unpack, check the build. Any failure leaves
+/// nothing staged.
+///
+/// THE HASH IS THE WHOLE CHECK on Windows UNTIL A KEY IS SET, which is a real
+/// difference from the Mac and worth saying plainly: there a download must
+/// also be signed by Ekin's team and notarized, so a zip somebody else built
+/// is refused even if the manifest names its hash. Authenticode needs a paid
+/// certificate and there is none, so here the manifest is the authority and
+/// whoever can write the releases repo decides what runs. With
+/// `UPDATE_PUBLIC_KEY` set, the repo's write access is no longer enough: the
+/// manifest must also carry Ekin's signature, checked first. The manifest
+/// itself comes over TLS from that repo and `parse_manifest` refuses a url
+/// pointing anywhere else, which is the floor the hash rests on.
+///
+/// `curl.exe` and `tar.exe` ship with Windows 10 1803 and later, and
+/// `certutil` with every Windows, so no crate is added for any of it — the
+/// same reasoning the macOS side uses for curl, ditto and shasum.
+#[cfg(windows)]
+fn stage(m: &Manifest, dir: &Path) -> Result<Staged, String> {
+    // The second factor, before a byte is downloaded: with a public key
+    // committed (`update::UPDATE_PUBLIC_KEY`) a manifest must carry a valid
+    // Ed25519 signature over its tag, build and hash. With none committed
+    // this passes and the hash below is the whole check, as before.
+    infiniterm_core::update::check_manifest_signature(
+        infiniterm_core::update::UPDATE_PUBLIC_KEY,
+        m,
+    )?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let zip = dir.join(format!("{}.zip", m.tag));
+    let out = dir.join(&m.tag);
+    let _ = std::fs::remove_dir_all(&out);
+    let zip_s = zip.to_string_lossy().into_owned();
+    run(
+        "curl",
+        &["-fsSL", "--max-time", "900", "-o", &zip_s, &m.url],
+    )?;
+
+    if hash_of(&zip_s)? != m.sha256.to_ascii_lowercase() {
+        let _ = std::fs::remove_file(&zip);
+        return Err(format!("{} does not match its checksum", m.tag));
+    }
+
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    run("tar", &["-xf", &zip_s, "-C", &out.to_string_lossy()])?;
+    let _ = std::fs::remove_file(&zip);
+
+    // The zip holds one folder, named for the build; find it rather than
+    // spelling the name twice.
+    let folder = std::fs::read_dir(&out)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.join("infiniterm.exe").is_file())
+        .ok_or_else(|| format!("{} holds no infiniterm.exe", m.tag))?;
+
+    Ok(Staged {
+        version: m.version.clone(),
+        build: m.build,
+        app: folder,
+    })
+}
+
+/// A file's SHA-256, lowercase, from `certutil`.
+///
+/// Its output is a header line, the digest, and a success line; older
+/// Windows put spaces inside the digest, so everything that is not a hex
+/// digit comes out before comparing.
+#[cfg(windows)]
+fn hash_of(path: &str) -> Result<String, String> {
+    let out = run("certutil", &["-hashfile", path, "SHA256"])?;
+    let digest: String = out
+        .lines()
+        .find(|l| {
+            let bare: String = l.chars().filter(|c| !c.is_whitespace()).collect();
+            bare.len() == 64 && bare.chars().all(|c| c.is_ascii_hexdigit())
+        })
+        .ok_or_else(|| format!("certutil gave no digest for {path}"))?
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    Ok(digest.to_ascii_lowercase())
+}
+
 /// Download, check, unpack, check again. Any failure leaves nothing staged.
+#[cfg(not(windows))]
 fn stage(m: &Manifest, dir: &Path) -> Result<Staged, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let zip = dir.join(format!("{}.zip", m.tag));
@@ -196,7 +305,12 @@ fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
     }
 }
 
-#[cfg(test)]
+// macOS only: every one of these runs a macOS tool (PlistBuddy for the
+// build number, codesign for the requirement) against a macOS bundle. The
+// updater itself does not run on Windows either (`update::applies_to` wants
+// an Applications folder); shipping there is phase 6 of the Windows handoff
+// and brings WinVerifyTrust with it.
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 

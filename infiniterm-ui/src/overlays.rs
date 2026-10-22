@@ -17,7 +17,9 @@ use gpui::{
 };
 use infiniterm_core::agent_state::AgentState;
 use infiniterm_core::format_zoom::format_zoom;
-use infiniterm_core::palette::{highlight, rank, sectionise, step_index, RankedItem, MAX_RESULTS};
+use infiniterm_core::palette::{
+    fit_label, highlight, rank, sectionise, step_index, RankedItem, MAX_RESULTS,
+};
 use infiniterm_core::palette_usage::{recent_keys, usage_bonus, use_key, RECENT_LIMIT};
 use infiniterm_core::saved_layout::CardKind;
 use infiniterm_core::shortcuts::{filter_shortcuts, shortcut_sections, GESTURES};
@@ -38,8 +40,13 @@ const TAB_IDLE_DOT_ALPHA: f32 = 0.45;
 /// The working dot is dimmer than the waiting one, so a card still running
 /// doesn't visually shout as loud as one already asking for you.
 const TAB_WORKING_DOT_ALPHA: f32 = 0.6;
-/// The title bar's tabs start clear of the traffic lights.
+/// The title bar's tabs start clear of the traffic lights. Zero where
+/// there are none: on Windows the system draws its own caption above this
+/// row, so the inset would be 84 pixels of nothing at the left of the tabs.
+#[cfg(target_os = "macos")]
 const TITLE_BAR_TRAFFIC_LIGHT_INSET_PX: f32 = 84.;
+#[cfg(not(target_os = "macos"))]
+const TITLE_BAR_TRAFFIC_LIGHT_INSET_PX: f32 = 8.;
 /// Below this the status bar's fps reads as a stall, not a frame rate.
 const LOW_FPS_THRESHOLD: f32 = 50.;
 /// A key cap: the panel's own ground for ink on a near-white cap, which
@@ -147,8 +154,11 @@ impl AppView {
                 i.item.hint.as_deref()
                     == Some(infiniterm_core::model::palette_state::ACTIVE_THEME_HINT)
             });
-            let heads = if source == infiniterm_core::model::palette_state::Source::Themes
-                && active_first
+            let heads = if matches!(
+                source,
+                infiniterm_core::model::palette_state::Source::Themes
+                    | infiniterm_core::model::palette_state::Source::UiThemes
+            ) && active_first
                 && ranked.items.len() > 1
             {
                 vec![(String::new(), 1)]
@@ -240,7 +250,11 @@ impl AppView {
             .map(|(i, l)| (i.as_str(), l.as_str()))
             .collect();
         let sections = filter_shortcuts(
-            &shortcut_sections(&self.model.keymap, &labels_ref),
+            &shortcut_sections(
+                &self.model.keymap,
+                &labels_ref,
+                self.model.modifier_labels(),
+            ),
             &self.shortcuts_field.text,
         );
         let mut rows = vec![];
@@ -442,7 +456,10 @@ impl Render for AppView {
         let focus = self.focus.clone();
         let title_bar = self.render_title_bar(cx);
         let status_bar = self.render_status_bar(cx);
-        let palette = self.model.palette_open().then(|| self.render_palette(cx));
+        let palette = self
+            .model
+            .palette_open()
+            .then(|| self.render_palette(window, cx));
         let prompt = self.model.prompt.is_open().then(|| self.render_prompt(cx));
         let shortcuts = self.model.shortcuts_open.then(|| self.render_shortcuts(cx));
         let omnibox = self.model.omni.open.then(|| self.render_omnibox(cx));
@@ -456,9 +473,17 @@ impl Render for AppView {
             .switcher
             .is_some()
             .then(|| self.render_switcher());
+        // A drawn right-click menu (off macOS), over everything, title bar
+        // included: a tab's menu opens from there.
+        let menu = self
+            .model
+            .menu
+            .is_some()
+            .then(|| self.render_menu(window, cx));
 
         div()
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(if self.model.config.ui.window_opacity < 1. {
@@ -487,8 +512,13 @@ impl Render for AppView {
             // Ctrl coming up commits the card switcher, the way letting go
             // of Cmd commits Cmd+Tab. gpui reports modifier changes to the
             // focused element like keys, so no NSEvent monitor is needed.
+            // Through `roles` like every other modifier read: on Windows the
+            // switcher is held with the Ctrl the terminal owns (Caps Lock on
+            // a Mac-order keyboard), and letting go of the OTHER one must
+            // not commit it.
             .on_modifiers_changed(cx.listener(|this, e: &gpui::ModifiersChangedEvent, _, cx| {
-                if this.model.switcher.is_some() && !e.modifiers.control {
+                let modifiers = this.modifier_roles(e.modifiers);
+                if this.model.switcher.is_some() && !modifiers.control {
                     this.model.switcher_commit();
                     this.perform_effects();
                     this.redraw = true;
@@ -623,6 +653,7 @@ impl Render for AppView {
                     .children(switcher),
             )
             .child(status_bar)
+            .children(menu)
     }
 }
 
@@ -645,6 +676,8 @@ impl AppView {
             idle_faint,
             chosen_fill,
         } = crate::chrome::tab_colors(chrome, wear, REMOTE_BAR_TINT);
+        // The ui theme (#425, #511) wins over the tint for the ground and sets the edge.
+        let bar_style = chrome.bar_style(&self.model.ui_theme.titlebar, bar);
         let mut tabs = div().flex().items_center().gap_1();
         for (index, ws) in self.model.workspaces.iter().enumerate() {
             let cards = self.model.cards_on(Some(&ws.id));
@@ -727,8 +760,8 @@ impl AppView {
                 )
                 .on_mouse_down(
                     MouseButton::Right,
-                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                        this.open_tab_menu(&menu_id, cx);
+                    cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                        this.open_tab_menu(&menu_id, e, cx);
                     }),
                 )
                 .on_mouse_down(
@@ -816,7 +849,7 @@ impl AppView {
                 .font_weight(chrome.typography.bold.weight)
                 .child(r.name)
         });
-        div()
+        let bar = div()
             .h(px(self.titlebar_h()))
             .w_full()
             .flex()
@@ -824,23 +857,50 @@ impl AppView {
             .justify_between()
             .pl(px(TITLE_BAR_TRAFFIC_LIGHT_INSET_PX))
             .pr_2()
-            .bg(self.window_fill(bar))
+            .bg(self.window_fill(bar_style.bg))
             .border_b_1()
-            .border_color(chrome.bar_border)
+            .border_color(bar_style.border.unwrap_or(gpui::transparent_black()))
             .font_family(chrome.typography.family.clone())
-            .font_weight(chrome.typography.regular.weight)
-            // A press that reaches the bar itself (not a tab or the "+", which
-            // stop it) drags the window; a double-click does the system's
-            // title bar action. `title_drag.rs` says why this is by hand.
-            .on_mouse_down(MouseButton::Left, |e: &MouseDownEvent, window, _| {
-                if e.click_count >= 2 {
-                    window.titlebar_double_click();
-                } else {
-                    crate::title_drag::begin();
+            .font_weight(chrome.typography.regular.weight);
+        // A press that reaches the bar itself (not a tab or the "+", which
+        // stop it) drags the window; a double-click does the system's title
+        // bar action. `title_drag.rs` says why this is by hand on the Mac.
+        #[cfg(target_os = "macos")]
+        let bar = bar.on_mouse_down(MouseButton::Left, |e: &MouseDownEvent, window, _| {
+            if e.click_count >= 2 {
+                window.titlebar_double_click();
+            } else {
+                crate::title_drag::begin();
+            }
+        });
+        // Linux moves and maximises through the window manager, the move
+        // only once the pointer travels with the button held; Windows as
+        // before (`not_macos.rs::title_drag`).
+        #[cfg(not(target_os = "macos"))]
+        let bar = bar
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseDownEvent, window, _| {
+                    let at = (f32::from(e.position.x), f32::from(e.position.y));
+                    this.title_press = crate::title_drag::press(window, e.click_count, at);
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, _| {
+                let Some(from) = this.title_press else { return };
+                if e.pressed_button != Some(MouseButton::Left) {
+                    this.title_press = None;
+                    return;
                 }
-            })
-            .child(tabs)
-            .children(chip)
+                let to = (f32::from(e.position.x), f32::from(e.position.y));
+                if crate::title_drag::moved(window, from, to) {
+                    this.title_press = None;
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, _| this.title_press = None),
+            );
+        bar.child(tabs).children(chip)
     }
 
     /// Whether the focused card is a locked browser: the one fact the
@@ -856,6 +916,7 @@ impl AppView {
             .and_then(|c| match c.kind {
                 CardKind::Browser => Some("locked: browser"),
                 CardKind::Editor => Some("locked: editor"),
+                CardKind::Diff => Some("locked: diff"),
                 _ => None,
             })
     }
@@ -910,6 +971,7 @@ impl AppView {
         } else {
             chrome.text_faint
         };
+        let bar_style = chrome.bar_style(&m.ui_theme.statusbar, chrome.bar_bg);
         div()
             .h(px(self.statusbar_h()))
             .w_full()
@@ -917,9 +979,9 @@ impl AppView {
             .items_center()
             .justify_between()
             .px_2()
-            .bg(self.window_fill(chrome.bar_bg))
+            .bg(self.window_fill(bar_style.bg))
             .border_t_1()
-            .border_color(chrome.bar_border)
+            .border_color(bar_style.border.unwrap_or(gpui::transparent_black()))
             .font_family(chrome.typography.family.clone())
             .font_weight(chrome.typography.regular.weight)
             .text_size(size)
@@ -997,7 +1059,7 @@ impl AppView {
             )
     }
 
-    fn render_palette(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_palette(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
         let ui = self.model.ui_scale as f32;
         let chrome = &self.chrome;
@@ -1010,6 +1072,30 @@ impl AppView {
             .saturating_sub(PALETTE_ROWS - 1)
             .min(flat.len().saturating_sub(PALETTE_ROWS));
         let query = self.model.palette.query.clone();
+        // What a label may take of a row (#492): the sheet's width less its
+        // border and the row's padding, measured in the palette's own font.
+        let rem = f32::from(window.rem_size());
+        let palette_w = PALETTE_WIDTH_PX * ui;
+        let source_hint_is_prose = matches!(
+            source,
+            infiniterm_core::model::palette_state::Source::Snippets
+                | infiniterm_core::model::palette_state::Source::Themes
+                | infiniterm_core::model::palette_state::Source::UiThemes
+        );
+        let body_px = px(chrome.typography.size(OVERLAY_BODY_FONT_PX) * ui);
+        let cap_px = px(chrome.typography.size(KEY_CAP_FONT_PX) * ui);
+        let mut body_font = gpui::font(chrome.typography.family.clone());
+        body_font.weight = chrome.typography.regular.weight;
+        let mut cap_font = gpui::font(chrome.typography.family.clone());
+        cap_font.weight = chrome.typography.bold.weight;
+        let measure = |text: &str, cap: bool| -> f32 {
+            let (size, font) = if cap {
+                (cap_px, &cap_font)
+            } else {
+                (body_px, &body_font)
+            };
+            f32::from(crate::text::shape(window, text, size, font, chrome.text).width)
+        };
         let mut list = div().flex().flex_col();
         if flat.is_empty() {
             list = list.child(
@@ -1046,8 +1132,30 @@ impl AppView {
             }
             let selected = i == index;
             let id = item.item.id.clone();
-            let mut label = div().flex().gap_0();
-            for run in highlight(&item.item.label, &item.matched.matches) {
+            // The label gets what the keys (or a snippet's first line) leave
+            // of the row, and is cut to it with an ellipsis (#492): a card's
+            // label can be a whole sentence.
+            let hint_room = match &item.item.hint {
+                None => 0.,
+                Some(hint) if source_hint_is_prose => {
+                    measure(hint, false).min(SNIPPET_HINT_MAX_W_PX * ui)
+                }
+                Some(hint) => hint
+                    .split(' ')
+                    .map(|key| measure(key, true) + 2. * KEY_CAP_PAD_X_PX * ui + 0.25 * rem)
+                    .sum(),
+            };
+            let room = (palette_w - 2. - 1.5 * rem - hint_room - 0.5 * rem).max(0.);
+            let fitted = fit_label(&item.item.label, &item.matched.matches, room, |t| {
+                measure(t, false)
+            });
+            let mut label = div()
+                .flex()
+                .gap_0()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap();
+            for run in highlight(&fitted.text, &fitted.matches) {
                 label = label.child(
                     div()
                         .when(run.hit, |d| d.text_color(chrome.sel_bg))
@@ -1086,6 +1194,7 @@ impl AppView {
                     source,
                     infiniterm_core::model::palette_state::Source::Snippets
                         | infiniterm_core::model::palette_state::Source::Themes
+                        | infiniterm_core::model::palette_state::Source::UiThemes
                 ) {
                     row = row.child(
                         div()
@@ -1469,8 +1578,14 @@ impl AppView {
             .map(|(i, l)| (i.as_str(), l.as_str()))
             .collect();
         let query = self.shortcuts_field.text.clone();
-        let sections =
-            filter_shortcuts(&shortcut_sections(&self.model.keymap, &labels_ref), &query);
+        let sections = filter_shortcuts(
+            &shortcut_sections(
+                &self.model.keymap,
+                &labels_ref,
+                self.model.modifier_labels(),
+            ),
+            &query,
+        );
         let key_box = |key: &str| key_cap_box(key, chrome, ui);
         let mut row_ix = 0usize;
         let highlighted = self.shortcuts_index;

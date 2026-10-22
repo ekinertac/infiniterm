@@ -288,6 +288,10 @@ pub enum Effect {
         text: String,
     },
     ClearPane(PaneId),
+    /// `terminal.redraw` (#447): ask the program in this pane to repaint,
+    /// through `Panes::redraw`; the ui knows the card's size and, in a
+    /// viewer, joins the session again.
+    RedrawPane(PaneId),
     WritePane(PaneId, Vec<u8>),
     DraftDelete(String),
     /// These cards are about to move: their rects as they are now, so the
@@ -332,8 +336,20 @@ pub enum Effect {
         path: String,
         value: Value,
     },
+    /// Written into the ui theme in force (#511), the way `SaveSetting` writes
+    /// settings.json: a look key such as `ui.windowColor` is the theme's.
+    SaveLook {
+        path: String,
+        value: Value,
+    },
     LoadTheme(String),
     RefreshThemes,
+    /// Read `ui-themes/<name>.json` and hand its text (`None`: no such file)
+    /// to `Model::apply_ui_theme_text`. From `ui.theme` changing and from the
+    /// ui theme picker's preview.
+    LoadUiTheme(String),
+    /// Re-list `ui-themes/` into `Model::ui_theme_names`; before the picker opens.
+    RefreshUiThemes,
     /// Onto the system clipboard. The model never touches it directly:
     /// only the ui has an App to write through.
     Copy(String),
@@ -631,6 +647,9 @@ pub struct Model {
     pub focus_visit: Option<FocusVisit>,
     /// The card switcher (Ctrl+Tab), while it is up.
     pub switcher: Option<Switcher>,
+    /// A right-click menu the app draws itself, while it is up (Linux and
+    /// Windows; the Mac's is an `NSMenu` and never sets this). `menu_nav.rs`.
+    pub menu: Option<crate::menu_nav::OpenMenu>,
     /// Layout undo (Cmd+Z / Cmd+Shift+Z): every card's rect on the active
     /// canvas as it was before each move, swap, drop, split or resize.
     /// Session-only. A snapshot is taken by `remember_layout` at the top
@@ -691,6 +710,20 @@ pub struct Model {
     pub first_run: bool,
     pub read_only: bool,
     pub dirty_layout: bool,
+    /// A viewer has applied at least one host snapshot, so its viewport,
+    /// zoom, focus and workspace are its own from here on.
+    pub snapshot_seen: bool,
+    /// The revision of the canvas a viewer and its host share (#423). On the
+    /// host: the number of the last layout it published. On a viewer: the
+    /// revision of the last snapshot it applied, which an edit it sends up
+    /// names, so the host can tell an edit made on an old canvas from one made
+    /// on the current one.
+    pub layout_rev: u64,
+    /// The last canvases the host published, by revision (#423). A viewer's
+    /// edit names the revision it was made on; the host works out WHAT the
+    /// viewer changed by comparing the edit with that canvas, and applies only
+    /// that to its current state.
+    pub published: std::collections::VecDeque<(u64, crate::saved_layout::SavedLayout)>,
     pub config: Config,
     pub keymap: Keymap,
     /// Bindings with a `when` from keybindings.json (#269); the last one whose
@@ -700,6 +733,21 @@ pub struct Model {
     /// frame (the completion popup, the editor's find panel and selection).
     pub ui_context: UiContext,
     pub settings_error: Option<String>,
+    /// The ui theme in force (#511): its bar overrides (#425) and look keys,
+    /// kept while a later edit is bad. Per client: a joined viewer keeps its own.
+    pub ui_theme: crate::ui_theme::UiTheme,
+    /// The ui theme's name that `ui_theme` came from; empty before the first
+    /// load. A preview changes it; cancelling puts the old one back.
+    pub ui_theme_name: String,
+    /// The last `ui.theme` setting seen, so only a CHANGE of it loads a file.
+    pub ui_theme_setting: String,
+    /// The folder's names, read by the ui when the picker opens.
+    pub ui_theme_names: Vec<String>,
+    /// The ui theme in force when its picker opened, which cancel puts back.
+    pub ui_theme_before_preview: Option<String>,
+    /// The look keys of `ui_theme` run through the settings reader, so a
+    /// settings.json apply can lay them over its own fresh `config.ui`.
+    pub look_ui: crate::config::Ui,
     pub theme_names: Vec<String>,
     /// the snippets folder's files, read by the ui when the picker opens
     /// (`Effect::RefreshSnippets`), the way `theme_names` is.
@@ -761,6 +809,13 @@ pub fn lowest_free_number(used: &[u32]) -> u32 {
 }
 
 impl Model {
+    /// What to call the app's modifier and the terminal's when a chord is
+    /// shown to somebody: the panel, the palette's hints, the keycast. A
+    /// function of `keyboard.commandModifier`, which is why it lives here
+    /// rather than being a constant in `shortcuts.rs`.
+    pub fn modifier_labels(&self) -> crate::shortcuts::ModifierLabels {
+        crate::shortcuts::ModifierLabels::new(self.config.keyboard.command_modifier)
+    }
     pub fn new() -> Model {
         Model {
             cards: vec![],
@@ -780,6 +835,7 @@ impl Model {
             programs: std::collections::HashMap::new(),
             focus_visit: None,
             switcher: None,
+            menu: None,
             layout_undo: Vec::new(),
             layout_redo: Vec::new(),
             undoing: false,
@@ -809,11 +865,20 @@ impl Model {
             first_run: false,
             read_only: false,
             dirty_layout: false,
+            snapshot_seen: false,
+            layout_rev: 0,
+            published: std::collections::VecDeque::new(),
             config: default_config(),
             keymap: default_keymap(),
             conditional_keys: vec![],
             ui_context: UiContext::default(),
             settings_error: None,
+            ui_theme: Default::default(),
+            ui_theme_name: String::new(),
+            ui_theme_setting: String::new(),
+            ui_theme_names: vec![],
+            ui_theme_before_preview: None,
+            look_ui: default_config().ui,
             theme_names: vec![],
             snippets: vec![],
             theme_current: None,

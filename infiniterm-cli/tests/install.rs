@@ -1,3 +1,4 @@
+#![cfg(unix)] // remote instances are unix-only; see docs/windows-handoff.md
 //! `ift connect --install` against a stand-in ssh (#159): the package reaches
 //! the host's `tar` through ssh, lands where a non-root user's files go, and the
 //! check then passes. The stand-in gives the host its own HOME and a PATH with
@@ -23,7 +24,7 @@ fn bare_host(work: &Path) -> (PathBuf, PathBuf) {
     std::fs::write(
         &ssh,
         format!(
-            "#!/bin/sh\nfor last; do :; done\nHOME='{}' PATH=/usr/bin:/bin exec sh -c \"$last\"\n",
+            "#!/bin/sh\nfor last; do :; done\nHOME='{}' PATH=/usr/bin:/bin INFINITERM_APP_DIR=/nonexistent exec sh -c \"$last\"\n",
             home.display()
         ),
     )

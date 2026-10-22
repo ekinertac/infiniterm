@@ -65,6 +65,14 @@ impl CardKind {
             CardKind::Page => "page",
         }
     }
+
+    /// Whether the card's body is the editor's, so the editor's keyboard
+    /// lock, chords and Cmd+F apply: an editor, and a diff, which is the
+    /// editor in a read-only diff mode (2026-10-20). Saved kinds stay apart
+    /// ("diff" still loads as a diff), only the runtime treats them alike.
+    pub fn has_editor_body(self) -> bool {
+        matches!(self, CardKind::Editor | CardKind::Diff)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -519,6 +527,20 @@ pub fn is_newer_than_this_build(text: &str) -> bool {
 /// cards left after validation. A layout with no cards is the same as no
 /// layout; letting it through would be indistinguishable from a first run.
 pub fn parse_layout(text: &str) -> Option<SavedLayout> {
+    parse_layout_with(text, false)
+}
+
+/// `parse_layout` for a canvas that travels between a host and a viewer
+/// (#438): a canvas with no cards is a real canvas there. A host with no
+/// shells yet (a fresh Linux server) publishes one, and a viewer that closed
+/// every card sends one; reading either as "unreadable" left the viewer empty
+/// with an error and every edit it made stale. A file on disk keeps the
+/// stricter rule.
+pub fn parse_layout_allowing_empty(text: &str) -> Option<SavedLayout> {
+    parse_layout_with(text, true)
+}
+
+fn parse_layout_with(text: &str, allow_empty: bool) -> Option<SavedLayout> {
     let raw: Value = serde_json::from_str(text).ok()?;
     let root = raw.as_object()?;
     // Forward compatibility only goes one way: a newer file may contain
@@ -536,7 +558,7 @@ pub fn parse_layout(text: &str) -> Option<SavedLayout> {
             cards.push(card);
         }
     }
-    if cards.is_empty() {
+    if cards.is_empty() && !allow_empty {
         return None;
     }
 
@@ -1002,6 +1024,11 @@ mod tests {
     #[test]
     fn a_layout_with_no_cards_is_the_same_as_no_layout() {
         assert!(parse_layout(&file(1, vec![])).is_none());
+        // ...but between a host and a viewer an empty canvas is a canvas.
+        let empty = parse_layout_allowing_empty(&file(1, vec![])).expect("readable");
+        assert!(empty.cards.is_empty());
+        // Everything else is still checked: a version from the future is not.
+        assert!(parse_layout_allowing_empty(&file(99, vec![])).is_none());
     }
 
     // A newer file may hold fields this build would drop. Older ones are still read.

@@ -38,6 +38,14 @@ pub const MOUSE_GESTURES: &[(&str, &str)] = &[
         "Mouse: zoom with Cmd+scroll or a pinch",
     ),
     (
+        "mouse.focus.scroll",
+        "Mouse: Cmd+Alt + two fingers moves the focus",
+    ),
+    (
+        "mouse.workspace.scroll",
+        "Mouse: Cmd+Shift + two fingers sideways switches workspace",
+    ),
+    (
         "mouse.fitCard.doubleclick",
         "Mouse: double-click a frame to fit the card",
     ),

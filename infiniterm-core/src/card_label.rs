@@ -48,8 +48,13 @@ pub fn tilde_path(path: &str, home: &str) -> String {
     if path == h {
         return "~".to_string();
     }
+    // Either separator: home is `C:\Users\PC` on Windows, and the test is
+    // that what follows is a SEPARATOR rather than more name, so
+    // `/Users/ekin2` is not shortened against `/Users/ekin`.
     match path.strip_prefix(h) {
-        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+        Some(rest) if rest.starts_with('/') || rest.starts_with('\\') => {
+            format!("~{rest}")
+        }
         _ => path.to_string(),
     }
 }
@@ -83,7 +88,7 @@ fn host_of(url: &str) -> &str {
 }
 
 fn last_segment(path: &str) -> &str {
-    let name = path.rsplit('/').next().unwrap_or("");
+    let name = crate::paths::base_name(path);
     if name.is_empty() {
         path
     } else {
@@ -107,7 +112,7 @@ pub fn card_label(card: &Labelled, home: &str) -> String {
         let Some(path) = card.path else {
             return "transcript".to_string();
         };
-        let name = path.rsplit('/').next().unwrap_or("");
+        let name = crate::paths::base_name(path);
         let start = name.rfind('_').map_or(0, |i| i + 1);
         return name[start..].chars().take(8).collect();
     }

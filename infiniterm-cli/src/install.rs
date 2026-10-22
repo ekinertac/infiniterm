@@ -32,7 +32,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use infiniterm_core::backend::remote::{self, RemoteHost};
-use infiniterm_core::drop::shell_quote;
+// The install runs on the host through ssh, in a POSIX shell.
+use infiniterm_core::drop::posix_quote as shell_quote;
 
 /// Where the packages live: the release for a tag.
 const RELEASE_BASE: &str = "https://github.com/ekinertac/infiniterm/releases/download";

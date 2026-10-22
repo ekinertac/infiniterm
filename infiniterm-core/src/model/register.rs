@@ -75,17 +75,13 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
     // Cmd+Alt+Arrow, it is a card like any other and the canvas has its
     // keys: Cmd+/ on an arrowed-to editor commented the highlighted line
     // instead of opening the shortcuts panel.
-    if kind == Some(crate::saved_layout::CardKind::Editor)
-        && card.is_some_and(|c| c.locked)
-        && crate::editor_keys::editor_keeps(chord)
-    {
+    // A diff has the editor's body, so the editor's keys (2026-10-20).
+    let editor_body = kind.is_some_and(|k| k.has_editor_body());
+    if editor_body && card.is_some_and(|c| c.locked) && crate::editor_keys::editor_keeps(chord) {
         return None;
     }
     let locked = card.is_some_and(|c| c.locked)
-        && matches!(
-            kind,
-            Some(crate::saved_layout::CardKind::Browser | crate::saved_layout::CardKind::Editor)
-        );
+        && (editor_body || kind == Some(crate::saved_layout::CardKind::Browser));
     // A locked card claims everything except Ctrl+1..9 and the two
     // app-carve-out chords below: real Chrome shortcuts shadow this app's
     // own bindings on the same keys, the whole point of locking. Workspace
@@ -113,7 +109,9 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
         && !leaves
         && !opens_palette
     {
-        let id = if kind == Some(crate::saved_layout::CardKind::Editor) {
+        let id = if kind == Some(crate::saved_layout::CardKind::Diff) {
+            crate::editor_keys::diff_lock_override(chord)
+        } else if kind == Some(crate::saved_layout::CardKind::Editor) {
             crate::editor_keys::lock_override(chord)
         } else {
             crate::browser_keys::lock_override(chord)
@@ -164,7 +162,7 @@ fn is_locked_carveout(chord: &str, kind: Option<crate::saved_layout::CardKind>) 
     if matches!(chord, "cmd+escape" | "ctrl+tab" | "ctrl+shift+tab") {
         return true;
     }
-    chord == "cmd+l" && kind != Some(crate::saved_layout::CardKind::Editor)
+    chord == "cmd+l" && !kind.is_some_and(|k| k.has_editor_body())
 }
 
 /// Runs a command and then any `RunCommand` effects it queued, so a palette
@@ -353,6 +351,22 @@ mod tests {
         h.m.app_active = true;
         h.m.note_input();
         assert_eq!(h.m.card(&ids[2]).unwrap().agent, None);
+    }
+
+    // A drawn right-click menu owns the keys and the wheel like any overlay,
+    // and draws no dim sheet over the canvas: paint.rs dims for the palette
+    // only (`Source::dims_canvas`), which a menu is not.
+    #[test]
+    fn a_drawn_menu_is_an_overlay_that_owns_the_keys() {
+        let mut h = Harness::new();
+        assert!(!h.m.overlay_open());
+        h.m.menu = Some(crate::menu_nav::OpenMenu {
+            nav: crate::menu_nav::MenuNav::new(vec![]),
+            at: (10.0, 10.0),
+        });
+        assert!(h.m.overlay_open());
+        assert!(h.m.modal_open());
+        assert!(h.m.palette.source.is_none(), "no palette, so no dim sheet");
     }
 
     // Release commits: the selected card is focused; Escape leaves things
@@ -827,11 +841,16 @@ mod tests {
         let effects = h.run("app.restart");
         assert!(!effects.iter().any(|e| matches!(e, Effect::Restart)));
 
+        // The daemon keeps the shells, so it may — WHERE IT EXISTS. On
+        // Windows `Panes::start` falls back to local shells for it, so
+        // asking for the daemon in settings must not unlock a restart that
+        // would kill every one of them (`backend::detaches_on_quit`).
         h.m.config.terminal.backend = TerminalBackend::Daemon;
         let effects = h.run("app.restart");
-        assert!(
+        assert_eq!(
             effects.iter().any(|e| matches!(e, Effect::Restart)),
-            "the daemon keeps the shells, so it may"
+            cfg!(not(windows)),
+            "the daemon restarts where it runs, and nowhere else"
         );
     }
 
@@ -1275,7 +1294,8 @@ mod tests {
                 .filter(|c| c.kind == CardKind::Editor)
                 .collect();
         assert_eq!(editors.len(), 1);
-        assert!(editors[0].root.as_deref().unwrap().ends_with("/snippets"));
+        // As a path: the separator is not the same on every platform.
+        assert!(std::path::Path::new(editors[0].root.as_deref().unwrap()).ends_with("snippets"));
         let editor = editors[0].id.clone();
         h.m.set_focus(Some(&id));
         h.m.palette_run(Source::Snippets, EDIT_ROW);
@@ -1527,13 +1547,13 @@ mod tests {
         assert!(h.m.card(&id).is_none(), "confirmed: closed");
     }
 
-    // #160: the local colour is the setting `ui.windowColor`, applied when the
-    // settings are, and a remote window ignores it.
+    // #160, #511: the local colour is the look key `ui.windowColor` of the ui
+    // theme, applied when the theme is, and a remote window ignores it.
     #[test]
     fn the_window_colour_setting_tints_the_local_window_and_not_a_remote_one() {
         let mut h = Harness::new();
         h.m.effects.clear();
-        h.m.apply_settings_text(r#"{"ui.windowColor": "teal"}"#);
+        h.m.apply_ui_theme_text("default", Some(r#"{"ui.windowColor": "teal"}"#));
         assert_eq!(h.m.window_color(), crate::remote_identity::named("teal"));
         assert!(
             h.m.effects
@@ -1542,21 +1562,21 @@ mod tests {
             "the Dock follows the file"
         );
         h.m.effects.clear();
-        h.m.apply_settings_text(r#"{"ui.windowColor": "teal"}"#);
+        h.m.apply_ui_theme_text("default", Some(r#"{"ui.windowColor": "teal"}"#));
         assert!(
             !h.m.effects
                 .iter()
                 .any(|e| matches!(e, Effect::WindowColor { .. })),
             "nothing changed, nothing to redraw"
         );
-        h.m.apply_settings_text("{}");
+        h.m.apply_ui_theme_text("default", Some("{}"));
         assert_eq!(h.m.window_color(), None, "removed from the file: no colour");
         h.m.remote = crate::remote_identity::RemoteIdentity::from_vars(
             Some("ops@box"),
             None,
             Some("ff8800"),
         );
-        h.m.apply_settings_text(r#"{"ui.windowColor": "teal"}"#);
+        h.m.apply_ui_theme_text("default", Some(r#"{"ui.windowColor": "teal"}"#));
         assert_eq!(
             h.m.window_color(),
             Some((0xff, 0x88, 0x00)),
@@ -1993,18 +2013,232 @@ mod tests {
     #[test]
     fn a_broken_settings_file_keeps_the_last_good_settings() {
         let mut h = Harness::new();
-        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.cardOpacity": 0.9}"#);
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.fitPadding": 40}"#);
         assert_eq!(h.m.config.terminal.font_size, 21.);
-        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.cardOpacity": 0.9,, "x": 1}"#);
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 21, "ui.fitPadding": 40,, "x": 1}"#);
         assert!(h.m.settings_error.is_some());
         assert_eq!(
             h.m.config.terminal.font_size, 21.,
             "the last good settings stay"
         );
-        assert_eq!(h.m.config.ui.card_opacity, 0.9);
+        assert_eq!(h.m.config.ui.fit_padding, 40.);
         h.m.apply_settings_text(r#"{"terminal.fontSize": 18}"#);
         assert!(h.m.settings_error.is_none());
         assert_eq!(h.m.config.terminal.font_size, 18.);
+    }
+
+    // A ui theme follows the same rule (#425, #511): a bad edit warns and the
+    // look in force stays; an emptied file is the built-in look.
+    #[test]
+    fn a_broken_ui_theme_keeps_the_last_good_look() {
+        use crate::ui_theme::{BorderSpec, ColorSpec};
+        let mut h = Harness::new();
+        h.m.apply_ui_theme_text(
+            "default",
+            Some(r#"{"titlebar.background": "canvas", "titlebar.border": "none", "ui.cardRadius": 12}"#),
+        );
+        assert_eq!(h.m.ui_theme.titlebar.background, Some(ColorSpec::Canvas));
+        assert_eq!(h.m.ui_theme.titlebar.border, Some(BorderSpec::None));
+        assert_eq!(h.m.config.ui.card_radius, 12.);
+        h.m.effects.clear();
+        h.m.apply_ui_theme_text("default", Some(r#"{"titlebar.background": "canvas",, }"#));
+        assert_eq!(
+            h.m.ui_theme.titlebar.background,
+            Some(ColorSpec::Canvas),
+            "the last good look stays"
+        );
+        assert_eq!(h.m.config.ui.card_radius, 12.);
+        assert!(h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::Warn(w) if w.contains("default.json not applied"))));
+        h.m.apply_ui_theme_text("default", Some(""));
+        assert_eq!(h.m.ui_theme, Default::default());
+        assert_eq!(h.m.config.ui.card_radius, 0., "back to the built-in look");
+    }
+
+    // #511: the look comes from the theme and survives a settings.json apply,
+    // which builds a fresh `config.ui` each time.
+    #[test]
+    fn the_look_survives_a_settings_apply_and_settings_cannot_set_it() {
+        let mut h = Harness::new();
+        h.m.apply_ui_theme_text(
+            "default",
+            Some(r#"{"ui.cardRadius": 12, "ui.showGrid": false}"#),
+        );
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 17, "ui.fitPadding": 9}"#);
+        assert_eq!(h.m.config.ui.card_radius, 12.);
+        assert!(!h.m.config.ui.show_grid);
+        assert_eq!(h.m.config.ui.fit_padding, 9.);
+        // A look key typed into settings.json is ignored, with a notice, and is
+        // not an error: the rest of the file applies.
+        h.m.effects.clear();
+        h.m.apply_settings_text(
+            r#"{"terminal.fontSize": 18, "ui.cardRadius": 30, "ui": {"showGrid": true}}"#,
+        );
+        assert!(h.m.settings_error.is_none());
+        assert_eq!(h.m.config.terminal.font_size, 18.);
+        assert_eq!(h.m.config.ui.card_radius, 12.);
+        assert!(!h.m.config.ui.show_grid);
+        assert!(h.m.effects.iter().any(|e| matches!(e, Effect::Warn(w)
+            if w.contains("ui.cardRadius") && w.contains("ui.showGrid") && w.contains("ui-themes"))));
+    }
+
+    // A joined viewer is sent the host's settings (#433): the look in them, from
+    // a host older than this build, is dropped without a notice, and the host's
+    // `ui.theme` does not change the viewer's look (#511).
+    #[test]
+    fn a_host_settings_file_does_not_touch_the_viewers_look() {
+        let mut h = Harness::new();
+        h.m.apply_settings_text(r#"{"ui.theme": "mine"}"#);
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadUiTheme("mine".into())));
+        h.m.apply_ui_theme_text("mine", Some(r#"{"ui.cardRadius": 7}"#));
+        h.m.effects.clear();
+        h.m.apply_host_settings_text(
+            r#"{"ui.theme": "theirs", "ui.cardRadius": 30, "terminal.fontSize": 15}"#,
+        );
+        assert_eq!(h.m.config.terminal.font_size, 15.);
+        assert_eq!(h.m.config.ui.card_radius, 7.);
+        assert_eq!(h.m.ui_theme_name, "mine");
+        assert!(!h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadUiTheme(_) | Effect::Warn(_))));
+        // The viewer's own settings.json names its theme.
+        h.m.note_ui_theme_setting("other");
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadUiTheme("other".into())));
+        assert_eq!(
+            crate::model::settings_in::ui_theme_name_in("{ // mine\n \"ui.theme\": \"glass\" }"),
+            Some("glass".into())
+        );
+        assert_eq!(crate::model::settings_in::ui_theme_name_in("{}"), None);
+    }
+
+    #[test]
+    fn a_ui_theme_loads_when_the_setting_changes_and_not_on_every_settings_edit() {
+        let mut h = Harness::new();
+        h.m.apply_settings_text("{}");
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadUiTheme("default".into())));
+        h.m.apply_settings_text(r#"{"terminal.fontSize": 17}"#);
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::LoadUiTheme(_))));
+        h.m.apply_settings_text(r#"{"ui.theme": "glass"}"#);
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadUiTheme("glass".into())));
+    }
+
+    // A name with no file keeps the look you had and says so; `default` needs no file.
+    #[test]
+    fn a_ui_theme_with_no_file_keeps_the_look_you_had() {
+        let mut h = Harness::new();
+        h.m.apply_ui_theme_text("glass", Some(r#"{"ui.cardRadius": 12}"#));
+        h.m.effects.clear();
+        h.m.apply_ui_theme_text("ghost", None);
+        assert_eq!(h.m.ui_theme_name, "glass");
+        assert_eq!(h.m.config.ui.card_radius, 12.);
+        assert!(h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::Warn(w) if w.contains("ghost"))));
+        h.m.effects.clear();
+        h.m.apply_ui_theme_text("default", None);
+        assert_eq!(h.m.ui_theme_name, "default");
+        assert_eq!(h.m.config.ui.card_radius, 0.);
+        assert!(h.m.effects.is_empty());
+    }
+
+    // The watcher reports every file; only the one in force counts, and a file
+    // that failed to load at startup is retried by the name the setting gave.
+    #[test]
+    fn only_the_ui_theme_in_force_follows_its_file() {
+        let mut h = Harness::new();
+        h.m.apply_settings_text(r#"{"ui.theme": "glass"}"#);
+        h.m.apply_ui_theme_text("glass", Some("{ broken"));
+        assert_eq!(h.m.ui_theme_name, "", "never loaded");
+        h.m.ui_theme_file_changed("other", r#"{"ui.cardRadius": 5}"#);
+        assert_eq!(h.m.config.ui.card_radius, 0.);
+        h.m.ui_theme_file_changed("glass", r#"{"ui.cardRadius": 5}"#);
+        assert_eq!(h.m.config.ui.card_radius, 5.);
+        h.m.ui_theme_file_changed("other", r#"{"ui.cardRadius": 9}"#);
+        assert_eq!(h.m.config.ui.card_radius, 5.);
+        h.m.ui_theme_file_changed("glass", r#"{"ui.cardRadius": 6}"#);
+        assert_eq!(h.m.config.ui.card_radius, 6.);
+    }
+
+    // The picker (#511): rows from the folder, the one you had first under
+    // "active", a move previews, cancel puts back, Enter writes `ui.theme`.
+    #[test]
+    fn the_ui_theme_picker_previews_cancels_and_saves() {
+        use crate::model::palette_state::{Source, ACTIVE_THEME_HINT};
+        let mut h = Harness::new();
+        h.m.apply_ui_theme_text("default", Some("{}"));
+        let effects = h.run("uitheme.pick");
+        assert!(effects.contains(&Effect::RefreshUiThemes));
+        h.m.ui_theme_names = vec!["default".into(), "glass".into(), "zen".into()];
+        h.m.ui_theme_name = "glass".into();
+        h.m.ui_theme_before_preview = Some("glass".into());
+        let items = h.m.palette_items(Source::UiThemes, &[]);
+        assert_eq!(
+            items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            ["glass", "default", "zen"]
+        );
+        assert_eq!(items[0].hint.as_deref(), Some(ACTIVE_THEME_HINT));
+        assert!(!Source::UiThemes.dims_canvas());
+        assert!(Source::UiThemes.keeps_its_order());
+        h.m.palette_preview(Source::UiThemes, Some("zen"));
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadUiTheme("zen".into())));
+        h.m.palette_preview(Source::UiThemes, None);
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadUiTheme("glass".into())));
+        h.m.palette_run(Source::UiThemes, "zen");
+        assert!(h.m.take_effects().contains(&Effect::SaveSetting {
+            path: "ui.theme".into(),
+            value: serde_json::json!("zen"),
+        }));
+    }
+
+    // #511: the label of the card Cmd+1 fitted hides when the theme asks.
+    #[test]
+    fn the_fitted_card_hides_its_label_when_the_ui_theme_asks() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("canvas.zoom.fitCard");
+        assert!(h.m.framing);
+        assert!(!h.m.card_label_hidden(&b), "off by default");
+        h.m.apply_ui_theme_text("default", Some(r#"{"ui.hideLabelWhenFitted": true}"#));
+        assert!(h.m.card_label_hidden(&b));
+        assert!(!h.m.card_label_hidden(&a), "only the fitted card");
+        h.m.set_focus(Some(&a));
+        assert!(!h.m.card_label_hidden(&b), "not once focus left it");
+        // The maximised card keeps its own key, which stays in settings.json.
+        h.m.apply_ui_theme_text("default", Some("{}"));
+        h.m.apply_settings_text(r#"{"ui.hideLabelWhenMaximised": true}"#);
+        h.m.selection.maximized = true;
+        assert!(h.m.card_label_hidden(&a));
     }
 
     // The file is checked before it is applied, and a file with an error is not
@@ -2024,7 +2258,7 @@ mod tests {
         };
         let _ = warned(&mut h);
         // a setting of the wrong kind
-        h.m.apply_settings_text(r#"{"terminal.fontSize": "big", "ui.showGrid": false}"#);
+        h.m.apply_settings_text(r#"{"terminal.fontSize": "big", "ui.animations": false}"#);
         let w = warned(&mut h);
         assert!(
             w.iter()
@@ -2035,7 +2269,7 @@ mod tests {
             h.m.config.terminal.font_size, 21.,
             "nothing of it was applied"
         );
-        assert!(h.m.config.ui.show_grid, "not even the part that was fine");
+        assert!(h.m.config.ui.animations, "not even the part that was fine");
         // a file that is not an object
         h.m.apply_settings_text("[1, 2]");
         assert!(!warned(&mut h).is_empty());
@@ -2043,12 +2277,12 @@ mod tests {
         // what must NOT be refused: the nested shape, a list for the background,
         // an unknown name, a number out of range, a trailing comma, comments
         h.m.apply_settings_text(
-            "{ // mine\n \"terminal\": {\"fontSize\": 19,},\n \"ui.backgroundImage\": [\"dusk\", \"ember\"],\n \"nope.nothing\": 1,\n \"ui.cardOpacity\": 7,\n}",
+            "{ // mine\n \"terminal\": {\"fontSize\": 19,},\n \"ui.panStep\": [100],\n \"nope.nothing\": 1,\n \"ui.fitPadding\": 7000,\n}",
         );
         assert!(warned(&mut h).is_empty());
         assert!(h.m.settings_error.is_none());
         assert_eq!(h.m.config.terminal.font_size, 19.);
-        assert_eq!(h.m.config.ui.background_image.len(), 2);
+        assert_eq!(h.m.config.ui.fit_padding, 500., "clamped, not refused");
     }
 
     #[test]
@@ -2070,14 +2304,14 @@ mod tests {
     // must leave a file that still parses.
     #[test]
     fn saving_a_setting_into_a_file_with_a_trailing_comma_still_parses() {
-        let text = "{\n  \"terminal.fontSize\": 16,\n  \"ui.cardOpacity\": 0.9,\n}\n";
+        let text = "{\n  \"terminal.fontSize\": 16,\n  \"ui.fitPadding\": 9,\n}\n";
         let patched =
-            Model::patched_settings(Some(text), "ui.windowColor", &serde_json::json!("lime"))
+            Model::patched_settings(Some(text), "ui.fitMagnify", &serde_json::json!(true))
                 .expect("a change");
         let mut h = Harness::new();
         h.m.apply_settings_text(&patched);
         assert!(h.m.settings_error.is_none(), "{patched}");
-        assert_eq!(h.m.config.ui.window_color, "lime");
+        assert!(h.m.config.ui.fit_magnify);
         assert_eq!(h.m.config.terminal.font_size, 16.);
     }
 
@@ -2131,6 +2365,57 @@ mod tests {
         h.m.close_whats_new();
         assert!(!h.m.modal_open() && !h.m.whats_new_flashing(t));
         assert_eq!(h.m.selection.focused_id, focus);
+    }
+
+    // #265: `ift -t <file> [card]` puts a file in a tab of an editor card: the
+    // focused one by default, a named one when given, a file already open is
+    // switched to, a terminal is refused, and with no editor focused it opens
+    // a card of its own.
+    #[test]
+    fn a_file_opens_as_a_tab_of_an_editor_card() {
+        let mut h = Harness::new();
+        // No editor focused: a card of its own, an editor.
+        let before = h.m.cards.len();
+        let first = h.m.open_file_tab("/tmp/a.rs", None, None).unwrap();
+        assert_eq!(h.m.cards.len(), before + 1);
+        assert_eq!(h.m.card(&first).unwrap().kind, CardKind::Editor);
+        // Now that editor is focused: the next file is a tab of it.
+        let second = h.m.open_file_tab("/tmp/b.rs", None, None).unwrap();
+        assert_eq!(second, first);
+        assert_eq!(h.m.cards.len(), before + 1, "no new card");
+        let tabs = h.m.card(&first).unwrap().tabs.clone();
+        assert!(tabs.contains(&"/tmp/a.rs".to_string()) && tabs.contains(&"/tmp/b.rs".to_string()));
+        assert_eq!(h.m.card(&first).unwrap().active_tab, tabs.len() - 1);
+        // A file already open is switched to, not opened twice.
+        h.m.open_file_tab("/tmp/a.rs", None, None).unwrap();
+        let after = h.m.card(&first).unwrap();
+        assert_eq!(after.tabs, tabs);
+        assert_eq!(after.tabs[after.active_tab], "/tmp/a.rs");
+        // A named card: by number, even when another card is focused.
+        let number = h.m.card(&first).unwrap().number;
+        h.run("card.new.terminal");
+        let named =
+            h.m.open_file_tab("/tmp/c.rs", Some(&format!("#{number}")), None)
+                .unwrap();
+        assert_eq!(named, first);
+        assert!(h
+            .m
+            .card(&first)
+            .unwrap()
+            .tabs
+            .contains(&"/tmp/c.rs".to_string()));
+        // A terminal is not an editor.
+        let term =
+            h.m.cards
+                .iter()
+                .find(|c| c.kind == CardKind::Terminal)
+                .unwrap()
+                .number;
+        let err =
+            h.m.open_file_tab("/tmp/d.rs", Some(&term.to_string()), None)
+                .unwrap_err();
+        assert!(err.contains("not an editor"), "{err}");
+        assert!(h.m.open_file_tab("/tmp/e.rs", Some("#999"), None).is_err());
     }
 
     // #419: Cmd+A selects every card of the workspace and keeps the focus where
@@ -3768,6 +4053,75 @@ mod tests {
         assert_eq!(h.m.card(&id).unwrap().tabs.len(), 2, "a tab instead");
     }
 
+    // Cmd+R redraws the focused terminal (#447). It was the development-only
+    // reload; a locked browser card keeps it as the page's reload.
+    #[test]
+    fn cmd_r_redraws_the_focused_terminal() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].pane_id = Some(7);
+        h.m.set_focus(Some(&id));
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+r").as_deref(),
+            Some("terminal.redraw")
+        );
+        h.m.take_effects();
+        assert!(handle_chord(&mut h.m, &h.r, "cmd+r"));
+        assert!(
+            h.m.take_effects()
+                .iter()
+                .any(|e| matches!(e, Effect::RedrawPane(7))),
+            "the focused terminal's pane is asked to repaint"
+        );
+        // Not a reload any more, even in a development build.
+        h.m.dev_build = true;
+        h.m.take_effects();
+        handle_chord(&mut h.m, &h.r, "cmd+r");
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::KillAllPanes | Effect::Reload)));
+    }
+
+    #[test]
+    fn redraw_on_a_card_that_is_not_a_terminal_says_so() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.set_focus(Some(&id));
+        h.m.take_effects();
+        let effects = h.run("terminal.redraw");
+        assert!(!effects.iter().any(|e| matches!(e, Effect::RedrawPane(_))));
+        assert!(
+            h.m.notice
+                .as_deref()
+                .is_some_and(|n| n.contains("terminal cards")),
+            "a notice names what redraw works on"
+        );
+    }
+
+    #[test]
+    fn a_locked_browser_card_keeps_cmd_r_as_the_pages_reload() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].locked = true;
+        h.m.cards[0].pane_id = Some(7);
+        h.m.set_focus(Some(&id));
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+r").as_deref(),
+            Some("browser.reload")
+        );
+        h.m.take_effects();
+        handle_chord(&mut h.m, &h.r, "cmd+r");
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::RedrawPane(_))));
+    }
+
     // The keycast labels a chord with what `resolve_chord` says, so on a
     // locked card it must name the tab command, not the keymap's card one.
     #[test]
@@ -3812,6 +4166,53 @@ mod tests {
         assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the comment toggle");
         assert_eq!(resolve_chord(&h.m, "cmd+z"), None, "the buffer's undo");
         assert_eq!(resolve_chord(&h.m, "cmd+s").as_deref(), Some("card.save"));
+    }
+
+    // A diff card is the editor's body in a read-only mode, so it locks the
+    // editor's way (2026-10-20): the find, comment and undo chords are the
+    // body's once locked, Cmd+F finds, and with no tabs Cmd+W closes the card
+    // and Cmd+T does not become a tab command.
+    #[test]
+    fn a_diff_card_locks_like_an_editor_without_the_tab_chords() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        h.m.cards[0].kind = CardKind::Diff;
+        h.m.cards[0].locked = false;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+/").as_deref(),
+            Some("app.shortcuts")
+        );
+        assert_eq!(resolve_chord(&h.m, "cmd+w").as_deref(), Some("card.close"));
+        h.m.cards[0].locked = true;
+        assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the body's");
+        assert_eq!(resolve_chord(&h.m, "cmd+f"), None, "the body's find");
+        assert_eq!(resolve_chord(&h.m, "cmd+z"), None);
+        assert_eq!(resolve_chord(&h.m, "cmd+w").as_deref(), Some("card.close"));
+        assert_eq!(resolve_chord(&h.m, "cmd+s").as_deref(), Some("card.save"));
+        assert_eq!(resolve_chord(&h.m, "cmd+t"), None, "no tabs to open");
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+k").as_deref(),
+            Some("editor.explorer"),
+            "the list of changed files, locked or not"
+        );
+        // Cmd+L is the body's select-line, not the omnibox.
+        assert_eq!(resolve_chord(&h.m, "cmd+l"), None);
+        // The way out is the same.
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+escape").as_deref(),
+            Some("browser.leave")
+        );
+        // Cmd+F on a diff card opens the editor's find, not the app's bar.
+        h.m.take_effects();
+        h.m.find_in_card();
+        assert!(h.m.take_effects().iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::Find,
+                ..
+            }
+        )));
     }
 
     // Ctrl+digit is workspace switching, never a Chrome shortcut, so lock
@@ -4395,7 +4796,12 @@ mod tests {
         let items = h.m.palette_items(Source::Commands, &labels);
         assert!(items.iter().all(|i| i.id != "app.palette"));
         let close = items.iter().find(|i| i.id == "card.close").unwrap();
-        assert_eq!(close.hint.as_deref(), Some("Cmd W"));
+        // Spelled through the same labels the app would use, because what
+        // the app's modifier is CALLED is per platform and per setting
+        // (`shortcuts::ModifierLabels`); the question here is that the hint
+        // is the chord for this command, not what that key is named.
+        let expected = crate::shortcuts::format_chord("cmd+w", h.m.modifier_labels());
+        assert_eq!(close.hint.as_deref(), Some(expected.as_str()));
     }
 
     // The emoji panel has one owner: our chord, our command, one effect

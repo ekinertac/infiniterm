@@ -112,6 +112,7 @@ pub fn read(path: &Path) -> Option<Licence> {
 /// Writes the file readable by its owner only (0600): it holds the key.
 pub fn write(path: &Path, licence: &Licence) -> std::io::Result<()> {
     use std::io::Write;
+    #[cfg(unix)]
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     // Through a link, not over it (#219).
     let path = &crate::files::resolve_link(path);
@@ -122,13 +123,15 @@ pub fn write(path: &Path, licence: &Licence) -> std::io::Result<()> {
     // Written to a temporary beside it and renamed, so a crash mid-write
     // leaves the old registration rather than half a file.
     let tmp = path.with_extension("json.tmp");
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)?;
+    // Windows has no mode bits: a file made under %APPDATA% is readable by
+    // its owner and the administrators already, which is the same promise.
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    open.mode(0o600);
+    let mut f = open.open(&tmp)?;
     // `mode` applies only when the file is created; a leftover keeps its own.
+    #[cfg(unix)]
     f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     f.write_all(text.as_bytes())?;
     f.write_all(b"\n")?;
@@ -172,6 +175,7 @@ mod tests {
 
     // A licence.json kept in a dotfiles repo stays a link, and its target
     // stays private (#219).
+    #[cfg(unix)]
     #[test]
     fn writing_through_a_symlink_keeps_the_link_and_the_mode() {
         use std::os::unix::fs::{symlink, PermissionsExt};
@@ -270,6 +274,7 @@ mod tests {
         assert!(accept(&r, "ada@example.com", true).is_ok());
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_file_round_trips_owner_only_and_a_corrupt_one_is_not_registered() {
         use std::os::unix::fs::PermissionsExt;

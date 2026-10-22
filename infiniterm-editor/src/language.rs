@@ -70,7 +70,12 @@ pub const CAPTURES: &[&str] = &[
 impl Language {
     /// From the file's path; `None` is plain text.
     pub fn for_path(path: &str) -> Option<Language> {
-        let name = path.rsplit('/').next().unwrap_or(path);
+        // Either separator, because a path reaches here from a save file or
+        // a terminal line and may be a Windows one. This crate has no
+        // infiniterm-core dependency on purpose (the editor's logic stands
+        // alone), so `paths::base_name` is spelled out rather than pulling a
+        // whole crate in for it.
+        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
         let ext = name.rsplit('.').next().filter(|e| *e != name).unwrap_or("");
         let ext = ext.to_ascii_lowercase();
         if name == "Cargo.lock" || name == "Pipfile" {
@@ -152,7 +157,7 @@ impl Language {
     /// where a blank pane is not.
     pub fn is_image(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
-        let name = lower.rsplit('/').next().unwrap_or(&lower);
+        let name = lower.rsplit(['/', '\\']).next().unwrap_or(&lower);
         match name.rsplit_once('.') {
             Some((stem, ext)) if !stem.is_empty() => [
                 "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "tif", "svg",
@@ -281,12 +286,17 @@ impl Language {
                     "",
                     "",
                 ),
+                #[cfg(not(windows))]
                 Language::Scss => (
                     tree_sitter_scss::language(),
                     tree_sitter_scss::HIGHLIGHTS_QUERY,
                     "",
                     "",
                 ),
+                // No grammar in this build: see Cargo.toml. The file opens
+                // as plain text rather than not at all.
+                #[cfg(windows)]
+                Language::Scss => return None,
             };
         let mut config =
             HighlightConfiguration::new(lang, self.badge(), highlights, injections, locals).ok()?;
@@ -350,6 +360,7 @@ mod tests {
             Language::Markdown,
             Language::Svelte,
             Language::Sql,
+            #[cfg(not(windows))]
             Language::Scss,
         ] {
             assert!(l.highlight_config().is_some(), "{l:?}");

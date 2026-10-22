@@ -4,7 +4,6 @@
 use super::palette_state::Source;
 use super::{ConfigPair, Effect, Model, WHATS_NEW_FLASH_MS};
 use crate::chrome::{clamp_ui_scale, UI_SCALE_STEP};
-use crate::config::TerminalBackend;
 use crate::config_files::{config_path, ConfigFile};
 use crate::grid::Point;
 use crate::ift::{open_plan, PathKind};
@@ -145,6 +144,21 @@ impl Model {
         if let Some(bounds) = bounding_rect(&rects) {
             self.apply_viewport(self.fit_viewport(bounds));
         }
+    }
+
+    /// Whether the chips on this card are hidden because the view is filled by
+    /// it: the maximised card (`ui.hideLabelWhenMaximised`, #71) or the card
+    /// Cmd+1 fitted to the window (`ui.hideLabelWhenFitted`, a ui theme key,
+    /// #511). The status bar names the focused card either way.
+    pub fn card_label_hidden(&self, card_id: &str) -> bool {
+        if self.selection.focused_id.as_deref() != Some(card_id) {
+            return false;
+        }
+        let ui = &self.config.ui;
+        (ui.hide_label_when_maximised && self.selection.maximized)
+            || (ui.hide_label_when_fitted
+                && self.framing
+                && self.framed_card.as_deref() == Some(card_id))
     }
 
     /// Steps through the installed schemes, so trying them is one keystroke.
@@ -358,6 +372,12 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.effects.push(Effect::RefreshThemes);
         m.open_palette(Source::Themes);
     });
+    // The ui themes (#511): how the app looks, not the terminal colours.
+    r.register("uitheme.pick", "UI theme: switch…", |m| {
+        m.ui_theme_before_preview = Some(m.ui_theme_name.clone());
+        m.effects.push(Effect::RefreshUiThemes);
+        m.open_palette(Source::UiThemes);
+    });
     r.register("theme.next", "Theme: next", |m| m.cycle_theme(1));
     r.register("theme.prev", "Theme: previous", |m| m.cycle_theme(-1));
     // Updates (update.rs, updater.rs): a check now, reported either way,
@@ -392,7 +412,10 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         // adopt them again. Under a local pty the same keystroke means
         // "kill everything I have open", which is not a thing to do on a
         // chord: say so instead of doing it.
-        if m.config.terminal.backend != TerminalBackend::Daemon {
+        // What the shells ACTUALLY do, not what the setting names: on
+        // Windows the daemon falls back to local shells, so asking for it
+        // there must not unlock a restart. See `backend::detaches_on_quit`.
+        if !crate::backend::detaches_on_quit(m.config.terminal.backend) {
             m.notify("restart needs terminal.backend \"daemon\"; on pty it would kill every shell");
             return;
         }

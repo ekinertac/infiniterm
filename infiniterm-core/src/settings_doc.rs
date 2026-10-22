@@ -15,6 +15,7 @@
 //! shape, so an override is one line copied across and nothing to nest. A
 //! group's own doc line (`terminal`, `cards`) heads its run of keys.
 use crate::config::{default_config, flatten, Config};
+use crate::ui_theme::{BAR_KEYS, LOOK_KEYS};
 use serde_json::Value;
 
 /// What each setting is for, by dotted key. Every leaf in the defaults has
@@ -144,6 +145,19 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "keyboard.commandModifier",
+        &[
+            "Windows only: which key plays Cmd's part, since Windows has none.",
+            "\"leftControl\" splits the two sides of Ctrl, left for the app and",
+            "right for the terminal, so a keyboard remapped into Mac order puts",
+            "every binding under the finger that already reaches for it and Caps",
+            "Lock plus C is still a real ^C. \"win\" puts them on the Windows key",
+            "and leaves Ctrl whole for the shell, at the cost of every binding",
+            "Windows takes first: Win+L locks the machine, and Win+D, E, R, S, T,",
+            "the digits, the arrows and = never arrive.",
+        ],
+    ),
+    (
         "terminal.decoyCommand",
         &[
             "What Cmd+Shift+H runs over the focused card when somebody is reading",
@@ -152,7 +166,8 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "\"ping 8.8.8.8\" and \"top\" are the other classics. It runs through a",
             "login shell, not an interactive one, so a PATH set in .zshrc is not",
             "there: give a Homebrew program its full path, cron's rule",
-            "(\"/opt/homebrew/bin/htop\").",
+            "(\"/opt/homebrew/bin/htop\"). On Windows it runs through PowerShell",
+            "instead, so write it as PowerShell.",
         ],
     ),
     (
@@ -272,6 +287,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "join.enabled",
+        &[
+            "Open the socket that `ift join <host>` on another Mac reaches through ssh,",
+            "so it can show and drive this canvas. The socket is owner-only, like the one",
+            "`ift send` uses, and ssh is the only way in. Read at launch.",
+        ],
+    ),
+    (
         "browser.suggestions",
         &[
             "Ask Google to complete what you type in the omnibox.",
@@ -301,7 +324,27 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     ),
     (
         "ui",
-        &["The app's own chrome: labels, the status bar, dimming."],
+        &[
+            "The app's own chrome: labels, the status bar, the grid. How it LOOKS (fonts,",
+            "window, background, card corners) is not set here but in a ui theme file,",
+            "ui-themes/<name>.json beside this one; ui.theme picks it.",
+        ],
+    ),
+    (
+        "ui.theme",
+        &[
+            "Which ui theme gives the look: the file name in the ui-themes folder, without",
+            ".json. \"default\" is ui-themes/default.json (the built-in look if the file is",
+            "gone). A name with no file keeps the look you had and shows a notice.",
+            "\"UI theme: switch…\" in the palette previews them and writes it here.",
+        ],
+    ),
+    (
+        "ui.hideLabelWhenFitted",
+        &[
+            "No label on the card Cmd+1 fitted to the window, like ui.hideLabelWhenMaximised",
+            "does for a maximised one. A ui theme key.",
+        ],
     ),
     (
         "ui.fontFamily",
@@ -664,9 +707,62 @@ pub fn render_settings_default(config: &Config) -> String {
             }
         })
         .collect();
-    let value = serde_json::to_value(config).expect("config serialises");
+    let mut value = serde_json::to_value(config).expect("config serialises");
+    // The look keys live in a ui theme (#511); listing them here would invite
+    // copying them into a file that no longer reads them.
+    if let Some(ui) = value.get_mut("ui").and_then(Value::as_object_mut) {
+        for (key, _) in LOOK_KEYS {
+            ui.remove(key.strip_prefix("ui.").unwrap_or(key));
+        }
+    }
     format!("{}\n{}\n", header.join("\n"), render(&value))
 }
+
+/// The text a new `ui-themes/default.json` starts with, and the ui theme
+/// reference: what a ui theme is, then every key with its docs and its default
+/// as a commented example. Delete the `//` of a line to use it. A test
+/// uncomments every example and parses the result, so they cannot rot.
+pub fn default_ui_theme_text() -> String {
+    let ui = serde_json::to_value(default_config().ui).expect("ui serialises");
+    let mut out = String::new();
+    for line in UI_THEME_HEADER {
+        out.push_str(&if line.is_empty() {
+            "//\n".to_string()
+        } else {
+            format!("// {line}\n")
+        });
+    }
+    out.push_str("{\n");
+    let mut entry = |key: &str, lines: &[&str], default: String| {
+        out.push('\n');
+        for line in lines {
+            out.push_str(&format!("  // {line}\n"));
+        }
+        out.push_str(&format!("  // \"{key}\": {default},\n"));
+    };
+    for (key, _) in LOOK_KEYS {
+        let short = key.strip_prefix("ui.").unwrap_or(key);
+        entry(key, doc(key), scalar(&ui[short]));
+    }
+    for (key, lines, default) in BAR_KEYS {
+        entry(key, lines, default.to_string());
+    }
+    out.push_str("}\n");
+    out
+}
+
+const UI_THEME_HEADER: &[&str] = &[
+    "A ui theme: how infiniterm looks. The file name is the theme's name; settings.json",
+    "\"ui.theme\" picks one, and \"UI theme: switch…\" in the palette previews them.",
+    "Copy this file to make another look: ui-themes/glass.json. Only the keys you",
+    "uncomment change anything; the rest keep the built-in look.",
+    "",
+    "The terminal colours are not here: that is \"theme\" in settings.json.",
+    "Behaviour (pan step, animations, label sizes) stays in settings.json too.",
+    "",
+    "Comments and trailing commas are allowed. A file with a mistake is not applied",
+    "and the look you had stays; a notice says why. Edits apply as you save.",
+];
 
 /// The defaults file as shipped.
 pub fn default_settings_text() -> String {
@@ -715,6 +811,48 @@ mod tests {
             merge_config(&parse_jsonc(&default_settings_text()).unwrap()),
             default_config()
         );
+    }
+
+    // #511: settings.json no longer reads these, so the reference for it must
+    // not offer them; they are the ui theme's.
+    #[test]
+    fn the_defaults_file_lists_no_look_key_but_names_the_ui_theme() {
+        let text = default_settings_text();
+        let parsed = parse_jsonc(&text).unwrap();
+        for (key, _) in LOOK_KEYS {
+            assert!(parsed.get(key).is_none(), "{key}");
+        }
+        assert_eq!(parsed["ui.theme"], json!("default"));
+        assert!(parsed.get("ui.panStep").is_some());
+    }
+
+    #[test]
+    fn the_ui_theme_reference_documents_every_key_and_its_examples_parse() {
+        let text = default_ui_theme_text();
+        assert!(crate::ui_theme::parse(&text).unwrap() == Default::default());
+        let body: Vec<&str> = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("  // \""))
+            // A doc line may start with a quote too (`"cover" fills ...`);
+            // an example is `"key": value,`.
+            .filter(|l| l.split_once("\": ").is_some_and(|(k, _)| !k.contains(' ')))
+            .collect();
+        assert_eq!(body.len(), LOOK_KEYS.len() + BAR_KEYS.len());
+        let all = format!(
+            "{{\n{}\n}}",
+            body.iter()
+                .map(|l| format!("  \"{l}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let theme = crate::ui_theme::parse(&all).unwrap();
+        assert_eq!(theme.look.len(), LOOK_KEYS.len());
+        assert!(theme.titlebar.background.is_some());
+        // The defaults it shows are the defaults in force.
+        let ui = merge_config(&serde_json::Value::Object(theme.look)).ui;
+        let mut again = default_config().ui;
+        again.take_look_from(&ui);
+        assert_eq!(again, default_config().ui);
     }
 
     #[test]

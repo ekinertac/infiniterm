@@ -28,8 +28,16 @@ use std::path::Path;
 /// releases lived on `ekinertac/infiniterm-releases` while the source was
 /// private, and builds up to 0.4.0 still poll that one (a bridge release
 /// there carries them over, `tools/publish.sh BRIDGE=1`).
-pub const LATEST_URL: &str =
-    "https://github.com/ekinertac/infiniterm/releases/latest/download/latest.json";
+///
+/// A SEPARATE file per platform rather than one manifest with a key each.
+/// An already-shipped Mac app parses this with `parse_manifest` and a shape
+/// it does not expect is a refusal on somebody else's machine, so the
+/// Windows release gets its own name (`tools/dist.ps1` writes it).
+pub const LATEST_URL: &str = if cfg!(windows) {
+    "https://github.com/ekinertac/infiniterm/releases/latest/download/latest-windows.json"
+} else {
+    "https://github.com/ekinertac/infiniterm/releases/latest/download/latest.json"
+};
 
 /// Where an update's zip may come from, whatever a manifest says: the
 /// main repo, and the old releases repo, which the bridge release serves.
@@ -61,6 +69,39 @@ pub struct Manifest {
     /// The zip of the notarized, stapled app.
     pub url: String,
     pub sha256: String,
+    /// Hex of an Ed25519 signature over the tag, build and hash
+    /// (`update_sign`). Written by `ift update-sign`; the Windows updater
+    /// requires it once `UPDATE_PUBLIC_KEY` is set. The Mac manifest has none.
+    pub signature: Option<String>,
+}
+
+/// The public half of the key that signs Windows release manifests, as hex
+/// of its 32 bytes (`ift update-key new` prints it).
+///
+/// EMPTY until Ekin generates a key and commits the public half here. While
+/// it is empty a Windows update is checked by its SHA-256 alone, as it was
+/// before signatures existed, so merging the code changes nothing for anyone
+/// until he turns it on. Once it is set, a manifest with no valid signature
+/// is refused before anything is downloaded. Windows only: the Mac's check is
+/// its Developer ID signature and notarization.
+pub const UPDATE_PUBLIC_KEY: &str = "";
+
+/// The rule `UPDATE_PUBLIC_KEY` makes: with no key set, nothing is required;
+/// with one, the manifest must carry a signature that verifies. Taking the
+/// key as an argument keeps the rule testable with a key made on the spot.
+pub fn check_manifest_signature(public_key_hex: &str, m: &Manifest) -> Result<(), String> {
+    if public_key_hex.trim().is_empty() {
+        return Ok(());
+    }
+    let signature = m
+        .signature
+        .as_deref()
+        .ok_or("the manifest is not signed, and this build requires a signature")?;
+    crate::update_sign::verify(
+        public_key_hex,
+        &crate::update_sign::signed_message(&m.tag, m.build, &m.sha256),
+        signature,
+    )
 }
 
 pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
@@ -90,6 +131,10 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
         tag: s("tag")?,
         url,
         sha256: s("sha256")?,
+        signature: v
+            .get("signature")
+            .and_then(|x| x.as_str())
+            .map(String::from),
     })
 }
 
@@ -99,15 +144,54 @@ pub fn is_newer(running_build: u64, m: &Manifest) -> bool {
     m.build > running_build
 }
 
-/// Whether an updater may act on this bundle: an app installed into an
-/// Applications folder. A bundle under the source tree's `target/` is a
-/// development build, and replacing it with a release would be a surprise;
-/// a scratch instance (`INFINITERM_DATA_DIR`) is the caller's to exclude.
+/// Whether an updater may act on what it is running from.
+///
+/// macOS: an app installed into an Applications folder. A bundle under the
+/// source tree's `target/` is a development build, and replacing it with a
+/// release would be a surprise; a scratch instance (`INFINITERM_DATA_DIR`)
+/// is the caller's to exclude.
+///
+/// Windows: the folder the exe sits in, wherever somebody unpacked it,
+/// because there is no install location to name. The one refusal is a
+/// folder under `target`, which is a `cargo build` and not a release, and
+/// where an update would replace what the next build is about to write.
+#[cfg(windows)]
+pub fn applies_to(folder: &Path, _home: &Path) -> bool {
+    !folder
+        .components()
+        .any(|c| c.as_os_str().eq_ignore_ascii_case("target"))
+}
+
+#[cfg(not(windows))]
 pub fn applies_to(bundle: &Path, home: &Path) -> bool {
     bundle.extension().is_some_and(|e| e == "app")
         && bundle
             .parent()
             .is_some_and(|p| p == Path::new("/Applications") || p == home.join("Applications"))
+}
+
+/// The Windows waiter, as one PowerShell command line.
+///
+/// The same shape as the unix one and for the same reasons: wait for this
+/// process to be gone, move the old folder aside, move the staged one in,
+/// put the old one back if that fails, then start the app again. A running
+/// exe cannot be overwritten on Windows but its FOLDER can be renamed, so
+/// moving is what makes this possible at all.
+///
+/// `Wait-Process` rather than a poll: it takes the pid and returns when the
+/// process ends, and a pid that is already gone is not an error worth
+/// stopping for.
+#[cfg(windows)]
+pub fn swap_script(pid: u32, folder: &str, staged: &str, aside: &str) -> String {
+    let q = |s: &str| crate::drop::quote_for(s, crate::shell_cmd::ShellKind::PowerShell);
+    let (f, s, a) = (q(folder), q(staged), q(aside));
+    let exe = q(&format!(
+        "{folder}{}infiniterm.exe",
+        std::path::MAIN_SEPARATOR
+    ));
+    format!(
+        "Wait-Process -Id {pid} -ErrorAction SilentlyContinue;          try {{ Move-Item -LiteralPath {f} -Destination {a} -Force -ErrorAction Stop;          try {{ Move-Item -LiteralPath {s} -Destination {f} -Force -ErrorAction Stop }}          catch {{ Move-Item -LiteralPath {a} -Destination {f} -Force }} }} catch {{}};          Start-Process -FilePath {exe}"
+    )
 }
 
 /// `CFBundleVersion` from an Info.plist in XML (what `tools/bundle.sh`
@@ -133,8 +217,9 @@ pub fn staged_is_newer(staged: u64, on_disk: Option<u64>) -> bool {
 /// launch, `updater::clean`), the staged one moved into its place, and if
 /// the second move fails the old one goes back, so a failed update is a
 /// plain restart rather than no app at all.
+#[cfg(not(windows))]
 pub fn swap_script(pid: u32, bundle: &str, staged: &str, aside: &str) -> String {
-    let q = crate::drop::shell_quote;
+    let q = crate::drop::posix_quote;
     let (b, s, a) = (q(bundle), q(staged), q(aside));
     format!(
         "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; \
@@ -145,6 +230,66 @@ pub fn swap_script(pid: u32, bundle: &str, staged: &str, aside: &str) -> String 
 
 #[cfg(test)]
 mod tests {
+
+    // Windows has no install location to name, so the rule is the opposite
+    // shape: anywhere a person unpacked it, except a build tree.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_release_folder_may_update_unless_it_is_a_build_tree() {
+        let home = Path::new(r"C:\Users\PC");
+        assert!(applies_to(Path::new(r"C:\Users\PC\infiniterm"), home));
+        assert!(applies_to(Path::new(r"C:\Program Files\infiniterm"), home));
+        assert!(applies_to(
+            Path::new(r"D:\tools\infiniterm-0.1.0-337-x86_64"),
+            home
+        ));
+        // A cargo build is not a release, whatever the case of the folder.
+        assert!(!applies_to(
+            Path::new(r"C:\Users\PC\Code\infiniterm\target\release"),
+            home
+        ));
+        assert!(!applies_to(Path::new(r"C:\x\Target\debug"), home));
+    }
+
+    // The waiter has to survive a path with a space in it, which on Windows
+    // is where programs live.
+    #[cfg(windows)]
+    #[test]
+    fn the_windows_waiter_quotes_every_path_and_names_the_exe() {
+        let script = swap_script(
+            4321,
+            r"C:\Program Files\infiniterm",
+            r"C:\staged\v1",
+            r"C:\staged\aside",
+        );
+        assert!(script.contains("Wait-Process -Id 4321"), "{script}");
+        // Quoted, so the space does not split the argument.
+        assert!(
+            script.contains(r"'C:\Program Files\infiniterm'"),
+            "{script}"
+        );
+        // It starts the app again from the folder it just put back.
+        assert!(
+            script
+                .contains(r"Start-Process -FilePath 'C:\Program Files\infiniterm\infiniterm.exe'"),
+            "{script}"
+        );
+        // The rollback is there: if the second move fails the old one returns.
+        assert!(script.contains("catch"), "{script}");
+    }
+
+    // One manifest per platform, so a shipped Mac app never sees a shape it
+    // does not expect.
+    #[test]
+    fn the_manifest_url_names_this_platforms_file() {
+        if cfg!(windows) {
+            assert!(LATEST_URL.ends_with("/latest-windows.json"), "{LATEST_URL}");
+        } else {
+            assert!(LATEST_URL.ends_with("/latest.json"), "{LATEST_URL}");
+        }
+        assert!(LATEST_URL.starts_with("https://github.com/ekinertac/infiniterm/releases/"));
+    }
+
     // The usage estimate (tools/usage-stats.py) assumes this many fetches a
     // day per Mac that stays up; change them together.
     #[test]
@@ -161,6 +306,79 @@ mod tests {
       "url": "https://github.com/ekinertac/infiniterm-releases/releases/download/v0.1.0-1301/infiniterm-0.1.0-1301-arm64.zip",
       "sha256": "00ff", "dmg": "x"
     }"#;
+
+    /// The fixture's manifest, signed by a key made for the test, returning
+    /// the public key and the manifest text with its `signature` field.
+    fn signed_manifest() -> (String, String) {
+        let (private, public) = crate::update_sign::generate().unwrap();
+        let m = parse_manifest(GOOD).unwrap();
+        let sig = crate::update_sign::sign(
+            &private,
+            &crate::update_sign::signed_message(&m.tag, m.build, &m.sha256),
+        )
+        .unwrap();
+        let text = GOOD.replacen('{', &format!("{{\"signature\": \"{sig}\","), 1);
+        (public, text)
+    }
+
+    #[test]
+    fn a_manifest_with_no_signature_parses_and_a_signed_one_keeps_it() {
+        assert_eq!(parse_manifest(GOOD).unwrap().signature, None);
+        let (_, text) = signed_manifest();
+        assert_eq!(parse_manifest(&text).unwrap().signature.unwrap().len(), 128);
+    }
+
+    // The switch is the constant: empty means today's behaviour, so nothing
+    // changes until a key is committed.
+    #[test]
+    fn with_no_key_set_nothing_is_required() {
+        assert_eq!(UPDATE_PUBLIC_KEY, "", "the key is Ekin's to commit");
+        let m = parse_manifest(GOOD).unwrap();
+        assert!(check_manifest_signature("", &m).is_ok());
+        assert!(check_manifest_signature("  ", &m).is_ok());
+        let (_, signed) = signed_manifest();
+        assert!(check_manifest_signature("", &parse_manifest(&signed).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn with_a_key_set_a_valid_signature_is_required() {
+        let (public, text) = signed_manifest();
+        let m = parse_manifest(&text).unwrap();
+        assert!(check_manifest_signature(&public, &m).is_ok());
+        // Not signed at all.
+        let unsigned = parse_manifest(GOOD).unwrap();
+        let err = check_manifest_signature(&public, &unsigned).unwrap_err();
+        assert!(err.contains("not signed"), "{err}");
+        // Signed, then changed: another build, another hash, another tag.
+        for tampered in [
+            Manifest {
+                build: m.build + 1,
+                ..m.clone()
+            },
+            Manifest {
+                sha256: "ffff".into(),
+                ..m.clone()
+            },
+            Manifest {
+                tag: "v9.9.9-9999".into(),
+                ..m.clone()
+            },
+        ] {
+            assert!(
+                check_manifest_signature(&public, &tampered).is_err(),
+                "{tampered:?}"
+            );
+        }
+        // Somebody else's key.
+        let (other, _) = crate::update_sign::generate().unwrap();
+        assert!(check_manifest_signature(&other, &m).is_err());
+        // The same text with its signature cut short.
+        let broken = Manifest {
+            signature: Some("abcd".into()),
+            ..m
+        };
+        assert!(check_manifest_signature(&public, &broken).is_err());
+    }
 
     // A staged update never downgrades the app on disk.
     #[test]
@@ -216,6 +434,9 @@ mod tests {
         assert!(LATEST_URL.starts_with("https://github.com/ekinertac/infiniterm/releases/"));
     }
 
+    // An Applications folder is a macOS idea; Windows has its own rule and
+    // its own test above.
+    #[cfg(not(windows))]
     #[test]
     fn only_an_installed_app_updates_itself() {
         let home = Path::new("/Users/me");
@@ -234,6 +455,8 @@ mod tests {
         ));
     }
 
+    // The sh waiter. The PowerShell one has its own test above.
+    #[cfg(not(windows))]
     #[test]
     fn the_swap_waits_moves_aside_puts_back_on_failure_and_opens() {
         let s = swap_script(

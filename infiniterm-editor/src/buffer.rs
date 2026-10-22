@@ -65,6 +65,11 @@ pub struct Buffer {
     /// of the header line to the end of the block's last line; edits shift
     /// them (`shift_folds`) and an edit that touches one drops it.
     folds: Vec<(usize, usize)>,
+    /// The only blocks that CAN fold, when the text is a read-only diff
+    /// (`set_fixed_folds`): same hidden char ranges as `folds`. Empty for an
+    /// ordinary buffer, which folds by indentation. Never shifted by edits,
+    /// because a buffer that has them is never edited.
+    fixed_folds: Vec<(usize, usize)>,
     undo: Vec<Edit>,
     redo: Vec<Edit>,
     /// Bumped by every change, so a view can cache against it.
@@ -84,6 +89,7 @@ impl Buffer {
             goal_col: None,
             extra: vec![],
             folds: vec![],
+            fixed_folds: vec![],
             undo: vec![],
             redo: vec![],
             version: 0,
@@ -112,6 +118,7 @@ impl Buffer {
         // whatever the extra cursors and the folds pointed at.
         self.extra.clear();
         self.folds.clear();
+        self.fixed_folds.clear();
     }
 
     pub fn text(&self) -> String {
@@ -527,7 +534,11 @@ impl Buffer {
         let col = self.col_of(self.cursor);
         let text = self.line(line);
         let last = line + 1 >= self.line_count();
-        let at = if last { self.len_chars() } else { self.line_start(line + 1) };
+        let at = if last {
+            self.len_chars()
+        } else {
+            self.line_start(line + 1)
+        };
         let new = if last {
             format!("\n{text}")
         } else {
@@ -656,7 +667,14 @@ impl Buffer {
         let ws = next.chars().take_while(|c| c.is_whitespace()).count();
         let remove_end = next_start + ws;
         let old = self.slice(end_of_line..remove_end);
-        self.apply(end_of_line, old, " ".to_string(), end_of_line + 1, false, now);
+        self.apply(
+            end_of_line,
+            old,
+            " ".to_string(),
+            end_of_line + 1,
+            false,
+            now,
+        );
     }
 
     /// Cmd+]: indent the current line (or every selected line), unlike Tab
@@ -750,6 +768,10 @@ impl Buffer {
     /// (blank lines inside a block belong to it; blank lines after it do
     /// not). `None` when nothing is indented under it.
     fn fold_range_at(&self, line: usize) -> Option<(usize, usize)> {
+        if !self.fixed_folds.is_empty() {
+            let end = self.line_end(line);
+            return self.fixed_folds.iter().find(|(s, _)| *s == end).copied();
+        }
         let text = self.line(line);
         if text.trim().is_empty() {
             return None;
@@ -775,6 +797,15 @@ impl Buffer {
     fn enclosing_fold_line(&self, line: usize) -> Option<usize> {
         if self.fold_range_at(line).is_some() {
             return Some(line);
+        }
+        if !self.fixed_folds.is_empty() {
+            // Inside an opened block: its header, by position.
+            let at = self.line_start(line);
+            return self
+                .fixed_folds
+                .iter()
+                .find(|(s, e)| at > *s && at <= *e)
+                .map(|(s, _)| self.line_of(*s));
         }
         let mut want = Self::indent_of(&self.line(line));
         for l in (0..line).rev() {
@@ -810,6 +841,21 @@ impl Buffer {
     /// Whether anything is folded at all, the painter's cheap way out.
     pub fn has_folds(&self) -> bool {
         !self.folds.is_empty()
+    }
+
+    /// Makes these the only blocks that can fold, all folded now: for a
+    /// read-only diff, whose unchanged stretches are folds that have nothing
+    /// to do with indentation. Each is (header line, last hidden line),
+    /// 0-based; the header stays visible. Call after the text is set, which
+    /// forgets them.
+    pub fn set_fixed_folds(&mut self, blocks: &[(usize, usize)]) {
+        self.fixed_folds = blocks
+            .iter()
+            .filter(|(h, last)| h < last)
+            .map(|(h, last)| (self.line_end(*h), self.line_end(*last)))
+            .collect();
+        self.folds = self.fixed_folds.clone();
+        self.extra.clear();
     }
 
     /// Cmd+Alt+[: fold the block the caret's line starts or sits in, and
@@ -861,6 +907,15 @@ impl Buffer {
     /// Folds every outermost block: the lines at the file's smallest
     /// indent that have something under them.
     pub fn fold_all(&mut self) {
+        if !self.fixed_folds.is_empty() {
+            self.folds = self.fixed_folds.clone();
+            let c = self.cursor;
+            if let Some((s, _)) = self.folds.iter().find(|(s, e)| c > *s && c <= *e).copied() {
+                self.set_cursor(s);
+            }
+            self.extra.clear();
+            return;
+        }
         let count = self.line_count();
         let base = (0..count)
             .map(|l| self.line(l))
@@ -883,7 +938,12 @@ impl Buffer {
         self.folds = folds;
         let c = self.cursor;
         if self.folds.iter().any(|(s, e)| c > *s && c <= *e) {
-            let s = self.folds.iter().find(|(s, e)| c > *s && c <= *e).unwrap().0;
+            let s = self
+                .folds
+                .iter()
+                .find(|(s, e)| c > *s && c <= *e)
+                .unwrap()
+                .0;
             self.set_cursor(s);
         }
         self.extra.clear();
@@ -1016,7 +1076,9 @@ impl Buffer {
     /// under the cursor) becomes its own cursor, replacing whatever set
     /// there was before.
     pub fn select_all_occurrences(&mut self) {
-        let r = self.selection().unwrap_or_else(|| self.word_at(self.cursor));
+        let r = self
+            .selection()
+            .unwrap_or_else(|| self.word_at(self.cursor));
         if r.is_empty() {
             return;
         }
@@ -1293,7 +1355,11 @@ impl Buffer {
             self.select_range(start..start + new_len);
             return;
         }
-        let target = if line + 1 < self.line_count() { line + 1 } else { line };
+        let target = if line + 1 < self.line_count() {
+            line + 1
+        } else {
+            line
+        };
         let len = self.line(target).chars().count();
         self.set_cursor(self.line_start(target) + col.min(len));
     }
@@ -1688,7 +1754,7 @@ mod tests {
         b.delete_line(0.);
         assert_eq!(b.text(), "a\nc");
         assert_eq!(b.cursor(), 2); // "c" took its place
-        // The last line has no newline of its own; the one before it goes.
+                                   // The last line has no newline of its own; the one before it goes.
         let mut b = Buffer::new("a\nb");
         b.set_cursor(2);
         b.delete_line(0.);
@@ -1851,7 +1917,10 @@ mod tests {
         b.select_range(0..3); // "foo"
         b.select_all_occurrences();
         assert_eq!(b.cursor_count(), 3);
-        assert_eq!(b.all_selections(), vec![(3, Some(0)), (11, Some(8)), (19, Some(16))]);
+        assert_eq!(
+            b.all_selections(),
+            vec![(3, Some(0)), (11, Some(8)), (19, Some(16))]
+        );
     }
 
     #[test]
@@ -1864,7 +1933,10 @@ mod tests {
         assert_eq!(b.cursor_count(), 2);
         b.select_word_or_next(); // adds the third
         assert_eq!(b.cursor_count(), 3);
-        assert_eq!(b.all_selections(), vec![(3, Some(0)), (11, Some(8)), (19, Some(16))]);
+        assert_eq!(
+            b.all_selections(),
+            vec![(3, Some(0)), (11, Some(8)), (19, Some(16))]
+        );
         // A fourth press wraps rather than adding a duplicate.
         b.select_word_or_next();
         assert_eq!(b.cursor_count(), 3);
@@ -1897,7 +1969,10 @@ mod tests {
         let mut b = Buffer::new("one\ntwo\nthree");
         b.select_range(1..10); // "ne\ntwo\nth"
         b.split_into_lines();
-        assert_eq!(b.all_selections(), vec![(3, Some(1)), (7, Some(4)), (10, Some(8))]);
+        assert_eq!(
+            b.all_selections(),
+            vec![(3, Some(1)), (7, Some(4)), (10, Some(8))]
+        );
         // A selection that never leaves one line is a no-op: nothing to split.
         let mut b = Buffer::new("one\ntwo");
         b.select_range(0..2);
@@ -1958,7 +2033,10 @@ mod tests {
         b.fold_at_cursor();
         assert!(b.is_fold_header(0));
         assert!(b.is_line_hidden(1) && b.is_line_hidden(2) && b.is_line_hidden(3));
-        assert!(!b.is_line_hidden(4), "the closing brace is at the header's indent");
+        assert!(
+            !b.is_line_hidden(4),
+            "the closing brace is at the header's indent"
+        );
         assert!(!b.is_line_hidden(5));
         // From inside the block, the block folds and the caret goes up to its header.
         let mut b = Buffer::new(CODE);
@@ -1972,13 +2050,54 @@ mod tests {
         assert!(!b.has_folds());
     }
 
+    // A diff's unchanged stretches fold by their own ranges, not by indent:
+    // the placeholder line heads a fold from the start, a click or the fold
+    // keys open it and fold it again, and nothing else can fold.
+    #[test]
+    fn fixed_folds_replace_the_indent_rule() {
+        // Line 0 is a placeholder over lines 1-3; lines 4-5 are indented code.
+        let mut b = Buffer::new("p\na\nb\nc\nfn x() {\n    y();\n}");
+        b.set_fixed_folds(&[(0, 3)]);
+        assert!(b.is_fold_header(0));
+        assert!(b.is_line_hidden(1) && b.is_line_hidden(3));
+        assert!(!b.is_line_hidden(4));
+        // The click on the header opens it, the next one closes it again.
+        b.toggle_fold_line(0);
+        assert!(!b.has_folds());
+        b.toggle_fold_line(0);
+        assert!(b.is_line_hidden(2));
+        // Indented code does not fold: it is not a fixed block.
+        b.toggle_fold_line(4);
+        assert!(!b.is_fold_header(4));
+        b.set_cursor(b.line_start(4));
+        b.fold_at_cursor();
+        assert!(!b.is_fold_header(4));
+        // From inside an opened block, Cmd+Alt+[ folds it again.
+        b.unfold_all();
+        b.set_cursor(b.line_start(2));
+        b.fold_at_cursor();
+        assert!(b.is_fold_header(0) && b.is_line_hidden(2));
+        assert_eq!(b.line_of(b.cursor()), 0, "the caret goes up to the header");
+        b.unfold_all();
+        b.fold_all();
+        assert!(b.is_fold_header(0));
+        // Replacing the text forgets them.
+        b.set_text("q\nr", 0.);
+        b.toggle_fold_line(0);
+        assert!(!b.has_folds());
+    }
+
     #[test]
     fn vertical_movement_steps_over_folded_lines() {
         let mut b = Buffer::new(CODE);
         b.set_cursor(0);
         b.fold_at_cursor();
         b.move_down(false);
-        assert_eq!(b.line_of(b.cursor()), 4, "from the header to the brace after the block");
+        assert_eq!(
+            b.line_of(b.cursor()),
+            4,
+            "from the header to the brace after the block"
+        );
         b.move_up(false);
         assert_eq!(b.line_of(b.cursor()), 0);
     }

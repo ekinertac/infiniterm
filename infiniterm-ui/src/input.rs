@@ -2,7 +2,8 @@
 //! and `CardFrame.svelte` and the key handler of `App.svelte`.
 //!
 //! The rules, unchanged: Cmd owns every app binding and every canvas
-//! gesture (Cmd+scroll zooms, Cmd+drag or middle-drag pans); a bare scroll
+//! gesture (Cmd+scroll zooms, Cmd+Alt+scroll moves the focus, Cmd+Shift and a
+//! sideways scroll switches workspace, Cmd+drag or middle-drag pans); a bare scroll
 //! and a bare drag belong to the card under the cursor. A Cmd+left press is
 //! PENDING and becomes a pan only after `DRAG_SLOP`, so a Cmd+click still
 //! reaches the card as a click. A card's TOP edge moves it, every other edge
@@ -12,7 +13,7 @@
 use crate::{now_ms, AppView, Gesture, GestureKind, Pan, DRAG_SLOP, EDGE_HIT};
 use gpui::{
     KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ScrollDelta, ScrollWheelEvent,
+    ScrollDelta, ScrollWheelEvent, TouchPhase,
 };
 use infiniterm_core::grid::{snap, Point, Rect};
 use infiniterm_core::keymap::{chord_for, KeyPress};
@@ -128,7 +129,20 @@ impl AppView {
         Hit::Nothing
     }
 
+    /// `keycode::roles` with this instance's setting, so the five entry
+    /// points below do not each have to reach for the config.
+    pub fn modifier_roles(&self, m: gpui::Modifiers) -> gpui::Modifiers {
+        crate::keycode::roles(m, self.model.config.keyboard.command_modifier)
+    }
+
     pub fn mouse_down(&mut self, e: &MouseDownEvent) {
+        // The roles, not the raw keys: see `keycode::roles`. Done at each
+        // of this file's five entry points, which is every way a modifier
+        // reaches the app, so nothing downstream needs to know.
+        let e = &MouseDownEvent {
+            modifiers: self.modifier_roles(e.modifiers),
+            ..e.clone()
+        };
         let p = self.to_content(e.position);
         self.mouse = p;
         let button = match e.button {
@@ -363,6 +377,10 @@ impl AppView {
     }
 
     pub fn mouse_move(&mut self, e: &MouseMoveEvent) {
+        let e = &MouseMoveEvent {
+            modifiers: self.modifier_roles(e.modifiers),
+            ..e.clone()
+        };
         let p = self.to_content(e.position);
         self.mouse = p;
         if let Some(mq) = self.marquee.as_mut() {
@@ -550,6 +568,10 @@ impl AppView {
     }
 
     pub fn mouse_up(&mut self, e: &MouseUpEvent) {
+        let e = &MouseUpEvent {
+            modifiers: self.modifier_roles(e.modifiers),
+            ..e.clone()
+        };
         if e.button == MouseButton::Left {
             self.left_on_canvas = false;
         }
@@ -699,7 +721,15 @@ impl AppView {
 
     /// Cmd+scroll (and a trackpad pinch, which arrives as ctrl) zooms about
     /// the cursor: the world point under the pointer must not move.
+    /// Two fingers with Cmd and Alt move the focus like Cmd+Alt+arrows, and
+    /// two fingers sideways with Cmd and Shift switch workspace (`scroll_nav`,
+    /// 2026-10-20); a plain scroll goes to the card under the pointer and over
+    /// empty canvas does nothing.
     pub fn wheel(&mut self, e: &ScrollWheelEvent) {
+        let e = &ScrollWheelEvent {
+            modifiers: self.modifier_roles(e.modifiers),
+            ..e.clone()
+        };
         let keylog = std::env::var_os("INFINITERM_KEYLOG").is_some();
         // An overlay's list scrolls itself, but the event still arrives at the
         // canvas under it: a scroll in the shortcuts panel also scrolled the
@@ -730,6 +760,45 @@ impl AppView {
                     _ => "not a card".to_string(),
                 }
             );
+        }
+        // Cmd+Alt + scroll moves the focus, Cmd+Shift + a sideways scroll
+        // switches workspace (`scroll_nav`). Both come BEFORE the zoom below,
+        // which Cmd+Alt must not reach; a vertical Cmd+Shift scroll is not
+        // claimed and zooms as it always did, and so does Cmd+Shift+Alt.
+        let m = &e.modifiers;
+        let focus = m.platform && m.alt && !m.shift && !m.control;
+        let workspace = m.platform && m.shift && !m.alt && !m.control;
+        if focus || workspace {
+            // It runs registered commands, so a locked card's own chord
+            // tables do not apply: the gesture keeps moving the focus over a
+            // locked editor or browser, which is what it is for.
+            let (raw_dx, raw_dy, lines) = match e.delta {
+                ScrollDelta::Pixels(d) => (f32::from(d.x) as f64, f32::from(d.y) as f64, false),
+                ScrollDelta::Lines(l) => (l.x as f64, l.y as f64, true),
+            };
+            if focus || infiniterm_core::scroll_nav::claims_workspace(raw_dx, raw_dy) {
+                let phase = match e.touch_phase {
+                    TouchPhase::Started => infiniterm_core::scroll_nav::Phase::Started,
+                    TouchPhase::Moved => infiniterm_core::scroll_nav::Phase::Moved,
+                    TouchPhase::Ended => infiniterm_core::scroll_nav::Phase::Ended,
+                };
+                let outs = self.scroll_nav.step(infiniterm_core::scroll_nav::ScrollEv {
+                    dx: raw_dx,
+                    dy: raw_dy,
+                    lines,
+                    phase,
+                    shift: workspace,
+                    now_ms: now_ms(),
+                });
+                for out in outs {
+                    // One usage line per gesture, not per step.
+                    if out.first_of_gesture {
+                        self.note_use(out.action.gesture_id());
+                    }
+                    self.run_command(out.action.command_id());
+                }
+                return;
+            }
         }
         if e.modifiers.platform || e.modifiers.control {
             self.animator.cancel();
@@ -783,10 +852,22 @@ impl AppView {
     }
 
     pub fn key_down(&mut self, e: &KeyDownEvent, cx: &mut gpui::App) -> bool {
+        // Linux reads this key's physical code now; elsewhere it is already
+        // recorded (`keycode::note_key_down`).
+        crate::keycode::note_key_down();
+        let mut owned = e.clone();
+        owned.keystroke.modifiers = self.modifier_roles(owned.keystroke.modifiers);
+        let e = &owned;
         let k: &Keystroke = &e.keystroke;
         let m = &k.modifiers;
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
             eprintln!("[key] {k:?} dead={}", crate::keycode::last_dead());
+        }
+        // A drawn right-click menu (off macOS) takes every key first, before
+        // Escape's own rules and every chord: `menus.rs::menu_key`.
+        if self.model.menu.is_some() {
+            self.menu_key(&k.key);
+            return true;
         }
         // What a `when` in keybindings.json can ask that only a body knows.
         self.sync_ui_context();
@@ -945,8 +1026,9 @@ impl AppView {
                 return true;
             }
         }
-        // The physical key and the real Shift state from the NSEvent, so
-        // the keymap is layout-proof; gpui's keystroke has neither.
+        // The physical key and the real Shift state from the NSEvent (or the
+        // Windows keyboard hook), so the keymap is layout-proof; gpui's
+        // keystroke has neither.
         let code = crate::keycode::last_code();
         let press = KeyPress {
             key: &k.key,
@@ -998,7 +1080,7 @@ impl AppView {
         let locked_editor = self
             .model
             .focused()
-            .is_some_and(|c| c.locked && c.kind == infiniterm_core::saved_layout::CardKind::Editor);
+            .is_some_and(|c| c.locked && c.kind.has_editor_body());
         if locked_editor && m.platform && m.alt && !m.control && !m.shift {
             let dir = match k.key.as_str() {
                 "left" => Some(infiniterm_core::navigate::Direction::Left),
@@ -1122,6 +1204,16 @@ impl AppView {
                 }
                 return true;
             }
+            // A joined card whose connection is down refuses the key in the
+            // open: the banner is on the card, and what was typed went
+            // nowhere (#442).
+            if self.viewer && self.model.card(&id).is_some_and(|c| c.displaced) {
+                self.model.notify(
+                    "not sent: this card lost its connection to the host and is joining again",
+                );
+                self.redraw = true;
+                return true;
+            }
             let action = match self.live_body(&id) {
                 Some(body) => body.key(k, now_ms(), cx),
                 None => crate::body::BodyAction::None,
@@ -1242,7 +1334,18 @@ impl AppView {
             Hit::CardBody { id, .. } | Hit::CardEdge { id, .. } => self.model.card(id).cloned(),
             _ => None,
         };
-        match drop_plan(&items, card.as_ref().map(|c| c.kind)) {
+        // The card's own shell, not this platform's idea of one: quoting a
+        // dropped path is the whole security story of the drop, and POSIX
+        // quoting does not survive PowerShell. `terminal.shell` when it is
+        // set, else whatever a new card would start.
+        let shell = infiniterm_core::shell_cmd::kind_of(
+            Some(self.model.config.terminal.shell.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(infiniterm_core::shell_cmd::default_shell)
+                .as_str(),
+        );
+        match drop_plan(&items, card.as_ref().map(|c| c.kind), shell) {
             DropAction::Type(text) => {
                 let Some(card) = card else { return };
                 // The drop focuses the card it landed on: the text has gone

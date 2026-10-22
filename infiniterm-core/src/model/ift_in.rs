@@ -118,7 +118,9 @@ impl Model {
                             .keymap
                             .iter()
                             .find(|(_, cid)| cid == id)
-                            .map(|(chord, _)| crate::shortcuts::format_chord(chord))
+                            .map(|(chord, _)| {
+                                crate::shortcuts::format_chord(chord, self.modifier_labels())
+                            })
                             .unwrap_or_default();
                         (id.to_string(), label.to_string(), chord)
                     })
@@ -176,6 +178,19 @@ impl Model {
                         Some(id) => ok(id),
                         None => err(&self.notice.clone().unwrap_or_default()),
                     },
+                }
+            }
+            // `ift -t <file> [card]`: the file as a tab of an editor card (#265).
+            "tab" => {
+                let path = req.args.first().map(String::as_str).unwrap_or("");
+                let target = req
+                    .args
+                    .get(1)
+                    .map(String::as_str)
+                    .filter(|t| !t.is_empty());
+                match self.open_file_tab(path, target, from.as_deref()) {
+                    Ok(id) => ok(id),
+                    Err(e) => err(&e),
                 }
             }
             "diff" => {
@@ -467,6 +482,30 @@ mod tests {
         assert!(r.ok, "an id works too");
     }
 
+    // #265: the `tab` verb opens a file as a tab of an editor card and says
+    // why it cannot.
+    #[test]
+    fn tab_opens_a_file_in_an_editor_card_and_says_why_it_cannot() {
+        let (mut m, a, _b) = two_cards();
+        let number = m.card(&a).unwrap().number;
+        // `a` is a terminal: refused by number.
+        let r = ask(&mut m, "tab", &["/tmp/x.rs", &number.to_string()]);
+        assert!(!r.ok && r.text.contains("not an editor"), "{}", r.text);
+        // With no editor focused, a card of its own; then a tab of it.
+        let r = ask(&mut m, "tab", &["/tmp/x.rs"]);
+        assert!(r.ok, "{}", r.text);
+        let editor = r.text.clone();
+        let r = ask(&mut m, "tab", &["/tmp/y.rs", ""]);
+        assert!(r.ok && r.text == editor, "{}", r.text);
+        assert!(m
+            .card(&editor)
+            .unwrap()
+            .tabs
+            .contains(&"/tmp/y.rs".to_string()));
+        let r = ask(&mut m, "tab", &["/tmp/z.rs", "999"]);
+        assert!(!r.ok && r.text.contains("no card 999"), "{}", r.text);
+    }
+
     #[test]
     fn send_says_why_it_cannot() {
         let (mut m, _a, b) = two_cards();
@@ -520,7 +559,14 @@ mod tests {
     fn terminal_opens_a_card_per_directory() {
         let (mut m, _a, _b) = two_cards();
         let before = m.cards.len();
-        let r = ask(&mut m, "terminal", &["/tmp", "/"]);
+        // Two directories that exist on any platform: `/tmp` is not one on
+        // Windows, and `/` there has no drive, so it is not absolute.
+        let tmp = std::env::temp_dir().to_string_lossy().into_owned();
+        let here = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let r = ask(&mut m, "terminal", &[tmp.as_str(), here.as_str()]);
         assert!(r.ok, "{}", r.text);
         assert_eq!(m.cards.len(), before + 2);
         let r = ask(&mut m, "terminal", &["relative"]);

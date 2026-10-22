@@ -390,11 +390,7 @@ impl Model {
     /// asked for follows once the editor reports it clean.
     fn save_as(&mut self, id: String, full: String, then_close: Option<(Vec<String>, bool)>) {
         if let Some(card) = self.card_mut(&id) {
-            card.cwd = full
-                .rsplit_once('/')
-                .map(|(dir, _)| if dir.is_empty() { "/" } else { dir })
-                .unwrap_or("/")
-                .to_string();
+            card.cwd = crate::paths::parent_dir(&full);
             card.path = Some(full);
             self.dirty_layout = true;
         }
@@ -434,18 +430,20 @@ impl Model {
     /// The typed path, resolved against the active card's directory with `~`
     /// for home. The caller has checked it exists.
     pub fn resolve_typed_path(&self, raw: &str, from: Option<&Card>) -> String {
-        let home = self.home.trim_end_matches('/');
+        let home = self.home.trim_end_matches(['/', '\\']);
         let cwd = from
             .map(|c| c.cwd.clone())
             .unwrap_or_else(|| self.cwd_beside(None));
-        if raw.starts_with('/') {
+        // Rooted either way round: `C:\Users\PC` has no leading slash and
+        // is still not relative to anything. See `paths::is_rooted`.
+        if crate::paths::is_rooted(raw) {
             raw.to_string()
         } else if raw == "~" {
             home.to_string()
-        } else if let Some(rest) = raw.strip_prefix("~/") {
+        } else if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix(r"~\")) {
             format!("{home}/{rest}")
         } else {
-            format!("{}/{raw}", cwd.trim_end_matches('/'))
+            format!("{}/{raw}", cwd.trim_end_matches(['/', '\\']))
         }
     }
 
@@ -531,7 +529,7 @@ impl Model {
                 match crate::save_as::target(&full, &exists) {
                     crate::save_as::Target::New => self.save_as(id, full, then_close),
                     crate::save_as::Target::Replace => {
-                        let name = full.rsplit('/').next().unwrap_or(&full).to_string();
+                        let name = crate::paths::base_name(&full).to_string();
                         self.prompt.confirm(
                             &format!("{name} exists. Replace it?"),
                             "Replace",
@@ -1157,6 +1155,11 @@ impl Model {
                 path: "theme".into(),
                 value: serde_json::Value::String(id.into()),
             }),
+            // Previewed already; this writes `ui.theme` so it outlives the session.
+            Source::UiThemes => self.effects.push(Effect::SaveSetting {
+                path: "ui.theme".into(),
+                value: serde_json::Value::String(id.into()),
+            }),
             Source::Placement => match id {
                 "slot" => self.pick_slot(),
                 "here" => self
@@ -1411,7 +1414,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             // A locked editor: the lock is dropped and focus stays on the
             // card. Escape does it too when it has nothing else to close
             // (`input.rs`); this is the chord you can rebind (#265).
-            if card.kind == CardKind::Editor {
+            if card.kind.has_editor_body() {
                 if card.locked {
                     if let Some(c) = m.card_mut(&id) {
                         c.locked = false;
@@ -1489,6 +1492,20 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             })
         },
     );
+    // Cmd+R (#447; it was the development-only reload). A Claude card's
+    // screen can come out scrambled after a replay cut in the wrong place or
+    // a repaint that never came; this asks the program for a fresh one. It
+    // does not touch the grid: `card.clear` is the one that empties it.
+    r.register("terminal.redraw", "Terminal: redraw", |m| {
+        m.with_active_card(|m, id| {
+            let Some(card) = m.card(&id) else { return };
+            match (card.kind, card.pane_id) {
+                (CardKind::Terminal, Some(pane)) => m.effects.push(Effect::RedrawPane(pane)),
+                (CardKind::Terminal, None) => {}
+                _ => m.notify("redraw works on terminal cards"),
+            }
+        })
+    });
     r.register(
         "card.findSelection",
         "Find: use selection for find",

@@ -45,13 +45,16 @@ pub enum Target {
 
 /// Whether the absolute `path` can be written, asking `exists` of the disk.
 pub fn target(path: &str, exists: impl Fn(&str) -> bool) -> Target {
-    let dir = match path.rsplit_once('/') {
-        Some(("", _)) => "/",
-        Some((d, _)) => d,
-        None => ".",
+    // Either separator, and `C:\a.txt` has the drive's root as its directory,
+    // not the bare `C:` (which means "this drive's current directory").
+    let dir = match crate::paths::split_parent(path) {
+        Some(("", _)) => "/".to_string(),
+        Some((d, _)) if d.ends_with(':') => format!("{d}\\"),
+        Some((d, _)) => d.to_string(),
+        None => ".".to_string(),
     };
-    if !exists(dir) {
-        return Target::NoDirectory(dir.to_string());
+    if !exists(&dir) {
+        return Target::NoDirectory(dir);
     }
     if exists(path) {
         Target::Replace

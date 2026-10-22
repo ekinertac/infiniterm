@@ -27,8 +27,26 @@ anyhow = "1"
 # Card, group and workspace ids, as the reference makes them (crypto.randomUUID).
 uuid = { version = "1", features = ["v4"] }
 pulldown-cmark = { version = "0.13.4", default-features = false }
+# update_sign.rs: the Ed25519 signature on a Windows release manifest. Already
+# in the tree through the http stack, so this adds an edge, not a crate.
+ring = "0.17"
 
 [dev-dependencies]
 # The PTY tests are async because SessionBackend::spawn is (tmux assigns ids
 # asynchronously, v2); the app itself runs them on gpui's executor.
 tokio = { version = "1", features = ["rt", "macros"] }
+
+# The local IPC channel is a unix socket on unix and a named pipe on
+# Windows (`transport.rs`); the server half of a named pipe is not in std.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    # `inspect.rs`: the process table, for a card's label.
+    "Win32_System_Diagnostics_ToolHelp",
+    # `local_pty.rs`: a job object per pane, so killing a card's shell
+    # reaches what that shell started.
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }

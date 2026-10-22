@@ -6,20 +6,89 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-17
+### 2026-10-22
 
 - `settings.json` and `settings.default.json` now start with a link to the settings reference (infiniterm.app/reference/settings/), and `keybindings.json` and `keybindings.default.json` with a link to the commands reference (infiniterm.app/reference/commands/). A `settings.json` or `keybindings.json` you already have is not changed; the two default files pick the link up at the next launch.
-- Right-clicking a terminal's or an editor's frame or label chip opens the same menu as right-clicking its text (Copy, Paste and Find for a terminal; Save, Find and Transform for an editor), so where you click on a card no longer changes what you are offered. Diff, transcript, page and browser cards, and a selection of several cards, keep the generic card menu.
+- Fixed: `terminal.fontFamily` is now read as a list. A family that is not installed is skipped and the next one is used; before, the first name was used even when it was missing, and the system's default font drew the terminal. A list that ends with `monospace` gets an installed monospace font when no named family is there.
+
+### 2026-10-21
+
+- New: UI themes. The look of the app (window opacity and blur, window colour, background pictures, card corners and opacity, grid, dimming, the chrome font) and the title and status bar styling now live in `ui-themes/<name>.json` in the config folder (`~/.config/infiniterm/`), one file per look. `ui.theme` in `settings.json` picks the file (default `default`), and "UI theme: switch…" in the palette lists them and previews each one live; Escape puts the old look back. A file applies as you save it, and a file with a mistake is not applied (a notice says why and the look you had stays). Copy `default.json` to make another look; it lists every key with its default. The bars are `titlebar.background`, `titlebar.border`, `statusbar.background` and `statusbar.border`: a background is `#rgb`, `#rrggbb`, `canvas`, `card`, `bar` or `transparent`, a border is a colour or `none`.
+- Changed: the look keys are no longer settings. The first launch of this version moves the ones in your `settings.json` into `ui-themes/default.json` (your comments stay, a note in `settings.json` says where they went): `ui.windowOpacity`, `ui.windowBlur`, `ui.windowColor`, `ui.backgroundImage`, `ui.backgroundImageInterval`, `ui.backgroundImageFade`, `ui.backgroundImageFit`, `ui.cardRadius`, `ui.cardOpacity`, `ui.showGrid`, `ui.inactiveDim`, `ui.unfocusedDim`, `ui.fontFamily`, `ui.fontSize`, `ui.fontWeight` and `ui.fontWeightBold`. A look key typed into `settings.json` afterwards is ignored with a notice. "Window: change the title bar and Dock colour" now writes to the ui theme in force. In a joined window the host's settings still apply, but the look is your own.
+- New: `ui.hideLabelWhenFitted` in a ui theme hides the card label on the card that Cmd+1 fitted to the window, as `ui.hideLabelWhenMaximised` does for a maximised card.
+
+### 2026-10-20
+
+- Changed: a diff card is now a read-only editor. It has a real cursor and selection, Cmd+C copies, Cmd+F finds, long lines can wrap, Cmd+D, Cmd+L, the word and line moves and the fold keys all work, and the code has the same syntax colours as in an editor card (added lines and removed lines are coloured by their own file). Nothing in it can be typed or saved.
+- Changed: a diff card locks like an editor card. Press Enter on the focused card (or click in the text) to use the keys, Escape or Cmd+Escape to give them back. Before, a diff card took arrow keys at once; now the first Enter goes in, and in a diff opened on a folder a second Enter opens the file under the list's cursor.
+- Changed: in the diff, the line numbers of the old file and of the new file are two columns (blank on the side where the line does not exist), with a + or - sign. Unchanged stretches are folds named "N unchanged lines": click the gutter, press Enter on the line, or use Cmd+Alt+] to open one.
+- New: Left on the first column of a line in the diff goes to the changed-files list, and Right or Enter in the list opens the file and goes back to the diff, keeping your place if that file was already open. Cmd+Alt+Left and Cmd+Alt+Right do the same from anywhere in the text. Cmd+K works as before. Cmd+W on a locked diff closes the card.
+- Fixed: the "N changed" heading of the changed-files list is cut at the edge of the list in a narrow card instead of running into the diff.
+
+## 0.6.2 (build 1049), 2026-10-20
+
+### Canvas
+
+- Removed: two-finger panning with the trackpad is gone again (0.6.0 and 0.6.1 had it). Scrolling is only for cards: a scroll goes to the card under the pointer, and over empty canvas it does nothing, for a trackpad and a mouse wheel alike.
+- New: Cmd+Alt + two fingers (or Cmd+Alt + the wheel) moves the focus like Cmd+Alt+arrows, one card for each swipe. Cmd+Shift + two fingers sideways switches to the next or previous workspace, one switch a swipe. Cmd+scroll and the pinch still zoom, and so does a vertical Cmd+Shift scroll. The momentum after you lift your fingers does not keep moving.
+
+### Browser
+
+- Fixed: after a quick resize (dragging a browser card's edge, or several size steps in a row) the page could stay stretched, or at its old size, until something else made it repaint; it was a coin toss, which is why it seemed to work sometimes. The card now works out what size the page was painted at from its own pixels, and when the page is still at an old size after a moment it asks the browser to paint again at the new one.
+- Fixed: resizing a browser card no longer stretches the page. While the page repaints at the new size you see the page as it was, at its own size, with the card's background beside it, instead of the old picture squeezed or enlarged to the new card.
+
+### Command palette
+
+- Fixed: the command palette lists only rows that really hold a word you type. A word of four letters or more used to match rows where the letters were scattered over a long label (`check` found "Canvas: tidy the cards into a block"); now the word must be in the row, as a run, as the initials of its words, or as two whole pieces that start words. Shorter queries (`rgs`, `ntc`) match as before, and the rows that hold the word come first.
+- Fixed: a long card label no longer runs past the edge of the command palette. It is cut at its right end with an ellipsis, so the row always starts where the label starts.
+
+### Remote servers
+
+- Fixed: a card of a remote instance (`ift connect`) now loads the server's own `.zshrc`, so your prompt and aliases appear as they do over plain ssh. Before, the card's zsh was started with a `ZDOTDIR` that pointed at a folder on your Mac, which does not exist on the server, so it started bare. One thing you lose there: zsh's command marks, which colour a card after a long command, are only added to local cards; a remote card still takes its colours from the agent hooks on the server.
+
+## 0.6.1 (build 1021), 2026-10-19
+
+### Canvas
+
+- Changed: a mouse wheel no longer pans the canvas. Over empty canvas, or over a card with nothing to scroll, it does nothing now; the trackpad's two-finger pan is unchanged. Only a trackpad opens a scroll gesture with a touch, which is how the app tells the two apart.
+- Fixed: scrolling a terminal with a mouse wheel panned the canvas instead (0.6.0). A mouse that sends smooth scrolling with no touch phase kept the choice its last scroll over empty canvas made; a pause of a moment between scrolls now starts afresh, so the card under the pointer gets the wheel again.
+
+## 0.6.0 (build 1015), 2026-10-19
+
+### Join another Mac's canvas
+
+- New: `ift join <host>` opens a window on the canvas of the infiniterm already running on another Mac, over ssh, with full control of it, as if you sat at that Mac. You see its cards, labels and agent colours and a live terminal for each terminal card, and what you do happens on the host: typing goes to the host's shell, closing a card closes it there, a new terminal (Cmd+T) starts a shell on the host, and moving, resizing, grouping, renaming and workspaces change the host's canvas. Your zoom, position and focus stay your own. Editor, diff, browser and page cards show as a card that says "<kind> on <host>" and move and close like any card. If you and the host change the canvas at the same moment, both changes stay; only when you both change the same thing on the same card does your change win. `ift join <host> --check` tests whether the host can be joined. The host is an ssh alias, `user@IP` or an IP.
+- It works when the host's infiniterm is closed. `ift join` starts `ift serve` there, says so first, and joins it. `ift serve` holds that Mac's saved canvas and keeps its cards running for viewers: `ift serve --detach` runs it in the background and returns once it answers, `ift serve --stop` saves the canvas and ends it (the cards keep running), and it refuses to start while the app or another `ift serve` is running there. A host whose `ift` is too old to have `serve` is told to update it. When you start infiniterm on that Mac, it asks `ift serve` to save and stop, then opens with the same cards, their shells still running, and anyone joined is connected to the app within seconds. If `ift serve` does not stop within 10 seconds, infiniterm says so in a dialog and does not start.
+- It works on a Linux server that runs infiniterm's sessions but never had the app: with no saved canvas, `ift serve` builds one with a card for every shell already running there, in the folder it was started in. You can type in them and add or close cards. The same holds for a Mac that never saved a canvas. A host with no cards yet opens an empty canvas, and Cmd+T makes the first card on the host. Closing the last card in a joined window closes it on the host too.
+- ssh's questions are asked once, in the terminal you ran `ift join` from, when the host was never connected to from this Mac or no key is set up: the fingerprint and the password prompt are ssh's own, and afterwards the window's connections need no prompt. A host key that has changed is never a question: `ift join` says so, with the new fingerprint, and does not connect. Run with no terminal (from a launcher or a script), the questions appear as macOS dialogs: the fingerprint as Yes or No (No is the default), and the password in a hidden field that goes to ssh and nowhere else. A host that only takes a password is asked for it once, and the window's connections share that one login (they would need the password 37 times otherwise); quitting the window ends the shared login, and one left by a crash ends itself after 10 minutes. A host with a key keeps one login per card.
+- The window uses the host's settings and keybindings: font, theme, cell size, keys and the rest, and a change in the host's file reaches the open window within a second. A host file with an error is not applied and the window keeps what it had, with the same notice. The window's host colour and chip, its frame, and a picture or folder that does not exist on your Mac stay your own. Changing a setting from the joined window is refused with a notice for now; change it on the host.
+- A joined window handles lost connections. A card whose connection ends keeps its last screen, says so in a banner, and joins its session again by itself, waiting 2 s, then longer up to 30 s; when the connection to the canvas comes back, every such card tries at once, also in a window that is behind others. A key typed into it is refused with a notice instead of vanishing. A card whose session is gone on the host says so and disappears with the host's next update. If the host's infiniterm quits or restarts while you are joined, the window waits for it and joins again, asking less often the longer it is gone. The status bar shows one short line while the host is unreachable ("ekin-mini: app not running; waiting").
+- A change made just before the host's next update arrives (closing a card, sliding it) is no longer undone. The window opens in front of the terminal you ran `ift join` from. Quitting a joined window no longer makes macOS report that infiniterm quit unexpectedly.
+- The app opens an owner-only socket that a window on another Mac joins through ssh. The setting `join.enabled` (on by default) turns it off. Nothing is shown or sent unless something joins.
+
+### Canvas
+
+- New: two fingers on the trackpad pan the canvas. Over empty canvas, a card's frame or label, or a card with nothing to scroll the way you moved (a fresh terminal with no history, a page already at its end), the canvas follows your fingers, like in a map, and glides on after you lift them, as after a Cmd+drag. Over a card that can scroll that way (a terminal with history, a long file, a page, a browser page) the card scrolls as before, and the whole gesture, momentum included, stays with what it started on. Cmd+scroll and the pinch still zoom. A mouse wheel pans over empty canvas the same way.
+- New: Cmd+Ctrl+Shift+Arrow pans the canvas from the keyboard: 120 screen pixels a press at any zoom, a held key repeats, and the focus stays where it is. `ui.panStep` (from 20 to 1000) sets the step.
 - New: Cmd+A selects every card of the workspace (`Focus: select every card`). The card you were on stays the active one. In a locked editor or browser card Cmd+A still selects the file's text or the page.
-- The right-click menus on a card (a terminal's text, an editor's text, a card's frame or label) now end with the same rows in the same order: Split Right, Split Down, New, Group…, Size, Move to Workspace…, Canvas, Rename…, Protect, Mask (terminals), Clear State Colour, Close. The new Canvas submenu holds Fit Card, Fit Selection, Fit All Cards, Actual Size, Tidy into a Block and Select All Cards. The bare canvas menu gains Select All Cards, Undo Layout, Redo Layout and Reopen Closed Card.
-- Dragging a workspace tab shows a vertical line at the edge of the tab where it will sit when you let go, instead of filling the tab under the pointer: on the left edge when you drag left, on the right edge when you drag right.
-- Fixed: dragging a workspace tab to reorder it no longer moves the window. The bare part of the title bar still drags the window, and a double-click on it still zooms. One side effect: the system's Ctrl+Cmd+drag (move a window by any point) does not move this window.
-- Fixed: closing the right-click menu on a card's frame or label no longer leaves the card following the pointer, as if you were dragging it. A right-click now only focuses the card and opens the menu.
-- New: double-click a workspace's name in the title bar to rename it.
+- Dragging a workspace tab shows a vertical line at the edge of the tab where it will sit, on the left edge when you drag left and on the right when you drag right. Dragging a tab no longer moves the window (one side effect: the system's Ctrl+Cmd+drag does not move this window). Double-click a workspace's name in the title bar to rename it.
 
-### 2026-10-15
+### Menus
 
-- New setting `ui.panStep` (default 120, from 20 to 1000): how many screen pixels one press of Cmd+Ctrl+Shift+Arrow moves the canvas. A smaller number is a slower pan.
+- The right-click menus on a card (a terminal's text, an editor's text, a card's frame or label) end with the same rows in the same order: Split Right, Split Down, New, Group…, Size, Move to Workspace…, Canvas, Rename…, Protect, Mask (terminals), Clear State Colour, Close. The new Canvas submenu holds Fit Card, Fit Selection, Fit All Cards, Actual Size, Tidy into a Block and Select All Cards. The bare canvas menu gains Select All Cards, Undo Layout, Redo Layout and Reopen Closed Card.
+- Right-clicking a terminal's or an editor's frame or label chip opens the same menu as right-clicking its text. Diff, transcript, page and browser cards, and a selection of several cards, keep the generic card menu.
+- Fixed: closing the right-click menu on a card's frame or label no longer leaves the card following the pointer, as if you were dragging it.
+
+### Terminal
+
+- New: Cmd+R redraws the focused terminal card (the palette's "Terminal: redraw", and Redraw in the card's right-click menu). It asks the program in the card to paint its screen again, which clears a scrambled Claude Code card without touching the scrollback. In a joined window the card joins its session again, which does the same. Cmd+R was the development-only reload, which does nothing in the installed app; that command has no key now.
+
+### Command line
+
+- New: `ift -t <path> [card]` opens a file as a tab of an editor card instead of a card of its own. `card` is a card's number (`2` or `#2`) or id; without one it uses the focused editor card, and when none is focused it opens a card of its own, as `ift <path>` does. A file already open in that card's tabs is switched to. A terminal is refused, with the reason.
+
+### Updates
+
 - The app looks for a new version every hour instead of every six, so a release no longer waits most of a working day to show up. It still checks at launch, and `App: check for updates` looks at once.
 
 ## 0.5.13 (build 907), 2026-10-15

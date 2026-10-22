@@ -118,6 +118,11 @@ pub fn settings_schema() -> Arc<Schema> {
         let flat = value.as_object().map(flatten).unwrap_or_default();
         let mut props = serde_json::Map::new();
         for (key, v) in &flat {
+            // The look keys are a ui theme's (#511): offering them here would
+            // suggest writing a key settings.json ignores.
+            if crate::ui_theme::is_look_key(key) {
+                continue;
+            }
             let mut p = json!({ "default": v, "description": doc(key).join(" ") });
             if let Some((_, choices)) = SETTING_CHOICES.iter().find(|(k, _)| k == key) {
                 p["enum"] = json!(choices);
@@ -139,7 +144,6 @@ pub const SETTING_CHOICES: &[(&str, &[&str])] = &[
     ("terminal.backend", &["daemon", "pty", "tmux"]),
     ("terminal.cursorStyle", &["block", "bar", "underline"]),
     ("editor.wrap", &["prose", "always", "never"]),
-    ("ui.backgroundImageFit", &["cover", "contain"]),
     (
         "ui.cardLabelPosition",
         &["top right", "top left", "bottom right", "bottom left"],
@@ -299,18 +303,22 @@ mod tests {
     }
 
     #[test]
-    fn ui_typography_settings_are_completed_with_defaults_and_docs() {
-        let o = settings("{\n  \"ui.font").unwrap();
-        for key in [
-            "ui.fontFamily",
-            "ui.fontSize",
-            "ui.fontWeight",
-            "ui.fontWeightBold",
-        ] {
-            let item = o.items.iter().find(|item| item.label == key).unwrap();
-            assert!(!item.detail.is_empty(), "{key} has no default");
-            assert!(!item.doc.is_empty(), "{key} has no documentation");
+    fn look_keys_are_not_completed_in_settings_but_the_ui_theme_name_is() {
+        // The chrome typography moved to a ui theme (#511).
+        if let Some(o) = settings("{\n  \"ui.font") {
+            assert!(o
+                .items
+                .iter()
+                .all(|item| !item.label.starts_with("ui.font")));
         }
+        let o = settings("{\n  \"ui.the").unwrap();
+        let theme = o
+            .items
+            .iter()
+            .find(|item| item.label == "ui.theme")
+            .unwrap();
+        assert!(!theme.doc.is_empty());
+        assert_eq!(theme.detail, "\"default\"");
     }
 
     #[test]
@@ -412,6 +420,8 @@ mod tests {
         assert!(at("{\"other\": {\"h").is_none());
     }
 
+    // Built around a symlink, which Windows lets only a privileged user make.
+    #[cfg(unix)]
     #[test]
     fn which_files_have_a_provider() {
         let base = std::env::temp_dir().join(format!("infiniterm-complete-{}", std::process::id()));

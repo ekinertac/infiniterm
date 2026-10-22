@@ -14,28 +14,52 @@
 mod animator;
 mod background_show;
 mod body;
+#[cfg(feature = "browser")]
 mod browser_body;
+// Without the feature, `browser_stub.rs` IS the browsers module: same names,
+// no CEF. Every call site stays as it is, and the difference between the two
+// builds lives in that one file. See its header.
+#[cfg(feature = "browser")]
+mod browsers;
+#[cfg(not(feature = "browser"))]
+#[path = "browser_stub.rs"]
 mod browsers;
 mod chrome;
 mod composing;
 mod decoys;
-mod diff_body;
 mod editor_body;
 mod editor_tabs;
 mod editors;
 mod field;
+// Seven modules talk to AppKit and CoreText. Elsewhere `not_macos.rs`
+// answers under the same names (its header says what each leaves undone).
+#[cfg(target_os = "macos")]
 mod finder_service;
 mod fonts;
+#[cfg(target_os = "macos")]
 mod fullscreen;
+#[cfg(target_os = "macos")]
 mod icon_font;
 mod ime;
 mod input;
+#[cfg(target_os = "macos")]
 mod instance_icon;
 mod keycast;
 mod keycode;
+mod menu_view;
 mod menus;
+#[cfg(target_os = "macos")]
 mod middle_drag;
+#[cfg(target_os = "macos")]
 mod native_menu;
+#[cfg(not(target_os = "macos"))]
+mod not_macos;
+#[cfg(not(target_os = "macos"))]
+use not_macos::{finder_service, fullscreen, icon_font, instance_icon, title_drag};
+// Off macOS the card menus are drawn (`menu_view.rs`); only the browser
+// page's own menu still asks for the native one.
+#[cfg(all(not(target_os = "macos"), feature = "browser"))]
+use not_macos::native_menu;
 mod omnibox;
 mod overlays;
 mod own_window;
@@ -49,6 +73,7 @@ mod tab_strip;
 mod terminal_body;
 mod terminals;
 mod text;
+#[cfg(target_os = "macos")]
 mod title_drag;
 mod transcript_body;
 mod updater;
@@ -59,7 +84,7 @@ use animator::Animator;
 use body::CardBody;
 use chrome::Chrome;
 use gpui::{
-    actions, point, prelude::*, px, size, App, Application, Bounds, FocusHandle, KeyBinding, Menu,
+    actions, prelude::*, px, size, App, Application, Bounds, FocusHandle, KeyBinding, Menu,
     MenuItem, TitlebarOptions, WindowBounds, WindowOptions,
 };
 use infiniterm_core::app::Backend;
@@ -91,6 +116,17 @@ fn titlebar_base_h(font_size: f32) -> f32 {
 
 fn statusbar_base_h(font_size: f32) -> f32 {
     STATUSBAR_H.max(font_size * 2.)
+}
+
+#[cfg(all(test, feature = "browser"))]
+mod cef_start_tests {
+    use super::starts_cef;
+
+    #[test]
+    fn a_joined_window_never_starts_cef_so_its_quit_never_shuts_it_down() {
+        assert!(!starts_cef(true));
+        assert!(starts_cef(false));
+    }
 }
 
 #[cfg(test)]
@@ -210,6 +246,9 @@ pub struct AppView {
     /// `app.emoji` asked; the next frame, which has the window, opens it.
     pub show_character_palette: bool,
     pub pan: Option<Pan>,
+    /// Cmd + scroll as navigation (`scroll_nav`): the swipe gathered so far,
+    /// whether the fingers lifted, the last workspace switch.
+    pub scroll_nav: infiniterm_core::scroll_nav::NavState,
     /// A rectangle being dragged on bare canvas to select cards (input.rs,
     /// `Model::marquee_select`).
     pub marquee: Option<Marquee>,
@@ -247,6 +286,17 @@ pub struct AppView {
     pub context_menu: Option<crate::browsers::CardContextMenu>,
     /// The page's native menu is open (`browsers.rs::show_page_menu`).
     pub page_menu_open: bool,
+    /// Off macOS: where a press on the bare title bar landed, kept until the
+    /// pointer travels far enough to start a window move or the button comes
+    /// up (`not_macos.rs::title_drag`).
+    #[cfg(not(target_os = "macos"))]
+    pub title_press: Option<(f32, f32)>,
+    /// Where the last right-click landed, window pixels: a drawn menu
+    /// (`menus.rs`, off macOS) opens there.
+    pub menu_anchor: (f32, f32),
+    /// What a drawn menu's choice runs against: the workspace a tab menu was
+    /// for and the editor whose tree row is lit (`menus.rs::close_menu`).
+    pub menu_pending: Option<(Option<String>, Option<String>)>,
     /// The prompt's field, opened with the suggestion selected; the palette's query.
     pub prompt_field: field::Field,
     pub query_field: field::Field,
@@ -258,6 +308,29 @@ pub struct AppView {
     /// "Open a file" asked for the open panel (`Effect::PickFile`); the idle
     /// timer, which has the app, shows it (#64). The card it opens beside.
     pub pick_request: Option<Option<String>>,
+    /// The socket viewers join through (`ift join`, #423); `None` when the
+    /// backend is not the daemon or the socket could not be bound.
+    #[cfg(unix)]
+    pub join: Option<infiniterm_core::backend::join::JoinHub>,
+    /// The agent states last sent to viewers, so a change is sent once.
+    pub last_agents: String,
+    /// The edits viewers send up (host side, #423): applied in the poll.
+    #[cfg(unix)]
+    pub join_updates:
+        Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join::RemoteUpdate>>,
+    /// A viewer's edits on their way up to the host (viewer side).
+    #[cfg(unix)]
+    pub uplink: Option<std::sync::mpsc::Sender<infiniterm_core::backend::join::RemoteUpdate>>,
+    /// This window is a viewer (`ift join`, #423): the canvas is the host's,
+    /// nothing is saved, nothing is seeded, no session is started.
+    pub viewer: bool,
+    /// The canvas connection (re)joined: every viewer card without a live
+    /// connection tries again now (#442).
+    pub viewer_poke: bool,
+    /// The host's canvas, as the client thread reads it.
+    #[cfg(unix)]
+    pub canvas_rx:
+        Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join_client::CanvasEvent>>,
     /// A terminal's Paste from the right-click menu: the card to paste into,
     /// read from the clipboard in the poll task.
     pub paste_request: Option<String>,
@@ -373,8 +446,16 @@ actions!(
     ]
 );
 
+/// Windows has its own reduced-motion setting; reading it is phase 3's
+/// business, and until then `ui.animations` is the only answer.
+#[cfg(not(target_os = "macos"))]
+fn system_reduces_motion() -> bool {
+    false
+}
+
 /// `NSWorkspace.accessibilityDisplayShouldReduceMotion`: the system's
 /// reduced-motion switch, which outranks `ui.animations` in the reference.
+#[cfg(target_os = "macos")]
 fn system_reduces_motion() -> bool {
     use objc::{class, msg_send, sel, sel_impl};
     unsafe {
@@ -384,10 +465,29 @@ fn system_reduces_motion() -> bool {
     }
 }
 
+/// Whether this process starts CEF. A joined window (`ift join`, #423, #444)
+/// has no browser cards (they are refused there and the host's show as
+/// "browser on <host>"), so it has nothing for CEF to do, and quitting it
+/// crashed inside CEF's shutdown (EXC_BREAKPOINT, three reports on the Air).
+/// The helper invocations are decided before this, in `early`.
+#[cfg(feature = "browser")]
+fn starts_cef(joined: bool) -> bool {
+    !joined
+}
+
 fn main() {
+    // Windows: this process and everything under it in one job, so the tree
+    // dies with us however we end. BEFORE CEF, or the subprocesses it is
+    // about to start would be outside the job and outlive us; measured, a
+    // killed infiniterm left all eight of Chromium's processes running
+    // eight seconds later. This is also what makes the quit below able to
+    // just exit. See `infiniterm_core::job`.
+    #[cfg(windows)]
+    infiniterm_core::job::adopt_this_process();
     // CEF first: a helper invocation runs and exits here; the browser
     // process loads the framework from the bundle and goes on. Outside a
     // bundle there is no framework and the app runs without browser cards.
+    #[cfg(feature = "browser")]
     let mut cef = match infiniterm_browser::process::early() {
         Ok(p) => Some(p),
         Err(infiniterm_browser::process::Unavailable::Helper(code)) => std::process::exit(code),
@@ -396,18 +496,71 @@ fn main() {
             None
         }
     };
+    // An `ift serve` of this data dir (a canvas host kept while the app was
+    // closed, #438) is asked to save and go first: the app takes over its
+    // canvas and its sessions, and viewers join the app (#442). `ift serve`
+    // is unix-only, so there is nothing to take over from elsewhere.
+    #[cfg(unix)]
+    {
+        use infiniterm_core::headless::{serve_pid_file, stop_running_serve, ServeStop};
+        match stop_running_serve(&serve_pid_file(), std::time::Duration::from_secs(10)) {
+            ServeStop::NotRunning => {}
+            ServeStop::Stopped => eprintln!("[infiniterm] took over from ift serve"),
+            ServeStop::Stuck(pid) => {
+                // Said where the person is looking, not only in a log: the
+                // app is about to exit, and a launch that ends with no window
+                // and no word reads as a crash.
+                let text = format!(
+                    "`ift serve` (pid {pid}) is holding this canvas and did not stop in 10 seconds. infiniterm did not start. Stop it with `ift serve --stop`, or quit that process, and open infiniterm again."
+                );
+                eprintln!("[infiniterm] {text}");
+                let _ = std::process::Command::new("osascript")
+                    .args([
+                        "-e",
+                        "on run argv",
+                        "-e",
+                        "display dialog (item 1 of argv) with title \"infiniterm\" buttons {\"OK\"} default button \"OK\" with icon caution",
+                        "-e",
+                        "end run",
+                        "--",
+                        &text,
+                    ])
+                    .status();
+                std::process::exit(1);
+            }
+        }
+    }
     if runtime::another_instance_holds_the_socket() {
-        eprintln!("[infiniterm] another infiniterm holds the socket; activating it");
+        eprintln!("[infiniterm] another infiniterm holds the endpoint; activating it");
+        // Bringing the first copy forward is macOS's `open -b`. Windows has
+        // no equivalent that does not mean finding its window by hand, so
+        // this one just exits: the lock is what mattered, and the first copy
+        // is already on screen somewhere.
+        #[cfg(target_os = "macos")]
         let _ = std::process::Command::new("open")
             .args(["-b", "dev.ekinertac.infiniterm"])
             .status();
         std::process::exit(0);
     }
+    // A joined window is `ift join`'s, which is unix-only.
+    #[cfg(unix)]
+    let joined = infiniterm_core::backend::remote::join_from_env().is_some();
+    #[cfg(windows)]
+    let joined = false;
     Application::new().run(move |cx: &mut App| {
         keycode::install();
+        #[cfg(target_os = "macos")]
         finder_service::register();
-        let cef_running = match cef.as_mut() {
+        // Without the feature there is no CEF to start and no pump to run:
+        // `browser_stub.rs` draws those cards instead.
+        #[cfg(not(feature = "browser"))]
+        let cef_running = false;
+        #[cfg(feature = "browser")]
+        let cef_running = match cef.as_mut().filter(|_| starts_cef(joined)) {
             Some(p) => {
+                // CEF's two methods on gpui's NSApplication; nothing on
+                // Windows owns an NSApplication to patch.
+                #[cfg(target_os = "macos")]
                 infiniterm_browser::app_protocol::install();
                 let ok = p.start();
                 if !ok {
@@ -417,6 +570,7 @@ fn main() {
             }
             None => false,
         };
+        #[cfg(feature = "browser")]
         if cef_running {
             // CEF's message pump, as the spikes ran it: one turn every 4 ms.
             cx.spawn(async move |cx: &mut gpui::AsyncApp| loop {
@@ -505,6 +659,17 @@ fn main() {
         if !icon_font::register() {
             eprintln!("[infiniterm/warn] the bundled icon font is not resolvable; prompt icons may draw as boxes");
         }
+        // Windows and Linux: the same font, through gpui's own store. On
+        // Windows its fallback list cannot reach a font added this way, so
+        // the terminal paints icons apart (`terminal_body::icon_glyph`); on
+        // Linux cosmic-text's own fallback finds it (`not_macos.rs`).
+        #[cfg(not(target_os = "macos"))]
+        if let Err(e) = cx
+            .text_system()
+            .add_fonts(vec![std::borrow::Cow::Borrowed(icon_font::ICON_FONT_TTF)])
+        {
+            eprintln!("[infiniterm/warn] the bundled icon font would not load: {e}");
+        }
         // A window that quit full screen opens at its old frame and goes
         // full screen once it exists, through the same toggle as the green
         // button, so `ui.fullscreen` picks the kind; left to gpui it would
@@ -521,17 +686,33 @@ fn main() {
             .unwrap_or_else(|| {
                 WindowBounds::Windowed(Bounds::centered(None, size(px(1600.), px(1000.)), cx))
             });
+        // `appears_transparent` means "we draw the whole title bar" and on
+        // Windows gpui takes it literally: no caption, and therefore no
+        // close, minimise or maximise button, because the traffic lights we
+        // leave room for are macOS's. Windows gets its own caption bar and
+        // our title row sits under it.
+        #[cfg(target_os = "macos")]
+        let titlebar = TitlebarOptions {
+            title: Some("infiniterm".into()),
+            appears_transparent: true,
+            traffic_light_position: Some(gpui::point(px(12.), px(14.))),
+        };
+        #[cfg(not(target_os = "macos"))]
+        let titlebar = TitlebarOptions {
+            title: Some("infiniterm".into()),
+            appears_transparent: false,
+            traffic_light_position: None,
+        };
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(window_bounds),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("infiniterm".into()),
-                    appears_transparent: true,
-                    traffic_light_position: Some(point(px(12.), px(14.))),
-                }),
+                titlebar: Some(titlebar),
                 ..Default::default()
             },
             |window, cx| {
+                // Before anything measures a terminal cell: the family is
+                // picked from the fonts this machine has (#464).
+                fonts::remember_installed(window);
                 let view = cx.new(|cx| {
                     let mut app = AppView::new(cx.focus_handle(), window.scale_factor());
                     app.cef_running = cef_running;
@@ -541,23 +722,93 @@ fn main() {
                     app
                 });
                 window.focus(&view.read(cx).focus.clone());
+                // WINDOWS QUITS HERE, at the close of the window rather
+                // than in `on_app_quit` below.
+                //
+                // Not a shortcut: on this platform `on_app_quit` is not
+                // reached at all once CEF has started. Closing the window
+                // left a live, windowless process holding the
+                // single-instance pipe, its own exe and libcef.dll, so the
+                // app could not even be started again; without a browser
+                // card it did eventually quit, taking thirty-eight seconds
+                // of which CEF's `shutdown()` was nineteen (measured
+                // 2026-09-25). `on_window_should_close` runs on WM_CLOSE
+                // with everything still alive, which is the last moment we
+                // can act at all.
+                //
+                // Exiting rather than unwinding is what the job object in
+                // `main` pays for: the kernel closes its handle here and
+                // every Chromium subprocess goes with it, which is the work
+                // `shutdown()` was being waited on to do. Everything of
+                // OURS is on disk by the line below — `flush_save` writes
+                // the canvas and the window frame, `leave` releases the
+                // shells the way a tmux detach needs.
+                #[cfg(windows)]
+                {
+                    let closing = view.clone();
+                    window.on_window_should_close(cx, move |_, cx| {
+                        closing.update(cx, |this, _| {
+                            this.flush_save();
+                            this.backend.pty.leave();
+                        });
+                        runtime::leave_now();
+                    });
+                }
+                // A joined window opens from `ift join`, run in another app's
+                // window (a terminal): without this it can open behind it.
+                // The app-wide `cx.activate` below does not always win over
+                // the app that launched us; making this window key does.
+                if joined {
+                    window.activate_window();
+                }
                 // gpui's view never answers middle-button drags; now that the
-                // window (and so its view class) exists, teach it to.
-                middle_drag::install();
-                title_drag::install();
-                fullscreen::install();
+                // window (and so its view class) exists, teach it to. These
+                // three patch AppKit's view class, so they are macOS only.
+                #[cfg(target_os = "macos")]
+                {
+                    middle_drag::install();
+                    title_drag::install();
+                    fullscreen::install();
+                }
                 // The idle wake-up: every 16 ms, drain what the backend's
                 // threads sent and draw a frame if anything needs one. A
                 // receiver cannot be awaited on gpui's executor, so a short
                 // timer is what stands in for it; it costs nothing when
                 // nothing arrived.
                 let poll = view.clone();
+                // The main window, for the one thing the poll does that needs
+                // a `Window`: the full screen toggle on Windows.
+                #[cfg(windows)]
+                let main_window = window.window_handle();
                 cx.spawn(async move |cx: &mut gpui::AsyncApp| loop {
                     cx.background_executor()
                         .timer(std::time::Duration::from_millis(16))
                         .await;
+                    // Windows' full screen is gpui's, which wants the window;
+                    // the toggle's callers have none, so they leave a request
+                    // (`not_macos::fullscreen::toggle`) and it is carried out
+                    // here, at most a poll later. macOS has its own path.
+                    #[cfg(windows)]
+                    if fullscreen::take_request() {
+                        let _ = main_window.update(cx, |_, window, _| window.toggle_fullscreen());
+                    }
                     let alive = poll.update(cx, |this, cx| {
                         this.drain_backend();
+                        // The host's canvas, for a viewer; the host's agent
+                        // states, for viewers (#423).
+                        this.drain_canvas();
+                        // A viewer's cards that lost their session rejoin
+                        // here too, not only in the frame: a window behind
+                        // others draws no frames (#442).
+                        if this.drive_viewer_links() {
+                            cx.notify();
+                        }
+                        this.publish_agents();
+                        // What viewers changed on this canvas (#423).
+                        if this.apply_remote_updates() {
+                            this.redraw = true;
+                            cx.notify();
+                        }
                         // The save debounce runs here, not in the frame: a
                         // layout change with nothing else moving must not
                         // hold the frame loop open for half a second.
@@ -659,6 +910,19 @@ fn main() {
                 // second of moves; the window's frame goes with it.
                 let quitting = view.clone();
                 cx.on_app_quit(move |cx| {
+                    // A joined window ends the shared ssh connection a
+                    // password host got (#450), so a normal quit leaves
+                    // nothing running; a crash leaves it its 10 minutes.
+                    #[cfg(unix)]
+                    if let Some(host) = infiniterm_core::backend::remote::join_from_env() {
+                        use std::os::unix::fs::MetadataExt;
+                        let uid = std::fs::metadata(infiniterm_core::paths::home_dir())
+                            .map(|m| m.uid())
+                            .unwrap_or(0);
+                        let control =
+                            infiniterm_core::backend::ssh_login::control_path(&host.target, uid);
+                        infiniterm_core::backend::ssh_login::stop_master(&host, &control);
+                    }
                     quitting.update(cx, |this, _| {
                         this.flush_save();
                         // The shells: local ones die with us, tmux windows
@@ -670,10 +934,32 @@ fn main() {
                         // The surfaces close before CEF shuts down.
                         this.bodies.clear();
                     });
-                    if cef_running {
-                        infiniterm_browser::process::stop();
+                    // WINDOWS ENDS HERE, ON PURPOSE. Everything worth
+                    // keeping is on disk by this line, and what remains is
+                    // CEF's own teardown, which does not work on this
+                    // platform: `shutdown()` measured nineteen seconds with
+                    // no browser card open and never returned at all with
+                    // one, leaving a windowless process holding its own exe
+                    // and libcef.dll until something killed it
+                    // (2026-09-25). The job object this process is in is
+                    // what makes exiting safe rather than rude: the kernel
+                    // closes its handle here and takes every Chromium
+                    // subprocess with it, which is the job `shutdown()` was
+                    // being waited on to do.
+                    #[cfg(windows)]
+                    infiniterm_core::job::exit_now();
+                    #[cfg(not(windows))]
+                    {
+                        #[cfg(feature = "browser")]
+                        if cef_running {
+                            infiniterm_browser::process::stop();
+                        }
                     }
-                    async {}
+                    // `on_app_quit` wants a future. On Windows nothing
+                    // reaches it, which is the point of the line above.
+                    #[allow(unreachable_code)]
+                    let done = async {};
+                    done
                 })
                 .detach();
                 view

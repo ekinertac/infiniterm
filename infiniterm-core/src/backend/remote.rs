@@ -30,7 +30,10 @@ use std::os::unix::net::UnixStream;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use crate::drop::shell_quote;
+// Every command built here runs on the HOST, through ssh, in a POSIX shell,
+// whichever platform this app runs on; so it is POSIX quoting, not the
+// card's shell's (`drop::quote_for`).
+use crate::drop::posix_quote as shell_quote;
 
 /// How much of ssh's stderr to keep: enough for a reason, not a log.
 const STDERR_KEEP: usize = 2048;
@@ -71,6 +74,19 @@ pub fn from_env() -> Option<RemoteHost> {
         var("INFINITERM_REMOTE_ARGS").as_deref(),
         var("INFINITERM_REMOTE_IFT").as_deref(),
         var("INFINITERM_REMOTE_SSH").as_deref(),
+    )
+}
+
+/// The host a viewer window joins (`ift join`, #423): `INFINITERM_JOIN` is the
+/// ssh target, with the same optional `_ARGS`, `_IFT` and `_SSH` as a remote
+/// instance. Its cards are the host app's, never started here.
+pub fn join_from_env() -> Option<RemoteHost> {
+    let var = |k: &str| std::env::var(k).ok();
+    from_vars(
+        var("INFINITERM_JOIN").as_deref(),
+        var("INFINITERM_JOIN_ARGS").as_deref(),
+        var("INFINITERM_JOIN_IFT").as_deref(),
+        var("INFINITERM_JOIN_SSH").as_deref(),
     )
 }
 
@@ -156,7 +172,17 @@ pub fn list_sessions(host: &RemoteHost) -> std::io::Result<Vec<String>> {
 /// short PATH, and the installer puts `ift` in `~/.local/bin` for anyone but
 /// root (`install.rs`), so a plain `ift` was "not installed" on a server it was
 /// installed on (#397).
-pub const INSTALL_DIRS: [&str; 2] = ["$HOME/.local/bin", "/usr/local/bin"];
+///
+/// A Mac host's `ift` is inside the app (`/Applications/infiniterm.app`), where
+/// `iftd` sits beside it; a non-interactive ssh to a Mac has a PATH of
+/// `/usr/local/bin:/usr/bin:/bin`, so `ift join mini` said "command not found"
+/// on a Mac that runs infiniterm (found testing #432 over real ssh).
+pub const INSTALL_DIRS: [&str; 3] = [
+    "$HOME/.local/bin",
+    "/usr/local/bin",
+    // Overridable so a test host can hide the app a developer's Mac has.
+    "${INFINITERM_APP_DIR:-/Applications/infiniterm.app/Contents/MacOS}",
+];
 
 /// The script `check` runs on the server: `ift` is there (on the PATH or in
 /// `INSTALL_DIRS`, for a bare name), `iftd` is beside it or on the PATH, and
@@ -164,7 +190,13 @@ pub const INSTALL_DIRS: [&str; 2] = ["$HOME/.local/bin", "/usr/local/bin"];
 /// of the `ift` it found. Each failure says what is missing on stderr and uses
 /// its own exit status.
 pub fn check_command(ift: &str) -> String {
-    let dirs = INSTALL_DIRS.join(" ");
+    check_command_in(ift, &INSTALL_DIRS)
+}
+
+/// `check_command` over explicit folders, so a test can leave out the app
+/// folder, which exists on a Mac that has infiniterm installed.
+fn check_command_in(ift: &str, install_dirs: &[&str]) -> String {
+    let dirs = install_dirs.join(" ");
     let script = format!(
         concat!(
             "ift={ift}; ",
@@ -246,6 +278,41 @@ pub fn remote_command(ift: &str, id: &str, spawn: Option<&SpawnSpec>) -> String 
 
 /// The argument list for the ssh child, after the program name.
 pub fn ssh_args(host: &RemoteHost, id: &str, spawn: Option<&SpawnSpec>) -> Vec<String> {
+    ssh_args_for(host, remote_command(&host.ift, id, spawn))
+}
+
+/// `ift proxy join session <id>`: the host app's join socket for one card
+/// (#423), quoted like `remote_command`.
+pub fn join_command(ift: &str, id: &str) -> String {
+    format!(
+        "{} proxy join session {}",
+        shell_quote(ift),
+        shell_quote(id)
+    )
+}
+
+/// `ift proxy join canvas`: the host's layout snapshots.
+pub fn join_canvas_command(ift: &str) -> String {
+    format!("{} proxy join canvas", shell_quote(ift))
+}
+
+/// What the host's join server says first, as one line: `ift-join <major> ok`
+/// or `ift-join <major> error <sentence>`. The sentence is the host's own,
+/// shown as it is: it already says what to do.
+pub fn check_join_answer(line: &str) -> Result<(), String> {
+    let line = line.trim_end();
+    let mut words = line.splitn(4, ' ');
+    match (words.next(), words.next(), words.next(), words.next()) {
+        (Some("ift-join"), Some(_), Some("ok"), None) => Ok(()),
+        (Some("ift-join"), Some(_), Some("error"), Some(why)) => Err(why.to_string()),
+        _ => Err(format!(
+            "the host did not answer as ift-join (is infiniterm running there, and is it a build with join?): {line:?}"
+        )),
+    }
+}
+
+/// The argument list for an ssh that runs `command` on the host.
+pub fn ssh_args_for(host: &RemoteHost, command: String) -> Vec<String> {
     let mut args: Vec<String> = [
         "-T",
         "-o",
@@ -261,7 +328,7 @@ pub fn ssh_args(host: &RemoteHost, id: &str, spawn: Option<&SpawnSpec>) -> Vec<S
     .collect();
     args.extend(host.ssh_args.iter().cloned());
     args.push(host.target.clone());
-    args.push(remote_command(&host.ift, id, spawn));
+    args.push(command);
     args
 }
 
@@ -342,8 +409,206 @@ pub fn connect(
     id: &str,
     spawn: Option<&SpawnSpec>,
 ) -> std::io::Result<(UnixStream, SshStderr)> {
+    connect_command(host, remote_command(&host.ift, id, spawn))
+}
+
+/// Joins one card of the host's running canvas (#423): the same splice, to
+/// `ift proxy join session <id>`, with the host's answer line read and checked
+/// before anything else, so the caller's next read is the host's `Hello`.
+pub fn connect_join(host: &RemoteHost, id: &str) -> Result<(UnixStream, SshStderr), JoinFailure> {
+    connect_join_with(host, join_command(&host.ift, id))
+}
+
+/// Joins the host's canvas: its layout and agent states (#423).
+pub fn connect_join_canvas(host: &RemoteHost) -> Result<(UnixStream, SshStderr), JoinFailure> {
+    connect_join_with(host, join_canvas_command(&host.ift))
+}
+
+/// Whether the host can be joined right now: one canvas handshake, closed at
+/// once. What `ift join` asks before it opens a window (#423).
+pub fn probe_join(host: &RemoteHost) -> Result<(), JoinFailure> {
+    connect_join_canvas(host).map(|_| ())
+}
+
+/// Whether a failed join means "nothing is serving a canvas there": the
+/// host's `ift proxy join` found no `j.sock` (the app is not running, and no
+/// `ift serve` either). The one failure `ift join` answers by starting a
+/// canvas host itself (#438); every other refusal stays what it was.
+pub fn is_no_host_running(why: &JoinFailure) -> bool {
+    let said = why.message().to_lowercase();
+    said.contains("no running infiniterm to join")
+}
+
+/// Starts `ift serve --detach` on the host (#438): a canvas host with no
+/// window, so a viewer can join a Mac whose app is closed. Returns once it
+/// answers there. The error is a sentence for a person, naming what to check:
+/// an `ift` too old to have `serve` treats the word as a file to open.
+pub fn start_serve(host: &RemoteHost) -> Result<(), String> {
+    let command = format!("{} serve --detach", shell_quote(&host.ift));
+    let out = run_on(host, &command).map_err(|e| format!("could not run {}: {e}", host.ssh))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    Err(format!(
+        "could not start a canvas host on {} (needs an infiniterm with `ift serve`; update it there if it is older): {}",
+        host.target,
+        said.lines().last().unwrap_or("it failed")
+    ))
+}
+
+/// Why joining a host failed, and whether trying again can help (#423).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JoinFailure {
+    /// The connection itself failed (ssh down, a timeout, a reset): it can
+    /// work later, so the viewer tries again.
+    Retry(String),
+    /// The host answered, and waiting will not change what it said: an `ift`
+    /// too old to join, a version it refuses, no app running there, a login
+    /// that was refused. A person has to do something, so the viewer says so
+    /// once and does not retry.
+    Fatal(String),
+}
+
+impl JoinFailure {
+    pub fn message(&self) -> &str {
+        match self {
+            JoinFailure::Retry(m) | JoinFailure::Fatal(m) => m,
+        }
+    }
+}
+
+/// What came back where the host's answer line should be.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    /// A line.
+    Line(String),
+    /// The connection ended first (ssh exited, the remote command failed).
+    Closed,
+    /// Nothing within the wait.
+    TimedOut,
+    /// More than a line's worth of bytes with no line end.
+    Unreadable,
+}
+
+/// What ssh says when the CONNECTION is what failed, in the words OpenSSH
+/// uses. Matched in lower case anywhere in its stderr.
+const CONNECTION_WORDS: [&str; 11] = [
+    "connection refused",
+    "connection timed out",
+    "operation timed out",
+    "connection reset",
+    "connection closed",
+    "network is unreachable",
+    "no route to host",
+    "could not resolve hostname",
+    "broken pipe",
+    "host is down",
+    "kex_exchange_identification",
+];
+
+/// Decides whether a failed handshake is worth another try. Pure, so the rule
+/// is tested without ssh: only a real connection failure retries; anything the
+/// host itself said (or its ssh refused) is fatal, with a sentence.
+pub fn classify_join_failure(target: &str, answer: &Answer, stderr: &str) -> JoinFailure {
+    match answer {
+        Answer::Line(line) => match check_join_answer(line) {
+            // The host's own sentence, or the line it did say.
+            Err(why) if line.trim_start().starts_with("ift-join ") => JoinFailure::Fatal(why),
+            _ => JoinFailure::Fatal(format!(
+                "{target} has an ift that cannot be joined (it did not answer as ift-join); update infiniterm there"
+            )),
+        },
+        Answer::TimedOut => JoinFailure::Retry(format!("{target} did not answer in time")),
+        Answer::Unreadable => JoinFailure::Fatal(format!(
+            "{target} sent something that is not an answer; update infiniterm there"
+        )),
+        Answer::Closed => {
+            let said = stderr.trim();
+            let lower = said.to_lowercase();
+            if let super::ssh_login::SshProblem::ChangedKey(fingerprint) =
+                super::ssh_login::classify(said)
+            {
+                // Final, and with the fingerprint: ssh's last line alone is
+                // "Host key verification failed." (#450).
+                JoinFailure::Fatal(super::ssh_login::changed_key_sentence(
+                    target,
+                    fingerprint.as_deref(),
+                ))
+            } else if said.is_empty() {
+                JoinFailure::Retry(format!("{target} closed the connection before it answered"))
+            } else if CONNECTION_WORDS.iter().any(|w| lower.contains(w)) {
+                JoinFailure::Retry(said.lines().last().unwrap_or(said).to_string())
+            } else {
+                JoinFailure::Fatal(said.lines().last().unwrap_or(said).to_string())
+            }
+        }
+    }
+}
+
+fn connect_join_with(
+    host: &RemoteHost,
+    command: String,
+) -> Result<(UnixStream, SshStderr), JoinFailure> {
+    let (mut stream, stderr) = connect_command(host, command)
+        .map_err(|e| JoinFailure::Fatal(format!("could not run {}: {e}", host.ssh)))?;
+    match read_line(&mut stream, JOIN_ANSWER_WAIT) {
+        Ok(line) => match check_join_answer(&line) {
+            Ok(()) => Ok((stream, stderr)),
+            Err(_) => Err(classify_join_failure(
+                &host.target,
+                &Answer::Line(line),
+                &stderr.text(),
+            )),
+        },
+        Err(answer) => {
+            // ssh may say why a moment after the stream ends.
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            Err(classify_join_failure(&host.target, &answer, &stderr.text()))
+        }
+    }
+}
+
+/// How long a host gets to answer the handshake line.
+const JOIN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// One line, a byte at a time, so nothing after it is taken from the frames
+/// that follow. Bounded: a line over 256 bytes is not an answer.
+fn read_line(stream: &mut UnixStream, wait: std::time::Duration) -> Result<String, Answer> {
+    stream
+        .set_read_timeout(Some(wait))
+        .map_err(|_| Answer::Closed)?;
+    let mut line = Vec::new();
+    let mut b = [0u8; 1];
+    loop {
+        match stream.read(&mut b) {
+            Ok(0) => return Err(Answer::Closed),
+            Ok(_) if b[0] == b'\n' => break,
+            Ok(_) if line.len() < 256 => line.push(b[0]),
+            Ok(_) => return Err(Answer::Unreadable),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                return Err(Answer::TimedOut)
+            }
+            Err(_) => return Err(Answer::Closed),
+        }
+    }
+    let _ = stream.set_read_timeout(None);
+    Ok(String::from_utf8_lossy(&line).into_owned())
+}
+
+/// Starts ssh with `command` on the host; the splice both `connect` and
+/// `connect_join` use.
+pub fn connect_command(
+    host: &RemoteHost,
+    command: String,
+) -> std::io::Result<(UnixStream, SshStderr)> {
     let mut child = Command::new(&host.ssh)
-        .args(ssh_args(host, id, spawn))
+        .args(ssh_args_for(host, command))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -429,6 +694,118 @@ mod tests {
     }
 
     #[test]
+    fn a_join_runs_ift_proxy_join_with_every_value_quoted() {
+        assert_eq!(join_command("ift", "abc-1"), "ift proxy join session abc-1");
+        assert_eq!(
+            join_command("/opt/my ift", "a b"),
+            "'/opt/my ift' proxy join session 'a b'"
+        );
+        assert_eq!(join_canvas_command("ift"), "ift proxy join canvas");
+    }
+
+    #[test]
+    fn the_hosts_answer_is_ok_or_its_own_sentence() {
+        assert_eq!(check_join_answer("ift-join 1 ok"), Ok(()));
+        assert_eq!(check_join_answer("ift-join 0 ok\n"), Ok(()));
+        assert_eq!(
+            check_join_answer("ift-join 1 error no session x on this host"),
+            Err("no session x on this host".to_string())
+        );
+        let err = check_join_answer("bash: ift: command not found").unwrap_err();
+        assert!(err.contains("did not answer as ift-join"), "{err}");
+        assert!(check_join_answer("").is_err());
+    }
+
+    #[test]
+    fn the_host_check_looks_inside_the_app_for_a_mac_host() {
+        let script = check_command("ift");
+        assert!(
+            script.contains("/Applications/infiniterm.app/Contents/MacOS"),
+            "{script}"
+        );
+        assert!(script.contains("$HOME/.local/bin") && script.contains("/usr/local/bin"));
+    }
+
+    #[test]
+    fn only_a_real_connection_failure_is_worth_another_try() {
+        use Answer::*;
+        let t = "ekin-mini";
+        let retry =
+            |a: &Answer, e: &str| matches!(classify_join_failure(t, a, e), JoinFailure::Retry(_));
+        // The connection failed: try again.
+        assert!(retry(&TimedOut, ""));
+        assert!(retry(&Closed, ""));
+        assert!(retry(
+            &Closed,
+            "ssh: connect to host ekin-mini port 22: Connection refused"
+        ));
+        assert!(retry(
+            &Closed,
+            "ssh: Could not resolve hostname ekin-mini: nodename nor servname"
+        ));
+        assert!(retry(&Closed, "Connection closed by 100.1.2.3 port 22"));
+        // The host (or its login) said no: a person has to act.
+        assert!(!retry(&Closed, "bash: ift: command not found"));
+        assert!(!retry(
+            &Closed,
+            "ekin@ekin-mini: Permission denied (publickey)."
+        ));
+        assert!(!retry(
+            &Closed,
+            "ift: no running infiniterm to join on this host (/x/j.sock): not found"
+        ));
+        assert!(!retry(&Unreadable, ""));
+    }
+
+    #[test]
+    fn a_changed_host_key_is_final_and_names_the_fingerprint() {
+        let said = "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nThe fingerprint for the ED25519 key sent by the remote host is\nSHA256:zzz999.\nHost key verification failed.";
+        match classify_join_failure("mini", &Answer::Closed, said) {
+            JoinFailure::Fatal(m) => {
+                assert!(m.contains("mini") && m.contains("SHA256:zzz999"), "{m}")
+            }
+            other => panic!("a changed key must be final, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_host_that_cannot_be_joined_is_told_once_with_a_sentence() {
+        let t = "ekin-mini";
+        // An older ift: a shell error where the answer line should be.
+        let old = classify_join_failure(t, &Answer::Line("ift: unknown command join".into()), "");
+        assert_eq!(
+            old,
+            JoinFailure::Fatal(
+                "ekin-mini has an ift that cannot be joined (it did not answer as ift-join); update infiniterm there"
+                    .into()
+            )
+        );
+        // The host's own refusal is shown as it is.
+        let newer = classify_join_failure(
+            t,
+            &Answer::Line("ift-join 1 error this host speaks ift-join 1 and you asked for 2; update infiniterm on the host".into()),
+            "",
+        );
+        assert_eq!(
+            newer,
+            JoinFailure::Fatal(
+                "this host speaks ift-join 1 and you asked for 2; update infiniterm on the host"
+                    .into()
+            )
+        );
+        // Of a failed connection, the last line ssh said.
+        let last = classify_join_failure(
+            t,
+            &Answer::Closed,
+            "warning: x\nbash: ift: command not found",
+        );
+        assert_eq!(
+            last,
+            JoinFailure::Fatal("bash: ift: command not found".into())
+        );
+    }
+
+    #[test]
     fn the_forward_maps_the_servers_socket_to_ours_and_ends_with_its_stdin() {
         let mut host = RemoteHost::new("root@h");
         host.ssh_args = vec!["-p".into(), "2222".into()];
@@ -488,7 +865,12 @@ mod tests {
     fn run_check(home: &std::path::Path, ift: &str) -> std::process::Output {
         std::process::Command::new("sh")
             .arg("-c")
-            .arg(check_command(ift))
+            // Only the home-based folders: a Mac that has infiniterm installed
+            // would otherwise find its own `ift` in the app folder.
+            .arg(check_command_in(
+                ift,
+                &["$HOME/.local/bin", "/usr/local/bin"],
+            ))
             .env_clear()
             .env("HOME", home)
             .env("PATH", "/usr/bin:/bin")

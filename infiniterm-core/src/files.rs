@@ -159,6 +159,8 @@ pub fn dir_list(path: &str) -> Result<Vec<DirEntry>, String> {
 mod tests {
     use super::*;
 
+    // Symlinks need a privilege on Windows; the rule they test is the Mac's.
+    #[cfg(unix)]
     #[test]
     fn a_save_keeps_a_symlink_and_writes_the_file_it_points_at() {
         use std::os::unix::fs::symlink;
@@ -198,6 +200,7 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    #[cfg(unix)]
     #[test]
     fn resolve_link_follows_a_link_and_leaves_other_paths_alone() {
         use std::os::unix::fs::symlink;

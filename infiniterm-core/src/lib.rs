@@ -76,10 +76,21 @@ pub mod fullscreen;
 pub mod fuzzy;
 pub mod git;
 pub mod git_repo;
+pub mod menu_nav;
+// `ift serve` (a Linux host running `iftd`) rides on the daemon, the join hub
+// and unix sockets; none of it exists on Windows.
+#[cfg(unix)]
+pub mod headless;
 pub mod hooks;
+pub mod icon_chars;
 pub mod ift;
 pub mod inspect;
+// Who owns the single-instance endpoint; the other half of `transport`.
+pub mod instance;
 pub mod itermcolors;
+// Windows job objects, used by the pane backend and by main to make a
+// process tree die with its owner. The file is `#![cfg(windows)]`.
+pub mod job;
 pub mod jsonc;
 pub mod jsonctx;
 pub mod keymap;
@@ -87,6 +98,7 @@ pub mod layout_file;
 pub mod licence;
 pub mod links;
 pub mod links_fs;
+pub mod look_migration;
 pub mod model;
 pub mod omni;
 pub mod page;
@@ -98,8 +110,10 @@ pub mod reading;
 pub mod saved_layout;
 pub mod schema;
 pub mod schema_store;
+pub mod scroll_nav;
 pub mod scrollbar;
 pub mod settings_doc;
+pub mod shell_cmd;
 pub mod shell_history;
 pub mod shortcuts;
 pub mod site_reference;
@@ -109,7 +123,10 @@ pub mod snippets;
 pub mod switcher;
 pub mod themes_files;
 pub mod transcript;
+pub mod transport;
+pub mod ui_theme;
 pub mod update;
+pub mod update_sign;
 
 pub mod sidebar;
 

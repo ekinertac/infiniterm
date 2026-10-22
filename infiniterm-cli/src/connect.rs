@@ -213,7 +213,7 @@ pub fn launch_env(p: &Parsed, data: &Path, config: &Path) -> Vec<(String, String
 fn host_version(host: &RemoteHost) -> Option<String> {
     let out = remote::run_on(
         host,
-        &format!("{} --version", infiniterm_core::drop::shell_quote(&host.ift)),
+        &format!("{} --version", infiniterm_core::drop::posix_quote(&host.ift)),
     )
     .ok()?;
     if !out.status.success() {

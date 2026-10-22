@@ -106,6 +106,13 @@ pub struct TerminalBody {
     /// check in its reconcile. Once a second: a file read per displaced
     /// card, and a second's lag after Ctrl+\ is not felt.
     pub displaced: bool,
+    /// A viewer's card whose connection to the host's session ended (#442):
+    /// what it says, and when it joins again. `displaced` is set with it, so
+    /// the screen stays and keys are refused.
+    pub lost: Option<LostLink>,
+    /// A viewer's card the host has not started a shell for yet shows a note
+    /// (#423); set once it is shown, cleared when the session arrives.
+    pub waiting_note: bool,
     pub readopt_due: f64,
     /// Bytes to write to the pty: the ui drains them after each event.
     pub outgoing: Vec<Vec<u8>>,
@@ -177,6 +184,10 @@ pub struct TerminalBody {
     scale: f64,
     cols: usize,
     rows: usize,
+    /// A viewer's terminal (#423, `ift join`) is drawn at the HOST's columns
+    /// and rows, since the shell wraps to those; set each frame from the
+    /// pane, `None` everywhere else, where the card's size decides.
+    pub fixed_cells: Option<(usize, usize)>,
     /// Each row shaped ONCE, keyed by what it was shaped from, so a row
     /// that did not change is not shaped again. htop repaints every second;
     /// the other 39 rows of the other 24 cards do not.
@@ -202,6 +213,9 @@ struct ShapedRow {
     slots: Vec<CharSlot>,
     /// Cell spans wearing a line, in columns: (start, len, colour, kind).
     decorations: Vec<(usize, usize, Hsla, Decoration)>,
+    /// Icon cells that are painted apart from the line (`SEPARATE_ICONS`):
+    /// (column, character, colour). Empty where the line draws them itself.
+    icons: Vec<(usize, char, Hsla)>,
 }
 
 #[derive(Clone, Copy)]
@@ -245,15 +259,47 @@ impl Metrics {
 /// So a card in Menlo drew empty boxes where every other terminal drew
 /// icons, even on a Mac full of Nerd Fonts (the MacBook Air, 2026-09-24).
 /// WezTerm ships the same font as its fallback for the same reason.
+#[cfg_attr(windows, allow(dead_code))]
 pub const ICON_FONT: &str = crate::icon_font::ICON_FONT_POSTSCRIPT;
 
 /// The terminal's font with the icon font behind it, so a glyph the
 /// configured family lacks is looked for there before anywhere else.
 pub fn term_font(family: &str) -> gpui::Font {
+    #[cfg_attr(windows, allow(unused_mut))]
     let mut f = font(family.to_string());
-    f.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![ICON_FONT.to_string()]));
+    // Not on Windows: its fallback list is matched by family name in the
+    // system collection, where the bundled font is not, so naming it only
+    // logged an error. Icons are painted apart there (`SEPARATE_ICONS`).
+    #[cfg(not(windows))]
+    {
+        f.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![ICON_FONT.to_string()]));
+    }
     f
 }
+
+/// Whether a row's icon characters are painted apart from its text line
+/// (`icon_glyph`). True where gpui cannot fall back to a font the app
+/// bundled and cannot mix it into the line either (Windows); elsewhere the
+/// fallback list does it.
+///
+/// Why not a run of the icon font inside the line, which was the first try:
+/// gpui builds ONE DirectWrite layout per line and takes the font
+/// collection (system or custom) from its FIRST run. The bundled font lives
+/// in the custom collection and Cascadia Mono in the system one, so a line
+/// mixing them looks the second family up in the wrong collection and gets
+/// the default face: the prompt's digits and letters came out in Segoe UI
+/// (measured 2026-10-22: glyph advances 3.8, 7.5, 3.0 where a mono face
+/// gives one width). The icon, shaped alone, starts in the right collection.
+#[cfg(windows)]
+const SEPARATE_ICONS: bool = true;
+#[cfg(not(windows))]
+const SEPARATE_ICONS: bool = false;
+
+/// The bundled font's family, for `icon_glyph`.
+#[cfg(windows)]
+const ICON_FAMILY: &str = crate::icon_font::ICON_FONT_FAMILY;
+#[cfg(not(windows))]
+const ICON_FAMILY: &str = "Symbols Nerd Font Mono";
 
 impl TerminalBody {
     pub fn new(
@@ -286,6 +332,8 @@ impl TerminalBody {
             autoscroll: 0.,
             drag_local: Point { x: 0., y: 0. },
             displaced: false,
+            lost: None,
+            waiting_note: false,
             readopt_due: 0.,
             outgoing: vec![],
             replies: vec![],
@@ -313,6 +361,7 @@ impl TerminalBody {
             dragging: None,
             scale: 1.,
             cols,
+            fixed_cells: None,
             rows,
             shaped: vec![],
         }
@@ -417,6 +466,19 @@ impl TerminalBody {
         self.refit(world)
     }
 
+    /// A viewer's grid at the host's size (#423). The replay is the host's
+    /// bytes, written for the host's columns; parsed at the card's own size
+    /// first, a full-screen program's cursor moves land in the wrong rows and
+    /// the screen stays garbled until something redraws it.
+    pub fn fit_host_cells(&mut self, cols: usize, rows: usize) {
+        self.fixed_cells = Some((cols, rows));
+        if cols != self.cols || rows != self.rows {
+            self.cols = cols;
+            self.rows = rows;
+            self.grid.resize(cols, rows);
+        }
+    }
+
     /// A fresh screen for a replay that starts from the ring's beginning.
     pub fn reset_for_replay(&mut self) {
         self.grid.reset();
@@ -426,12 +488,14 @@ impl TerminalBody {
     }
 
     fn refit(&mut self, world: Size) -> bool {
-        let (cols, rows) = Self::cells_for(
-            world,
-            self.cell_w,
-            self.font_px * self.line_height,
-            self.pad,
-        );
+        let (cols, rows) = self.fixed_cells.unwrap_or_else(|| {
+            Self::cells_for(
+                world,
+                self.cell_w,
+                self.font_px * self.line_height,
+                self.pad,
+            )
+        });
         if cols == self.cols && rows == self.rows {
             return false;
         }
@@ -659,6 +723,93 @@ const AUTOSCROLL_MAX_LINES: f64 = 4.;
 /// How often a displaced card asks whether `ift attach` has let go.
 pub const READOPT_POLL_MS: f64 = 1000.;
 
+/// The wait before a viewer card's first try to join its session again, and
+/// the longest wait between tries: quick for a dropped ssh, gentle on a host
+/// that is down (every try is an ssh login).
+const REJOIN_FIRST_MS: f64 = 2000.;
+const REJOIN_LONGEST_MS: f64 = 30_000.;
+
+/// The wait after `tries` failed tries: doubling, up to the longest.
+pub fn rejoin_wait_ms(tries: u32) -> f64 {
+    (REJOIN_FIRST_MS * 2f64.powi(tries.min(10) as i32)).min(REJOIN_LONGEST_MS)
+}
+
+/// A viewer card that lost its session connection (#442).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LostLink {
+    /// When the next try may start, in ms.
+    pub next_at: f64,
+    pub tries: u32,
+    /// A try is running on its thread.
+    pub in_flight: bool,
+    /// What the card says: the last failure, or that it is joining again.
+    pub note: String,
+    /// The host answered and trying again will not change it (the session is
+    /// gone there, a login refused). No more tries until the canvas
+    /// reconnects.
+    pub fatal: bool,
+}
+
+impl LostLink {
+    pub fn new(now: f64) -> LostLink {
+        LostLink {
+            next_at: now + REJOIN_FIRST_MS,
+            tries: 0,
+            in_flight: false,
+            note: "the connection to the host was lost; joining again".into(),
+            fatal: false,
+        }
+    }
+
+    /// A card joining its session for the first time: the try is due now.
+    pub fn first(now: f64) -> LostLink {
+        LostLink {
+            next_at: now,
+            note: "joining the host's session".into(),
+            ..LostLink::new(now)
+        }
+    }
+
+    /// A viewer card asked for a redraw (`terminal.redraw`, #447): it let go
+    /// of its connection on purpose and joins again at once, so the note
+    /// says what is happening rather than that something was lost.
+    pub fn redraw(now: f64) -> LostLink {
+        LostLink {
+            next_at: now,
+            note: "redrawing from the host".into(),
+            ..LostLink::new(now)
+        }
+    }
+
+    /// A try failed: say why and wait longer for the next one.
+    pub fn failed(&mut self, now: f64, why: &str, fatal: bool) {
+        self.in_flight = false;
+        self.fatal = fatal;
+        self.tries += 1;
+        self.next_at = now + rejoin_wait_ms(self.tries);
+        self.note = if fatal {
+            why.to_string()
+        } else {
+            format!("the connection to the host was lost ({why}); joining again")
+        };
+    }
+
+    /// The canvas is back, so the host is reachable: try now, whatever was
+    /// decided before.
+    pub fn poke(&mut self, now: f64) {
+        self.fatal = false;
+        self.tries = 0;
+        if !self.in_flight {
+            self.next_at = now;
+        }
+    }
+
+    /// Whether to start a try at `now`.
+    pub fn due(&self, now: f64) -> bool {
+        !self.in_flight && !self.fatal && now >= self.next_at
+    }
+}
+
 impl TerminalBody {
     /// A key in visual mode: move, select, copy (staying in the mode) or
     /// leave on Escape.
@@ -731,24 +882,32 @@ impl TerminalBody {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let size_px = px((ERROR_FONT_PX * scale) as f32);
+        let said = match &self.lost {
+            Some(l) => l.note.as_str(),
+            None => "attached from outside (ift attach); the card takes the shell back when that terminal detaches",
+        };
+        let mut size_px = px((ERROR_FONT_PX * scale) as f32);
+        // A lost connection is news: readable on screen at any zoom, as
+        // large as the card's width allows (a banner at the card's zoomed
+        // 12 px was a faint sliver on a canvas of 38 cards, #442).
+        let (back, fore) = if self.lost.is_some() {
+            let fits = bounds.size.width / (said.chars().count() as f32 * 0.62);
+            size_px = size_px.max(fits.min(px(14.)));
+            (0x7f1d1d, 0xfee2e2)
+        } else {
+            (0x1a0f0f, 0xfca5a5)
+        };
         if size_px < crate::chrome::legible_font_px(window.scale_factor()) {
             return;
         }
-        let pad = px((ERROR_PAD_PX * scale) as f32);
+        let pad = (size_px * 0.5).max(px((ERROR_PAD_PX * scale) as f32));
         let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
         window.paint_quad(fill(
             Bounds::new(bounds.origin, size(bounds.size.width, line_h + pad * 2.)),
-            gpui::rgb(0x1a0f0f),
+            gpui::rgb(back),
         ));
         let f = term_font(&self.font_family);
-        let line = crate::text::shape(
-            window,
-            "attached from outside (ift attach); the card takes the shell back when that terminal detaches",
-            size_px,
-            &f,
-            gpui::rgb(0xfca5a5).into(),
-        );
+        let line = crate::text::shape(window, said, size_px, &f, gpui::rgb(fore).into());
         let _ = line.paint(
             point(bounds.origin.x + pad, bounds.origin.y + pad),
             line_h,
@@ -1396,6 +1555,10 @@ fn shape_row(
     // The row's zero-width characters, in column order, taken as the
     // columns are walked.
     let mut zerowidth = row.zerowidth.iter().peekable();
+    // Where `SEPARATE_ICONS` is on, the cells holding icons: (column,
+    // character, colour). Their text is a space in the shaped line and the
+    // glyph is painted from `icon_glyph` instead.
+    let mut icons: Vec<(usize, char, Hsla)> = vec![];
     for run in &row.runs {
         let color = if run.dim {
             crate::chrome::with_alpha(rgb(run.fg), TERM_DIM_ALPHA)
@@ -1417,8 +1580,17 @@ fn shape_row(
                 col += 1;
                 continue;
             }
-            let mut len = ch.len_utf8();
-            text.push(ch);
+            // An icon is shaped apart from the line (see `SEPARATE_ICONS`):
+            // a space holds its place in the text, so every byte offset and
+            // slot below stays one per cell.
+            let icon = SEPARATE_ICONS && infiniterm_core::icon_chars::is_icon(ch);
+            let mut len = if icon { 1 } else { ch.len_utf8() };
+            if icon {
+                text.push(' ');
+                icons.push((col, ch, color));
+            } else {
+                text.push(ch);
+            }
             // The cell's zero-width characters join its character in the
             // shaped text and belong to its slot: with U+FE0F the shaper
             // picks the colour emoji, and a joiner fuses this character
@@ -1432,7 +1604,8 @@ fn shape_row(
             slots.push(CharSlot {
                 col,
                 color,
-                blank: ch.is_whitespace(),
+                // An icon's cell paints through `icons`, not the line.
+                blank: ch.is_whitespace() || icon,
             });
             run_len += len;
             col += 1;
@@ -1458,12 +1631,15 @@ fn shape_row(
             decorations.push((run_start_col, cells, color, Decoration::Strikethrough));
         }
     }
-    if slots.iter().all(|s| s.blank) {
+    // A row of nothing but blanks has no line to shape; one with icons does,
+    // because their baseline is the line's.
+    if slots.iter().all(|s| s.blank) && icons.is_empty() {
         return ShapedRow {
             line: None,
             slot_of_byte,
             slots,
             decorations,
+            icons,
         };
     }
     let line = window
@@ -1474,7 +1650,49 @@ fn shape_row(
         slot_of_byte,
         slots,
         decorations,
+        icons,
     }
+}
+
+/// An icon's font and glyph, or `None` when the icon font has none.
+type IconGlyph = Option<(gpui::FontId, gpui::GlyphId)>;
+
+thread_local! {
+    /// The glyph for each icon character at a font size (the size's bits).
+    /// An icon is the same glyph in any colour, so one entry serves every
+    /// cell that shows it.
+    static ICON_GLYPHS: std::cell::RefCell<std::collections::HashMap<(char, u32), IconGlyph>> =
+        Default::default();
+}
+
+/// The icon font's glyph for `ch`, found by shaping that one character in a
+/// line of its own: a line whose first run is the icon font starts in the
+/// right font collection, which a line shared with the terminal's text does
+/// not (see `SEPARATE_ICONS`). Cached, so it costs one shaping per distinct
+/// icon, not one per cell per frame.
+fn icon_glyph(window: &Window, ch: char, font_size: Pixels) -> IconGlyph {
+    let key = (ch, f32::from(font_size).to_bits());
+    if let Some(found) = ICON_GLYPHS.with(|c| c.borrow().get(&key).copied()) {
+        return found;
+    }
+    let text = ch.to_string();
+    let run = TextRun {
+        len: text.len(),
+        font: font(ICON_FAMILY.to_string()),
+        color: Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let line = window
+        .text_system()
+        .shape_line(SharedString::from(text), font_size, &[run], None);
+    let found = line
+        .runs
+        .first()
+        .and_then(|r| r.glyphs.first().map(|g| (r.font_id, g.id)));
+    ICON_GLYPHS.with(|c| c.borrow_mut().insert(key, found));
+    found
 }
 
 /// The row's glyphs, each at its cell. gpui's own `ShapedLine::paint`
@@ -1515,6 +1733,15 @@ fn paint_row(
             } else {
                 window.paint_glyph(at, run.font_id, glyph.id, font_size, slot.color)
             };
+        }
+    }
+    // The icons, each at its cell on the line's baseline. A glyph from the
+    // icon font is wider than a cell; the cell after an icon is a space in a
+    // prompt, so it overhangs into nothing.
+    for &(col, ch, color) in &shaped.icons {
+        if let Some((font_id, glyph_id)) = icon_glyph(window, ch, font_size) {
+            let at = point(origin.x + cell_w * col as f32, baseline);
+            let _ = window.paint_glyph(at, font_id, glyph_id, font_size, color);
         }
     }
     for &(start, len, color, kind) in &shaped.decorations {
@@ -1654,8 +1881,54 @@ pub fn lost_session_tail(when: &str, resume: Option<&str>) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_lost_card_waits_longer_after_each_failure_up_to_a_cap() {
+        assert_eq!(rejoin_wait_ms(0), 2000.);
+        assert_eq!(rejoin_wait_ms(1), 4000.);
+        assert_eq!(rejoin_wait_ms(3), 16000.);
+        assert_eq!(rejoin_wait_ms(4), 30_000.);
+        assert_eq!(rejoin_wait_ms(500), 30_000.);
+    }
+
+    #[test]
+    fn a_lost_card_tries_when_due_says_why_it_failed_and_stops_on_a_final_answer() {
+        let mut l = LostLink::new(1000.);
+        assert!(!l.due(1500.), "not before the first wait");
+        assert!(l.due(3000.));
+        l.in_flight = true;
+        assert!(!l.due(9000.), "one try at a time");
+        l.failed(5000., "Connection refused", false);
+        assert!(l.note.contains("Connection refused"));
+        assert!(!l.due(5000.) && l.due(5000. + rejoin_wait_ms(1)));
+        // The host said the session is gone: no more tries on its own...
+        l.failed(6000., "no session s1 on this host", true);
+        assert_eq!(l.note, "no session s1 on this host");
+        assert!(!l.due(1e9));
+        // ...until the canvas connection comes back: then at once.
+        l.poke(7000.);
+        assert!(l.due(7000.) && l.tries == 0 && !l.fatal);
+    }
+
+    #[test]
+    fn a_card_joining_for_the_first_time_tries_at_once() {
+        let l = LostLink::first(500.);
+        assert!(l.due(500.));
+        assert!(l.note.contains("joining"));
+    }
+
+    // On Windows the icons are painted apart from the line instead.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_icons_are_painted_apart_and_the_font_has_no_fallback_list() {
+        assert!(SEPARATE_ICONS);
+        assert!(term_font("Cascadia Mono").fallbacks.is_none());
+        // The family gpui must find is the one in the bundled font's name table.
+        assert_eq!(ICON_FAMILY, "Symbols Nerd Font Mono");
+    }
+
     /// Every terminal font carries the bundled icon font behind it, whatever
     /// family the settings name, or a Mac without a Nerd Font draws boxes.
+    #[cfg(not(windows))]
     #[test]
     fn every_terminal_font_falls_back_to_the_icon_font() {
         for family in ["Menlo", "IosevkaTerm Nerd Font Mono"] {

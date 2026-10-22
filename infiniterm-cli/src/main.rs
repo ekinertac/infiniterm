@@ -24,10 +24,21 @@ mod claude_hooks;
 mod antigravity_hooks;
 mod cursor_hooks;
 mod completion;
+// Remote instances, join, serve and the proxy behind them ride on unix
+// sockets, ssh stdio and `iftd`; none of it exists on Windows. The verbs stay
+// in the table and answer with one line (`unix_only_verb`).
+#[cfg(unix)]
 mod connect;
+#[cfg(unix)]
 mod install;
+#[cfg(unix)]
+mod join;
 mod licence_cmd;
+mod update_sign_cmd;
+#[cfg(unix)]
 mod proxy;
+#[cfg(unix)]
+mod serve;
 mod socket;
 
 use std::path::{Path, PathBuf};
@@ -47,6 +58,9 @@ ift — drive infiniterm from a shell
                              below is taken as one); its directory must
                              exist
   ift -n <path>              a file in a card of its own, returning at once
+  ift -t <path> [card]       a file as a tab of an editor card: the card's
+                             number (2 or #2) or id, else the focused editor
+                             card, else a card of its own
   ift diff [path]            changes against git HEAD, as a card: a tree of the
                              changed files under path (the current directory
                              without one) and each file's diff
@@ -68,6 +82,14 @@ ift — drive infiniterm from a shell
                              Ctrl-\\ (0x1c) detaches, leaving it running
   ift --version              the version of this ift
   ift connect <[user@]host> [--name N] [--color RRGGBB] [--check] [--install]
+  ift serve [--detach|--stop]
+                             hold this Mac's saved canvas and its cards for
+                             viewers (ift join) with the app closed; --detach
+                             runs it in the background, --stop ends it (the
+                             cards keep running; the app takes over at its
+                             next launch)
+  ift join <[user@]host> [--name N] [--color RRGGBB] [--check]
+                             a viewer window on the canvas running on host
                              open a second infiniterm for a host: its own
                              window, Dock icon and canvas, with terminal cards
                              that run on that host over ssh (key login; ift
@@ -109,6 +131,14 @@ ift — drive infiniterm from a shell
                              key (optional; asks Lemon Squeezy once, then
                              the About window says who it is licensed to);
                              bare, says whether it is registered
+  ift update-key new <file>  make the key that signs Windows releases: the
+                             private half goes to <file> (never over an
+                             existing one), the public half is printed;
+                             update-key public <file> prints it again
+  ift update-sign <manifest> --key <file>
+                             sign a release manifest's tag, build and hash
+                             and write the signature into it (the key file
+                             can also be named by INFINITERM_UPDATE_KEY)
   ift install                put ift on $PATH (a symlink in ~/.local/bin) and
                              its zsh completion on fpath
   ift completion zsh         print the zsh completion function
@@ -139,12 +169,14 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 25] = [
+pub const SUBCOMMANDS: [&str; 29] = [
     "diff",
     "ls",
     "sessions",
     "attach",
     "connect",
+    "serve",
+    "join",
     "terminal",
     "send",
     "read",
@@ -157,6 +189,8 @@ pub const SUBCOMMANDS: [&str; 25] = [
     "group",
     "install",
     "licence",
+    "update-key",
+    "update-sign",
     "install-claude-hooks",
     "install-codex-hooks",
     "install-opencode-hooks",
@@ -169,6 +203,8 @@ pub const SUBCOMMANDS: [&str; 25] = [
 
 /// The bundle id, which is how LaunchServices finds the app wherever it was
 /// put — no path to guess, and a moved .app still launches.
+// Only `launch` on macOS asks `open` for it.
+#[cfg(unix)]
 const BUNDLE_ID: &str = "dev.ekinertac.infiniterm";
 
 fn main() -> ExitCode {
@@ -194,15 +230,16 @@ fn main() -> ExitCode {
         Some("install-extension") => install_extension(args.get(1).map(String::as_str)),
         Some("install") => install_self(),
         Some("licence") => licence_cmd::run(&args[1..]),
-        Some("connect") => connect::run(&args[1..]),
+        Some("update-key") => update_sign_cmd::key(&args[1..]),
+        Some("update-sign") => update_sign_cmd::sign(&args[1..]),
+        Some(verb @ ("connect" | "join" | "serve" | "proxy" | "askpass")) => {
+            unix_only_verb(verb, &args[1..])
+        }
         // Not `ift version`: any word that is not a verb is a file to open.
         Some("--version") | Some("-V") => {
             println!("ift {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        // Plumbing for the remote instances, called over ssh by the app, so it
-        // is in neither USAGE nor the completion (like dev-run).
-        Some("proxy") => proxy::run(&args[1..]),
         Some("completion") => match args.get(1).map(String::as_str) {
             Some("zsh") => {
                 print!("{}", completion::ZSH);
@@ -243,6 +280,13 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        Some("-t") => match tab_args(&args) {
+            Some((path, card)) => open_tab(path, card),
+            None => {
+                eprintln!("ift: -t takes a path and optionally a card");
+                ExitCode::from(2)
+            }
+        },
         Some("-h") | Some("--help") => {
             print!("{USAGE}");
             ExitCode::SUCCESS
@@ -258,12 +302,70 @@ fn main() -> ExitCode {
     }
 }
 
+/// The verbs that need unix sockets, ssh stdio or `iftd`.
+///
+/// `proxy` is plumbing for the remote instances, called over ssh by the app,
+/// and `askpass` is run by ssh as SSH_ASKPASS for `ift join` with no terminal
+/// (#450): the question is the one argument, the answer goes to stdout, for
+/// ssh alone. Both are in neither USAGE nor the completion.
+#[cfg(unix)]
+fn unix_only_verb(verb: &str, args: &[String]) -> ExitCode {
+    match verb {
+        "connect" => connect::run(args),
+        "join" => join::run(args),
+        "serve" => serve::run(args),
+        "proxy" => proxy::run(args),
+        _ => match args.first() {
+            Some(prompt) => match infiniterm_core::backend::ssh_login::run_askpass(prompt) {
+                Ok(answer) => {
+                    println!("{answer}");
+                    ExitCode::SUCCESS
+                }
+                Err(_) => ExitCode::from(1),
+            },
+            None => ExitCode::from(2),
+        },
+    }
+}
+
+#[cfg(windows)]
+fn unix_only_verb(verb: &str, _args: &[String]) -> ExitCode {
+    eprintln!("ift: {verb} is not available on Windows (it needs unix sockets or iftd)");
+    ExitCode::from(2)
+}
+
 /// Bare `ift`: the app, the way typing `code` opens the editor.
 ///
+/// Windows has no bundle to register and no `open -b`, so this runs the
+/// `infiniterm.exe` sitting beside this binary, which is how the app is laid
+/// out when a release zip is unpacked. A running instance still ends up
+/// focused rather than duplicated: the second copy sees the endpoint is held
+/// and exits (`hooks::listen`).
+#[cfg(windows)]
+fn launch() -> ExitCode {
+    let app = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("infiniterm.exe")))
+        .filter(|app| app.is_file());
+    let Some(app) = app else {
+        eprintln!("ift: no infiniterm.exe beside this binary");
+        eprintln!("ift: run ift from the folder the release zip unpacked into");
+        return ExitCode::from(1);
+    };
+    match std::process::Command::new(&app).spawn() {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("ift: cannot start {}: {e}", app.display());
+            ExitCode::from(1)
+        }
+    }
+}
+
 /// Through `open -b`, so it works from anywhere the bundle has been registered
 /// (dropped into /Applications, or simply launched once). A running instance
 /// is focused rather than duplicated: the app is single-instance, and `open`
 /// on a running bundle activates it.
+#[cfg(unix)]
 fn launch() -> ExitCode {
     let status = std::process::Command::new("open")
         .args(["-b", BUNDLE_ID])
@@ -278,11 +380,43 @@ fn launch() -> ExitCode {
     }
 }
 
+/// `ift install` on Windows: nothing to install, just where to point PATH.
+///
+/// No symlink. A symlink on Windows needs Developer Mode or an elevated
+/// shell, and the reason the Mac makes one (the command keeps pointing at the
+/// bundle's own copy, so an update updates the command) has no equivalent
+/// while the app ships as a folder you unpack yourself. Copying instead would
+/// leave a stale `ift` behind after the next update, which is worse than
+/// asking for one line in a profile. The zsh completion is skipped for the
+/// obvious reason.
+#[cfg(windows)]
+fn install_self() -> ExitCode {
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("ift: cannot find my own path");
+        return ExitCode::from(2);
+    };
+    let Some(dir) = exe.parent() else {
+        eprintln!("ift: {} has no parent folder", exe.display());
+        return ExitCode::from(2);
+    };
+    println!("ift: this binary is {}", exe.display());
+    let on_path = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d == dir))
+        .unwrap_or(false);
+    if on_path {
+        println!("ift: {} is already on your PATH", dir.display());
+    } else {
+        println!("ift: add {} to your PATH to run ift from anywhere", dir.display());
+    }
+    ExitCode::SUCCESS
+}
+
 /// `ift install`: a symlink to this very binary in ~/.local/bin.
 ///
 /// A symlink, not a copy, so the bundle's copy stays the one that runs and an
 /// updated app updates the command. ~/.local/bin because it needs no sudo and
 /// is on most people's PATH already; it says so when it is not.
+#[cfg(unix)]
 fn install_self() -> ExitCode {
     let Ok(exe) = std::env::current_exe().and_then(std::fs::canonicalize) else {
         eprintln!("ift: cannot find my own path");
@@ -358,7 +492,9 @@ fn open_path(arg: &str, in_place: bool) -> ExitCode {
 /// not is a new file, allowed only where its directory exists, since vim
 /// finds that out at the first write and that is the worst moment to.
 fn resolve(path: &str) -> Result<PathBuf, String> {
-    if let Ok(full) = std::fs::canonicalize(path) {
+    // `paths::canonical`, not `fs::canonicalize`: on Windows the latter
+    // returns a `\\?\` path that nothing downstream can use.
+    if let Ok(full) = infiniterm_core::paths::canonical(path) {
         return Ok(full);
     }
     let given = Path::new(path);
@@ -369,7 +505,7 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    let dir = std::fs::canonicalize(&dir)
+    let dir = infiniterm_core::paths::canonical(&dir)
         .map_err(|_| format!("no such directory: {}", dir.display()))?;
     Ok(dir.join(name))
 }
@@ -411,7 +547,7 @@ fn terminal_cmd(paths: &[String]) -> ExitCode {
 
 /// `ift diff [path]`: the changes under a directory, or of one file.
 fn diff_path(arg: &str) -> ExitCode {
-    let Ok(full) = std::fs::canonicalize(arg) else {
+    let Ok(full) = infiniterm_core::paths::canonical(arg) else {
         eprintln!("ift: cannot resolve {arg}");
         return ExitCode::from(2);
     };
@@ -515,6 +651,34 @@ fn send(cmd: &str, args: Vec<String>) -> ExitCode {
     }
 }
 
+/// `ift -t <path> [card]`: the path right after `-t` and the card after it.
+fn tab_args(args: &[String]) -> Option<(&str, Option<&str>)> {
+    let path = args.get(1).map(String::as_str).filter(|p| !p.is_empty())?;
+    Some((path, args.get(2).map(String::as_str).filter(|c| !c.is_empty())))
+}
+
+/// `ift -t`: the file is resolved here, where the working directory is, and
+/// the app puts it in a tab (#265). A directory is not a tab.
+fn open_tab(arg: &str, card: Option<&str>) -> ExitCode {
+    let (path, _line) = split_line(arg);
+    let full = match resolve(path) {
+        Ok(full) => full,
+        Err(e) => {
+            eprintln!("ift: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if full.is_dir() {
+        eprintln!("ift: -t takes a file, not a directory: {}", full.display());
+        return ExitCode::from(2);
+    }
+    let mut args = vec![full.to_string_lossy().into_owned()];
+    if let Some(card) = card {
+        args.push(card.to_string());
+    }
+    send("tab", args)
+}
+
 /// The path after `-n`. `args` already left the program name out, so it
 /// is the second argument; it read the third, and `ift -n <file>` said
 /// "-n takes a path" (#48).
@@ -523,7 +687,10 @@ fn new_card_path(args: &[String]) -> Option<&str> {
 }
 
 fn home() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()))
+    // core's answer, which knows about %USERPROFILE%; `ift` had its own copy
+    // that only read $HOME and so put ~/.claude at the filesystem root on
+    // Windows.
+    infiniterm_core::paths::home_dir()
 }
 
 /// What every installer says when `hook_binary` finds nothing: the bundle
@@ -550,19 +717,22 @@ fn hook_missing() -> ExitCode {
 fn hook_binary() -> Option<String> {
     // Canonical, so a symlinked ift (`ift install`) looks beside the real
     // binary in the bundle, not beside the link in ~/.local/bin.
-    let exe = std::env::current_exe().and_then(std::fs::canonicalize).ok()?;
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|e| infiniterm_core::paths::canonical(e).ok())?;
     let dir = exe.parent()?;
+    let name = claude_hooks::HOOK_BINARY;
     let candidates = [
-        dir.join("infiniterm-hook"),
+        dir.join(name),
         // crates/infiniterm-cli/target/release/ift -> crates/infiniterm-hook/...
-        dir.join("../../../infiniterm-hook/target/release/infiniterm-hook"),
+        dir.join("../../../infiniterm-hook/target/release").join(name),
     ];
     candidates
         .iter()
         .find(|p| p.exists())
-        .and_then(|p| std::fs::canonicalize(p).ok())
+        .and_then(|p| infiniterm_core::paths::canonical(p).ok())
         .map(|p| p.to_string_lossy().into_owned())
-        .or_else(|| which_on_path("infiniterm-hook"))
+        .or_else(|| which_on_path(name))
 }
 
 /// The first `infiniterm-hook` on `$PATH`, if there is one.
@@ -622,11 +792,15 @@ fn write_cursor_script(path: &std::path::Path, body: &str) -> Result<(), ExitCod
         eprintln!("ift: could not write {}: {e}", path.display());
         return Err(ExitCode::from(2));
     }
-    use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = std::fs::metadata(path) {
-        let mut perms = meta.permissions();
-        perms.set_mode(0o755);
-        let _ = std::fs::set_permissions(path, perms);
+    // Executable on unix; Windows decides by extension, not a mode bit.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = std::fs::set_permissions(path, perms);
+        }
     }
     println!("installed {}", path.display());
     Ok(())
@@ -956,6 +1130,19 @@ fn install_extension(source: Option<&str>) -> ExitCode {
 mod tests {
     use super::*;
 
+    // `ift -t <file> [card]`: the file right after `-t`, then the card.
+    #[test]
+    fn tab_takes_a_path_and_an_optional_card() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            tab_args(&a(&["-t", "src/main.rs", "#2"])),
+            Some(("src/main.rs", Some("#2")))
+        );
+        assert_eq!(tab_args(&a(&["-t", "a.rs"])), Some(("a.rs", None)));
+        assert_eq!(tab_args(&a(&["-t"])), None);
+        assert_eq!(tab_args(&a(&["-t", ""])), None);
+    }
+
     // `ift -n <file>`: the path is the argument right after `-n`.
     #[test]
     fn dash_n_takes_the_next_argument_as_its_path() {
@@ -996,10 +1183,15 @@ mod tests {
         if Command::new("python3").arg("--version").output().is_err() {
             return None;
         }
+        // One folder per call. It was named from the lengths of the arguments,
+        // so two tests running in parallel whose inputs happened to be as long
+        // shared a folder, and one's cleanup or log overwrote the other's: the
+        // flaky failure of #452.
+        static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
             "ift-adapter-{}-{}",
             std::process::id(),
-            event_arg.len() + stdin.len()
+            CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("call.txt");
@@ -1012,9 +1204,13 @@ mod tests {
         let script = dir.join("adapter.sh");
         std::fs::write(&script, adapter.replace("__INFINITERM_HOOK__", &fake.to_string_lossy()))
             .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        for f in [&fake, &script] {
-            std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Windows has no execute bit; `sh` runs the script by path anyway.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for f in [&fake, &script] {
+                std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
         }
         let mut child = Command::new("sh")
             .arg(&script)
@@ -1104,7 +1300,9 @@ mod tests {
     fn a_new_file_needs_its_directory() {
         let dir = std::env::temp_dir().join(format!("ift-resolve-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let dir = std::fs::canonicalize(&dir).unwrap();
+        // The same canonicalisation `resolve` uses: on Windows the std one
+        // adds a `\\?\` prefix that `resolve` takes off.
+        let dir = infiniterm_core::paths::canonical(&dir).unwrap();
         let new = dir.join("notes.txt");
         assert_eq!(resolve(new.to_str().unwrap()).unwrap(), new);
         let missing = dir.join("nope/notes.txt");
