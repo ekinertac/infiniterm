@@ -1541,6 +1541,20 @@ fn shape_row(
     // symbol has no bold. Named by family, which gpui finds among the fonts
     // the app added (`ICON_RUNS` says when this is used).
     let icon_font = font(ICON_FAMILY.to_string());
+    {
+        // TEMPORARY DEBUG (remove before the PR).
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            eprintln!(
+                "[icondebug] base family={:?} weight={:?} fallbacks={:?} font_id={:?} icon_font_id={:?}",
+                base.family,
+                base.weight,
+                base.fallbacks,
+                window.text_system().resolve_font(base),
+                window.text_system().resolve_font(&icon_font),
+            );
+        });
+    }
     let text_run = |len: usize, font: &gpui::Font, color: Hsla| TextRun {
         len,
         font: font.clone(),
