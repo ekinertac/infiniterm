@@ -75,6 +75,7 @@ These go in `settings.json`; every setting is on the [settings reference](../../
 - `"terminal.scrollMultiplier"` sets scroll speed, from 0.1 to 10 (default 1).
 - `"terminal.padding"` is the space between a card's edge and its text, 0 to 60 (default 6). Open cards resize to it at once.
 - `"terminal.env": ["EDITOR=ift"]` adds environment variables to new cards.
+- `"terminal.fontFamily"` is read as a list, like `["JetBrains Mono", "Menlo", "monospace"]`: a family that is not installed is skipped and the next one is used. A list that ends with `monospace` gets an installed monospace font when no named family is there. Before, the first name was used even when it was missing.
 - `"terminal.shell"` takes arguments too, like `"/bin/zsh -l"`.
 
 ## Cursor colour

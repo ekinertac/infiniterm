@@ -3,7 +3,7 @@ title: Configuration
 description: Settings and keybindings files, themes, snippets, and what the app touches.
 ---
 
-Configuration lives in `~/.config/infiniterm/`, four files in two pairs:
+Configuration lives in `~/.config/infiniterm/`, four files in two pairs, plus the folder `ui-themes/` for the look of the app (see [UI themes](#ui-themes)):
 
 ```
 settings.json              yours, only what you changed
@@ -12,7 +12,7 @@ keybindings.json           yours, only what you rebound
 keybindings.default.json   every binding, commented
 ```
 
-The `.default` files are rewritten at every launch, so editing them does nothing. Read them to see what exists, copy a line into your file and change it there. An upgrade never touches your files; new settings appear in the defaults. Your files can be symlinks into a dotfiles repo: a save writes the file the link points at and keeps the link.
+The `.default` files are rewritten at every launch, so editing them does nothing. Read them to see what exists, copy a line into your file and change it there. An upgrade never touches your files; new settings appear in the defaults. Each of the four files starts with a link to the reference page for its keys. Your files can be symlinks into a dotfiles repo: a save writes the file the link points at and keeps the link.
 
 `Cmd ,` opens settings and `Cmd Shift ,` keybindings, each as a pair of editor cards. Changes apply on save, no restart, also when you save from another editor. A file that does not parse, or has the wrong kind of value (text where a number goes), is not applied: your previous settings stay, and the status bar says `settings.json not applied` with the reason until you save a valid file. `keybindings.json` works the same way. Unknown names, numbers out of range and trailing commas are accepted. In `settings.json` the setting names complete as you type (see [JSON with a schema](../editor/#json-with-a-schema)).
 
@@ -86,17 +86,33 @@ All 500-odd schemes from iTerm2-Color-Schemes ship with the app; Violite is the 
 
 "Theme: switch…" in the palette lists the theme you have first, marked active, then every other one A to Z. Each one is applied as you move through the list, with the canvas left undimmed so the cards show its real colours, and the list keeps its order while you do. `Escape`, or a click outside the list, puts back the one you started on; `Enter` keeps the new one. The theme colours the app's chrome, the editor's syntax and the card labels too.
 
+## UI themes
+
+The look of the app is not in `settings.json`. It lives in `ui-themes/<name>.json` in the config folder, one file per look. `"ui.theme"` in `settings.json` picks the file (default `"default"`). "UI theme: switch…" in the palette lists them and previews each one live; `Escape` puts the old look back. A file applies as you save it. A file with a mistake is not applied: a notice says why and the look you had stays. To make another look, copy `ui-themes/default.json` and change it. The default file is created at the first launch and lists every key as a commented example with its default.
+
+A ui theme holds these keys:
+
+- the window: `ui.windowOpacity`, `ui.windowBlur`, `ui.windowColor`;
+- the background picture: `ui.backgroundImage`, `ui.backgroundImageFit`, `ui.backgroundImageInterval`, `ui.backgroundImageFade`;
+- the cards and canvas: `ui.cardRadius`, `ui.cardOpacity`, `ui.showGrid`, `ui.inactiveDim`, `ui.unfocusedDim`, `ui.hideLabelWhenFitted`;
+- the interface font: `ui.fontFamily`, `ui.fontSize`, `ui.fontWeight`, `ui.fontWeightBold`;
+- the bars: `titlebar.background`, `titlebar.border`, `statusbar.background` and `statusbar.border`. A background is `#rgb`, `#rrggbb`, `canvas`, `card`, `bar` or `transparent`. A border is a colour or `none`.
+
+The first launch that has this feature moves any of these keys out of your `settings.json` into `ui-themes/default.json`. Your comments stay, and a note in `settings.json` says where the keys went. After that, a look key typed into `settings.json` is ignored, with a notice. In a window opened with `ift join`, the host's settings apply but the look is your own.
+
 ## The window and the canvas
+
+The keys below go in a ui theme file, not in `settings.json`.
 
 `ui.windowOpacity` (0.1 to 1) lets the desktop show through the canvas, title bar and status bar, and `ui.windowBlur` blurs it. `ui.backgroundImage` puts a picture behind the canvas: `"dusk"`, `"aurora"` or `"ember"` come with the app, or give a path to your own; `ui.backgroundImageFit` is `"cover"` (crop to fill) or `"contain"`. A picture is opaque, so it hides the desktop. Give a list instead, `["dusk", "~/Pictures/lake.jpg"]`, and the pictures take turns in that order: each stays `ui.backgroundImageInterval` seconds (300 by default), with a crossfade of `ui.backgroundImageFade` seconds (2 by default, `0` for a cut). An entry that does not exist is skipped. Only two pictures are in memory at a time, so a long list costs no more than a short one. `ui.cardOpacity` lets the canvas and the picture show through card backgrounds while the text stays solid; browser cards stay opaque. `ui.cardRadius` rounds the corners of cards and group frames, in pixels at 100% zoom (0 to 40, default 0 for square corners); the border, the focus ring, the label and the tabs follow it. The window's own corners stay as macOS draws them. `"ui.showGrid": false` leaves the canvas plain.
 
-"Window: change the title bar and Dock colour" in the palette tints the title bar and the workspace tabs, and badges the Dock icon. Pick a named colour (each one shows as you move through the list, `Escape` puts it back) or "Custom hex colour…" for a code like `3b82f6`. The choice is saved as `ui.windowColor`, a name or a hex code, empty for none. In an `ift connect` window the same command sets that server's colour instead, and "Default: from the host name" goes back to the automatic one.
+"Window: change the title bar and Dock colour" in the palette tints the title bar and the workspace tabs, and badges the Dock icon. Pick a named colour (each one shows as you move through the list, `Escape` puts it back) or "Custom hex colour…" for a code like `3b82f6`. The choice is saved as `ui.windowColor` in the ui theme in force, a name or a hex code, empty for none. In an `ift connect` window the same command sets that server's colour instead, and "Default: from the host name" goes back to the automatic one.
 
 `ui.statusBarPwd` (off by default) shows the focused terminal card's folder in the status bar, with your home folder as `~`. It is left out when the card's label already is the path, and a long path is cut so the build number stays. `ui.statusBarPwdSide` puts it on the `"left"` (default) or the `"right"`.
 
 ## The interface font
 
-The workspace tabs, card labels, status bar, palette and dialogs use the macOS system font. `ui.fontFamily` changes it (a font name, for example `"Menlo"` to bring back the monospace look), `ui.fontSize` sets its size, and `ui.fontWeight` and `ui.fontWeightBold` set the normal and bold weights. Terminal, editor and document text keep their own settings (`terminal.fontFamily` and the rest), and `Cmd =` and `Cmd -` still change only the terminal. A change applies as you save.
+The workspace tabs, card labels, status bar, palette and dialogs use the macOS system font. `ui.fontFamily` changes it (a font name, for example `"Menlo"` to bring back the monospace look), `ui.fontSize` sets its size, and `ui.fontWeight` and `ui.fontWeightBold` set the normal and bold weights. Terminal, editor and document text keep their own settings (`terminal.fontFamily` and the rest), and `Cmd =` and `Cmd -` still change only the terminal. A change applies as you save. These keys are in the ui theme too.
 
 ## Snippets
 
