@@ -840,7 +840,7 @@ impl AppView {
                 .font_weight(chrome.typography.bold.weight)
                 .child(r.name)
         });
-        div()
+        let bar = div()
             .h(px(self.titlebar_h()))
             .w_full()
             .flex()
@@ -852,19 +852,46 @@ impl AppView {
             .border_b_1()
             .border_color(bar_style.border.unwrap_or(gpui::transparent_black()))
             .font_family(chrome.typography.family.clone())
-            .font_weight(chrome.typography.regular.weight)
-            // A press that reaches the bar itself (not a tab or the "+", which
-            // stop it) drags the window; a double-click does the system's
-            // title bar action. `title_drag.rs` says why this is by hand.
-            .on_mouse_down(MouseButton::Left, |e: &MouseDownEvent, window, _| {
-                if e.click_count >= 2 {
-                    window.titlebar_double_click();
-                } else {
-                    crate::title_drag::begin();
+            .font_weight(chrome.typography.regular.weight);
+        // A press that reaches the bar itself (not a tab or the "+", which
+        // stop it) drags the window; a double-click does the system's title
+        // bar action. `title_drag.rs` says why this is by hand on the Mac.
+        #[cfg(target_os = "macos")]
+        let bar = bar.on_mouse_down(MouseButton::Left, |e: &MouseDownEvent, window, _| {
+            if e.click_count >= 2 {
+                window.titlebar_double_click();
+            } else {
+                crate::title_drag::begin();
+            }
+        });
+        // Linux moves and maximises through the window manager, the move
+        // only once the pointer travels with the button held; Windows as
+        // before (`not_macos.rs::title_drag`).
+        #[cfg(not(target_os = "macos"))]
+        let bar = bar
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseDownEvent, window, _| {
+                    let at = (f32::from(e.position.x), f32::from(e.position.y));
+                    this.title_press = crate::title_drag::press(window, e.click_count, at);
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, _| {
+                let Some(from) = this.title_press else { return };
+                if e.pressed_button != Some(MouseButton::Left) {
+                    this.title_press = None;
+                    return;
                 }
-            })
-            .child(tabs)
-            .children(chip)
+                let to = (f32::from(e.position.x), f32::from(e.position.y));
+                if crate::title_drag::moved(window, from, to) {
+                    this.title_press = None;
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, _| this.title_press = None),
+            );
+        bar.child(tabs).children(chip)
     }
 
     /// Whether the focused card is a locked browser: the one fact the

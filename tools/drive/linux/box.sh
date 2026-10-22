@@ -36,7 +36,9 @@ SSH_KEY_ID=${SSH_KEY_ID:-23752258}
 SIZE=${SIZE:-s-8vcpu-16gb}
 REGION=${REGION:-fra1}
 DIR=/root/ift
-SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15)
+# Keepalives: the package install and the build are minutes with no output,
+# and a connection with nothing on it was dropped once ("Operation timed out").
+SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=8)
 
 # The packages: most of zed's script/linux (the set for gpui) plus Mesa's
 # software Vulkan, the virtual display, a window manager and the tools the

@@ -121,6 +121,8 @@ impl AppView {
             extracted_size: Default::default(),
             extract_request: None,
             page_menu_open: false,
+            #[cfg(not(target_os = "macos"))]
+            title_press: None,
             background: Default::default(),
             scale_factor,
             cef_running: false,

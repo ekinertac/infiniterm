@@ -281,6 +281,11 @@ pub struct AppView {
     pub context_menu: Option<crate::browsers::CardContextMenu>,
     /// The page's native menu is open (`browsers.rs::show_page_menu`).
     pub page_menu_open: bool,
+    /// Off macOS: where a press on the bare title bar landed, kept until the
+    /// pointer travels far enough to start a window move or the button comes
+    /// up (`not_macos.rs::title_drag`).
+    #[cfg(not(target_os = "macos"))]
+    pub title_press: Option<(f32, f32)>,
     /// The prompt's field, opened with the suggestion selected; the palette's query.
     pub prompt_field: field::Field,
     pub query_field: field::Field,
