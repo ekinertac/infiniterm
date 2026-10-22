@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-22
+
+- `ui.hideLabelWhenFitted` also hides the label of the only card on a workspace, without pressing Cmd+1.
+
 ## 0.6.3 (build 1196), 2026-10-22
 
 ### Settings files
