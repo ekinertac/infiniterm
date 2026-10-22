@@ -265,10 +265,7 @@ pub fn term_font(family: &str) -> gpui::Font {
     // Not on Windows: its fallback list is matched by family name in the
     // system collection, where the bundled font is not, so naming it only
     // logged an error. Icons get runs of their own there instead.
-    #[cfg(not(windows))]
-    {
-        f.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![ICON_FONT.to_string()]));
-    }
+    f.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![ICON_FONT.to_string()]));
     f
 }
 
