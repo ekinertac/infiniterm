@@ -15,6 +15,10 @@
 #                     minus, waits HOLD seconds, releases in reverse.
 #   click <b> <x> <y> a held click at x, y (screen pixels); b is 1 left,
 #                     2 middle, 3 right.
+#   drag <x1> <y1> <x2> <y2>
+#                     a left-button drag in steps.
+#   dblclick <x> <y>  a left double-click.
+#   win               the app window's frame on screen: x y w h.
 #   type <text>       types text into the focused window.
 #   layout <xkb>      the keyboard layout, `layout tr` or `layout us intl`.
 #   ift <args...>     `ift` against the scratch instance.
@@ -109,6 +113,30 @@ click)
     sleep "$HOLD"
     xdotool mouseup "$2"
     sleep 0.3
+    ;;
+drag)
+    # `drag <x1> <y1> <x2> <y2>`: the left button pressed at the first point,
+    # moved in steps (a window manager starts a move on motion, not on a
+    # jump), released at the second.
+    x1=${2:?drag <x1> <y1> <x2> <y2>} y1=${3:?} x2=${4:?} y2=${5:?}
+    xdotool mousemove "$x1" "$y1" mousedown 1
+    for s in 1 2 3 4 5 6 7 8 9 10; do
+        xdotool mousemove $((x1 + (x2 - x1) * s / 10)) $((y1 + (y2 - y1) * s / 10))
+        sleep 0.03
+    done
+    xdotool mouseup 1
+    sleep 0.5
+    ;;
+dblclick)
+    xdotool mousemove "${2:?dblclick <x> <y>}" "${3:?}" click --repeat 2 --delay 80 1
+    sleep 0.8
+    ;;
+win)
+    # The app window's frame on screen: `x y w h`. By name, which is safe on
+    # the box: the instance under test is the only infiniterm there.
+    id=$(xdotool search --name '^infiniterm$' | head -1)
+    eval "$(xdotool getwindowgeometry --shell "$id")"
+    echo "$X $Y $WIDTH $HEIGHT"
     ;;
 type)
     xdotool type --delay 30 "${2:?type <text>}"

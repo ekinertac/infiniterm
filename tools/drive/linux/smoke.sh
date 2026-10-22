@@ -12,7 +12,9 @@
 #      makes the terminal font BIGGER: the chord took the physical key
 #      (keycode.rs); gpui's layout name would have made it smaller;
 #   4. a right-click on the card opens the drawn menu, and choosing Close
-#      from it by keyboard closes the card.
+#      from it by keyboard closes the card;
+#   5. a drag on the bare title bar moves the window and a double-click
+#      maximises it.
 # The terminal font being monospace is in screenshot 2, by eye.
 # Exit 0 only when every check held. SKIP_BUILD=1 skips sync and build.
 #
@@ -75,6 +77,22 @@ cards_after=$(r ift ls | wc -l)
     fail "the menu's Close did not close card 2 ($cards_before cards, then $cards_after)"
 "$BOX" shot 4-menu-closed >/dev/null
 echo "ok 4: the right-click menu opens and runs a command"
+
+# 5. The title bar (not_macos.rs::title_drag): a drag on its bare part moves
+# the window, a double-click maximises it. The point is right of the tabs,
+# inside the app's own bar (the window manager's bar is above the window).
+read -r wx wy ww _ <<<"$(r win)"
+bx=$((wx + ww - 300)) by=$((wy + 15))
+r drag "$bx" "$by" $((bx - 100)) $((by + 80))
+read -r mx my _ _ <<<"$(r win)"
+[ $((wx - mx)) -ge 80 ] && [ $((my - wy)) -ge 60 ] ||
+    fail "a drag on the title bar did not move the window: $wx,$wy then $mx,$my"
+r dblclick $((bx - 100)) $((by + 80))
+read -r _ _ zw _ <<<"$(r win)"
+[ "$zw" -ge 1900 ] || fail "a double-click on the title bar did not maximise the window (width $zw)"
+"$BOX" shot 5-maximised >/dev/null
+r dblclick 960 15
+echo "ok 5: the title bar moves and maximises the window"
 
 r stop >/dev/null
 echo "smoke passed; screenshots in ${SHOTS:-.scratchpad/linux-shots}"
