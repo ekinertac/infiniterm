@@ -59,11 +59,12 @@ pub mod fullscreen {
 
 pub mod icon_font {
     /// Windows bundles the font and hands it to gpui at start-up
-    /// (`main.rs`, `add_fonts`); icons are then drawn from runs that name
-    /// `ICON_FONT_FAMILY` (`terminal_body::shape_row`, `core::icon_chars`),
+    /// (`main.rs`, `add_fonts`); icons are then painted from glyphs shaped
+    /// by `ICON_FONT_FAMILY` on their own (`terminal_body::icon_glyph`),
     /// because gpui's Windows fallback list looks in the SYSTEM font
-    /// collection only and cannot see a font added this way. Other
-    /// platforms have no bundled copy.
+    /// collection only and cannot see a font added this way, and a line
+    /// that mixes the two collections loses one of them. Other platforms
+    /// have no bundled copy.
     #[cfg(windows)]
     pub const ICON_FONT_TTF: &[u8] =
         include_bytes!("../../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
