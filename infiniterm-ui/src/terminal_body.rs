@@ -1654,11 +1654,14 @@ fn shape_row(
     }
 }
 
+/// An icon's font and glyph, or `None` when the icon font has none.
+type IconGlyph = Option<(gpui::FontId, gpui::GlyphId)>;
+
 thread_local! {
-    /// The glyph for each icon character at a font size: (font, glyph), or
-    /// `None` when the icon font has none. An icon is the same glyph in any
-    /// colour, so one entry serves every cell that shows it.
-    static ICON_GLYPHS: std::cell::RefCell<std::collections::HashMap<(char, u32), Option<(gpui::FontId, gpui::GlyphId)>>> =
+    /// The glyph for each icon character at a font size (the size's bits).
+    /// An icon is the same glyph in any colour, so one entry serves every
+    /// cell that shows it.
+    static ICON_GLYPHS: std::cell::RefCell<std::collections::HashMap<(char, u32), IconGlyph>> =
         Default::default();
 }
 
@@ -1667,11 +1670,7 @@ thread_local! {
 /// right font collection, which a line shared with the terminal's text does
 /// not (see `SEPARATE_ICONS`). Cached, so it costs one shaping per distinct
 /// icon, not one per cell per frame.
-fn icon_glyph(
-    window: &Window,
-    ch: char,
-    font_size: Pixels,
-) -> Option<(gpui::FontId, gpui::GlyphId)> {
+fn icon_glyph(window: &Window, ch: char, font_size: Pixels) -> IconGlyph {
     let key = (ch, f32::from(font_size).to_bits());
     if let Some(found) = ICON_GLYPHS.with(|c| c.borrow().get(&key).copied()) {
         return found;
