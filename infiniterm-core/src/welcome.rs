@@ -52,6 +52,25 @@ const KEYS: &[(&str, &str)] = &[
     ("app.shortcuts", "every key and gesture, searchable"),
 ];
 
+/// What a platform's chord is called in the card's prose: the modifier the
+/// card names, from the labels (`ModifierLabels::new`). The Mac says `Cmd`; off
+/// the Mac in `ctrl` mode the app's keys are Ctrl+Shift chords and a few plain
+/// Ctrl ones (`command-key.md`), and `Super` mode names Super.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kind {
+    Mac,
+    CtrlShift,
+    Super,
+}
+
+fn kind_of(labels: ModifierLabels) -> Kind {
+    match labels.cmd {
+        "Cmd" => Kind::Mac,
+        "Super" => Kind::Super,
+        _ => Kind::CtrlShift,
+    }
+}
+
 /// A command's first chord as the card shows it, or `None` when unbound.
 fn key(keymap: &Keymap, id: &str, labels: ModifierLabels) -> Option<String> {
     keymap
@@ -62,7 +81,11 @@ fn key(keymap: &Keymap, id: &str, labels: ModifierLabels) -> Option<String> {
 
 /// `labels` names the two modifiers as this machine's keyboard has them
 /// (`ModifierLabels::new`), so the card never says Cmd where there is none.
+/// `keymap` is the chords to SHOW: on the Mac the keymap itself, off it the
+/// platform chords (`Model::shown_keymap`), so nothing here maps them again.
 pub fn render(keymap: &Keymap, agents: &[Agent], labels: ModifierLabels) -> String {
+    let kind = kind_of(labels);
+    let key = |id: &str| key(keymap, id, labels);
     let mut out = String::from(
         "# Start here\n\n\
          Welcome to infiniterm. It puts your terminals, editors and browsers on one canvas. Zoom out to see every card, zoom in to work in one. A card's border turns yellow when the agent in it is waiting for you.\n\n",
@@ -70,34 +93,46 @@ pub fn render(keymap: &Keymap, agents: &[Agent], labels: ModifierLabels) -> Stri
     // The first steps, in the keys this keymap has. A newcomer starts on
     // this card alone (`Model::seed_first_card`), so the first thing to
     // learn is how to make a terminal and how to come back here.
-    if let Some(new) = key(keymap, "card.new.terminal", labels) {
+    if let Some(new) = key("card.new.terminal") {
         out.push_str(&format!(
             "Press {new} for your first terminal. It opens beside this card."
         ));
-        if let Some(back) = key(keymap, "focus.move.left", labels) {
+        if let Some(back) = key("focus.move.left") {
             out.push_str(&format!(" {back} brings you back here."));
         }
-        if let Some(all) = key(keymap, "canvas.zoom.fitAll", labels) {
+        if let Some(all) = key("canvas.zoom.fitAll") {
             out.push_str(&format!(" {all} shows every card at once."));
         }
         out.push_str("\n\n");
     }
+    out.push_str("Cards stay where you put them. Nothing moves on its own.\n\n");
+    // Which keys are infiniterm's, in this platform's words. The Mac's whole
+    // Cmd layer is the app's; off the Mac the app takes Ctrl+Shift chords and
+    // a few plain Ctrl ones that a terminal never uses.
+    out.push_str(match kind {
+        Kind::Mac => "`Cmd` belongs to infiniterm. Every other key goes to the terminal, so vim, tmux and your shell work as usual.\n\n",
+        Kind::CtrlShift => "`Ctrl+Shift` with a letter belongs to infiniterm, and so do the few plain Ctrl keys a terminal never uses (the digits, `Ctrl+Tab`). Every other key goes to the terminal, so vim, tmux and your shell work as usual.\n\n",
+        Kind::Super => "`Super` belongs to infiniterm. Every other key goes to the terminal, so vim, tmux and your shell work as usual.\n\n",
+    });
     out.push_str(
-        "Cards stay where you put them. Nothing moves on its own.\n\n\
-         `Cmd` belongs to infiniterm. Every other key goes to the terminal, so vim, tmux and your shell work as usual.\n\n\
-         Click into a file in an editor card to type in it: the keyboard is the file's until you press Escape. This card is a page: the wheel or the arrows scroll it, and it never takes the keyboard.\n\n\
+        "Click into a file in an editor card to type in it: the keyboard is the file's until you press Escape. This card is a page: the wheel or the arrows scroll it, and it never takes the keyboard.\n\n\
          ## Keys to start with\n\n",
     );
     for (id, does) in KEYS {
-        if let Some(chord) = key(keymap, id, labels) {
+        if let Some(chord) = key(id) {
             out.push_str(&format!("- {chord}: {does}\n"));
         }
     }
-    out.push_str(
+    // The mouse's modifier is `labels.cmd`: Cmd on the Mac, Ctrl off it (the
+    // mouse roles in `keycode::roles`), Super in `super` mode.
+    let mouse = labels.cmd;
+    out.push_str(&format!(
         "\n## Moving around with the mouse\n\n\
-         - `Cmd` + scroll, or a pinch: zoom\n\
-         - `Cmd` + drag, or a middle-button drag: pan\n\
-         - drag on empty canvas: select the cards it touches\n\
+         - `{mouse}` + scroll, or a pinch: zoom\n\
+         - `{mouse}` + drag, or a middle-button drag: pan\n"
+    ));
+    out.push_str(
+        "- drag on empty canvas: select the cards it touches\n\
          - drag a card by its top edge or its label: move it\n\
          - double-click empty canvas: fit everything\n\n\
          ## The border colours\n\n\
@@ -109,7 +144,8 @@ pub fn render(keymap: &Keymap, agents: &[Agent], labels: ModifierLabels) -> Stri
     );
     let shown: Vec<&Agent> = agents.iter().filter(|a| a.present).collect();
     if shown.is_empty() {
-        out.push_str("No coding agent found on this Mac. When you install one, wire it from any terminal:\n\n");
+        let here = if kind == Kind::Mac { "Mac" } else { "computer" };
+        out.push_str(&format!("No coding agent found on this {here}. When you install one, wire it from any terminal:\n\n"));
         for a in agents {
             out.push_str(&format!("- {}: `ift {}`\n", a.name, a.install));
         }
@@ -125,12 +161,17 @@ pub fn render(keymap: &Keymap, agents: &[Agent], labels: ModifierLabels) -> Stri
             }
         }
     }
-    out.push_str(
+    // The chord for closing a card as this platform has it; the sentence is
+    // dropped, not guessed, when the keymap leaves it unbound.
+    let close = key("card.close")
+        .map(|chord| format!("Close this card with {chord}. "))
+        .unwrap_or_default();
+    out.push_str(&format!(
         "\n## When you are done\n\n\
-         Close this card with `Cmd W`. \"Help: open the welcome card\" in the palette brings it back, and \"Help: open the docs\" opens the whole manual in a card like this one. \
+         {close}\"Help: open the welcome card\" in the palette brings it back, and \"Help: open the docs\" opens the whole manual in a card like this one. \
          The full docs are at https://infiniterm.app.\n\n\
-         This file is rewritten at every launch, so edits to it do not last.\n",
-    );
+         This file is rewritten at every launch, so edits to it do not last.\n"
+    ));
     out
 }
 
@@ -228,6 +269,70 @@ mod tests {
         // Unbound, the sentence goes rather than naming a dead key.
         let bare: Keymap = vec![];
         assert!(!render(&bare, &[]).contains("first terminal"));
+    }
+
+    const CTRL: ModifierLabels = ModifierLabels {
+        cmd: "Ctrl",
+        ctrl: "Ctrl",
+    };
+    const SUPER: ModifierLabels = ModifierLabels {
+        cmd: "Super",
+        ctrl: "Ctrl",
+    };
+
+    /// The default keymap in the platform's chords, built the way
+    /// `Model::shown_keymap` builds it: what the card is handed off the Mac.
+    fn platform_keymap() -> Keymap {
+        let km = default_keymap();
+        let (table, _) =
+            crate::platform_keys::PlatformKeys::build(km.iter().map(|(c, _)| c.as_str()));
+        km.iter()
+            .filter_map(|(c, id)| table.platform(c).map(|p| (p.to_string(), id.clone())))
+            .collect()
+    }
+
+    // The bug that started this: the card said Cmd in prose on a keyboard that
+    // has none, and taught the Mac chord's relabelling instead of the chord.
+    #[test]
+    fn off_the_mac_the_card_has_no_cmd_and_teaches_the_platform_chords() {
+        let text = super::render(&platform_keymap(), &[], CTRL);
+        assert!(!text.contains("Cmd"), "{text}");
+        assert!(text.contains("`Ctrl+Shift` with a letter belongs to infiniterm"));
+        assert!(text.contains("`Ctrl` + scroll, or a pinch: zoom"));
+        assert!(text.contains("`Ctrl` + drag, or a middle-button drag: pan"));
+        // The first steps are the platform's chords: a terminal is Ctrl+Shift+T,
+        // not the Mac chord with its modifier renamed.
+        assert!(
+            text.contains("Press `Ctrl Shift T` for your first terminal"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Close this card with `Ctrl Shift W`."),
+            "{text}"
+        );
+        assert!(text.contains("No coding agent found on this computer"));
+    }
+
+    #[test]
+    fn super_mode_names_super_and_the_mac_keeps_its_cmd_words() {
+        let text = super::render(&default_keymap(), &[], SUPER);
+        assert!(text.contains("`Super` belongs to infiniterm"));
+        assert!(text.contains("`Super` + scroll, or a pinch: zoom"));
+        let mac = render(&default_keymap(), &[]);
+        assert!(mac.contains("`Cmd` belongs to infiniterm."));
+        assert!(mac.contains("`Cmd` + scroll, or a pinch: zoom"));
+        assert!(mac.contains("Close this card with `Cmd W`."));
+        assert!(mac.contains("No coding agent found on this Mac"));
+    }
+
+    // Not guessed: with no close chord the sentence goes and the rest stays.
+    #[test]
+    fn an_unbound_close_drops_its_sentence_not_the_section() {
+        let km: Keymap = vec![("cmd+t".into(), "card.new.terminal".into())];
+        let text = render(&km, &[]);
+        assert!(!text.contains("Close this card"));
+        assert!(text.contains("## When you are done"));
+        assert!(text.contains("Help: open the welcome card"));
     }
 
     fn agent(name: &'static str, present: bool, wired: bool) -> Agent {

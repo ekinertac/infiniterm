@@ -32,6 +32,10 @@ static LAST: AtomicI32 = AtomicI32::new(-1);
 /// clears its shift flag when it reports a shifted character, so the
 /// keystroke cannot say.
 static LAST_SHIFT: AtomicBool = AtomicBool::new(false);
+/// Whether that key-down was typed with AltGr (Windows only: the Ctrl+Alt a
+/// chord reader would see is Right Alt plus an injected Left Ctrl, see
+/// `infiniterm_core::altgr`). Never set elsewhere.
+static LAST_ALTGR: AtomicBool = AtomicBool::new(false);
 /// Whether that key-down was a DEAD key: one that types nothing by itself
 /// and waits for the next letter (Option+E on a US layout, then E, for é).
 /// The event's `characters` is empty for exactly that case, and it is the
@@ -191,14 +195,53 @@ mod tests {
 /// queue, which is what the Mac's LOCAL monitor sees.
 #[cfg(windows)]
 mod windows_hook {
-    use super::{LAST, LAST_SHIFT};
+    use super::{LAST, LAST_ALTGR, LAST_SHIFT};
     use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
     use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetKeyState, GetKeyboardLayout, VkKeyScanExW, HKL, VK_LCONTROL, VK_RCONTROL, VK_RMENU,
+        VK_SHIFT,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, SetWindowsHookExW, HC_ACTION, WH_KEYBOARD,
     };
+
+    /// Each layout's answer to "do you have an AltGr?", asked once: the probe
+    /// is about two hundred `VkKeyScanExW` calls and a key-down must not pay
+    /// for it. Keyed by the layout handle; a user has a handful of layouts.
+    static LAYOUTS: Mutex<Vec<(isize, bool)>> = Mutex::new(Vec::new());
+
+    fn layout_has_altgr(hkl: HKL) -> bool {
+        let key = hkl as isize;
+        let mut cache = LAYOUTS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(&(_, has)) = cache.iter().find(|(k, _)| *k == key) {
+            return has;
+        }
+        let has = infiniterm_core::altgr::layout_has_altgr(|c| {
+            // A character outside the BMP cannot be asked; the probe has none.
+            let r = unsafe { VkKeyScanExW(c as u16, hkl) };
+            // -1: this layout cannot type it.
+            (r != -1).then(|| ((r >> 8) & 0xFF) as u8)
+        });
+        cache.push((key, has));
+        has
+    }
+
+    /// Whether the keys down right now are AltGr (`core::altgr`): the current
+    /// layout has one, Right Alt is down, and the Left Ctrl is the injected
+    /// one (no Right Ctrl with it).
+    fn altgr_now() -> bool {
+        let down = |vk: u16| unsafe { GetKeyState(vk as i32) } < 0;
+        let hkl = unsafe { GetKeyboardLayout(0) };
+        infiniterm_core::altgr::altgr_in_effect(
+            layout_has_altgr(hkl),
+            down(VK_RMENU),
+            down(VK_LCONTROL),
+            down(VK_RCONTROL),
+        )
+    }
 
     /// An extended key (the arrows, Home/End, the numpad's Enter) shares its
     /// scan code with a key that is not extended. None of them are in the
@@ -220,6 +263,7 @@ mod windows_hook {
                     unsafe { GetKeyState(VK_SHIFT as i32) } < 0,
                     Ordering::Relaxed,
                 );
+                LAST_ALTGR.store(altgr_now(), Ordering::Relaxed);
             }
         }
         unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
@@ -464,6 +508,25 @@ pub fn forget_last() {
     LAST.store(-1, Ordering::Relaxed);
 }
 
+/// Whether the most recent key-down was AltGr typing: its Ctrl and Alt are
+/// the keyboard's own and must not count as a chord. Always false off Windows.
+pub fn altgr_active() -> bool {
+    LAST_ALTGR.load(Ordering::Relaxed)
+}
+
+/// The keystroke without the Ctrl and Alt AltGr put on it. Unchanged unless
+/// the last key-down was AltGr typing, so a real Ctrl+Alt chord still counts
+/// and every platform but Windows is untouched. The character the key types
+/// travels in `key_char`, which this leaves alone.
+pub fn without_altgr(k: &gpui::Keystroke) -> gpui::Keystroke {
+    let mut k = k.clone();
+    if altgr_active() {
+        k.modifiers.control = false;
+        k.modifiers.alt = false;
+    }
+    k
+}
+
 /// No dead keys are recorded on Windows yet. Turkish Q, the layout this was
 /// all written for, has none: it puts ç, ğ, ı, ö, ş and ü on keys of their
 /// own. Turkish F and the US-International layout do have them, and when one
@@ -523,13 +586,8 @@ mod set1_tests {
         );
     }
 
-    /// Every key the default keymap can bind must have a scan code here, or
-    /// that binding silently falls back to gpui's layout-dependent name and
-    /// breaks on a keyboard that is not US. This walks the real keymap
-    /// rather than a list copied beside it.
-    #[test]
-    fn every_key_the_keymap_binds_has_a_scan_code() {
-        // What the table can produce, as the keymap spells it.
+    /// The keys the scan code table can name, spelled as a chord spells them.
+    fn scan_named_keys() -> Vec<String> {
         let mut named: Vec<String> = Vec::new();
         for scan in 0..=0xFFu16 {
             if let Some(code) = dom_code(scan) {
@@ -560,7 +618,53 @@ mod set1_tests {
                 named.push(ch.to_string());
             }
         }
+        named
+    }
 
+    /// The chords Windows and Linux actually press (the table #537 builds
+    /// from the default keymap, `platform_keys.rs`) use physical keys, and a
+    /// key with no scan code falls back to gpui's layout-dependent name: the
+    /// chord would then work on a US board and not on Turkish Q. The Mac
+    /// keymap's keys are covered by the test below, but the platform table
+    /// can move a chord to another key (Alt+digit for workspaces, F11), so it
+    /// is walked as well.
+    #[test]
+    fn every_key_the_platform_chords_use_has_a_scan_code() {
+        let named = scan_named_keys();
+        let (table, problems) = infiniterm_core::platform_keys::PlatformKeys::build(
+            infiniterm_core::keymap::DEFAULT_KEYMAP
+                .iter()
+                .map(|(chord, _, _)| *chord),
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let mut checked = 0;
+        let mut missing: Vec<String> = Vec::new();
+        for (mac, _, _) in infiniterm_core::keymap::DEFAULT_KEYMAP {
+            let Some(platform) = table.platform(mac) else {
+                continue;
+            };
+            let key = platform.rsplit('+').next().unwrap_or("");
+            // Named keys (enter, escape, tab, the arrows, space, F11) keep
+            // gpui's name, stable across layouts.
+            if key.chars().count() != 1 {
+                continue;
+            }
+            checked += 1;
+            if !named.iter().any(|n| n == key) {
+                missing.push(format!("{platform} (from {mac})"));
+            }
+        }
+        assert!(checked > 40, "the walk saw only {checked} chords");
+        assert!(missing.is_empty(), "no scan code for {missing:?}");
+    }
+
+    /// Every key the default keymap can bind must have a scan code here, or
+    /// that binding silently falls back to gpui's layout-dependent name and
+    /// breaks on a keyboard that is not US. This walks the real keymap
+    /// rather than a list copied beside it.
+    #[test]
+    fn every_key_the_keymap_binds_has_a_scan_code() {
+        let named = scan_named_keys();
         let missing: Vec<&str> = infiniterm_core::keymap::DEFAULT_KEYMAP
             .iter()
             .filter_map(|(chord, _, _)| chord.rsplit('+').next())

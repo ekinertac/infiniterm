@@ -54,6 +54,7 @@ pub mod chrome;
 pub mod format_zoom;
 
 pub mod alignment;
+pub mod altgr;
 pub mod app;
 pub mod backend;
 pub mod browser_keys;
