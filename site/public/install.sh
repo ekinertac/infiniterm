@@ -22,6 +22,16 @@
 # it, and quitting it here would pull the canvas out from under whoever ran
 # this from inside a card. INFINITERM_APPS_DIR and INFINITERM_ZIP exist for
 # tools/test-install.sh. Exit codes: 0 ok, 1 install failed, 2 bad usage.
+#
+# Linux (#464): the release tarball for this architecture, named with its
+# sha256 in latest-linux.json, unpacked into
+# ~/.local/share/infiniterm/<version>/ with `current` pointing at it,
+# `infiniterm` and `ift` linked in ~/.local/bin and a desktop entry written.
+# Running it again IS the update: the new version goes in beside the old,
+# `current` moves, and only the two newest versions are kept (a running
+# iftd keeps working after its file is removed; the next app adopts it).
+# INFINITERM_TARBALL and INFINITERM_LINUX_ROOT exist for
+# tools/drive/linux/install-test.sh.
 set -eu
 
 REPO="ekinertac/infiniterm"
@@ -51,7 +61,69 @@ case ",$hooks," in
        done ;;
 esac
 
-[ "$(uname -s)" = Darwin ] || die "infiniterm is a macOS app"
+# The Linux install: the tarball into a versioned folder, `current` moved to
+# it. Sets IFT. See the header.
+install_linux() {
+    case "$(uname -m)" in
+        x86_64 | amd64) arch=x86_64 ;;
+        aarch64 | arm64) arch=aarch64 ;;
+        *) die "there is no Linux build for $(uname -m)" ;;
+    esac
+    root="${INFINITERM_LINUX_ROOT:-$HOME/.local/share/infiniterm}"
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    if [ -n "${INFINITERM_TARBALL:-}" ]; then
+        cp "$INFINITERM_TARBALL" "$tmp/infiniterm.tar.gz"
+    else
+        # Flat keys, one pair per architecture: "x86_64_url", "x86_64_sha256".
+        manifest=$(curl -fsSL "$LATEST/latest-linux.json") || die "could not fetch latest-linux.json from $REPO"
+        field() { printf '%s\n' "$manifest" | sed -n "s/^ *\"$1\": *\"\([^\"]*\)\".*/\1/p" | head -n 1; }
+        url=$(field "${arch}_url")
+        sha=$(field "${arch}_sha256")
+        [ -n "$url" ] && [ -n "$sha" ] || die "latest-linux.json has no build for $arch"
+        say "Downloading ${url##*/}"
+        curl -fSL --progress-bar -o "$tmp/infiniterm.tar.gz" "$url" || die "download failed"
+        [ "$(sha256sum "$tmp/infiniterm.tar.gz" | cut -d' ' -f1)" = "$sha" ] || die "checksum mismatch; not installing"
+    fi
+    mkdir -p "$tmp/x"
+    tar -xzf "$tmp/infiniterm.tar.gz" -C "$tmp/x" || die "could not unpack the tarball"
+    [ -f "$tmp/x/infiniterm/VERSION" ] && [ -x "$tmp/x/infiniterm/infiniterm" ] \
+        || die "the tarball holds no infiniterm build"
+    version=$(cat "$tmp/x/infiniterm/VERSION")
+    case "$version" in '' | *[!0-9A-Za-z.+-]*) die "the tarball's VERSION is not a version: $version" ;; esac
+    mkdir -p "$root"
+    # The same version again (a repair) replaces the folder; the files a
+    # running copy has open stay readable until it exits.
+    rm -rf "$root/$version.new"
+    mv "$tmp/x/infiniterm" "$root/$version.new"
+    rm -rf "$root/$version"
+    mv "$root/$version.new" "$root/$version"
+    ln -sfn "$version" "$root/current"
+    mkdir -p "$HOME/.local/bin"
+    ln -sfn "$root/current/infiniterm" "$HOME/.local/bin/infiniterm"
+    apps="$HOME/.local/share/applications"
+    mkdir -p "$apps"
+    cat > "$apps/infiniterm.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=infiniterm
+Comment=Terminals, editors and agents on one canvas
+Exec=$root/current/infiniterm
+Icon=$root/current/icon.png
+Terminal=false
+Categories=System;TerminalEmulator;Development;
+StartupWMClass=infiniterm
+EOF
+    # The two newest versions stay, the one `current` names among them.
+    old=$(ls -1 "$root" | grep -v -e '^current$' -e '\.new$' | sort -V | head -n -2)
+    for v in $old; do
+        [ "$v" = "$version" ] || rm -rf "${root:?}/$v"
+    done
+    say "Installed infiniterm $version in $root/$version"
+    IFT="$root/current/ift"
+}
+
+install_mac() {
 [ "$(uname -m)" = arm64 ] || die "builds are Apple Silicon only for now"
 
 if [ -d "$APP" ]; then
@@ -85,6 +157,13 @@ else
 fi
 
 IFT="$APP/Contents/MacOS/ift"
+}
+
+case "$(uname -s)" in
+    Darwin) install_mac ;;
+    Linux) install_linux ;;
+    *) die "infiniterm runs on macOS and Linux" ;;
+esac
 "$IFT" install || die "ift install failed"
 
 # An agent is offered only when the installed ift knows its installer: an
@@ -122,6 +201,11 @@ for h in $(printf '%s' "$hooks" | tr ',' ' '); do
 done
 
 say ""
-say "Done. Start it with: open -a infiniterm   (or \`ift\` once ~/.local/bin is on your PATH)"
+if [ "$(uname -s)" = Linux ]; then
+    say "Done. Start it from your applications menu, or with: infiniterm   (once ~/.local/bin is on your PATH)"
+    say "To update, run this installer again."
+else
+    say "Done. Start it with: open -a infiniterm   (or \`ift\` once ~/.local/bin is on your PATH)"
+fi
 say "One more line for per-card shell history, in ~/.zshrc:"
 say '  HISTFILE="${INFINITERM_HISTFILE:-$HOME/.zsh_history}"'

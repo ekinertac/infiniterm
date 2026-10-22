@@ -85,10 +85,48 @@ jobs:
           path: dist/*
 
   # Only for a published release: put the packages on it.
+  # The Linux desktop app's tarball (#464): built for a published release
+  # and by hand (`workflow_dispatch`, to try it on a branch), not for every
+  # PR (a release build is many minutes; the `app` job below checks that it
+  # compiles). glibc, not musl: the app links the system's X11, Wayland and
+  # Vulkan. Ubuntu 22.04 so the binaries run on glibc 2.35 and newer.
+  # tools/linux-dist.sh lays it out; site/public/install.sh installs it.
+  desktop:
+    name: desktop ${{ matrix.arch }}
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1 libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev clang
+      - name: build
+        run: >
+          cargo build --release --locked
+          -p infiniterm-ui --no-default-features
+          -p infiniterm-cli -p infiniterm-session -p infiniterm-hook
+      - name: package
+        run: tools/linux-dist.sh target/release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-desktop-${{ matrix.arch }}
+          path: dist/*
+
   release-assets:
     name: attach to the release
     if: github.event_name == 'release'
-    needs: build
+    needs: [build, desktop]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

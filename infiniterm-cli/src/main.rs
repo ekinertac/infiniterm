@@ -422,6 +422,9 @@ fn install_self() -> ExitCode {
         eprintln!("ift: cannot find my own path");
         return ExitCode::from(2);
     };
+    // Through `current` (install.sh) or brew's `opt`, so the link outlives
+    // the versioned folder it resolved to (`paths::stable_install_path`).
+    let exe = stable_or(exe);
     let bin = home().join(".local").join("bin");
     if let Err(e) = std::fs::create_dir_all(&bin) {
         eprintln!("ift: cannot create {}: {e}", bin.display());
@@ -731,8 +734,22 @@ fn hook_binary() -> Option<String> {
         .iter()
         .find(|p| p.exists())
         .and_then(|p| infiniterm_core::paths::canonical(p).ok())
+        // The hook command lives in an agent's settings long after this
+        // binary is replaced: name it through a link that survives updates.
+        .map(stable_or)
         .map(|p| p.to_string_lossy().into_owned())
         .or_else(|| which_on_path(name))
+}
+
+/// `path` through a link that survives the next update, when one exists
+/// there (`paths::stable_install_path`); else `path` itself.
+fn stable_or(path: std::path::PathBuf) -> std::path::PathBuf {
+    let stable = infiniterm_core::paths::stable_install_path(&path);
+    if stable != path && stable.exists() {
+        stable
+    } else {
+        path
+    }
 }
 
 /// The first `infiniterm-hook` on `$PATH`, if there is one.

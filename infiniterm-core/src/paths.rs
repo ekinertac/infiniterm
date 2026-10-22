@@ -357,6 +357,71 @@ pub fn canonical(path: impl AsRef<std::path::Path>) -> std::io::Result<PathBuf> 
     Ok(PathBuf::from(strip_verbatim(&full.to_string_lossy())))
 }
 
+/// The folder `install.sh` puts each Linux version in, under the home:
+/// `~/.local/share/infiniterm/<version>/`, with `current` linked to the
+/// newest (docs/agent/linux-port.md, "Packaging").
+pub const LINUX_INSTALL_ROOT: &str = ".local/share/infiniterm";
+
+/// A path that survives the next update, for a path written somewhere that
+/// outlives this binary: the `ift` link in `~/.local/bin` and the hook
+/// command in an agent's settings. `canonical` resolves every link, so on
+/// Linux it lands in a versioned folder that `install.sh` removes two
+/// updates later, and under Homebrew in a Cellar folder `brew cleanup`
+/// removes. The rewrite:
+/// - `.../.local/share/infiniterm/<version>/x` gives `.../current/x`;
+/// - `<prefix>/Cellar/<formula>/<version>/x` gives `<prefix>/opt/<formula>/x`,
+///   Homebrew's own stable link.
+///
+/// Pure: the caller uses the answer only when it exists, so a layout these
+/// rules do not know (the Mac bundle, a source tree) keeps its own path.
+pub fn stable_install_path(path: &std::path::Path) -> PathBuf {
+    let parts: Vec<String> = path
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let root: Vec<&str> = LINUX_INSTALL_ROOT.split('/').collect();
+    let mut out = parts.clone();
+    for i in 0..parts.len() {
+        // `<root>/<version>/...` with something after the version.
+        let end = i + root.len();
+        if end + 1 < parts.len()
+            && parts[i..end]
+                .iter()
+                .map(String::as_str)
+                .eq(root.iter().copied())
+            && parts[end] != "current"
+        {
+            out[end] = "current".into();
+            return out.iter().collect();
+        }
+        // `Cellar/<formula>/<version>/...`
+        if parts[i] == "Cellar" && i + 3 < parts.len() {
+            let mut stable = parts[..i].to_vec();
+            stable.push("opt".into());
+            stable.push(parts[i + 1].clone());
+            stable.extend(parts[i + 3..].iter().cloned());
+            return stable.iter().collect();
+        }
+    }
+    path.to_path_buf()
+}
+
+/// Where a release keeps a resource folder (`themes`, `backgrounds`) next to
+/// the binary in `exe_dir`: the bundle's `Contents/Resources` on macOS,
+/// beside the binary everywhere else (the Windows release folder and the
+/// Linux tarball are both flat).
+pub fn shipped_resource(exe_dir: &std::path::Path, name: &str, macos: bool) -> PathBuf {
+    if macos {
+        exe_dir
+            .parent()
+            .unwrap_or(exe_dir)
+            .join("Resources")
+            .join(name)
+    } else {
+        exe_dir.join(name)
+    }
+}
+
 /// The plain form of a Windows verbatim path, and anything else unchanged.
 /// A network share is spelled `\\?\UNC\server\share` in that form and
 /// `\\server\share` in this one, which is why the answer is owned: the
@@ -376,6 +441,55 @@ pub fn data_dir_overridden() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn an_installed_linux_path_goes_through_current() {
+        let p = Path::new("/home/ekin/.local/share/infiniterm/0.6.3/infiniterm-hook");
+        assert_eq!(
+            stable_install_path(p),
+            Path::new("/home/ekin/.local/share/infiniterm/current/infiniterm-hook")
+        );
+        // Already stable, or the root itself: unchanged.
+        let current = Path::new("/home/ekin/.local/share/infiniterm/current/ift");
+        assert_eq!(stable_install_path(current), current);
+        let root = Path::new("/home/ekin/.local/share/infiniterm/0.6.3");
+        assert_eq!(stable_install_path(root), root);
+    }
+
+    #[test]
+    fn a_homebrew_cellar_path_goes_through_opt() {
+        let p = Path::new("/home/linuxbrew/.linuxbrew/Cellar/infiniterm-linux/0.6.3/libexec/ift");
+        assert_eq!(
+            stable_install_path(p),
+            Path::new("/home/linuxbrew/.linuxbrew/opt/infiniterm-linux/libexec/ift")
+        );
+    }
+
+    #[test]
+    fn other_layouts_keep_their_path() {
+        for p in [
+            "/Applications/infiniterm.app/Contents/MacOS/infiniterm-hook",
+            "/Users/ekin/Code/infiniterm/target/release/ift",
+            "/usr/local/bin/ift",
+        ] {
+            assert_eq!(stable_install_path(Path::new(p)), Path::new(p));
+        }
+    }
+
+    #[test]
+    fn resources_sit_in_the_bundle_on_macos_and_beside_the_binary_elsewhere() {
+        let mac = Path::new("/Applications/infiniterm.app/Contents/MacOS");
+        assert_eq!(
+            shipped_resource(mac, "backgrounds", true),
+            Path::new("/Applications/infiniterm.app/Contents/Resources/backgrounds")
+        );
+        let linux = Path::new("/home/ekin/.local/share/infiniterm/current");
+        assert_eq!(
+            shipped_resource(linux, "themes", false),
+            Path::new("/home/ekin/.local/share/infiniterm/current/themes")
+        );
+    }
 
     // The save file sits in the per-OS place for what an app writes for
     // itself: Application Support on macOS, %APPDATA% on Windows.
