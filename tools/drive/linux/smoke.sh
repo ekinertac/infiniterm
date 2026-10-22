@@ -8,15 +8,20 @@
 # checks, each with a screenshot in $SHOTS:
 #   1. the window draws (the first frame is not black);
 #   2. a terminal card runs a shell under iftd and `ift read` shows its output;
-#   3. on Turkish Q, Super + the key US prints `=` on (Turkish prints `-`)
+#   3. on Turkish Q, Ctrl + the key US prints `=` on (Turkish prints `-`)
 #      makes the terminal font BIGGER: the chord took the physical key
-#      (keycode.rs); gpui's layout name would have made it smaller;
+#      (keycode.rs) and the command key read it as Cmd+= (platform_keys.rs);
+#      3b: plain Ctrl+C reaches the shell, Alt+Shift+D is readline's
+#      kill-word (why split down is not on it), Ctrl+Shift+T makes a card,
+#      Alt+2 is the workspace chord;
 #   4. a right-click on the card opens the drawn menu, and choosing Close
 #      from it by keyboard closes the card;
 #   5. a drag on the bare title bar moves the window and a double-click
 #      maximises it;
 #   6. under xfwm4 (client-side decorations), the drawn frame's buttons
-#      maximise, restore and close, and its corner resizes the window.
+#      maximise, restore and close, and its corner resizes the window;
+#   7. with keyboard.commandModifier = super, Super + physical Equal on
+#      Turkish Q is font bigger again (the Mac's chords, nothing rewritten).
 # The terminal font being monospace and the Nerd Font icons drawing as icons
 # are in screenshot 2, by eye.
 # Exit 0 only when every check held. SKIP_BUILD=1 skips sync and build.
@@ -58,16 +63,46 @@ sleep 1
 "$BOX" shot 2-terminal >/dev/null
 echo "ok 2: a terminal card runs a shell"
 
-# 3. The physical key on Turkish Q.
+# 3. The physical key on Turkish Q, with the command key (platform_keys.rs):
+# Ctrl + the key US prints `=` on is Cmd+= (font bigger); gpui's layout name
+# (`-`) would have made it smaller.
 r layout tr
-r chord super minus
+r chord ctrl minus
 sleep 1
 settings=$(r settings)
 r layout us
 echo "$settings" | grep -Eq '"terminal.fontSize": *15' ||
-    fail "Super + physical Equal on Turkish Q did not make the font bigger: $settings"
+    fail "Ctrl + physical Equal on Turkish Q did not make the font bigger: $settings"
+r logged '\[platform\] ctrl\+= -> cmd\+=' || fail "the chord was not read as cmd+="
 "$BOX" shot 3-turkish-bigger >/dev/null
 echo "ok 3: a Turkish Q chord took the physical key"
+
+# 3b. The command key with a terminal focused (card 2): plain Ctrl stays the
+# terminal's, Ctrl+Shift is the app's, Alt+digit is a workspace.
+r ift send 2 'sleep 100' --enter >/dev/null
+sleep 0.5
+r chord ctrl c
+r ift send 2 'echo interrupted-ok' --enter >/dev/null
+sleep 1
+r ift read 2 | grep -q '^interrupted-ok' || fail "plain Ctrl+C did not reach the shell: $(r ift read 2 | tail -3)"
+# Split down is NOT Alt+Shift+D because a terminal uses it: readline runs
+# Meta-D as Meta-d, kill-word.
+r type 'foo bar'
+r chord ctrl a
+r chord alt shift d
+sleep 0.5
+line=$(r ift read 2 | grep -v '^$' | tail -1)
+r chord ctrl u
+echo "$line" | grep -q '#  bar$' || fail "Alt+Shift+D was not kill-word in bash: $line"
+cards_before=$(r ift ls | wc -l)
+r chord ctrl shift t
+sleep 1
+cards_after=$(r ift ls | wc -l)
+[ "$cards_after" -eq $((cards_before + 1)) ] || fail "Ctrl+Shift+T made no card ($cards_before, then $cards_after)"
+r chord alt 2
+r logged '\[platform\] alt\+2 -> ctrl\+2' || fail "Alt+2 was not read as the workspace chord"
+r chord alt 1
+echo "ok 3b: plain Ctrl+C is the shell's, Alt+Shift+D is kill-word, Ctrl+Shift+T makes a card, Alt+2 is a workspace"
 
 # 4. The right-click menu the app draws (menu_view.rs): a right-click on
 # card 2 opens its menu; Up from nothing selected is the last row, Close;
@@ -131,5 +166,19 @@ sleep 2
 [ -z "$(r pid)" ] || fail "the close button did not quit the app"
 r wm openbox
 echo "ok 6: the drawn frame maximises, restores, resizes and closes"
+
+# 7. keyboard.commandModifier = super: the Mac's chords with Super for Cmd,
+# nothing rewritten, so Super + physical Equal on Turkish Q is font bigger.
+r setting '{"terminal.fontSize": 14, "keyboard.commandModifier": "super"}' fresh
+r start >/dev/null
+r layout tr
+r chord super minus
+sleep 1
+settings=$(r settings)
+r layout us
+echo "$settings" | grep -Eq '"terminal.fontSize": *15' ||
+    fail "with super, Super + physical Equal did not make the font bigger: $settings"
+r stop >/dev/null
+echo "ok 7: keyboard.commandModifier super keeps the Mac's chords on Super"
 
 echo "smoke passed; screenshots in ${SHOTS:-.scratchpad/linux-shots}"

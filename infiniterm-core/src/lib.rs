@@ -105,6 +105,7 @@ pub mod page;
 pub mod palette;
 pub mod palette_usage;
 pub mod paths;
+pub mod platform_keys;
 pub mod prompt;
 pub mod reading;
 pub mod saved_layout;

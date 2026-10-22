@@ -199,7 +199,14 @@ pub fn encode_with(k: &Key, app_cursor: bool, kitty: bool) -> Option<Vec<u8>> {
                 // reached the line as `<ffffffff>`. The character IS the
                 // key there, so it goes alone. A layout where Option
                 // changes nothing (US: Option+S is still `s`) keeps Meta.
-                let composed = k.alt && text != k.name;
+                // Shift only changing the letter's case is not composition
+                // either: on Linux Alt+Shift+D arrives as `D` for the key
+                // `d`, and is Meta+D, readline's kill-word (found by the
+                // Linux driver, #464). A Mac's Option+Shift+letter composes
+                // another letter (US `Î`, Turkish Q `Ş`), still alone.
+                let only_case =
+                    k.shift && text.chars().count() == 1 && text.to_lowercase() == k.name;
+                let composed = k.alt && text != k.name && !only_case;
                 let mut out = Vec::with_capacity(text.len() + 1);
                 if k.alt && !composed {
                     out.push(0x1b);
@@ -230,6 +237,20 @@ mod tests {
     // resolves it through the layout and hands us the composed character;
     // an ESC in front of it is a sequence no shell binds, and it showed on
     // the line as `<ffffffff>`.
+    // Linux: Alt+Shift+D is `D` for the key `d`, Meta+D, not a composed
+    // character; a Mac's Option+Shift+D composes `Î` and still goes alone.
+    #[test]
+    fn alt_shift_letter_is_meta_with_the_capital() {
+        let mut k = key("d", Some("D"));
+        k.alt = true;
+        k.shift = true;
+        assert_eq!(encode(&k, false), Some(b"\x1bD".to_vec()));
+        let mut mac = key("d", Some("Î"));
+        mac.alt = true;
+        mac.shift = true;
+        assert_eq!(encode(&mac, false), Some("Î".as_bytes().to_vec()));
+    }
+
     #[test]
     fn option_types_the_character_a_layout_composes() {
         let mut k = key("s", Some("ş"));

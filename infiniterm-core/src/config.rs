@@ -51,34 +51,31 @@ pub struct Config {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Keyboard {
-    /// Which key plays Cmd's part. Read on Windows only; macOS has a Cmd
-    /// key and reads this nowhere.
+    /// Which key plays Cmd's part off the Mac. macOS has a Cmd key and
+    /// reads this nowhere.
     pub command_modifier: CommandModifier,
 }
 
-/// Where the app's modifier lives when the keyboard has no Cmd key.
+/// Where the app's chords live when the keyboard has no Cmd key (Linux and
+/// Windows; decided by Ekin, docs/agent/command-key.md).
 ///
-/// The Mac's whole keyboard story rests on Cmd being a modifier terminals
-/// ignore, so the app can claim all of it with no prefix key and no modal
-/// state. Windows has no such modifier: Ctrl is the shell's, Alt is Meta,
-/// and Win is the OS's.
+/// The Mac's keyboard story rests on Cmd being a modifier terminals ignore.
+/// Off the Mac, Ctrl is also the terminal's, so the default keeps plain
+/// Ctrl+letter for the terminal and takes Ctrl+Shift for the app
+/// (`platform_keys.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CommandModifier {
-    /// The two SIDES of Ctrl carry the two roles: left is the app's, right
-    /// is the terminal's. The default, because a keyboard remapped into Mac
-    /// order already puts left Ctrl where Cmd sits and right Ctrl on Caps
-    /// Lock, so every binding lands under the finger that reaches for it
-    /// and Caps Lock plus C is still a real `^C`. Without such a remap it
-    /// still works, it just is not muscle memory: app chords on the left
-    /// Ctrl, the shell's Ctrl on the right.
-    LeftControl,
-    /// The Windows key, and Ctrl stays entirely the terminal's. Honest, and
-    /// the closest thing to Cmd in position, but Windows takes Win+L (which
-    /// LOCKS THE MACHINE), Win+D, Win+E, Win+R, Win+S, Win+T, Win+digit,
-    /// Win+arrows and Win+= before any application sees them, so the
-    /// bindings on those keys simply will not arrive.
-    Win,
+    /// Ctrl, with Shift where plain Ctrl is terminal input: Ctrl+Shift+T a
+    /// new card, Ctrl+Shift+C copy, Ctrl+1 fit a card (`platform_keys.rs`
+    /// holds the whole table). The default. The old Windows values
+    /// (`leftControl`, `win`) read as this one.
+    Ctrl,
+    /// Linux only: the Mac's chords with Super for Cmd, Ctrl left whole for
+    /// the terminal. Opt-in, because desktops take many Super chords
+    /// themselves. Windows takes every Win chord first, so it reads as
+    /// `ctrl` there.
+    Super,
 }
 
 /// `ift join` (#423): whether this app opens the socket a viewer on another
@@ -599,7 +596,7 @@ pub fn default_config() -> Config {
         },
         keyboard: Keyboard {
             // See `CommandModifier`. Ignored on macOS.
-            command_modifier: CommandModifier::LeftControl,
+            command_modifier: CommandModifier::Ctrl,
         },
     }
 }
@@ -963,8 +960,19 @@ pub fn merge_config(raw: &Value) -> Config {
                 k.get("commandModifier"),
                 d.keyboard.command_modifier,
                 &[
-                    ("leftControl", CommandModifier::LeftControl),
-                    ("win", CommandModifier::Win),
+                    ("ctrl", CommandModifier::Ctrl),
+                    // Windows takes every Win chord; Super is Linux's.
+                    (
+                        "super",
+                        if cfg!(windows) {
+                            CommandModifier::Ctrl
+                        } else {
+                            CommandModifier::Super
+                        },
+                    ),
+                    // The side-of-Ctrl design this replaced (2026-10-22).
+                    ("leftControl", CommandModifier::Ctrl),
+                    ("win", CommandModifier::Ctrl),
                 ],
             ),
         },

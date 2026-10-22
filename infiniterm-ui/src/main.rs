@@ -290,6 +290,11 @@ pub struct AppView {
     pub context_menu: Option<crate::browsers::CardContextMenu>,
     /// The page's native menu is open (`browsers.rs::show_page_menu`).
     pub page_menu_open: bool,
+    /// Off the Mac: the two-way chord table for the active keymap
+    /// (`platform_keys.rs`), and the keymap it was built from, so a change
+    /// rebuilds it (`input.rs::platform_keystroke`).
+    pub platform_keys: infiniterm_core::platform_keys::PlatformKeys,
+    pub platform_keys_for: infiniterm_core::keymap::Keymap,
     /// Off macOS: where a press on the bare title bar landed, kept until the
     /// pointer travels far enough to start a window move or the button comes
     /// up (`not_macos.rs::title_drag`).

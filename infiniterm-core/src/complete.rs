@@ -150,6 +150,7 @@ pub const SETTING_CHOICES: &[(&str, &[&str])] = &[
     ),
     ("ui.fullscreen", &["cover", "native"]),
     ("ui.statusBarPwdSide", &["left", "right"]),
+    ("keyboard.commandModifier", &["ctrl", "super"]),
 ];
 
 impl SchemaProvider {

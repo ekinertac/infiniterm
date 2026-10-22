@@ -38,11 +38,10 @@ const OTHER: &str = "other";
 
 /// What to call the two modifiers whose keys differ per platform.
 ///
-/// `cmd` and `ctrl` are ROLES, not keys (see `keymap::modifier_roles`): the
-/// app's modifier and the terminal's. On macOS they are the keys of those
-/// names. On Windows they are whichever keys `keyboard.commandModifier`
-/// put them on, and naming them "Cmd" there would point at a key the
-/// keyboard does not have.
+/// `cmd` is the app's modifier and `ctrl` the terminal's. On macOS they are
+/// the keys of those names. Off the Mac `keyboard.commandModifier` decides
+/// (`platform_keys.rs`), and naming one "Cmd" there would point at a key
+/// the keyboard does not have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModifierLabels {
     pub cmd: &'static str,
@@ -60,25 +59,23 @@ impl ModifierLabels {
     /// The labels this build and this setting actually mean. `choice` is
     /// read on Windows only; macOS has both keys and ignores it.
     pub fn new(choice: CommandModifier) -> ModifierLabels {
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
         {
             let _ = choice;
             ModifierLabels::MAC
         }
-        #[cfg(windows)]
+        // Off the Mac a chord shown in its platform form has no `cmd` in it
+        // with `ctrl` (`platform_keys.rs`); one still shown in its Mac form
+        // names the key that plays Cmd's part. No space in a label: the
+        // separator between key boxes IS a space (the test below).
+        #[cfg(not(target_os = "macos"))]
         match choice {
-            // Both roles live on Ctrl, so the SIDE is the whole label. Said
-            // as the key is, not as the role: someone reading the panel is
-            // looking for a key to press.
-            // No space in either: the separator between key boxes IS a
-            // space, so "L Ctrl" would draw as two caps, L and Ctrl. The
-            // test below holds that.
-            CommandModifier::LeftControl => ModifierLabels {
-                cmd: "LCtrl",
-                ctrl: "RCtrl",
+            CommandModifier::Ctrl => ModifierLabels {
+                cmd: "Ctrl",
+                ctrl: "Ctrl",
             },
-            CommandModifier::Win => ModifierLabels {
-                cmd: "Win",
+            CommandModifier::Super => ModifierLabels {
+                cmd: "Super",
                 ctrl: "Ctrl",
             },
         }
@@ -372,7 +369,7 @@ mod tests {
     #[test]
     fn no_modifier_label_contains_the_separator() {
         use crate::config::CommandModifier;
-        for choice in [CommandModifier::LeftControl, CommandModifier::Win] {
+        for choice in [CommandModifier::Ctrl, CommandModifier::Super] {
             let l = ModifierLabels::new(choice);
             for label in [l.cmd, l.ctrl, super::ALWAYS[0].1, super::ALWAYS[1].1] {
                 assert!(!label.contains(CHORD_SEPARATOR), "{label:?} has a space");
