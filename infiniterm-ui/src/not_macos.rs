@@ -15,13 +15,18 @@
 //!   gpui, `menu_view.rs`), but the browser page's menu
 //!   (`browsers.rs::show_page_menu`) still does, so on Windows that one
 //!   does nothing until it is drawn the same way.
-//! - `fullscreen`: the app menu's toggle and `ui.fullscreen` do nothing; gpui's
-//!   own `toggle_fullscreen` on the window would do it.
+//! - `fullscreen`: on Windows the toggle works (gpui's own full screen, asked
+//!   for through a request the poll loop carries out, see `toggle`);
+//!   `ui.fullscreen` ("cover" or "native") is a Mac notch setting and does
+//!   nothing here. Elsewhere the toggle is still a no-op.
 //! - `icon_font`: the bundled Nerd Font is handed to gpui at start-up
 //!   (`main.rs`, `add_fonts`) and the terminal paints icons from it
 //!   (`terminal_body::icon_glyph`); only `ICON_FONT_FAMILY` and the bytes
 //!   live here.
-//! - `instance_icon`: no Dock badge; Windows has taskbar overlays instead.
+//! - `instance_icon`: no Dock badge, and none wanted on Windows: it marks a
+//!   remote or joined instance (both unix-only) or a local one with
+//!   `ui.windowColor`, and a Windows instance is single by design (the pipe
+//!   is the lock). A taskbar overlay would be the way if that ever changes.
 //! - `finder_service`: no "open folder in infiniterm" service.
 //! - `title_drag`: an AppKit view patch on the Mac. Here: Linux moves and
 //!   maximises the window through gpui from the bare bar; Windows draws its
@@ -54,13 +59,69 @@ pub mod finder_service {
 
 pub mod fullscreen {
     use infiniterm_core::config::FullscreenMode;
+    #[cfg(windows)]
+    use std::sync::atomic::{AtomicBool, Ordering};
 
+    /// A toggle somebody asked for that no window has carried out yet.
+    #[cfg(windows)]
+    static REQUESTED: AtomicBool = AtomicBool::new(false);
+
+    /// Windows has no notch and one kind of full screen, so there is no mode
+    /// to remember: `ui.fullscreen` is a Mac setting.
     pub fn set_mode(_mode: FullscreenMode) {}
+
+    /// Never "covering": that is the Mac's cover mode, which keeps its own
+    /// frame for the window save. Windows' full screen is gpui's, which
+    /// reports itself as `WindowBounds::Fullscreen` with the frame to
+    /// return to, and `window_state.rs` already saves and restores that.
     pub fn covering() -> bool {
         false
     }
+
     pub fn install() {}
-    pub fn toggle() {}
+
+    /// Asks for the toggle. The callers (the menu action, the command's
+    /// effect, a relaunch into full screen) have no `Window`, and gpui's
+    /// `Window::toggle_fullscreen` needs one, so this leaves a request that
+    /// the poll loop in `main.rs` carries out with the main window
+    /// (`take_request`), a frame at most 16 ms later.
+    pub fn toggle() {
+        #[cfg(windows)]
+        REQUESTED.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether a toggle was asked for since the last call, and forgets it.
+    #[cfg(windows)]
+    pub fn take_request() -> bool {
+        REQUESTED.swap(false, Ordering::SeqCst)
+    }
+
+    // Windows only: elsewhere `toggle` stays the no-op it was, because gpui's
+    // full screen has been checked on a Windows screen and nowhere else.
+    #[cfg(all(test, windows))]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_toggle_is_one_request_that_is_taken_once() {
+            // Drain anything another test left, then: nothing asked, one ask,
+            // two asks before anyone looks are still one, and it is gone.
+            let _ = take_request();
+            assert!(!take_request());
+            toggle();
+            assert!(take_request());
+            assert!(!take_request());
+            toggle();
+            toggle();
+            assert!(take_request());
+            assert!(!take_request());
+        }
+
+        #[test]
+        fn the_windows_stand_in_never_claims_to_be_covering() {
+            assert!(!covering());
+        }
+    }
 }
 
 pub mod icon_font {

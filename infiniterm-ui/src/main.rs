@@ -775,10 +775,22 @@ fn main() {
                 // timer is what stands in for it; it costs nothing when
                 // nothing arrived.
                 let poll = view.clone();
+                // The main window, for the one thing the poll does that needs
+                // a `Window`: the full screen toggle on Windows.
+                #[cfg(windows)]
+                let main_window = window.window_handle();
                 cx.spawn(async move |cx: &mut gpui::AsyncApp| loop {
                     cx.background_executor()
                         .timer(std::time::Duration::from_millis(16))
                         .await;
+                    // Windows' full screen is gpui's, which wants the window;
+                    // the toggle's callers have none, so they leave a request
+                    // (`not_macos::fullscreen::toggle`) and it is carried out
+                    // here, at most a poll later. macOS has its own path.
+                    #[cfg(windows)]
+                    if fullscreen::take_request() {
+                        let _ = main_window.update(cx, |_, window, _| window.toggle_fullscreen());
+                    }
                     let alive = poll.update(cx, |this, cx| {
                         this.drain_backend();
                         // The host's canvas, for a viewer; the host's agent
