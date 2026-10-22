@@ -213,6 +213,9 @@ struct ShapedRow {
     slots: Vec<CharSlot>,
     /// Cell spans wearing a line, in columns: (start, len, colour, kind).
     decorations: Vec<(usize, usize, Hsla, Decoration)>,
+    /// Icon cells that are painted apart from the line (`SEPARATE_ICONS`):
+    /// (column, character, colour). Empty where the line draws them itself.
+    icons: Vec<(usize, char, Hsla)>,
 }
 
 #[derive(Clone, Copy)]
@@ -256,15 +259,47 @@ impl Metrics {
 /// So a card in Menlo drew empty boxes where every other terminal drew
 /// icons, even on a Mac full of Nerd Fonts (the MacBook Air, 2026-09-24).
 /// WezTerm ships the same font as its fallback for the same reason.
+#[cfg_attr(windows, allow(dead_code))]
 pub const ICON_FONT: &str = crate::icon_font::ICON_FONT_POSTSCRIPT;
 
 /// The terminal's font with the icon font behind it, so a glyph the
 /// configured family lacks is looked for there before anywhere else.
 pub fn term_font(family: &str) -> gpui::Font {
+    #[cfg_attr(windows, allow(unused_mut))]
     let mut f = font(family.to_string());
-    f.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![ICON_FONT.to_string()]));
+    // Not on Windows: its fallback list is matched by family name in the
+    // system collection, where the bundled font is not, so naming it only
+    // logged an error. Icons are painted apart there (`SEPARATE_ICONS`).
+    #[cfg(not(windows))]
+    {
+        f.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![ICON_FONT.to_string()]));
+    }
     f
 }
+
+/// Whether a row's icon characters are painted apart from its text line
+/// (`icon_glyph`). True where gpui cannot fall back to a font the app
+/// bundled and cannot mix it into the line either (Windows); elsewhere the
+/// fallback list does it.
+///
+/// Why not a run of the icon font inside the line, which was the first try:
+/// gpui builds ONE DirectWrite layout per line and takes the font
+/// collection (system or custom) from its FIRST run. The bundled font lives
+/// in the custom collection and Cascadia Mono in the system one, so a line
+/// mixing them looks the second family up in the wrong collection and gets
+/// the default face: the prompt's digits and letters came out in Segoe UI
+/// (measured 2026-10-22: glyph advances 3.8, 7.5, 3.0 where a mono face
+/// gives one width). The icon, shaped alone, starts in the right collection.
+#[cfg(windows)]
+const SEPARATE_ICONS: bool = true;
+#[cfg(not(windows))]
+const SEPARATE_ICONS: bool = false;
+
+/// The bundled font's family, for `icon_glyph`.
+#[cfg(windows)]
+const ICON_FAMILY: &str = crate::icon_font::ICON_FONT_FAMILY;
+#[cfg(not(windows))]
+const ICON_FAMILY: &str = "Symbols Nerd Font Mono";
 
 impl TerminalBody {
     pub fn new(
@@ -1520,6 +1555,10 @@ fn shape_row(
     // The row's zero-width characters, in column order, taken as the
     // columns are walked.
     let mut zerowidth = row.zerowidth.iter().peekable();
+    // Where `SEPARATE_ICONS` is on, the cells holding icons: (column,
+    // character, colour). Their text is a space in the shaped line and the
+    // glyph is painted from `icon_glyph` instead.
+    let mut icons: Vec<(usize, char, Hsla)> = vec![];
     for run in &row.runs {
         let color = if run.dim {
             crate::chrome::with_alpha(rgb(run.fg), TERM_DIM_ALPHA)
@@ -1541,8 +1580,17 @@ fn shape_row(
                 col += 1;
                 continue;
             }
-            let mut len = ch.len_utf8();
-            text.push(ch);
+            // An icon is shaped apart from the line (see `SEPARATE_ICONS`):
+            // a space holds its place in the text, so every byte offset and
+            // slot below stays one per cell.
+            let icon = SEPARATE_ICONS && infiniterm_core::icon_chars::is_icon(ch);
+            let mut len = if icon { 1 } else { ch.len_utf8() };
+            if icon {
+                text.push(' ');
+                icons.push((col, ch, color));
+            } else {
+                text.push(ch);
+            }
             // The cell's zero-width characters join its character in the
             // shaped text and belong to its slot: with U+FE0F the shaper
             // picks the colour emoji, and a joiner fuses this character
@@ -1556,7 +1604,8 @@ fn shape_row(
             slots.push(CharSlot {
                 col,
                 color,
-                blank: ch.is_whitespace(),
+                // An icon's cell paints through `icons`, not the line.
+                blank: ch.is_whitespace() || icon,
             });
             run_len += len;
             col += 1;
@@ -1582,12 +1631,15 @@ fn shape_row(
             decorations.push((run_start_col, cells, color, Decoration::Strikethrough));
         }
     }
-    if slots.iter().all(|s| s.blank) {
+    // A row of nothing but blanks has no line to shape; one with icons does,
+    // because their baseline is the line's.
+    if slots.iter().all(|s| s.blank) && icons.is_empty() {
         return ShapedRow {
             line: None,
             slot_of_byte,
             slots,
             decorations,
+            icons,
         };
     }
     let line = window
@@ -1598,7 +1650,49 @@ fn shape_row(
         slot_of_byte,
         slots,
         decorations,
+        icons,
     }
+}
+
+/// An icon's font and glyph, or `None` when the icon font has none.
+type IconGlyph = Option<(gpui::FontId, gpui::GlyphId)>;
+
+thread_local! {
+    /// The glyph for each icon character at a font size (the size's bits).
+    /// An icon is the same glyph in any colour, so one entry serves every
+    /// cell that shows it.
+    static ICON_GLYPHS: std::cell::RefCell<std::collections::HashMap<(char, u32), IconGlyph>> =
+        Default::default();
+}
+
+/// The icon font's glyph for `ch`, found by shaping that one character in a
+/// line of its own: a line whose first run is the icon font starts in the
+/// right font collection, which a line shared with the terminal's text does
+/// not (see `SEPARATE_ICONS`). Cached, so it costs one shaping per distinct
+/// icon, not one per cell per frame.
+fn icon_glyph(window: &Window, ch: char, font_size: Pixels) -> IconGlyph {
+    let key = (ch, f32::from(font_size).to_bits());
+    if let Some(found) = ICON_GLYPHS.with(|c| c.borrow().get(&key).copied()) {
+        return found;
+    }
+    let text = ch.to_string();
+    let run = TextRun {
+        len: text.len(),
+        font: font(ICON_FAMILY.to_string()),
+        color: Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let line = window
+        .text_system()
+        .shape_line(SharedString::from(text), font_size, &[run], None);
+    let found = line
+        .runs
+        .first()
+        .and_then(|r| r.glyphs.first().map(|g| (r.font_id, g.id)));
+    ICON_GLYPHS.with(|c| c.borrow_mut().insert(key, found));
+    found
 }
 
 /// The row's glyphs, each at its cell. gpui's own `ShapedLine::paint`
@@ -1639,6 +1733,15 @@ fn paint_row(
             } else {
                 window.paint_glyph(at, run.font_id, glyph.id, font_size, slot.color)
             };
+        }
+    }
+    // The icons, each at its cell on the line's baseline. A glyph from the
+    // icon font is wider than a cell; the cell after an icon is a space in a
+    // prompt, so it overhangs into nothing.
+    for &(col, ch, color) in &shaped.icons {
+        if let Some((font_id, glyph_id)) = icon_glyph(window, ch, font_size) {
+            let at = point(origin.x + cell_w * col as f32, baseline);
+            let _ = window.paint_glyph(at, font_id, glyph_id, font_size, color);
         }
     }
     for &(start, len, color, kind) in &shaped.decorations {
@@ -1813,8 +1916,19 @@ mod tests {
         assert!(l.note.contains("joining"));
     }
 
+    // On Windows the icons are painted apart from the line instead.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_icons_are_painted_apart_and_the_font_has_no_fallback_list() {
+        assert!(SEPARATE_ICONS);
+        assert!(term_font("Cascadia Mono").fallbacks.is_none());
+        // The family gpui must find is the one in the bundled font's name table.
+        assert_eq!(ICON_FAMILY, "Symbols Nerd Font Mono");
+    }
+
     /// Every terminal font carries the bundled icon font behind it, whatever
     /// family the settings name, or a Mac without a Nerd Font draws boxes.
+    #[cfg(not(windows))]
     #[test]
     fn every_terminal_font_falls_back_to_the_icon_font() {
         for family in ["Menlo", "IosevkaTerm Nerd Font Mono"] {

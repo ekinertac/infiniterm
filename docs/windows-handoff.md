@@ -26,9 +26,14 @@ Master's new code is Mac or unix only and stays that way here, each behind a
 - **Seven AppKit/CoreText ui modules** (finder_service, fullscreen, icon_font,
   instance_icon, middle_drag, native_menu, title_drag) have same-named
   stand-ins in `infiniterm-ui/src/not_macos.rs`. What each leaves undone is
-  in that file's header. The visible gaps are: **no right-click menu** (the
-  native menu is the only one), no full-screen toggle, and the bundled Nerd
-  Font is not registered, so prompt icons need an installed Nerd Font.
+  in that file's header. The visible gaps that remain: no full-screen toggle,
+  no taskbar badge, and **the browser page's right-click menu does
+  nothing**: since #522 the app's own menus are drawn by gpui where there is
+  no `NSMenu` (`menu_view.rs`), so Windows has them, but
+  `browsers.rs::show_page_menu` still calls the `native_menu::pop_up` stub,
+  which answers "dismissed". It needs the same gpui drawing; not done.
+  The bundled Nerd Font is registered and its icons draw (see "Prompt icons"
+  below).
 - **Daemon-only features** (parking a closed card, `ift sessions`/`attach`)
   are absent as before: there is no `iftd`.
 
@@ -36,6 +41,34 @@ Two rules for the next merge: a new `std::os::unix` or `libc` call in a crate
 the box builds fails the Windows build, and a test that writes `/tmp`, uses a
 symlink, checks a mode bit or canonicalises with `std::fs::canonicalize`
 (use `paths::canonical`) fails on Windows only.
+
+## Prompt icons (Nerd Font), 2026-10-22
+
+Before this, every icon in an oh-my-posh prompt drew as a box on Windows.
+Two facts about gpui's DirectWrite text system decided the design, both found
+by reading its source and then by looking at the result:
+
+- **A font fallback is looked up by family name in the SYSTEM font collection
+  only**, so a font added with `add_fonts` (the bundled Symbols Nerd Font
+  Mono) is invisible to `Font::fallbacks`. Naming it in a run does find it.
+- **One line is one DirectWrite layout, and its font collection (system or
+  custom) comes from the line's FIRST run.** A line that mixes the bundled
+  font (custom collection) with Cascadia Mono (system) looks the second
+  family up in the wrong collection and gets the default face. The first
+  attempt put each icon in a run of its own and the prompt's digits and
+  letters came out in Segoe UI: the glyph advances were 3.8, 7.5, 3.0 where a
+  monospace face gives one width.
+
+So `terminal_body::shape_row` leaves a space in the line where an icon is
+(`icon_chars::is_icon` says which characters), and `icon_glyph` shapes each
+icon alone, cached per character and size, and paints it at its cell. Only
+where `SEPARATE_ICONS` is on (Windows); macOS and Linux are unchanged. It was
+checked on screen with the box's own oh-my-posh prompt (folder, home, clock,
+powerline separators drawn; text still monospace) using `app-shot.ps1`.
+
+Not covered: the editor and the diff card draw text with their own fonts and
+do not go through this path. A character in the private use area that the
+bundled font lacks draws nothing.
 
 ## Where this stands
 
