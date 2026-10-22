@@ -273,7 +273,7 @@ pub fn term_font(family: &str) -> gpui::Font {
 /// font's family. True where gpui cannot fall back to a font the app bundled
 /// (Windows, see `icon_chars.rs`); elsewhere the fallback list does it.
 #[cfg(windows)]
-const ICON_RUNS: bool = false; // EXPERIMENT: is it the splitting or add_fonts?
+const ICON_RUNS: bool = true;
 #[cfg(not(windows))]
 const ICON_RUNS: bool = false;
 
@@ -1660,6 +1660,25 @@ fn paint_row(
     // of the same character (a combining mark) keeps its offset from it.
     let mut first_x: Vec<Option<Pixels>> = vec![None; shaped.slots.len()];
     let font_size = line.font_size;
+    // TEMPORARY DEBUG (remove before the PR).
+    {
+        static SHOWN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        if line.runs.len() > 1 && SHOWN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 3 {
+            for run in &line.runs {
+                eprintln!(
+                    "[icondebug] run font_id={:?} glyphs={} xs={:?}",
+                    run.font_id,
+                    run.glyphs.len(),
+                    run.glyphs
+                        .iter()
+                        .take(10)
+                        .map(|g| (g.index, f32::from(g.position.x)))
+                        .collect::<Vec<_>>()
+                );
+            }
+            eprintln!("[icondebug] cell_w={:?} slots={}", cell_w, shaped.slots.len());
+        }
+    }
     for run in &line.runs {
         for glyph in &run.glyphs {
             let Some(&slot_i) = shaped.slot_of_byte.get(glyph.index) else {
