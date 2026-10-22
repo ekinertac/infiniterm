@@ -12,6 +12,15 @@ use crate::{now_ms, AppView, SWAP_MS};
 
 /// Big text centred on a slot that stands for a card that is somewhere else:
 /// the card in its own window (#356), a host's card a viewer cannot show (#423).
+/// Sets `chrome::CardRingGap` only when it changes, like the other per-frame
+/// globals.
+fn set_ring_gap(cx: &mut gpui::App, gap: Pixels) {
+    let gap = crate::chrome::CardRingGap(f32::from(gap));
+    if cx.try_global::<crate::chrome::CardRingGap>() != Some(&gap) {
+        cx.set_global(gap);
+    }
+}
+
 fn paint_slot_text(
     window: &mut Window,
     cx: &mut App,
@@ -38,7 +47,7 @@ use gpui::{fill, outline, point, px, size, App, BorderStyle, Bounds, Pixels, Win
 use infiniterm_core::agent_state::AgentState;
 use infiniterm_core::card_label::split_label;
 use infiniterm_core::chrome::{
-    card_border_world_px, focus_ring_alpha, focus_ring_screen_px, inverse_scale,
+    card_border_world_px, focus_ring_alpha, focus_ring_width_px, inverse_scale,
     state_border_screen_px, CARD_BORDER_SCREEN_PX,
 };
 use infiniterm_core::grid::{grid_line_offsets, is_grid_visible, Rect, Size};
@@ -337,6 +346,13 @@ impl AppView {
         if cx.try_global::<crate::chrome::CardOpacity>() != Some(&opacity) {
             cx.set_global(opacity);
         }
+        let gradient = crate::chrome::CardGradient::from_ui(&self.model.config.ui);
+        if cx.try_global::<crate::chrome::CardGradient>() != Some(&gradient) {
+            cx.set_global(gradient);
+        }
+        let gradient_on = gradient.0.is_some();
+        // No ring on the maximised path; the loop below sets it per card.
+        set_ring_gap(cx, px(0.));
         // Another app is in front: a glance must say keys are going
         // elsewhere. Every card ends up washed ONCE: the canvas here, under
         // the cards; the focused card over its body, below; an unfocused
@@ -404,6 +420,9 @@ impl AppView {
         };
         let inv = inverse_scale(vp.scale, self.model.ui_scale) as f32;
         let border_w = px((card_border_world_px(vp.scale) * vp.scale) as f32);
+        // `ui.focusRingWidth`, else the zoom-stepped ring.
+        let ring_w =
+            px(focus_ring_width_px(vp.scale, self.model.config.ui.focus_ring_width) as f32);
         // Rounded cards (`ui.cardRadius`, 0 = square): every outline of a
         // card takes it, and the bodies read it from the global.
         let radius = self.card_radius(vp.scale);
@@ -611,11 +630,24 @@ impl AppView {
                     self.bodies.get_mut(&card.id).map(|b| b.as_mut())
                 };
                 if let Some(body) = body {
+                    // A ringed card's gradient reaches out to its ring
+                    // (`chrome::CardRingGap`), so the clip grows with it.
+                    let gap = if focused || selected {
+                        ring_w * infiniterm_core::chrome::RING_GAP_RATIO as f32
+                    } else {
+                        px(0.)
+                    };
+                    set_ring_gap(cx, gap);
+                    let clip = Bounds::new(
+                        point(b.origin.x - gap, b.origin.y - gap),
+                        size(b.size.width + gap * 2., b.size.height + gap * 2.),
+                    );
                     // Clipped to the card: a long line or a wash must not
                     // paint over the neighbour.
-                    window.with_content_mask(Some(gpui::ContentMask { bounds: b }), |window| {
+                    window.with_content_mask(Some(gpui::ContentMask { bounds: clip }), |window| {
                         body.paint(b, vp.scale, focused, now, window, cx)
                     });
+                    set_ring_gap(cx, px(0.));
                 }
                 // A viewer's card that is not a terminal (#423) is a real card
                 // with no body (its file or page is on the host): its slot says
@@ -649,6 +681,9 @@ impl AppView {
                 AgentState::Waiting => chrome.agent_waiting,
                 AgentState::Failed => chrome.agent_failed,
                 AgentState::Done => chrome.agent_done,
+                // A gradient reaches the card's edge: a resting card's dark
+                // hairline over it would read as padding (#544).
+                AgentState::None if gradient_on => gpui::transparent_black(),
                 AgentState::None => chrome.card_border,
             };
             // A resting card keeps the hairline; one with an agent in it gets
@@ -680,7 +715,7 @@ impl AppView {
             }
             // The ring sits OUTSIDE the border so the border stays free for agent state.
             if focused || selected {
-                let ring = px(focus_ring_screen_px(vp.scale) as f32);
+                let ring = ring_w;
                 // One card is a FOCUS and wears the white ring. Several are
                 // a SELECTION, and every member wears the same blue at the
                 // same strength: halving the ring on the cards you did not

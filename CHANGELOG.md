@@ -6,6 +6,11 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-22
+
+- A ui theme can paint cards as a gradient: `ui.cardGradient` takes two colours (`#rgb`, `#rrggbb` or `#rrggbbaa`) and `ui.cardGradientAngle` the direction in degrees (180, the default, runs top to bottom). `ui.cardOpacity` still applies to both colours, so the gradient stays translucent over the window. Off unless the theme sets it; browser cards stay flat. With a gradient on, the gradient reaches the focus ring (no dark strip between them) and a resting card has no dark hairline border; a card with an agent in it keeps its coloured border.
+- New `ui.focusRingWidth` theme key sets the focus ring's width in screen pixels at every zoom (0 to 10). 0, the default, keeps the built-in 3, 4 or 5 pixels by zoom. The gap between a card and its ring is as wide as the ring, so a thinner ring also closes the gap.
+
 ## 0.6.3 (build 1196), 2026-10-22
 
 ### Settings files

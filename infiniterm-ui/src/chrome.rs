@@ -292,6 +292,63 @@ pub fn hex(s: &str) -> Option<Hsla> {
     Some(rgb(v).into())
 }
 
+/// A gradient stop: `#rgb`, `#rrggbb` or `#rrggbbaa` (the alpha kept).
+pub fn hex_alpha(s: &str) -> Option<Hsla> {
+    match s.strip_prefix('#')?.len() {
+        8 => {
+            let v = u32::from_str_radix(&s[1..], 16).ok()?;
+            Some(gpui::rgba(v).into())
+        }
+        _ => hex(s),
+    }
+}
+
+/// `ui.cardGradient` for the frame being painted: the two stops (alpha as
+/// written, before the card opacity) and the angle, set once a frame in
+/// `paint_world` beside `CardOpacity`. `None` is the flat fill (#544).
+#[derive(Clone, Copy, PartialEq)]
+pub struct CardGradient(pub Option<(Hsla, Hsla, f32)>);
+impl gpui::Global for CardGradient {}
+
+impl CardGradient {
+    /// The stops from the config strings; `None` unless both parse.
+    pub fn from_ui(ui: &Ui) -> Self {
+        let stops: Vec<Hsla> = ui
+            .card_gradient
+            .iter()
+            .filter_map(|s| hex_alpha(s))
+            .collect();
+        match stops[..] {
+            [a, b] => Self(Some((a, b, ui.card_gradient_angle as f32))),
+            _ => Self(None),
+        }
+    }
+}
+
+/// The strip of canvas between a ringed card and its focus ring, in screen
+/// pixels, for the card being painted; 0 for a card without a ring. With a
+/// gradient the body's fill grows by this much so the gradient reaches the
+/// ring instead of leaving a dark gap (#544). Set per card in `paint_world`.
+#[derive(Clone, Copy, PartialEq)]
+pub struct CardRingGap(pub f32);
+impl gpui::Global for CardRingGap {}
+
+/// A card's background at the card opacity: the gradient when the theme set
+/// one (it replaces `flat`, the terminal theme's background), else `flat`.
+/// Only the fill across the whole body goes through this: text, selections and
+/// cells a program coloured keep their own alpha.
+pub fn card_ground(cx: &gpui::App, flat: Hsla) -> gpui::Background {
+    let opacity = cx.try_global::<CardOpacity>().map_or(1., |o| o.0);
+    match cx.try_global::<CardGradient>().and_then(|g| g.0) {
+        Some((from, to, angle)) => gpui::linear_gradient(
+            angle,
+            gpui::linear_color_stop(scaled_alpha(from, opacity), 0.),
+            gpui::linear_color_stop(scaled_alpha(to, opacity), 1.),
+        ),
+        None => scaled_alpha(flat, opacity).into(),
+    }
+}
+
 /// `ui.cardOpacity` for the frame being painted, as a gpui global so every
 /// body's `paint` can reach it without a new parameter on `CardBody`
 /// (#98). Set once a frame in `paint_world`; absent means opaque.
@@ -323,20 +380,45 @@ pub fn card_body_quad(
     bounds: gpui::Bounds<gpui::Pixels>,
     c: Hsla,
 ) -> gpui::PaintQuad {
-    gpui::fill(bounds, card_fill(cx, c)).corner_radii(card_radius(cx))
+    let (bounds, radius) = ring_reach(cx, bounds, card_radius(cx));
+    gpui::fill(bounds, card_ground(cx, c)).corner_radii(radius)
+}
+
+/// The fill's bounds and corner radius: grown to the focus ring while a
+/// gradient is on, else the card's own.
+fn ring_reach(
+    cx: &gpui::App,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    radius: gpui::Pixels,
+) -> (gpui::Bounds<gpui::Pixels>, gpui::Pixels) {
+    let gap = cx.try_global::<CardRingGap>().map_or(0., |g| g.0);
+    let gradient = cx
+        .try_global::<CardGradient>()
+        .is_some_and(|g| g.0.is_some());
+    if !gradient || gap <= 0. {
+        return (bounds, radius);
+    }
+    grow(bounds, radius, gpui::px(gap))
+}
+
+/// `bounds` grown by `gap` on every side, the radius with it so the corners
+/// stay concentric with the card's.
+fn grow(
+    bounds: gpui::Bounds<gpui::Pixels>,
+    radius: gpui::Pixels,
+    gap: gpui::Pixels,
+) -> (gpui::Bounds<gpui::Pixels>, gpui::Pixels) {
+    let grown = gpui::Bounds::new(
+        gpui::point(bounds.origin.x - gap, bounds.origin.y - gap),
+        gpui::size(bounds.size.width + gap * 2., bounds.size.height + gap * 2.),
+    );
+    (grown, radius + gap)
 }
 
 /// A wash over a whole body (the inactive dim), rounded like the body so its
 /// corners do not poke out past the card's.
 pub fn card_wash(cx: &gpui::App, bounds: gpui::Bounds<gpui::Pixels>, c: Hsla) -> gpui::PaintQuad {
     gpui::fill(bounds, c).corner_radii(card_radius(cx))
-}
-
-/// A card's background fill at the card opacity. Only the fill across the
-/// whole body goes through this: text, selections and cells a program
-/// coloured keep their own alpha.
-pub fn card_fill(cx: &gpui::App, c: Hsla) -> Hsla {
-    scaled_alpha(c, cx.try_global::<CardOpacity>().map_or(1., |o| o.0))
 }
 
 /// `c` with its own alpha multiplied by `factor`: a fill that was already
@@ -598,6 +680,43 @@ mod tests {
             over_glyph_budget(card * 20, 0, GLYPH_BUDGET_CELLS),
             "a wall of twenty is bars"
         );
+    }
+
+    #[test]
+    fn a_gradient_stop_keeps_its_own_alpha() {
+        assert!((hex_alpha("#ff000080").unwrap().a - 128. / 255.).abs() < 0.01);
+        assert_eq!(hex_alpha("#ff0000").unwrap().a, 1.);
+        assert_eq!(hex_alpha("#f00"), hex("#f00"));
+        assert!(hex_alpha("#ff00").is_none());
+        assert!(hex_alpha("red").is_none());
+    }
+
+    #[test]
+    fn the_fill_grows_to_the_ring_with_concentric_corners() {
+        let b = gpui::Bounds::new(
+            gpui::point(gpui::px(10.), gpui::px(20.)),
+            gpui::size(gpui::px(100.), gpui::px(50.)),
+        );
+        let (g, r) = grow(b, gpui::px(6.), gpui::px(2.));
+        assert_eq!((g.origin.x, g.origin.y), (gpui::px(8.), gpui::px(18.)));
+        assert_eq!(
+            (g.size.width, g.size.height),
+            (gpui::px(104.), gpui::px(54.))
+        );
+        assert_eq!(r, gpui::px(8.));
+    }
+
+    #[test]
+    fn the_gradient_is_off_unless_both_stops_parse() {
+        let mut ui = infiniterm_core::config::default_config().ui;
+        assert!(CardGradient::from_ui(&ui).0.is_none());
+        ui.card_gradient = vec!["#111".into(), "#222222cc".into()];
+        ui.card_gradient_angle = 90.;
+        let (a, b, angle) = CardGradient::from_ui(&ui).0.unwrap();
+        assert_eq!((a, angle), (hex("#111").unwrap(), 90.));
+        assert!((b.a - 0.8).abs() < 0.01);
+        ui.card_gradient = vec!["#111".into()];
+        assert!(CardGradient::from_ui(&ui).0.is_none());
     }
 
     /// A window that holds 200,000 cells at 100% (a large one) and is covered

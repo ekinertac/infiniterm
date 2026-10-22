@@ -73,13 +73,24 @@ pub enum Kind {
     Bool,
     Text,
     TextOrList,
+    /// A list of exactly two gradient stops, or an empty list (off).
+    ColorPair,
+}
+
+/// A gradient stop: `#rgb`, `#rrggbb` or `#rrggbbaa`. Unlike a bar colour it
+/// may carry its own alpha, which the card opacity then multiplies (#544).
+pub fn is_gradient_stop(s: &str) -> bool {
+    let Some(h) = s.strip_prefix('#') else {
+        return false;
+    };
+    matches!(h.len(), 3 | 6 | 8) && h.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Every look key the file accepts, with its value kind. These are the keys
 /// that left settings.json in #511. The `settings_doc` rule applies here too:
 /// a key someone can write is a key in this list, in `Ui::take_look_from`
 /// and in the docs; a test holds each of the three.
-pub const LOOK_KEYS: [(&str, Kind); 17] = [
+pub const LOOK_KEYS: [(&str, Kind); 20] = [
     ("ui.windowOpacity", Kind::Number),
     ("ui.windowBlur", Kind::Bool),
     ("ui.windowColor", Kind::Text),
@@ -89,6 +100,9 @@ pub const LOOK_KEYS: [(&str, Kind); 17] = [
     ("ui.backgroundImageFit", Kind::Text),
     ("ui.cardRadius", Kind::Number),
     ("ui.cardOpacity", Kind::Number),
+    ("ui.cardGradient", Kind::ColorPair),
+    ("ui.cardGradientAngle", Kind::Number),
+    ("ui.focusRingWidth", Kind::Number),
     ("ui.showGrid", Kind::Bool),
     ("ui.inactiveDim", Kind::Number),
     ("ui.unfocusedDim", Kind::Number),
@@ -234,6 +248,13 @@ fn check_kind(key: &str, kind: Kind, v: &Value) -> Result<(), String> {
             v.is_string() || v.as_array().is_some_and(|a| a.iter().all(Value::is_string)),
             "text or a list of text",
         ),
+        Kind::ColorPair => (
+            v.as_array().is_some_and(|a| {
+                a.is_empty()
+                    || (a.len() == 2 && a.iter().all(|s| s.as_str().is_some_and(is_gradient_stop)))
+            }),
+            "[] or two colours like [\"#3a2c27\", \"#1f1a18\"] (#rgb, #rrggbb or #rrggbbaa)",
+        ),
     };
     if ok {
         Ok(())
@@ -369,6 +390,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_card_gradient_is_two_stops_or_off() {
+        let t = parse(
+            r##"{"ui.cardGradient": ["#3a2c27", "#1f1a18cc"], "ui.cardGradientAngle": 170}"##,
+        )
+        .unwrap();
+        assert_eq!(t.look["ui.cardGradient"], json!(["#3a2c27", "#1f1a18cc"]));
+        assert!(parse(r#"{"ui.cardGradient": []}"#).is_ok());
+        for bad in [
+            r##"{"ui.cardGradient": ["#fff"]}"##,
+            r##"{"ui.cardGradient": ["#fff", "#000", "#123"]}"##,
+            r##"{"ui.cardGradient": ["#fff", "red"]}"##,
+            r##"{"ui.cardGradient": ["#fff", "#12345"]}"##,
+            r##"{"ui.cardGradient": "#fff"}"##,
+            r##"{"ui.cardGradientAngle": "up"}"##,
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains("ui.cardGradient"), "{e}");
+        }
+    }
+
     // A behaviour key is not a look key: it stays in settings.json.
     #[test]
     fn a_behaviour_key_or_a_typo_rejects_the_file() {
@@ -409,6 +451,7 @@ mod tests {
                 (_, Kind::Number) => json!(0.5),
                 (_, Kind::Text) => json!("x"),
                 (_, Kind::TextOrList) => json!(["dusk"]),
+                (_, Kind::ColorPair) => json!(["#112233", "#445566ff"]),
             };
             let look = merge_config(&json!({ key: sample })).ui;
             let mut ui = default_config().ui;

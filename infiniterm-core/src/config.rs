@@ -339,6 +339,15 @@ pub struct Ui {
     pub window_color: String,
     /// Alpha of a card's background fill, text untouched (#98).
     pub card_opacity: f64,
+    /// A card's background as a gradient: exactly two `#rgb`, `#rrggbb` or
+    /// `#rrggbbaa` stops, empty for the flat fill (#544). gpui draws two stops.
+    pub card_gradient: Vec<String>,
+    /// The gradient's direction in degrees, CSS-style: 0 points up, 180 (the
+    /// default) runs from the first stop at the top to the second at the bottom.
+    pub card_gradient_angle: f64,
+    /// The focus ring's width in screen pixels at every zoom; 0 keeps the
+    /// built-in 3, 4 or 5 by zoom (#544).
+    pub focus_ring_width: f64,
     /// Rounded card corners, in pixels at 100% zoom; 0 keeps them square (#235).
     pub card_radius: f64,
     /// Whether the canvas draws its grid (#96).
@@ -419,6 +428,9 @@ impl Ui {
         self.background_image_fit = look.background_image_fit;
         self.card_radius = look.card_radius;
         self.card_opacity = look.card_opacity;
+        self.card_gradient = look.card_gradient.clone();
+        self.card_gradient_angle = look.card_gradient_angle;
+        self.focus_ring_width = look.focus_ring_width;
         self.show_grid = look.show_grid;
         self.hide_label_when_fitted = look.hide_label_when_fitted;
     }
@@ -567,6 +579,9 @@ pub fn default_config() -> Config {
             workspace_isolation: false,
             window_color: String::new(),
             card_opacity: 1.,
+            card_gradient: Vec::new(),
+            card_gradient_angle: 180.,
+            focus_ring_width: 0.,
             card_radius: 0.,
             card_zoom: 1.5,
             glyph_budget: DEFAULT_GLYPH_BUDGET,
@@ -619,6 +634,18 @@ fn num(value: Option<&Value>, fallback: f64, min: f64, max: f64) -> f64 {
 
 /// A setting that is one string or a list of them (`ui.backgroundImage`):
 /// the trimmed, non-empty strings, in order. Anything else is an empty list.
+/// `ui.cardGradient`: both stops or none. A bad pair (the ui theme parser
+/// rejects one, so this only guards a hand-built value) turns the gradient off
+/// rather than painting half of one.
+fn gradient_stops(value: Option<&Value>) -> Vec<String> {
+    let stops = string_or_list(value);
+    if stops.len() == 2 && stops.iter().all(|s| crate::ui_theme::is_gradient_stop(s)) {
+        stops
+    } else {
+        Vec::new()
+    }
+}
+
 fn string_or_list(value: Option<&Value>) -> Vec<String> {
     let one = |v: &Value| v.as_str().map(|s| s.trim().to_string());
     match value {
@@ -893,6 +920,14 @@ pub fn merge_config(raw: &Value) -> Config {
                 .trim()
                 .to_string(),
             card_opacity: num(u.get("cardOpacity"), d.ui.card_opacity, 0.1, 1.),
+            card_gradient: gradient_stops(u.get("cardGradient")),
+            card_gradient_angle: num(
+                u.get("cardGradientAngle"),
+                d.ui.card_gradient_angle,
+                0.,
+                360.,
+            ),
+            focus_ring_width: num(u.get("focusRingWidth"), d.ui.focus_ring_width, 0., 10.),
             card_radius: num(u.get("cardRadius"), d.ui.card_radius, 0., 40.),
             // `ui.readZoom` was this setting's name in 0.5.11; the new one wins.
             card_zoom: {
@@ -1489,6 +1524,38 @@ mod tests {
         assert_eq!(m(json!({"ui.cardRadius": 500})).ui.card_radius, 40.);
         assert_eq!(m(json!({"ui.cardRadius": -3})).ui.card_radius, 0.);
         assert_eq!(m(json!({"ui.cardRadius": "big"})).ui.card_radius, 0.);
+    }
+
+    #[test]
+    fn card_gradient_is_off_by_default_and_needs_both_stops() {
+        assert!(m(json!({})).ui.card_gradient.is_empty());
+        assert_eq!(m(json!({})).ui.card_gradient_angle, 180.);
+        let on = m(json!({"ui.cardGradient": ["#111", "#222222cc"], "ui.cardGradientAngle": 90}));
+        assert_eq!(on.ui.card_gradient, vec!["#111", "#222222cc"]);
+        assert_eq!(on.ui.card_gradient_angle, 90.);
+        for bad in [json!(["#111"]), json!(["#111", "red"]), json!("#111")] {
+            assert!(m(json!({ "ui.cardGradient": bad }))
+                .ui
+                .card_gradient
+                .is_empty());
+        }
+        assert_eq!(
+            m(json!({"ui.cardGradientAngle": 999}))
+                .ui
+                .card_gradient_angle,
+            360.
+        );
+    }
+
+    #[test]
+    fn the_focus_ring_width_is_the_built_in_unless_set_and_clamps() {
+        assert_eq!(m(json!({})).ui.focus_ring_width, 0.);
+        assert_eq!(
+            m(json!({"ui.focusRingWidth": 1.5})).ui.focus_ring_width,
+            1.5
+        );
+        assert_eq!(m(json!({"ui.focusRingWidth": 99})).ui.focus_ring_width, 10.);
+        assert_eq!(m(json!({"ui.focusRingWidth": -2})).ui.focus_ring_width, 0.);
     }
 
     #[test]
