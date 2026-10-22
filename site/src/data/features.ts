@@ -101,6 +101,7 @@ export const featureGroups: FeatureGroup[] = [
   {
     title: 'Look and settings',
     items: [
+      { text: 'UI themes: the look of the app lives in `ui-themes/<name>.json`, one file per look, switched and previewed from the palette.', href: 'guide/configuration/#ui-themes' },
       { text: '522 themes, previewed live as you move through the list.', href: 'guide/configuration/#themes' },
       { text: 'Settings as flat dotted keys, with every default documented beside your file. Changes apply on save.', href: 'guide/configuration/#settings' },
       { text: '`settings.json` is checked before it applies: a mistake keeps your old settings and the status bar says why.', href: 'guide/configuration/' },

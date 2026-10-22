@@ -45,7 +45,7 @@ Canvas: tidy, in the palette, packs the cards back onto the grid in reading orde
 - Scrolling is for cards. A plain scroll, a mouse wheel or two fingers on the trackpad goes to the card under the pointer: a terminal's history, an editor, a page. Over empty canvas it does nothing. To pan, drag with `Cmd` held, middle-drag, or use `Cmd Ctrl Shift` + arrow.
 - `Cmd` + scroll, or a pinch on the trackpad, zooms around the pointer. The palette has zoom in and out too. (`Cmd =` and `Cmd -` change the terminal font size; see [Terminal cards](../terminal/).)
 - `Cmd Alt` + two fingers (or `Cmd Alt` + the wheel) moves the focus like `Cmd Alt` + arrow, one card for each swipe. `Cmd Shift` + two fingers sideways switches to the next or previous workspace, once a swipe. The momentum after you lift your fingers does not keep moving.
-- `Cmd 0` actual size, `Cmd 1` fit the focused card, `Cmd 2` fit everything.
+- `Cmd 0` actual size, `Cmd 1` fit the focused card, `Cmd 2` fit everything. `"ui.hideLabelWhenFitted": true` in a ui theme leaves the card's label off on the card `Cmd 1` fitted to the window.
 - `Cmd 3` fits the selected cards when several are selected. With one card it fits the card's group, or else the block of cards around it (every card within a gutter of the next).
 - Double-click a card's frame or label to fit it; double-click empty canvas to fit everything. A terminal card drawn as bars (only when `ui.textAsBars` is on, see below) fits on a double-click anywhere on it.
 
