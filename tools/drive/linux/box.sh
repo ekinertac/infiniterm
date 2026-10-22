@@ -79,7 +79,12 @@ up)
         echo provisioned"
     ;;
 sync)
-    rsync -az --delete --exclude /target --exclude /.git --exclude /.claude \
+    # Not -a: it keeps each file's time, and a checkout edited before the
+    # box's last build looked older than that build, so cargo skipped the
+    # rebuild (seen syncing another branch onto a used box). Without -t a
+    # copied file gets the time it lands; --checksum leaves files that did
+    # not change alone, so their times stay and nothing extra rebuilds.
+    rsync -rlpz --checksum --delete --exclude /target --exclude /.git --exclude /.claude \
         --exclude node_modules --exclude /.scratchpad --exclude /site/dist \
         -e "ssh ${SSH_OPTS[*]}" "$ROOT/" "$(host):$DIR/"
     echo "synced to $(host):$DIR"
