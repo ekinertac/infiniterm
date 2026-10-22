@@ -530,6 +530,10 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["No label on a maximised card: it fills the window and the status bar names it."],
     ),
     (
+        "ui.hideBuildNumber",
+        &["No \"build N\" at the right end of the status bar."],
+    ),
+    (
         "ui.cardLabelSize",
         &[
             "Screen pixels, before the Cmd+Shift+= multiplier, at 60% zoom and closer;",

@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-22
+
+- `"ui.hideBuildNumber": true` in settings.json hides "build N" at the right end of the status bar.
+
 ## 0.6.3 (build 1196), 2026-10-22
 
 ### Settings files

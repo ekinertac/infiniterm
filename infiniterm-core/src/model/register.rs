@@ -2241,6 +2241,14 @@ mod tests {
         assert!(h.m.card_label_hidden(&a));
     }
 
+    #[test]
+    fn hide_build_number_is_a_setting_off_by_default() {
+        let mut h = Harness::new();
+        assert!(!h.m.config.ui.hide_build_number);
+        h.m.apply_settings_text(r#"{"ui.hideBuildNumber": true}"#);
+        assert!(h.m.config.ui.hide_build_number);
+    }
+
     // The file is checked before it is applied, and a file with an error is not
     // accepted: the settings in force stay and the notice says what is wrong.
     #[test]
