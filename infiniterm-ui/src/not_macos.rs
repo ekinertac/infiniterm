@@ -10,13 +10,17 @@
 //! library.
 //!
 //! What each stub leaves undone on Windows, and what would finish it:
-//! - `native_menu`: no right-click menu. `pop_up` answers "dismissed". A
-//!   Windows port needs `TrackPopupMenu` or an in-app menu drawn by gpui.
+//! - `native_menu`: `pop_up` answers "dismissed". The app's own right-click
+//!   menus no longer use it where there is no `NSMenu` (they are drawn by
+//!   gpui, `menu_view.rs`), but the browser page's menu
+//!   (`browsers.rs::show_page_menu`) still does, so on Windows that one
+//!   does nothing until it is drawn the same way.
 //! - `fullscreen`: the app menu's toggle and `ui.fullscreen` do nothing; gpui's
 //!   own `toggle_fullscreen` on the window would do it.
-//! - `icon_font`: the bundled Nerd Font is not registered, so prompt icons
-//!   come from whatever Nerd Font the user installed; DirectWrite resolves
-//!   fallbacks by family name and gpui's `add_fonts` is the way in.
+//! - `icon_font`: the bundled Nerd Font is handed to gpui at start-up
+//!   (`main.rs`, `add_fonts`) and the terminal paints icons from it
+//!   (`terminal_body::icon_glyph`); only `ICON_FONT_FAMILY` and the bytes
+//!   live here.
 //! - `instance_icon`: no Dock badge; Windows has taskbar overlays instead.
 //! - `finder_service`: no "open folder in infiniterm" service.
 //! - `title_drag`: an AppKit view patch on the Mac. Here: Linux moves and
@@ -60,12 +64,26 @@ pub mod fullscreen {
 }
 
 pub mod icon_font {
-    /// Empty: nothing is registered, so nothing can be drawn from it.
+    /// Windows bundles the font and hands it to gpui at start-up
+    /// (`main.rs`, `add_fonts`); icons are then painted from glyphs shaped
+    /// by `ICON_FONT_FAMILY` on their own (`terminal_body::icon_glyph`),
+    /// because gpui's Windows fallback list looks in the SYSTEM font
+    /// collection only and cannot see a font added this way, and a line
+    /// that mixes the two collections loses one of them. Other platforms
+    /// have no bundled copy.
+    #[cfg(windows)]
+    pub const ICON_FONT_TTF: &[u8] =
+        include_bytes!("../../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
+    #[cfg(not(windows))]
     pub const ICON_FONT_TTF: &[u8] = &[];
     pub const ICON_FONT_POSTSCRIPT: &str = "SymbolsNFM";
+    /// The family name in the font's own name table, which is what gpui's
+    /// DirectWrite lookup matches (the PostScript name above is CoreText's).
+    pub const ICON_FONT_FAMILY: &str = "Symbols Nerd Font Mono";
 
     /// True, so the start-up warning about a missing bundled font does not
-    /// fire on a platform where the font is not bundled yet.
+    /// fire on a platform where the font is not bundled yet. On Windows the
+    /// real work is `add_fonts` in `main.rs`, which has the `App` this lacks.
     pub fn register() -> bool {
         true
     }

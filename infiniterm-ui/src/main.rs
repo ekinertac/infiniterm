@@ -46,6 +46,7 @@ mod input;
 mod instance_icon;
 mod keycast;
 mod keycode;
+mod menu_view;
 mod menus;
 #[cfg(target_os = "macos")]
 mod middle_drag;
@@ -54,7 +55,11 @@ mod native_menu;
 #[cfg(not(target_os = "macos"))]
 mod not_macos;
 #[cfg(not(target_os = "macos"))]
-use not_macos::{finder_service, fullscreen, icon_font, instance_icon, native_menu, title_drag};
+use not_macos::{finder_service, fullscreen, icon_font, instance_icon, title_drag};
+// Off macOS the card menus are drawn (`menu_view.rs`); only the browser
+// page's own menu still asks for the native one.
+#[cfg(all(not(target_os = "macos"), feature = "browser"))]
+use not_macos::native_menu;
 mod omnibox;
 mod overlays;
 mod own_window;
@@ -286,6 +291,12 @@ pub struct AppView {
     /// up (`not_macos.rs::title_drag`).
     #[cfg(not(target_os = "macos"))]
     pub title_press: Option<(f32, f32)>,
+    /// Where the last right-click landed, window pixels: a drawn menu
+    /// (`menus.rs`, off macOS) opens there.
+    pub menu_anchor: (f32, f32),
+    /// What a drawn menu's choice runs against: the workspace a tab menu was
+    /// for and the editor whose tree row is lit (`menus.rs::close_menu`).
+    pub menu_pending: Option<(Option<String>, Option<String>)>,
     /// The prompt's field, opened with the suggestion selected; the palette's query.
     pub prompt_field: field::Field,
     pub query_field: field::Field,
@@ -647,6 +658,16 @@ fn main() {
         // through CoreText, which cannot see gpui's own store.
         if !icon_font::register() {
             eprintln!("[infiniterm/warn] the bundled icon font is not resolvable; prompt icons may draw as boxes");
+        }
+        // Windows: the same font, through gpui's own store. Its fallback
+        // list cannot reach a font added this way, so the terminal names the
+        // family in the runs that hold icons (`terminal_body::shape_row`).
+        #[cfg(windows)]
+        if let Err(e) = cx
+            .text_system()
+            .add_fonts(vec![std::borrow::Cow::Borrowed(icon_font::ICON_FONT_TTF)])
+        {
+            eprintln!("[infiniterm/warn] the bundled icon font would not load: {e}");
         }
         // A window that quit full screen opens at its old frame and goes
         // full screen once it exists, through the same toggle as the green

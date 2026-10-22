@@ -353,6 +353,22 @@ mod tests {
         assert_eq!(h.m.card(&ids[2]).unwrap().agent, None);
     }
 
+    // A drawn right-click menu owns the keys and the wheel like any overlay,
+    // and draws no dim sheet over the canvas: paint.rs dims for the palette
+    // only (`Source::dims_canvas`), which a menu is not.
+    #[test]
+    fn a_drawn_menu_is_an_overlay_that_owns_the_keys() {
+        let mut h = Harness::new();
+        assert!(!h.m.overlay_open());
+        h.m.menu = Some(crate::menu_nav::OpenMenu {
+            nav: crate::menu_nav::MenuNav::new(vec![]),
+            at: (10.0, 10.0),
+        });
+        assert!(h.m.overlay_open());
+        assert!(h.m.modal_open());
+        assert!(h.m.palette.source.is_none(), "no palette, so no dim sheet");
+    }
+
     // Release commits: the selected card is focused; Escape leaves things
     // where they were. A card in another workspace brings its workspace.
     #[test]

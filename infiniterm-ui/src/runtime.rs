@@ -123,6 +123,8 @@ impl AppView {
             page_menu_open: false,
             #[cfg(not(target_os = "macos"))]
             title_press: None,
+            menu_anchor: (0., 0.),
+            menu_pending: None,
             background: Default::default(),
             scale_factor,
             cef_running: false,
