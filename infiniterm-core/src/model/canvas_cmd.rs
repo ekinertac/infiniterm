@@ -149,7 +149,8 @@ impl Model {
     /// Whether the chips on this card are hidden because the view is filled by
     /// it: the maximised card (`ui.hideLabelWhenMaximised`, #71) or the card
     /// Cmd+1 fitted to the window (`ui.hideLabelWhenFitted`, a ui theme key,
-    /// #511). The status bar names the focused card either way.
+    /// #511), or the only card on its workspace (#548). The status bar names
+    /// the focused card either way.
     pub fn card_label_hidden(&self, card_id: &str) -> bool {
         if self.selection.focused_id.as_deref() != Some(card_id) {
             return false;
@@ -157,8 +158,14 @@ impl Model {
         let ui = &self.config.ui;
         (ui.hide_label_when_maximised && self.selection.maximized)
             || (ui.hide_label_when_fitted
-                && self.framing
-                && self.framed_card.as_deref() == Some(card_id))
+                && ((self.framing && self.framed_card.as_deref() == Some(card_id))
+                    || self.is_only_card_here(card_id)))
+    }
+
+    /// The one card on the active workspace (#548): nothing else to tell it
+    /// from, so `ui.hideLabelWhenFitted` hides its chips without a Cmd+1.
+    fn is_only_card_here(&self, card_id: &str) -> bool {
+        matches!(self.here().as_slice(), [c] if c.id == card_id)
     }
 
     /// Steps through the installed schemes, so trying them is one keystroke.
