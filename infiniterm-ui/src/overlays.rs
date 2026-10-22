@@ -454,7 +454,21 @@ impl Render for AppView {
         let chrome = self.chrome.clone();
         let entity = cx.entity();
         let focus = self.focus.clone();
-        let title_bar = self.render_title_bar(cx);
+        // Linux with client-side decorations: the window's buttons at the
+        // end of the bar and resize bands on the border (`window_frame.rs`).
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let frame = crate::window_frame::client_tiling(window);
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let (trailing, edges) = match frame {
+            Some(tiling) => (
+                Some(self.window_buttons(window, self.chrome.text)),
+                self.window_edges(tiling),
+            ),
+            None => (None, vec![]),
+        };
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        let (trailing, edges): (Option<gpui::AnyElement>, Vec<gpui::AnyElement>) = (None, vec![]);
+        let title_bar = self.render_title_bar(trailing, cx);
         let status_bar = self.render_status_bar(cx);
         let palette = self
             .model
@@ -654,11 +668,18 @@ impl Render for AppView {
             )
             .child(status_bar)
             .children(menu)
+            .children(edges)
     }
 }
 
 impl AppView {
-    fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// `trailing`: anything at the bar's right end after the host chip (the
+    /// window's own buttons on Linux with client-side decorations).
+    fn render_title_bar(
+        &self,
+        trailing: Option<gpui::AnyElement>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         // The interface multiplier (Cmd+Shift+= / -) reaches the tabs and the panels.
         let ui = self.model.ui_scale as f32;
         let chrome = &self.chrome;
@@ -900,7 +921,13 @@ impl AppView {
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _, _| this.title_press = None),
             );
-        bar.child(tabs).children(chip)
+        let bar = bar.child(tabs);
+        match trailing {
+            None => bar.children(chip).into_any_element(),
+            Some(buttons) => bar
+                .child(div().flex().items_center().children(chip).child(buttons))
+                .into_any_element(),
+        }
     }
 
     /// Whether the focused card is a locked browser: the one fact the

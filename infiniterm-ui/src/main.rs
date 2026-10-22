@@ -78,6 +78,10 @@ mod title_drag;
 mod transcript_body;
 mod updater;
 mod whats_new;
+// The frame the app draws on Linux when gpui gives it client-side
+// decorations (GNOME style buttons, resize edges).
+#[cfg(all(unix, not(target_os = "macos")))]
+mod window_frame;
 mod window_state;
 
 use animator::Animator;
@@ -703,12 +707,22 @@ fn main() {
             appears_transparent: false,
             traffic_light_position: None,
         };
+        #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(unused_mut))]
+        let mut options = WindowOptions {
+            window_bounds: Some(window_bounds),
+            titlebar: Some(titlebar),
+            ..Default::default()
+        };
+        // Linux: the app's own bar as the window's only bar where a
+        // compositor can do it (GNOME Wayland has no system frame at all);
+        // gpui falls back to the system frame where it cannot
+        // (`window_frame.rs`).
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            options.window_decorations = Some(gpui::WindowDecorations::Client);
+        }
         cx.open_window(
-            WindowOptions {
-                window_bounds: Some(window_bounds),
-                titlebar: Some(titlebar),
-                ..Default::default()
-            },
+            options,
             |window, cx| {
                 // Before anything measures a terminal cell: the family is
                 // picked from the fonts this machine has (#464).

@@ -19,8 +19,11 @@
 #                     a left-button drag in steps.
 #   dblclick <x> <y>  a left double-click.
 #   win               the app window's frame on screen: x y w h.
+#   move <x> <y>      the app window to that place on screen.
 #   type <text>       types text into the focused window.
 #   layout <xkb>      the keyboard layout, `layout tr` or `layout us intl`.
+#   wm openbox|xfwm4  the window manager; xfwm4 (with its compositor) is
+#                     the one where gpui draws client-side decorations.
 #   ift <args...>     `ift` against the scratch instance.
 #   setting <json> [fresh]
 #                     writes <data>/config/settings.json (before `start`);
@@ -56,7 +59,9 @@ start_display() {
         setsid Xvfb "$DISPLAY" -screen 0 1920x1080x24 </dev/null >/tmp/ift-xvfb.log 2>&1 &
         for _ in $(seq 50); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; done
     fi
-    pgrep -x openbox >/dev/null || { setsid openbox </dev/null >/tmp/ift-openbox.log 2>&1 & }
+    # A window manager unless one runs already (`wm` picks which).
+    pgrep -x openbox >/dev/null || pgrep -x xfwm4 >/dev/null \
+        || { setsid openbox </dev/null >/tmp/ift-openbox.log 2>&1 & }
     sleep 1
 }
 
@@ -76,6 +81,10 @@ start)
     # The window draws a moment after the socket is up.
     sleep 3
     echo "started: pid $(app_pid)"
+    ;;
+pid)
+    # The instance's pid, empty when it is not running.
+    app_pid
     ;;
 stop)
     pid=$(app_pid)
@@ -131,6 +140,12 @@ dblclick)
     xdotool mousemove "${2:?dblclick <x> <y>}" "${3:?}" click --repeat 2 --delay 80 1
     sleep 0.8
     ;;
+move)
+    # `move <x> <y>`: the app window to that place on screen.
+    id=$(xdotool search --name '^infiniterm$' | head -1)
+    xdotool windowmove "$id" "${2:?move <x> <y>}" "${3:?}"
+    sleep 0.5
+    ;;
 win)
     # The app window's frame on screen: `x y w h`. By name, which is safe on
     # the box: the instance under test is the only infiniterm there.
@@ -145,6 +160,24 @@ layout)
     # The layout lives on the display, so it needs one before the app.
     start_display
     setxkbmap "${2:?layout <xkb>}" ${3:+-variant "$3"}
+    ;;
+wm)
+    # `wm openbox|xfwm4`: the window manager. gpui draws client-side
+    # decorations on X11 only with a compositor AND a window manager that
+    # supports `_GTK_FRAME_EXTENTS` (window_frame.rs); openbox has neither,
+    # xfwm4 with its compositor has both (picom beside openbox was tried:
+    # still the system frame). Switch BEFORE starting the app, which asks
+    # once, when its window opens.
+    start_display
+    pkill -x openbox || true
+    pkill -x xfwm4 || true
+    sleep 0.5
+    case "${2:?wm openbox|xfwm4}" in
+        openbox) setsid openbox </dev/null >/tmp/ift-openbox.log 2>&1 & ;;
+        xfwm4) setsid xfwm4 --compositor=on </dev/null >/tmp/ift-xfwm4.log 2>&1 & ;;
+        *) echo "wm: openbox or xfwm4" >&2; exit 2 ;;
+    esac
+    sleep 2
     ;;
 ift)
     shift
