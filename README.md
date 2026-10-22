@@ -37,6 +37,7 @@ Nothing flashes, nothing steals focus, nothing sends a notification. You switch 
 - Shells outlive the window: each card's shell runs under its own small daemon, so quitting the app keeps your work running.
 - `ift`, the command line side: `ift file.rs` edits a file over the terminal you are in, `ift diff` opens your changes, `ift attach 7` reaches card #7's shell from any terminal, and `ift send 7 "ls" --enter` and `ift read 7` type into a card and read what it shows, so a script can drive your cards.
 - Servers: `ift connect user@host` opens a second window whose terminal cards run on that server over ssh. The shells keep running when you close the window and come back when you connect again. Each host has its own canvas, settings and colour (a tinted title bar and a badge on its Dock icon). Terminal cards only so far; `--install` puts the server half on a Linux host.
+- Joining: `ift join user@host` opens a window on the canvas another Mac already has, over ssh, with full control: you see its cards, agent colours and live terminals, and what you do happens there. It works when the host's app is closed (`ift serve` holds the canvas) and on a Linux server, and ssh asks its own fingerprint and password questions once.
 
 Native Rust: gpui draws the canvas, `alacritty_terminal` parses the shells, Chromium (CEF) runs the browser cards. No Electron, no account, no telemetry; the one request the app makes on its own is the update check. Early, and in active development.
 
@@ -48,6 +49,7 @@ Native Rust: gpui draws the canvas, `alacritty_terminal` parses the shells, Chro
 
 Big items only, in rough order. No dates.
 
+- **Done in 0.6.0:** `ift join`, a window on another Mac's running canvas, also with its app closed and for Linux hosts.
 - **Done in 0.5.3:** `ift connect` for servers: terminals, colours, `--install` for Linux hosts, agent hooks over the connection.
 - **Light mode:** the chrome follows a light theme. Today a light theme gives light cards on a dark chrome.
 - **More agents:** Cursor (`ift install-cursor-hooks`) and Antigravity CLI (`ift install-antigravity-hooks`) are in.
