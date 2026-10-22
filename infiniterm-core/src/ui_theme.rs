@@ -85,6 +85,24 @@ pub struct TabTheme {
     pub icon_map: std::collections::BTreeMap<String, String>,
 }
 
+/// The card header's keys (#544); see `card_header.rs`. Unset is no header.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CardTheme {
+    /// A header row inside terminal, transcript and page cards.
+    pub header: Option<bool>,
+    /// Which buttons it carries, in order; none unless listed.
+    pub header_buttons: Vec<crate::card_header::HeaderButton>,
+    /// The program's icon at the header's left, from the tab icon keys
+    /// (`tab.iconStyle`, `tab.iconMap`).
+    pub header_icons: Option<bool>,
+}
+
+impl CardTheme {
+    pub fn header_on(&self) -> bool {
+        self.header == Some(true)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UiTheme {
     /// The look keys the file set, as written (`"ui.cardRadius": 8`). Range
@@ -94,6 +112,7 @@ pub struct UiTheme {
     pub titlebar: BarTheme,
     pub statusbar: BarTheme,
     pub tab: TabTheme,
+    pub card: CardTheme,
 }
 
 /// What kind of JSON value a look key holds.
@@ -145,7 +164,7 @@ pub const LOOK_KEYS: [(&str, Kind); 20] = [
 
 /// The bar keys (#425) and the tab keys (#544), with their docs. They exist
 /// only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 15] = [
+pub const BAR_KEYS: [(&str, &[&str], &str); 18] = [
     (
         "titlebar.background",
         &[
@@ -246,6 +265,33 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 15] = [
             "glyphs cover common shells, runtimes and coding agents.",
         ],
         "{\"bun\": \"bun.svg\", \"default\": \"\\uf120\"}",
+    ),
+    (
+        "card.header",
+        &[
+            "A header row inside terminal, transcript and page cards, above the body: the",
+            "program's icon (card.headerIcons), the card's name and card.headerButtons. The body",
+            "gets the rest, so a terminal has fewer rows. Editor, diff and browser cards keep",
+            "their own tab strip. Off, the name is a chip in the card's corner as before.",
+        ],
+        "false",
+    ),
+    (
+        "card.headerButtons",
+        &[
+            "The header's buttons, left to right: \"split-right\", \"split-down\", \"maximise\",",
+            "\"close\". Each runs the command of that name (card.split.right, card.split.down,",
+            "card.maximize.toggle, card.close). None unless listed.",
+        ],
+        "[\"split-right\", \"split-down\", \"maximise\", \"close\"]",
+    ),
+    (
+        "card.headerIcons",
+        &[
+            "Show the program's icon at the header's left. It uses tab.iconStyle and",
+            "tab.iconMap, so the card and its workspace tab agree. Default false.",
+        ],
+        "false",
     ),
 ];
 
@@ -389,6 +435,27 @@ fn icon_map(key: &str, v: &Value) -> Result<std::collections::BTreeMap<String, S
     Ok(map)
 }
 
+/// `card.headerButtons`: a list of button names (`card_header::HeaderButton`).
+fn header_buttons(key: &str, v: &Value) -> Result<Vec<crate::card_header::HeaderButton>, String> {
+    let names: Option<Vec<String>> = v.as_array().and_then(|a| {
+        a.iter()
+            .map(|n| n.as_str().map(String::from))
+            .collect::<Option<Vec<_>>>()
+    });
+    names
+        .and_then(|n| crate::card_header::parse_buttons(&n))
+        .ok_or_else(|| {
+            format!(
+                "\"{key}\" must be a list of {}",
+                crate::card_header::HeaderButton::NAMES
+                    .iter()
+                    .map(|n| format!("\"{n}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+}
+
 /// A number clamped to `min..=max`, like `merge_config` does for the look keys.
 fn number(key: &str, v: &Value, min: f64, max: f64) -> Result<f64, String> {
     v.as_f64()
@@ -457,6 +524,17 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
                 )
             }
             "tab.iconMap" => theme.tab.icon_map = icon_map(key, v)?,
+            "card.header" => {
+                theme.card.header =
+                    Some(v.as_bool().ok_or("\"card.header\" must be true or false")?)
+            }
+            "card.headerIcons" => {
+                theme.card.header_icons = Some(
+                    v.as_bool()
+                        .ok_or("\"card.headerIcons\" must be true or false")?,
+                )
+            }
+            "card.headerButtons" => theme.card.header_buttons = header_buttons(key, v)?,
             _ => match LOOK_KEYS.iter().find(|(k, _)| *k == key) {
                 Some((_, kind)) => {
                     check_kind(key, *kind, v)?;
@@ -619,6 +697,44 @@ mod tests {
         assert_eq!(t.icon_map["bun"], "bun.svg");
         assert_eq!(t.icon_map["fish"], "F", "keyed like a process name");
         assert_eq!(t.icon_map["default"], "default.png");
+    }
+
+    #[test]
+    fn card_header_keys_parse_and_the_header_is_off_unless_set() {
+        let none = parse("{}").unwrap().card;
+        assert_eq!(none, CardTheme::default());
+        assert!(!none.header_on());
+        let c = parse(
+            r#"{
+              "card.header": true,
+              "card.headerIcons": true,
+              "card.headerButtons": ["close", "split-right"],
+            }"#,
+        )
+        .unwrap()
+        .card;
+        assert!(c.header_on());
+        assert_eq!(c.header_icons, Some(true));
+        use crate::card_header::HeaderButton::*;
+        assert_eq!(c.header_buttons, vec![Close, SplitRight]);
+        assert!(!parse(r#"{"card.header": false}"#).unwrap().card.header_on());
+    }
+
+    #[test]
+    fn bad_card_header_values_name_the_key() {
+        for (bad, key) in [
+            (r#"{"card.header": "yes"}"#, "card.header"),
+            (r#"{"card.headerIcons": 1}"#, "card.headerIcons"),
+            (r#"{"card.headerButtons": "close"}"#, "card.headerButtons"),
+            (
+                r#"{"card.headerButtons": ["minimise"]}"#,
+                "card.headerButtons",
+            ),
+            (r#"{"card.headerButtons": [1]}"#, "card.headerButtons"),
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains(key), "{e}");
+        }
     }
 
     #[test]

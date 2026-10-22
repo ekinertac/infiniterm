@@ -12,6 +12,30 @@ use crate::{now_ms, AppView, SWAP_MS};
 
 /// Big text centred on a slot that stands for a card that is somewhere else:
 /// the card in its own window (#356), a host's card a viewer cannot show (#423).
+/// Sets `chrome::CardHeaderH` (the height the card ground reaches up under
+/// the header) only when it changes.
+fn set_header_h(cx: &mut gpui::App, height: Pixels) {
+    let h = crate::chrome::CardHeaderH(f32::from(height));
+    if cx.try_global::<crate::chrome::CardHeaderH>() != Some(&h) {
+        cx.set_global(h);
+    }
+}
+
+/// A card's rect under its header: the rect a body paints into.
+fn under_header(b: Bounds<Pixels>, inset: Pixels) -> Bounds<Pixels> {
+    Bounds::new(
+        point(b.origin.x, b.origin.y + inset),
+        size(b.size.width, (b.size.height - inset).max(px(0.))),
+    )
+}
+
+/// The header's own sizes in world units, as screen pixels at `scale`.
+const HEADER_PAD_WORLD: f64 = 10.;
+/// Text and glyph size as a share of the header's height.
+const HEADER_TEXT_RATIO: f32 = 0.46;
+/// Gap between the icon and the title, as a share of the header's height.
+const HEADER_ICON_GAP_RATIO: f32 = 0.3;
+
 /// Sets `chrome::CardRingGap` only when it changes, like the other per-frame
 /// globals.
 fn set_ring_gap(cx: &mut gpui::App, gap: Pixels) {
@@ -305,10 +329,13 @@ impl AppView {
                     color: self.chrome.card_bg,
                 })
             });
-            // A drag, a resize, a split: the body learns its new size once.
+            // A drag, a resize, a split, or the header coming or going: the
+            // body learns its new size once. The header's height is not its.
+            let inset =
+                infiniterm_core::card_header::inset(self.model.ui_theme.card.header_on(), c.kind);
             let size = Size {
                 w: c.rect.w,
-                h: c.rect.h,
+                h: (c.rect.h - inset).max(0.),
             };
             if self.body_sizes.get(&c.id) != Some(&size) {
                 self.body_sizes.insert(c.id.clone(), size);
@@ -377,15 +404,26 @@ impl AppView {
             } else {
                 self.bodies.get_mut(&card.id).map(|b| b.as_mut())
             };
+            // The header (`card.header`) sits over the top of the body's rect.
+            let inset = px(infiniterm_core::card_header::inset(
+                self.model.ui_theme.card.header_on(),
+                card.kind,
+            ) as f32);
             if let Some(body) = body {
+                set_header_h(cx, inset);
                 window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                    body.paint(bounds, 1., focused, now, window, cx)
+                    body.paint(under_header(bounds, inset), 1., focused, now, window, cx)
                 });
+                set_header_h(cx, px(0.));
             }
             if let Some(wash) = away {
                 window.paint_quad(fill(bounds, wash));
             }
-            self.paint_labels(&card, bounds, 1., window, cx);
+            if inset > px(0.) {
+                self.paint_header(&card, bounds, 1., focused, window, cx);
+            } else {
+                self.paint_labels(&card, bounds, 1., window, cx);
+            }
             return;
         }
 
@@ -638,6 +676,11 @@ impl AppView {
                         px(0.)
                     };
                     set_ring_gap(cx, gap);
+                    let inset = px((infiniterm_core::card_header::inset(
+                        self.model.ui_theme.card.header_on(),
+                        card.kind,
+                    ) * vp.scale) as f32);
+                    set_header_h(cx, inset);
                     let clip = Bounds::new(
                         point(b.origin.x - gap, b.origin.y - gap),
                         size(b.size.width + gap * 2., b.size.height + gap * 2.),
@@ -645,9 +688,10 @@ impl AppView {
                     // Clipped to the card: a long line or a wash must not
                     // paint over the neighbour.
                     window.with_content_mask(Some(gpui::ContentMask { bounds: clip }), |window| {
-                        body.paint(b, vp.scale, focused, now, window, cx)
+                        body.paint(under_header(b, inset), vp.scale, focused, now, window, cx)
                     });
                     set_ring_gap(cx, px(0.));
+                    set_header_h(cx, px(0.));
                 }
                 // A viewer's card that is not a terminal (#423) is a real card
                 // with no body (its file or page is on the host): its slot says
@@ -764,7 +808,13 @@ impl AppView {
                     .corner_radii(radius + off),
                 );
             }
-            self.paint_labels(card, b, vp.scale, window, cx);
+            if infiniterm_core::card_header::inset(self.model.ui_theme.card.header_on(), card.kind)
+                > 0.
+            {
+                self.paint_header(card, b, vp.scale, focused, window, cx);
+            } else {
+                self.paint_labels(card, b, vp.scale, window, cx);
+            }
             if let Some(hint) = sel.hints.get(&card.id) {
                 // Big enough to read from across the canvas, over the body
                 // rather than in a corner.
@@ -914,6 +964,124 @@ impl AppView {
 
     /// The name (top-right), the kind badges beside it, the remote badge
     /// (top-left, red) and the mid-zoom label. Pointer-inert, over the body.
+    /// The card header (`card.header`, #544): the program's icon, the card's
+    /// name and the buttons, over the top of the card. The ground under it is
+    /// the card's own (`CardHeaderH` reaches the body's quad up here), so a
+    /// gradient runs through it unbroken. Buttons' hit rects are the pure
+    /// `card_header::button_rects`, which `input.rs` reads too.
+    fn paint_header(
+        &mut self,
+        card: &infiniterm_core::model::Card,
+        b: Bounds<Pixels>,
+        scale: f64,
+        focused: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let chrome = self.chrome.clone();
+        let h = px((infiniterm_core::card_header::HEADER_H * scale) as f32);
+        let text_px = h * HEADER_TEXT_RATIO;
+        let pad = px((HEADER_PAD_WORLD * scale) as f32);
+        let ink = if focused {
+            chrome.card_fg
+        } else {
+            chrome.card_label_fg
+        };
+        let icon_font = crate::terminal_body::term_font(&chrome.typography.family);
+        let mut x = b.origin.x + pad;
+        // The program's icon, a glyph or a logo, drawn like the tab's.
+        if self.model.ui_theme.card.header_icons == Some(true) {
+            let tab = &self.model.ui_theme.tab;
+            let shell = infiniterm_core::tab_icon::shell_name(
+                &self.model.config.terminal.shell,
+                std::env::var("SHELL").ok().as_deref(),
+            );
+            let dir = infiniterm_core::config_files::ui_theme_icons_dir(&self.model.ui_theme_name);
+            let has_file = |f: &str| dir.as_ref().is_some_and(|d| d.join(f).is_file());
+            let icon = infiniterm_core::tab_icon::choose(
+                card.proc.as_deref().unwrap_or(&shell),
+                tab.icon_style.unwrap_or_default(),
+                &tab.icon_map,
+                &has_file,
+            );
+            let slot = Bounds::new(point(x, b.origin.y), size(h, h));
+            match icon {
+                infiniterm_core::tab_icon::Icon::Glyph(glyph) => {
+                    let line = crate::text::shape(window, &glyph, text_px * 1.25, &icon_font, ink);
+                    crate::text::paint_in(
+                        window,
+                        cx,
+                        &line,
+                        slot,
+                        ((h - line.width) / 2.).max(px(0.)),
+                    );
+                }
+                infiniterm_core::tab_icon::Icon::File(file) => {
+                    // The same loader the background pictures use (SVG in
+                    // colour, PNG); `paint_image` because the header is hand
+                    // painted, where gpui only lets elements be laid out in
+                    // prepaint. It is `None` while the file loads.
+                    if let Some(dir) = dir {
+                        let source = gpui::Resource::Path(dir.join(file).into());
+                        if let Some(Ok(image)) =
+                            window.use_asset::<gpui::ImageAssetLoader>(&source, cx)
+                        {
+                            let side = h * 0.6;
+                            let at = point(x + (h - side) / 2., b.origin.y + (h - side) / 2.);
+                            let _ = window.paint_image(
+                                Bounds::new(at, size(side, side)),
+                                gpui::Corners::default(),
+                                image,
+                                0,
+                                false,
+                            );
+                        }
+                    }
+                }
+            }
+            x += h + h * HEADER_ICON_GAP_RATIO - pad / 2.;
+        }
+        // The buttons, right-aligned; the title gets what is left.
+        let buttons = self.model.ui_theme.card.header_buttons.clone();
+        let rects = infiniterm_core::card_header::button_rects(
+            f32::from(b.size.width) as f64 / scale,
+            &buttons,
+        );
+        let title_end = rects
+            .first()
+            .map_or(b.origin.x + b.size.width - pad, |(_, r)| {
+                b.origin.x + px((r.x * scale) as f32)
+            });
+        for (button, r) in &rects {
+            let slot = Bounds::new(
+                point(
+                    b.origin.x + px((r.x * scale) as f32),
+                    b.origin.y + px((r.y * scale) as f32),
+                ),
+                size(px((r.w * scale) as f32), px((r.h * scale) as f32)),
+            );
+            let line = crate::text::shape(window, button.glyph(), text_px, &icon_font, ink);
+            crate::text::paint_in(
+                window,
+                cx,
+                &line,
+                slot,
+                ((slot.size.width - line.width) / 2.).max(px(0.)),
+            );
+        }
+        let room = (title_end - x).max(px(0.));
+        let label = self.model.numbered_label(card);
+        let measure = |window: &Window, t: &str| {
+            f32::from(crate::text::shape(window, t, text_px, &chrome.typography.regular, ink).width)
+        };
+        let text = crate::text::elide(&label, f32::from(room), |t| measure(window, t));
+        if !text.is_empty() {
+            let line = crate::text::shape(window, &text, text_px, &chrome.typography.regular, ink);
+            let slot = Bounds::new(point(x, b.origin.y), size(room, h));
+            crate::text::paint_in(window, cx, &line, slot, px(0.));
+        }
+    }
+
     fn paint_labels(
         &mut self,
         card: &infiniterm_core::model::Card,

@@ -248,20 +248,27 @@ impl AppView {
             .maximized
             .then(|| self.model.selection.focused_id.clone())
             .flatten();
+        let header_on = self.model.ui_theme.card.header_on();
         for card in cards {
-            // A card in its own window fills that window (#356 spike).
-            let world = self
-                .extracted_size
-                .get(&card.id)
-                .copied()
-                .unwrap_or_else(|| {
-                    fit_size(
+            // A card in its own window fills that window (#356 spike), and
+            // wears no header there.
+            let world = match self.extracted_size.get(&card.id).copied() {
+                Some(size) => size,
+                None => {
+                    let fit = fit_size(
                         &card.id,
                         card.rect,
                         maximized.as_deref(),
                         self.model.view_size,
-                    )
-                });
+                    );
+                    // The header (`card.header`) takes its height from the grid.
+                    let inset = infiniterm_core::card_header::inset(header_on, card.kind);
+                    Size {
+                        w: fit.w,
+                        h: (fit.h - inset).max(0.),
+                    }
+                }
+            };
             let is_terminal = self
                 .bodies
                 .get_mut(&card.id)

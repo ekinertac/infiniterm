@@ -58,6 +58,7 @@ pub mod altgr;
 pub mod app;
 pub mod backend;
 pub mod browser_keys;
+pub mod card_header;
 pub mod card_label;
 pub mod cli;
 pub mod commands;

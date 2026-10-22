@@ -333,6 +333,14 @@ impl CardGradient {
 pub struct CardRingGap(pub f32);
 impl gpui::Global for CardRingGap {}
 
+/// The height of the card header, in screen pixels, for the card being
+/// painted; 0 without one. The body paints into the rect UNDER the header, and
+/// its ground quad reaches up by this much so the header sits on the same
+/// ground, gradient and all (`card.header`, #544). Set per card in `paint_world`.
+#[derive(Clone, Copy, PartialEq)]
+pub struct CardHeaderH(pub f32);
+impl gpui::Global for CardHeaderH {}
+
 /// A card's background at the card opacity: the gradient when the theme set
 /// one (it replaces `flat`, the terminal theme's background), else `flat`.
 /// Only the fill across the whole body goes through this: text, selections and
@@ -380,8 +388,17 @@ pub fn card_body_quad(
     bounds: gpui::Bounds<gpui::Pixels>,
     c: Hsla,
 ) -> gpui::PaintQuad {
-    let (bounds, radius) = ring_reach(cx, bounds, card_radius(cx));
+    let (bounds, radius) = ring_reach(cx, reach_header(cx, bounds), card_radius(cx));
     gpui::fill(bounds, card_ground(cx, c)).corner_radii(radius)
+}
+
+/// `bounds` taller upward by the header, which sits over the same ground.
+fn reach_header(cx: &gpui::App, bounds: gpui::Bounds<gpui::Pixels>) -> gpui::Bounds<gpui::Pixels> {
+    let header = gpui::px(cx.try_global::<CardHeaderH>().map_or(0., |h| h.0));
+    gpui::Bounds::new(
+        gpui::point(bounds.origin.x, bounds.origin.y - header),
+        gpui::size(bounds.size.width, bounds.size.height + header),
+    )
 }
 
 /// The fill's bounds and corner radius: grown to the focus ring while a
