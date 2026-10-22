@@ -8,21 +8,30 @@
 //! clicked, builds the rows from the live registry and keymap, and runs the
 //! chosen command AFTER the menu is gone.
 //!
-//! Constraints: the popup blocks and re-enters gpui, so it runs from a
+//! Off macOS there is no `NSMenu` (#464): the same rows open as
+//! `Model::menu`, drawn by `menu_view.rs` and walked with `menu_nav.rs`, and
+//! `close_menu` runs the choice. Both paths end in `finish_menu`. The
+//! browser page's own menu (`browsers.rs`) is not drawn this way: its rows
+//! carry actions, not commands, and browser cards are not built on Linux.
+//!
+//! Constraints: the Mac popup blocks and re-enters gpui, so it runs from a
 //! spawned task (a handler holds the app borrowed: `native_menu.rs`). A
 //! terminal whose program asked for the mouse keeps its right-click unless
 //! Shift is held, as `TerminalBody::mouse_down` already decides. A browser
 //! card keeps its own menu (browsers.rs) for now.
 
 use crate::input::Hit;
+#[cfg(target_os = "macos")]
 use crate::native_menu::{self, Row as NativeRow};
 use crate::AppView;
 use gpui::{Context, MouseDownEvent};
 use infiniterm_core::context_menu::{self, Area, Row, Source};
+use infiniterm_core::menu_nav::Outcome;
 use infiniterm_core::saved_layout::CardKind;
 
 /// The rows as the presenter takes them, each command row tagged with its
 /// index in the returned list of command ids.
+#[cfg(target_os = "macos")]
 fn to_native(rows: &[Row], ids: &mut Vec<String>) -> Vec<NativeRow> {
     rows.iter()
         .map(|row| match row {
@@ -53,6 +62,7 @@ impl AppView {
     /// A right-click on the canvas: the menu for what is under the pointer, or
     /// nothing when the click belongs to a program or a browser page.
     pub fn open_context_menu(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
+        self.menu_anchor = (f32::from(e.position.x), f32::from(e.position.y));
         let mut lit: Option<String> = None;
         let hit = self.hit(self.to_content(e.position));
         // A card of a selection of several: the menu of what acts on all of
@@ -133,8 +143,39 @@ impl AppView {
     /// The menu for a workspace tab. The tab is not switched to on the click:
     /// only a command chosen from the menu takes you there, so its commands
     /// act on it.
-    pub fn open_tab_menu(&mut self, workspace_id: &str, cx: &mut Context<Self>) {
+    pub fn open_tab_menu(
+        &mut self,
+        workspace_id: &str,
+        e: &MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.menu_anchor = (f32::from(e.position.x), f32::from(e.position.y));
         self.show_menu(Area::Tab, None, Some(workspace_id.to_string()), cx);
+    }
+
+    /// After the menu is gone, on either path: run the chosen command on the
+    /// workspace the menu was for, and put out the lit tree row.
+    pub fn finish_menu(
+        &mut self,
+        chosen: Option<String>,
+        workspace: Option<String>,
+        lit: Option<String>,
+    ) {
+        // The command first: it acts on the lit row.
+        if let Some(id) = chosen {
+            let before = self.model.active_workspace.clone();
+            if let Some(ws) = &workspace {
+                self.model.show_workspace(ws);
+                self.perform_effects();
+            }
+            self.run_command(&id);
+            // Moving a tab is no reason to leave the one you are in.
+            if let (true, Some(prev)) = (id.starts_with("workspace.reorder"), before) {
+                self.model.show_workspace(&prev);
+                self.perform_effects();
+            }
+        }
+        self.clear_lit_row(lit);
     }
 
     fn clear_lit_row(&mut self, card: Option<String>) {
@@ -186,9 +227,22 @@ impl AppView {
             self.clear_lit_row(lit);
             return;
         }
+        self.present_menu(rows, workspace, lit, cx);
+        self.redraw = true;
+    }
+
+    /// macOS: an `NSMenu`. Not here: see the header. The choice is run once
+    /// the menu is gone.
+    #[cfg(target_os = "macos")]
+    fn present_menu(
+        &mut self,
+        rows: Vec<Row>,
+        workspace: Option<String>,
+        lit: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         let mut ids = vec![];
         let native = to_native(&rows, &mut ids);
-        // Not here: see the header. The choice is run once the menu is gone.
         let wait_for_frame = lit.is_some();
         cx.spawn(async move |view, cx| {
             // The popup blocks the main loop, so a lit tree row is only seen
@@ -200,25 +254,75 @@ impl AppView {
             }
             let chosen = native_menu::pop_up(&native);
             let _ = view.update(cx, |this, cx| {
-                // The command first: it acts on the lit row.
-                if let Some(id) = chosen.and_then(|tag| ids.get(tag as usize).cloned()) {
-                    let before = this.model.active_workspace.clone();
-                    if let Some(ws) = &workspace {
-                        this.model.show_workspace(ws);
-                        this.perform_effects();
-                    }
-                    this.run_command(&id);
-                    // Moving a tab is no reason to leave the one you are in.
-                    if let (true, Some(prev)) = (id.starts_with("workspace.reorder"), before) {
-                        this.model.show_workspace(&prev);
-                        this.perform_effects();
-                    }
-                }
-                this.clear_lit_row(lit);
+                let id = chosen.and_then(|tag| ids.get(tag as usize).cloned());
+                this.finish_menu(id, workspace, lit);
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Everywhere else: the app draws the menu itself (`menu_view.rs`), so it
+    /// is state, not a blocking call. `finish_menu` runs when a row is chosen
+    /// or the menu is dismissed.
+    #[cfg(not(target_os = "macos"))]
+    fn present_menu(
+        &mut self,
+        rows: Vec<Row>,
+        workspace: Option<String>,
+        lit: Option<String>,
+        _cx: &mut Context<Self>,
+    ) {
+        self.model.menu = Some(infiniterm_core::menu_nav::OpenMenu {
+            nav: infiniterm_core::menu_nav::MenuNav::new(rows),
+            at: self.menu_anchor,
+        });
+        self.menu_pending = Some((workspace, lit));
+    }
+
+    /// The drawn menu closes: `chosen` runs, if anything was. The caller
+    /// asks for a frame.
+    pub fn close_menu(&mut self, chosen: Option<String>) {
+        self.model.menu = None;
+        let (workspace, lit) = self.menu_pending.take().unwrap_or((None, None));
+        self.finish_menu(chosen, workspace, lit);
         self.redraw = true;
+    }
+
+    /// A key while a drawn menu is up. Every key is the menu's: the arrows
+    /// walk it, Enter chooses, Escape and any other key close it, and none
+    /// reaches the canvas (a Cmd+W aimed at the menu must not close the card
+    /// behind it).
+    pub fn menu_key(&mut self, key: &str) {
+        let Some(menu) = self.model.menu.as_mut() else {
+            return;
+        };
+        let chosen = match key {
+            "down" => {
+                menu.nav.down();
+                None
+            }
+            "up" => {
+                menu.nav.up();
+                None
+            }
+            "right" => {
+                menu.nav.right();
+                None
+            }
+            "left" => {
+                menu.nav.left();
+                None
+            }
+            "enter" | "space" => match menu.nav.enter() {
+                Outcome::Chosen(id) => Some(Some(id)),
+                Outcome::Stay => None,
+            },
+            _ => Some(None),
+        };
+        match chosen {
+            Some(id) => self.close_menu(id),
+            None => self.redraw = true,
+        }
     }
 }

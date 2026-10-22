@@ -46,6 +46,7 @@ mod input;
 mod instance_icon;
 mod keycast;
 mod keycode;
+mod menu_view;
 mod menus;
 #[cfg(target_os = "macos")]
 mod middle_drag;
@@ -54,7 +55,11 @@ mod native_menu;
 #[cfg(not(target_os = "macos"))]
 mod not_macos;
 #[cfg(not(target_os = "macos"))]
-use not_macos::{finder_service, fullscreen, icon_font, instance_icon, native_menu, title_drag};
+use not_macos::{finder_service, fullscreen, icon_font, instance_icon, title_drag};
+// Off macOS the card menus are drawn (`menu_view.rs`); only the browser
+// page's own menu still asks for the native one.
+#[cfg(all(not(target_os = "macos"), feature = "browser"))]
+use not_macos::native_menu;
 mod omnibox;
 mod overlays;
 mod own_window;
@@ -281,6 +286,12 @@ pub struct AppView {
     pub context_menu: Option<crate::browsers::CardContextMenu>,
     /// The page's native menu is open (`browsers.rs::show_page_menu`).
     pub page_menu_open: bool,
+    /// Where the last right-click landed, window pixels: a drawn menu
+    /// (`menus.rs`, off macOS) opens there.
+    pub menu_anchor: (f32, f32),
+    /// What a drawn menu's choice runs against: the workspace a tab menu was
+    /// for and the editor whose tree row is lit (`menus.rs::close_menu`).
+    pub menu_pending: Option<(Option<String>, Option<String>)>,
     /// The prompt's field, opened with the suggestion selected; the palette's query.
     pub prompt_field: field::Field,
     pub query_field: field::Field,

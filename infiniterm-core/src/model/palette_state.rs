@@ -188,6 +188,7 @@ impl Model {
             || self.whats_new_open
             || self.omni.open
             || self.switcher.is_some()
+            || self.menu.is_some()
     }
 
     /// An overlay that owns the keyboard: while one is up no chord reaches

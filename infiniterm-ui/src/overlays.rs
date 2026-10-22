@@ -473,9 +473,17 @@ impl Render for AppView {
             .switcher
             .is_some()
             .then(|| self.render_switcher());
+        // A drawn right-click menu (off macOS), over everything, title bar
+        // included: a tab's menu opens from there.
+        let menu = self
+            .model
+            .menu
+            .is_some()
+            .then(|| self.render_menu(window, cx));
 
         div()
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(if self.model.config.ui.window_opacity < 1. {
@@ -645,6 +653,7 @@ impl Render for AppView {
                     .children(switcher),
             )
             .child(status_bar)
+            .children(menu)
     }
 }
 
@@ -751,8 +760,8 @@ impl AppView {
                 )
                 .on_mouse_down(
                     MouseButton::Right,
-                    cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                        this.open_tab_menu(&menu_id, cx);
+                    cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                        this.open_tab_menu(&menu_id, e, cx);
                     }),
                 )
                 .on_mouse_down(
