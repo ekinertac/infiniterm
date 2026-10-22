@@ -129,10 +129,123 @@ impl AppView {
         Hit::Nothing
     }
 
-    /// `keycode::roles` with this instance's setting, so the five entry
-    /// points below do not each have to reach for the config.
+    /// `keycode::roles` with this instance's setting, for the four MOUSE
+    /// entry points below. Keys go through `platform_keystroke`.
     pub fn modifier_roles(&self, m: gpui::Modifiers) -> gpui::Modifiers {
         crate::keycode::roles(m, self.model.config.keyboard.command_modifier)
+    }
+
+    /// A key-down off the Mac, as the Mac chord it stands for
+    /// (`platform_keys.rs`): the physical chord, built the way the keymap
+    /// builds every chord (physical key, real Shift), looked up in the
+    /// two-way table for the active keymap; an event the table does not
+    /// name (a plain Ctrl+letter on its way to a terminal) is left as it
+    /// is. When the Mac chord's Shift or key differs from what was pressed,
+    /// the physical record is dropped for this event so the chord is built
+    /// from the rewritten keystroke. The Mac and `super` are untouched.
+    pub fn platform_keystroke(&mut self, k: &Keystroke) -> Keystroke {
+        use infiniterm_core::platform_keys::KeyContext;
+        let ctx = match self.model.focused() {
+            Some(c)
+                if c.locked
+                    && matches!(
+                        c.kind,
+                        infiniterm_core::saved_layout::CardKind::Editor
+                            | infiniterm_core::saved_layout::CardKind::Browser
+                    ) =>
+            {
+                KeyContext::CardOwnsKeys
+            }
+            _ => KeyContext::Canvas,
+        };
+        self.platform_keystroke_in(k, ctx)
+    }
+
+    /// `platform_keystroke` with the context given: a card in a window of
+    /// its own (`own_window.rs`) is a terminal whatever the canvas has
+    /// focused.
+    pub fn platform_keystroke_in(
+        &mut self,
+        k: &Keystroke,
+        ctx: infiniterm_core::platform_keys::KeyContext,
+    ) -> Keystroke {
+        use infiniterm_core::config::CommandModifier;
+        use infiniterm_core::platform_keys::PlatformKeys;
+        if cfg!(target_os = "macos")
+            || self.model.config.keyboard.command_modifier == CommandModifier::Super
+        {
+            return k.clone();
+        }
+        // The table follows the keymap: rebuilt when it changed, and what
+        // it could not map is said once.
+        if self.platform_keys_for != self.model.keymap {
+            let chords = self
+                .model
+                .keymap
+                .iter()
+                .map(|(c, _)| c.as_str())
+                .chain(self.model.conditional_keys.iter().map(|b| b.chord.as_str()));
+            let (table, problems) = PlatformKeys::build(chords);
+            self.platform_keys = table;
+            self.platform_keys_for = self.model.keymap.clone();
+            if !problems.is_empty() {
+                self.model
+                    .notify(format!("keybindings: {}", problems.join("; ")));
+            }
+        }
+        let m = &k.modifiers;
+        let code = crate::keycode::last_code();
+        let physical = chord_for(&KeyPress {
+            key: &k.key,
+            code,
+            cmd: m.platform,
+            ctrl: m.control,
+            alt: m.alt,
+            shift: if code.is_some() {
+                crate::keycode::last_shift()
+            } else {
+                m.shift
+            },
+        });
+        let Some(mac) = self.platform_keys.mac(&physical, ctx) else {
+            return k.clone();
+        };
+        if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+            eprintln!("[platform] {physical} -> {mac}");
+        }
+        let parts: Vec<&str> = mac.split('+').collect();
+        let (mods, key) = parts.split_at(parts.len() - 1);
+        let key = key[0];
+        let has = |name: &str| mods.contains(&name);
+        let physical_key = physical.rsplit('+').next().unwrap_or("");
+        let shift_changed = has("shift") != physical.split('+').any(|p| p == "shift");
+        if shift_changed || key != physical_key {
+            crate::keycode::forget_last();
+        }
+        // gpui's names for the keys the chord spells the DOM way.
+        let gpui_key = match key {
+            "arrowleft" => "left",
+            "arrowright" => "right",
+            "arrowup" => "up",
+            "arrowdown" => "down",
+            other => other,
+        };
+        Keystroke {
+            modifiers: gpui::Modifiers {
+                platform: has("cmd"),
+                control: has("ctrl"),
+                alt: has("alt"),
+                shift: has("shift"),
+                function: m.function,
+            },
+            key: if key == physical_key {
+                k.key.clone()
+            } else {
+                gpui_key.to_string()
+            },
+            // A chord the app takes types nothing.
+            key_char: None,
+        }
     }
 
     pub fn mouse_down(&mut self, e: &MouseDownEvent) {
@@ -856,7 +969,10 @@ impl AppView {
         // recorded (`keycode::note_key_down`).
         crate::keycode::note_key_down();
         let mut owned = e.clone();
-        owned.keystroke.modifiers = self.modifier_roles(owned.keystroke.modifiers);
+        // Off the Mac: the physical chord into the Mac chord it stands for
+        // (Ctrl+Shift+T is Cmd+T), once, here, so nothing downstream needs
+        // to know (`platform_keystroke`).
+        owned.keystroke = self.platform_keystroke(&owned.keystroke);
         let e = &owned;
         let k: &Keystroke = &e.keystroke;
         let m = &k.modifiers;

@@ -147,14 +147,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "keyboard.commandModifier",
         &[
-            "Windows only: which key plays Cmd's part, since Windows has none.",
-            "\"leftControl\" splits the two sides of Ctrl, left for the app and",
-            "right for the terminal, so a keyboard remapped into Mac order puts",
-            "every binding under the finger that already reaches for it and Caps",
-            "Lock plus C is still a real ^C. \"win\" puts them on the Windows key",
-            "and leaves Ctrl whole for the shell, at the cost of every binding",
-            "Windows takes first: Win+L locks the machine, and Win+D, E, R, S, T,",
-            "the digits, the arrows and = never arrive.",
+            "Linux and Windows: which key plays Cmd's part, since they have none.",
+            "\"ctrl\": Ctrl, with Shift where plain Ctrl is the terminal's",
+            "(Ctrl+Shift+T a new card, Ctrl+Shift+C copy, Ctrl+1 fit a card);",
+            "plain Ctrl+letter always reaches the terminal. \"super\" (Linux",
+            "only): the Mac's chords with Super for Cmd, Ctrl left whole for the",
+            "terminal, at the cost of the Super chords your desktop takes first.",
+            "Ignored on macOS.",
         ],
     ),
     (

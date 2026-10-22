@@ -436,49 +436,32 @@ pub fn install() {
     windows_hook::install();
 }
 
-/// gpui's modifiers with the ROLES on them rather than the raw keys.
-///
-/// The app is written against the Mac's split: `platform` is the app's
-/// modifier, `control` is the terminal's. Windows has no Cmd key, so WHICH
-/// keys carry those two roles is a setting, `keyboard.commandModifier`, and
-/// `keymap::modifier_roles` is the rule it selects. The default splits the
-/// two SIDES of Ctrl, left for the app and right for the terminal, because a
-/// keyboard remapped into Mac order already puts left Ctrl where Cmd sits
-/// and right Ctrl on Caps Lock.
-///
-/// Rewriting the modifiers once, where an event enters (`input.rs`), is what
-/// keeps the other thirty-odd reads of `.platform` across this crate correct
-/// without a cfg at each of them, and keeps the next one correct too.
-///
-/// gpui cannot answer this on its own: `current_modifiers` sets one
-/// `control` flag from `VK_CONTROL`, which is either side, and the sides are
-/// the whole point. They are read live rather than recorded by the keyboard
-/// hook, because a modifier is a STATE while the hook records the last key
-/// pressed, and a chord asks about both at the same moment.
-///
-/// A no-op everywhere else, so the Mac path is the code it always was and
-/// the setting is read nowhere.
-#[cfg(windows)]
+/// A MOUSE event's modifiers with the roles on them: `platform` is the
+/// app's modifier, `control` the terminal's. Off the Mac with
+/// `keyboard.commandModifier` = `ctrl`, Ctrl plays Cmd's part for the mouse
+/// (Ctrl+click opens a link, Ctrl+scroll zooms, Ctrl+drag pans, the Linux
+/// and Windows convention). Keys are rewritten by the chord instead
+/// (`input.rs::platform_keystroke`, `platform_keys.rs`), since plain Ctrl
+/// on a key is the terminal's. The Mac, and `super`, keep the keys as they
+/// are. Modifier-only events never come here: the card switcher commits
+/// when the PHYSICAL Ctrl comes up.
 pub fn roles(m: gpui::Modifiers, choice: CommandModifier) -> gpui::Modifiers {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_LCONTROL, VK_RCONTROL};
-    // The high bit of GetKeyState is "down right now".
-    let down = |vk: u16| unsafe { GetKeyState(vk as i32) } < 0;
-    let (platform, control) = infiniterm_core::keymap::modifier_roles(
-        choice,
-        down(VK_LCONTROL),
-        down(VK_RCONTROL),
-        m.platform,
-    );
+    if cfg!(target_os = "macos") || choice == CommandModifier::Super {
+        return m;
+    }
     gpui::Modifiers {
-        platform,
-        control,
+        platform: m.platform || m.control,
+        control: false,
         ..m
     }
 }
 
-#[cfg(not(windows))]
-pub fn roles(m: gpui::Modifiers, _choice: CommandModifier) -> gpui::Modifiers {
-    m
+/// Forgets the physical key recorded for this key-down, so the chord is
+/// built from the keystroke alone. For an event `input.rs` rewrote into a
+/// Mac chord whose Shift or key differs from what was pressed (Ctrl+Shift+T
+/// is Cmd+T, F11 is Cmd+Ctrl+F): the physical record would put them back.
+pub fn forget_last() {
+    LAST.store(-1, Ordering::Relaxed);
 }
 
 /// No dead keys are recorded on Windows yet. Turkish Q, the layout this was

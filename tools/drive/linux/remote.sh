@@ -29,6 +29,7 @@
 #                     writes <data>/config/settings.json (before `start`);
 #                     `fresh` empties the data dir first.
 #   settings          prints <data>/config/settings.json.
+#   logged <regex>    exit 0 when the instance's log has a matching line.
 #
 # Why these rules (docs/agent/linux-port.md): without a window manager the
 # first frame never shows, so openbox always runs; a chord sent with
@@ -190,6 +191,11 @@ setting)
     ;;
 settings)
     cat "$DATA/config/settings.json"
+    ;;
+logged)
+    # `logged <regex>`: exit 0 when the instance's log (INFINITERM_KEYLOG is
+    # on) has a matching line, such as `[platform] ctrl+= -> cmd+=`.
+    grep -Eq "${2:?logged <regex>}" "$DATA/run.log"
     ;;
 *)
     # The header comment is the help.

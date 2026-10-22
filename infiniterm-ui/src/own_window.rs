@@ -92,7 +92,16 @@ impl CardWindow {
 
     fn key_down(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         crate::keycode::note_key_down();
-        let k = &e.keystroke;
+        // Off the Mac: the physical chord into the Mac chord, as the main
+        // window does (`input.rs::platform_keystroke_in`); this window holds
+        // a terminal, so the canvas rule applies.
+        let rewritten = self.app.update(cx, |app, _| {
+            app.platform_keystroke_in(
+                &e.keystroke,
+                infiniterm_core::platform_keys::KeyContext::Canvas,
+            )
+        });
+        let k = &rewritten;
         let m = &k.modifiers;
         // A dead key is composed by macOS through `replace_text_in_range`,
         // not here; see ime.rs for why the NSEvent decides it.
