@@ -75,7 +75,39 @@ clicks or scrolls in it without taking the foreground, `type.ps1` and
 itself, `kill.ps1` stops it, `awake.ps1` keeps the box from blanking, and
 `window.ps1` is the one handle lookup they share.
 
-Three things about it are worth knowing before trusting a result:
+**Looking at the screen from ssh** (verified 2026-10-22). Those scripts need
+a desktop, and an ssh session (or a `Win32_Process Create` job) has none:
+nothing it starts is on a screen, and a screenshot of it is empty. A
+scheduled task registered with `/IT` runs as the signed-in user inside THEIR
+session, which has one. `as-user.ps1 <script> [-ScriptArgs ...]` does that
+round trip (create, run, wait, read the log, delete the task) and returns the
+script's exit code; `app-shot.ps1` is `run`, `shot` and `kill` through it, so
+from the Mac it is two commands:
+
+    ssh win-gpu-box 'pwsh -NoProfile -File C:\Users\PC\Code\infiniterm\tools\drive\win\app-shot.ps1 -Exe <exe> -Out C:\Users\PC\a.png'
+    scp win-gpu-box:C:/Users/PC/a.png .
+
+What has to be true, and what it checks first: a console session that is
+Active (`query user`; a Disc session has no screen) and no LogonUI process
+(the lock screen). It costs the person at the box a window on their screen
+for about ten seconds and sends no input. It refuses to start while any
+`infiniterm` is running, because `kill.ps1` stops every process of that name
+and `shot.ps1` takes the one window it finds; never point it at a box where
+the real app is open. Pass arguments to `as-user.ps1` from a script file on
+the box, not from an ssh command line: `-ScriptArgs '-Out','x'` does not
+survive two layers of quoting.
+
+Two limits found on the way. A full-screen grab (`CopyFromScreen`) works and
+shows everything on both displays, including whatever else is open, so
+prefer `shot.ps1`'s one-window capture. And the CEF build **crashes in
+libcef.dll (0x80000003) about a second after start when launched through the
+task**, on the September build as well as today's, so it is not a regression
+in master; an app built with `--no-default-features` runs and captures
+normally. Whether CEF also fails when started from the desktop by hand today
+is not known. Until it is, UI work is verified on the browser-less build, and
+a browser card's behaviour is not verified this way.
+
+Three things about the driver are worth knowing before trusting a result:
 
 - **`window.ps1` exists because `Get-Process infiniterm` returns seven
   processes** once a browser card is open. Windows re-executes the same exe
