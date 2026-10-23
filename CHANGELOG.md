@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-23
 
+- New: `ift focus <card>` goes to a card by its number (`7` or `#7`) or id, as picking it in the palette does: it shows the card's workspace, focuses it and fits it.
 - New: `ift workspaces` lists the workspaces (id, name, cards, and `*` on the one on screen). `ift terminal --workspace <id|name|new> [--name <text>] <dir>...` opens the terminals on that workspace and shows it; `new` makes a workspace first. Without `--workspace` nothing changes.
 
 ## 0.6.3 (build 1196), 2026-10-22

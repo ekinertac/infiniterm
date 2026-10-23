@@ -119,6 +119,10 @@ ift — drive infiniterm from a shell
   ift read <card> [--lines N] [--all]
                              print what a card's terminal shows (the last N
                              lines of it; --all reaches into the history)
+  ift focus <card>           go to a card as the palette does: show its
+                             workspace, focus it and fit it; needs a running
+                             app, and does not bring its window to the front
+                             (bare `ift` does that)
   ift close <card>           close a card like Cmd+W; a locked card refuses
   ift run <command-id>       run a registered command as the palette would,
                              on the card in focus (ift commands lists them)
@@ -175,7 +179,7 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 30] = [
+pub const SUBCOMMANDS: [&str; 31] = [
     "diff",
     "ls",
     "workspaces",
@@ -187,6 +191,7 @@ pub const SUBCOMMANDS: [&str; 30] = [
     "terminal",
     "send",
     "read",
+    "focus",
     "close",
     "run",
     "omni",
@@ -263,6 +268,7 @@ fn main() -> ExitCode {
         Some("terminal") => terminal_cmd(&args[1..]),
         Some("send") => send("send", rest()),
         Some("read") => send("read", rest()),
+        Some("focus") => send("focus", rest()),
         Some("close") => send("close", rest()),
         Some("run") => send("run", rest()),
         Some("commands") => send_table("commands", &["id", "label", "key"]),
