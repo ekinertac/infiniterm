@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-23
+
+- New: `ift workspaces` lists the workspaces (id, name, cards, and `*` on the one on screen). `ift terminal --workspace <id|name|new> [--name <text>] <dir>...` opens the terminals on that workspace and shows it; `new` makes a workspace first. Without `--workspace` nothing changes.
+
 ## 0.6.3 (build 1196), 2026-10-22
 
 ### Settings files

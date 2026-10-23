@@ -275,9 +275,197 @@ pub fn format_agents(rows: &[(u32, &str, &str, &str, &str)]) -> String {
         .join("\n")
 }
 
+/// One row per workspace, in tab order: id, name, cards, active. The active
+/// column is `*` for the workspace on screen and `-` otherwise, the same
+/// placeholder as `ift ls`, so a shell `read` never loses a column. A name is
+/// free text: tabs and newlines become spaces so one row stays one row.
+pub fn format_workspace_list(rows: &[(&str, &str, usize, bool)]) -> String {
+    rows.iter()
+        .map(|(id, name, cards, active)| {
+            let name: String = name
+                .chars()
+                .map(|c| {
+                    if c == '\t' || c == '\n' || c == '\r' {
+                        ' '
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            let name = if name.trim().is_empty() {
+                EMPTY.to_string()
+            } else {
+                name
+            };
+            format!(
+                "{id}\t{name}\t{cards}\t{}",
+                if *active { "*" } else { EMPTY }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Which workspace `ift terminal` opens its cards on.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WorkspaceTarget {
+    /// An id or an exact name, resolved against the live workspaces.
+    Existing(String),
+    /// `--workspace new`: make one first.
+    New,
+}
+
+/// `ift terminal`'s arguments: the flags in front, then the directories.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TerminalArgs<'a> {
+    pub workspace: Option<&'a str>,
+    pub name: Option<&'a str>,
+    pub dirs: Vec<&'a str>,
+}
+
+/// Splits `[--workspace V] [--name V] [--] <dir>...`. Flags only lead; `--`
+/// ends them, so a directory called `--workspace` still opens. A word that
+/// starts with `--` and is not one of ours stops the flags too and is taken
+/// as a directory, which is what an app before this flag did with it.
+pub fn parse_terminal_args(args: &[String]) -> Result<TerminalArgs<'_>, String> {
+    let mut out = TerminalArgs::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--" => {
+                i += 1;
+                break;
+            }
+            flag @ ("--workspace" | "--name") => {
+                let Some(value) = args.get(i + 1) else {
+                    return Err(format!("{flag} takes a value"));
+                };
+                let slot = if flag == "--workspace" {
+                    &mut out.workspace
+                } else {
+                    &mut out.name
+                };
+                if slot.replace(value.as_str()).is_some() {
+                    return Err(format!("{flag} given twice"));
+                }
+                i += 2;
+            }
+            _ => break,
+        }
+    }
+    out.dirs = args[i..].iter().map(String::as_str).collect();
+    Ok(out)
+}
+
+/// What `--workspace <value>` names: an id, else an exact name (case
+/// sensitive), else the word `new`. A name two workspaces share is an error,
+/// not first-wins: the launcher should send the id. A workspace that happens
+/// to be called "new" is reachable by its id.
+pub fn resolve_workspace(
+    workspaces: &[(&str, &str)],
+    value: &str,
+) -> Result<WorkspaceTarget, String> {
+    if let Some((id, _)) = workspaces.iter().find(|(id, _)| *id == value) {
+        return Ok(WorkspaceTarget::Existing((*id).to_string()));
+    }
+    let named: Vec<&str> = workspaces
+        .iter()
+        .filter(|(_, name)| *name == value)
+        .map(|(id, _)| *id)
+        .collect();
+    match named.as_slice() {
+        [id] => Ok(WorkspaceTarget::Existing((*id).to_string())),
+        [] if value == "new" => Ok(WorkspaceTarget::New),
+        [] => Err(format!("no workspace {value}")),
+        _ => Err("workspace name is ambiguous: use the id".to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn strings(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn workspace_list_is_one_tab_separated_row_each() {
+        let text = format_workspace_list(&[("w1", "api", 3, true), ("w2", "docs", 0, false)]);
+        assert_eq!(text, "w1\tapi\t3\t*\nw2\tdocs\t0\t-");
+        assert_eq!(format_workspace_list(&[]), "");
+    }
+
+    #[test]
+    fn workspace_names_cannot_break_a_row() {
+        let text = format_workspace_list(&[("w1", "a\tb\nc", 1, false), ("w2", " ", 0, false)]);
+        let rows: Vec<Vec<&str>> = text.lines().map(|l| l.split('\t').collect()).collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], ["w1", "a b c", "1", "-"]);
+        assert_eq!(rows[1][1], "-");
+    }
+
+    #[test]
+    fn terminal_args_split_flags_from_directories() {
+        let a = strings(&["--workspace", "new", "--name", "demo", "--", "/a", "/b"]);
+        let p = parse_terminal_args(&a).unwrap();
+        assert_eq!(p.workspace, Some("new"));
+        assert_eq!(p.name, Some("demo"));
+        assert_eq!(p.dirs, ["/a", "/b"]);
+        let only = strings(&["/a"]);
+        let p = parse_terminal_args(&only).unwrap();
+        assert_eq!(
+            p,
+            TerminalArgs {
+                dirs: vec!["/a"],
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn terminal_args_double_dash_protects_a_directory_named_like_a_flag() {
+        let a = strings(&["--", "--workspace", "x"]);
+        let p = parse_terminal_args(&a).unwrap();
+        assert_eq!(p.workspace, None);
+        assert_eq!(p.dirs, ["--workspace", "x"]);
+        // Not ours: stays a directory, as before the flags existed.
+        let unknown = strings(&["--other", "/a"]);
+        let p = parse_terminal_args(&unknown).unwrap();
+        assert_eq!(p.dirs, ["--other", "/a"]);
+    }
+
+    #[test]
+    fn terminal_args_refuse_a_missing_or_repeated_value() {
+        assert!(parse_terminal_args(&strings(&["--workspace"])).is_err());
+        assert!(parse_terminal_args(&strings(&["--name"])).is_err());
+        let twice = strings(&["--workspace", "a", "--workspace", "b", "/d"]);
+        assert!(parse_terminal_args(&twice).is_err());
+    }
+
+    #[test]
+    fn workspace_resolves_by_id_then_name_then_new() {
+        let ws = [("w1", "api"), ("w2", "docs"), ("w3", "docs"), ("w4", "w1")];
+        let existing = |id: &str| Ok(WorkspaceTarget::Existing(id.to_string()));
+        assert_eq!(resolve_workspace(&ws, "w2"), existing("w2"));
+        assert_eq!(resolve_workspace(&ws, "api"), existing("w1"));
+        // An id beats a name that spells it.
+        assert_eq!(resolve_workspace(&ws, "w1"), existing("w1"));
+        assert_eq!(resolve_workspace(&ws, "new"), Ok(WorkspaceTarget::New));
+        let e = resolve_workspace(&ws, "docs").unwrap_err();
+        assert!(e.contains("ambiguous"), "{e}");
+        let e = resolve_workspace(&ws, "API").unwrap_err();
+        assert_eq!(e, "no workspace API");
+    }
+
+    #[test]
+    fn a_workspace_called_new_wins_over_the_word() {
+        let ws = [("w1", "new")];
+        assert_eq!(
+            resolve_workspace(&ws, "new"),
+            Ok(WorkspaceTarget::Existing("w1".into()))
+        );
+    }
 
     fn card<'a>() -> ListedCard<'a> {
         ListedCard {
