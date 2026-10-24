@@ -322,9 +322,13 @@ pub struct AppView {
     #[cfg(unix)]
     pub join_updates:
         Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join::RemoteUpdate>>,
-    /// A viewer's edits on their way up to the host (viewer side).
+    /// A viewer's clicks on paths, already found on this disk (host side,
+    /// #555): opened beside the card they came from, in the poll.
     #[cfg(unix)]
-    pub uplink: Option<std::sync::mpsc::Sender<infiniterm_core::backend::join::RemoteUpdate>>,
+    pub join_opens: Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join::OpenOnHost>>,
+    /// A viewer's edits and clicks on their way up to the host (viewer side).
+    #[cfg(unix)]
+    pub uplink: Option<std::sync::mpsc::Sender<infiniterm_core::backend::join_client::Uplink>>,
     /// This window is a viewer (`ift join`, #423): the canvas is the host's,
     /// nothing is saved, nothing is seeded, no session is started.
     pub viewer: bool,
@@ -819,7 +823,7 @@ fn main() {
                         }
                         this.publish_agents();
                         // What viewers changed on this canvas (#423).
-                        if this.apply_remote_updates() {
+                        if this.apply_remote_opens() | this.apply_remote_updates() {
                             this.redraw = true;
                             cx.notify();
                         }

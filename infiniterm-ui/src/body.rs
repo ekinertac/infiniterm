@@ -41,6 +41,9 @@ pub enum BodyAction {
         url: Option<String>,
         path: Option<(String, String)>,
     },
+    /// Cmd+click on a path in a JOINED terminal (#555): the path is the
+    /// host's, so the host is asked to open it, not this Mac's disk.
+    OpenOnHost { path: String, line: Option<u64> },
     /// A click on a spawn error: start the shell again.
     Retry,
     /// A click on a browser card's tab strip.

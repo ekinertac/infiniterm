@@ -1375,6 +1375,9 @@ impl AppView {
             crate::body::BodyAction::Open(plan) => {
                 self.model.open_in_card(plan, Some(id));
             }
+            crate::body::BodyAction::OpenOnHost { path, line } => {
+                self.send_open_request(id, path, line);
+            }
             crate::body::BodyAction::OpenExternal { url, path } => {
                 let result = match (url, path) {
                     (Some(url), _) => infiniterm_core::links_fs::open_url(url.as_str()),

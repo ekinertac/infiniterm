@@ -80,6 +80,66 @@ pub const KIND_REVISION: u8 = b'V';
 /// "layout": "<the layout text>"}`. The host applies it in place unless the
 /// revision is stale (see `Model::apply_remote_layout`).
 pub const KIND_UPDATE: u8 = b'U';
+/// Viewer to host (#555): a Cmd+click on a path in a joined terminal, as the
+/// card, its directory and the path the viewer saw. The path is the HOST's
+/// (the shell runs there), so the host looks at its own disk.
+pub const KIND_OPEN: u8 = b'O';
+/// Host to the one viewer that asked: a sentence for a person, shown as the
+/// viewer's notice (the click found nothing on the host).
+pub const KIND_NOTICE: u8 = b'N';
+
+/// A viewer's click on a path: which card, the card's directory and the text
+/// of the path (`~/x`, `src/a.rs`, `/abs`), and the line from `a.rs:42`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenRequest {
+    pub card: String,
+    pub cwd: String,
+    pub path: String,
+    pub line: Option<u64>,
+}
+
+/// What the host's app does with a click it resolved: the absolute path, and
+/// whether it is a folder, beside the card that was clicked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenOnHost {
+    pub card: String,
+    pub path: String,
+    pub directory: bool,
+    pub line: Option<u64>,
+}
+
+pub fn encode_open(r: &OpenRequest) -> String {
+    serde_json::json!({ "card": r.card, "cwd": r.cwd, "path": r.path, "line": r.line }).to_string()
+}
+
+pub fn decode_open(text: &str) -> Option<OpenRequest> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    Some(OpenRequest {
+        card: v.get("card")?.as_str()?.to_string(),
+        cwd: v.get("cwd")?.as_str()?.to_string(),
+        path: v.get("path")?.as_str()?.to_string(),
+        line: v.get("line").and_then(|l| l.as_u64()),
+    })
+}
+
+/// The host's side of a click: resolved on ITS disk. `Err` is the sentence
+/// for the viewer.
+pub fn resolve_open(r: &OpenRequest) -> Result<OpenOnHost, String> {
+    let full = crate::links_fs::resolve(&r.cwd, &r.path);
+    let directory = if full.is_dir() {
+        true
+    } else if full.is_file() {
+        false
+    } else {
+        return Err(format!("{}: not found on the host", r.path));
+    };
+    Ok(OpenOnHost {
+        card: r.card.clone(),
+        path: full.to_string_lossy().into_owned(),
+        directory,
+        line: r.line,
+    })
+}
 
 /// What a viewer sent up: the revision it edited, and the canvas it made.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,11 +224,16 @@ pub struct JoinHub {
     /// (`take_updates`) and applies them in its own poll, on its own thread.
     updates_tx: std::sync::mpsc::Sender<RemoteUpdate>,
     updates_rx: Arc<Mutex<Option<std::sync::mpsc::Receiver<RemoteUpdate>>>>,
+    /// Clicks on paths a viewer sent, already resolved on this host's disk
+    /// (#555); the app opens each beside the card clicked.
+    opens_tx: std::sync::mpsc::Sender<OpenOnHost>,
+    opens_rx: Arc<Mutex<Option<std::sync::mpsc::Receiver<OpenOnHost>>>>,
 }
 
 impl JoinHub {
     pub fn new(relay: Arc<Mutex<Relay>>, write: WriteSession) -> JoinHub {
         let (updates_tx, updates_rx) = std::sync::mpsc::channel();
+        let (opens_tx, opens_rx) = std::sync::mpsc::channel();
         JoinHub {
             relay,
             write,
@@ -176,7 +241,15 @@ impl JoinHub {
             canvas: Arc::new(Mutex::new(Canvas::default())),
             updates_tx,
             updates_rx: Arc::new(Mutex::new(Some(updates_rx))),
+            opens_tx,
+            opens_rx: Arc::new(Mutex::new(Some(opens_rx))),
         }
+    }
+
+    /// The clicks viewers sent on paths (#555), resolved here, for the app to
+    /// open. Once: the second call gets `None`.
+    pub fn take_opens(&self) -> Option<std::sync::mpsc::Receiver<OpenOnHost>> {
+        self.opens_rx.lock().unwrap().take()
     }
 
     /// A repaint request for each session a viewer joins. The ring a viewer
@@ -278,11 +351,13 @@ impl JoinHub {
 
     fn serve_canvas(&self, mut out: UnixStream, mut input: impl Read) {
         // Registered and the latest taken under one lock, so a snapshot saved
-        // meanwhile is neither missed nor sent twice.
-        let (latest, rx) = {
+        // meanwhile is neither missed nor sent twice. `notice_tx` is this
+        // viewer's own queue, kept to answer a click that found nothing to
+        // only the viewer that asked (#555).
+        let (latest, rx, notice_tx) = {
             let mut c = self.canvas.lock().unwrap();
             let (tx, rx) = sync_channel(CANVAS_QUEUE);
-            c.clients.push(tx);
+            c.clients.push(tx.clone());
             // The settings first, so the first layout is drawn in the host's
             // font and theme.
             let latest: Vec<(u8, String)> = [
@@ -295,7 +370,7 @@ impl JoinHub {
             .into_iter()
             .filter_map(|(k, t)| t.map(|t| (k, t)))
             .collect();
-            (latest, rx)
+            (latest, rx, tx)
         };
         if writeln!(out, "ift-join {MAJOR} ok").is_err() {
             return;
@@ -335,6 +410,21 @@ impl JoinHub {
                 Ok(Some((KIND_UPDATE, text))) => {
                     if let Some(update) = decode_update(&text) {
                         let _ = self.updates_tx.send(update);
+                    }
+                }
+                // A click on a path: looked up on THIS disk. Found, the app
+                // opens it beside the card; not found, only this viewer is
+                // told.
+                Ok(Some((KIND_OPEN, text))) => {
+                    if let Some(request) = decode_open(&text) {
+                        match resolve_open(&request) {
+                            Ok(open) => {
+                                let _ = self.opens_tx.send(open);
+                            }
+                            Err(sentence) => {
+                                let _ = notice_tx.try_send((KIND_NOTICE, sentence));
+                            }
+                        }
                     }
                 }
                 Ok(Some(_)) => {}
@@ -662,6 +752,86 @@ mod tests {
             (KIND_SETTINGS, "{\"terminal.fontSize\": 21}".to_string())
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_click_on_a_path_is_looked_up_on_the_hosts_disk() {
+        let dir = std::env::temp_dir().join(format!("jo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/a.rs"), "fn main() {}").unwrap();
+        let cwd = dir.to_string_lossy().to_string();
+        let ask = |path: &str| OpenRequest {
+            card: "c1".into(),
+            cwd: cwd.clone(),
+            path: path.into(),
+            line: Some(7),
+        };
+        // A file, relative to the card's directory.
+        let open = resolve_open(&ask("src/a.rs")).unwrap();
+        assert_eq!(open.path, dir.join("src/a.rs").to_string_lossy());
+        assert!(!open.directory);
+        assert_eq!((open.card.as_str(), open.line), ("c1", Some(7)));
+        // A folder.
+        assert!(resolve_open(&ask("src")).unwrap().directory);
+        // Nothing there: a sentence for the viewer, naming what it clicked.
+        assert_eq!(
+            resolve_open(&ask("nope.rs")).unwrap_err(),
+            "nope.rs: not found on the host"
+        );
+        // The wire form round-trips, with and without a line.
+        let r = ask("src/a.rs");
+        assert_eq!(decode_open(&encode_open(&r)), Some(r));
+        let no_line = OpenRequest {
+            line: None,
+            ..ask("x")
+        };
+        assert_eq!(decode_open(&encode_open(&no_line)), Some(no_line));
+        assert_eq!(decode_open("not json"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_viewers_click_reaches_the_app_resolved_or_comes_back_as_a_notice() {
+        let dir = std::env::temp_dir().join(format!("jn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        let cwd = dir.to_string_lossy().to_string();
+        let (hub, _relay, _w) = hub();
+        let opens = hub.take_opens().expect("the app takes the receiver once");
+        assert!(hub.take_opens().is_none());
+        let path = socket("open");
+        hub.serve(&path).unwrap();
+        let (mut s, answer) = connect(&path, "ift-join 2 canvas");
+        assert_eq!(answer, "ift-join 2 ok");
+        let click = |path: &str| {
+            encode_canvas_message(
+                KIND_OPEN,
+                &encode_open(&OpenRequest {
+                    card: "c1".into(),
+                    cwd: cwd.clone(),
+                    path: path.into(),
+                    line: None,
+                }),
+            )
+        };
+        s.write_all(&click("nothing-here")).unwrap();
+        s.write_all(&click("a.txt")).unwrap();
+        // The app gets only the one that exists, with the host's full path.
+        let open = opens.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(open.path, dir.join("a.txt").to_string_lossy());
+        assert!(opens.try_recv().is_err());
+        // The viewer that clicked the missing one is told, and no other.
+        let notice = loop {
+            let (kind, text) = read_canvas_message(&mut s).unwrap().unwrap();
+            if kind == KIND_NOTICE {
+                break text;
+            }
+        };
+        assert_eq!(notice, "nothing-here: not found on the host");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

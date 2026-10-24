@@ -149,6 +149,8 @@ pub struct Host {
     registry: CommandRegistry<Model>,
     hub: JoinHub,
     updates: Option<Receiver<RemoteUpdate>>,
+    /// A viewer's clicks on paths, resolved on this disk (#555).
+    opens: Option<Receiver<crate::backend::join::OpenOnHost>>,
     io: HostIo,
     /// Sessions the daemon lists as running and no pane holds yet.
     live_sessions: Vec<String>,
@@ -227,6 +229,7 @@ impl Host {
         hub.serve(&io.join_socket)
             .map_err(|e| format!("could not serve {}: {e}", io.join_socket.display()))?;
         let updates = hub.take_updates();
+        let opens = hub.take_opens();
 
         let mut host = Host {
             model,
@@ -234,6 +237,7 @@ impl Host {
             registry,
             hub,
             updates,
+            opens,
             io,
             live_sessions,
             save_due: None,
@@ -258,7 +262,7 @@ impl Host {
         self.model.tick(now);
         self.perform_effects();
         self.reconcile_terminals();
-        if self.apply_remote_updates() {
+        if self.apply_remote_updates() | self.apply_remote_opens() {
             self.perform_effects();
             self.reconcile_terminals();
         }
@@ -494,6 +498,27 @@ impl Host {
                 }
                 Err(why) => eprintln!("[infiniterm] a viewer's canvas was refused: {why}"),
             }
+        }
+        changed
+    }
+
+    /// A viewer's click on a path, already found on this disk: opened beside
+    /// the card it came from, as a Cmd+click in this canvas's own window is
+    /// (the model's `open_in_card`). True when a card was made.
+    fn apply_remote_opens(&mut self) -> bool {
+        let Some(rx) = &self.opens else {
+            return false;
+        };
+        let opens: Vec<_> = rx.try_iter().collect();
+        let mut changed = false;
+        for o in opens {
+            let kind = if o.directory {
+                crate::ift::PathKind::Directory
+            } else {
+                crate::ift::PathKind::File
+            };
+            let plan = crate::ift::open_plan(&o.path, kind, o.line.map(|l| l as f64));
+            changed |= self.model.open_in_card(plan, Some(&o.card)).is_some();
         }
         changed
     }

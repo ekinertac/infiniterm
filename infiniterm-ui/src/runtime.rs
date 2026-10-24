@@ -80,6 +80,8 @@ impl AppView {
             #[cfg(unix)]
             join_updates: None,
             #[cfg(unix)]
+            join_opens: None,
+            #[cfg(unix)]
             uplink: None,
             viewer: false,
             viewer_poke: false,
@@ -1012,10 +1014,71 @@ impl AppView {
             return;
         };
         let layout = self.model.layout_snapshot();
-        let _ = up.send(infiniterm_core::backend::join::RemoteUpdate {
-            base: self.model.layout_rev,
-            layout,
+        let _ = up.send(infiniterm_core::backend::join_client::Uplink::Edit(
+            infiniterm_core::backend::join::RemoteUpdate {
+                base: self.model.layout_rev,
+                layout,
+            },
+        ));
+    }
+
+    /// A Cmd+click on a path in a joined terminal (#555): the path is the
+    /// HOST's, so the host is asked to open it. Said in a notice when it
+    /// cannot be sent.
+    #[cfg(windows)]
+    pub fn send_open_request(&mut self, _card: &str, _path: String, _line: Option<u64>) {}
+
+    #[cfg(unix)]
+    pub fn send_open_request(&mut self, card: &str, path: String, line: Option<u64>) {
+        let cwd = self
+            .model
+            .card(card)
+            .map(|c| c.cwd.clone())
+            .unwrap_or_default();
+        let sent = self.uplink.as_ref().is_some_and(|up| {
+            up.send(infiniterm_core::backend::join_client::Uplink::Open(
+                infiniterm_core::backend::join::OpenRequest {
+                    card: card.to_string(),
+                    cwd,
+                    path,
+                    line,
+                },
+            ))
+            .is_ok()
         });
+        if !sent {
+            self.model.notify("could not ask the host to open it");
+        }
+    }
+
+    /// A viewer's click on a path, found on this disk by the join server: an
+    /// editor or folder card beside the card it came from, as a Cmd+click in
+    /// this window is. True when a card was made.
+    #[cfg(windows)]
+    pub fn apply_remote_opens(&mut self) -> bool {
+        false
+    }
+
+    #[cfg(unix)]
+    pub fn apply_remote_opens(&mut self) -> bool {
+        let Some(rx) = &self.join_opens else {
+            return false;
+        };
+        let opens: Vec<_> = rx.try_iter().collect();
+        let mut changed = false;
+        for o in opens {
+            let kind = if o.directory {
+                infiniterm_core::ift::PathKind::Directory
+            } else {
+                infiniterm_core::ift::PathKind::File
+            };
+            let plan = infiniterm_core::ift::open_plan(&o.path, kind, o.line.map(|l| l as f64));
+            changed |= self.model.open_in_card(plan, Some(&o.card)).is_some();
+        }
+        if changed {
+            self.perform_effects();
+        }
+        changed
     }
 
     /// What the viewers sent up since the last tick (#423), applied to this
@@ -1215,6 +1278,7 @@ fn start_join(app: &mut AppView) {
     match hub.serve(&infiniterm_core::paths::join_socket()) {
         Ok(()) => {
             app.join_updates = hub.take_updates();
+            app.join_opens = hub.take_opens();
             app.join = Some(hub);
         }
         Err(e) => eprintln!("[infiniterm/warn] ift join is off: {e}"),
