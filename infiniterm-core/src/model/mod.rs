@@ -713,6 +713,11 @@ pub struct Model {
     /// A viewer has applied at least one host snapshot, so its viewport,
     /// zoom, focus and workspace are its own from here on.
     pub snapshot_seen: bool,
+    /// A viewer asked its host to open a path (#565): the cards it had then
+    /// and when it asked. The first card a snapshot brings that is not in the
+    /// list is the one the host made, and the viewer goes to it, as the host
+    /// does in its own window. It lapses after `OPEN_WAIT`.
+    pub awaiting_open: Option<(Vec<String>, std::time::Instant)>,
     /// The revision of the canvas a viewer and its host share (#423). On the
     /// host: the number of the last layout it published. On a viewer: the
     /// revision of the last snapshot it applied, which an edit it sends up
@@ -936,6 +941,7 @@ impl Model {
             read_only: false,
             dirty_layout: false,
             snapshot_seen: false,
+            awaiting_open: None,
             layout_rev: 0,
             published: std::collections::VecDeque::new(),
             config: default_config(),

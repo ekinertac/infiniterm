@@ -110,7 +110,17 @@ impl HostSource {
                 )));
             }
         }
-        match (self.connector)() {
+        let started = Instant::now();
+        let made = (self.connector)();
+        if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+            eprintln!(
+                "[files] {} connect {} {} ms",
+                self.label,
+                if made.is_ok() { "ok" } else { "failed" },
+                started.elapsed().as_millis()
+            );
+        }
+        match made {
             Ok(stream) => {
                 st.failures = 0;
                 st.retry_at = None;
@@ -149,6 +159,24 @@ impl HostSource {
         request: &Request,
         body: &[u8],
     ) -> Result<(Value, Vec<u8>), FileError> {
+        let started = Instant::now();
+        let result = self.call_untimed(request, body);
+        // Every request's time, to tell a slow link from a bug (#565).
+        if std::env::var_os("INFINITERM_KEYLOG").is_some() {
+            let json = request.to_json();
+            let op = json.get("op").and_then(Value::as_str).unwrap_or("?");
+            let path = json.get("path").and_then(Value::as_str).unwrap_or("");
+            let ok = if result.is_ok() { "ok" } else { "error" };
+            eprintln!(
+                "[files] {} {op} {path} {ok} {} ms",
+                self.label,
+                started.elapsed().as_millis()
+            );
+        }
+        result
+    }
+
+    fn call_untimed(&self, request: &Request, body: &[u8]) -> Result<(Value, Vec<u8>), FileError> {
         let conn = self.conn()?;
         let id = conn.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = channel();

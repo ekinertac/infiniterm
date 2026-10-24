@@ -547,6 +547,7 @@ impl Host {
             if let Err(e) = (self.io.write_layout)(&text) {
                 eprintln!("[infiniterm] could not save the layout: {e}");
             }
+            let text = self.model.publish_text().unwrap_or(text);
             let rev = self.model.record_published(&text);
             self.hub.publish_layout(&text, rev);
         }

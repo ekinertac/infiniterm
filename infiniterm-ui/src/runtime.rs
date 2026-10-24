@@ -1012,6 +1012,9 @@ impl AppView {
             if let Some(hub) = &self.join {
                 // Remembered by revision, so a viewer's edit can be compared
                 // with the canvas it started from and merged field by field.
+                // Viewers also get the in-place editors, which the file
+                // leaves out (#566).
+                let text = self.model.publish_text().unwrap_or(text);
                 let rev = self.model.record_published(&text);
                 hub.publish_layout(&text, rev);
             }
@@ -1150,7 +1153,9 @@ impl AppView {
             ))
             .is_ok()
         });
-        if !sent {
+        if sent {
+            self.model.await_host_open();
+        } else {
             self.model.notify("could not ask the host to open it");
         }
     }
