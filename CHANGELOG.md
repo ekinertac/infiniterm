@@ -8,7 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-24
 
-- Fixed: a file or folder dropped on a terminal of a joined window (`ift join`), or an image pasted with Cmd+V, gave the program on the host a path on your Mac, which it cannot read. They are now copied to the host over the existing ssh, into `~/.infiniterm/drops/<id>/` there (the image as `clipboard.png`), and the card is given that path. Folders older than a week are removed by the next send. Ctrl+V inside an agent still reads the host's own clipboard.
+- Fixed: a file or folder dropped on a terminal of a joined window (`ift join`), or an image pasted with Cmd+V or Ctrl+V (Claude Code's paste key), gave the program on the host a path on your Mac, which it cannot read. They are now copied to the host over the existing ssh, into `~/.infiniterm/drops/<id>/` there (the image as `clipboard.png`), and the card is given that path. Folders older than a week are removed by the next send. Ctrl+V with text on your clipboard, or no image, still goes to the program as a key.
 
 - Fixed: Cmd+click on a file or folder path in a joined window's terminal (`ift join`) did nothing, because the path was looked up on your Mac instead of the host. It now asks the host, which opens an editor (or folder) card beside the terminal on its own canvas; the card appears in your window like any other. A path that is not on the host says so in a notice.
 

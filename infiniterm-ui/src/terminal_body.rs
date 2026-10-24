@@ -941,6 +941,14 @@ impl TerminalBody {
     }
 }
 
+/// What Ctrl+V does in a joined card: the image goes to the host only when
+/// this Mac's clipboard has an image and NO text. Text means the key is meant
+/// as a key (a program that pastes text itself), and nothing on the clipboard
+/// means there is nothing to send.
+pub fn ctrl_v_sends_image(clipboard_has_text: bool, clipboard_has_image: bool) -> bool {
+    clipboard_has_image && !clipboard_has_text
+}
+
 /// The first image on the clipboard: the extension its format has and its
 /// bytes (#556).
 fn clipboard_image(item: &ClipboardItem) -> Option<(String, Vec<u8>)> {
@@ -1299,6 +1307,22 @@ impl CardBody for TerminalBody {
                 }
             }
             return BodyAction::None;
+        }
+        // Ctrl+V is the paste chord of an agent in the card (Claude Code reads
+        // an image from the clipboard of the machine it runs on). In a joined
+        // card that is the HOST's clipboard, which holds nothing of what was
+        // copied on this Mac: with an image and no text here, the image goes
+        // to the host and its path is typed instead of the key (#556); with
+        // text, or no image, the key goes on as ever.
+        if self.remote_paths && m.control && !m.platform && !m.alt && k.key == "v" {
+            let clip = cx.read_from_clipboard();
+            let text = clip.as_ref().and_then(|c| c.text()).is_some();
+            let image = clip.as_ref().and_then(clipboard_image);
+            if ctrl_v_sends_image(text, image.is_some()) {
+                if let Some((ext, bytes)) = image {
+                    return BodyAction::PasteImage { ext, bytes };
+                }
+            }
         }
         let key = Key {
             name: &k.key,
@@ -1989,6 +2013,19 @@ mod tests {
             "jpg"
         );
         assert!(clipboard_image(&ClipboardItem::new_string("hello".into())).is_none());
+    }
+
+    /// Ctrl+V in a joined card (#556): an image here goes to the host; text, or
+    /// nothing, leaves the key to the program.
+    #[test]
+    fn ctrl_v_sends_an_image_only_when_there_is_one_and_no_text() {
+        assert!(ctrl_v_sends_image(false, true));
+        assert!(
+            !ctrl_v_sends_image(true, true),
+            "text wins: the key goes on"
+        );
+        assert!(!ctrl_v_sends_image(true, false));
+        assert!(!ctrl_v_sends_image(false, false));
     }
 
     #[test]
