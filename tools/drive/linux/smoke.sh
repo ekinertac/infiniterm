@@ -114,6 +114,10 @@ r logged '\[chord\] cmd\+\] \(' || fail "Ctrl+Shift+] was not read as cmd+]"
 r chord ctrl 1
 r logged '\[chord\] cmd\+1 \(' || fail "Ctrl+1 was not read as cmd+1"
 sleep 1
+# The chords are shown as the platform writes them (Model::shown_chord):
+# `ift commands` lists the key column the palette and the panel use.
+r ift commands | grep -E '^card\.new\.terminal' | grep -q 'Ctrl Shift T' ||
+    fail "ift commands does not show Ctrl Shift T: $(r ift commands | grep -E '^card\.new\.terminal')"
 echo "ok 3b: plain Ctrl+C is the shell's, Alt+Shift+D is kill-word, Ctrl+Shift+T makes a card, Alt+2 is a workspace"
 
 # 4. The right-click menu the app draws (menu_view.rs): a right-click on

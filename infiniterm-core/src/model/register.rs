@@ -369,6 +369,69 @@ mod tests {
         assert!(h.m.palette.source.is_none(), "no palette, so no dim sheet");
     }
 
+    // Off the Mac with `ctrl`, every chord is shown as the platform's: the
+    // panel, the palette, the menus and the keycast all go through
+    // `shown_chord` / `shown_keymap` (#464). On the Mac, and with `super`,
+    // the chords are the Mac's.
+    #[test]
+    fn chords_are_shown_as_the_platform_writes_them() {
+        use crate::config::CommandModifier;
+        let mut h = Harness::new();
+        assert!(
+            h.m.sync_platform_keys().is_empty(),
+            "the default keymap maps cleanly"
+        );
+        assert_eq!(
+            h.m.shown_chord_with(true, "cmd+t").as_deref(),
+            Some("ctrl+shift+t")
+        );
+        assert_eq!(
+            h.m.shown_chord_with(true, "ctrl+2").as_deref(),
+            Some("alt+2")
+        );
+        assert_eq!(
+            h.m.shown_chord_with(true, "cmd+ctrl+space"),
+            None,
+            "palette only"
+        );
+        assert_eq!(
+            h.m.shown_chord_with(false, "cmd+t").as_deref(),
+            Some("cmd+t")
+        );
+        let shown = h.m.shown_keymap_with(true);
+        assert!(shown
+            .iter()
+            .any(|(c, id)| c == "ctrl+shift+t" && id == "card.new.terminal"));
+        assert!(
+            !shown.iter().any(|(_, id)| id == "app.emoji"),
+            "no key, no row"
+        );
+        assert!(
+            shown.iter().all(|(c, _)| !c.starts_with("cmd+")),
+            "no Cmd off the Mac"
+        );
+        // Which platforms use the table.
+        assert!(crate::model::uses_platform_keys(
+            false,
+            CommandModifier::Ctrl
+        ));
+        assert!(!crate::model::uses_platform_keys(
+            false,
+            CommandModifier::Super
+        ));
+        assert!(!crate::model::uses_platform_keys(
+            true,
+            CommandModifier::Ctrl
+        ));
+        // A changed keymap rebuilds the table.
+        h.m.keymap.push(("cmd+u".into(), "card.close".into()));
+        h.m.sync_platform_keys();
+        assert_eq!(
+            h.m.shown_chord_with(true, "cmd+u").as_deref(),
+            Some("ctrl+shift+u")
+        );
+    }
+
     // Release commits: the selected card is focused; Escape leaves things
     // where they were. A card in another workspace brings its workspace.
     #[test]
@@ -586,6 +649,7 @@ mod tests {
                             .find(|(_, c)| c == id)
                             .map(|(k, _)| k.clone())
                     },
+                    shown: &|c| Some(c.to_string()),
                 },
             );
             fn items(rows: &[Row], out: &mut Vec<(String, String)>) {
@@ -4787,7 +4851,10 @@ mod tests {
 
     #[test]
     fn the_command_source_lists_every_command_but_the_palette_with_its_chord() {
-        let h = Harness::new();
+        let mut h = Harness::new();
+        // The ui syncs the platform table each frame; off the Mac the hint
+        // is read through it (`Model::shown_chord`).
+        h.m.sync_platform_keys();
         let labels: Vec<(&str, &str)> =
             h.r.all()
                 .iter()
@@ -4796,11 +4863,12 @@ mod tests {
         let items = h.m.palette_items(Source::Commands, &labels);
         assert!(items.iter().all(|i| i.id != "app.palette"));
         let close = items.iter().find(|i| i.id == "card.close").unwrap();
-        // Spelled through the same labels the app would use, because what
-        // the app's modifier is CALLED is per platform and per setting
-        // (`shortcuts::ModifierLabels`); the question here is that the hint
-        // is the chord for this command, not what that key is named.
-        let expected = crate::shortcuts::format_chord("cmd+w", h.m.modifier_labels());
+        // Spelled through the same labels and chord the app would show,
+        // because what the key is CALLED is per platform and per setting
+        // (`shortcuts::ModifierLabels`, `platform_keys.rs`); the question
+        // here is that the hint is the chord for this command.
+        let shown = h.m.shown_chord("cmd+w").unwrap();
+        let expected = crate::shortcuts::format_chord(&shown, h.m.modifier_labels());
         assert_eq!(close.hint.as_deref(), Some(expected.as_str()));
     }
 

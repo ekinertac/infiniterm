@@ -370,6 +370,7 @@ mod tests {
                 context: &ctx,
                 label: &|id| Some(format!("Card: {id}")),
                 chord: &|_| None,
+                shown: &|_| None,
             },
         );
         let canvas = built
