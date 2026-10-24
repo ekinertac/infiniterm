@@ -301,14 +301,29 @@ impl FileSource for HostSource {
         // Registered before the request goes, so no event can pass unseen.
         conn.watches.lock().unwrap().insert(id, tx);
         let request = Request::Watch { path: path.into() };
-        if let Err(e) = self.exchange(&conn, id, &request, &[]) {
+        let started = Instant::now();
+        let result = self.exchange(&conn, id, &request, &[]);
+        let log = std::env::var_os("INFINITERM_KEYLOG").is_some();
+        if log {
+            eprintln!(
+                "[files] {} watch {path} {} {} ms",
+                self.label,
+                if result.is_ok() { "ok" } else { "error" },
+                started.elapsed().as_millis()
+            );
+        }
+        if let Err(e) = result {
             conn.watches.lock().unwrap().remove(&id);
             return Err(e);
         }
         let stop_conn = conn.clone();
+        let (label, path) = (self.label.clone(), path.to_string());
         Ok(Watch::new(
             events,
             Box::new(move || {
+                if log {
+                    eprintln!("[files] {label} unwatch {path}");
+                }
                 stop_conn.watches.lock().unwrap().remove(&id);
                 // Best effort and not waited for: the host's reply to it has
                 // no owner, and the reader drops it.

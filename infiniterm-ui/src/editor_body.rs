@@ -361,7 +361,12 @@ struct SaveAnswer {
 /// What the host's poll of the open file found.
 enum DiskAnswer {
     Same,
-    Changed { mtime: Option<u64>, text: String },
+    /// The file the card read is gone from the host.
+    Gone,
+    Changed {
+        mtime: Option<u64>,
+        text: String,
+    },
 }
 
 fn hex(s: &str) -> Hsla {
@@ -872,7 +877,18 @@ impl EditorBody {
         let (source, known) = (self.source.clone(), self.disk_stamp);
         std::thread::spawn(move || {
             let answer = (|| {
-                let stat = source.stat(&path).ok()?;
+                let stat = match source.stat(&path) {
+                    Ok(stat) => stat,
+                    // Said only for a file the card had read: a new file that
+                    // is not made yet is not "gone".
+                    Err(e)
+                        if e.code == infiniterm_core::file_source::Code::NotFound
+                            && known.is_some() =>
+                    {
+                        return Some(DiskAnswer::Gone);
+                    }
+                    Err(_) => return None,
+                };
                 if stat.mtime_ms.is_none() || stat.mtime_ms == known {
                     return Some(DiskAnswer::Same);
                 }
@@ -994,11 +1010,23 @@ impl EditorBody {
             match rx.try_recv() {
                 Ok(answer) => {
                     self.host_disk = None;
-                    if let (DiskAnswer::Changed { mtime, text }, Some(path)) =
-                        (answer, self.path.clone())
-                    {
-                        self.disk_stamp = mtime;
-                        self.apply_disk_text(&path, text, now);
+                    match (answer, self.path.clone()) {
+                        (DiskAnswer::Changed { mtime, text }, Some(path)) => {
+                            self.disk_stamp = mtime;
+                            self.apply_disk_text(&path, text, now);
+                        }
+                        // The text stays in the card; a save makes the file
+                        // again, as a local one does. Said once: with no
+                        // stamp left the next look finds nothing new.
+                        (DiskAnswer::Gone, Some(path)) => {
+                            self.disk_stamp = None;
+                            self.events.push(EditorEvent::Notice(format!(
+                                "{} was deleted on the host; saving writes it again",
+                                infiniterm_core::paths::base_name(&path)
+                            )));
+                            self.dirty = true;
+                        }
+                        _ => {}
                     }
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => self.host_disk = None,
@@ -4918,6 +4946,37 @@ mod tests {
         settle(&mut b, t + 3.);
         assert_eq!(b.buffer.text(), "v3\n");
         assert!(b.file_watch.is_none());
+    }
+
+    // The open file removed on the host: said once, the text stays, a save
+    // writes it again, and a file made there later is read like any change.
+    #[test]
+    fn a_host_file_deleted_under_the_card_is_said_once_and_a_save_makes_it_again() {
+        let host = FakeHost::with("keep me\n", 1);
+        let mut b = host_body(&host, "/srv/a.txt");
+        settle(&mut b, 1.);
+        notices(&mut b);
+        *host.file.lock().unwrap() = None;
+        for n in 1..=3 {
+            b.last_host_poll = -1e9;
+            b.idle(DISK_POLL_MS * (4 + n) as f64);
+            settle(&mut b, DISK_POLL_MS * (4 + n) as f64);
+        }
+        let said = notices(&mut b);
+        assert_eq!(
+            said.iter()
+                .filter(|n| n.contains("deleted on the host"))
+                .count(),
+            1,
+            "{said:?}"
+        );
+        assert_eq!(b.buffer.text(), "keep me\n");
+
+        b.save("/srv/a.txt", 5.);
+        settle(&mut b, 5.);
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        b.take_host_answers(6.);
+        assert_eq!(host.file.lock().unwrap().clone().unwrap().0, "keep me\n");
     }
 
     #[test]

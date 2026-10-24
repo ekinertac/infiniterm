@@ -996,9 +996,8 @@ impl CardBody for TerminalBody {
             self.paint_error(&error, bounds, scale, window, cx);
             return;
         }
-        if self.displaced {
-            self.paint_displaced(bounds, scale, window, cx);
-        }
+        // (A displaced card's banner is painted last, below: drawn here it
+        // went under the body's own background and never showed.)
         // A selection drag held past the edge: one step of scroll a frame,
         // and the selection's end follows to the edge row, so what scrolls
         // into view is selected as it arrives.
@@ -1134,6 +1133,9 @@ impl CardBody for TerminalBody {
                 }
             }
             self.frame = frame;
+            if self.displaced {
+                self.paint_displaced(bounds, scale, window, cx);
+            }
             self.paint_scrim(bounds, focused, window, cx);
             return;
         }
@@ -1251,6 +1253,9 @@ impl CardBody for TerminalBody {
         self.frame = frame;
         if visual {
             self.paint_visual_tag(bounds, scale, window, cx);
+        }
+        if self.displaced {
+            self.paint_displaced(bounds, scale, window, cx);
         }
         self.paint_scrim(bounds, focused, window, cx);
     }

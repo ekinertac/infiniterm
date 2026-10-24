@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-25
 
+- Fixed, in a joined window (`ift join`): after `ift ./file` in a terminal, the editor it opens now takes the keys, so Cmd+W closes it. Before, Cmd+W went to the terminal under it and nothing happened. A card whose host connection is lost shows its red line again at 100% zoom (it was drawn under the card's background). A file deleted on the host while open in your window says so once and keeps its text; saving writes it again. With `INFINITERM_KEYLOG` set, the file watches print a line too.
+
 - In a joined window (`ift join`) the editor's file tree now shows the host's folders. `ift -n .` and Cmd+K on a host card list the host's folder, say "Loading from the host..." until the list arrives, and show the host's error as text in the tree if it cannot be read. Opening a folder lists it on the host; opening a file opens it from the host. The tree and the open file follow changes on the host within about half a second, over the connection that was already there (an older `ift` on the host is polled every 2 seconds as before).
 
 - Fixed, in a joined window (`ift join`): the editor that `ift ./file` opens in a terminal could not be closed from your window. It came back after Cmd+W. Closing it there now closes it on the host too, and the `ift` waiting in the terminal ends.
