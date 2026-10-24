@@ -15,6 +15,11 @@ use super::{Model, NewCard};
 /// publishes ago is resynced instead.
 const PUBLISHED_KEPT: usize = 32;
 
+/// How long a viewer waits for the card its host was asked to open (#565).
+/// A slow link and a host that is busy both fit; after it a card the host's
+/// own user opens must not pull the viewer's focus.
+const OPEN_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// What `Model::apply_remote_layout` did with a viewer's edit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteApply {
@@ -182,6 +187,13 @@ impl Model {
             })
             .collect();
 
+        // The host's in-place editors, so a viewer treats them as the host
+        // does: laid over their terminal, never saved, never closed by a
+        // merge (#566).
+        self.covers = cards
+            .iter()
+            .filter_map(|c| Some((c.id.clone(), c.cover_of.clone()?)))
+            .collect();
         let host_ids: Vec<String> = cards.iter().map(|c| c.id.clone()).collect();
         let gone: Vec<String> = self
             .cards
@@ -259,7 +271,39 @@ impl Model {
         self.ensure_workspace();
         self.dirty_layout = false;
         self.layout_undo.clear();
+        self.follow_host_open();
         Ok(())
+    }
+
+    /// Asks to be taken to the card the host is about to open (#565).
+    pub fn await_host_open(&mut self) {
+        let known = self.cards.iter().map(|c| c.id.clone()).collect();
+        self.awaiting_open = Some((known, std::time::Instant::now()));
+    }
+
+    /// The host opened the card a viewer asked for: focus it and pan to it.
+    /// The host does this in its own viewport; the viewer's is its own, so
+    /// it has to do it here.
+    fn follow_host_open(&mut self) {
+        let Some((known, since)) = self.awaiting_open.take() else {
+            return;
+        };
+        if since.elapsed() > OPEN_WAIT {
+            return;
+        }
+        let new = self
+            .cards
+            .iter()
+            .find(|c| !known.contains(&c.id))
+            .map(|c| c.id.clone());
+        match new {
+            Some(id) => {
+                self.set_focus(Some(&id));
+                self.reveal_focused();
+            }
+            // Not here yet: keep waiting for the next snapshot.
+            None => self.awaiting_open = Some((known, since)),
+        }
     }
 
     /// The host's live agent states, for a viewer (#423): `{"<card id>":
@@ -297,21 +341,38 @@ impl Model {
         if !self.loaded || self.read_only {
             return None;
         }
-        Some(self.layout_snapshot())
+        Some(self.snapshot(false))
+    }
+
+    /// The canvas a host sends its viewers (#566): the saved text plus the
+    /// in-place editors, each marked with the terminal it covers. Without
+    /// them a viewer would not see the editor `ift <file>` opens until the
+    /// terminal closed.
+    pub fn publish_text(&mut self) -> Option<String> {
+        if !self.loaded || self.read_only {
+            return None;
+        }
+        Some(self.snapshot(true))
     }
 
     /// The canvas as the layout text, whatever the model may save. A viewer
     /// (`read_only`, so it never writes a file) sends this up to its host.
+    /// Covers stay in it, so the host sees them unchanged, not closed.
     pub fn layout_snapshot(&mut self) -> String {
+        self.snapshot(true)
+    }
+
+    /// `with_covers` false is the file's text: an in-place editor lives as
+    /// long as the `ift` waiting on it, which a relaunch ends (cover.rs).
+    fn snapshot(&mut self, with_covers: bool) -> String {
         self.sync_workspace_viewport();
         self.dirty_layout = false;
         let cards: Vec<SavedCard> = self
             .cards
             .iter()
-            // An in-place editor lives as long as the `ift` waiting on it,
-            // which a relaunch ends (cover.rs).
-            .filter(|c| !self.covers.contains_key(&c.id))
+            .filter(|c| with_covers || !self.covers.contains_key(&c.id))
             .map(|c| SavedCard {
+                cover_of: self.covers.get(&c.id).cloned().filter(|_| with_covers),
                 id: c.id.clone(),
                 workspace_id: c.workspace_id.clone(),
                 rect: c.rect,
@@ -351,15 +412,19 @@ impl Model {
         let usage: &Usage = &self.usage;
         // A cover is not saved, so the focus it holds is saved as the
         // terminal under it.
+        let under = |f: &str| match with_covers {
+            true => None,
+            false => self.covers.get(f).map(String::as_str),
+        };
         let focused = self
             .selection
             .focused_id
             .as_deref()
-            .map(|f| self.covers.get(f).map(String::as_str).unwrap_or(f));
+            .map(|f| under(f).unwrap_or(f));
         let mut workspaces = self.workspaces.clone();
         for w in &mut workspaces {
-            if let Some(base) = w.focused.as_ref().and_then(|f| self.covers.get(f)) {
-                w.focused = Some(base.clone());
+            if let Some(base) = w.focused.as_deref().and_then(under) {
+                w.focused = Some(base.to_string());
             }
         }
         layout_text(&serialise_layout(
@@ -711,7 +776,7 @@ mod snapshot_tests {
     use super::*;
     use crate::grid::{Rect, Size};
 
-    fn host_model() -> Model {
+    pub(super) fn host_model() -> Model {
         let mut m = Model::new();
         m.view_size = Size { w: 1600., h: 1000. };
         m.home = "/Users/me".into();
@@ -721,7 +786,7 @@ mod snapshot_tests {
         m
     }
 
-    fn add(m: &mut Model, rect: Rect) -> String {
+    pub(super) fn add(m: &mut Model, rect: Rect) -> String {
         let ws = m.active_workspace.clone();
         m.add_card(
             "/Users/me",
@@ -733,7 +798,7 @@ mod snapshot_tests {
         )
     }
 
-    fn rect(x: f64, y: f64) -> Rect {
+    pub(super) fn rect(x: f64, y: f64) -> Rect {
         Rect {
             x,
             y,
@@ -829,7 +894,7 @@ mod snapshot_tests {
         assert_eq!(viewer.card(&a).unwrap().agent, AgentState::Working);
     }
 
-    fn editor_card(m: &mut Model, rect: Rect) -> String {
+    pub(super) fn editor_card(m: &mut Model, rect: Rect) -> String {
         use crate::saved_layout::CardKind;
         let ws = m.active_workspace.clone();
         m.add_card(
@@ -846,7 +911,7 @@ mod snapshot_tests {
 
     /// A host with two terminals and an editor, and a viewer that has applied
     /// its canvas. Returns (host, viewer, term a, term b, editor).
-    fn host_and_viewer() -> (Model, Model, String, String, String) {
+    pub(super) fn host_and_viewer() -> (Model, Model, String, String, String) {
         let mut host = host_model();
         let a = add(&mut host, rect(0., 0.));
         let b = add(&mut host, rect(900., 0.));
@@ -1208,6 +1273,7 @@ mod snapshot_tests {
 
 #[cfg(test)]
 mod agent_states_text_tests {
+    use super::snapshot_tests::{add, editor_card, host_and_viewer, host_model, rect};
     use super::*;
     use crate::agent_state::AgentState;
     use crate::grid::Size;
@@ -1248,6 +1314,74 @@ mod agent_states_text_tests {
             v.get(&quiet).is_none(),
             "a card with no state is not listed"
         );
+    }
+
+    // #566: `ift <file>` in a joined terminal opens an editor laid over it.
+    // The file leaves it out, the canvas sent to viewers carries it.
+    #[test]
+    fn a_cover_reaches_the_viewer_and_stays_when_the_viewer_sends_its_canvas_up() {
+        let mut host = host_model();
+        let term = add(&mut host, rect(0., 0.));
+        let cover = editor_card(&mut host, rect(0., 0.));
+        host.covers.insert(cover.clone(), term.clone());
+
+        assert!(
+            !host.save_text().unwrap().contains(&cover),
+            "the file never has it"
+        );
+        let text = host.publish_text().unwrap();
+        assert!(text.contains(&cover));
+        let rev = host.record_published(&text);
+
+        let mut viewer = Model::new();
+        viewer.apply_snapshot(&text).unwrap();
+        viewer.layout_rev = rev;
+        assert!(viewer.card(&cover).is_some());
+        assert_eq!(viewer.covers.get(&cover), Some(&term));
+        assert_eq!(
+            viewer.card(&cover).unwrap().path.as_deref(),
+            Some("/Users/me/notes.rs")
+        );
+
+        // An unrelated edit in the viewer sends the cover back unchanged, so
+        // the host does not close it.
+        viewer.card_mut(&term).unwrap().title = "renamed".into();
+        let up = viewer.layout_snapshot();
+        assert!(host.apply_remote_layout(&up, rev).is_ok());
+        assert!(host.card(&cover).is_some(), "the editor is still open");
+        assert_eq!(host.card(&term).unwrap().title, "renamed");
+    }
+
+    // #565: the host opens the card in its own viewport; the viewer goes to
+    // the new card itself once the snapshot that has it arrives.
+    #[test]
+    fn a_viewer_focuses_the_card_its_host_opened_for_it() {
+        let (mut host, mut viewer, a, _b, _e) = host_and_viewer();
+        viewer.set_focus(Some(&a));
+        viewer.await_host_open();
+
+        let opened = editor_card(&mut host, rect(2000., 0.));
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        assert_eq!(
+            viewer.selection.focused_id.as_deref(),
+            Some(opened.as_str())
+        );
+        assert!(viewer.awaiting_open.is_none());
+
+        // A card the host opens later on its own is not followed.
+        let later = editor_card(&mut host, rect(3000., 0.));
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        assert_ne!(viewer.selection.focused_id.as_deref(), Some(later.as_str()));
+    }
+
+    #[test]
+    fn a_viewer_keeps_waiting_when_the_snapshot_has_no_new_card() {
+        let (mut host, mut viewer, a, ..) = host_and_viewer();
+        viewer.set_focus(Some(&a));
+        viewer.await_host_open();
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        assert!(viewer.awaiting_open.is_some());
+        assert_eq!(viewer.selection.focused_id.as_deref(), Some(a.as_str()));
     }
 
     #[test]

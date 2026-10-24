@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-24
 
+- Fixed, in a joined window (`ift join`): Cmd+click on a path opened the editor but your view stayed where it was. The window now moves to the new card and focuses it. Also fixed: `ift ./file` typed in a joined terminal showed no editor until the terminal was closed. The editor the host lays over the terminal now appears in your window too. With `INFINITERM_KEYLOG` set, each request to the host's files prints its time in ms, to tell a slow link from a bug.
+
 - An editor card in a joined window (`ift join`) now opens the host's file instead of an empty "editor on <host>" card: Cmd+click on a path in a terminal there shows the file in your window. You can edit and save it: the save goes to the host, which refuses it if the file changed on the host since you opened it (your changes are kept, and saving again overwrites on purpose). It follows changes on the host and keeps what it showed if the host cannot be reached; a file it could not read stays locked rather than risk being saved over. Not yet for a host's folders (no file list), pictures, git marks, diffs and transcripts.
 
 - A Markdown page card in a joined window (`ift join`) now shows the host's page instead of an empty "page on <host>" card. It reads the file over a second ssh connection to the host, made when the first card needs it, shows "Loading from the host..." while it comes, picks up changes on the host, and keeps what it showed if the host cannot be reached for a while. A link in it opens on the host. Editor, diff and transcript cards follow in later builds.
