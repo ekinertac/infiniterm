@@ -493,14 +493,15 @@ impl Model {
 
         let was_card = |id: &str| was.cards.iter().find(|c| c.id == id);
 
-        // Closed in the viewer, closed here. An in-place editor (a cover) is
-        // the host's own and lives as long as its `ift`.
+        // Closed in the viewer, closed here. That includes an in-place editor
+        // (a cover): published to viewers since #566, so a viewer can close
+        // it, and the host's close ends the `ift` waiting in the terminal.
         let closed: Vec<String> = was
             .cards
             .iter()
             .filter(|c| !now.cards.iter().any(|n| n.id == c.id))
             .map(|c| c.id.clone())
-            .filter(|id| self.card(id).is_some() && !self.covers.contains_key(id))
+            .filter(|id| self.card(id).is_some())
             .collect();
         for id in closed {
             self.close_card(&id, false);
@@ -1314,6 +1315,66 @@ mod agent_states_text_tests {
             v.get(&quiet).is_none(),
             "a card with no state is not listed"
         );
+    }
+
+    /// A host with a terminal and a cover over it (an `ift` waiting on it),
+    /// and a viewer that has applied the published canvas.
+    fn host_with_cover() -> (Model, Model, String, String, u64) {
+        let mut host = host_model();
+        let term = add(&mut host, rect(0., 0.));
+        let cover = editor_card(&mut host, rect(0., 0.));
+        host.covers.insert(cover.clone(), term.clone());
+        host.edit_waiters.insert(cover.clone(), 7);
+        let text = host.publish_text().unwrap();
+        let rev = host.record_published(&text);
+        let mut viewer = Model::new();
+        viewer.apply_snapshot(&text).unwrap();
+        viewer.layout_rev = rev;
+        host.take_effects();
+        (host, viewer, term, cover, rev)
+    }
+
+    fn replied(host: &mut Model) -> bool {
+        host.take_effects()
+            .iter()
+            .any(|e| matches!(e, crate::model::Effect::CliReply { id: 7, .. }))
+    }
+
+    // A cover closed in the viewer is closed on the host, which ends the
+    // `ift` waiting in its terminal, and it does not come back.
+    #[test]
+    fn closing_a_cover_in_a_viewer_closes_it_on_the_host_for_good() {
+        let (mut host, mut viewer, term, cover, rev) = host_with_cover();
+        viewer.close_card(&cover, false);
+        assert!(viewer.card(&cover).is_none() && viewer.covers.is_empty());
+        let up = viewer.layout_snapshot();
+        assert!(host.apply_remote_layout(&up, rev).is_ok());
+        assert!(host.card(&cover).is_none(), "closed on the host");
+        assert!(host.covers.is_empty());
+        assert!(replied(&mut host), "the waiting ift is answered");
+
+        let text = host.publish_text().unwrap();
+        viewer.apply_snapshot(&text).unwrap();
+        assert!(viewer.card(&cover).is_none(), "not brought back");
+        assert!(viewer.card(&term).is_some());
+    }
+
+    // The reverse: closed on the host, gone from the viewer, and the
+    // viewer's next canvas does not make it again.
+    #[test]
+    fn closing_a_cover_on_the_host_removes_it_from_the_viewer_for_good() {
+        let (mut host, mut viewer, _term, cover, _rev) = host_with_cover();
+        host.close_card(&cover, false);
+        assert!(replied(&mut host));
+        let text = host.publish_text().unwrap();
+        let rev = host.record_published(&text);
+        viewer.apply_snapshot(&text).unwrap();
+        viewer.layout_rev = rev;
+        assert!(viewer.card(&cover).is_none() && viewer.covers.is_empty());
+
+        let up = viewer.layout_snapshot();
+        assert!(host.apply_remote_layout(&up, rev).is_ok());
+        assert!(host.card(&cover).is_none());
     }
 
     // #566: `ift <file>` in a joined terminal opens an editor laid over it.

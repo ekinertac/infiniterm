@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-25
+
+- Fixed, in a joined window (`ift join`): the editor that `ift ./file` opens in a terminal could not be closed from your window. It came back after Cmd+W. Closing it there now closes it on the host too, and the `ift` waiting in the terminal ends.
+
 ### 2026-10-24
 
 - Fixed, in a joined window (`ift join`): Cmd+click on a path opened the editor but your view stayed where it was. The window now moves to the new card and focuses it. Also fixed: `ift ./file` typed in a joined terminal showed no editor until the terminal was closed. The editor the host lays over the terminal now appears in your window too. With `INFINITERM_KEYLOG` set, each request to the host's files prints its time in ms, to tell a slow link from a bug.
