@@ -207,10 +207,9 @@ impl AppView {
                 || body.host_locked;
             body.sidebar_top = card.sidebar_top;
             body.sidebar_w = sidebar_width(card.sidebar, sidebar_extent(world, card.sidebar_top));
-            // A diff's list is its own (changed files, not the folder).
-            // (A host's folder has no list yet: the tree is the next step of
-            // the file service, #560.)
-            if card.explorer && !is_diff && body.source.is_local() {
+            // A diff's list is its own (changed files, not the folder). A
+            // host's folder is listed by the host (`host_dirs.rs`).
+            if card.explorer && !is_diff {
                 if let Some(root) = card.root.clone() {
                     body.show_tree(&root);
                 }

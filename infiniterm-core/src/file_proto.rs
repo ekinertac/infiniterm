@@ -349,6 +349,17 @@ pub enum Request {
         path: String,
         expect_mtime_ms: Option<u64>,
     },
+    /// Tell me when this file changes or this folder's entries do: `W`
+    /// events carry THIS request's id, until `Unwatch` or the connection
+    /// ends. The reply is sent once the watch is set, so nothing between the
+    /// reply and the first event is missed.
+    Watch {
+        path: String,
+    },
+    /// Stops the watch that was requested with id `watch`.
+    Unwatch {
+        watch: u32,
+    },
 }
 
 impl Request {
@@ -365,6 +376,8 @@ impl Request {
                 path,
                 expect_mtime_ms,
             } => json!({ "op": "write", "path": path, "expect_mtime_ms": expect_mtime_ms }),
+            Request::Watch { path } => json!({ "op": "watch", "path": path }),
+            Request::Unwatch { watch } => json!({ "op": "unwatch", "watch": watch }),
         }
     }
 
@@ -403,6 +416,16 @@ impl Request {
             "write" => Request::Write {
                 path: need("path")?,
                 expect_mtime_ms: v.get("expect_mtime_ms").and_then(Value::as_u64),
+            },
+            "watch" => Request::Watch {
+                path: need("path")?,
+            },
+            "unwatch" => Request::Unwatch {
+                watch: v
+                    .get("watch")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| FileError::new(Code::Io, "unwatch: needs \"watch\""))?
+                    as u32,
             },
             other => {
                 return Err(FileError::new(
@@ -543,6 +566,8 @@ mod tests {
                 path: "/new".into(),
                 expect_mtime_ms: None,
             },
+            Request::Watch { path: "/d".into() },
+            Request::Unwatch { watch: 9 },
         ] {
             assert_eq!(Request::from_json(&req.to_json()).unwrap(), req);
         }

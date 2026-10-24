@@ -112,24 +112,53 @@ impl Tree {
             }
         }
         if changed {
-            // Directories no longer shown are re-listed when next opened.
-            let expanded: Vec<String> = self.expanded.keys().cloned().collect();
-            for dir in expanded {
-                if !self
-                    .listed
-                    .values()
-                    .flatten()
-                    .any(|e| e.is_dir && e.path == dir)
-                    && dir != self.root
-                {
-                    self.listed.remove(&dir);
-                    self.expanded.remove(&dir);
-                }
-            }
-            let last = self.rows().len().saturating_sub(1);
-            self.cursor = self.cursor.min(last);
+            self.forget_vanished();
         }
         changed
+    }
+
+    /// Forgets expanded folders their parent no longer lists (they are
+    /// re-listed when next opened) and keeps the cursor on a row that remains.
+    fn forget_vanished(&mut self) {
+        let expanded: Vec<String> = self.expanded.keys().cloned().collect();
+        for dir in expanded {
+            if !self
+                .listed
+                .values()
+                .flatten()
+                .any(|e| e.is_dir && e.path == dir)
+                && dir != self.root
+            {
+                self.listed.remove(&dir);
+                self.expanded.remove(&dir);
+            }
+        }
+        let last = self.rows().len().saturating_sub(1);
+        self.cursor = self.cursor.min(last);
+    }
+
+    /// A folder's entries that came from somewhere slow (a host): the answer
+    /// to an earlier `load`, or a re-list. True when the tree changed.
+    pub fn set_listing(&mut self, dir: &str, entries: Vec<Entry>) -> bool {
+        if self.listed.get(dir) == Some(&entries) {
+            return false;
+        }
+        self.listed.insert(dir.to_string(), entries);
+        self.forget_vanished();
+        true
+    }
+
+    /// The folders the tree is showing: the root and the expanded ones. What a
+    /// slow source watches and re-lists.
+    pub fn shown_dirs(&self) -> Vec<String> {
+        let mut dirs = vec![self.root.clone()];
+        dirs.extend(
+            self.expanded
+                .iter()
+                .filter(|(d, open)| **open && **d != self.root)
+                .map(|(d, _)| d.clone()),
+        );
+        dirs
     }
 
     pub fn rows(&self) -> Vec<Row> {
@@ -256,6 +285,37 @@ mod tests {
         t.key("left", &mut list);
         assert_eq!(t.rows().len(), 2);
         assert_eq!(t.key("escape", &mut list), TreeAction::Close);
+    }
+
+    // A slow source (a host) answers later: the tree starts with nothing for
+    // a folder and takes the listing when it arrives.
+    #[test]
+    fn a_listing_that_arrives_later_fills_the_folder_and_a_vanished_one_is_forgotten() {
+        let e = |dir: &str, name: &str, is_dir: bool| Entry {
+            name: name.into(),
+            path: format!("{dir}/{name}"),
+            is_dir,
+        };
+        let mut t = Tree::new("/r");
+        let mut nothing = |_: &str| -> Vec<Entry> { vec![] };
+        t.ensure_root(&mut nothing);
+        assert_eq!(t.rows().len(), 0);
+        assert!(t.set_listing("/r", vec![e("/r", "src", true), e("/r", "a.md", false)]));
+        assert!(!t.set_listing("/r", vec![e("/r", "src", true), e("/r", "a.md", false)]));
+        assert_eq!(t.rows().len(), 2);
+
+        t.key("right", &mut nothing); // src opens, still empty
+        assert_eq!(t.shown_dirs().len(), 2);
+        assert!(t.set_listing("/r/src", vec![e("/r/src", "main.rs", false)]));
+        assert_eq!(t.rows().len(), 3);
+
+        // The host removes src: the root no longer lists it, so its open
+        // state and listing go, and the cursor stays on a row.
+        t.cursor = 2;
+        assert!(t.set_listing("/r", vec![e("/r", "a.md", false)]));
+        assert_eq!(t.rows().len(), 1);
+        assert_eq!(t.cursor, 0);
+        assert_eq!(t.shown_dirs(), vec!["/r".to_string()]);
     }
 
     // A file appearing or vanishing on disk shows on the next refresh; a

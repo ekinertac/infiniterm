@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-25
 
+- In a joined window (`ift join`) the editor's file tree now shows the host's folders. `ift -n .` and Cmd+K on a host card list the host's folder, say "Loading from the host..." until the list arrives, and show the host's error as text in the tree if it cannot be read. Opening a folder lists it on the host; opening a file opens it from the host. The tree and the open file follow changes on the host within about half a second, over the connection that was already there (an older `ift` on the host is polled every 2 seconds as before).
+
 - Fixed, in a joined window (`ift join`): the editor that `ift ./file` opens in a terminal could not be closed from your window. It came back after Cmd+W. Closing it there now closes it on the host too, and the `ift` waiting in the terminal ends.
 
 ### 2026-10-24
