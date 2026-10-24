@@ -646,6 +646,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // Opening a file from the tree hands the keys to the new buffer, on this
+    // machine's disk and a host's alike. So in a LOCKED card a bare Enter
+    // that follows (the habit: Enter opens a row) is a newline in the file;
+    // in a card that is not locked it only locks. Written down because it
+    // looked like a joined-window bug (#570); it is the lock's rule.
+    #[test]
+    fn after_a_tree_open_the_keys_are_the_buffers() {
+        let dir = std::env::temp_dir().join(format!("ift-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.txt").to_string_lossy().to_string();
+        let b = dir.join("b.txt").to_string_lossy().to_string();
+        std::fs::write(&a, "aaa\n").unwrap();
+        std::fs::write(&b, "bbb\n").unwrap();
+        let mut t = tabs();
+        t.rebuild_tabs(
+            std::slice::from_ref(&a),
+            0,
+            &dir.to_string_lossy(),
+            0.,
+            false,
+        );
+        t.active_body().unwrap().show_tree(&dir.to_string_lossy());
+        t.locked = true;
+        let body = t.active_body().unwrap();
+        let row = body
+            .tree
+            .as_ref()
+            .unwrap()
+            .rows()
+            .iter()
+            .position(|r| r.entry.path == b)
+            .unwrap();
+        body.tree.as_mut().unwrap().cursor = row;
+        body.tree_open_entry();
+        let opened: Vec<_> = t.take_events();
+        assert!(opened
+            .iter()
+            .any(|e| matches!(e, EditorEvent::OpenTab(p) if *p == b)));
+        t.rebuild_tabs(
+            &[a.clone(), b.clone()],
+            1,
+            &dir.to_string_lossy(),
+            0.,
+            false,
+        );
+        let body = t.active_body().unwrap();
+        assert!(!body.tree_focused);
+        assert_eq!(body.buffer.text(), "bbb\n");
+        assert!(t.locked);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // A diff card is one body with no strip: nothing at the card's top is a
     // tab, a click there is the text (and locks), and the body gets the whole
     // card. It locks the editor's way, since this is the editor's wrapper.

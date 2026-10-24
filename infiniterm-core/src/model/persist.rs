@@ -204,7 +204,12 @@ impl Model {
         for id in gone {
             self.remove_card(&id);
         }
+        // A cover that appears over the terminal this viewer is on is the
+        // editor of an `ift <file>` typed there: it takes the keys, as on the
+        // host, so Cmd+W closes it (#570).
+        let mut cover_to_focus: Option<String> = None;
         for c in cards {
+            let cover_base = c.cover_of.clone();
             if let Some(card) = self.card_mut(&c.id) {
                 card.workspace_id = c.workspace_id;
                 card.rect = c.rect;
@@ -242,6 +247,9 @@ impl Model {
                     ..Default::default()
                 },
             );
+            if cover_base.is_some() && cover_base == self.selection.focused_id {
+                cover_to_focus = Some(id.clone());
+            }
             if let Some(card) = self.card_mut(&id) {
                 card.title = c.title;
                 card.z = c.z;
@@ -267,6 +275,9 @@ impl Model {
             if self.card(&id).is_none() {
                 self.selection.focused_id = None;
             }
+        }
+        if let Some(id) = cover_to_focus {
+            self.set_focus(Some(&id));
         }
         self.ensure_workspace();
         self.dirty_layout = false;
@@ -1375,6 +1386,38 @@ mod agent_states_text_tests {
         let up = viewer.layout_snapshot();
         assert!(host.apply_remote_layout(&up, rev).is_ok());
         assert!(host.card(&cover).is_none());
+    }
+
+    // #570: the editor of an `ift <file>` typed in the terminal a viewer is on
+    // takes the viewer's focus, so Cmd+W closes it. One over a terminal the
+    // viewer is not on leaves its focus alone.
+    #[test]
+    fn a_cover_over_the_viewers_terminal_takes_its_focus_and_one_elsewhere_does_not() {
+        let mut host = host_model();
+        let mine = add(&mut host, rect(0., 0.));
+        let other = add(&mut host, rect(900., 0.));
+        let text = host.publish_text().unwrap();
+        let mut viewer = Model::new();
+        viewer.apply_snapshot(&text).unwrap();
+        viewer.set_focus(Some(&mine));
+
+        let theirs = editor_card(&mut host, rect(900., 0.));
+        host.covers.insert(theirs.clone(), other.clone());
+        viewer
+            .apply_snapshot(&host.publish_text().unwrap())
+            .unwrap();
+        assert_eq!(viewer.selection.focused_id.as_deref(), Some(mine.as_str()));
+
+        let cover = editor_card(&mut host, rect(0., 0.));
+        host.covers.insert(cover.clone(), mine.clone());
+        viewer
+            .apply_snapshot(&host.publish_text().unwrap())
+            .unwrap();
+        assert_eq!(viewer.selection.focused_id.as_deref(), Some(cover.as_str()));
+
+        // Closing it hands the focus back to the terminal under it.
+        viewer.close_card(&cover, false);
+        assert_eq!(viewer.selection.focused_id.as_deref(), Some(mine.as_str()));
     }
 
     // #566: `ift <file>` in a joined terminal opens an editor laid over it.
