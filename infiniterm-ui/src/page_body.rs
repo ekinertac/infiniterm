@@ -306,17 +306,25 @@ impl PageBody {
                 path: None,
             };
         }
+        let file = target.split('#').next().unwrap_or(target);
+        // A document of a host's: the card that shows it is the host's too,
+        // so the host is asked to open it (#555), never a card of this
+        // window's own copy of the canvas. A host's path is POSIX text
+        // whatever this machine is, so it is joined as text, not with this
+        // platform's path rules.
+        if !self.source.is_local() {
+            let base = self.path.rsplit_once('/').map_or("", |(dir, _)| dir);
+            let path = if file.starts_with('/') {
+                file.to_string()
+            } else {
+                format!("{base}/{file}")
+            };
+            return BodyAction::OpenOnHost { path, line: None };
+        }
         let base = std::path::Path::new(&self.path)
             .parent()
             .unwrap_or(std::path::Path::new("/"));
-        let file = target.split('#').next().unwrap_or(target);
         let path = base.join(file).to_string_lossy().into_owned();
-        // A document of a host's: the card that shows it is the host's too,
-        // so the host is asked to open it (#555), never a card of this
-        // window's own copy of the canvas.
-        if !self.source.is_local() {
-            return BodyAction::OpenOnHost { path, line: None };
-        }
         BodyAction::Open(infiniterm_core::ift::OpenPlan::Page {
             cwd: base.to_string_lossy().into_owned(),
             path,

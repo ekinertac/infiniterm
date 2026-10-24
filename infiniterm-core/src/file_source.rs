@@ -111,14 +111,16 @@ impl LocalSource {
     ) -> Result<(Vec<u8>, u64, Option<u64>), FileError> {
         let full = expand(path)?;
         let io = |e: std::io::Error| FileError::from_io(path, &e);
-        let mut file = std::fs::File::open(&full).map_err(io)?;
-        let meta = file.metadata().map_err(io)?;
-        if meta.is_dir() {
+        // Looked at before it is opened: on Windows opening a folder fails
+        // with "access denied", which would hide what it is.
+        if std::fs::metadata(&full).map_err(io)?.is_dir() {
             return Err(FileError::new(
                 Code::IsADirectory,
                 format!("{path}: is a directory"),
             ));
         }
+        let mut file = std::fs::File::open(&full).map_err(io)?;
+        let meta = file.metadata().map_err(io)?;
         let size = meta.len();
         let want = len.unwrap_or(size.saturating_sub(offset));
         if want > MAX_READ {

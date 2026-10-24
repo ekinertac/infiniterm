@@ -1,3 +1,4 @@
+#![cfg(unix)] // join is unix-only; see docs/windows-handoff.md
 //! The join file service end to end (#560): a `HostSource` over a stand-in ssh
 //! that runs the real `ift proxy files` as the host's helper, with files in a
 //! scratch folder. The ssh and the helper's process are real; only the network
