@@ -95,6 +95,8 @@ impl AppView {
             #[cfg(unix)]
             join_updates: None,
             #[cfg(unix)]
+            host_files: None,
+            #[cfg(unix)]
             join_opens: None,
             #[cfg(unix)]
             uplink: None,

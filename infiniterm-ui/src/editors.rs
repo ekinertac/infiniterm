@@ -279,7 +279,33 @@ impl AppView {
     /// One `PageBody` per Page card (#42). The chrome's text on the card's
     /// ground, the theme's blue for headings, green for code and cyan for
     /// links.
-    fn reconcile_pages(&mut self, window: &Window) {
+    /// Where this window's cards read their files: the host's, in a joined
+    /// window (one connection, made at the first request, #560), else this
+    /// machine's own disk.
+    #[cfg(unix)]
+    pub fn file_source(&mut self) -> std::sync::Arc<dyn infiniterm_core::file_source::FileSource> {
+        use infiniterm_core::file_source::{FileSource, LocalSource};
+        if self.viewer {
+            if let Some(s) = &self.host_files {
+                return s.clone();
+            }
+            if let Some(host) = infiniterm_core::backend::remote::join_from_env() {
+                let source: std::sync::Arc<dyn FileSource> =
+                    infiniterm_core::backend::file_client::HostSource::new(host);
+                self.host_files = Some(source.clone());
+                return source;
+            }
+        }
+        std::sync::Arc::new(LocalSource)
+    }
+
+    /// Joining is unix-only, so there is no host to read from elsewhere.
+    #[cfg(windows)]
+    pub fn file_source(&mut self) -> std::sync::Arc<dyn infiniterm_core::file_source::FileSource> {
+        std::sync::Arc::new(infiniterm_core::file_source::LocalSource)
+    }
+
+    pub fn reconcile_pages(&mut self, window: &Window) {
         let metrics = self.metrics(window);
         let theme_hex = |k: &str| {
             self.chrome
@@ -321,9 +347,16 @@ impl AppView {
                 .and_then(|b| b.as_any_mut().downcast_mut::<PageBody>())
                 .is_some();
             if !built {
+                let source = self.file_source();
                 self.bodies.insert(
                     card.id.clone(),
-                    Box::new(PageBody::new(path.clone(), &metrics, colors.clone(), world)),
+                    Box::new(PageBody::new(
+                        path.clone(),
+                        &metrics,
+                        colors.clone(),
+                        world,
+                        source,
+                    )),
                 );
             }
             let Some(body) = self.bodies.get_mut(&card.id) else {

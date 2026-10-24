@@ -1,6 +1,6 @@
 # A file service for `ift join` (proposal, #560)
 
-Status: PROPOSAL. Nothing in this file is built. It is for review before code. Covers: why a joined window needs it, the helper, the wire messages, where the file-source seam sits in the code, and the order cards switch in. Read with `join-viewer.md` (how a viewer works) and `join-serve-and-login.md` (the host without an app).
+Status: step 1 BUILT (2026-10-24, #560): `file_proto.rs` (frames, requests), `file_source.rs` (`FileSource`, `LocalSource`), `file_server.rs` (the host's loop, `ift proxy files`), `backend/file_client.rs` (`HostSource`), requests home, stat, exists, list and read, and the PAGE card on it (`PageBody` takes a source; a host page loads on a thread with a "Loading from the host" line, polls the mtime, keeps its text when the host is lost, and a link in it asks the host to open it). `AppView::file_source()` hands a joined window one `HostSource`, connected at the first request. Everything below the first table is still the plan for the later steps; the changes against it are noted in the commit history of the step PRs. Covers: why a joined window needs it, the helper, the wire messages, where the file-source seam sits in the code, and the order cards switch in. Read with `join-viewer.md` (how a viewer works) and `join-serve-and-login.md` (the host without an app).
 
 ## The problem
 

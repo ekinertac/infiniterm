@@ -31,6 +31,8 @@ pub mod daemon;
 // step all ride on unix sockets and ssh; none of them has a Windows
 // counterpart yet.
 #[cfg(unix)]
+pub mod file_client;
+#[cfg(unix)]
 pub mod host_drop;
 #[cfg(unix)]
 pub mod join;
