@@ -16,6 +16,21 @@ use infiniterm_core::model::register::{describe_context, register_commands, run_
 use infiniterm_core::model::settings_in::{EMPTY_KEYBINDINGS, EMPTY_SETTINGS};
 use infiniterm_core::model::Effect;
 use infiniterm_core::paths::{home_dir, socket_path};
+
+/// Something dropped or pasted into a joined card that has to reach the host
+/// before its program can read it (#556).
+pub enum HostItem {
+    /// A file or folder on this Mac.
+    Path(std::path::PathBuf),
+    /// A clipboard image: its bytes and the extension its format has.
+    Image { ext: String, bytes: Vec<u8> },
+}
+
+/// A transfer that ended: the host's paths in the order sent, or why not.
+pub struct HostDrop {
+    pub card: String,
+    pub result: Result<Vec<String>, String>,
+}
 use infiniterm_core::settings_doc::default_settings_text;
 use infiniterm_core::themes_files::{ensure_themes_dir, list_themes, read_theme};
 use std::path::PathBuf;
@@ -83,6 +98,8 @@ impl AppView {
             join_opens: None,
             #[cfg(unix)]
             uplink: None,
+            #[cfg(unix)]
+            host_drops: std::sync::mpsc::channel(),
             viewer: false,
             viewer_poke: false,
             #[cfg(unix)]
@@ -996,6 +1013,91 @@ impl AppView {
                 let rev = self.model.record_published(&text);
                 hub.publish_layout(&text, rev);
             }
+        }
+    }
+
+    /// Sends what was dropped or pasted into a joined card to the host and
+    /// types the host's paths into it when they have arrived (#556). The
+    /// shell is on the host: a path on this Mac is one its program cannot read.
+    #[cfg(windows)]
+    pub fn send_to_host(&mut self, _card: &str, _items: Vec<HostItem>) {}
+
+    #[cfg(unix)]
+    pub fn send_to_host(&mut self, card: &str, items: Vec<HostItem>) {
+        let Some(host) = infiniterm_core::backend::remote::join_from_env() else {
+            return;
+        };
+        if items.is_empty() {
+            return;
+        }
+        self.model.notify(match items.len() {
+            1 => "sending 1 item to the host...".to_string(),
+            n => format!("sending {n} items to the host..."),
+        });
+        let (tx, card) = (self.host_drops.0.clone(), card.to_string());
+        std::thread::spawn(move || {
+            use infiniterm_core::backend::host_drop::{new_id, send_image, send_path};
+            // One folder on the host for the whole drop.
+            let id = new_id();
+            let mut paths = Vec::new();
+            let mut failure = None;
+            for item in &items {
+                let sent = match item {
+                    HostItem::Path(p) => send_path(&host, p, &id),
+                    HostItem::Image { ext, bytes } => send_image(&host, bytes, ext, &id),
+                };
+                match sent {
+                    Ok(p) => paths.push(p),
+                    Err(e) => {
+                        failure = Some(e);
+                        break;
+                    }
+                }
+            }
+            let _ = tx.send(HostDrop {
+                card,
+                result: match failure {
+                    Some(e) => Err(e),
+                    None => Ok(paths),
+                },
+            });
+        });
+    }
+
+    /// Transfers that ended: the host's paths are typed into the card the
+    /// way a local drop's are (quoted, one line), or the reason is shown.
+    #[cfg(windows)]
+    pub fn drain_host_drops(&mut self) {}
+
+    #[cfg(unix)]
+    pub fn drain_host_drops(&mut self) {
+        while let Ok(done) = self.host_drops.1.try_recv() {
+            match done.result {
+                Ok(paths) => {
+                    // The host's shell, not this Mac's: POSIX quoting.
+                    let text = paths
+                        .iter()
+                        .map(|p| {
+                            infiniterm_core::drop::quote_for(
+                                p,
+                                infiniterm_core::shell_cmd::ShellKind::Posix,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    self.model.set_focus(Some(&done.card));
+                    if let Some(body) = self.live_body(&done.card).and_then(|b| {
+                        b.as_any_mut()
+                            .downcast_mut::<crate::terminal_body::TerminalBody>()
+                    }) {
+                        body.paste_text(&text);
+                    }
+                    self.flush_writes();
+                    self.model.notify("sent to the host");
+                }
+                Err(why) => self.model.notify(why),
+            }
+            self.redraw = true;
         }
     }
 

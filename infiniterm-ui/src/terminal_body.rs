@@ -941,6 +941,38 @@ impl TerminalBody {
     }
 }
 
+/// What Ctrl+V does in a joined card: the image goes to the host only when
+/// this Mac's clipboard has an image and NO text. Text means the key is meant
+/// as a key (a program that pastes text itself), and nothing on the clipboard
+/// means there is nothing to send.
+pub fn ctrl_v_sends_image(clipboard_has_text: bool, clipboard_has_image: bool) -> bool {
+    clipboard_has_image && !clipboard_has_text
+}
+
+/// The first image on the clipboard: the extension its format has and its
+/// bytes (#556).
+fn clipboard_image(item: &ClipboardItem) -> Option<(String, Vec<u8>)> {
+    item.entries().iter().find_map(|e| match e {
+        gpui::ClipboardEntry::Image(image) => Some((
+            image_extension(image.format).to_string(),
+            image.bytes.clone(),
+        )),
+        _ => None,
+    })
+}
+
+fn image_extension(format: gpui::ImageFormat) -> &'static str {
+    match format {
+        gpui::ImageFormat::Png => "png",
+        gpui::ImageFormat::Jpeg => "jpg",
+        gpui::ImageFormat::Webp => "webp",
+        gpui::ImageFormat::Gif => "gif",
+        gpui::ImageFormat::Svg => "svg",
+        gpui::ImageFormat::Bmp => "bmp",
+        gpui::ImageFormat::Tiff => "tiff",
+    }
+}
+
 fn rgb(c: [u8; 3]) -> Hsla {
     gpui::rgb(((c[0] as u32) << 16) | ((c[1] as u32) << 8) | c[2] as u32).into()
 }
@@ -1262,11 +1294,35 @@ impl CardBody for TerminalBody {
             return BodyAction::None;
         }
         if m.platform && k.key == "v" {
-            if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+            let clip = cx.read_from_clipboard();
+            if let Some(text) = clip.as_ref().and_then(|c| c.text()) {
                 let bracketed = self.grid.bracketed_paste();
                 self.write(paste(&text, bracketed));
+            } else if self.remote_paths {
+                // An image and no text, in a joined terminal: the program is
+                // on the host and cannot see this Mac's clipboard, so the
+                // image goes there and its path is typed (#556).
+                if let Some((ext, bytes)) = clip.as_ref().and_then(clipboard_image) {
+                    return BodyAction::PasteImage { ext, bytes };
+                }
             }
             return BodyAction::None;
+        }
+        // Ctrl+V is the paste chord of an agent in the card (Claude Code reads
+        // an image from the clipboard of the machine it runs on). In a joined
+        // card that is the HOST's clipboard, which holds nothing of what was
+        // copied on this Mac: with an image and no text here, the image goes
+        // to the host and its path is typed instead of the key (#556); with
+        // text, or no image, the key goes on as ever.
+        if self.remote_paths && m.control && !m.platform && !m.alt && k.key == "v" {
+            let clip = cx.read_from_clipboard();
+            let text = clip.as_ref().and_then(|c| c.text()).is_some();
+            let image = clip.as_ref().and_then(clipboard_image);
+            if ctrl_v_sends_image(text, image.is_some()) {
+                if let Some((ext, bytes)) = image {
+                    return BodyAction::PasteImage { ext, bytes };
+                }
+            }
         }
         let key = Key {
             name: &k.key,
@@ -1942,6 +1998,34 @@ mod tests {
         assert!(url
             .iter()
             .any(|(f, k)| f.kind == LinkKind::Url && k.is_none()));
+    }
+
+    /// A pasted image in a joined terminal is found on the clipboard with the
+    /// extension its format has (#556); text alone is not an image.
+    #[test]
+    fn a_clipboard_image_is_found_with_its_extension_and_text_is_not_one() {
+        let png = gpui::Image::from_bytes(gpui::ImageFormat::Png, vec![1, 2, 3]);
+        let found = clipboard_image(&ClipboardItem::new_image(&png)).expect("an image");
+        assert_eq!(found, ("png".to_string(), vec![1, 2, 3]));
+        let jpg = gpui::Image::from_bytes(gpui::ImageFormat::Jpeg, vec![9]);
+        assert_eq!(
+            clipboard_image(&ClipboardItem::new_image(&jpg)).unwrap().0,
+            "jpg"
+        );
+        assert!(clipboard_image(&ClipboardItem::new_string("hello".into())).is_none());
+    }
+
+    /// Ctrl+V in a joined card (#556): an image here goes to the host; text, or
+    /// nothing, leaves the key to the program.
+    #[test]
+    fn ctrl_v_sends_an_image_only_when_there_is_one_and_no_text() {
+        assert!(ctrl_v_sends_image(false, true));
+        assert!(
+            !ctrl_v_sends_image(true, true),
+            "text wins: the key goes on"
+        );
+        assert!(!ctrl_v_sends_image(true, false));
+        assert!(!ctrl_v_sends_image(false, false));
     }
 
     #[test]

@@ -1378,6 +1378,9 @@ impl AppView {
             crate::body::BodyAction::OpenOnHost { path, line } => {
                 self.send_open_request(id, path, line);
             }
+            crate::body::BodyAction::PasteImage { ext, bytes } => {
+                self.send_to_host(id, vec![crate::runtime::HostItem::Image { ext, bytes }]);
+            }
             crate::body::BodyAction::OpenExternal { url, path } => {
                 let result = match (url, path) {
                     (Some(url), _) => infiniterm_core::links_fs::open_url(url.as_str()),
@@ -1440,6 +1443,22 @@ impl AppView {
             Hit::CardBody { id, .. } | Hit::CardEdge { id, .. } => self.model.card(id).cloned(),
             _ => None,
         };
+        // A terminal of a joined window runs on the host: a path on this Mac
+        // would be one its program cannot read, so the files go to the host
+        // first and the card gets THEIR path (#556).
+        if self.viewer {
+            if let Some(c) = card
+                .as_ref()
+                .filter(|c| c.kind == infiniterm_core::saved_layout::CardKind::Terminal)
+            {
+                let sent = items
+                    .iter()
+                    .map(|(p, _)| crate::runtime::HostItem::Path(p.into()))
+                    .collect();
+                self.send_to_host(&c.id.clone(), sent);
+                return;
+            }
+        }
         // The card's own shell, not this platform's idea of one: quoting a
         // dropped path is the whole security story of the drop, and POSIX
         // quoting does not survive PowerShell. `terminal.shell` when it is
