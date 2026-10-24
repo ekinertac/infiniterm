@@ -25,6 +25,7 @@
 //! disk poll work as for a file, so a screenshot taken again shows again.
 use crate::body::{BodyAction, CardBody};
 use crate::field::{Edit, Field};
+use crate::host_dirs::HostDirs;
 use crate::terminal_body::Metrics;
 use gpui::{
     fill, outline, point, px, size, App, Bounds, ClipboardItem, Corners, Font, FontStyle, Hsla,
@@ -32,7 +33,7 @@ use gpui::{
 };
 use infiniterm_core::complete::{provider_for, Offer, Provider};
 use infiniterm_core::editor_theme::{EditorColors, SyntaxRule};
-use infiniterm_core::file_source::{FileError, FileSource, LocalSource};
+use infiniterm_core::file_source::{FileError, FileSource, LocalSource, Watch};
 use infiniterm_core::files::{
     dir_list, draft_delete, draft_read, draft_write, file_mtime, file_read, file_write,
 };
@@ -331,6 +332,17 @@ pub struct EditorBody {
     host_load: Option<(Receiver<HostRead>, bool)>,
     host_save: Option<Receiver<SaveAnswer>>,
     host_disk: Option<Receiver<DiskAnswer>>,
+    /// The tree's folders, from `source` (made at the first need, and again
+    /// if the source is replaced).
+    dirs: Option<HostDirs>,
+    /// A watch on the open host file, with the path it is on; `file_watch_start`
+    /// is one being set up on a thread. `file_watch_unsupported`: the host's
+    /// helper cannot watch, so the file is polled.
+    file_watch: Option<(String, Watch)>,
+    file_watch_start: Option<Receiver<(String, Result<Watch, FileError>)>>,
+    file_watch_unsupported: bool,
+    /// When the open host file was last asked about without a watch.
+    last_host_poll: f64,
     /// `Some` for a diff card: this body is then read-only, holds the merged
     /// text of HEAD and the working tree, and its tree is the changed files
     /// (`diff.rs`). Every file-touching path below checks it.
@@ -443,6 +455,11 @@ impl EditorBody {
             host_load: None,
             host_save: None,
             host_disk: None,
+            dirs: None,
+            file_watch: None,
+            file_watch_start: None,
+            file_watch_unsupported: false,
+            last_host_poll: 0.,
             diff: None,
         }
     }
@@ -618,19 +635,17 @@ impl EditorBody {
                 let _ = draft_delete(&self.card_id);
             }
         }
-        if now - self.last_disk_check >= DISK_POLL_MS {
+        if !self.source.is_local() {
+            self.host_tick(now);
+        } else if now - self.last_disk_check >= DISK_POLL_MS {
             self.last_disk_check = now;
-            if self.source.is_local() {
-                self.check_disk(now);
-                // The tree follows the disk too: a file made outside the app
-                // (a build, a download, another card's shell) appears.
-                if let Some(tree) = self.tree.as_mut() {
-                    if tree.refresh(&mut list_dir) {
-                        self.dirty = true;
-                    }
+            self.check_disk(now);
+            // The tree follows the disk too: a file made outside the app
+            // (a build, a download, another card's shell) appears.
+            if let Some(tree) = self.tree.as_mut() {
+                if tree.refresh(&mut list_dir) {
+                    self.dirty = true;
                 }
-            } else {
-                self.ask_host_disk();
             }
         }
         // The gutter's own poll: HEAD moves on a commit, checkout or
@@ -816,6 +831,9 @@ impl EditorBody {
                 }
                 self.events
                     .push(EditorEvent::Notice(format!("saved {name} on the host")));
+                // What the host's watch said during the save was ours; this
+                // finds a change by somebody else made at the same moment.
+                self.ask_host_disk();
             }
             Err(e) if e.code == infiniterm_core::file_source::Code::ChangedOnHost => {
                 self.disk_stamp = e.mtime_ms;
@@ -837,7 +855,13 @@ impl EditorBody {
     /// Asks the host whether the open file moved: its mtime first, the text
     /// only when it did. One question at a time.
     fn ask_host_disk(&mut self) {
-        if self.host_disk.is_some() || self.host_load.is_some() || self.host_locked {
+        // Not while saving: the watch fires for our own write, and the
+        // answer to a save asks again (`finish_save`).
+        if self.host_disk.is_some()
+            || self.host_load.is_some()
+            || self.host_save.is_some()
+            || self.host_locked
+        {
             return;
         }
         let Some(path) = self.path.clone().filter(|_| self.diff.is_none()) else {
@@ -862,6 +886,85 @@ impl EditorBody {
             .unwrap_or(DiskAnswer::Same);
             let _ = tx.send(answer);
         });
+    }
+
+    /// What a host card keeps up to date between frames: the tree's folders
+    /// (listings that arrived, folders the host changed) and the open file.
+    /// A watch on the host says when something moved; where there is none
+    /// (an older host, a link that dropped) the poll asks instead.
+    fn host_tick(&mut self, now: f64) {
+        if let Some(tree) = self.tree.as_mut() {
+            let dirs = host_dirs(&mut self.dirs, &self.source);
+            let shown = tree.shown_dirs();
+            let root = tree.root.clone();
+            let up = dirs.tick(&shown, &root, now);
+            if !up.listings.is_empty() || !up.notices.is_empty() {
+                self.dirty = true;
+            }
+            for (dir, entries) in up.listings {
+                tree.set_listing(&dir, entries);
+            }
+            for text in up.notices {
+                self.events.push(EditorEvent::Notice(text));
+            }
+        }
+        self.host_file_watch(now);
+    }
+
+    /// Keeps a watch on the open host file and asks about it when the watch
+    /// fires; without one, asks every `DISK_POLL_MS`.
+    fn host_file_watch(&mut self, now: f64) {
+        let Some(path) = self.path.clone().filter(|_| self.diff.is_none()) else {
+            self.file_watch = None;
+            return;
+        };
+        if let Some(rx) = &self.file_watch_start {
+            if let Ok((on, result)) = rx.try_recv() {
+                self.file_watch_start = None;
+                match result {
+                    // What changed before the watch was set is not an event.
+                    Ok(watch) if on == path => {
+                        self.file_watch = Some((on, watch));
+                        self.ask_host_disk();
+                    }
+                    Ok(_) => {}
+                    Err(e) if e.code == infiniterm_core::file_source::Code::Unsupported => {
+                        self.file_watch_unsupported = true;
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+        match &self.file_watch {
+            Some((on, watch)) if *on == path => {
+                let seen = watch.poll();
+                if seen.closed {
+                    // The link dropped: look now, and a new watch is set below.
+                    self.file_watch = None;
+                    self.ask_host_disk();
+                } else if seen.changed {
+                    self.ask_host_disk();
+                }
+            }
+            // On another file than the open one (a load from the tree).
+            _ => self.file_watch = None,
+        }
+        if self.file_watch.is_some() {
+            return;
+        }
+        if now - self.last_host_poll >= DISK_POLL_MS {
+            self.last_host_poll = now;
+            self.ask_host_disk();
+            if !self.file_watch_unsupported && self.file_watch_start.is_none() && !self.host_locked
+            {
+                let (tx, rx) = channel();
+                self.file_watch_start = Some(rx);
+                let source = self.source.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send((path.clone(), source.watch(&path)));
+                });
+            }
+        }
     }
 
     /// Takes whatever the host answered since the last tick.
@@ -1099,7 +1202,8 @@ impl EditorBody {
             }
             None => {
                 let mut t = Tree::new(root);
-                t.ensure_root(&mut list_dir);
+                let dirs = host_dirs(&mut self.dirs, &self.source);
+                t.ensure_root(&mut |d| dirs.list(d));
                 self.tree = Some(t);
                 self.tree_focused = true;
                 true
@@ -1114,7 +1218,8 @@ impl EditorBody {
     pub fn show_tree(&mut self, root: &str) {
         if self.tree.is_none() {
             let mut t = Tree::new(root);
-            t.ensure_root(&mut list_dir);
+            let dirs = host_dirs(&mut self.dirs, &self.source);
+            t.ensure_root(&mut |d| dirs.list(d));
             self.tree = Some(t);
             self.tree_focused = self.path.is_none();
             self.focus = if self.tree_focused {
@@ -1187,6 +1292,9 @@ impl EditorBody {
     }
 
     pub fn put_tree(&mut self, tree: Tree, focused: bool, sidebar_w: f64, sidebar_top: bool) {
+        // The folders it already shows are listed, not loading again; this
+        // tab's own watches follow from its next tick.
+        host_dirs(&mut self.dirs, &self.source).adopt(&tree.shown_dirs());
         self.tree = Some(tree);
         self.tree_focused = focused;
         self.sidebar_w = sidebar_w;
@@ -1258,7 +1366,17 @@ impl EditorBody {
 
     /// Rows above the tree's first: the changed-files list has a heading.
     fn tree_head_rows(&self) -> usize {
-        usize::from(self.diff.is_some())
+        usize::from(self.diff.is_some()) + usize::from(self.tree_status().is_some())
+    }
+
+    /// A host folder's one line of text over the rows: "Loading from the
+    /// host..." until the root is listed, or why it could not be.
+    fn tree_status(&self) -> Option<String> {
+        let tree = self.tree.as_ref()?;
+        if self.diff.is_some() {
+            return None;
+        }
+        self.dirs.as_ref()?.status(&tree.root).map(|s| s.text())
     }
 
     /// Lights a tree row (the one a menu is open on) or clears it.
@@ -1291,7 +1409,8 @@ impl EditorBody {
         if entry.is_dir {
             let index = self.menu_row.or(self.tree.as_ref().map(|t| t.cursor));
             if let (Some(i), Some(tree)) = (index, self.tree.as_mut()) {
-                tree.toggle(i, &mut list_dir);
+                let dirs = host_dirs(&mut self.dirs, &self.source);
+                tree.toggle(i, &mut |d| dirs.list(d));
                 self.dirty = true;
             }
         } else {
@@ -2429,7 +2548,8 @@ impl EditorBody {
         } else {
             k.key.as_str()
         };
-        let action = tree.key(key, &mut list_dir);
+        let dirs = host_dirs(&mut self.dirs, &self.source);
+        let action = tree.key(key, &mut |d| dirs.list(d));
         self.dirty = true;
         match action {
             TreeAction::None => BodyAction::None,
@@ -2609,6 +2729,17 @@ impl EditorBody {
                 |t| f32::from(crate::text::shape(window, t, font_size, &f, dim).width),
             );
             let l = crate::text::shape(window, &head, font_size, &f, dim);
+            let _ = l.paint(point(area.origin.x + pad, y), line_h, window, cx);
+            y += line_h;
+        }
+        if let Some(status) = self.tree_status() {
+            let dim = hex(&self.colors.gutter);
+            let status = crate::text::elide(
+                &status,
+                f32::from((area.size.width - pad * 2.).max(px(0.))),
+                |t| f32::from(crate::text::shape(window, t, font_size, &f, dim).width),
+            );
+            let l = crate::text::shape(window, &status, font_size, &f, dim);
             let _ = l.paint(point(area.origin.x + pad, y), line_h, window, cx);
             y += line_h;
         }
@@ -2846,7 +2977,17 @@ fn parent_of(path: &str) -> String {
     infiniterm_core::paths::parent_dir(path)
 }
 
-fn list_dir(dir: &str) -> Vec<Entry> {
+/// The tree's folders for `source`, made when first asked for and again if the
+/// source is no longer the one they were made for. A free function over two
+/// fields, so a tree call can borrow `self.tree` beside it.
+fn host_dirs<'a>(dirs: &'a mut Option<HostDirs>, source: &Arc<dyn FileSource>) -> &'a mut HostDirs {
+    if !dirs.as_ref().is_some_and(|d| d.is_for(source)) {
+        *dirs = Some(HostDirs::new(source.clone()));
+    }
+    dirs.as_mut().expect("made just above")
+}
+
+pub(crate) fn list_dir(dir: &str) -> Vec<Entry> {
     match dir_list(dir) {
         Ok(entries) => entries
             .into_iter()
@@ -3488,7 +3629,12 @@ impl CardBody for EditorBody {
                     return BodyAction::None;
                 };
                 let index = row + tree.scroll;
-                let action = self.tree.as_mut().unwrap().toggle(index, &mut list_dir);
+                let dirs = host_dirs(&mut self.dirs, &self.source);
+                let action = self
+                    .tree
+                    .as_mut()
+                    .unwrap()
+                    .toggle(index, &mut |d| dirs.list(d));
                 return match action {
                     TreeAction::Open(path) => self.open_from_tree(path, crate::now_ms()),
                     _ => BodyAction::None,
@@ -4385,6 +4531,13 @@ mod tests {
         file: Mutex<Option<(String, u64)>>,
         read_error: Mutex<Option<FileError>>,
         writes: Mutex<Vec<(String, Option<u64>)>>,
+        /// Folders by path; a path not here is `not_found`. `list_error`
+        /// makes every listing fail.
+        dirs: Mutex<HashMap<String, Vec<ListEntry>>>,
+        list_error: Mutex<Option<FileError>>,
+        /// Whether `watch` works, and the sender that fires the watch last set.
+        can_watch: Mutex<bool>,
+        fire: Mutex<Option<std::sync::mpsc::Sender<()>>>,
     }
 
     impl FakeHost {
@@ -4393,7 +4546,23 @@ mod tests {
                 file: Mutex::new(Some((text.into(), mtime))),
                 read_error: Mutex::new(None),
                 writes: Mutex::new(vec![]),
+                dirs: Mutex::new(HashMap::new()),
+                list_error: Mutex::new(None),
+                can_watch: Mutex::new(false),
+                fire: Mutex::new(None),
             })
+        }
+        fn with_dir(&self, path: &str, entries: &[(&str, bool)]) {
+            self.dirs.lock().unwrap().insert(
+                path.into(),
+                entries
+                    .iter()
+                    .map(|(n, d)| ListEntry {
+                        name: n.to_string(),
+                        is_dir: *d,
+                    })
+                    .collect(),
+            );
         }
         fn change_under_the_editor(&self, text: &str, mtime: u64) {
             *self.file.lock().unwrap() = Some((text.into(), mtime));
@@ -4421,8 +4590,25 @@ mod tests {
         fn exists(&self, _: &[String]) -> Result<Vec<Option<EntryKind>>, FileError> {
             unreachable!()
         }
-        fn list(&self, _: &str) -> Result<Vec<ListEntry>, FileError> {
-            unreachable!()
+        fn list(&self, path: &str) -> Result<Vec<ListEntry>, FileError> {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            if let Some(e) = self.list_error.lock().unwrap().clone() {
+                return Err(e);
+            }
+            self.dirs
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| FileError::new(Code::NotFound, format!("{path}: not found")))
+        }
+        fn watch(&self, _: &str) -> Result<Watch, FileError> {
+            if !*self.can_watch.lock().unwrap() {
+                return Err(FileError::new(Code::Unsupported, "no watching"));
+            }
+            let (tx, rx) = channel();
+            *self.fire.lock().unwrap() = Some(tx);
+            Ok(Watch::new(rx, Box::new(|| {})))
         }
         fn read(&self, path: &str) -> Result<FileData, FileError> {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -4601,18 +4787,151 @@ mod tests {
         let mut b = host_body(&host, "/srv/a.txt");
         settle(&mut b, 1.);
         host.change_under_the_editor("v2\n", 2);
-        b.last_disk_check = -1e9;
+        b.last_host_poll = -1e9;
         b.idle(DISK_POLL_MS * 5.);
         settle(&mut b, DISK_POLL_MS * 5.);
         assert_eq!(b.buffer.text(), "v2\n", "a clean buffer follows the host");
         b.buffer.set_text("typing\n", 1.);
         host.change_under_the_editor("v3\n", 3);
-        b.last_disk_check = -1e9;
+        b.last_host_poll = -1e9;
         b.idle(DISK_POLL_MS * 10.);
         settle(&mut b, DISK_POLL_MS * 10.);
         assert_eq!(b.buffer.text(), "typing\n", "a dirty buffer keeps its text");
         assert!(notices(&mut b)
             .iter()
             .any(|n| n.contains("changed on disk")));
+    }
+
+    /// Idles the body until `done`, as frames do (the asks run on threads).
+    fn idle_until(b: &mut EditorBody, mut now: f64, mut done: impl FnMut(&mut EditorBody) -> bool) {
+        let stop = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !done(b) {
+            assert!(std::time::Instant::now() < stop, "timed out");
+            b.idle(now);
+            now += 1.;
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn row_names(b: &EditorBody) -> Vec<String> {
+        b.tree
+            .as_ref()
+            .map(|t| t.rows().into_iter().map(|r| r.entry.name).collect())
+            .unwrap_or_default()
+    }
+
+    // `ift -n .` on a host: the card has no file, only a folder. The tree
+    // says it is loading, never an empty list, then shows the host's names.
+    #[test]
+    fn a_host_tree_says_loading_then_lists_the_hosts_folder_and_opens_subfolders() {
+        let host = FakeHost::with("", 1);
+        host.with_dir("/srv", &[("app", true), ("README.md", false)]);
+        host.with_dir("/srv/app", &[("main.py", false)]);
+        let mut b = body();
+        b.source = host.clone();
+        b.show_tree("/srv");
+        assert_eq!(b.tree_status().as_deref(), Some("Loading from the host..."));
+        assert!(row_names(&b).is_empty());
+
+        idle_until(&mut b, 1., |b| b.tree_status().is_none());
+        assert_eq!(row_names(&b), vec!["app", "README.md"]);
+        assert_eq!(b.tree_head_rows(), 0, "no status row once listed");
+
+        // Opening a folder lists it on the host too, and the rows follow.
+        b.tree.as_mut().unwrap().cursor = 0;
+        b.tree_open_entry();
+        idle_until(&mut b, 100., |b| row_names(b).len() == 3);
+        assert_eq!(row_names(&b), vec!["app", "main.py", "README.md"]);
+        assert_eq!(
+            b.tree.as_ref().unwrap().rows()[1].entry.path,
+            "/srv/app/main.py"
+        );
+    }
+
+    // An error from the host shows in the card as text, with the reason, and
+    // a notice; a fixed host recovers on the next look.
+    #[test]
+    fn a_host_error_shows_as_text_in_the_tree_and_recovers() {
+        let host = FakeHost::with("", 1);
+        host.with_dir("/srv", &[("a.txt", false)]);
+        *host.list_error.lock().unwrap() =
+            Some(FileError::new(Code::Denied, "/srv: permission denied"));
+        let mut b = body();
+        b.source = host.clone();
+        b.show_tree("/srv");
+        idle_until(&mut b, 1., |b| {
+            b.tree_status()
+                .is_some_and(|s| s.contains("permission denied"))
+        });
+        assert!(b
+            .tree_status()
+            .unwrap()
+            .starts_with("Could not list this folder on the host"));
+        assert_eq!(
+            b.tree_head_rows(),
+            1,
+            "the text takes a row, clicks stay aligned"
+        );
+        assert!(notices(&mut b)
+            .iter()
+            .any(|n| n.contains("permission denied")));
+
+        *host.list_error.lock().unwrap() = None;
+        idle_until(&mut b, 10_000., |b| b.tree_status().is_none());
+        assert_eq!(row_names(&b), vec!["a.txt"]);
+    }
+
+    // A host without watching (an older ift) is polled; one with it is told:
+    // a change under a watched file is found long before the poll is due.
+    #[test]
+    fn a_watch_on_the_open_host_file_finds_a_change_without_waiting_for_the_poll() {
+        let host = FakeHost::with("v1\n", 1);
+        *host.can_watch.lock().unwrap() = true;
+        let mut b = host_body(&host, "/srv/a.txt");
+        settle(&mut b, 1.);
+        b.last_host_poll = -1e9;
+        let t = DISK_POLL_MS * 5.;
+        idle_until(&mut b, t, |b| b.file_watch.is_some());
+        settle(&mut b, t);
+
+        host.change_under_the_editor("v2\n", 2);
+        // Not yet: nothing fired, and the poll is not due.
+        b.idle(t + 1.);
+        assert!(b.host_disk.is_none());
+        assert_eq!(b.buffer.text(), "v1\n");
+        host.fire
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .send(())
+            .unwrap();
+        b.idle(t + 2.);
+        settle(&mut b, t + 2.);
+        assert_eq!(b.buffer.text(), "v2\n", "the watch's event was enough");
+
+        // The link drops: the watch closes, the file is looked at, and a new
+        // watch is set at the next poll.
+        *host.fire.lock().unwrap() = None;
+        host.change_under_the_editor("v3\n", 3);
+        b.idle(t + 3.);
+        settle(&mut b, t + 3.);
+        assert_eq!(b.buffer.text(), "v3\n");
+        assert!(b.file_watch.is_none());
+    }
+
+    #[test]
+    fn a_host_that_cannot_watch_is_polled_and_not_asked_to_watch_again() {
+        let host = FakeHost::with("v1\n", 1);
+        let mut b = host_body(&host, "/srv/a.txt");
+        settle(&mut b, 1.);
+        b.last_host_poll = -1e9;
+        idle_until(&mut b, DISK_POLL_MS * 5., |b| b.file_watch_unsupported);
+        assert!(b.file_watch.is_none());
+        host.change_under_the_editor("v2\n", 2);
+        b.last_host_poll = -1e9;
+        b.idle(DISK_POLL_MS * 9.);
+        settle(&mut b, DISK_POLL_MS * 9.);
+        assert_eq!(b.buffer.text(), "v2\n");
     }
 }

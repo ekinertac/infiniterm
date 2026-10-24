@@ -31,6 +31,7 @@ mod editor_body;
 mod editor_tabs;
 mod editors;
 mod field;
+mod host_dirs;
 // Seven modules talk to AppKit and CoreText. Elsewhere `not_macos.rs`
 // answers under the same names (its header says what each leaves undone).
 #[cfg(target_os = "macos")]

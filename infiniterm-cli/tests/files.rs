@@ -94,3 +94,32 @@ fn a_host_whose_ift_has_no_file_helper_is_told_to_update_it() {
     assert_eq!(err.code, Code::Lost);
     assert!(err.message.contains("unknown command proxy files"), "{err}");
 }
+
+#[test]
+fn a_watch_through_the_real_helper_fires_for_a_folder_and_a_relative_path_is_refused() {
+    let work = Scratch::new("files-watch");
+    let server = Scratch::new("files-wtsrv");
+    let ssh = stand_in_ssh(&work.0, &server.0);
+    let dir = server.0.join("proj");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.txt"), "a").unwrap();
+
+    let src = HostSource::new(host(&ssh));
+    let watch = src.watch(&dir.to_string_lossy()).unwrap();
+    std::fs::write(dir.join("b.txt"), "b").unwrap();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !watch.poll().changed {
+        assert!(std::time::Instant::now() < until, "the folder's watch never fired");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let names: Vec<_> = src
+        .list(&dir.to_string_lossy())
+        .unwrap()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert_eq!(names, vec!["a.txt", "b.txt"]);
+
+    // A relative path is refused like any request's, not watched.
+    assert_eq!(src.watch("proj").err().unwrap().code, Code::Io);
+}

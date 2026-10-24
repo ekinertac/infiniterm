@@ -40,7 +40,65 @@ pub struct HostPaths {
     pub config_dir: String,
 }
 
+/// A file or folder being watched on a host. `poll` says whether it changed
+/// since the last poll and whether the watch is over (the connection ended:
+/// the owner asks again, with a `stat` or `list` of its own to catch what it
+/// missed). Dropping it stops the watch on the host.
+pub struct Watch {
+    events: std::sync::mpsc::Receiver<()>,
+    stop: Option<Box<dyn FnOnce() + Send>>,
+}
+
+/// What `Watch::poll` found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Watched {
+    pub changed: bool,
+    pub closed: bool,
+}
+
+impl Watch {
+    pub fn new(events: std::sync::mpsc::Receiver<()>, stop: Box<dyn FnOnce() + Send>) -> Watch {
+        Watch {
+            events,
+            stop: Some(stop),
+        }
+    }
+
+    pub fn poll(&self) -> Watched {
+        use std::sync::mpsc::TryRecvError;
+        let mut out = Watched::default();
+        loop {
+            match self.events.try_recv() {
+                Ok(()) => out.changed = true,
+                Err(TryRecvError::Empty) => return out,
+                Err(TryRecvError::Disconnected) => {
+                    out.closed = true;
+                    return out;
+                }
+            }
+        }
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            stop();
+        }
+    }
+}
+
 pub trait FileSource: Send + Sync {
+    /// Tells when `path` (a file, or a folder's entries) changes. A local
+    /// source does not: its bodies keep their own cheap poll, so the default
+    /// is `unsupported`, which is also what an older host's helper answers.
+    fn watch(&self, _path: &str) -> Result<Watch, FileError> {
+        Err(FileError::new(
+            Code::Unsupported,
+            "watching is not available",
+        ))
+    }
+
     /// The machine's own disk: answers at once, so a body may call inline.
     /// False for another machine's, where a call may take seconds.
     fn is_local(&self) -> bool;

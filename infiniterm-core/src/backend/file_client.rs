@@ -31,7 +31,7 @@ use super::remote::{connect_files, RemoteHost};
 use crate::file_proto::{
     Code, EntryKind, FileError, Frame, FrameReader, Kind, ListEntry, Request, Stat, CHUNK,
 };
-use crate::file_source::{FileData, FileSource, HostPaths};
+use crate::file_source::{FileData, FileSource, HostPaths, Watch};
 
 /// How long a request waits for its reply before it is given up on. Generous:
 /// a big read over a slow link is not a failure.
@@ -52,6 +52,10 @@ struct Conn {
     waiting: Mutex<HashMap<u32, Sender<Frame>>>,
     next_id: AtomicU32,
     alive: AtomicBool,
+    /// Open watches by the id of the request that made them: a `W` frame
+    /// with that id fires its sender. Cleared when the connection ends, which
+    /// the watch's owner sees as a closed watch.
+    watches: Mutex<HashMap<u32, Sender<()>>>,
 }
 
 #[derive(Default)]
@@ -132,6 +136,7 @@ impl HostSource {
                     waiting: Mutex::new(HashMap::new()),
                     next_id: AtomicU32::new(1),
                     alive: AtomicBool::new(true),
+                    watches: Mutex::new(HashMap::new()),
                 });
                 let for_reader = conn.clone();
                 std::thread::spawn(move || read_replies(reader, for_reader));
@@ -179,6 +184,17 @@ impl HostSource {
     fn call_untimed(&self, request: &Request, body: &[u8]) -> Result<(Value, Vec<u8>), FileError> {
         let conn = self.conn()?;
         let id = conn.next_id.fetch_add(1, Ordering::SeqCst);
+        self.exchange(&conn, id, request, body)
+    }
+
+    /// One request on `conn` under `id`: its frames out, its reply back.
+    fn exchange(
+        &self,
+        conn: &Arc<Conn>,
+        id: u32,
+        request: &Request,
+        body: &[u8],
+    ) -> Result<(Value, Vec<u8>), FileError> {
         let (tx, rx) = channel();
         conn.waiting.lock().unwrap().insert(id, tx);
         let frame = Frame::new(Kind::Request, id, request.to_json(), vec![]);
@@ -235,6 +251,12 @@ fn read_replies(mut stream: UnixStream, conn: Arc<Conn>) {
         }
         loop {
             match reader.next() {
+                // A watch fired: its owner is told, whatever else is in flight.
+                Ok(Some(frame)) if frame.kind == Kind::Event => {
+                    if let Some(tx) = conn.watches.lock().unwrap().get(&frame.id) {
+                        let _ = tx.send(());
+                    }
+                }
                 Ok(Some(frame)) => {
                     let done = matches!(frame.kind, Kind::Reply | Kind::Error);
                     let mut waiting = conn.waiting.lock().unwrap();
@@ -252,6 +274,7 @@ fn read_replies(mut stream: UnixStream, conn: Arc<Conn>) {
     }
     conn.alive.store(false, Ordering::SeqCst);
     conn.waiting.lock().unwrap().clear();
+    conn.watches.lock().unwrap().clear();
 }
 
 fn str_of(v: &Value, key: &str) -> String {
@@ -269,6 +292,39 @@ impl FileSource for HostSource {
             home: str_of(&v, "home"),
             config_dir: str_of(&v, "config_dir"),
         })
+    }
+
+    fn watch(&self, path: &str) -> Result<Watch, FileError> {
+        let conn = self.conn()?;
+        let id = conn.next_id.fetch_add(1, Ordering::SeqCst);
+        let (tx, events) = channel();
+        // Registered before the request goes, so no event can pass unseen.
+        conn.watches.lock().unwrap().insert(id, tx);
+        let request = Request::Watch { path: path.into() };
+        if let Err(e) = self.exchange(&conn, id, &request, &[]) {
+            conn.watches.lock().unwrap().remove(&id);
+            return Err(e);
+        }
+        let stop_conn = conn.clone();
+        Ok(Watch::new(
+            events,
+            Box::new(move || {
+                stop_conn.watches.lock().unwrap().remove(&id);
+                // Best effort and not waited for: the host's reply to it has
+                // no owner, and the reader drops it.
+                if stop_conn.alive.load(Ordering::SeqCst) {
+                    let next = stop_conn.next_id.fetch_add(1, Ordering::SeqCst);
+                    let frame = Frame::new(
+                        Kind::Request,
+                        next,
+                        Request::Unwatch { watch: id }.to_json(),
+                        vec![],
+                    );
+                    let mut w = stop_conn.writer.lock().unwrap();
+                    let _ = w.write_all(&frame.encode()).and_then(|_| w.flush());
+                }
+            }),
+        ))
     }
 
     fn stat(&self, path: &str) -> Result<Stat, FileError> {
@@ -596,6 +652,82 @@ mod tests {
         assert_eq!(retry_wait(0), Duration::from_secs(2));
         assert_eq!(retry_wait(1), Duration::from_secs(4));
         assert_eq!(retry_wait(9), Duration::from_secs(30));
+    }
+
+    /// Polls a watch until it fires or `wait` passes.
+    fn fired(watch: &Watch, wait: Duration) -> bool {
+        let until = Instant::now() + wait;
+        while Instant::now() < until {
+            if watch.poll().changed {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    #[test]
+    fn a_watch_on_a_file_and_on_a_folder_fires_when_the_host_changes_them() {
+        let dir = scratch("watch");
+        let file = dir.join("a.txt").to_string_lossy().into_owned();
+        std::fs::write(&file, "one").unwrap();
+        let src = served("h");
+        let on_file = src.watch(&file).unwrap();
+        let on_dir = src.watch(&dir.to_string_lossy()).unwrap();
+        assert!(
+            !fired(&on_file, Duration::from_millis(900)),
+            "quiet is quiet"
+        );
+
+        std::fs::write(&file, "two, longer").unwrap();
+        assert!(fired(&on_file, Duration::from_secs(5)), "the file moved");
+        assert!(
+            !on_dir.poll().changed,
+            "a file's edit is not a change of the folder's entries"
+        );
+        std::fs::write(dir.join("new.txt"), "x").unwrap();
+        assert!(fired(&on_dir, Duration::from_secs(5)), "an entry came");
+        // A folder that vanishes fires too, then the watch stays quiet.
+        std::fs::remove_dir_all(dir.join("sub")).unwrap();
+        assert!(fired(&on_dir, Duration::from_secs(5)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_dropped_watch_stops_and_a_lost_connection_closes_every_watch() {
+        let dir = scratch("watch-lost");
+        let file = dir.join("a.txt").to_string_lossy().into_owned();
+        std::fs::write(&file, "one").unwrap();
+        let src = served("h");
+        let kept = src.watch(&file).unwrap();
+        drop(src.watch(&file).unwrap());
+        let conn = src.conn().unwrap();
+        assert_eq!(
+            conn.watches.lock().unwrap().len(),
+            1,
+            "the dropped one left"
+        );
+
+        // The host's end goes away: the owner is told the watch is closed.
+        conn.writer
+            .lock()
+            .unwrap()
+            .shutdown(std::net::Shutdown::Both)
+            .unwrap();
+        let until = Instant::now() + Duration::from_secs(5);
+        while !kept.poll().closed && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(kept.poll().closed);
+        // Watching again goes through a new connection.
+        assert!(src.watch(&file).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_local_source_has_no_watch_and_says_so() {
+        let err = crate::file_source::LocalSource.watch("/tmp").err().unwrap();
+        assert_eq!(err.code, Code::Unsupported);
     }
 
     #[test]
