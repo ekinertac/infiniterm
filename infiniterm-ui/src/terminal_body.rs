@@ -188,6 +188,10 @@ pub struct TerminalBody {
     /// and rows, since the shell wraps to those; set each frame from the
     /// pane, `None` everywhere else, where the card's size decides.
     pub fixed_cells: Option<(usize, usize)>,
+    /// A viewer's terminal (#555): its paths are the HOST's, so they are not
+    /// checked against this Mac's disk (that found nothing and dropped the
+    /// click); every path-like text is a link and a click asks the host.
+    pub remote_paths: bool,
     /// Each row shaped ONCE, keyed by what it was shaped from, so a row
     /// that did not change is not shaped again. htop repaints every second;
     /// the other 39 rows of the other 24 cards do not.
@@ -362,6 +366,7 @@ impl TerminalBody {
             scale: 1.,
             cols,
             fixed_cells: None,
+            remote_paths: false,
             rows,
             shaped: vec![],
         }
@@ -606,7 +611,13 @@ impl TerminalBody {
             self.link_texts[r].push_str(line);
             self.link_spans[r] = row.hyperlinks.clone();
             self.links[r] = if line.contains(['/', '.', '#']) || !row.hyperlinks.is_empty() {
-                Self::scan_links(line, &self.cwd, repo.as_ref(), &row.hyperlinks)
+                Self::scan_links(
+                    line,
+                    &self.cwd,
+                    repo.as_ref(),
+                    &row.hyperlinks,
+                    self.remote_paths,
+                )
             } else {
                 vec![]
             };
@@ -618,10 +629,23 @@ impl TerminalBody {
         cwd: &str,
         repo: Option<&Repo>,
         spans: &[(usize, usize, String)],
+        remote_paths: bool,
     ) -> Vec<(Found, Option<PathKind>)> {
         {
             {
                 let found = merge_hyperlinks(find_links_in(line, repo), line, spans);
+                // The paths are on another machine: nothing here can say
+                // whether they exist, so each is a link and the host decides
+                // when it is clicked (#555).
+                if remote_paths {
+                    return found
+                        .into_iter()
+                        .map(|f| {
+                            let kind = (f.kind == LinkKind::Path).then_some(PathKind::File);
+                            (f, kind)
+                        })
+                        .collect();
+                }
                 let paths: Vec<&str> = found
                     .iter()
                     .filter(|f| f.kind == LinkKind::Path)
@@ -1337,6 +1361,19 @@ impl CardBody for TerminalBody {
                 let home = infiniterm_core::paths::home_dir()
                     .to_string_lossy()
                     .into_owned();
+                // A path in a joined terminal is the host's: the host opens
+                // it (#555). The system's handler here would look on this
+                // Mac's disk, so Shift does nothing for a path.
+                if self.remote_paths && f.kind == LinkKind::Path {
+                    return if modifiers.shift {
+                        BodyAction::None
+                    } else {
+                        BodyAction::OpenOnHost {
+                            path: f.target,
+                            line: f.line,
+                        }
+                    };
+                }
                 if modifiers.shift {
                     return match f.kind {
                         LinkKind::Url => BodyAction::OpenExternal {
@@ -1880,6 +1917,32 @@ pub fn lost_session_tail(when: &str, resume: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A joined terminal's paths are the host's (#555): this Mac's disk says
+    /// nothing about them, and checking it dropped every click.
+    #[test]
+    fn in_a_joined_terminal_a_path_is_a_link_without_a_look_at_this_disk() {
+        let line = "edited /no/such/dir/on/this/mac/disk.rs:42 just now";
+        let here = TerminalBody::scan_links(line, "/", None, &[], false);
+        assert!(
+            here.iter().all(|(f, _)| f.kind != LinkKind::Path),
+            "a path that is not on this disk is no link in a local terminal"
+        );
+        let joined = TerminalBody::scan_links(line, "/", None, &[], true);
+        let paths: Vec<_> = joined
+            .iter()
+            .filter(|(f, _)| f.kind == LinkKind::Path)
+            .collect();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].0.target, "/no/such/dir/on/this/mac/disk.rs");
+        assert_eq!(paths[0].0.line, Some(42));
+        assert!(paths[0].1.is_some(), "clickable");
+        // An address is still an address.
+        let url = TerminalBody::scan_links("see https://infiniterm.app/x", "/", None, &[], true);
+        assert!(url
+            .iter()
+            .any(|(f, k)| f.kind == LinkKind::Url && k.is_none()));
+    }
 
     #[test]
     fn a_lost_card_waits_longer_after_each_failure_up_to_a_cap() {
