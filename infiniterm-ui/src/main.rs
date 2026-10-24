@@ -326,6 +326,10 @@ pub struct AppView {
     /// #555): opened beside the card they came from, in the poll.
     #[cfg(unix)]
     pub join_opens: Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join::OpenOnHost>>,
+    /// The host's files for a joined window's cards (#560), made at the first
+    /// card that needs them.
+    #[cfg(unix)]
+    pub host_files: Option<std::sync::Arc<dyn infiniterm_core::file_source::FileSource>>,
     /// A viewer's edits and clicks on their way up to the host (viewer side).
     #[cfg(unix)]
     pub uplink: Option<std::sync::mpsc::Sender<infiniterm_core::backend::join_client::Uplink>>,
