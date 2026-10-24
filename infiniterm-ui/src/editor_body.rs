@@ -32,6 +32,7 @@ use gpui::{
 };
 use infiniterm_core::complete::{provider_for, Offer, Provider};
 use infiniterm_core::editor_theme::{EditorColors, SyntaxRule};
+use infiniterm_core::file_source::{FileError, FileSource, LocalSource};
 use infiniterm_core::files::{
     dir_list, draft_delete, draft_read, draft_write, file_mtime, file_read, file_write,
 };
@@ -47,6 +48,7 @@ use infiniterm_editor::language::Language;
 use infiniterm_editor::search::Search;
 use infiniterm_editor::wrap::wrap_line;
 use std::collections::HashMap;
+use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 
 // The read-only diff mode (a diff card's body); a child so it can reach this
@@ -319,10 +321,35 @@ pub struct EditorBody {
     image_stale: bool,
     /// The card's size in world px, for hit tests between paints.
     world: Size,
+    /// Where this card's file lives (#560): this machine's disk, or a host's
+    /// in a joined window. A host's is asked on threads and answers in `idle`.
+    pub source: Arc<dyn FileSource>,
+    /// Typing is refused while a host's file is loading, and after a read
+    /// that failed for any reason but "not there": a buffer that stands in
+    /// for a file nobody could read must never be saved over it.
+    pub host_locked: bool,
+    host_load: Option<(Receiver<HostRead>, bool)>,
+    host_save: Option<Receiver<SaveAnswer>>,
+    host_disk: Option<Receiver<DiskAnswer>>,
     /// `Some` for a diff card: this body is then read-only, holds the merged
     /// text of HEAD and the working tree, and its tree is the changed files
     /// (`diff.rs`). Every file-touching path below checks it.
     diff: Option<diff::DiffView>,
+}
+
+/// What a host's `read` answered, for a load.
+type HostRead = Result<infiniterm_core::file_source::FileData, FileError>;
+
+/// What a host's `write` answered, with the text that was sent.
+struct SaveAnswer {
+    result: Result<Option<u64>, FileError>,
+    text: String,
+}
+
+/// What the host's poll of the open file found.
+enum DiskAnswer {
+    Same,
+    Changed { mtime: Option<u64>, text: String },
 }
 
 fn hex(s: &str) -> Hsla {
@@ -411,6 +438,11 @@ impl EditorBody {
             image: None,
             image_stale: false,
             world,
+            source: Arc::new(LocalSource),
+            host_locked: false,
+            host_load: None,
+            host_save: None,
+            host_disk: None,
             diff: None,
         }
     }
@@ -452,7 +484,14 @@ impl EditorBody {
         self.scroll_x = 0.;
         self.shaped.clear();
         self.loads += 1;
-        self.image = Language::is_image(path).then(|| path.to_string());
+        // A host's picture is not shown yet (its bytes would have to come over
+        // the file service into the decoder); a local one is as ever.
+        let host = !self.source.is_local();
+        self.image = (Language::is_image(path) && !host).then(|| path.to_string());
+        if host {
+            self.start_host_load(path, with_draft, now);
+            return;
+        }
         if self.image.is_some() {
             // Nothing to read: the decoder reads the file at paint time.
             self.buffer = Buffer::new("");
@@ -534,6 +573,10 @@ impl EditorBody {
             // A save-as can change the grammar without changing the text.
             self.loads += 1;
         }
+        if !self.source.is_local() {
+            self.start_host_save(path, now);
+            return;
+        }
         let text = self.buffer.text();
         match file_write(path, &text) {
             Ok(()) => {
@@ -564,6 +607,7 @@ impl EditorBody {
             self.diff_idle(now);
             return;
         }
+        self.take_host_answers(now);
         if self.draft_due.is_some_and(|due| now >= due) {
             self.draft_due = None;
             if self.is_dirty() {
@@ -576,13 +620,17 @@ impl EditorBody {
         }
         if now - self.last_disk_check >= DISK_POLL_MS {
             self.last_disk_check = now;
-            self.check_disk(now);
-            // The tree follows the disk too: a file made outside the app
-            // (a build, a download, another card's shell) appears.
-            if let Some(tree) = self.tree.as_mut() {
-                if tree.refresh(&mut list_dir) {
-                    self.dirty = true;
+            if self.source.is_local() {
+                self.check_disk(now);
+                // The tree follows the disk too: a file made outside the app
+                // (a build, a download, another card's shell) appears.
+                if let Some(tree) = self.tree.as_mut() {
+                    if tree.refresh(&mut list_dir) {
+                        self.dirty = true;
+                    }
                 }
+            } else {
+                self.ask_host_disk();
             }
         }
         // The gutter's own poll: HEAD moves on a commit, checkout or
@@ -614,6 +662,12 @@ impl EditorBody {
             return;
         }
         let Ok(text) = file_read(&path) else { return };
+        self.apply_disk_text(&path, text, now);
+    }
+
+    /// The text the disk has now, when it is not the one this card last read
+    /// or wrote: a clean buffer takes it, a dirty one keeps its changes.
+    fn apply_disk_text(&mut self, path: &str, text: String, now: f64) {
         if text == self.saved {
             return;
         }
@@ -621,7 +675,7 @@ impl EditorBody {
             if !self.warned_stale {
                 self.events.push(EditorEvent::Notice(format!(
                     "{} changed on disk; your unsaved changes are kept",
-                    infiniterm_core::paths::base_name(&path)
+                    infiniterm_core::paths::base_name(path)
                 )));
             }
             self.warned_stale = true;
@@ -631,6 +685,223 @@ impl EditorBody {
         self.saved = text.clone();
         self.buffer.set_text(&text, now);
         self.dirty = true;
+    }
+
+    // ---- A host's file (#560): every call is asked on a thread and its
+    // answer taken in `idle`, so a slow link never stops a frame. ----
+
+    /// Starts reading the host's file; the card says so and takes no typing
+    /// until the text is in.
+    fn start_host_load(&mut self, path: &str, with_draft: bool, now: f64) {
+        self.buffer = Buffer::new("Loading from the host...");
+        self.saved.clear();
+        self.disk_stamp = None;
+        self.host_locked = true;
+        self.host_save = None;
+        self.host_disk = None;
+        let (tx, rx) = channel();
+        self.host_load = Some((rx, with_draft));
+        let (source, path) = (self.source.clone(), path.to_string());
+        std::thread::spawn(move || {
+            let _ = tx.send(source.read(&path));
+        });
+        self.dirty = true;
+        self.blink_epoch = now;
+    }
+
+    /// The host's answer to a load: the text, a new file (vim's way, as a
+    /// local one), or the reason it could not be read.
+    fn finish_load(&mut self, answer: HostRead, with_draft: bool, now: f64) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let draft = if with_draft {
+            draft_read(&self.card_id).ok().flatten()
+        } else {
+            None
+        };
+        match answer {
+            Ok(data) => {
+                let text = data.text();
+                self.crlf = text.contains("\r\n");
+                self.saved = text.clone();
+                self.disk_stamp = data.mtime_ms;
+                self.buffer = Buffer::new(draft.as_deref().unwrap_or(&text));
+                self.host_locked = false;
+            }
+            // Not there yet: a new file on the host; the first save makes it.
+            Err(e) if e.code == infiniterm_core::file_source::Code::NotFound => {
+                self.saved.clear();
+                self.disk_stamp = None;
+                self.buffer = Buffer::new(draft.as_deref().unwrap_or(""));
+                self.host_locked = false;
+                self.events.push(EditorEvent::Notice(format!(
+                    "new file on the host: {}",
+                    infiniterm_core::paths::base_name(&path)
+                )));
+            }
+            // Anything else: the card says why and stays locked, so nothing
+            // typed into a stand-in buffer can be saved over a file nobody
+            // could read.
+            Err(e) => {
+                self.buffer = Buffer::new(&format!("Could not read this file from the host:\n{e}"));
+                self.saved.clear();
+                self.host_locked = true;
+                self.events.push(EditorEvent::Notice(format!(
+                    "could not open {} from the host",
+                    infiniterm_core::paths::base_name(&path)
+                )));
+            }
+        }
+        if let Some(line) = self.pending_line.take() {
+            self.go_to_line(line as usize);
+        }
+        self.dirty = true;
+        self.blink_epoch = now;
+    }
+
+    /// Sends the buffer to the host, expecting the file as it was read (or as
+    /// the last save left it). One save at a time.
+    fn start_host_save(&mut self, path: &str, now: f64) {
+        if self.host_save.is_some() {
+            self.events.push(EditorEvent::Notice(
+                "still saving; try again in a moment".into(),
+            ));
+            return;
+        }
+        if self.host_locked {
+            self.events.push(EditorEvent::Notice(
+                "this file is not loaded from the host".into(),
+            ));
+            return;
+        }
+        let text = self.buffer.text();
+        let (tx, rx) = channel();
+        self.host_save = Some(rx);
+        let (source, path, expect, sent) = (
+            self.source.clone(),
+            path.to_string(),
+            self.disk_stamp,
+            text.clone(),
+        );
+        std::thread::spawn(move || {
+            let result = source.write(&path, sent.as_bytes(), expect);
+            let _ = tx.send(SaveAnswer { result, text: sent });
+        });
+        self.dirty = true;
+        self.blink_epoch = now;
+    }
+
+    /// The host's answer to a save. A refusal is the same story as an external
+    /// edit under a dirty buffer: the changes are kept, it is said once, and
+    /// a second save overwrites on purpose (it now expects the host's file).
+    fn finish_save(&mut self, answer: SaveAnswer, now: f64) {
+        let name = self
+            .path
+            .as_deref()
+            .map(infiniterm_core::paths::base_name)
+            .unwrap_or_default()
+            .to_string();
+        match answer.result {
+            Ok(mtime) => {
+                self.saved = answer.text;
+                self.disk_stamp = mtime;
+                self.warned_stale = false;
+                if self.is_dirty() {
+                    // Typed while it was going: the draft keeps that.
+                    self.draft_due = Some(now + DRAFT_MS);
+                } else {
+                    self.draft_due = None;
+                    let _ = draft_delete(&self.card_id);
+                }
+                self.events
+                    .push(EditorEvent::Notice(format!("saved {name} on the host")));
+            }
+            Err(e) if e.code == infiniterm_core::file_source::Code::ChangedOnHost => {
+                self.disk_stamp = e.mtime_ms;
+                self.warned_stale = true;
+                self.events.push(EditorEvent::Notice(format!(
+                    "{name} changed on the host since you opened it; your changes are kept. Save again to overwrite it"
+                )));
+            }
+            Err(e) => {
+                eprintln!("[infiniterm/warn] could not save to the host: {e}");
+                self.events
+                    .push(EditorEvent::Notice(format!("could not save: {e}")));
+            }
+        }
+        self.dirty = true;
+        self.blink_epoch = now;
+    }
+
+    /// Asks the host whether the open file moved: its mtime first, the text
+    /// only when it did. One question at a time.
+    fn ask_host_disk(&mut self) {
+        if self.host_disk.is_some() || self.host_load.is_some() || self.host_locked {
+            return;
+        }
+        let Some(path) = self.path.clone().filter(|_| self.diff.is_none()) else {
+            return;
+        };
+        let (tx, rx) = channel();
+        self.host_disk = Some(rx);
+        let (source, known) = (self.source.clone(), self.disk_stamp);
+        std::thread::spawn(move || {
+            let answer = (|| {
+                let stat = source.stat(&path).ok()?;
+                if stat.mtime_ms.is_none() || stat.mtime_ms == known {
+                    return Some(DiskAnswer::Same);
+                }
+                let data = source.read(&path).ok()?;
+                Some(DiskAnswer::Changed {
+                    mtime: data.mtime_ms,
+                    text: data.text(),
+                })
+            })()
+            // The host gone, or the file: nothing to say; the poll asks again.
+            .unwrap_or(DiskAnswer::Same);
+            let _ = tx.send(answer);
+        });
+    }
+
+    /// Takes whatever the host answered since the last tick.
+    fn take_host_answers(&mut self, now: f64) {
+        if let Some((rx, with_draft)) = &self.host_load {
+            let with_draft = *with_draft;
+            match rx.try_recv() {
+                Ok(answer) => {
+                    self.host_load = None;
+                    self.finish_load(answer, with_draft, now);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.host_load = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if let Some(rx) = &self.host_save {
+            match rx.try_recv() {
+                Ok(answer) => {
+                    self.host_save = None;
+                    self.finish_save(answer, now);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.host_save = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if let Some(rx) = &self.host_disk {
+            match rx.try_recv() {
+                Ok(answer) => {
+                    self.host_disk = None;
+                    if let (DiskAnswer::Changed { mtime, text }, Some(path)) =
+                        (answer, self.path.clone())
+                    {
+                        self.disk_stamp = mtime;
+                        self.apply_disk_text(&path, text, now);
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.host_disk = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
     }
 
     /// The caret is about to leap: remember where it is.
@@ -2269,7 +2540,9 @@ impl EditorBody {
         self.git_head = self
             .path
             .as_deref()
-            .filter(|_| self.image.is_none() && self.diff.is_none())
+            // A host's file has no gutter yet: `git` here would look at this
+            // Mac's disk (the host's git is a later step of #560).
+            .filter(|_| self.image.is_none() && self.diff.is_none() && self.source.is_local())
             .and_then(|path| {
                 let repo = repo_of(std::path::Path::new(path)).ok()?;
                 let repo = repo.to_string_lossy();
@@ -4099,5 +4372,247 @@ mod tests {
         assert_eq!(b.focus, Focus::Tree);
         assert!(b.image.is_some());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- an editor on a host's file (#560) ----
+
+    use infiniterm_core::file_source::{Code, EntryKind, FileData, HostPaths, ListEntry, Stat};
+    use std::sync::Mutex;
+
+    /// A host with one file, answering slowly like a link. It is not local, so
+    /// the body must ask on threads. `read_error` makes reads fail.
+    struct FakeHost {
+        file: Mutex<Option<(String, u64)>>,
+        read_error: Mutex<Option<FileError>>,
+        writes: Mutex<Vec<(String, Option<u64>)>>,
+    }
+
+    impl FakeHost {
+        fn with(text: &str, mtime: u64) -> Arc<FakeHost> {
+            Arc::new(FakeHost {
+                file: Mutex::new(Some((text.into(), mtime))),
+                read_error: Mutex::new(None),
+                writes: Mutex::new(vec![]),
+            })
+        }
+        fn change_under_the_editor(&self, text: &str, mtime: u64) {
+            *self.file.lock().unwrap() = Some((text.into(), mtime));
+        }
+    }
+
+    impl FileSource for FakeHost {
+        fn is_local(&self) -> bool {
+            false
+        }
+        fn home(&self) -> Result<HostPaths, FileError> {
+            unreachable!()
+        }
+        fn stat(&self, path: &str) -> Result<Stat, FileError> {
+            match &*self.file.lock().unwrap() {
+                Some((text, mtime)) => Ok(Stat {
+                    kind: EntryKind::File,
+                    size: text.len() as u64,
+                    mtime_ms: Some(*mtime),
+                    symlink: false,
+                }),
+                None => Err(FileError::new(Code::NotFound, format!("{path}: not found"))),
+            }
+        }
+        fn exists(&self, _: &[String]) -> Result<Vec<Option<EntryKind>>, FileError> {
+            unreachable!()
+        }
+        fn list(&self, _: &str) -> Result<Vec<ListEntry>, FileError> {
+            unreachable!()
+        }
+        fn read(&self, path: &str) -> Result<FileData, FileError> {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if let Some(e) = self.read_error.lock().unwrap().clone() {
+                return Err(e);
+            }
+            match &*self.file.lock().unwrap() {
+                Some((text, mtime)) => Ok(FileData {
+                    bytes: text.clone().into_bytes(),
+                    mtime_ms: Some(*mtime),
+                }),
+                None => Err(FileError::new(Code::NotFound, format!("{path}: not found"))),
+            }
+        }
+        fn write(
+            &self,
+            path: &str,
+            bytes: &[u8],
+            expect: Option<u64>,
+        ) -> Result<Option<u64>, FileError> {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            self.writes
+                .lock()
+                .unwrap()
+                .push((String::from_utf8_lossy(bytes).into(), expect));
+            let mut file = self.file.lock().unwrap();
+            if let (Some(want), Some((_, now))) = (expect, file.as_ref()) {
+                if *now != want {
+                    return Err(FileError::new(
+                        Code::ChangedOnHost,
+                        format!("{path}: changed on the host"),
+                    )
+                    .with_mtime(Some(*now)));
+                }
+            }
+            let next = file.as_ref().map_or(1, |(_, m)| m + 1);
+            *file = Some((String::from_utf8_lossy(bytes).into(), next));
+            Ok(Some(next))
+        }
+    }
+
+    fn host_body(host: &Arc<FakeHost>, path: &str) -> EditorBody {
+        let mut b = body();
+        b.source = host.clone();
+        b.load(path, false, 0.);
+        b
+    }
+
+    fn settle(b: &mut EditorBody, now: f64) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while (b.host_load.is_some() || b.host_save.is_some() || b.host_disk.is_some())
+            && std::time::Instant::now() < deadline
+        {
+            b.take_host_answers(now);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        b.take_host_answers(now);
+        assert!(
+            b.host_load.is_none() && b.host_save.is_none() && b.host_disk.is_none(),
+            "an answer never came"
+        );
+    }
+
+    fn notices(b: &mut EditorBody) -> Vec<String> {
+        b.take_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                EditorEvent::Notice(n) => Some(n),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // The card never waits for the host: it says it is loading, takes no
+    // typing, and has the text when the answer is in.
+    #[test]
+    fn a_host_file_loads_on_a_thread_and_takes_no_typing_until_it_is_in() {
+        let host = FakeHost::with("fn main() {}\n", 5);
+        let started = std::time::Instant::now();
+        let mut b = host_body(&host, "/srv/a.rs");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(80),
+            "load waited on the host"
+        );
+        assert!(b.host_locked, "no typing while loading");
+        assert_eq!(b.buffer.text(), "Loading from the host...");
+        settle(&mut b, 1.);
+        assert_eq!(b.buffer.text(), "fn main() {}\n");
+        assert!(!b.host_locked && !b.is_dirty());
+        assert_eq!(b.disk_stamp, Some(5));
+        // A save while loading is refused, with nothing sent.
+        let slow = FakeHost::with("x", 1);
+        let mut loading = host_body(&slow, "/srv/b.txt");
+        loading.save("/srv/b.txt", 0.);
+        assert!(slow.writes.lock().unwrap().is_empty());
+        assert!(notices(&mut loading)
+            .iter()
+            .any(|n| n.contains("not loaded")));
+    }
+
+    // A file that is not on the host is a new one, as a local path is; a
+    // host that cannot be read leaves the card locked with the reason, so a
+    // save can never overwrite a file nobody could read.
+    #[test]
+    fn a_missing_host_file_is_a_new_one_and_an_unreadable_one_stays_locked() {
+        let host = FakeHost::with("", 1);
+        *host.file.lock().unwrap() = None;
+        let mut new = host_body(&host, "/srv/new.txt");
+        settle(&mut new, 1.);
+        assert!(!new.host_locked && new.buffer.text().is_empty());
+        assert!(notices(&mut new)
+            .iter()
+            .any(|n| n.contains("new file on the host")));
+
+        let down = FakeHost::with("real contents", 3);
+        *down.read_error.lock().unwrap() = Some(FileError::new(Code::Lost, "mini: lost"));
+        let mut b = host_body(&down, "/srv/real.txt");
+        settle(&mut b, 1.);
+        assert!(b.host_locked, "locked: a save would replace the real file");
+        assert!(b
+            .buffer
+            .text()
+            .contains("Could not read this file from the host"));
+        b.save("/srv/real.txt", 2.);
+        assert!(
+            down.writes.lock().unwrap().is_empty(),
+            "nothing was written"
+        );
+    }
+
+    // The save expects the file as it was read; a refusal keeps the changes,
+    // says so, and a second save overwrites on purpose.
+    #[test]
+    fn a_save_is_refused_when_the_host_file_changed_and_a_second_save_overwrites_it() {
+        let host = FakeHost::with("one\n", 10);
+        let mut b = host_body(&host, "/srv/a.txt");
+        settle(&mut b, 1.);
+        b.buffer.set_text("mine\n", 2.);
+        // The first save goes through, expecting mtime 10.
+        b.save("/srv/a.txt", 2.);
+        settle(&mut b, 3.);
+        assert_eq!(host.writes.lock().unwrap().last().unwrap().1, Some(10));
+        assert!(
+            !b.is_dirty() && b.disk_stamp == Some(11),
+            "{:?}",
+            b.disk_stamp
+        );
+        assert!(notices(&mut b).iter().any(|n| n.starts_with("saved")));
+        // Somebody changes the file on the host; the next save is refused.
+        host.change_under_the_editor("theirs\n", 99);
+        b.buffer.set_text("mine again\n", 4.);
+        b.save("/srv/a.txt", 4.);
+        settle(&mut b, 5.);
+        assert_eq!(
+            host.file.lock().unwrap().clone().unwrap().0,
+            "theirs\n",
+            "nothing was overwritten"
+        );
+        assert!(b.is_dirty(), "the changes are kept");
+        assert!(notices(&mut b)
+            .iter()
+            .any(|n| n.contains("changed on the host") && n.contains("Save again")));
+        assert_eq!(b.disk_stamp, Some(99), "it now expects the host's file");
+        // Saving again overwrites on purpose.
+        b.save("/srv/a.txt", 6.);
+        settle(&mut b, 7.);
+        assert_eq!(host.file.lock().unwrap().clone().unwrap().0, "mine again\n");
+        assert!(!b.is_dirty());
+    }
+
+    // The poll asks the host and treats what comes back like a local change:
+    // a clean buffer takes it, a dirty one is told and keeps its changes.
+    #[test]
+    fn the_host_poll_updates_a_clean_buffer_and_only_tells_a_dirty_one() {
+        let host = FakeHost::with("v1\n", 1);
+        let mut b = host_body(&host, "/srv/a.txt");
+        settle(&mut b, 1.);
+        host.change_under_the_editor("v2\n", 2);
+        b.last_disk_check = -1e9;
+        b.idle(DISK_POLL_MS * 5.);
+        settle(&mut b, DISK_POLL_MS * 5.);
+        assert_eq!(b.buffer.text(), "v2\n", "a clean buffer follows the host");
+        b.buffer.set_text("typing\n", 1.);
+        host.change_under_the_editor("v3\n", 3);
+        b.last_disk_check = -1e9;
+        b.idle(DISK_POLL_MS * 10.);
+        settle(&mut b, DISK_POLL_MS * 10.);
+        assert_eq!(b.buffer.text(), "typing\n", "a dirty buffer keeps its text");
+        assert!(notices(&mut b)
+            .iter()
+            .any(|n| n.contains("changed on disk")));
     }
 }

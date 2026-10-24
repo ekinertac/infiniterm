@@ -47,7 +47,13 @@ impl AppView {
     }
 
     pub fn reconcile_editors(&mut self, window: &Window) {
-        self.reconcile_transcripts(window);
+        // A joined window reads a host's files through its file service (#560).
+        // Page and editor cards do; transcripts and diffs still read this
+        // machine's disk, so a viewer builds no body for them yet.
+        let viewer = self.viewer;
+        if !viewer {
+            self.reconcile_transcripts(window);
+        }
         self.reconcile_pages(window);
         self.reconcile_whats_new(window);
         let metrics = self.metrics(window);
@@ -81,7 +87,7 @@ impl AppView {
             .model
             .cards
             .iter()
-            .filter(|c| c.kind.has_editor_body())
+            .filter(|c| c.kind.has_editor_body() && (!viewer || c.kind == CardKind::Editor))
             .cloned()
             .collect();
         let mut locks: Vec<(String, bool)> = vec![];
@@ -93,6 +99,7 @@ impl AppView {
             let is_diff = card.kind == CardKind::Diff;
             let fresh = self.editor_tabs_for(&card.id).is_none();
             if fresh {
+                let source = self.file_source();
                 let mut tabs = if is_diff {
                     // The diff's scope: the root it was opened on, else its
                     // file, else the directory it was opened from.
@@ -109,6 +116,7 @@ impl AppView {
                 // keys at once. The lock is the body's from here on, and the
                 // mirror below copies it back onto the card.
                 tabs.locked = card.locked;
+                tabs.source = source;
                 self.bodies.insert(card.id.clone(), Box::new(tabs));
             }
             let Some(tabs) = self.editor_tabs_for(&card.id) else {
@@ -192,11 +200,17 @@ impl AppView {
                 Wrap::Never => false,
                 Wrap::Prose => Language::is_prose(&path),
             };
-            body.read_only = is_diff || is_generated(&path) || Language::is_image(&path);
+            body.read_only = is_diff
+                || is_generated(&path)
+                || Language::is_image(&path)
+                // A host's file that is loading, or could not be read.
+                || body.host_locked;
             body.sidebar_top = card.sidebar_top;
             body.sidebar_w = sidebar_width(card.sidebar, sidebar_extent(world, card.sidebar_top));
             // A diff's list is its own (changed files, not the folder).
-            if card.explorer && !is_diff {
+            // (A host's folder has no list yet: the tree is the next step of
+            // the file service, #560.)
+            if card.explorer && !is_diff && body.source.is_local() {
                 if let Some(root) = card.root.clone() {
                     body.show_tree(&root);
                 }

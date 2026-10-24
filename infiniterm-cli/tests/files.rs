@@ -47,6 +47,35 @@ fn a_host_source_reads_the_hosts_files_through_the_real_helper() {
 }
 
 #[test]
+fn a_save_through_the_real_helper_is_whole_and_refused_when_the_host_file_moved() {
+    let work = Scratch::new("files-write");
+    let server = Scratch::new("files-wsrv");
+    let ssh = stand_in_ssh(&work.0, &server.0);
+    let path = server.0.join("notes.txt");
+    std::fs::write(&path, "one\n").unwrap();
+    let p = path.to_string_lossy().into_owned();
+
+    let src = HostSource::new(host(&ssh));
+    let read = src.read(&p).unwrap();
+    let saved = src.write(&p, b"two\n", read.mtime_ms).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\n");
+    assert_eq!(saved, src.stat(&p).unwrap().mtime_ms);
+
+    // The file moves on the host (a later mtime): a save that expects the
+    // old one is refused, leaves the file alone, and names the mtime to
+    // expect to overwrite on purpose.
+    let f = std::fs::File::options().write(true).open(&path).unwrap();
+    f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(120))
+        .unwrap();
+    let err = src.write(&p, b"mine\n", saved).unwrap_err();
+    assert_eq!(err.code, Code::ChangedOnHost);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\n");
+    assert!(err.mtime_ms.is_some());
+    src.write(&p, b"mine\n", err.mtime_ms).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine\n");
+}
+
+#[test]
 fn a_host_whose_ift_has_no_file_helper_is_told_to_update_it() {
     let work = Scratch::new("files-old");
     // `proxy files` on an older ift is not an answer at all: a shell error.

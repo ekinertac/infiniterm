@@ -28,7 +28,7 @@ fn send<W: Write>(out: &Mutex<W>, frame: &Frame) -> std::io::Result<()> {
 }
 
 /// Answers one request: its `D` chunks, then its `R`, or an `E`.
-fn answer<W: Write>(out: &Mutex<W>, id: u32, request: Value) -> std::io::Result<()> {
+fn answer<W: Write>(out: &Mutex<W>, id: u32, request: Value, body: Vec<u8>) -> std::io::Result<()> {
     let source = LocalSource;
     let result: Result<(Value, Vec<u8>), FileError> = Request::from_json(&request).and_then(|r| {
         match r {
@@ -70,6 +70,13 @@ fn answer<W: Write>(out: &Mutex<W>, id: u32, request: Value) -> std::io::Result<
             Request::Read { path, offset, len } => {
                 let (bytes, size, mtime_ms) = source.read_range(&path, offset, len)?;
                 Ok((json!({ "size": size, "mtime_ms": mtime_ms }), bytes))
+            }
+            Request::Write {
+                path,
+                expect_mtime_ms,
+            } => {
+                let mtime_ms = source.write(&path, &body, expect_mtime_ms)?;
+                Ok((json!({ "mtime_ms": mtime_ms }), vec![]))
             }
         }
     });
@@ -128,6 +135,9 @@ pub fn serve<R: Read, W: Write + Send + 'static>(mut input: R, output: W) -> std
 
     let mut reader = FrameReader::default();
     let mut buf = vec![0u8; 64 * 1024];
+    // The bytes of writes whose request has not arrived yet, by id. A
+    // connection that ends drops them; nothing is written from a half.
+    let mut partial: std::collections::HashMap<u32, Vec<u8>> = std::collections::HashMap::new();
     loop {
         let n = input.read(&mut buf)?;
         if n == 0 {
@@ -136,13 +146,20 @@ pub fn serve<R: Read, W: Write + Send + 'static>(mut input: R, output: W) -> std
         reader.feed(&buf[..n]);
         loop {
             match reader.next() {
+                // The bytes of a write come first, as data frames of the
+                // request's id; they are kept until its request arrives.
+                Ok(Some(frame)) if frame.kind == Kind::Data => {
+                    partial.entry(frame.id).or_default().extend(frame.bytes);
+                }
                 Ok(Some(frame)) if frame.kind == Kind::Request => {
                     let out = out.clone();
+                    let mut body = partial.remove(&frame.id).unwrap_or_default();
+                    body.extend(frame.bytes);
                     std::thread::spawn(move || {
-                        let _ = answer(&out, frame.id, frame.json);
+                        let _ = answer(&out, frame.id, frame.json, body);
                     });
                 }
-                // Only requests come up; anything else is ignored.
+                // Nothing else comes up from a viewer; it is ignored.
                 Ok(Some(_)) => {}
                 Ok(None) => break,
                 // Not our stream any more: end it.

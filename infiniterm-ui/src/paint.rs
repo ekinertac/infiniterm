@@ -199,14 +199,12 @@ impl AppView {
         self.reconcile_bodies(window);
         self.reconcile_terminals(window);
         self.reconcile_decoys(window);
-        // A viewer builds no body for an editor, a diff or a browser card yet:
-        // its file is on the host, and this Mac must not read a path of its own
-        // and show it as the host's (#423). A page card reads through the
-        // host's file service (#560); the others follow, one card at a time.
-        if self.viewer {
-            self.reconcile_pages(window);
-        } else {
-            self.reconcile_editors(window);
+        // A viewer's page and editor cards read the host's files through its
+        // file service (#560), never a path of this Mac's own shown as the
+        // host's (#423). Its transcript, diff and browser cards still have no
+        // body; the file service takes them one at a time.
+        self.reconcile_editors(window);
+        if !self.viewer {
             self.reconcile_browsers();
         }
         let t0 = std::time::Instant::now();
