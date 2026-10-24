@@ -249,6 +249,9 @@ impl Code {
 pub struct FileError {
     pub code: Code,
     pub message: String,
+    /// With `ChangedOnHost`: the file's modification time on the host now, so
+    /// a viewer that means to overwrite it can say "that one" next time.
+    pub mtime_ms: Option<u64>,
 }
 
 impl FileError {
@@ -256,7 +259,13 @@ impl FileError {
         FileError {
             code,
             message: message.into(),
+            mtime_ms: None,
         }
+    }
+
+    pub fn with_mtime(mut self, mtime_ms: Option<u64>) -> FileError {
+        self.mtime_ms = mtime_ms;
+        self
     }
 
     /// An OS error, with the code its kind maps to.
@@ -275,7 +284,7 @@ impl FileError {
     }
 
     pub fn to_json(&self) -> Value {
-        json!({ "code": self.code.name(), "message": self.message })
+        json!({ "code": self.code.name(), "message": self.message, "mtime_ms": self.mtime_ms })
     }
 
     pub fn from_json(v: &Value) -> FileError {
@@ -286,6 +295,7 @@ impl FileError {
                 .and_then(Value::as_str)
                 .unwrap_or("the host answered with an error")
                 .to_string(),
+            mtime_ms: v.get("mtime_ms").and_then(Value::as_u64),
         }
     }
 }
@@ -331,6 +341,14 @@ pub enum Request {
         offset: u64,
         len: Option<u64>,
     },
+    /// The whole file's new bytes, which ride the request as `D` frames of
+    /// the same id (and the `Q` frame's own bytes). `expect_mtime_ms`: the
+    /// write is refused with `changed_on_host` if the file's mtime is not
+    /// this one (`None`: no check, a file being made).
+    Write {
+        path: String,
+        expect_mtime_ms: Option<u64>,
+    },
 }
 
 impl Request {
@@ -343,6 +361,10 @@ impl Request {
             Request::Read { path, offset, len } => {
                 json!({ "op": "read", "path": path, "offset": offset, "len": len })
             }
+            Request::Write {
+                path,
+                expect_mtime_ms,
+            } => json!({ "op": "write", "path": path, "expect_mtime_ms": expect_mtime_ms }),
         }
     }
 
@@ -377,6 +399,10 @@ impl Request {
                 path: need("path")?,
                 offset: v.get("offset").and_then(Value::as_u64).unwrap_or(0),
                 len: v.get("len").and_then(Value::as_u64),
+            },
+            "write" => Request::Write {
+                path: need("path")?,
+                expect_mtime_ms: v.get("expect_mtime_ms").and_then(Value::as_u64),
             },
             other => {
                 return Err(FileError::new(
@@ -509,6 +535,14 @@ mod tests {
                 offset: 0,
                 len: None,
             },
+            Request::Write {
+                path: "/f".into(),
+                expect_mtime_ms: Some(5),
+            },
+            Request::Write {
+                path: "/new".into(),
+                expect_mtime_ms: None,
+            },
         ] {
             assert_eq!(Request::from_json(&req.to_json()).unwrap(), req);
         }
@@ -522,6 +556,8 @@ mod tests {
     fn errors_keep_their_code_through_json_and_the_os_maps_to_codes() {
         let e = FileError::new(Code::ChangedOnHost, "changed");
         assert_eq!(FileError::from_json(&e.to_json()), e);
+        let with = FileError::new(Code::ChangedOnHost, "changed").with_mtime(Some(77));
+        assert_eq!(FileError::from_json(&with.to_json()).mtime_ms, Some(77));
         let gone = std::io::Error::from(std::io::ErrorKind::NotFound);
         assert_eq!(FileError::from_io("/x", &gone).code, Code::NotFound);
         let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);

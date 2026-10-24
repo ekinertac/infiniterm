@@ -50,6 +50,9 @@ pub struct EditorTabs {
     world: Size,
     dirty: bool,
     metrics: Metrics,
+    /// Where the card's files are (#560): handed to each tab's body before it
+    /// loads. This machine's disk unless the window is a joined one.
+    pub source: std::sync::Arc<dyn infiniterm_core::file_source::FileSource>,
 }
 
 impl EditorTabs {
@@ -112,6 +115,7 @@ impl EditorTabs {
             world,
             dirty: true,
             metrics: metrics.clone(),
+            source: std::sync::Arc::new(infiniterm_core::file_source::LocalSource),
         }
     }
 
@@ -186,6 +190,8 @@ impl EditorTabs {
             &self.metrics,
             self.text_world(),
         );
+        // Before the load: a host's file is read through it, on a thread.
+        body.source = self.source.clone();
         match path {
             Some(p) => body.load(&p, restoring, now),
             None => body.load_untitled(),

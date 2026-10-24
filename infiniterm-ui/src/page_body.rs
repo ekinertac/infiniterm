@@ -540,6 +540,14 @@ mod tests {
         fn is_local(&self) -> bool {
             false
         }
+        fn write(
+            &self,
+            _: &str,
+            _: &[u8],
+            _: Option<u64>,
+        ) -> Result<Option<u64>, infiniterm_core::file_source::FileError> {
+            unreachable!("a page is read only")
+        }
         fn home(
             &self,
         ) -> Result<infiniterm_core::file_source::HostPaths, infiniterm_core::file_source::FileError>

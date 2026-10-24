@@ -52,6 +52,16 @@ pub trait FileSource: Send + Sync {
     fn list(&self, path: &str) -> Result<Vec<ListEntry>, FileError>;
     /// The whole file.
     fn read(&self, path: &str) -> Result<FileData, FileError>;
+    /// Replaces the whole file, through a temp file and a rename. With
+    /// `expect_mtime_ms` the write is refused (`ChangedOnHost`, carrying the
+    /// file's mtime now) if the file is not the one that was read; a file
+    /// that is gone is no conflict. Returns the new mtime.
+    fn write(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        expect_mtime_ms: Option<u64>,
+    ) -> Result<Option<u64>, FileError>;
 }
 
 /// The most a read returns: a card holds the file in memory, and a stray
@@ -200,6 +210,36 @@ impl FileSource for LocalSource {
         let (bytes, _size, mtime_ms) = self.read_range(path, 0, None)?;
         Ok(FileData { bytes, mtime_ms })
     }
+
+    fn write(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        expect_mtime_ms: Option<u64>,
+    ) -> Result<Option<u64>, FileError> {
+        let full = expand(path)?;
+        if bytes.len() as u64 > MAX_READ {
+            return Err(FileError::new(
+                Code::TooLarge,
+                format!("{path}: {} bytes is more than a card holds", bytes.len()),
+            ));
+        }
+        // Checked where the write happens, just before it: a viewer's idea of
+        // the file is the mtime it read, and the file may have moved since.
+        if let (Some(expected), Ok(meta)) = (expect_mtime_ms, std::fs::metadata(&full)) {
+            let now = mtime_of(&meta);
+            if now != Some(expected) {
+                return Err(FileError::new(
+                    Code::ChangedOnHost,
+                    format!("{path}: changed on the host since it was read"),
+                )
+                .with_mtime(now));
+            }
+        }
+        crate::files::write_bytes_atomically(&full, bytes)
+            .map_err(|e| FileError::from_io(path, &e))?;
+        Ok(std::fs::metadata(&full).ok().and_then(|m| mtime_of(&m)))
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +311,42 @@ mod tests {
         );
         let relative = src.read("a.txt").unwrap_err();
         assert!(relative.message.contains("not an absolute path"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_write_replaces_the_file_and_is_refused_when_it_changed_since_it_was_read() {
+        let dir = scratch("write");
+        let src = LocalSource;
+        let path = p(&dir, "a.txt");
+        let read = src.read(&path).unwrap();
+        // The file as read: the write goes through and says the new mtime.
+        let mtime = src.write(&path, b"new text\n", read.mtime_ms).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new text\n");
+        assert_eq!(mtime, src.stat(&path).unwrap().mtime_ms);
+        // Somebody else writes it (a later mtime): a write that expects the
+        // old one is refused, nothing is written, and the error carries the
+        // mtime to expect next time.
+        let theirs = std::fs::File::options().write(true).open(&path).unwrap();
+        theirs
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
+            .unwrap();
+        let err = src.write(&path, b"mine\n", mtime).unwrap_err();
+        assert_eq!(err.code, Code::ChangedOnHost);
+        assert_eq!(err.mtime_ms, src.stat(&path).unwrap().mtime_ms);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new text\n");
+        // Overwriting on purpose: expect what the refusal said.
+        src.write(&path, b"mine\n", err.mtime_ms).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine\n");
+        // A file being made has nothing to expect, and a file that is gone
+        // is no conflict.
+        let fresh = p(&dir, "sub/new.txt");
+        src.write(&fresh, b"made", None).unwrap();
+        std::fs::remove_file(&fresh).unwrap();
+        src.write(&fresh, b"again", Some(1)).unwrap();
+        assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "again");
+        // Not a path: refused, not written.
+        assert_eq!(src.write("rel.txt", b"x", None).unwrap_err().code, Code::Io);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

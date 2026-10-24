@@ -29,7 +29,7 @@ use serde_json::Value;
 
 use super::remote::{connect_files, RemoteHost};
 use crate::file_proto::{
-    Code, EntryKind, FileError, Frame, FrameReader, Kind, ListEntry, Request, Stat,
+    Code, EntryKind, FileError, Frame, FrameReader, Kind, ListEntry, Request, Stat, CHUNK,
 };
 use crate::file_source::{FileData, FileSource, HostPaths};
 
@@ -138,6 +138,17 @@ impl HostSource {
 
     /// One request: its reply JSON and the bytes of its `D` frames.
     fn call(&self, request: &Request) -> Result<(Value, Vec<u8>), FileError> {
+        self.call_with_body(request, &[])
+    }
+
+    /// A request that carries bytes (a write): they go first as `D` frames of
+    /// the request's id, a chunk each, then the request itself. All of it under
+    /// the writer lock, so another request's frames never land in between.
+    fn call_with_body(
+        &self,
+        request: &Request,
+        body: &[u8],
+    ) -> Result<(Value, Vec<u8>), FileError> {
         let conn = self.conn()?;
         let id = conn.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = channel();
@@ -145,7 +156,17 @@ impl HostSource {
         let frame = Frame::new(Kind::Request, id, request.to_json(), vec![]);
         let sent = {
             let mut w = conn.writer.lock().unwrap();
-            w.write_all(&frame.encode()).and_then(|_| w.flush())
+            let mut result = Ok(());
+            for chunk in body.chunks(CHUNK) {
+                let data = Frame::new(Kind::Data, id, Value::Null, chunk.to_vec());
+                result = w.write_all(&data.encode());
+                if result.is_err() {
+                    break;
+                }
+            }
+            result
+                .and_then(|_| w.write_all(&frame.encode()))
+                .and_then(|_| w.flush())
         };
         if let Err(e) = sent {
             conn.waiting.lock().unwrap().remove(&id);
@@ -267,6 +288,28 @@ impl FileSource for HostSource {
             bytes,
             mtime_ms: v.get("mtime_ms").and_then(Value::as_u64),
         })
+    }
+
+    fn write(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        expect_mtime_ms: Option<u64>,
+    ) -> Result<Option<u64>, FileError> {
+        if bytes.len() as u64 > crate::file_source::MAX_READ {
+            return Err(FileError::new(
+                Code::TooLarge,
+                format!("{path}: {} bytes is more than a card holds", bytes.len()),
+            ));
+        }
+        let (v, _) = self.call_with_body(
+            &Request::Write {
+                path: path.into(),
+                expect_mtime_ms,
+            },
+            bytes,
+        )?;
+        Ok(v.get("mtime_ms").and_then(Value::as_u64))
     }
 }
 
@@ -437,6 +480,70 @@ mod tests {
         // from: the host had answered the handshake) and works.
         assert_eq!(src.read(&path).unwrap().text(), "after");
         assert_eq!(made.load(Ordering::SeqCst), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_write_of_several_chunks_lands_whole_and_a_stale_one_is_refused_with_the_mtime_to_expect() {
+        let dir = scratch("write");
+        let path = dir.join("doc.txt").to_string_lossy().into_owned();
+        std::fs::write(&path, "old").unwrap();
+        let src = served("h");
+        let read = src.read(&path).unwrap();
+        // Several chunks and a ragged end.
+        let big: Vec<u8> = (0..(2 * crate::file_proto::CHUNK + 777))
+            .map(|i| (i % 249) as u8)
+            .collect();
+        let mtime = src.write(&path, &big, read.mtime_ms).unwrap();
+        assert!(std::fs::read(&path).unwrap() == big, "the write is whole");
+        assert_eq!(mtime, src.stat(&path).unwrap().mtime_ms);
+        // The host's file moves under the viewer: its write is refused, the
+        // file keeps what the other writer left, and the error says which
+        // mtime to expect when overwriting on purpose.
+        let theirs = std::fs::File::options().write(true).open(&path).unwrap();
+        theirs
+            .set_modified(std::time::SystemTime::now() + Duration::from_secs(90))
+            .unwrap();
+        let err = src.write(&path, b"mine", mtime).unwrap_err();
+        assert_eq!(err.code, Code::ChangedOnHost, "{err}");
+        assert!(std::fs::read(&path).unwrap() == big);
+        let expected = src.stat(&path).unwrap().mtime_ms;
+        assert_eq!(err.mtime_ms, expected);
+        src.write(&path, b"mine", err.mtime_ms).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "mine");
+        // A file being made, in a folder that is there.
+        let fresh = dir.join("sub/new.txt").to_string_lossy().into_owned();
+        src.write(&fresh, b"made", None).unwrap();
+        assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "made");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_connection_lost_before_a_write_finished_writes_nothing() {
+        let dir = scratch("halfwrite");
+        let path = dir.join("keep.txt").to_string_lossy().into_owned();
+        std::fs::write(&path, "kept").unwrap();
+        // A server end that takes the data frames and the connection dies
+        // before the request frame: only data frames arrive.
+        let src = HostSource::with_connector(
+            "h",
+            Box::new(|| {
+                let (near, mut far) = UnixStream::pair().map_err(|e| e.to_string())?;
+                std::thread::spawn(move || {
+                    let mut b = [0u8; 1];
+                    while far.read(&mut b).unwrap_or(0) == 1 && b[0] != b'\n' {}
+                    let _ = writeln!(far, "ift-files 1 ok");
+                    // Read one chunk's worth, then go away.
+                    let mut buf = vec![0u8; 4096];
+                    let _ = far.read(&mut buf);
+                });
+                shake(near)
+            }),
+        );
+        let big = vec![1u8; 2 * crate::file_proto::CHUNK];
+        let err = src.write(&path, &big, None).unwrap_err();
+        assert_eq!(err.code, Code::Lost);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
