@@ -941,6 +941,30 @@ impl TerminalBody {
     }
 }
 
+/// The first image on the clipboard: the extension its format has and its
+/// bytes (#556).
+fn clipboard_image(item: &ClipboardItem) -> Option<(String, Vec<u8>)> {
+    item.entries().iter().find_map(|e| match e {
+        gpui::ClipboardEntry::Image(image) => Some((
+            image_extension(image.format).to_string(),
+            image.bytes.clone(),
+        )),
+        _ => None,
+    })
+}
+
+fn image_extension(format: gpui::ImageFormat) -> &'static str {
+    match format {
+        gpui::ImageFormat::Png => "png",
+        gpui::ImageFormat::Jpeg => "jpg",
+        gpui::ImageFormat::Webp => "webp",
+        gpui::ImageFormat::Gif => "gif",
+        gpui::ImageFormat::Svg => "svg",
+        gpui::ImageFormat::Bmp => "bmp",
+        gpui::ImageFormat::Tiff => "tiff",
+    }
+}
+
 fn rgb(c: [u8; 3]) -> Hsla {
     gpui::rgb(((c[0] as u32) << 16) | ((c[1] as u32) << 8) | c[2] as u32).into()
 }
@@ -1262,9 +1286,17 @@ impl CardBody for TerminalBody {
             return BodyAction::None;
         }
         if m.platform && k.key == "v" {
-            if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+            let clip = cx.read_from_clipboard();
+            if let Some(text) = clip.as_ref().and_then(|c| c.text()) {
                 let bracketed = self.grid.bracketed_paste();
                 self.write(paste(&text, bracketed));
+            } else if self.remote_paths {
+                // An image and no text, in a joined terminal: the program is
+                // on the host and cannot see this Mac's clipboard, so the
+                // image goes there and its path is typed (#556).
+                if let Some((ext, bytes)) = clip.as_ref().and_then(clipboard_image) {
+                    return BodyAction::PasteImage { ext, bytes };
+                }
             }
             return BodyAction::None;
         }
@@ -1942,6 +1974,21 @@ mod tests {
         assert!(url
             .iter()
             .any(|(f, k)| f.kind == LinkKind::Url && k.is_none()));
+    }
+
+    /// A pasted image in a joined terminal is found on the clipboard with the
+    /// extension its format has (#556); text alone is not an image.
+    #[test]
+    fn a_clipboard_image_is_found_with_its_extension_and_text_is_not_one() {
+        let png = gpui::Image::from_bytes(gpui::ImageFormat::Png, vec![1, 2, 3]);
+        let found = clipboard_image(&ClipboardItem::new_image(&png)).expect("an image");
+        assert_eq!(found, ("png".to_string(), vec![1, 2, 3]));
+        let jpg = gpui::Image::from_bytes(gpui::ImageFormat::Jpeg, vec![9]);
+        assert_eq!(
+            clipboard_image(&ClipboardItem::new_image(&jpg)).unwrap().0,
+            "jpg"
+        );
+        assert!(clipboard_image(&ClipboardItem::new_string("hello".into())).is_none());
     }
 
     #[test]

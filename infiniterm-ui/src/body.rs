@@ -44,6 +44,9 @@ pub enum BodyAction {
     /// Cmd+click on a path in a JOINED terminal (#555): the path is the
     /// host's, so the host is asked to open it, not this Mac's disk.
     OpenOnHost { path: String, line: Option<u64> },
+    /// Cmd+V with an image and no text on the clipboard, in a JOINED
+    /// terminal (#556): the image is sent to the host and its path typed.
+    PasteImage { ext: String, bytes: Vec<u8> },
     /// A click on a spawn error: start the shell again.
     Retry,
     /// A click on a browser card's tab strip.

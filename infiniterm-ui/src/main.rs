@@ -334,6 +334,14 @@ pub struct AppView {
     /// A viewer's edits and clicks on their way up to the host (viewer side).
     #[cfg(unix)]
     pub uplink: Option<std::sync::mpsc::Sender<infiniterm_core::backend::join_client::Uplink>>,
+    /// Files, folders and images a joined window sent to the host (#556): the
+    /// transfers run on threads and answer here, and the poll types the
+    /// host's paths into the card.
+    #[cfg(unix)]
+    pub host_drops: (
+        std::sync::mpsc::Sender<crate::runtime::HostDrop>,
+        std::sync::mpsc::Receiver<crate::runtime::HostDrop>,
+    ),
     /// This window is a viewer (`ift join`, #423): the canvas is the host's,
     /// nothing is saved, nothing is seeded, no session is started.
     pub viewer: bool,
@@ -828,6 +836,8 @@ fn main() {
                         }
                         this.publish_agents();
                         // What viewers changed on this canvas (#423).
+                        // Files a joined window sent to the host (#556).
+                        this.drain_host_drops();
                         if this.apply_remote_opens() | this.apply_remote_updates() {
                             this.redraw = true;
                             cx.notify();
