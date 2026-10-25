@@ -4624,6 +4624,10 @@ mod tests {
         fire: Mutex<Option<std::sync::mpsc::Sender<()>>>,
         /// The file's text at HEAD, or `None` for a folder outside a repo.
         head: Mutex<Option<String>>,
+        /// What `git_changes` answers (or the error), and HEAD's text by
+        /// repo-relative name for `git_show`.
+        changes: Mutex<Option<Result<infiniterm_core::git::Changes, FileError>>>,
+        shown: Mutex<HashMap<String, String>>,
     }
 
     impl FakeHost {
@@ -4637,6 +4641,8 @@ mod tests {
                 can_watch: Mutex::new(false),
                 fire: Mutex::new(None),
                 head: Mutex::new(None),
+                changes: Mutex::new(None),
+                shown: Mutex::new(HashMap::new()),
             })
         }
         fn with_dir(&self, path: &str, entries: &[(&str, bool)]) {
@@ -4699,6 +4705,23 @@ mod tests {
                 }),
                 None => Err(FileError::new(Code::NotFound, "not a git repository")),
             }
+        }
+        fn git_changes(&self, _: &str) -> Result<infiniterm_core::git::Changes, FileError> {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            self.changes
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| Err(FileError::new(Code::NotFound, "not a git repository")))
+        }
+        fn git_show(&self, _: &str, path: &str) -> Result<String, FileError> {
+            Ok(self
+                .shown
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .unwrap_or_default())
         }
         fn watch(&self, _: &str) -> Result<Watch, FileError> {
             if !*self.can_watch.lock().unwrap() {
@@ -5047,6 +5070,91 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(150));
         b.take_host_answers(6.);
         assert_eq!(host.file.lock().unwrap().clone().unwrap().0, "keep me\n");
+    }
+
+    fn diff_body(host: &Arc<FakeHost>) -> EditorBody {
+        let metrics = Metrics {
+            family: "Menlo".into(),
+            font_px: 13.,
+            line_height: 1.4,
+            cell_w: 8.,
+            weight: gpui::FontWeight::NORMAL,
+            bold_weight: gpui::FontWeight::BOLD,
+        };
+        let mut b = EditorBody::new_diff("c1", "/srv", &metrics, Size { w: 400., h: 300. });
+        b.source = host.clone();
+        b
+    }
+
+    fn changes_of(file: &str) -> infiniterm_core::git::Changes {
+        infiniterm_core::git::Changes {
+            repo: "/srv".into(),
+            files: vec![infiniterm_core::git::ChangedFile {
+                path: file.into(),
+                added: 1,
+                removed: 0,
+                status: "modified",
+            }],
+        }
+    }
+
+    // A diff card in a joined window: the changed files and both sides of a
+    // file come from the host's git and disk, on threads; the card says it is
+    // loading, and a host error is its text.
+    #[test]
+    fn a_host_diff_lists_the_hosts_changes_and_shows_a_files_two_sides() {
+        let host = FakeHost::with("a\nb\nc\n", 1);
+        *host.changes.lock().unwrap() = Some(Ok(changes_of("a.txt")));
+        host.shown
+            .lock()
+            .unwrap()
+            .insert("a.txt".into(), "a\nc\n".into());
+        let mut b = diff_body(&host);
+        b.diff_start(None, true);
+        assert_eq!(b.buffer.text(), "Loading from the host...");
+
+        idle_until(&mut b, 1., |b| b.tree.is_some());
+        assert_eq!(row_names(&b), vec!["a.txt"]);
+
+        // Enter on the row: the merged text, the added line marked.
+        let path = b.tree.as_ref().unwrap().rows()[0].entry.path.clone();
+        assert_eq!(path, "/srv/a.txt");
+        b.diff_open(&path);
+        idle_until(&mut b, 100., |b| b.diff_state_for_test().0.is_some());
+        assert_eq!(b.buffer.text(), "a\nb\nc");
+        let kinds = b.diff_state_for_test().1;
+        assert!(
+            kinds.contains(&infiniterm_editor::diff::LineKind::Added),
+            "{kinds:?}"
+        );
+    }
+
+    #[test]
+    fn a_host_diff_opened_on_a_file_shows_it_and_a_git_error_is_the_cards_text() {
+        let host = FakeHost::with("x\ny\n", 1);
+        *host.changes.lock().unwrap() = Some(Ok(changes_of("a.txt")));
+        host.shown
+            .lock()
+            .unwrap()
+            .insert("a.txt".into(), "x\n".into());
+        let mut b = diff_body(&host);
+        b.diff_start(Some("/srv/a.txt"), false);
+        idle_until(&mut b, 1., |b| b.diff_state_for_test().0.is_some());
+        assert_eq!(b.buffer.text(), "x\ny");
+        assert!(b.tree.is_none(), "the list stays hidden as the card says");
+
+        let none = FakeHost::with("", 1);
+        *none.changes.lock().unwrap() =
+            Some(Err(FileError::new(Code::Denied, "/srv: permission denied")));
+        let mut b = diff_body(&none);
+        b.diff_start(None, true);
+        idle_until(&mut b, 1., |b| {
+            b.buffer.text().starts_with("Could not read the host's git")
+        });
+        assert!(b.buffer.text().contains("permission denied"));
+        assert!(notices(&mut b)
+            .iter()
+            .any(|n| n.contains("not a git repository")));
     }
 
     // The gutter on a host's file: HEAD comes from the host's git on a

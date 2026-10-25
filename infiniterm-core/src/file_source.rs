@@ -127,6 +127,11 @@ pub trait FileSource: Send + Sync {
         Err(FileError::new(Code::Unsupported, "git is not available"))
     }
 
+    /// `path` (relative to `repo`) at HEAD; empty for a file HEAD never had.
+    fn git_show(&self, _repo: &str, _path: &str) -> Result<String, FileError> {
+        Err(FileError::new(Code::Unsupported, "git is not available"))
+    }
+
     /// Tells when `path` (a file, or a folder's entries) changes. A local
     /// source does not: its bodies keep their own cheap poll, so the default
     /// is `unsupported`, which is also what an older host's helper answers.
@@ -332,6 +337,10 @@ impl FileSource for LocalSource {
 
     fn git_blame(&self, repo: &str, path: &str) -> Result<Vec<crate::git::BlameLine>, FileError> {
         crate::git::git_blame(repo, path).map_err(|e| git_error(path, e))
+    }
+
+    fn git_show(&self, repo: &str, path: &str) -> Result<String, FileError> {
+        crate::git::git_show_head(repo, path).map_err(|e| git_error(path, e))
     }
 
     fn write(
