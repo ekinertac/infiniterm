@@ -27,6 +27,8 @@ pub enum HostItem {
 }
 
 /// A transfer that ended: the host's paths in the order sent, or why not.
+/// Joining is unix-only, so nothing makes one elsewhere.
+#[cfg(unix)]
 pub struct HostDrop {
     pub card: String,
     pub result: Result<Vec<String>, String>,
