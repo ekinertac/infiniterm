@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-25
 
+- In a joined window (`ift join`) a file dropped on a terminal, or an image pasted with Cmd+V or Ctrl+V, is now sent to the host over the connection the window already has for files, not a new ssh login each time. A folder, a file over 64 MB, or a host with an older `ift` still goes the old way (ssh), so nothing stops working. Where it lands is unchanged: `~/.infiniterm/drops/<id>/` on the host.
+
 - In a joined window (`ift join`) an editor card on a host file now shows the git marks in its gutter (added and changed lines against HEAD), taken from the host's git. A commit on the host shows in the marks within about 10 seconds. A file outside a repository has no marks. The host needs an `ift` with this build; an older one shows no marks, as before.
 - In a joined window (`ift join`) the red line on a card that lost its host connection is now short: "Lost the connection to the host; joining again", with the cause in a smaller line under it (no socket path, no error number). Both lines are cut at the card's edge, not wrapped, and stay clear of the card's label.
 

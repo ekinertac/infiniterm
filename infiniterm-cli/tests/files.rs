@@ -123,3 +123,38 @@ fn a_watch_through_the_real_helper_fires_for_a_folder_and_a_relative_path_is_ref
     // A relative path is refused like any request's, not watched.
     assert_eq!(src.watch("proj").err().unwrap().code, Code::Io);
 }
+
+#[test]
+fn a_send_through_the_real_helper_lands_in_the_hosts_drops_folder() {
+    let work = Scratch::new("files-drop");
+    let server = Scratch::new("files-dsrv");
+    // The host's `$HOME` is the scratch folder: the helper stores under it.
+    let ssh = work.0.join("ssh");
+    std::fs::write(
+        &ssh,
+        format!(
+            "#!/bin/sh\nfor last; do :; done\nHOME='{}' PATH='{}':\"$PATH\" exec sh -c \"$last\"\n",
+            server.0.display(),
+            profile_dir().display()
+        ),
+    )
+    .unwrap();
+    std::process::Command::new("chmod").arg("+x").arg(&ssh).status().unwrap();
+
+    let src = HostSource::new(host(&ssh));
+    let path = src.put_drop("77-0", "shot 1.png", b"\x89PNG bytes").unwrap();
+    assert_eq!(
+        path,
+        server
+            .0
+            .join(".infiniterm/drops/77-0/shot 1.png")
+            .to_string_lossy()
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"\x89PNG bytes");
+    // A second file of the same send lands beside it, over the same connection.
+    let other = src.put_drop("77-0", "b.txt", b"b").unwrap();
+    assert_eq!(
+        std::path::Path::new(&other).parent(),
+        std::path::Path::new(&path).parent()
+    );
+}

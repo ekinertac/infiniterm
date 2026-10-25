@@ -366,6 +366,15 @@ pub enum Request {
     GitHead {
         path: String,
     },
+    /// A file sent from a viewer (#556), its bytes riding the request as `D`
+    /// frames like a `write`'s: stored as `~/.infiniterm/drops/<id>/<name>`
+    /// on the host after old drop folders are tidied. The reply is
+    /// `{ "path" }`. Confined to the drops folder, and the only request that
+    /// makes a folder.
+    PutDrop {
+        id: String,
+        name: String,
+    },
     /// What changed under `path` against HEAD (`git::git_changes`).
     GitChanges {
         path: String,
@@ -394,6 +403,7 @@ impl Request {
             Request::Watch { path } => json!({ "op": "watch", "path": path }),
             Request::Unwatch { watch } => json!({ "op": "unwatch", "watch": watch }),
             Request::GitHead { path } => json!({ "op": "git_head", "path": path }),
+            Request::PutDrop { id, name } => json!({ "op": "put_drop", "id": id, "name": name }),
             Request::GitChanges { path } => json!({ "op": "git_changes", "path": path }),
             Request::GitBlame { repo, path } => {
                 json!({ "op": "git_blame", "repo": repo, "path": path })
@@ -449,6 +459,10 @@ impl Request {
             },
             "git_head" => Request::GitHead {
                 path: need("path")?,
+            },
+            "put_drop" => Request::PutDrop {
+                id: need("id")?,
+                name: need("name")?,
             },
             "git_changes" => Request::GitChanges {
                 path: need("path")?,
@@ -673,6 +687,10 @@ mod tests {
                 path: "/r/a.rs".into(),
             },
             Request::GitChanges { path: "/r".into() },
+            Request::PutDrop {
+                id: "1-0".into(),
+                name: "shot.png".into(),
+            },
             Request::GitBlame {
                 repo: "/r".into(),
                 path: "a.rs".into(),

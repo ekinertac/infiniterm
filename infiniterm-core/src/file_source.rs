@@ -111,7 +111,73 @@ fn git_error(path: &str, message: String) -> FileError {
     FileError::new(code, format!("{path}: {message}"))
 }
 
+/// Where on the host the drops go, relative to its `$HOME` (#556).
+pub const DROPS_DIR: &str = ".infiniterm/drops";
+
+/// How long a drop folder is kept, in days.
+pub const KEEP_DAYS: u32 = 7;
+
+/// A name safe to put in one path component: the last part of the path, with
+/// a slash or a control character turned into `_`, never empty or a dot name.
+pub fn host_name(name: &str) -> String {
+    let base = name.rsplit('/').next().unwrap_or(name);
+    let cleaned: String = base
+        .chars()
+        .map(|c| if c == '/' || c.is_control() { '_' } else { c })
+        .collect();
+    match cleaned.as_str() {
+        "" | "." | ".." => "file".to_string(),
+        _ => cleaned,
+    }
+}
+
+/// Stores `bytes` as `<root>/<id>/<name>` (`id` and `name` made safe path
+/// components), after removing the folders of `root` that are older than
+/// `KEEP_DAYS`: what a send to the host does, in one step, with no shell.
+/// Returns the file's path. Confined to `root`: the host's drops folder is the
+/// only place a send can write.
+pub fn put_drop_in(
+    root: &std::path::Path,
+    id: &str,
+    name: &str,
+    bytes: &[u8],
+) -> Result<String, FileError> {
+    let io = |e: std::io::Error| FileError::from_io(&root.to_string_lossy(), &e);
+    std::fs::create_dir_all(root).map_err(io)?;
+    // Tidied first, as the shell command did: older than a week, by mtime.
+    let cutoff = std::time::Duration::from_secs(u64::from(KEEP_DAYS) * 86_400);
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let old = entry
+                .metadata()
+                .ok()
+                .filter(|m| m.is_dir())
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > cutoff);
+            if old {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    let dir = root.join(host_name(id));
+    std::fs::create_dir_all(&dir).map_err(io)?;
+    let file = dir.join(host_name(name));
+    crate::files::write_bytes_atomically(&file, bytes)
+        .map_err(|e| FileError::from_io(&file.to_string_lossy(), &e))?;
+    Ok(file.to_string_lossy().into_owned())
+}
+
 pub trait FileSource: Send + Sync {
+    /// Stores a sent file in the host's drops folder (`~/.infiniterm/drops/
+    /// <id>/<name>`) and says where (#556). Not every source has one.
+    fn put_drop(&self, _id: &str, _name: &str, _bytes: &[u8]) -> Result<String, FileError> {
+        Err(FileError::new(
+            Code::Unsupported,
+            "sending is not available",
+        ))
+    }
+
     /// The file's text at HEAD with its repository (`not_found` outside one).
     fn git_head(&self, _path: &str) -> Result<GitHead, FileError> {
         Err(FileError::new(Code::Unsupported, "git is not available"))
@@ -307,6 +373,10 @@ impl FileSource for LocalSource {
         Ok(FileData { bytes, mtime_ms })
     }
 
+    fn put_drop(&self, id: &str, name: &str, bytes: &[u8]) -> Result<String, FileError> {
+        put_drop_in(&crate::paths::home_dir().join(DROPS_DIR), id, name, bytes)
+    }
+
     fn git_head(&self, path: &str) -> Result<GitHead, FileError> {
         let full = expand(path)?;
         let repo = crate::git::repo_of(&full).map_err(|e| git_error(path, e))?;
@@ -485,5 +555,41 @@ mod tests {
         let home = LocalSource.home().unwrap();
         assert_eq!(home.home, crate::paths::home_dir().to_string_lossy());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A send stores one file in its own folder of the drops root, whatever
+    // the names say, and tidies the folders older than a week first.
+    #[test]
+    fn a_drop_is_stored_in_its_own_folder_confined_to_the_root_and_old_ones_go() {
+        let root = scratch("drops").join("drops");
+        std::fs::create_dir_all(root.join("ancient")).unwrap();
+        let old = std::process::Command::new("touch")
+            .args(["-t", "202001010000"])
+            .arg(root.join("ancient"))
+            .status()
+            .unwrap();
+        assert!(old.success());
+
+        let a = put_drop_in(&root, "1-0", "shot 1.png", b"one").unwrap();
+        assert_eq!(a, root.join("1-0").join("shot 1.png").to_string_lossy());
+        assert_eq!(std::fs::read(&a).unwrap(), b"one");
+        assert!(!root.join("ancient").exists(), "the old folder was removed");
+
+        // Names that try to leave the folder are made plain.
+        let b = put_drop_in(&root, "../2-0", "../../etc/passwd", b"two").unwrap();
+        assert!(std::path::Path::new(&b).starts_with(&root), "{b}");
+        assert_eq!(std::fs::read(&b).unwrap(), b"two");
+        assert!(
+            root.join("1-0/shot 1.png").exists(),
+            "an earlier send is kept"
+        );
+
+        // A second file with the same id lands beside the first.
+        let c = put_drop_in(&root, "1-0", "other.txt", b"three").unwrap();
+        assert_eq!(
+            std::path::Path::new(&c).parent(),
+            std::path::Path::new(&a).parent()
+        );
+        let _ = std::fs::remove_dir_all(root.parent().unwrap());
     }
 }
