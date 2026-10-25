@@ -37,7 +37,7 @@ use infiniterm_core::file_source::{FileError, FileSource, LocalSource, Watch};
 use infiniterm_core::files::{
     dir_list, draft_delete, draft_read, draft_write, file_mtime, file_read, file_write,
 };
-use infiniterm_core::git::{git_show_head, repo_of};
+use infiniterm_core::git::git_show_head;
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::words::{complete_words, unique_words, Other};
 use infiniterm_editor::buffer::Buffer;
@@ -75,6 +75,12 @@ const STATUS_FIELD_GAP: &str = "   ";
 /// A blink is slower than the terminal's: CodeMirror's 1200 ms period.
 const BLINK_MS: f64 = 600.;
 const DISK_POLL_MS: f64 = 2000.;
+
+/// How often a host file's HEAD is asked for again: a commit is rare and each
+/// ask is a `git show` over the link, so far slower than the disk poll.
+/// shortcut: a commit on the host shows in the gutter within this long; a
+/// watch on the repository's HEAD would make it instant.
+const HOST_GIT_POLL_MS: f64 = 10_000.;
 /// A click this many lines from the caret is a leap worth a Ctrl+- back;
 /// a click within the screenful is just placing the caret.
 const JUMP_CLICK_LINES: usize = 20;
@@ -335,6 +341,8 @@ pub struct EditorBody {
     /// The tree's folders, from `source` (made at the first need, and again
     /// if the source is replaced).
     dirs: Option<HostDirs>,
+    /// The host's answer to a HEAD question, with the path it was for.
+    host_git: Option<Receiver<(String, Option<String>)>>,
     /// A watch on the open host file, with the path it is on; `file_watch_start`
     /// is one being set up on a thread. `file_watch_unsupported`: the host's
     /// helper cannot watch, so the file is polled.
@@ -461,6 +469,7 @@ impl EditorBody {
             host_save: None,
             host_disk: None,
             dirs: None,
+            host_git: None,
             file_watch: None,
             file_watch_start: None,
             file_watch_unsupported: false,
@@ -657,7 +666,12 @@ impl EditorBody {
         // stash elsewhere, not on every keystroke, so it is not worth a
         // shell-out that often either. Same cadence as the disk poll, its
         // own timer so the two do not have to land on the same frame.
-        if now - self.last_git_check >= DISK_POLL_MS {
+        let git_poll = if self.source.is_local() {
+            DISK_POLL_MS
+        } else {
+            HOST_GIT_POLL_MS
+        };
+        if now - self.last_git_check >= git_poll {
             self.last_git_check = now;
             self.refresh_git_head();
             self.dirty = true;
@@ -776,6 +790,9 @@ impl EditorBody {
         if let Some(line) = self.pending_line.take() {
             self.go_to_line(line as usize);
         }
+        // The gutter's HEAD, now that the file is in (a local load does this
+        // at its end).
+        self.refresh_git_head();
         self.dirty = true;
         self.blink_epoch = now;
     }
@@ -1003,6 +1020,22 @@ impl EditorBody {
                     self.finish_save(answer, now);
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => self.host_save = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if let Some(rx) = &self.host_git {
+            match rx.try_recv() {
+                Ok((path, head)) => {
+                    self.host_git = None;
+                    // Not for the file the card shows any more: asked again.
+                    if self.path.as_deref() == Some(path.as_str()) {
+                        self.set_git_head(head);
+                        self.dirty = true;
+                    } else {
+                        self.refresh_git_head();
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.host_git = None,
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
@@ -2685,18 +2718,41 @@ impl EditorBody {
     /// disk poll's cadence, never per keystroke (a shell-out). `None`
     /// outside a repo, or for a picture, where there is no text to gutter.
     fn refresh_git_head(&mut self) {
-        self.git_head = self
+        let Some(path) = self
             .path
-            .as_deref()
-            // A host's file has no gutter yet: `git` here would look at this
-            // Mac's disk (the host's git is a later step of #560).
-            .filter(|_| self.image.is_none() && self.diff.is_none() && self.source.is_local())
-            .and_then(|path| {
-                let repo = repo_of(std::path::Path::new(path)).ok()?;
-                let repo = repo.to_string_lossy();
-                let rel = path.strip_prefix(&format!("{}/", repo.trim_end_matches('/')))?;
-                git_show_head(&repo, rel).ok()
-            });
+            .clone()
+            .filter(|_| self.image.is_none() && self.diff.is_none())
+        else {
+            self.set_git_head(None);
+            return;
+        };
+        if self.source.is_local() {
+            let head = self.source.git_head(&path).ok().map(|h| h.text);
+            self.set_git_head(head);
+            return;
+        }
+        // A host's git is asked on a thread, one question at a time; the
+        // answer is taken in `take_host_answers`.
+        if self.host_git.is_some() {
+            return;
+        }
+        let (tx, rx) = channel();
+        self.host_git = Some(rx);
+        let source = self.source.clone();
+        std::thread::spawn(move || {
+            let head = source.git_head(&path).ok().map(|h| h.text);
+            let _ = tx.send((path, head));
+        });
+    }
+
+    /// Takes HEAD's text, and drops the gutter's cache when it is not the
+    /// text the marks were made from (a commit moves HEAD without touching
+    /// the buffer, so the version the cache is keyed by does not change).
+    fn set_git_head(&mut self, head: Option<String>) {
+        if self.git_head != head {
+            self.git_head = head;
+            self.gutter.0 = u64::MAX;
+        }
     }
 
     /// The gutter's marks for the buffer's current text against the HEAD
@@ -4566,6 +4622,8 @@ mod tests {
         /// Whether `watch` works, and the sender that fires the watch last set.
         can_watch: Mutex<bool>,
         fire: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+        /// The file's text at HEAD, or `None` for a folder outside a repo.
+        head: Mutex<Option<String>>,
     }
 
     impl FakeHost {
@@ -4578,6 +4636,7 @@ mod tests {
                 list_error: Mutex::new(None),
                 can_watch: Mutex::new(false),
                 fire: Mutex::new(None),
+                head: Mutex::new(None),
             })
         }
         fn with_dir(&self, path: &str, entries: &[(&str, bool)]) {
@@ -4629,6 +4688,17 @@ mod tests {
                 .get(path)
                 .cloned()
                 .ok_or_else(|| FileError::new(Code::NotFound, format!("{path}: not found")))
+        }
+        fn git_head(&self, path: &str) -> Result<infiniterm_core::file_source::GitHead, FileError> {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            match self.head.lock().unwrap().clone() {
+                Some(text) => Ok(infiniterm_core::file_source::GitHead {
+                    repo: "/srv".into(),
+                    rel: path.trim_start_matches("/srv/").into(),
+                    text,
+                }),
+                None => Err(FileError::new(Code::NotFound, "not a git repository")),
+            }
         }
         fn watch(&self, _: &str) -> Result<Watch, FileError> {
             if !*self.can_watch.lock().unwrap() {
@@ -4977,6 +5047,39 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(150));
         b.take_host_answers(6.);
         assert_eq!(host.file.lock().unwrap().clone().unwrap().0, "keep me\n");
+    }
+
+    // The gutter on a host's file: HEAD comes from the host's git on a
+    // thread, marks follow it, a commit there moves them at the slower git
+    // poll, and a file outside a repository has no marks.
+    #[test]
+    fn a_host_files_gutter_is_made_from_the_hosts_head_and_follows_a_commit() {
+        let host = FakeHost::with("a\nb\nc\n", 1);
+        *host.head.lock().unwrap() = Some("a\nc\n".into());
+        let mut b = host_body(&host, "/srv/a.txt");
+        settle(&mut b, 1.);
+        idle_until(&mut b, 1., |b| b.git_head.is_some());
+        let (marks, _) = b.gutter_for();
+        assert_eq!(
+            marks.iter().filter(|m| **m == GutterMark::Added).count(),
+            1,
+            "line b is new against HEAD"
+        );
+
+        // The host commits: HEAD now has b. Not asked again before the slow
+        // poll is due, then the marks clear.
+        *host.head.lock().unwrap() = Some("a\nb\nc\n".into());
+        b.idle(HOST_GIT_POLL_MS - 1.);
+        assert_eq!(b.git_head.as_deref(), Some("a\nc\n"));
+        idle_until(&mut b, HOST_GIT_POLL_MS * 3., |b| {
+            b.git_head.as_deref() == Some("a\nb\nc\n")
+        });
+        assert!(b.gutter_for().0.iter().all(|m| *m == GutterMark::Clean));
+
+        // Outside a repository: no HEAD, no marks, nothing said.
+        *host.head.lock().unwrap() = None;
+        idle_until(&mut b, HOST_GIT_POLL_MS * 6., |b| b.git_head.is_none());
+        assert!(b.gutter_for().0.iter().all(|m| *m == GutterMark::Clean));
     }
 
     #[test]
