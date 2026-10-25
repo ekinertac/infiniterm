@@ -360,6 +360,27 @@ pub enum Request {
     Unwatch {
         watch: u32,
     },
+    /// The host's git (#560 step 4): the file's HEAD text. The reply carries
+    /// `{ "repo", "rel" }` and the text as `D` chunks; `not_found` when the
+    /// path is in no repository.
+    GitHead {
+        path: String,
+    },
+    /// What changed under `path` against HEAD (`git::git_changes`).
+    GitChanges {
+        path: String,
+    },
+    /// `rel` (relative to `repo`) at HEAD, as `D` chunks: the diff card's
+    /// "before" side, where the file may be gone from the disk.
+    GitShow {
+        repo: String,
+        path: String,
+    },
+    /// Who last touched each line of `path` in `repo` (`git::git_blame`).
+    GitBlame {
+        repo: String,
+        path: String,
+    },
 }
 
 impl Request {
@@ -378,6 +399,14 @@ impl Request {
             } => json!({ "op": "write", "path": path, "expect_mtime_ms": expect_mtime_ms }),
             Request::Watch { path } => json!({ "op": "watch", "path": path }),
             Request::Unwatch { watch } => json!({ "op": "unwatch", "watch": watch }),
+            Request::GitHead { path } => json!({ "op": "git_head", "path": path }),
+            Request::GitChanges { path } => json!({ "op": "git_changes", "path": path }),
+            Request::GitShow { repo, path } => {
+                json!({ "op": "git_show", "repo": repo, "path": path })
+            }
+            Request::GitBlame { repo, path } => {
+                json!({ "op": "git_blame", "repo": repo, "path": path })
+            }
         }
     }
 
@@ -427,6 +456,20 @@ impl Request {
                     .ok_or_else(|| FileError::new(Code::Io, "unwatch: needs \"watch\""))?
                     as u32,
             },
+            "git_head" => Request::GitHead {
+                path: need("path")?,
+            },
+            "git_changes" => Request::GitChanges {
+                path: need("path")?,
+            },
+            "git_show" => Request::GitShow {
+                repo: need("repo")?,
+                path: need("path")?,
+            },
+            "git_blame" => Request::GitBlame {
+                repo: need("repo")?,
+                path: need("path")?,
+            },
             other => {
                 return Err(FileError::new(
                     Code::Unsupported,
@@ -464,6 +507,77 @@ pub fn check_answer(line: &str) -> Result<(), String> {
             "the host did not answer as ift-files (update infiniterm there): {line:?}"
         )),
     }
+}
+
+/// `git::Changes` as the reply of `git_changes`.
+pub fn changes_to_json(c: &crate::git::Changes) -> Value {
+    json!({
+        "repo": c.repo,
+        "files": c.files.iter().map(|f| json!({
+            "path": f.path, "added": f.added, "removed": f.removed, "status": f.status,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+pub fn changes_from_json(v: &Value) -> crate::git::Changes {
+    // The statuses git.rs makes; any other word reads as "modified" rather
+    // than leaking a string this build did not mean.
+    fn status(s: &str) -> &'static str {
+        match s {
+            "added" => "added",
+            "deleted" => "deleted",
+            "untracked" => "untracked",
+            _ => "modified",
+        }
+    }
+    crate::git::Changes {
+        repo: v.get("repo").and_then(Value::as_str).unwrap_or("").into(),
+        files: v
+            .get("files")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .map(|f| crate::git::ChangedFile {
+                        path: f.get("path").and_then(Value::as_str).unwrap_or("").into(),
+                        added: f.get("added").and_then(Value::as_u64).unwrap_or(0) as u32,
+                        removed: f.get("removed").and_then(Value::as_u64).unwrap_or(0) as u32,
+                        status: status(f.get("status").and_then(Value::as_str).unwrap_or("")),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// `git::BlameLine`s as the reply of `git_blame`.
+pub fn blame_to_json(lines: &[crate::git::BlameLine]) -> Value {
+    json!({
+        "lines": lines.iter().map(|l| json!({
+            "line": l.line, "hash": l.hash, "author": l.author,
+            "time": l.time, "summary": l.summary,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+pub fn blame_from_json(v: &Value) -> Vec<crate::git::BlameLine> {
+    v.get("lines")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|l| crate::git::BlameLine {
+                    line: l.get("line").and_then(Value::as_u64).unwrap_or(0) as u32,
+                    hash: l.get("hash").and_then(Value::as_str).unwrap_or("").into(),
+                    author: l.get("author").and_then(Value::as_str).unwrap_or("").into(),
+                    time: l.get("time").and_then(Value::as_u64).unwrap_or(0),
+                    summary: l
+                        .get("summary")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .into(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -568,6 +682,18 @@ mod tests {
             },
             Request::Watch { path: "/d".into() },
             Request::Unwatch { watch: 9 },
+            Request::GitHead {
+                path: "/r/a.rs".into(),
+            },
+            Request::GitChanges { path: "/r".into() },
+            Request::GitShow {
+                repo: "/r".into(),
+                path: "a.rs".into(),
+            },
+            Request::GitBlame {
+                repo: "/r".into(),
+                path: "a.rs".into(),
+            },
         ] {
             assert_eq!(Request::from_json(&req.to_json()).unwrap(), req);
         }
@@ -575,6 +701,40 @@ mod tests {
         assert_eq!(err.code, Code::Unsupported);
         let err = Request::from_json(&json!({ "op": "stat" })).unwrap_err();
         assert!(err.message.contains("path"));
+    }
+
+    #[test]
+    fn git_answers_round_trip_through_json() {
+        let changes = crate::git::Changes {
+            repo: "/r".into(),
+            files: vec![
+                crate::git::ChangedFile {
+                    path: "a.rs".into(),
+                    added: 3,
+                    removed: 1,
+                    status: "modified",
+                },
+                crate::git::ChangedFile {
+                    path: "n.rs".into(),
+                    added: 9,
+                    removed: 0,
+                    status: "untracked",
+                },
+            ],
+        };
+        assert_eq!(changes_from_json(&changes_to_json(&changes)), changes);
+        // A status word this build does not know reads as modified.
+        let odd = json!({ "repo": "/r", "files": [{ "path": "x", "status": "teleported" }] });
+        assert_eq!(changes_from_json(&odd).files[0].status, "modified");
+
+        let blame = vec![crate::git::BlameLine {
+            line: 2,
+            hash: "abc1234".into(),
+            author: "Ekin".into(),
+            time: 1_700_000_000,
+            summary: "why".into(),
+        }];
+        assert_eq!(blame_from_json(&blame_to_json(&blame)), blame);
     }
 
     #[test]
