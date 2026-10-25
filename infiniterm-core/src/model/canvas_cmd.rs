@@ -94,6 +94,16 @@ impl Model {
     /// right. A file already open on this workspace is reused. Remembered as
     /// a pair so one close closes both and lands back where you were.
     pub fn open_config_pair(&mut self, keybindings: bool) {
+        // In a joined window the settings are the HOST's (#433, #559): its
+        // files, opened as editor cards on its paths. Where they are is the
+        // host's to say, so the first time the app asks.
+        if self.read_only && self.snapshot_seen {
+            match self.host_config_dir.clone() {
+                Some(dir) => self.open_host_config_pair(&dir, keybindings),
+                None => self.effects.push(Effect::AskHostConfig { keybindings }),
+            }
+            return;
+        }
         let (defaults_file, user_file) = if keybindings {
             (ConfigFile::KeybindingsDefault, ConfigFile::Keybindings)
         } else {
@@ -101,6 +111,30 @@ impl Model {
         };
         let defaults_path = config_path(defaults_file).to_string_lossy().into_owned();
         let user_path = config_path(user_file).to_string_lossy().into_owned();
+        self.open_pair(&defaults_path, &user_path);
+    }
+
+    /// The host's config folder is known (the file service's `home`): kept,
+    /// and the pair the command asked for opens.
+    pub fn host_config_known(&mut self, dir: &str, keybindings: bool) {
+        self.host_config_dir = Some(dir.to_string());
+        self.open_host_config_pair(dir, keybindings);
+    }
+
+    fn open_host_config_pair(&mut self, dir: &str, keybindings: bool) {
+        // Joined as text: the host's separator is not this machine's.
+        let join = |name: &str| format!("{}/{name}", dir.trim_end_matches('/'));
+        let (defaults, user) = if keybindings {
+            ("keybindings.default.json", "keybindings.json")
+        } else {
+            ("settings.default.json", "settings.json")
+        };
+        self.open_pair(&join(defaults), &join(user));
+    }
+
+    /// Opens the defaults file and the user's, side by side, as one pair.
+    fn open_pair(&mut self, defaults_path: &str, user_path: &str) {
+        let (defaults_path, user_path) = (defaults_path.to_string(), user_path.to_string());
         let from = self.focused().cloned();
         let return_to = from
             .as_ref()

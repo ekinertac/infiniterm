@@ -343,6 +343,12 @@ pub enum Effect {
         value: Value,
     },
     LoadTheme(String),
+    /// A viewer needs the host's config folder to open its settings (#559):
+    /// the app asks the file service (`home`) and answers with
+    /// `Model::host_config_known`.
+    AskHostConfig {
+        keybindings: bool,
+    },
     RefreshThemes,
     /// Read `ui-themes/<name>.json` and hand its text (`None`: no such file)
     /// to `Model::apply_ui_theme_text`. From `ui.theme` changing and from the
@@ -713,6 +719,9 @@ pub struct Model {
     /// A viewer has applied at least one host snapshot, so its viewport,
     /// zoom, focus and workspace are its own from here on.
     pub snapshot_seen: bool,
+    /// A viewer's host's config folder, once the file service has said where
+    /// it is (#559). The viewer's own is empty and never opened.
+    pub host_config_dir: Option<String>,
     /// A viewer asked its host to open a path (#565): the cards it had then
     /// and when it asked. The first card a snapshot brings that is not in the
     /// list is the one the host made, and the viewer goes to it, as the host
@@ -941,6 +950,7 @@ impl Model {
             read_only: false,
             dirty_layout: false,
             snapshot_seen: false,
+            host_config_dir: None,
             awaiting_open: None,
             layout_rev: 0,
             published: std::collections::VecDeque::new(),
