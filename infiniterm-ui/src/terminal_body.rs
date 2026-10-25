@@ -758,6 +758,53 @@ pub fn rejoin_wait_ms(tries: u32) -> f64 {
     (REJOIN_FIRST_MS * 2f64.powi(tries.min(10) as i32)).min(REJOIN_LONGEST_MS)
 }
 
+/// The cause line of a lost card's banner is this much of the first line's
+/// size, in a duller red than its text.
+const DETAIL_FONT_RATIO: f32 = 0.8;
+const DETAIL_COLOR: u32 = 0xfca5a5;
+
+/// The banner leaves this share of the card's width (at most this many world
+/// px) free at the right, where the card's label chip sits.
+const CHIP_RESERVE_RATIO: f32 = 0.4;
+const CHIP_RESERVE_MAX_PX: f32 = 320.;
+
+/// The first line of a lost card's banner: short and the same every time, so
+/// it never wraps.
+const LOST_NOTE: &str = "Lost the connection to the host; joining again";
+
+/// A failure's text for the banner's second line: no socket path and no
+/// "(os error N)", which say nothing to a reader; "ift: " goes too. What is
+/// left is the sentence ("no running infiniterm to join on this host:
+/// Connection refused"). If trimming leaves nothing, the original is kept.
+pub fn short_cause(why: &str) -> String {
+    let mut out = String::new();
+    let mut rest = why.trim();
+    rest = rest.strip_prefix("ift: ").unwrap_or(rest);
+    // Walk the text, dropping any "(...)" that is a path or an os error.
+    while let Some(open) = rest.find('(') {
+        let (head, tail) = rest.split_at(open);
+        let Some(close) = tail.find(')') else { break };
+        let inner = &tail[1..close];
+        out.push_str(head);
+        if !(inner.contains('/') || inner.starts_with("os error")) {
+            out.push_str(&tail[..=close]);
+        }
+        rest = &tail[close + 1..];
+    }
+    out.push_str(rest);
+    let out = out
+        .replace(" :", ":")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let out = out.trim_matches(|c: char| c == ':' || c.is_whitespace());
+    if out.is_empty() {
+        why.trim().to_string()
+    } else {
+        out.to_string()
+    }
+}
+
 /// A viewer card that lost its session connection (#442).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LostLink {
@@ -768,6 +815,9 @@ pub struct LostLink {
     pub in_flight: bool,
     /// What the card says: the last failure, or that it is joining again.
     pub note: String,
+    /// The technical cause of the last failure, trimmed (`short_cause`), drawn
+    /// smaller under the note. None when the note says it all.
+    pub detail: Option<String>,
     /// The host answered and trying again will not change it (the session is
     /// gone there, a login refused). No more tries until the canvas
     /// reconnects.
@@ -780,7 +830,8 @@ impl LostLink {
             next_at: now + REJOIN_FIRST_MS,
             tries: 0,
             in_flight: false,
-            note: "the connection to the host was lost; joining again".into(),
+            note: LOST_NOTE.into(),
+            detail: None,
             fatal: false,
         }
     }
@@ -811,11 +862,15 @@ impl LostLink {
         self.fatal = fatal;
         self.tries += 1;
         self.next_at = now + rejoin_wait_ms(self.tries);
-        self.note = if fatal {
-            why.to_string()
+        // A final answer is the host's own sentence and is the note; any
+        // other failure keeps the one fixed line and the cause under it.
+        if fatal {
+            self.note = why.to_string();
+            self.detail = None;
         } else {
-            format!("the connection to the host was lost ({why}); joining again")
-        };
+            self.note = LOST_NOTE.to_string();
+            self.detail = Some(short_cause(why)).filter(|d| !d.is_empty());
+        }
     }
 
     /// The canvas is back, so the host is reachable: try now, whatever was
@@ -910,6 +965,7 @@ impl TerminalBody {
             Some(l) => l.note.as_str(),
             None => "attached from outside (ift attach); the card takes the shell back when that terminal detaches",
         };
+        let detail = self.lost.as_ref().and_then(|l| l.detail.as_deref());
         let mut size_px = px((ERROR_FONT_PX * scale) as f32);
         // A lost connection is news: readable on screen at any zoom, as
         // large as the card's width allows (a banner at the card's zoomed
@@ -926,18 +982,53 @@ impl TerminalBody {
         }
         let pad = (size_px * 0.5).max(px((ERROR_PAD_PX * scale) as f32));
         let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
+        // The cause is smaller and under the note.
+        let detail_px = size_px * DETAIL_FONT_RATIO;
+        let detail_h = detail_px * ERROR_LINE_HEIGHT_RATIO as f32;
+        let height = line_h + pad * 2. + if detail.is_some() { detail_h } else { px(0.) };
         window.paint_quad(fill(
-            Bounds::new(bounds.origin, size(bounds.size.width, line_h + pad * 2.)),
+            Bounds::new(bounds.origin, size(bounds.size.width, height)),
             gpui::rgb(back),
         ));
+        // Clear of the card's label chip at the top right, and one line each:
+        // a cut with an ellipsis, never a wrap onto a second row.
+        let chip =
+            (bounds.size.width * CHIP_RESERVE_RATIO).min(px(CHIP_RESERVE_MAX_PX * scale as f32));
+        let room = f32::from((bounds.size.width - pad * 2. - chip).max(px(0.)));
         let f = term_font(&self.font_family);
-        let line = crate::text::shape(window, said, size_px, &f, gpui::rgb(fore).into());
-        let _ = line.paint(
-            point(bounds.origin.x + pad, bounds.origin.y + pad),
+        let paint_line = |text: &str,
+                          px_size: Pixels,
+                          h: Pixels,
+                          y: Pixels,
+                          color: u32,
+                          window: &mut Window,
+                          cx: &mut App| {
+            let text = crate::text::elide(text, room, |t| {
+                f32::from(crate::text::shape(window, t, px_size, &f, gpui::rgb(color).into()).width)
+            });
+            let line = crate::text::shape(window, &text, px_size, &f, gpui::rgb(color).into());
+            let _ = line.paint(point(bounds.origin.x + pad, y), h, window, cx);
+        };
+        paint_line(
+            said,
+            size_px,
             line_h,
+            bounds.origin.y + pad,
+            fore,
             window,
             cx,
         );
+        if let Some(detail) = detail {
+            paint_line(
+                detail,
+                detail_px,
+                detail_h,
+                bounds.origin.y + pad + line_h,
+                DETAIL_COLOR,
+                window,
+                cx,
+            );
+        }
     }
 }
 
@@ -2050,15 +2141,40 @@ mod tests {
         l.in_flight = true;
         assert!(!l.due(9000.), "one try at a time");
         l.failed(5000., "Connection refused", false);
-        assert!(l.note.contains("Connection refused"));
+        assert_eq!(l.note, "Lost the connection to the host; joining again");
+        assert_eq!(l.detail.as_deref(), Some("Connection refused"));
         assert!(!l.due(5000.) && l.due(5000. + rejoin_wait_ms(1)));
         // The host said the session is gone: no more tries on its own...
         l.failed(6000., "no session s1 on this host", true);
         assert_eq!(l.note, "no session s1 on this host");
+        assert_eq!(l.detail, None, "a final answer is the note itself");
         assert!(!l.due(1e9));
         // ...until the canvas connection comes back: then at once.
         l.poke(7000.);
         assert!(l.due(7000.) && l.tries == 0 && !l.fatal);
+    }
+
+    // The cause under the banner has no socket path and no os error number.
+    #[test]
+    fn the_banner_cause_drops_paths_and_os_error_numbers() {
+        assert_eq!(
+            short_cause(
+                "ift: no running infiniterm to join on this host (/Users/x/.local/share/infiniterm/j.sock): Connection refused (os error 61)"
+            ),
+            "no running infiniterm to join on this host: Connection refused"
+        );
+        assert_eq!(short_cause("Connection refused"), "Connection refused");
+        // Parentheses that are not a path or an os error stay.
+        assert_eq!(
+            short_cause("host key changed (see ssh)"),
+            "host key changed (see ssh)"
+        );
+        // Nothing left after trimming: the original text is kept.
+        assert_eq!(short_cause("(os error 61)"), "(os error 61)");
+        // A failure with no text has no second line.
+        let mut l = LostLink::new(0.);
+        l.failed(1., "", false);
+        assert_eq!(l.detail, None);
     }
 
     #[test]
