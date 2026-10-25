@@ -153,7 +153,10 @@ mod tests {
     #[test]
     fn a_picture_the_host_does_not_have_is_an_error_and_leaves_nothing() {
         let cache = scratch("none");
-        let err = fetch(&LocalSource, &cache, "/no/such/pic.jpg").unwrap_err();
+        // Absolute and missing on every OS (a bare "/no/such" is not absolute
+        // on Windows, which LocalSource refuses before looking).
+        let missing = cache.join("none.jpg").to_string_lossy().into_owned();
+        let err = fetch(&LocalSource, &cache, &missing).unwrap_err();
         assert_eq!(err.code, Code::NotFound);
         assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&cache);
