@@ -27,6 +27,8 @@ pub enum HostItem {
 }
 
 /// A transfer that ended: the host's paths in the order sent, or why not.
+/// Joining is unix-only, so nothing makes one elsewhere.
+#[cfg(unix)]
 pub struct HostDrop {
     pub card: String,
     pub result: Result<Vec<String>, String>,
@@ -1042,17 +1044,22 @@ impl AppView {
             1 => "sending 1 item to the host...".to_string(),
             n => format!("sending {n} items to the host..."),
         });
+        // Sent over the file connection (one request each, no login of its
+        // own); a folder, a file too big for it or an older host go over ssh.
+        let source = self.file_source();
         let (tx, card) = (self.host_drops.0.clone(), card.to_string());
         std::thread::spawn(move || {
-            use infiniterm_core::backend::host_drop::{new_id, send_image, send_path};
+            use infiniterm_core::backend::host_drop::{new_id, send_image_via, send_path_via};
             // One folder on the host for the whole drop.
             let id = new_id();
             let mut paths = Vec::new();
             let mut failure = None;
             for item in &items {
                 let sent = match item {
-                    HostItem::Path(p) => send_path(&host, p, &id),
-                    HostItem::Image { ext, bytes } => send_image(&host, bytes, ext, &id),
+                    HostItem::Path(p) => send_path_via(&*source, &host, p, &id),
+                    HostItem::Image { ext, bytes } => {
+                        send_image_via(&*source, &host, bytes, ext, &id)
+                    }
                 };
                 match sent {
                     Ok(p) => paths.push(p),
