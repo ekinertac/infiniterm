@@ -162,6 +162,25 @@ fn answer<W: Write + Send + 'static>(
                 start_watch(out, watches, id, full.to_string_lossy().into_owned());
                 Ok((json!({ "watch": id }), vec![]))
             }
+            Request::GitHead { path } => {
+                let head = source.git_head(&path)?;
+                Ok((
+                    json!({ "repo": head.repo, "rel": head.rel }),
+                    head.text.into_bytes(),
+                ))
+            }
+            Request::GitChanges { path } => {
+                let changes = source.git_changes(&path)?;
+                Ok((crate::file_proto::changes_to_json(&changes), vec![]))
+            }
+            Request::GitShow { repo, path } => {
+                let text = source.git_show(&repo, &path)?;
+                Ok((json!({}), text.into_bytes()))
+            }
+            Request::GitBlame { repo, path } => {
+                let lines = source.git_blame(&repo, &path)?;
+                Ok((crate::file_proto::blame_to_json(&lines), vec![]))
+            }
             Request::Unwatch { watch } => {
                 if let Some(stop) = watches.lock().unwrap().remove(&watch) {
                     stop.store(true, Ordering::SeqCst);

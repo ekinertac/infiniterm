@@ -88,7 +88,50 @@ impl Drop for Watch {
     }
 }
 
+/// A file's place in its git repository and its text at HEAD, for the
+/// editor's gutter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitHead {
+    /// The repository root, absolute.
+    pub repo: String,
+    /// The file relative to it, with `/` whatever the host's separator.
+    pub rel: String,
+    /// The file at HEAD; empty for one HEAD did not have.
+    pub text: String,
+}
+
+/// A git failure as a file error: "not a git repository" is the one answer a
+/// card acts on (no gutter), anything else is the OS-level `io`.
+fn git_error(path: &str, message: String) -> FileError {
+    let code = if message.contains("not a git repository") {
+        Code::NotFound
+    } else {
+        Code::Io
+    };
+    FileError::new(code, format!("{path}: {message}"))
+}
+
 pub trait FileSource: Send + Sync {
+    /// The file's text at HEAD with its repository (`not_found` outside one).
+    fn git_head(&self, _path: &str) -> Result<GitHead, FileError> {
+        Err(FileError::new(Code::Unsupported, "git is not available"))
+    }
+
+    /// What changed under `path` against HEAD.
+    fn git_changes(&self, _path: &str) -> Result<crate::git::Changes, FileError> {
+        Err(FileError::new(Code::Unsupported, "git is not available"))
+    }
+
+    /// Who last touched each line of `path` (relative to `repo`).
+    fn git_blame(&self, _repo: &str, _path: &str) -> Result<Vec<crate::git::BlameLine>, FileError> {
+        Err(FileError::new(Code::Unsupported, "git is not available"))
+    }
+
+    /// `path` (relative to `repo`) at HEAD; empty for a file HEAD never had.
+    fn git_show(&self, _repo: &str, _path: &str) -> Result<String, FileError> {
+        Err(FileError::new(Code::Unsupported, "git is not available"))
+    }
+
     /// Tells when `path` (a file, or a folder's entries) changes. A local
     /// source does not: its bodies keep their own cheap poll, so the default
     /// is `unsupported`, which is also what an older host's helper answers.
@@ -267,6 +310,37 @@ impl FileSource for LocalSource {
     fn read(&self, path: &str) -> Result<FileData, FileError> {
         let (bytes, _size, mtime_ms) = self.read_range(path, 0, None)?;
         Ok(FileData { bytes, mtime_ms })
+    }
+
+    fn git_head(&self, path: &str) -> Result<GitHead, FileError> {
+        let full = expand(path)?;
+        let repo = crate::git::repo_of(&full).map_err(|e| git_error(path, e))?;
+        let repo = repo.to_string_lossy().into_owned();
+        // As paths, not text: on Windows git's root has forward slashes and
+        // the file's path has backslashes.
+        // git names the root with symlinks resolved (/private/var for
+        // /var on a Mac), the path asked about may not have them resolved.
+        let under = |p: &std::path::Path| p.strip_prefix(&repo).map(|r| r.to_path_buf()).ok();
+        let rel = under(&full)
+            .or_else(|| std::fs::canonicalize(&full).ok().and_then(|c| under(&c)))
+            .ok_or_else(|| FileError::new(Code::NotFound, format!("{path}: not inside {repo}")))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let text = crate::git::git_show_head(&repo, &rel).map_err(|e| git_error(path, e))?;
+        Ok(GitHead { repo, rel, text })
+    }
+
+    fn git_changes(&self, path: &str) -> Result<crate::git::Changes, FileError> {
+        let full = expand(path)?;
+        crate::git::git_changes(&full.to_string_lossy()).map_err(|e| git_error(path, e))
+    }
+
+    fn git_blame(&self, repo: &str, path: &str) -> Result<Vec<crate::git::BlameLine>, FileError> {
+        crate::git::git_blame(repo, path).map_err(|e| git_error(path, e))
+    }
+
+    fn git_show(&self, repo: &str, path: &str) -> Result<String, FileError> {
+        crate::git::git_show_head(repo, path).map_err(|e| git_error(path, e))
     }
 
     fn write(

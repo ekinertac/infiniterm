@@ -31,7 +31,7 @@ use super::remote::{connect_files, RemoteHost};
 use crate::file_proto::{
     Code, EntryKind, FileError, Frame, FrameReader, Kind, ListEntry, Request, Stat, CHUNK,
 };
-use crate::file_source::{FileData, FileSource, HostPaths, Watch};
+use crate::file_source::{FileData, FileSource, GitHead, HostPaths, Watch};
 
 /// How long a request waits for its reply before it is given up on. Generous:
 /// a big read over a slow link is not a failure.
@@ -340,6 +340,36 @@ impl FileSource for HostSource {
                 }
             }),
         ))
+    }
+
+    fn git_head(&self, path: &str) -> Result<GitHead, FileError> {
+        let (v, bytes) = self.call(&Request::GitHead { path: path.into() })?;
+        Ok(GitHead {
+            repo: str_of(&v, "repo"),
+            rel: str_of(&v, "rel"),
+            text: String::from_utf8_lossy(&bytes).into_owned(),
+        })
+    }
+
+    fn git_changes(&self, path: &str) -> Result<crate::git::Changes, FileError> {
+        let (v, _) = self.call(&Request::GitChanges { path: path.into() })?;
+        Ok(crate::file_proto::changes_from_json(&v))
+    }
+
+    fn git_show(&self, repo: &str, path: &str) -> Result<String, FileError> {
+        let (_, bytes) = self.call(&Request::GitShow {
+            repo: repo.into(),
+            path: path.into(),
+        })?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn git_blame(&self, repo: &str, path: &str) -> Result<Vec<crate::git::BlameLine>, FileError> {
+        let (v, _) = self.call(&Request::GitBlame {
+            repo: repo.into(),
+            path: path.into(),
+        })?;
+        Ok(crate::file_proto::blame_from_json(&v))
     }
 
     fn stat(&self, path: &str) -> Result<Stat, FileError> {
@@ -736,6 +766,99 @@ mod tests {
         assert!(kept.poll().closed);
         // Watching again goes through a new connection.
         assert!(src.watch(&file).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A repository with one commit holding `a.txt` ("one\ntwo\n"), in a
+    /// scratch folder.
+    fn repo(name: &str) -> std::path::PathBuf {
+        let dir = scratch(name);
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        git(&["add", "a.txt"]);
+        git(&["commit", "-q", "-m", "first"]);
+        dir
+    }
+
+    #[test]
+    fn the_hosts_git_answers_head_changes_and_blame_and_says_when_there_is_no_repository() {
+        let dir = repo("git");
+        let a = dir.join("a.txt").to_string_lossy().into_owned();
+        let src = served("h");
+
+        let head = src.git_head(&a).unwrap();
+        assert_eq!(head.text, "one\ntwo\n");
+        assert_eq!(head.rel, "a.txt");
+        assert_eq!(
+            std::fs::canonicalize(&head.repo).unwrap(),
+            std::fs::canonicalize(&dir).unwrap()
+        );
+
+        // A change in the working tree and a file git has not seen.
+        std::fs::write(dir.join("a.txt"), "one\nTWO\nthree\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "x\n").unwrap();
+        let changes = src.git_changes(&dir.to_string_lossy()).unwrap();
+        let files: Vec<_> = changes
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.added, f.removed, f.status))
+            .collect();
+        assert_eq!(
+            files,
+            vec![("a.txt", 2, 1, "modified"), ("new.txt", 1, 0, "untracked")]
+        );
+
+        // HEAD's side of a file, by repo and relative name (the diff card's).
+        assert_eq!(src.git_show(&head.repo, "a.txt").unwrap(), "one\ntwo\n");
+        assert_eq!(src.git_show(&head.repo, "new.txt").unwrap(), "");
+        let lines = src.git_blame(&head.repo, "a.txt").unwrap();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].summary, "first");
+        assert_eq!(lines[1].hash, "0000000", "an edited line is not committed");
+
+        // A file HEAD did not have: the whole file is new, text empty.
+        let new = src
+            .git_head(&dir.join("new.txt").to_string_lossy())
+            .unwrap();
+        assert_eq!(new.text, "");
+
+        // Outside any repository: not_found, the one answer a card acts on.
+        let plain = scratch("git-none");
+        let err = src
+            .git_head(&plain.join("a.txt").to_string_lossy())
+            .unwrap_err();
+        assert_eq!(err.code, Code::NotFound, "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&plain);
+    }
+
+    #[test]
+    fn a_local_source_answers_git_the_same_way() {
+        let dir = repo("git-local");
+        let a = dir.join("a.txt").to_string_lossy().into_owned();
+        let local = crate::file_source::LocalSource;
+        let head = local.git_head(&a).unwrap();
+        assert_eq!(
+            (head.rel.as_str(), head.text.as_str()),
+            ("a.txt", "one\ntwo\n")
+        );
+        assert!(local
+            .git_changes(&dir.to_string_lossy())
+            .unwrap()
+            .files
+            .is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

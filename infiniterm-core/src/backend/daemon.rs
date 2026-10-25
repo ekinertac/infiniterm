@@ -1175,7 +1175,11 @@ mod viewer_tests {
     use std::time::Duration;
 
     fn frames_until_quiet(mut far: UnixStream, wait: Duration) -> Vec<Frame> {
-        far.set_read_timeout(Some(wait)).unwrap();
+        // A backend that has already let go of its end (a redraw does) leaves
+        // a socket macOS refuses the option on (EINVAL, "peer gone"); the
+        // read below then ends at once with what was sent, which is the
+        // answer wanted, so the error is no failure. Seen in a busy full run.
+        let _ = far.set_read_timeout(Some(wait));
         let mut reader = FrameReader::default();
         let mut frames = Vec::new();
         let mut buf = [0u8; 4096];
