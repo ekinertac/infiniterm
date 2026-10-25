@@ -360,6 +360,10 @@ mod tests {
     // In a joined window the list's files are the host's: a bundled name is
     // this app's, the rest are fetched to the cache, and the picture list
     // gains each as it arrives; one that cannot be had is not waited for.
+    // Unix only: a host path is always posix (`/...`), and this test stands a
+    // folder of this machine in for the host, so its paths are the machine's;
+    // joining is unix-only (`docs/windows-handoff.md`).
+    #[cfg(unix)]
     #[test]
     fn a_viewers_background_list_fetches_the_hosts_files_and_keeps_bundled_names() {
         let host_home = scratch("home");
