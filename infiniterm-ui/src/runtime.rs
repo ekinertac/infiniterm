@@ -27,6 +27,8 @@ pub enum HostItem {
 }
 
 /// A transfer that ended: the host's paths in the order sent, or why not.
+/// Joining is unix-only, so nothing makes one elsewhere.
+#[cfg(unix)]
 pub struct HostDrop {
     pub card: String,
     pub result: Result<Vec<String>, String>,
@@ -96,6 +98,8 @@ impl AppView {
             join_updates: None,
             #[cfg(unix)]
             host_files: None,
+            #[cfg(unix)]
+            host_config: None,
             #[cfg(unix)]
             join_opens: None,
             #[cfg(unix)]
@@ -538,6 +542,7 @@ impl AppView {
                     self.model.ui_theme_names = infiniterm_core::config_files::list_ui_themes();
                 }
                 Effect::LoadTheme(name) => self.load_theme(&name),
+                Effect::AskHostConfig { keybindings } => self.ask_host_config(keybindings),
                 Effect::RefreshThemes => self.refresh_themes(),
                 Effect::RefreshSnippets => self.refresh_snippets(),
                 Effect::PasteText { card_id, text } => self.paste_text(&card_id, &text),
@@ -1039,17 +1044,22 @@ impl AppView {
             1 => "sending 1 item to the host...".to_string(),
             n => format!("sending {n} items to the host..."),
         });
+        // Sent over the file connection (one request each, no login of its
+        // own); a folder, a file too big for it or an older host go over ssh.
+        let source = self.file_source();
         let (tx, card) = (self.host_drops.0.clone(), card.to_string());
         std::thread::spawn(move || {
-            use infiniterm_core::backend::host_drop::{new_id, send_image, send_path};
+            use infiniterm_core::backend::host_drop::{new_id, send_image_via, send_path_via};
             // One folder on the host for the whole drop.
             let id = new_id();
             let mut paths = Vec::new();
             let mut failure = None;
             for item in &items {
                 let sent = match item {
-                    HostItem::Path(p) => send_path(&host, p, &id),
-                    HostItem::Image { ext, bytes } => send_image(&host, bytes, ext, &id),
+                    HostItem::Path(p) => send_path_via(&*source, &host, p, &id),
+                    HostItem::Image { ext, bytes } => {
+                        send_image_via(&*source, &host, bytes, ext, &id)
+                    }
                 };
                 match sent {
                     Ok(p) => paths.push(p),
@@ -1259,8 +1269,59 @@ impl AppView {
     #[cfg(windows)]
     pub fn drain_canvas(&mut self) {}
 
+    /// A viewer's open-settings needs the host's config folder: asked of the
+    /// file service on a thread (`home`), answered in `drain_canvas`.
+    #[cfg(windows)]
+    pub fn ask_host_config(&mut self, _keybindings: bool) {}
+
+    #[cfg(unix)]
+    pub fn ask_host_config(&mut self, keybindings: bool) {
+        let source = self.file_source();
+        if source.is_local() {
+            self.model.notify("this window has no host to ask");
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.host_config = Some(rx);
+        std::thread::spawn(move || {
+            let answer = source
+                .home()
+                .map(|h| h.config_dir)
+                .map_err(|e| e.to_string());
+            let _ = tx.send((keybindings, answer));
+        });
+        self.model
+            .notify("asking the host where its settings are...");
+    }
+
     #[cfg(unix)]
     pub fn drain_canvas(&mut self) {
+        self.take_host_config();
+        self.drain_canvas_events();
+    }
+
+    /// The host said where its config folder is (or could not): the settings
+    /// the command asked for open there.
+    #[cfg(unix)]
+    fn take_host_config(&mut self) {
+        let Some(rx) = &self.host_config else {
+            return;
+        };
+        let Ok((keybindings, answer)) = rx.try_recv() else {
+            return;
+        };
+        self.host_config = None;
+        match answer {
+            Ok(dir) => self.model.host_config_known(&dir, keybindings),
+            Err(why) => self
+                .model
+                .notify(format!("could not ask the host for its settings: {why}")),
+        }
+        self.redraw = true;
+    }
+
+    #[cfg(unix)]
+    fn drain_canvas_events(&mut self) {
         use infiniterm_core::backend::join_client::CanvasEvent;
         let Some(rx) = &self.canvas_rx else {
             return;

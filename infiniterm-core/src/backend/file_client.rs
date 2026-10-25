@@ -342,6 +342,23 @@ impl FileSource for HostSource {
         ))
     }
 
+    fn put_drop(&self, id: &str, name: &str, bytes: &[u8]) -> Result<String, FileError> {
+        if bytes.len() as u64 > crate::file_source::MAX_READ {
+            return Err(FileError::new(
+                Code::TooLarge,
+                format!("{name}: {} bytes is more than one send holds", bytes.len()),
+            ));
+        }
+        let (v, _) = self.call_with_body(
+            &Request::PutDrop {
+                id: id.into(),
+                name: name.into(),
+            },
+            bytes,
+        )?;
+        Ok(str_of(&v, "path"))
+    }
+
     fn git_head(&self, path: &str) -> Result<GitHead, FileError> {
         let (v, bytes) = self.call(&Request::GitHead { path: path.into() })?;
         Ok(GitHead {

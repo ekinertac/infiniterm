@@ -331,6 +331,11 @@ pub struct AppView {
     /// card that needs them.
     #[cfg(unix)]
     pub host_files: Option<std::sync::Arc<dyn infiniterm_core::file_source::FileSource>>,
+    /// The host's answer to "where is your config folder" for a viewer's
+    /// open-settings command (#559): whether it was for the keybindings, and
+    /// the folder or why not.
+    #[cfg(unix)]
+    pub host_config: Option<std::sync::mpsc::Receiver<(bool, Result<String, String>)>>,
     /// A viewer's edits and clicks on their way up to the host (viewer side).
     #[cfg(unix)]
     pub uplink: Option<std::sync::mpsc::Sender<infiniterm_core::backend::join_client::Uplink>>,

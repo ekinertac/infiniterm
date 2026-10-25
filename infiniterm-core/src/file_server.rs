@@ -169,6 +169,10 @@ fn answer<W: Write + Send + 'static>(
                     head.text.into_bytes(),
                 ))
             }
+            Request::PutDrop { id, name } => {
+                let path = source.put_drop(&id, &name, &body)?;
+                Ok((json!({ "path": path }), vec![]))
+            }
             Request::GitChanges { path } => {
                 let changes = source.git_changes(&path)?;
                 Ok((crate::file_proto::changes_to_json(&changes), vec![]))

@@ -21,24 +21,64 @@ use std::path::Path;
 
 use super::remote::{run_on_stdin, RemoteHost};
 use crate::drop::posix_quote as shell_quote;
+use crate::file_source::{Code, FileError, FileSource};
 
-/// Where on the host the drops go, relative to its `$HOME`.
-pub const DROPS_DIR: &str = ".infiniterm/drops";
+// Shared with the host's file service, which does the same storing for a send
+// over the file connection (`FileSource::put_drop`).
+pub use crate::file_source::{host_name, DROPS_DIR, KEEP_DAYS};
 
-/// How long a drop folder is kept, in days.
-pub const KEEP_DAYS: u32 = 7;
+/// The biggest file sent over the file connection: it goes whole in one
+/// request and sits in memory at both ends. A bigger one keeps using ssh and
+/// `cat`, which stream.
+pub const SERVICE_MAX: u64 = 64 * 1024 * 1024;
 
-/// A name safe to put in one path component: the last part of the path, with
-/// a slash or a control character turned into `_`, never empty or a dot name.
-pub fn host_name(name: &str) -> String {
-    let base = name.rsplit('/').next().unwrap_or(name);
-    let cleaned: String = base
-        .chars()
-        .map(|c| if c == '/' || c.is_control() { '_' } else { c })
-        .collect();
-    match cleaned.as_str() {
-        "" | "." | ".." => "file".to_string(),
-        _ => cleaned,
+/// Whether a failed send over the file connection should be tried over ssh
+/// instead: the host's `ift` does not know the request, the connection could
+/// not be made, or the file is too big for it. Any other failure is real.
+fn try_ssh_instead(e: &FileError) -> bool {
+    matches!(e.code, Code::Unsupported | Code::Lost | Code::TooLarge)
+}
+
+/// `send_path` over the host's file connection when it will take the file
+/// (one request, no new login); over ssh when it will not, and for a folder
+/// (a tar keeps its links and modes).
+pub fn send_path_via(
+    source: &dyn FileSource,
+    host: &RemoteHost,
+    local: &Path,
+    id: &str,
+) -> Result<String, String> {
+    let small = std::fs::metadata(local).is_ok_and(|m| m.is_file() && m.len() <= SERVICE_MAX);
+    if small {
+        let name = host_name(
+            &local
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
+        let bytes = std::fs::read(local).map_err(|e| format!("could not read {name}: {e}"))?;
+        match source.put_drop(id, &name, &bytes) {
+            Ok(path) => return Ok(path),
+            Err(e) if try_ssh_instead(&e) => {}
+            Err(e) => return Err(format!("could not send {name} to the host: {e}")),
+        }
+    }
+    send_path(host, local, id)
+}
+
+/// `send_image` over the file connection, with the same fallback.
+pub fn send_image_via(
+    source: &dyn FileSource,
+    host: &RemoteHost,
+    bytes: &[u8],
+    ext: &str,
+    id: &str,
+) -> Result<String, String> {
+    let name = format!("clipboard.{}", host_name(ext));
+    match source.put_drop(id, &name, bytes) {
+        Ok(path) => Ok(path),
+        Err(e) if try_ssh_instead(&e) => send_image(host, bytes, ext, id),
+        Err(e) => Err(format!("could not send the image to the host: {e}")),
     }
 }
 
@@ -144,6 +184,133 @@ pub fn new_id() -> String {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    use crate::file_source::{EntryKind, FileData, HostPaths, ListEntry, Stat};
+    use std::sync::Mutex;
+
+    /// A file connection whose answer to a send the test chooses; it records
+    /// what was sent.
+    struct Connection {
+        answer: Mutex<Result<String, FileError>>,
+        sent: Mutex<Vec<(String, String, usize)>>,
+    }
+
+    impl Connection {
+        fn new(answer: Result<String, FileError>) -> Connection {
+            Connection {
+                answer: Mutex::new(answer),
+                sent: Mutex::new(vec![]),
+            }
+        }
+    }
+
+    impl FileSource for Connection {
+        fn is_local(&self) -> bool {
+            false
+        }
+        fn put_drop(&self, id: &str, name: &str, bytes: &[u8]) -> Result<String, FileError> {
+            self.sent
+                .lock()
+                .unwrap()
+                .push((id.into(), name.into(), bytes.len()));
+            self.answer.lock().unwrap().clone()
+        }
+        fn home(&self) -> Result<HostPaths, FileError> {
+            unreachable!()
+        }
+        fn stat(&self, _: &str) -> Result<Stat, FileError> {
+            unreachable!()
+        }
+        fn exists(&self, _: &[String]) -> Result<Vec<Option<EntryKind>>, FileError> {
+            unreachable!()
+        }
+        fn list(&self, _: &str) -> Result<Vec<ListEntry>, FileError> {
+            unreachable!()
+        }
+        fn read(&self, _: &str) -> Result<FileData, FileError> {
+            unreachable!()
+        }
+        fn write(&self, _: &str, _: &[u8], _: Option<u64>) -> Result<Option<u64>, FileError> {
+            unreachable!()
+        }
+    }
+
+    /// An ssh that cannot be run: a send that reaches it is a send that did
+    /// not use the file connection.
+    fn no_ssh() -> RemoteHost {
+        let mut host = RemoteHost::new("h");
+        host.ssh = "/nonexistent/ssh".into();
+        host
+    }
+
+    // A file and a pasted image go over the file connection when it takes
+    // them: one request each, the host's answer is the path, and no ssh runs.
+    #[test]
+    fn a_file_and_an_image_go_over_the_file_connection_with_no_ssh() {
+        let dir = std::env::temp_dir().join(format!("hd-{}-via", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let local = dir.join("it's a shot.png");
+        std::fs::write(&local, b"12345").unwrap();
+        let conn = Connection::new(Ok("/host/drops/1-0/x".into()));
+
+        assert_eq!(
+            send_path_via(&conn, &no_ssh(), &local, "1-0").unwrap(),
+            "/host/drops/1-0/x"
+        );
+        assert_eq!(
+            send_image_via(&conn, &no_ssh(), b"png", "png", "1-0").unwrap(),
+            "/host/drops/1-0/x"
+        );
+        assert_eq!(
+            *conn.sent.lock().unwrap(),
+            vec![
+                ("1-0".to_string(), "it's a shot.png".to_string(), 5),
+                ("1-0".to_string(), "clipboard.png".to_string(), 3),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A host whose ift does not know the request, or no connection, or a file
+    // too big for one request: ssh does it as before. A real refusal is not
+    // retried over ssh, which would hide it.
+    #[test]
+    fn the_old_ssh_way_is_the_fallback_and_a_real_failure_is_not_hidden() {
+        let (host, dir) = stand_in("via-fallback");
+        let local = dir.join("a.txt");
+        std::fs::write(&local, b"by ssh").unwrap();
+        for code in [Code::Unsupported, Code::Lost, Code::TooLarge] {
+            let conn = Connection::new(Err(FileError::new(code, "no")));
+            let path = send_path_via(&conn, &host, &local, &new_id()).unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), b"by ssh", "{code:?}");
+            let image = send_image_via(&conn, &host, b"img", "png", &new_id()).unwrap();
+            assert_eq!(std::fs::read(&image).unwrap(), b"img", "{code:?}");
+        }
+
+        let refused = Connection::new(Err(FileError::new(Code::Denied, "permission denied")));
+        let err = send_path_via(&refused, &no_ssh(), &local, "1-0").unwrap_err();
+        assert!(
+            err.contains("a.txt") && err.contains("permission denied"),
+            "{err}"
+        );
+        let err = send_image_via(&refused, &no_ssh(), b"x", "png", "1-0").unwrap_err();
+        assert!(err.contains("permission denied"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A folder is a tar over ssh (links and modes survive), never a request.
+    #[test]
+    fn a_folder_is_sent_over_ssh_not_the_file_connection() {
+        let (host, dir) = stand_in("via-folder");
+        let local = dir.join("project");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::write(local.join("a.rs"), "fn a() {}").unwrap();
+        let conn = Connection::new(Ok("/should/not/be/used".into()));
+        let path = send_path_via(&conn, &host, &local, &new_id()).unwrap();
+        assert!(path.ends_with("/project"), "{path}");
+        assert!(conn.sent.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_name_is_one_safe_path_component() {
