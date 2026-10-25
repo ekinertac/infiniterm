@@ -379,6 +379,12 @@ pub enum Request {
     GitChanges {
         path: String,
     },
+    /// `rel` (relative to `repo`) at HEAD, as `D` chunks: the diff card's
+    /// "before" side, where the file may be gone from the disk.
+    GitShow {
+        repo: String,
+        path: String,
+    },
     /// Who last touched each line of `path` in `repo` (`git::git_blame`).
     GitBlame {
         repo: String,
@@ -405,6 +411,9 @@ impl Request {
             Request::GitHead { path } => json!({ "op": "git_head", "path": path }),
             Request::PutDrop { id, name } => json!({ "op": "put_drop", "id": id, "name": name }),
             Request::GitChanges { path } => json!({ "op": "git_changes", "path": path }),
+            Request::GitShow { repo, path } => {
+                json!({ "op": "git_show", "repo": repo, "path": path })
+            }
             Request::GitBlame { repo, path } => {
                 json!({ "op": "git_blame", "repo": repo, "path": path })
             }
@@ -465,6 +474,10 @@ impl Request {
                 name: need("name")?,
             },
             "git_changes" => Request::GitChanges {
+                path: need("path")?,
+            },
+            "git_show" => Request::GitShow {
+                repo: need("repo")?,
                 path: need("path")?,
             },
             "git_blame" => Request::GitBlame {
@@ -690,6 +703,10 @@ mod tests {
             Request::PutDrop {
                 id: "1-0".into(),
                 name: "shot.png".into(),
+            },
+            Request::GitShow {
+                repo: "/r".into(),
+                path: "a.rs".into(),
             },
             Request::GitBlame {
                 repo: "/r".into(),

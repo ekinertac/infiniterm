@@ -24,6 +24,7 @@ use super::*;
 use infiniterm_core::blame::{blame_text, BlameLine};
 use infiniterm_core::git::{git_blame, git_changes, ChangedFile};
 use infiniterm_editor::diff::{merged, merged_spans, DiffLine, LineKind};
+use std::sync::mpsc::Sender;
 
 /// An added/removed line's background wash: a hint of colour, not a block.
 const DIFF_WASH_ALPHA: f32 = 0.18;
@@ -64,7 +65,30 @@ pub(super) struct DiffView {
     /// The shown file's modification time at the last load, for the poll.
     stamp: Option<u64>,
     last_check: f64,
+    /// What a host's threads found: they send, `diff_take_answers` takes.
+    /// Unused on this machine's own disk, where every step is immediate.
+    answers: (Sender<DiffAnswer>, Receiver<DiffAnswer>),
+    /// A new card's target file and list flag, waiting for the host's first
+    /// list (`diff_start`).
+    start: Option<(Option<String>, bool)>,
 }
+
+/// What a host answered a diff card, from the thread that asked.
+enum DiffAnswer {
+    Changes(Result<infiniterm_core::git::Changes, String>),
+    Shown {
+        rel: String,
+        original: String,
+        current: String,
+        stamp: Option<u64>,
+    },
+    Blame(Vec<infiniterm_core::git::BlameLine>),
+    /// The shown file's mtime now (`None` when it could not be had).
+    Stamp(Option<u64>),
+}
+
+/// What a host diff card says until its first list arrives.
+const HOST_LOADING: &str = "Loading from the host...";
 
 impl DiffView {
     fn new(root: &str) -> DiffView {
@@ -81,6 +105,8 @@ impl DiffView {
             blame: vec![],
             stamp: None,
             last_check: 0.,
+            answers: channel(),
+            start: None,
         }
     }
 
@@ -150,15 +176,45 @@ impl EditorBody {
         self.diff.is_some()
     }
 
+    /// The file on show and the kind of each line of the merged text, for
+    /// the tests (the fields are the mode's own).
+    #[cfg(test)]
+    pub(super) fn diff_state_for_test(&self) -> (Option<String>, Vec<LineKind>) {
+        self.diff
+            .as_ref()
+            .map(|d| (d.shown.clone(), d.lines.iter().map(|l| l.kind).collect()))
+            .unwrap_or_default()
+    }
+
     /// The first state of a new diff card: the list read, and either the
     /// file asked for on show (with the list as the card says) or, with none,
     /// the list alone and focused.
     pub fn diff_start(&mut self, target: Option<&str>, list_shown: bool) {
+        if !self.source.is_local() {
+            // The list is the host's git's: asked now, and what to show
+            // is decided when it arrives (`diff_apply_changes`).
+            if let Some(d) = self.diff.as_mut() {
+                d.start = Some((target.map(str::to_string), list_shown));
+            }
+            self.buffer = Buffer::new(HOST_LOADING);
+            self.dirty = true;
+            self.diff_refresh();
+            return;
+        }
         self.diff_refresh();
+        self.diff_begin(target, list_shown, true);
+    }
+
+    /// What a new diff card shows once its list is known: the file asked for
+    /// (a file on this disk, `check_file`; a host's is trusted to be there
+    /// and reads empty if not), else the list.
+    fn diff_begin(&mut self, target: Option<&str>, list_shown: bool, check_file: bool) {
         let Some(d) = self.diff.as_ref() else { return };
         let repo = d.repo.clone();
         let file = target.filter(|t| {
-            !repo.is_empty() && relative_to(&repo, t).is_some() && std::path::Path::new(t).is_file()
+            !repo.is_empty()
+                && relative_to(&repo, t).is_some()
+                && (!check_file || std::path::Path::new(t).is_file())
         });
         match file {
             Some(t) => {
@@ -187,8 +243,25 @@ impl EditorBody {
     /// Reads the changed files again: Cmd+K, a change of the shown file, and
     /// once at the start. Updates the flat tree when it is on show.
     pub fn diff_refresh(&mut self) {
+        let Some(d) = self.diff.as_ref() else { return };
+        if self.source.is_local() {
+            let result = git_changes(&d.root);
+            self.diff_apply_changes(result);
+            return;
+        }
+        let (source, root, tx) = (self.source.clone(), d.root.clone(), d.answers.0.clone());
+        std::thread::spawn(move || {
+            let result = source.git_changes(&root).map_err(|e| e.to_string());
+            let _ = tx.send(DiffAnswer::Changes(result));
+        });
+    }
+
+    /// Takes the changed files: the list, and for a card just started, what
+    /// it was asked to show.
+    fn diff_apply_changes(&mut self, result: Result<infiniterm_core::git::Changes, String>) {
         let Some(d) = self.diff.as_mut() else { return };
-        match git_changes(&d.root) {
+        let failed = result.is_err();
+        match result {
             Ok(changes) => {
                 d.repo = changes.repo;
                 d.files = changes.files;
@@ -200,13 +273,50 @@ impl EditorBody {
                     infiniterm_core::paths::base_name(&d.root)
                 )));
                 d.files.clear();
+                // A host's reason is the card's text, where a file would be.
+                if !self.source.is_local() && d.shown.is_none() {
+                    self.buffer = Buffer::new(&format!("Could not read the host's git:\n{e}"));
+                }
             }
         }
         let entries = d.entries();
         if let Some(t) = self.tree.as_mut() {
             t.set_flat(entries);
         }
+        let start = d.start.take();
         self.dirty = true;
+        if let (Some((target, list_shown)), false) = (start, failed) {
+            self.diff_begin(target.as_deref(), list_shown, false);
+        }
+    }
+
+    /// Takes what a host's threads found, between frames.
+    fn diff_take_answers(&mut self) {
+        loop {
+            let Some(answer) = self.diff.as_ref().and_then(|d| d.answers.1.try_recv().ok()) else {
+                return;
+            };
+            match answer {
+                DiffAnswer::Changes(result) => self.diff_apply_changes(result),
+                DiffAnswer::Shown {
+                    rel,
+                    original,
+                    current,
+                    stamp,
+                } => self.diff_apply_show(&rel, original, current, stamp),
+                DiffAnswer::Blame(lines) => self.diff_apply_blame(lines),
+                // The shown file's mtime moved: the list and the diff again.
+                DiffAnswer::Stamp(stamp) => {
+                    let Some(d) = self.diff.as_mut() else { return };
+                    if stamp.is_some() && stamp != d.stamp {
+                        d.stamp = stamp;
+                        let Some(rel) = d.shown.clone() else { continue };
+                        self.diff_refresh();
+                        self.diff_show(&rel);
+                    }
+                }
+            }
+        }
     }
 
     /// Shows one file's diff: HEAD's text as the original, the disk's as the
@@ -219,9 +329,51 @@ impl EditorBody {
             return;
         }
         let full = d.full(rel);
+        if !self.source.is_local() {
+            // Both sides come from the host, on a thread.
+            let (source, repo, rel, tx) = (
+                self.source.clone(),
+                d.repo.clone(),
+                rel.to_string(),
+                d.answers.0.clone(),
+            );
+            std::thread::spawn(move || {
+                let original = source.git_show(&repo, &rel).unwrap_or_default();
+                // As a local read: a file that is not text reads as empty.
+                let (current, stamp) = match source.read(&full) {
+                    Ok(data) => (
+                        String::from_utf8(data.bytes).unwrap_or_default(),
+                        data.mtime_ms,
+                    ),
+                    Err(_) => (String::new(), None),
+                };
+                let _ = tx.send(DiffAnswer::Shown {
+                    rel,
+                    original,
+                    current,
+                    stamp,
+                });
+            });
+            return;
+        }
         let original = git_show_head(&d.repo, rel).unwrap_or_default();
         let current = file_read(&full).unwrap_or_default();
-        d.stamp = file_mtime(&full);
+        let stamp = file_mtime(&full);
+        self.diff_apply_show(rel, original, current, stamp);
+    }
+
+    /// Puts one file's two sides on show: the merged text, its folds and
+    /// spans, the number columns, and the card's path.
+    fn diff_apply_show(
+        &mut self,
+        rel: &str,
+        original: String,
+        current: String,
+        stamp: Option<u64>,
+    ) {
+        let Some(d) = self.diff.as_mut() else { return };
+        let full = d.full(rel);
+        d.stamp = stamp;
         let m = merged(&original, &current);
         let language = Language::for_path(&full);
         // Each side highlighted by itself: see `merged_spans`.
@@ -284,13 +436,33 @@ impl EditorBody {
     fn diff_load_blame(&mut self) {
         let Some(d) = self.diff.as_mut() else { return };
         let Some(rel) = d.shown.clone() else { return };
-        // git.rs parses what git said; blame.rs formats it and takes its
-        // own record shape (the reference had the same two).
-        d.blame = git_blame(&d.repo, &rel)
-            .unwrap_or_else(|e| {
-                eprintln!("[infiniterm/warn] blame: {e}");
-                vec![]
-            })
+        if !self.source.is_local() {
+            let (source, repo, tx) = (self.source.clone(), d.repo.clone(), d.answers.0.clone());
+            std::thread::spawn(move || {
+                let lines = source.git_blame(&repo, &rel).unwrap_or_else(|e| {
+                    eprintln!("[infiniterm/warn] blame: {e}");
+                    vec![]
+                });
+                let _ = tx.send(DiffAnswer::Blame(lines));
+            });
+            return;
+        }
+        let lines = git_blame(&d.repo, &rel).unwrap_or_else(|e| {
+            eprintln!("[infiniterm/warn] blame: {e}");
+            vec![]
+        });
+        self.diff_apply_blame(lines);
+    }
+
+    /// git.rs parses what git said; blame.rs formats it and takes its own
+    /// record shape (the reference had the same two).
+    fn diff_apply_blame(&mut self, lines: Vec<infiniterm_core::git::BlameLine>) {
+        let Some(d) = self.diff.as_mut() else { return };
+        // Blame turned off while the host was answering: nothing to show.
+        if !d.blame_on {
+            return;
+        }
+        d.blame = lines
             .into_iter()
             .map(|b| BlameLine {
                 line: b.line as usize,
@@ -352,12 +524,26 @@ impl EditorBody {
     /// The disk poll of a diff: the shown file changed under it, so the
     /// list and the diff are read again (the old card did the same).
     pub(super) fn diff_idle(&mut self, now: f64) {
+        let local = self.source.is_local();
+        if !local {
+            self.diff_take_answers();
+        }
         let Some(d) = self.diff.as_mut() else { return };
         if now - d.last_check < DISK_POLL_MS {
             return;
         }
         d.last_check = now;
         let Some(rel) = d.shown.clone() else { return };
+        if !local {
+            // The shown file's mtime, asked on a thread; a change comes back
+            // as `DiffAnswer::Stamp`.
+            let (source, full, tx) = (self.source.clone(), d.full(&rel), d.answers.0.clone());
+            std::thread::spawn(move || {
+                let stamp = source.stat(&full).ok().and_then(|s| s.mtime_ms);
+                let _ = tx.send(DiffAnswer::Stamp(stamp));
+            });
+            return;
+        }
         let stamp = file_mtime(&d.full(&rel));
         if stamp == d.stamp {
             return;
