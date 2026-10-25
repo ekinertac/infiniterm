@@ -22,9 +22,12 @@
 //! does. A picture that will not load draws nothing and never holds the
 //! rotation up.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+
+use infiniterm_core::file_source::FileSource;
 
 use gpui::{
     canvas, div, point, px, size, AnyElement, Bounds, ContentMask, Corners, Hsla, ImageAssetLoader,
@@ -46,7 +49,26 @@ pub struct Show {
     animating: bool,
     /// When a frame is next needed while nothing animates (ms).
     wake: Option<f64>,
+    /// A joined window's pictures, which are files on the host (#560): the
+    /// entries asked for, the cached copy of each that arrived, and the
+    /// threads' answers. See `host_pictures.rs`.
+    host_asked: HashSet<String>,
+    host_ready: HashMap<String, PathBuf>,
+    /// Entries whose fetch failed: drawn as nothing, never waited for.
+    host_lost: HashSet<String>,
+    host_answers: Option<(Sender<HostPicture>, Receiver<HostPicture>)>,
 }
+
+/// Where the list's pictures come from: the app's bundled folder, and in a
+/// joined window the host's file source for the rest.
+#[derive(Clone, Copy)]
+pub struct Pictures<'a> {
+    pub bundled: Option<&'a Path>,
+    pub host: Option<&'a Arc<dyn FileSource>>,
+}
+
+/// One entry's cached copy, or why it could not be had.
+type HostPicture = (String, Result<PathBuf, String>);
 
 fn source(path: &Path) -> Resource {
     Resource::Path(path.into())
@@ -56,7 +78,9 @@ impl Show {
     /// A frame is due: a fade is running, or the clock reached the next
     /// look at the rotation. A still picture never asks.
     pub fn needs_frame(&self, now: f64) -> bool {
-        self.animating || self.wake.is_some_and(|w| now >= w)
+        // A host's picture still on its way: a frame takes the answer.
+        let waiting = self.host_asked.len() > self.host_ready.len() + self.host_lost.len();
+        self.animating || waiting || self.wake.is_some_and(|w| now >= w)
     }
 
     /// There is a picture to show, so the canvas leaves its fill to the
@@ -70,20 +94,30 @@ impl Show {
     pub fn update(
         &mut self,
         ui: &Ui,
-        bundled: Option<&Path>,
+        from: Pictures,
         animate: bool,
         now: f64,
         window: &mut Window,
         cx: &mut gpui::App,
     ) {
+        let Pictures { bundled, host } = from;
+        let mut rebuild = false;
         if self.entries != ui.background_image {
             self.entries = ui.background_image.clone();
-            let home = infiniterm_core::paths::home_dir();
-            self.paths = self
-                .entries
-                .iter()
-                .filter_map(|e| resolve(e, bundled, &home))
-                .collect();
+            self.host_asked.clear();
+            self.host_ready.clear();
+            self.host_lost.clear();
+            rebuild = true;
+        }
+        // In a joined window the list is the host's settings: a bundled name
+        // is this app's own, any other entry is a file on the host, fetched
+        // into the cache and drawn from there.
+        if let Some(source) = host {
+            self.ask_host(source, &infiniterm_core::host_pictures::cache_dir());
+            rebuild |= self.take_host_answers();
+        }
+        if rebuild {
+            self.paths = self.resolve_all(bundled, host.is_some());
             self.slideshow = Slideshow::default();
         }
         let fade = if animate {
@@ -116,6 +150,73 @@ impl Show {
         self.wake = shown.wake;
         self.evict(&shown, window, cx);
         self.shown = Some(shown);
+    }
+
+    /// The files the entries name, in order: the host's from their cached
+    /// copies (when they have arrived) in a viewer, the rest as on any Mac.
+    fn resolve_all(&self, bundled: Option<&Path>, viewer: bool) -> Vec<PathBuf> {
+        let home = infiniterm_core::paths::home_dir();
+        self.entries
+            .iter()
+            .filter_map(|e| {
+                if viewer && infiniterm_core::host_pictures::is_host_entry(e) {
+                    self.host_ready.get(e).cloned()
+                } else {
+                    resolve(e, bundled, &home)
+                }
+            })
+            .collect()
+    }
+
+    /// Starts the fetch of each host entry not asked for yet, one thread
+    /// each: the host's `~` and a file's bytes both take a round trip.
+    fn ask_host(&mut self, source: &Arc<dyn FileSource>, cache: &Path) {
+        let (tx, _) = self.host_answers.get_or_insert_with(channel);
+        for entry in &self.entries {
+            if !infiniterm_core::host_pictures::is_host_entry(entry)
+                || !self.host_asked.insert(entry.clone())
+            {
+                continue;
+            }
+            let (source, tx, entry, cache) = (
+                source.clone(),
+                tx.clone(),
+                entry.clone(),
+                cache.to_path_buf(),
+            );
+            std::thread::spawn(move || {
+                let result = infiniterm_core::host_pictures::host_path(&*source, &entry)
+                    .and_then(|p| infiniterm_core::host_pictures::fetch(&*source, &cache, &p))
+                    .map(|(cached, _)| cached)
+                    .map_err(|e| e.to_string());
+                let _ = tx.send((entry, result));
+            });
+        }
+    }
+
+    /// Takes the fetches that finished; true when a picture is new.
+    fn take_host_answers(&mut self) -> bool {
+        let Some((_, rx)) = &self.host_answers else {
+            return false;
+        };
+        let mut arrived = false;
+        while let Ok((entry, result)) = rx.try_recv() {
+            // An answer for an entry the list no longer has is dropped.
+            if !self.entries.contains(&entry) {
+                continue;
+            }
+            match result {
+                Ok(path) => {
+                    self.host_ready.insert(entry, path);
+                    arrived = true;
+                }
+                Err(why) => {
+                    eprintln!("[infiniterm/warn] background {entry} from the host: {why}");
+                    self.host_lost.insert(entry);
+                }
+            }
+        }
+        arrived
     }
 
     /// The layers under the canvas, bottom first: the window's fill, the
@@ -208,4 +309,125 @@ fn paint_picture(
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         let _ = window.paint_image(rect, Corners::default(), image.clone(), 0, false);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use infiniterm_core::file_source::{
+        EntryKind, FileData, FileError, HostPaths, ListEntry, LocalSource, Stat,
+    };
+
+    /// This disk dressed as another machine's: not local, with its own home.
+    struct Host {
+        home: String,
+    }
+
+    impl FileSource for Host {
+        fn is_local(&self) -> bool {
+            false
+        }
+        fn home(&self) -> Result<HostPaths, FileError> {
+            Ok(HostPaths {
+                home: self.home.clone(),
+                config_dir: format!("{}/.config", self.home),
+            })
+        }
+        fn stat(&self, path: &str) -> Result<Stat, FileError> {
+            LocalSource.stat(path)
+        }
+        fn exists(&self, paths: &[String]) -> Result<Vec<Option<EntryKind>>, FileError> {
+            LocalSource.exists(paths)
+        }
+        fn list(&self, path: &str) -> Result<Vec<ListEntry>, FileError> {
+            LocalSource.list(path)
+        }
+        fn read(&self, path: &str) -> Result<FileData, FileError> {
+            LocalSource.read(path)
+        }
+        fn write(&self, p: &str, b: &[u8], e: Option<u64>) -> Result<Option<u64>, FileError> {
+            LocalSource.write(p, b, e)
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bs-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    // In a joined window the list's files are the host's: a bundled name is
+    // this app's, the rest are fetched to the cache, and the picture list
+    // gains each as it arrives; one that cannot be had is not waited for.
+    // Unix only: a host path is always posix (`/...`), and this test stands a
+    // folder of this machine in for the host, so its paths are the machine's;
+    // joining is unix-only (`docs/windows-handoff.md`).
+    #[cfg(unix)]
+    #[test]
+    fn a_viewers_background_list_fetches_the_hosts_files_and_keeps_bundled_names() {
+        let host_home = scratch("home");
+        let cache = scratch("cache");
+        let bundled = scratch("bundled");
+        std::fs::write(bundled.join("aurora.jpg"), b"bundled").unwrap();
+        std::fs::create_dir_all(host_home.join("Pictures")).unwrap();
+        std::fs::write(host_home.join("Pictures/sky.jpg"), b"sky").unwrap();
+        let abs = host_home.join("Pictures/sea.jpg");
+        std::fs::write(&abs, b"sea").unwrap();
+
+        let source: Arc<dyn FileSource> = Arc::new(Host {
+            home: host_home.to_string_lossy().into_owned(),
+        });
+        let mut show = Show {
+            entries: vec![
+                "aurora".into(),
+                "~/Pictures/sky.jpg".into(),
+                abs.to_string_lossy().into_owned(),
+                "~/Pictures/missing.jpg".into(),
+            ],
+            ..Default::default()
+        };
+        show.ask_host(&source, &cache);
+        assert_eq!(show.host_asked.len(), 3, "the bundled name is not asked");
+        assert!(show.needs_frame(0.), "pictures are on their way");
+
+        let stop = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while show.needs_frame(0.) {
+            assert!(std::time::Instant::now() < stop, "timed out");
+            show.take_host_answers();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let paths = show.resolve_all(Some(&bundled), true);
+        let bytes: Vec<_> = paths.iter().map(|p| std::fs::read(p).unwrap()).collect();
+        assert_eq!(
+            bytes,
+            vec![b"bundled".to_vec(), b"sky".to_vec(), b"sea".to_vec()],
+            "in the list's order; the missing one is left out"
+        );
+        assert!(paths[1].starts_with(&cache) && paths[2].starts_with(&cache));
+        assert_eq!(show.host_lost.len(), 1);
+        assert!(!show.needs_frame(0.));
+
+        // Not in a joined window: every entry is resolved on this disk.
+        let local = show.resolve_all(Some(&bundled), false);
+        assert_eq!(local.len(), 2, "aurora and the absolute path exist here");
+        for d in [&host_home, &cache, &bundled] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    // An answer for an entry the list no longer has is not taken.
+    #[test]
+    fn an_answer_for_an_entry_that_left_the_list_is_dropped() {
+        let (tx, rx) = channel();
+        let mut show = Show {
+            entries: vec!["~/a.jpg".into()],
+            host_answers: Some((tx.clone(), rx)),
+            ..Default::default()
+        };
+        tx.send(("~/gone.jpg".into(), Ok(PathBuf::from("/x"))))
+            .unwrap();
+        assert!(!show.take_host_answers());
+        assert!(show.host_ready.is_empty());
+    }
 }

@@ -341,6 +341,12 @@ pub struct EditorBody {
     /// The tree's folders, from `source` (made at the first need, and again
     /// if the source is replaced).
     dirs: Option<HostDirs>,
+    /// The cached copy of a host's picture, once fetched: the host path it
+    /// is for, and where it is on this Mac with its mtime on the host.
+    host_picture: Option<Receiver<PictureFetched>>,
+    /// Where host pictures are cached (`host_pictures::cache_dir`; a test's
+    /// own folder).
+    picture_dir: std::path::PathBuf,
     /// The host's answer to a HEAD question, with the path it was for.
     host_git: Option<Receiver<(String, Option<String>)>>,
     /// A watch on the open host file, with the path it is on; `file_watch_start`
@@ -366,9 +372,18 @@ struct SaveAnswer {
     text: String,
 }
 
+/// A host picture fetched into the cache: the host path asked for, and the
+/// cached copy with the file's mtime, or why not.
+type PictureFetched = (String, Result<(std::path::PathBuf, Option<u64>), FileError>);
+
 /// What the host's poll of the open file found.
 enum DiskAnswer {
     Same,
+    /// The open picture changed on the host: its new cached copy.
+    Picture {
+        cached: std::path::PathBuf,
+        mtime: Option<u64>,
+    },
     /// The file the card read is gone from the host.
     Gone,
     Changed {
@@ -469,6 +484,8 @@ impl EditorBody {
             host_save: None,
             host_disk: None,
             dirs: None,
+            host_picture: None,
+            picture_dir: infiniterm_core::host_pictures::cache_dir(),
             host_git: None,
             file_watch: None,
             file_watch_start: None,
@@ -515,10 +532,14 @@ impl EditorBody {
         self.scroll_x = 0.;
         self.shaped.clear();
         self.loads += 1;
-        // A host's picture is not shown yet (its bytes would have to come over
-        // the file service into the decoder); a local one is as ever.
+        // A host's picture is fetched into a cache folder on this Mac and
+        // drawn from there (`host_pictures.rs`); a local one is as ever.
         let host = !self.source.is_local();
         self.image = (Language::is_image(path) && !host).then(|| path.to_string());
+        if host && Language::is_image(path) {
+            self.start_host_picture(path, now);
+            return;
+        }
         if host {
             self.start_host_load(path, with_draft, now);
             return;
@@ -743,6 +764,59 @@ impl EditorBody {
         self.blink_epoch = now;
     }
 
+    /// A picture on the host: fetched on a thread into the cache folder; the
+    /// card says so until it is in, and draws the cached copy then.
+    fn start_host_picture(&mut self, path: &str, now: f64) {
+        self.buffer = Buffer::new("Loading from the host...");
+        self.saved.clear();
+        self.disk_stamp = None;
+        self.host_locked = true;
+        self.host_save = None;
+        self.host_disk = None;
+        let (tx, rx) = channel();
+        self.host_picture = Some(rx);
+        let (source, path, dir) = (
+            self.source.clone(),
+            path.to_string(),
+            self.picture_dir.clone(),
+        );
+        std::thread::spawn(move || {
+            let result = infiniterm_core::host_pictures::fetch(&*source, &dir, &path);
+            let _ = tx.send((path, result));
+        });
+        self.dirty = true;
+        self.blink_epoch = now;
+    }
+
+    /// The picture's cached copy is in (or why it is not).
+    fn finish_picture(
+        &mut self,
+        path: &str,
+        result: Result<(std::path::PathBuf, Option<u64>), FileError>,
+    ) {
+        if self.path.as_deref() != Some(path) {
+            return;
+        }
+        match result {
+            Ok((cached, mtime)) => {
+                self.image = Some(cached.to_string_lossy().into_owned());
+                self.buffer = Buffer::new("");
+                self.disk_stamp = mtime;
+                self.host_locked = false;
+            }
+            Err(e) => {
+                self.buffer =
+                    Buffer::new(&format!("Could not read this picture from the host:\n{e}"));
+                self.image = None;
+                self.events.push(EditorEvent::Notice(format!(
+                    "could not open {} from the host",
+                    infiniterm_core::paths::base_name(path)
+                )));
+            }
+        }
+        self.dirty = true;
+    }
+
     /// The host's answer to a load: the text, a new file (vim's way, as a
     /// local one), or the reason it could not be read.
     fn finish_load(&mut self, answer: HostRead, with_draft: bool, now: f64) {
@@ -891,7 +965,11 @@ impl EditorBody {
         };
         let (tx, rx) = channel();
         self.host_disk = Some(rx);
-        let (source, known) = (self.source.clone(), self.disk_stamp);
+        let (source, known, dir) = (
+            self.source.clone(),
+            self.disk_stamp,
+            self.picture_dir.clone(),
+        );
         std::thread::spawn(move || {
             let answer = (|| {
                 let stat = match source.stat(&path) {
@@ -908,6 +986,13 @@ impl EditorBody {
                 };
                 if stat.mtime_ms.is_none() || stat.mtime_ms == known {
                     return Some(DiskAnswer::Same);
+                }
+                // A picture is not read as text: its new version is fetched
+                // into the cache.
+                if Language::is_image(&path) {
+                    let (cached, mtime) =
+                        infiniterm_core::host_pictures::fetch(&*source, &dir, &path).ok()?;
+                    return Some(DiskAnswer::Picture { cached, mtime });
                 }
                 let data = source.read(&path).ok()?;
                 Some(DiskAnswer::Changed {
@@ -1002,6 +1087,16 @@ impl EditorBody {
 
     /// Takes whatever the host answered since the last tick.
     fn take_host_answers(&mut self, now: f64) {
+        if let Some(rx) = &self.host_picture {
+            match rx.try_recv() {
+                Ok((path, result)) => {
+                    self.host_picture = None;
+                    self.finish_picture(&path, result);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.host_picture = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
         if let Some((rx, with_draft)) = &self.host_load {
             let with_draft = *with_draft;
             match rx.try_recv() {
@@ -1047,6 +1142,14 @@ impl EditorBody {
                         (DiskAnswer::Changed { mtime, text }, Some(path)) => {
                             self.disk_stamp = mtime;
                             self.apply_disk_text(&path, text, now);
+                        }
+                        // The picture changed on the host: its new copy is
+                        // drawn (a new path, so gpui's cache cannot serve
+                        // the old one).
+                        (DiskAnswer::Picture { cached, mtime }, Some(_)) => {
+                            self.image = Some(cached.to_string_lossy().into_owned());
+                            self.disk_stamp = mtime;
+                            self.dirty = true;
                         }
                         // The text stays in the card; a save makes the file
                         // again, as a local one does. Said once: with no
@@ -4780,7 +4883,10 @@ mod tests {
 
     fn settle(b: &mut EditorBody, now: f64) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while (b.host_load.is_some() || b.host_save.is_some() || b.host_disk.is_some())
+        while (b.host_load.is_some()
+            || b.host_save.is_some()
+            || b.host_disk.is_some()
+            || b.host_picture.is_some())
             && std::time::Instant::now() < deadline
         {
             b.take_host_answers(now);
@@ -4788,7 +4894,10 @@ mod tests {
         }
         b.take_host_answers(now);
         assert!(
-            b.host_load.is_none() && b.host_save.is_none() && b.host_disk.is_none(),
+            b.host_load.is_none()
+                && b.host_save.is_none()
+                && b.host_disk.is_none()
+                && b.host_picture.is_none(),
             "an answer never came"
         );
     }
@@ -5070,6 +5179,56 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(150));
         b.take_host_answers(6.);
         assert_eq!(host.file.lock().unwrap().clone().unwrap().0, "keep me\n");
+    }
+
+    // A picture on the host is fetched to the cache and drawn from there: the
+    // card says it is loading, then has an image path on this Mac; a changed
+    // picture is a new path; one the host does not have is text.
+    #[test]
+    fn a_host_picture_is_fetched_into_the_cache_and_follows_a_change() {
+        let cache = std::env::temp_dir().join(format!("eb-pics-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cache);
+        let host = FakeHost::with("first picture bytes", 1);
+        let mut b = body();
+        b.source = host.clone();
+        b.picture_dir = cache.clone();
+        b.load("/srv/pic.png", false, 0.);
+        assert_eq!(b.buffer.text(), "Loading from the host...");
+        assert!(b.image.is_none() && b.host_locked);
+        settle(&mut b, 1.);
+        let first = b.image.clone().expect("the cached copy is shown");
+        assert!(first.starts_with(&*cache.to_string_lossy()), "{first}");
+        assert_eq!(std::fs::read(&first).unwrap(), b"first picture bytes");
+        assert!(!b.host_locked && b.buffer.text().is_empty());
+        assert_eq!(b.disk_stamp, Some(1));
+
+        host.change_under_the_editor("second, longer picture bytes", 2);
+        b.last_host_poll = -1e9;
+        b.idle(DISK_POLL_MS * 5.);
+        settle(&mut b, DISK_POLL_MS * 5.);
+        let second = b.image.clone().unwrap();
+        assert_ne!(
+            second, first,
+            "a new path, so the old picture is not served"
+        );
+        assert_eq!(
+            std::fs::read(&second).unwrap(),
+            b"second, longer picture bytes"
+        );
+
+        // Not on the host: the card says so and shows no picture.
+        *host.file.lock().unwrap() = None;
+        let mut gone = body();
+        gone.source = host.clone();
+        gone.picture_dir = cache.clone();
+        gone.load("/srv/none.png", false, 0.);
+        settle(&mut gone, 1.);
+        assert!(gone.image.is_none());
+        assert!(gone
+            .buffer
+            .text()
+            .contains("Could not read this picture from the host"));
+        let _ = std::fs::remove_dir_all(&cache);
     }
 
     fn diff_body(host: &Arc<FakeHost>) -> EditorBody {
