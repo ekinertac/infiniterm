@@ -1420,6 +1420,60 @@ mod agent_states_text_tests {
         assert_eq!(viewer.selection.focused_id.as_deref(), Some(mine.as_str()));
     }
 
+    // #559: in a joined window "open settings" is the HOST's files. The
+    // viewer does not know where they are, so the app is asked (once); the
+    // cards that open are on the host's paths, joined as text, defaults first.
+    #[test]
+    fn a_viewer_opens_the_hosts_settings_after_asking_where_they_are() {
+        let (_host, mut viewer, ..) = host_and_viewer();
+        let before = viewer.cards.len();
+        viewer.take_effects();
+        viewer.open_config_pair(false);
+        assert_eq!(
+            viewer.cards.len(),
+            before,
+            "nothing opens before the answer"
+        );
+        assert!(viewer.take_effects().iter().any(|e| matches!(
+            e,
+            crate::model::Effect::AskHostConfig { keybindings: false }
+        )));
+
+        viewer.host_config_known("/home/ekin/.config/infiniterm", false);
+        let paths: Vec<_> = viewer
+            .cards
+            .iter()
+            .skip(before)
+            .filter_map(|c| c.path.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/home/ekin/.config/infiniterm/settings.default.json".to_string(),
+                "/home/ekin/.config/infiniterm/settings.json".to_string(),
+            ]
+        );
+        assert_eq!(viewer.config_pairs.len(), 1);
+        assert!(
+            !paths
+                .iter()
+                .any(|p| p.starts_with(crate::paths::config_dir().to_string_lossy().as_ref())),
+            "this Mac's own config folder is never opened"
+        );
+
+        // The folder is remembered: the keybindings open without asking.
+        viewer.take_effects();
+        viewer.open_config_pair(true);
+        assert!(!viewer
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, crate::model::Effect::AskHostConfig { .. })));
+        assert!(viewer
+            .cards
+            .iter()
+            .any(|c| c.path.as_deref() == Some("/home/ekin/.config/infiniterm/keybindings.json")));
+    }
+
     // #566: `ift <file>` in a joined terminal opens an editor laid over it.
     // The file leaves it out, the canvas sent to viewers carries it.
     #[test]
