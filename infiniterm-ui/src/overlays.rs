@@ -443,9 +443,17 @@ impl Render for AppView {
         // A fade is an animation: the system's reduced-motion switch and
         // `ui.animations` turn it into a cut.
         let animate = self.model.config.ui.animations && !self.reduce_motion;
+        // A joined window's pictures are the host's files (#560).
+        let host = self
+            .viewer
+            .then(|| self.file_source())
+            .filter(|s| !s.is_local());
         self.background.update(
             &self.model.config.ui,
-            self.backgrounds_dir.as_deref(),
+            crate::background_show::Pictures {
+                bundled: self.backgrounds_dir.as_deref(),
+                host: host.as_ref(),
+            },
             animate,
             crate::now_ms(),
             window,

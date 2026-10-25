@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-25
 
+- In a joined window (`ift join`) pictures from the host now show. A picture file opened in an editor card (from the tree, or Cmd+click on its path) is fetched from the host and drawn, and follows the file if it changes there. The canvas background list of the host's settings works too: a bundled name is this app's own, any other entry (`~/Pictures/x.jpg`, an absolute path) is a file on the host. The copies are kept in a `host-pictures` folder in the app's data folder.
+
 - In a joined window (`ift join`) the red line on a card that lost its host connection is now short: "Lost the connection to the host; joining again", with the cause in a smaller line under it (no socket path, no error number). Both lines are cut at the card's edge, not wrapped, and stay clear of the card's label.
 
 - Fixed, in a joined window (`ift join`): after `ift ./file` in a terminal, the editor it opens now takes the keys, so Cmd+W closes it. Before, Cmd+W went to the terminal under it and nothing happened. A card whose host connection is lost shows its red line again at 100% zoom (it was drawn under the card's background). A file deleted on the host while open in your window says so once and keeps its text; saving writes it again. With `INFINITERM_KEYLOG` set, the file watches print a line too.
