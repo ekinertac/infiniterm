@@ -12,11 +12,21 @@
 use crate::body::{BodyAction, CardBody};
 use crate::terminal_body::Metrics;
 use gpui::{fill, point, px, size, App, Bounds, Hsla, Keystroke, Pixels, Window};
+use infiniterm_core::file_source::{FileSource, LocalSource};
 use infiniterm_core::files::file_mtime;
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::transcript::{
-    tool_line, transcript_read, turn_preview, turn_time, Role, Turn,
+    parse_transcript, tool_line, transcript_read, turn_preview, turn_time, Role, Turn,
 };
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::Arc;
+
+/// What a host's file service answered about the session file: its path (the
+/// card may have moved on), its mtime and the turns, or why not.
+type HostTurns = (String, Option<u64>, Result<Vec<Turn>, String>);
+
+/// What the list says until the host's first answer.
+const LOADING: &str = "Loading from the host...";
 use infiniterm_editor::wrap::wrap_line;
 
 const PAD_X: f64 = 8.;
@@ -68,6 +78,10 @@ pub struct TranscriptBody {
     dirty: bool,
     /// The wheel's fraction of a line, carried between events.
     wheel_carry: crate::chrome::WheelCarry,
+    /// Where the session file lives (#560): this machine's disk, or a host's
+    /// in a joined window, asked on a thread (`host_idle`).
+    pub source: Arc<dyn FileSource>,
+    host_read: Option<Receiver<Option<HostTurns>>>,
 }
 
 impl TranscriptBody {
@@ -100,7 +114,19 @@ impl TranscriptBody {
             world,
             dirty: true,
             wheel_carry: crate::chrome::WheelCarry::default(),
+            source: Arc::new(LocalSource),
+            host_read: None,
         }
+    }
+
+    /// Reads the session file through `source`. A host's is not read on the
+    /// spot, so the list says so until the first answer.
+    pub fn set_source(&mut self, source: Arc<dyn FileSource>) {
+        if !source.is_local() {
+            self.error = Some(LOADING.into());
+        }
+        self.source = source;
+        self.dirty = true;
     }
 
     pub fn mark_dirty(&mut self) {
@@ -115,8 +141,14 @@ impl TranscriptBody {
         let Some(path) = self.path.clone() else {
             return;
         };
+        self.apply(&path, transcript_read(&path));
+    }
+
+    /// Takes the turns read from `path`, or the reason they were not. The
+    /// list follows the end if the card was on the last turn.
+    fn apply(&mut self, path: &str, read: Result<Vec<Turn>, String>) {
         let at_end = self.cursor + 1 >= self.turns.len();
-        match transcript_read(&path) {
+        match read {
             Ok(next) => {
                 let n = next.len();
                 self.turns = next;
@@ -136,6 +168,10 @@ impl TranscriptBody {
 
     /// Re-reads the file when its mtime moved; every two seconds.
     pub fn idle(&mut self, now: f64) {
+        if !self.source.is_local() {
+            self.host_idle(now);
+            return;
+        }
         if now - self.last_check < DISK_POLL_MS {
             return;
         }
@@ -149,6 +185,57 @@ impl TranscriptBody {
         }
         self.mtime = m;
         self.load();
+    }
+
+    /// The host's session file, asked about every `DISK_POLL_MS` on a thread:
+    /// its mtime first, the whole file and its parse only when it moved. One
+    /// question at a time. shortcut: a session that grows to tens of MB is
+    /// read whole each time it moves; read from the old size on if that bites.
+    fn host_idle(&mut self, now: f64) {
+        if let Some(rx) = &self.host_read {
+            match rx.try_recv() {
+                Ok(answer) => {
+                    self.host_read = None;
+                    // Not for this card's file any more: dropped, the next
+                    // look asks about the right one.
+                    if let Some((path, mtime, read)) = answer {
+                        if self.path.as_deref() == Some(path.as_str()) {
+                            self.mtime = mtime.or(self.mtime);
+                            self.apply(&path, read);
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.host_read = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            }
+        }
+        if now - self.last_check < DISK_POLL_MS {
+            return;
+        }
+        self.last_check = now;
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let (tx, rx) = channel();
+        self.host_read = Some(rx);
+        let (source, known) = (self.source.clone(), self.mtime);
+        std::thread::spawn(move || {
+            let answer = (|| {
+                let stat = match source.stat(&path) {
+                    Ok(stat) => stat,
+                    Err(e) => return Some((path.clone(), None, Err(e.to_string()))),
+                };
+                if stat.mtime_ms.is_none() || stat.mtime_ms == known {
+                    return None;
+                }
+                let read = source
+                    .read(&path)
+                    .map(|data| parse_transcript(&data.text()))
+                    .map_err(|e| e.to_string());
+                Some((path.clone(), stat.mtime_ms, read))
+            })();
+            let _ = tx.send(answer);
+        });
     }
 
     fn set_cursor(&mut self, i: usize) {
@@ -492,5 +579,145 @@ impl CardBody for TranscriptBody {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use infiniterm_core::file_source::{
+        Code, EntryKind, FileData, FileError, HostPaths, ListEntry, Stat,
+    };
+    use std::sync::Mutex;
+
+    /// A host with one session file whose text and mtime the test changes.
+    struct FakeHost {
+        file: Mutex<Option<(String, u64)>>,
+        reads: Mutex<u32>,
+    }
+
+    impl FileSource for FakeHost {
+        fn is_local(&self) -> bool {
+            false
+        }
+        fn home(&self) -> Result<HostPaths, FileError> {
+            unreachable!()
+        }
+        fn stat(&self, path: &str) -> Result<Stat, FileError> {
+            match &*self.file.lock().unwrap() {
+                Some((text, mtime)) => Ok(Stat {
+                    kind: EntryKind::File,
+                    size: text.len() as u64,
+                    mtime_ms: Some(*mtime),
+                    symlink: false,
+                }),
+                None => Err(FileError::new(Code::Lost, format!("{path}: host lost"))),
+            }
+        }
+        fn exists(&self, _: &[String]) -> Result<Vec<Option<EntryKind>>, FileError> {
+            unreachable!()
+        }
+        fn list(&self, _: &str) -> Result<Vec<ListEntry>, FileError> {
+            unreachable!()
+        }
+        fn read(&self, _: &str) -> Result<FileData, FileError> {
+            *self.reads.lock().unwrap() += 1;
+            let (text, mtime) = self.file.lock().unwrap().clone().unwrap();
+            Ok(FileData {
+                bytes: text.into_bytes(),
+                mtime_ms: Some(mtime),
+            })
+        }
+        fn write(&self, _: &str, _: &[u8], _: Option<u64>) -> Result<Option<u64>, FileError> {
+            unreachable!()
+        }
+    }
+
+    fn user(text: &str, at: &str) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({"type": "user", "timestamp": at, "message": {"content": text}})
+        )
+    }
+
+    fn body(host: &Arc<FakeHost>) -> TranscriptBody {
+        let metrics = Metrics {
+            family: "Menlo".into(),
+            font_px: 13.,
+            line_height: 1.4,
+            cell_w: 8.,
+            weight: gpui::FontWeight::NORMAL,
+            bold_weight: gpui::FontWeight::BOLD,
+        };
+        let mut b = TranscriptBody::new(
+            Some("/home/x/.claude/s.jsonl".into()),
+            &metrics,
+            Size { w: 800., h: 600. },
+        );
+        b.set_source(host.clone());
+        b
+    }
+
+    /// Idles at times a poll apart until `done`.
+    fn until(b: &mut TranscriptBody, mut done: impl FnMut(&TranscriptBody) -> bool) {
+        let stop = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !done(b) {
+            assert!(std::time::Instant::now() < stop, "timed out");
+            // A poll interval after the last look, whatever the clock was.
+            b.idle(b.last_check + DISK_POLL_MS);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    // A joined window's transcript reads the host's session file: it says it
+    // is loading, shows the turns when they arrive, follows the end as the
+    // session grows, and reads the file again only when its mtime moved.
+    #[test]
+    fn a_host_transcript_loads_follows_the_end_and_reads_only_when_it_moved() {
+        let host = Arc::new(FakeHost {
+            file: Mutex::new(Some((user("first", "t1"), 1))),
+            reads: Mutex::new(0),
+        });
+        let mut b = body(&host);
+        assert_eq!(b.error.as_deref(), Some("Loading from the host..."));
+        assert!(b.turns.is_empty());
+
+        until(&mut b, |b| b.turns.len() == 1);
+        assert_eq!(b.turns[0].text, "first");
+        assert!(b.error.is_none());
+
+        // Nothing moved: more polls, no more reads.
+        for n in 1..4 {
+            b.idle(1e6 + n as f64 * DISK_POLL_MS);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        assert_eq!(*host.reads.lock().unwrap(), 1);
+
+        // The session grows: the card was on the last turn, so it follows.
+        *host.file.lock().unwrap() = Some((
+            format!("{}{}", user("first", "t1"), user("second", "t2")),
+            2,
+        ));
+        until(&mut b, |b| b.turns.len() == 2);
+        assert_eq!(b.cursor, 1);
+        assert_eq!(*host.reads.lock().unwrap(), 2);
+    }
+
+    // The host gone: the turns already shown stay; the error is for an empty
+    // list only.
+    #[test]
+    fn a_host_transcript_keeps_its_turns_when_the_host_is_lost() {
+        let host = Arc::new(FakeHost {
+            file: Mutex::new(Some((user("kept", "t1"), 1))),
+            reads: Mutex::new(0),
+        });
+        let mut b = body(&host);
+        until(&mut b, |b| b.turns.len() == 1);
+        *host.file.lock().unwrap() = None;
+        let seen = b.turns.len();
+        until(&mut b, |b| {
+            b.error.as_deref().is_some_and(|e| e.contains("host lost"))
+        });
+        assert_eq!(b.turns.len(), seen, "the list is not emptied");
     }
 }

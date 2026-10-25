@@ -356,6 +356,14 @@ impl FileSource for HostSource {
         Ok(crate::file_proto::changes_from_json(&v))
     }
 
+    fn git_show(&self, repo: &str, path: &str) -> Result<String, FileError> {
+        let (_, bytes) = self.call(&Request::GitShow {
+            repo: repo.into(),
+            path: path.into(),
+        })?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
     fn git_blame(&self, repo: &str, path: &str) -> Result<Vec<crate::git::BlameLine>, FileError> {
         let (v, _) = self.call(&Request::GitBlame {
             repo: repo.into(),
@@ -812,6 +820,9 @@ mod tests {
             vec![("a.txt", 2, 1, "modified"), ("new.txt", 1, 0, "untracked")]
         );
 
+        // HEAD's side of a file, by repo and relative name (the diff card's).
+        assert_eq!(src.git_show(&head.repo, "a.txt").unwrap(), "one\ntwo\n");
+        assert_eq!(src.git_show(&head.repo, "new.txt").unwrap(), "");
         let lines = src.git_blame(&head.repo, "a.txt").unwrap();
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].summary, "first");

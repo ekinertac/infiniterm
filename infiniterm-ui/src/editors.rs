@@ -47,13 +47,10 @@ impl AppView {
     }
 
     pub fn reconcile_editors(&mut self, window: &Window) {
-        // A joined window reads a host's files through its file service (#560).
-        // Page and editor cards do; transcripts and diffs still read this
-        // machine's disk, so a viewer builds no body for them yet.
-        let viewer = self.viewer;
-        if !viewer {
-            self.reconcile_transcripts(window);
-        }
+        // A joined window reads a host's files and git through its file
+        // service (#560): page, editor, transcript and diff cards all do, so
+        // a viewer builds a body for each.
+        self.reconcile_transcripts(window);
         self.reconcile_pages(window);
         self.reconcile_whats_new(window);
         let metrics = self.metrics(window);
@@ -87,7 +84,7 @@ impl AppView {
             .model
             .cards
             .iter()
-            .filter(|c| c.kind.has_editor_body() && (!viewer || c.kind == CardKind::Editor))
+            .filter(|c| c.kind.has_editor_body())
             .cloned()
             .collect();
         let mut locks: Vec<(String, bool)> = vec![];
@@ -143,7 +140,10 @@ impl AppView {
                 // diff (with the list as the card says), else it opens on
                 // the list of changed files.
                 if fresh {
+                    let source = tabs.source.clone();
                     if let Some(body) = tabs.active_body() {
+                        // A host's git and files, in a joined window.
+                        body.source = source;
                         body.diff_start(card.path.as_deref(), card.explorer);
                     }
                 }
@@ -432,6 +432,7 @@ impl AppView {
                 .is_some();
             if !exists {
                 let mut body = TranscriptBody::new(card.path.clone(), &metrics, world);
+                body.set_source(self.file_source());
                 body.idle(crate::now_ms());
                 self.bodies.insert(card.id.clone(), Box::new(body));
             }

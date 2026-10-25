@@ -173,6 +173,10 @@ fn answer<W: Write + Send + 'static>(
                 let changes = source.git_changes(&path)?;
                 Ok((crate::file_proto::changes_to_json(&changes), vec![]))
             }
+            Request::GitShow { repo, path } => {
+                let text = source.git_show(&repo, &path)?;
+                Ok((json!({}), text.into_bytes()))
+            }
             Request::GitBlame { repo, path } => {
                 let lines = source.git_blame(&repo, &path)?;
                 Ok((crate::file_proto::blame_to_json(&lines), vec![]))
