@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-25
 
+- In a joined window (`ift join`) an editor card on a host file now shows the git marks in its gutter (added and changed lines against HEAD), taken from the host's git. A commit on the host shows in the marks within about 10 seconds. A file outside a repository has no marks. The host needs an `ift` with this build; an older one shows no marks, as before.
+
 - Fixed, in a joined window (`ift join`): after `ift ./file` in a terminal, the editor it opens now takes the keys, so Cmd+W closes it. Before, Cmd+W went to the terminal under it and nothing happened. A card whose host connection is lost shows its red line again at 100% zoom (it was drawn under the card's background). A file deleted on the host while open in your window says so once and keeps its text; saving writes it again. With `INFINITERM_KEYLOG` set, the file watches print a line too.
 
 - In a joined window (`ift join`) the editor's file tree now shows the host's folders. `ift -n .` and Cmd+K on a host card list the host's folder, say "Loading from the host..." until the list arrives, and show the host's error as text in the tree if it cannot be read. Opening a folder lists it on the host; opening a file opens it from the host. The tree and the open file follow changes on the host within about half a second, over the connection that was already there (an older `ift` on the host is polled every 2 seconds as before).
