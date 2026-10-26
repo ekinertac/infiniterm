@@ -549,13 +549,44 @@ impl Model {
                         }
                     }
                 }
-                // A card the viewer made. Only a terminal can be made from a
-                // viewer: an editor, diff or browser card would name a file or
-                // page on the viewer's Mac.
+                // A card the viewer made. A terminal can be made from a
+                // viewer; an editor, diff or browser card would name a file or
+                // page on the viewer's Mac, with ONE exception: the host's own
+                // settings and keybindings files, which "open settings" in a
+                // joined window opens on the host's paths (#559). Refusing
+                // those made the cards vanish at the next snapshot (#580).
                 None => {
+                    use crate::saved_layout::CardKind;
+                    let settings_file = c.kind == CardKind::Editor
+                        && c.path
+                            .as_deref()
+                            .is_some_and(crate::config_files::is_config_file_path);
                     if self.card(&c.id).is_some()
-                        || c.kind != crate::saved_layout::CardKind::Terminal
+                        || !(c.kind == CardKind::Terminal || settings_file)
                     {
+                        continue;
+                    }
+                    if settings_file {
+                        let path = c.path.clone().unwrap_or_default();
+                        let id = self.add_card(
+                            &crate::paths::parent_dir(&path),
+                            NewCard {
+                                id: Some(c.id.clone()),
+                                rect: Some(c.rect),
+                                group_id: c.group_id.clone(),
+                                workspace_id: Some(c.workspace_id.clone()),
+                                soft_group_id: c.soft_group_id.clone(),
+                                kind: c.kind,
+                                path: Some(path),
+                                ..Default::default()
+                            },
+                        );
+                        let number = self.take_number();
+                        if let Some(card) = self.card_mut(&id) {
+                            card.title = c.title.clone();
+                            card.z = c.z;
+                            card.number = number;
+                        }
                         continue;
                     }
                     // `~` and an empty folder are this host's own start
@@ -1472,6 +1503,47 @@ mod agent_states_text_tests {
             .cards
             .iter()
             .any(|c| c.path.as_deref() == Some("/home/ekin/.config/infiniterm/keybindings.json")));
+    }
+
+    // #580: the settings pair a viewer opens is made by the HOST (its merge
+    // accepts exactly the host's own config files from a viewer) and stays;
+    // before, the host ignored the cards and the next snapshot removed them.
+    // An editor card for any other file, which would name a path on the
+    // viewer's Mac, is still refused.
+    // Unix only: a join's host is unix and its paths are posix text, which the
+    // viewer joins with `/`; this machine's config paths on Windows have `\`.
+    #[cfg(unix)]
+    #[test]
+    fn the_settings_pair_a_viewer_opens_is_made_by_the_host_and_stays() {
+        let (mut host, mut viewer, ..) = host_and_viewer();
+        let base = viewer.layout_rev;
+        let dir = crate::paths::config_dir().to_string_lossy().into_owned();
+        viewer.host_config_known(&dir, false);
+        let made: Vec<_> = viewer
+            .cards
+            .iter()
+            .filter(|c| c.path.as_deref().is_some_and(|p| p.contains("settings")))
+            .map(|c| (c.id.clone(), c.path.clone().unwrap()))
+            .collect();
+        assert_eq!(made.len(), 2, "defaults and the user's file");
+        let stray = editor_card(&mut viewer, rect(3000., 0.));
+
+        let up = viewer.layout_snapshot();
+        assert!(host.apply_remote_layout(&up, base).is_ok());
+        for (id, path) in &made {
+            let card = host.card(id).expect("the host made the card, same id");
+            assert_eq!(card.path.as_deref(), Some(path.as_str()));
+            assert_eq!(card.kind, crate::saved_layout::CardKind::Editor);
+        }
+        assert!(host.card(&stray).is_none(), "another path is still refused");
+
+        // The host publishes; the viewer applies it. The pair is still there.
+        let text = host.publish_text().unwrap();
+        viewer.apply_snapshot(&text).unwrap();
+        for (id, _) in &made {
+            assert!(viewer.card(id).is_some(), "the cards stay in the viewer");
+        }
+        assert!(viewer.card(&stray).is_none(), "the refused one is gone");
     }
 
     // #566: `ift <file>` in a joined terminal opens an editor laid over it.
