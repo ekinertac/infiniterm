@@ -224,7 +224,15 @@ impl EditorBody {
                     self.diff_show_list(false);
                 }
             }
-            None => self.diff_show_list(true),
+            None => {
+                // The list is all there is to show: the text is empty, as on
+                // this machine's disk, not "Loading from the host..." that
+                // `diff_start` put there until the list came.
+                if !self.source.is_local() {
+                    self.buffer = Buffer::new("");
+                }
+                self.diff_show_list(true)
+            }
         }
     }
 
