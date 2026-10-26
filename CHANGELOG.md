@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-26
 
+- Fixed: "App: restart", and the restart that installs an update, in a joined window (`ift join`) brought back a plain app with no connection to the host, which then stopped `ift join` from opening anything. A restart now starts the app with the same environment it had (`open -n` with each `INFINITERM_*` variable), so a viewer comes back as the same viewer. `ift join` for a host whose window is already open now says so ("a window for it is already open (pid N); it is in front now") and brings that window to the front.
 - Fixed, in a joined window (`ift join`): a diff card opened on a folder kept saying "Loading from the host..." in its text area after the list of changed files had arrived. The text is now empty until you pick a file, as on this Mac.
 
 - Fixed, in a joined window (`ift join`): "App: open settings" and "App: open keybindings" opened the host's files and then the cards closed at once. The host did not accept editor cards made in a viewer; it now accepts the ones on its own settings and keybindings files (and still refuses any other file, which would be a path on your Mac).
