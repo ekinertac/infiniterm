@@ -336,7 +336,15 @@ mod tests {
             assert_eq!(pid, std::process::id());
         }
         drop(listener);
-        assert_eq!(window_open(&sock), None, "the file is left, nobody holds it");
+        // The file is left, nobody holds it. A test thread that forks while
+        // the listener is open leaves its child a copy of the descriptor until
+        // that child's exec, so the socket can stay live for a moment (the
+        // same fork trap as #563): wait for it to go.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while window_open(&sock).is_some() {
+            assert!(std::time::Instant::now() < until, "the socket stayed live");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

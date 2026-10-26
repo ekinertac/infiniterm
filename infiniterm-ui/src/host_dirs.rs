@@ -447,11 +447,15 @@ mod tests {
         let mut dirs = HostDirs::new(fake.clone());
         dirs.list("/r");
         until(&mut dirs, &["/r"], 0., |u, _| !u.listings.is_empty());
-        // The watch is set (and lists once, for what it missed).
-        until(&mut dirs, &["/r"], 1., |_, _| {
+        // The watch is set and lists once, for what it missed: wait until
+        // that listing has been asked AND taken (the ticks of this wait take
+        // it, whichever tick it lands on), so nothing old is in flight when
+        // the event is sent.
+        until(&mut dirs, &["/r"], 1., |_, d| {
             fake.fire.lock().unwrap().contains_key("/r")
+                && fake.lists.lock().unwrap().len() >= 2
+                && d.asking.is_empty()
         });
-        until(&mut dirs, &["/r"], 2., |u, _| !u.listings.is_empty());
 
         fake.dirs
             .lock()
