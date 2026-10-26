@@ -314,15 +314,20 @@ fn paint_picture(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The stand-in host, its folder helper and the one test that uses them are
+    // unix-only (a host path is posix; joining is unix-only).
+    #[cfg(unix)]
     use infiniterm_core::file_source::{
         EntryKind, FileData, FileError, HostPaths, ListEntry, LocalSource, Stat,
     };
 
     /// This disk dressed as another machine's: not local, with its own home.
+    #[cfg(unix)]
     struct Host {
         home: String,
     }
 
+    #[cfg(unix)]
     impl FileSource for Host {
         fn is_local(&self) -> bool {
             false
@@ -350,6 +355,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("bs-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
