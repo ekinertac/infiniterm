@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-26
 
+- Fixed, in a joined window (`ift join`): a diff card opened on a folder kept saying "Loading from the host..." in its text area after the list of changed files had arrived. The text is now empty until you pick a file, as on this Mac.
+
 - Fixed, in a joined window (`ift join`): "App: open settings" and "App: open keybindings" opened the host's files and then the cards closed at once. The host did not accept editor cards made in a viewer; it now accepts the ones on its own settings and keybindings files (and still refuses any other file, which would be a path on your Mac).
 
 ### 2026-10-25
