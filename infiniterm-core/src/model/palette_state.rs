@@ -396,6 +396,12 @@ impl Model {
                     label: (*label).into(),
                     hint: None,
                 })
+                // After the fractions: the window's proportions (#585).
+                .chain(std::iter::once(PaletteItem {
+                    id: super::window_fit_cmd::WINDOW_ROW.0.into(),
+                    label: super::window_fit_cmd::WINDOW_ROW.1.into(),
+                    hint: Some("the window's aspect, same width".into()),
+                }))
                 .collect(),
             // The file's names, the first line as the hint, and the way to
             // the file last. Recency applies: the snippet you paste daily
