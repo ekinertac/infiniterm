@@ -1510,6 +1510,9 @@ mod agent_states_text_tests {
     // before, the host ignored the cards and the next snapshot removed them.
     // An editor card for any other file, which would name a path on the
     // viewer's Mac, is still refused.
+    // Unix only: a join's host is unix and its paths are posix text, which the
+    // viewer joins with `/`; this machine's config paths on Windows have `\`.
+    #[cfg(unix)]
     #[test]
     fn the_settings_pair_a_viewer_opens_is_made_by_the_host_and_stays() {
         let (mut host, mut viewer, ..) = host_and_viewer();
