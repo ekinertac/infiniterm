@@ -17,6 +17,8 @@ pub mod layout;
 
 pub mod resize;
 
+pub mod window_fit;
+
 pub mod cards;
 
 pub mod navigate;

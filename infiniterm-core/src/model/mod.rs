@@ -37,6 +37,7 @@ pub mod reading_cmd;
 pub mod register;
 pub mod settings_in;
 pub mod tabs_cmd;
+pub mod window_fit_cmd;
 pub mod workspaces_cmd;
 
 use crate::agent_state::AgentState;
