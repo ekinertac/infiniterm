@@ -1190,6 +1190,8 @@ impl Model {
                     self.resize_active(*w, *h);
                 } else if id == super::window_fit_cmd::WINDOW_ROW.0 {
                     self.resize_to_window();
+                } else if id == super::window_fit_cmd::DEFAULT_ROW.0 {
+                    self.reset_selection_to_default_size();
                 }
             }
             Source::Snippets => self.paste_snippet(id),

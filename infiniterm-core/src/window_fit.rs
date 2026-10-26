@@ -1,7 +1,9 @@
-//! "Resize to window" geometry (`card.size.window`, #585): each selected card
-//! keeps its width and takes the height that gives the window's aspect ratio,
-//! then the selection is reflowed so nothing overlaps. Pure: rects and group
-//! ids in, rects out; no model.
+//! Reflow geometry for the size commands that act on a whole selection:
+//! "Resize to window" (`card.size.window`, #585: each card keeps its width and
+//! takes the height of the window's aspect) and "Default size"
+//! (`card.size.default`: each card takes the default card's size), then the
+//! selection is reflowed so nothing overlaps. `Target` says which. Pure: rects
+//! and group ids in, rects out; no model.
 //!
 //! Where a card goes is decided by its neighbours, not by its old corner:
 //! one gap right of the nearest card on its left, one gap below the nearest
@@ -23,7 +25,7 @@
 //! can send a card across them: the sweep only looks for a free spot, it does
 //! not keep the selection together. shortcut: O(n^2) per card pushed, fine
 //! for the few dozen cards of a selection.
-use crate::grid::{snap, Rect, GRID_SIZE};
+use crate::grid::{snap, Rect, Size, GRID_SIZE};
 use crate::resize::MIN_CARD_H;
 
 /// A card (or an obstacle) for the geometry: rect and group, nothing else.
@@ -130,6 +132,33 @@ pub fn sweep(desired: &[Body], fixed: &[Body], gap: f64) -> Vec<Body> {
 /// the closing `sweep` moves whatever still collides. Result is in `old`'s
 /// order.
 pub fn reflow(old: &[Body], fixed: &[Body], aspect: f64, gap: f64) -> Vec<Body> {
+    reflow_to(old, fixed, Target::Window(aspect), gap)
+}
+
+/// What size the reflowed cards take.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Target {
+    /// The same width, the height of the window's aspect (width over height):
+    /// "Resize to window".
+    Window(f64),
+    /// Exactly this size, the default card: "Default size".
+    Size(Size),
+}
+
+impl Target {
+    fn size_of(self, old: Rect) -> Size {
+        match self {
+            Target::Window(aspect) => Size {
+                w: old.w,
+                h: window_height(old.w, aspect),
+            },
+            Target::Size(s) => s,
+        }
+    }
+}
+
+/// `reflow` with the size as an input: the same placement rule for any target.
+pub fn reflow_to(old: &[Body], fixed: &[Body], target: Target, gap: f64) -> Vec<Body> {
     const EPS: f64 = 0.5;
     // (old rect, new rect) of everything already placed, fixed bodies first.
     let mut done: Vec<(Rect, Rect)> = fixed.iter().map(|b| (b.rect, b.rect)).collect();
@@ -156,11 +185,12 @@ pub fn reflow(old: &[Body], fixed: &[Body], aspect: f64, gap: f64) -> Vec<Body> 
         if let Some(a) = above {
             y = a;
         }
+        let s = target.size_of(o);
         let rect = Rect {
             x,
             y,
-            w: o.w,
-            h: window_height(o.w, aspect),
+            w: s.w,
+            h: s.h,
         };
         done.push((o, rect));
         desired[i] = Some(Body {
@@ -366,6 +396,84 @@ mod tests {
             .map(|&i| v[i].id.as_str())
             .collect();
         assert_eq!(order, ["a", "b", "c"]);
+    }
+
+    const DEFAULT: Size = Size { w: 1250., h: 2000. };
+
+    fn to_default(old: &[Body], fixed: &[Body]) -> Vec<Body> {
+        reflow_to(old, fixed, Target::Size(DEFAULT), GAP)
+    }
+
+    #[test]
+    fn a_row_resized_to_the_window_goes_back_to_the_default_in_place() {
+        let start = grid(4, 1);
+        let shaped = reflow(&start, &[], ASPECT, GAP);
+        assert!(shaped.iter().all(|b| b.rect.h == 775.));
+        let back = to_default(&shaped, &[]);
+        assert_eq!(back, start);
+    }
+
+    #[test]
+    fn a_3x2_grid_back_to_the_default_reopens_its_rows() {
+        let start = grid(3, 2);
+        let shaped = reflow(&start, &[], ASPECT, GAP);
+        let back = to_default(&shaped, &[]);
+        assert_eq!(back, start, "columns and rows return to the lattice");
+    }
+
+    #[test]
+    fn the_default_size_also_shrinks_a_bigger_card_and_pulls_its_neighbour() {
+        let old = vec![
+            body("a", 12.5, 12.5, 3000., 3000., None),
+            body("b", 3037.5, 12.5, 3000., 3000., None),
+        ];
+        let out = to_default(&old, &[]);
+        assert_eq!(
+            *at(&out, "a"),
+            Rect {
+                x: 12.5,
+                y: 12.5,
+                w: 1250.,
+                h: 2000.
+            }
+        );
+        assert_eq!(at(&out, "b").x, 12.5 + 1250. + GAP);
+    }
+
+    #[test]
+    fn the_default_size_pushes_clear_of_an_unselected_neighbour() {
+        let old = vec![body("a", 12.5, 12.5, 1250., 775., None)];
+        // Below the short card, inside the default card's reach.
+        let below = vec![body("y", 12.5, 900., 600., 600., None)];
+        let out = to_default(&old, &below);
+        assert!(!hit(out[0].rect, below[0].rect));
+        // To the right, same.
+        let right = vec![body("x", 1287.5, 1500., 600., 600., None)];
+        let out = to_default(&old, &right);
+        assert!(!hit(out[0].rect, right[0].rect));
+        assert_eq!(
+            right[0].rect.x, 1287.5,
+            "the unselected card is never moved"
+        );
+    }
+
+    #[test]
+    fn the_default_size_keeps_a_group_apart_and_clear() {
+        let old = vec![
+            body("a", 12.5, 12.5, 1250., 775., Some("g")),
+            body("b", 1287.5, 12.5, 1250., 775., Some("g")),
+        ];
+        let fixed = vec![body("x", 12.5, 1000., 600., 600., None)];
+        let out = to_default(&old, &fixed);
+        assert!(!any_overlap(&out));
+        assert!(out.iter().all(|b| !hit(b.rect, fixed[0].rect)));
+        assert_eq!(at(&out, "b").x, at(&out, "a").x + 1250. + GAP);
+    }
+
+    #[test]
+    fn a_card_already_at_the_default_size_does_not_move() {
+        let old = grid(2, 2);
+        assert_eq!(to_default(&old, &[]), old);
     }
 
     #[test]

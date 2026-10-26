@@ -1,7 +1,8 @@
 //! "Resize to window" (`card.size.window`, #585): the selected cards keep
 //! their width and take the window's aspect ratio, reflowed so nothing
-//! overlaps. Also the last row of the `card.size` picker (Cmd+Alt+S), so the
-//! palette, the keymap and `ift run` all reach it.
+//! overlaps. "Default size" (`card.size.default`): the selected cards take the
+//! default card size, same reflow. Both are the last rows of the `card.size`
+//! picker (Cmd+Alt+S), so the palette, the keymap and `ift run` reach them.
 //!
 //! Called from `Model::palette_run` (`Source::Sizes`) and the registry. The
 //! geometry is `window_fit.rs`; this file gathers the bodies (the selection
@@ -17,23 +18,43 @@ use super::Model;
 use crate::cards::viewport_measured;
 use crate::grid::Rect;
 use crate::viewport::bounding_rect;
-use crate::window_fit::{reflow, Body};
+use crate::window_fit::{reflow_to, Body, Target};
 
-/// The picker row's id and label.
+/// The picker rows' ids and labels. The default-size label is Ekin's
+/// placeholder (he did not pick a name): a rename is this one line.
 pub const WINDOW_ROW: (&str, &str) = ("window", "Resize to window");
+pub const DEFAULT_ROW: (&str, &str) = (
+    "default",
+    "Default size: reset every selected card to the size in settings",
+);
 
 impl Model {
     /// Resizes the selected cards to the window's proportions.
     pub fn resize_to_window(&mut self) {
+        let aspect = self.view_size.w / self.view_size.h;
+        let target = viewport_measured(self.view_size).then_some(Target::Window(aspect));
+        self.reflow_selection(target, "already the window's shape");
+    }
+
+    /// Takes every selected card to the default size of `cards.width` and
+    /// `cards.height` (else from the window), reflowed so nothing overlaps.
+    /// `Fraction::Full` acts on the one active card; this acts on all.
+    pub fn reset_selection_to_default_size(&mut self) {
+        let target = Target::Size(self.default_size());
+        self.reflow_selection(Some(target), "already the default size");
+    }
+
+    /// The selection resized to `target` and reflowed among the other cards
+    /// of this workspace, as one undo step. `None` is a window with no size.
+    fn reflow_selection(&mut self, target: Option<Target>, unchanged: &str) {
         if self.selection.maximized {
             self.notify("restore the card first: it is maximised");
             return;
         }
-        if !viewport_measured(self.view_size) {
+        let Some(target) = target else {
             self.notify("the window has no size yet");
             return;
-        }
-        let aspect = self.view_size.w / self.view_size.h;
+        };
         let body = |c: &super::Card| Body {
             id: c.id.clone(),
             rect: c.rect,
@@ -49,13 +70,13 @@ impl Model {
             .filter(|c| !selected.iter().any(|s| s.id == c.id))
             .map(|c| body(c))
             .collect();
-        let next = reflow(&selected, &fixed, aspect, self.gap());
+        let next = reflow_to(&selected, &fixed, target, self.gap());
         if next
             .iter()
             .zip(&selected)
             .all(|(n, old)| n.rect == old.rect)
         {
-            self.notify("already the window's shape");
+            self.notify(unchanged);
             return;
         }
         let ids: Vec<String> = selected.iter().map(|b| b.id.clone()).collect();
@@ -78,5 +99,8 @@ impl Model {
 pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("card.size.window", "Card: resize to window", |m| {
         m.resize_to_window()
+    });
+    r.register("card.size.default", DEFAULT_ROW.1, |m| {
+        m.reset_selection_to_default_size()
     });
 }
