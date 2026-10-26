@@ -5205,12 +5205,96 @@ mod tests {
         h.run("card.size");
         let rows = h.m.palette_items(Source::Sizes, &[]);
         let ids_in_menu: Vec<_> = rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids_in_menu.last(), Some(&"window"));
+        assert!(ids_in_menu.contains(&"window"));
         h.m.palette_run(Source::Sizes, "window");
         assert!(none_overlap(&h));
         assert_eq!(rect_of(&h, &ids[0]).h, 1075.);
         h.m.notice = None;
         h.m.palette_run(Source::Sizes, "window");
         assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("already")));
+    }
+
+    // ----- default size for the selection ----------------------------------
+
+    #[test]
+    fn default_size_takes_the_whole_selection_back_in_one_undo_step() {
+        let mut h = Harness::new();
+        let ids = six_selected(&mut h);
+        let start: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        h.run("card.size.window");
+        let shaped: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        assert_ne!(shaped, start);
+        h.run("card.size.default");
+        let back: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        assert_eq!(back, start, "the lattice and the 69x80 size return");
+        assert!(none_overlap(&h));
+        h.run("layout.undo");
+        let undone: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        assert_eq!(undone, shaped, "one step");
+        // Already there: says so.
+        h.run("card.size.default");
+        h.m.notice = None;
+        h.run("card.size.default");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("already the default size")));
+    }
+
+    #[test]
+    fn default_size_works_for_one_card_and_is_a_picker_row() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.palette_run(Source::Sizes, "quarter");
+        assert!(rect_of(&h, &id).w < 1725.);
+        h.run("card.size");
+        let rows = h.m.palette_items(Source::Sizes, &[]);
+        let row = rows.iter().find(|r| r.id == "default").expect("the row");
+        assert_eq!(row.label, super::super::window_fit_cmd::DEFAULT_ROW.1);
+        h.m.palette_run(Source::Sizes, "default");
+        let r = rect_of(&h, &id);
+        assert_eq!((r.w, r.h), (1725., 2000.));
+    }
+
+    #[test]
+    fn default_size_keeps_clear_of_outsiders_groups_other_workspaces_and_maximise() {
+        let mut h = Harness::new();
+        let ids = six_selected(&mut h);
+        // The outsider is the last card; the pair is a group.
+        let outsider = ids[5].clone();
+        h.m.selection.extra = ids[1..5].to_vec();
+        let g = h.m.add_group("pair");
+        for i in [0, 1] {
+            h.m.card_mut(&ids[i]).unwrap().group_id = Some(g.clone());
+        }
+        h.run("card.size.window");
+        let kept = rect_of(&h, &outsider);
+        h.run("card.size.default");
+        assert!(none_overlap(&h));
+        assert_eq!(rect_of(&h, &outsider), kept);
+        // Maximised refuses.
+        let at = rect_of(&h, &ids[0]);
+        h.m.selection.maximized = true;
+        h.m.notice = None;
+        h.run("card.size.window");
+        h.run("card.size.default");
+        assert_eq!(rect_of(&h, &ids[0]), at);
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("maximised")));
+        h.m.selection.maximized = false;
+        // Another workspace is never touched.
+        h.run("workspace.new");
+        h.run("card.new.terminal");
+        let there = h.focused().id.clone();
+        h.m.palette_run(Source::Sizes, "quarter");
+        let there_rect = rect_of(&h, &there);
+        h.run("workspace.prev");
+        h.m.set_focus(Some(&ids[0]));
+        h.run("card.size.default");
+        assert_eq!(rect_of(&h, &there), there_rect);
     }
 }

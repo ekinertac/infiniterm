@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-27
 
+- New: "Default size" in the Cmd+Alt+S menu (command `card.size.default`). Every selected card goes back to the default card size from your settings (`cards.width` and `cards.height`, else the window's shape), placed one gutter from the card on its left and the card above it, so nothing overlaps; cards you did not select stay put. The "Full" row still resizes only the focused card. Cmd+Z undoes it in one step.
 - New: "Resize to window" in the Cmd+Alt+S menu (command `card.size.window`). The selected cards keep their width and get the height that gives the window's shape, so portrait cards from a host become landscape. Each card is placed one gutter right of the card on its left and one gutter below the card above it, so neighbours are pushed away or pulled closer and nothing overlaps; cards you did not select stay where they are. Cmd+Z undoes all of it in one step, and the view then fits the cards.
 
 ### 2026-10-26
