@@ -5066,7 +5066,7 @@ mod tests {
             .any(|e| matches!(e, Effect::Editor { .. })));
     }
 
-    // ----- resize to window (spike, #585) ----------------------------------
+    // ----- resize to window (#585) -----------------------------------------
 
     /// Six portrait cards (the harness card is 69x80 cells), in a 3x2 block,
     /// all selected; the first stays focused.
@@ -5095,14 +5095,11 @@ mod tests {
         let mut h = Harness::new();
         let id = h.focused().id.clone();
         let before = h.focused().rect;
-        h.run("card.size.window.area");
+        h.run("card.size.window");
         let after = rect_of(&h, &id);
         assert_eq!((after.x, after.y), (before.x, before.y));
-        assert_eq!((after.w, after.h), (2350., 1475.), "same area, 1.6 aspect");
+        assert_eq!((after.w, after.h), (1725., 1075.), "same width, 1.6 aspect");
         assert!((after.w / after.h - 1.6).abs() < 0.05);
-        let w = h.m.card(&id).unwrap().rect.w;
-        h.run("card.size.window.width");
-        assert_eq!(rect_of(&h, &id).w, w, "same width");
     }
 
     #[test]
@@ -5110,12 +5107,12 @@ mod tests {
         let mut h = Harness::new();
         let ids = six_selected(&mut h);
         let before: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
-        h.run("card.size.window.area");
+        h.run("card.size.window");
         assert!(none_overlap(&h));
         // Three columns, two rows still: same row, same y; same column, same x.
         let r: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
         for c in &r {
-            assert_eq!((c.w, c.h), (2350., 1475.));
+            assert_eq!((c.w, c.h), (1725., 1075.));
         }
         for i in 0..6 {
             for j in 0..6 {
@@ -5141,12 +5138,9 @@ mod tests {
         let outsider = ids[5].clone();
         h.m.selection.extra = ids[1..5].to_vec();
         let kept = rect_of(&h, &outsider);
-        for v in ["card.size.window.area", "card.size.window.block"] {
-            h.run("layout.undo");
-            h.run(v);
-            assert!(none_overlap(&h), "{v}");
-            assert_eq!(rect_of(&h, &outsider), kept, "{v}: the outsider stays");
-        }
+        h.run("card.size.window");
+        assert!(none_overlap(&h));
+        assert_eq!(rect_of(&h, &outsider), kept, "the outsider stays");
     }
 
     #[test]
@@ -5160,7 +5154,7 @@ mod tests {
         // Known ceiling: a selection that is only PART of the canvas can leave
         // a group's bounding frame around an outsider (the sweep reads cards,
         // not frames); with everything selected the frame stays clear.
-        h.run("card.size.window.area");
+        h.run("card.size.window");
         assert!(none_overlap(&h));
         let ws = h.m.card(&ids[0]).unwrap().workspace_id.clone();
         let frame = h.m.group_frame(&g, &ws).unwrap();
@@ -5190,12 +5184,12 @@ mod tests {
         let there_rect = rect_of(&h, &there);
         h.run("workspace.prev");
         h.m.set_focus(Some(&first));
-        h.run("card.size.window.area");
+        h.run("card.size.window");
         assert_eq!(rect_of(&h, &there), there_rect);
         // Maximised: refused with a reason, nothing changes.
         let at = rect_of(&h, &first);
         h.m.selection.maximized = true;
-        h.run("card.size.window.block");
+        h.run("card.size.window");
         assert_eq!(rect_of(&h, &first), at);
         assert!(h
             .m
@@ -5211,14 +5205,12 @@ mod tests {
         h.run("card.size");
         let rows = h.m.palette_items(Source::Sizes, &[]);
         let ids_in_menu: Vec<_> = rows.iter().map(|r| r.id.as_str()).collect();
-        for want in ["window-area", "window-width", "window-fill", "window-block"] {
-            assert!(ids_in_menu.contains(&want), "{want}");
-        }
-        h.m.palette_run(Source::Sizes, "window-block");
+        assert_eq!(ids_in_menu.last(), Some(&"window"));
+        h.m.palette_run(Source::Sizes, "window");
         assert!(none_overlap(&h));
-        assert_ne!(rect_of(&h, &ids[0]).w, 1725.);
+        assert_eq!(rect_of(&h, &ids[0]).h, 1075.);
         h.m.notice = None;
-        h.m.palette_run(Source::Sizes, "window-block");
+        h.m.palette_run(Source::Sizes, "window");
         assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("already")));
     }
 }

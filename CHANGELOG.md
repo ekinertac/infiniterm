@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-27
+
+- New: "Resize to window" in the Cmd+Alt+S menu (command `card.size.window`). The selected cards keep their width and get the height that gives the window's shape, so portrait cards from a host become landscape. Each card is placed one gutter right of the card on its left and one gutter below the card above it, so neighbours are pushed away or pulled closer and nothing overlaps; cards you did not select stay where they are. Cmd+Z undoes all of it in one step, and the view then fits the cards.
+
 ### 2026-10-26
 
 - Fixed: "App: restart", and the restart that installs an update, in a joined window (`ift join`) brought back a plain app with no connection to the host, which then stopped `ift join` from opening anything. A restart now starts the app with the same environment it had (`open -n` with each `INFINITERM_*` variable), so a viewer comes back as the same viewer. `ift join` for a host whose window is already open now says so ("a window for it is already open (pid N); it is in front now") and brings that window to the front.

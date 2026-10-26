@@ -396,11 +396,11 @@ impl Model {
                     label: (*label).into(),
                     hint: None,
                 })
-                // The spike's window variants (#585), after the fractions.
-                .chain(crate::window_fit::VARIANTS.iter().map(|v| PaletteItem {
-                    id: v.id.into(),
-                    label: v.label.into(),
-                    hint: Some(v.hint.into()),
+                // After the fractions: the window's proportions (#585).
+                .chain(std::iter::once(PaletteItem {
+                    id: super::window_fit_cmd::WINDOW_ROW.0.into(),
+                    label: super::window_fit_cmd::WINDOW_ROW.1.into(),
+                    hint: Some("the window's aspect, same width".into()),
                 }))
                 .collect(),
             // The file's names, the first line as the hint, and the way to

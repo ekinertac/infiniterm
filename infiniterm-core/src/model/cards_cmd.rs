@@ -1188,8 +1188,8 @@ impl Model {
             Source::Sizes => {
                 if let Some((_, _, w, h)) = SIZES.iter().find(|(sid, ..)| *sid == id) {
                     self.resize_active(*w, *h);
-                } else {
-                    self.resize_to_window_row(id);
+                } else if id == super::window_fit_cmd::WINDOW_ROW.0 {
+                    self.resize_to_window();
                 }
             }
             Source::Snippets => self.paste_snippet(id),
