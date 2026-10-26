@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-26
+
+- Fixed, in a joined window (`ift join`): "App: open settings" and "App: open keybindings" opened the host's files and then the cards closed at once. The host did not accept editor cards made in a viewer; it now accepts the ones on its own settings and keybindings files (and still refuses any other file, which would be a path on your Mac).
+
 ### 2026-10-25
 
 - In a joined window (`ift join`) pictures from the host now show. A picture file opened in an editor card (from the tree, or Cmd+click on its path) is fetched from the host and drawn, and follows the file if it changes there. The canvas background list of the host's settings works too: a bundled name is this app's own, any other entry (`~/Pictures/x.jpg`, an absolute path) is a file on the host. The copies are kept in a `host-pictures` folder in the app's data folder.
