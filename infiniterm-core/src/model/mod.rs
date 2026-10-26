@@ -570,6 +570,28 @@ const NOTICE_MAX_MS: f64 = 12000.;
 pub const NOTICE_MIN_SHOW_MS: f64 = 1500.;
 
 /// How long `text` stays in the status bar.
+/// Where a host run's revisions start: a random EPOCH in the high 32 bits,
+/// the count in the low ones. Revisions used to restart at 1 with every run
+/// of the host app, so a viewer that kept an old run's revision could name a
+/// revision a NEW run had also made, and the host compared its edit with a
+/// different canvas (#588). With the epoch in the number, two runs never
+/// share a revision: an edit on another run's revision is stale, applies
+/// nothing, and the viewer resyncs. 31 bits from the clock and the pid; they
+/// need to differ between runs, not to be secret.
+pub fn new_run_revision() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let mixed = nanos ^ (u64::from(std::process::id()) << 17) ^ (nanos >> 29);
+    ((mixed & 0x7fff_ffff).max(1)) << 32
+}
+
+/// The run a revision belongs to.
+pub fn revision_epoch(rev: u64) -> u64 {
+    rev >> 32
+}
+
 pub fn notice_duration_ms(text: &str) -> f64 {
     let extra = text.chars().count().saturating_sub(NOTICE_FREE_CHARS) as f64 * NOTICE_MS_PER_CHAR;
     (NOTICE_MS + extra).min(NOTICE_MAX_MS)
@@ -734,6 +756,10 @@ pub struct Model {
     /// names, so the host can tell an edit made on an old canvas from one made
     /// on the current one.
     pub layout_rev: u64,
+    /// The ids of the cards THIS viewer closed since the host's last canvas
+    /// reached it (#588). The upload carries them, and the host closes exactly
+    /// those: a card missing from an uploaded layout is never read as closed.
+    pub closed_by_viewer: Vec<String>,
     /// The last canvases the host published, by revision (#423). A viewer's
     /// edit names the revision it was made on; the host works out WHAT the
     /// viewer changed by comparing the edit with that canvas, and applies only
@@ -953,7 +979,8 @@ impl Model {
             snapshot_seen: false,
             host_config_dir: None,
             awaiting_open: None,
-            layout_rev: 0,
+            layout_rev: new_run_revision(),
+            closed_by_viewer: Vec::new(),
             published: std::collections::VecDeque::new(),
             config: default_config(),
             keymap: default_keymap(),

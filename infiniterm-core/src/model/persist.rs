@@ -155,6 +155,9 @@ impl Model {
         // that the viewport, zoom, focus and workspace are the viewer's own.
         let first = !self.snapshot_seen;
         self.snapshot_seen = true;
+        // The host's canvas is the answer to what was sent: the closes it
+        // carried are done (or were not the host's to do).
+        self.closed_by_viewer.clear();
         let (host_viewport, host_scale, host_focus, host_active) = (
             saved.viewport,
             saved.ui_scale,
@@ -450,6 +453,32 @@ impl Model {
         ))
     }
 
+    /// The ids this viewer closed since the host's last canvas: what an upload
+    /// names as closed (#588).
+    pub fn closed_ids(&self) -> Vec<String> {
+        self.closed_by_viewer.clone()
+    }
+
+    /// The host said its canvas is at revision `rev`. When that is another
+    /// RUN of the host app than the viewer's last revision (the host was
+    /// restarted), a change the viewer had not sent yet was made on a canvas
+    /// that no longer exists: it is dropped, not sent, and a notice says so.
+    /// True when the host is a new run.
+    pub fn note_host_revision(&mut self, rev: u64) -> bool {
+        let restarted = self.layout_rev != 0
+            && super::revision_epoch(self.layout_rev) != super::revision_epoch(rev);
+        self.layout_rev = rev;
+        if restarted {
+            let pending = !self.closed_by_viewer.is_empty() || self.dirty_layout;
+            self.closed_by_viewer.clear();
+            self.dirty_layout = false;
+            if pending {
+                self.notify("the host was restarted; your last change was not applied");
+            }
+        }
+        restarted
+    }
+
     /// Records a canvas the host is about to publish and returns its revision
     /// (#423). The host keeps the last few, so it can tell what a viewer
     /// changed: the viewer names the revision it edited, and its edit is
@@ -490,7 +519,21 @@ impl Model {
     /// number (a number the viewer picked can collide with a host's). The only
     /// edit refused is one made on a revision the host no longer remembers:
     /// `Stale`, and the app republishes its canvas so the viewer resyncs.
-    pub fn apply_remote_layout(&mut self, text: &str, base: u64) -> Result<RemoteApply, String> {
+    ///
+    /// CLOSES are explicit (#588): `closed` is the ids the viewer closed, and
+    /// the host closes exactly those, through its normal close (so the reopen
+    /// ring and a terminal's parking apply). A card the host has that is
+    /// missing from the viewer's layout is NOT closed: the viewer's copy can
+    /// lack it for reasons that are not a close (a card it could not parse, a
+    /// copy from before a restart, one still rejoining), and a host that read
+    /// absence as a close lost a whole workspace of shells that way. An id the
+    /// host does not know, or that is protected, is left alone.
+    pub fn apply_remote_layout(
+        &mut self,
+        text: &str,
+        base: u64,
+        closed: &[String],
+    ) -> Result<RemoteApply, String> {
         let Some(was) = self
             .published
             .iter()
@@ -504,18 +547,15 @@ impl Model {
 
         let was_card = |id: &str| was.cards.iter().find(|c| c.id == id);
 
-        // Closed in the viewer, closed here. That includes an in-place editor
-        // (a cover): published to viewers since #566, so a viewer can close
-        // it, and the host's close ends the `ift` waiting in the terminal.
-        let closed: Vec<String> = was
-            .cards
-            .iter()
-            .filter(|c| !now.cards.iter().any(|n| n.id == c.id))
-            .map(|c| c.id.clone())
-            .filter(|id| self.card(id).is_some())
-            .collect();
+        // Closed in the viewer, closed here, by name. That includes an
+        // in-place editor (a cover): published to viewers since #566, so a
+        // viewer can close it, and the host's close ends the `ift` waiting in
+        // the terminal. Only cards the canvas the viewer edited had: an id
+        // from nowhere is no card of this host's to close.
         for id in closed {
-            self.close_card(&id, false);
+            if was_card(id).is_some() && self.card(id).is_some() {
+                self.close_card(id, false);
+            }
         }
 
         for c in &now.cards {
@@ -982,7 +1022,7 @@ mod snapshot_tests {
         // And it goes up with its path intact; the host moves it and keeps it.
         let up = viewer.layout_snapshot();
         assert_eq!(
-            host.apply_remote_layout(&up, viewer.layout_rev),
+            host.apply_remote_layout(&up, viewer.layout_rev, &viewer.closed_ids()),
             Ok(RemoteApply::Applied)
         );
         let on_host = host.card(&e).expect("the editor is still on the host");
@@ -997,7 +1037,7 @@ mod snapshot_tests {
         viewer.close_card(&e, false);
         let up = viewer.layout_snapshot();
         assert_eq!(
-            host.apply_remote_layout(&up, viewer.layout_rev),
+            host.apply_remote_layout(&up, viewer.layout_rev, &viewer.closed_ids()),
             Ok(RemoteApply::Applied)
         );
         assert!(host.card(&a).is_some());
@@ -1027,7 +1067,7 @@ mod snapshot_tests {
         );
         let up = viewer.layout_snapshot();
         assert_eq!(
-            host.apply_remote_layout(&up, viewer.layout_rev),
+            host.apply_remote_layout(&up, viewer.layout_rev, &viewer.closed_ids()),
             Ok(RemoteApply::Applied)
         );
         let new = host.card(&made).expect("a normal new card on the host");
@@ -1059,7 +1099,7 @@ mod snapshot_tests {
         let first = add(&mut viewer, rect(25., 25.));
         let up = viewer.layout_snapshot();
         assert_eq!(
-            host.apply_remote_layout(&up, viewer.layout_rev),
+            host.apply_remote_layout(&up, viewer.layout_rev, &viewer.closed_ids()),
             Ok(RemoteApply::Applied),
             "an edit on an empty canvas is not stale"
         );
@@ -1072,7 +1112,7 @@ mod snapshot_tests {
         viewer.close_card(&first, false);
         let up = viewer.layout_snapshot();
         assert_eq!(
-            host.apply_remote_layout(&up, viewer.layout_rev),
+            host.apply_remote_layout(&up, viewer.layout_rev, &viewer.closed_ids()),
             Ok(RemoteApply::Applied)
         );
         assert!(
@@ -1088,7 +1128,7 @@ mod snapshot_tests {
         let made = add(&mut viewer, rect(1800., 0.));
         let up = viewer.layout_snapshot();
         assert_eq!(
-            host.apply_remote_layout(&up, viewer.layout_rev),
+            host.apply_remote_layout(&up, viewer.layout_rev, &viewer.closed_ids()),
             Ok(RemoteApply::Applied)
         );
         // The host publishes its canvas; the viewer applies it and takes the
@@ -1105,7 +1145,7 @@ mod snapshot_tests {
         viewer.close_card(&made, false);
         let up = viewer.layout_snapshot();
         assert_eq!(
-            host.apply_remote_layout(&up, viewer.layout_rev),
+            host.apply_remote_layout(&up, viewer.layout_rev, &viewer.closed_ids()),
             Ok(RemoteApply::Applied)
         );
         assert!(host.card(&made).is_none(), "the host closed it too");
@@ -1121,6 +1161,8 @@ mod snapshot_tests {
         viewer.close_card(&b, false);
         viewer.card_mut(&a).unwrap().rect = rect(60., 70.);
         let up = viewer.layout_snapshot();
+        // What was sent names the close; it is fixed at send time.
+        let sent_closed = viewer.closed_ids();
         // The host changed something else meanwhile and published it.
         host.card_mut(&_e).unwrap().title = "agent".into();
         let text = host.save_text().unwrap();
@@ -1132,7 +1174,7 @@ mod snapshot_tests {
         // ...but the sent copy reaches the host, which applies it, and the
         // canvas it publishes next has the edit.
         assert_eq!(
-            host.apply_remote_layout(&up, base),
+            host.apply_remote_layout(&up, base, &sent_closed),
             Ok(RemoteApply::Applied)
         );
         let text = host.save_text().unwrap();
@@ -1161,7 +1203,7 @@ mod snapshot_tests {
         viewer.card_mut(&b).unwrap().group_id = Some("g1".into());
         let up = viewer.layout_snapshot();
         assert_eq!(
-            host.apply_remote_layout(&up, viewer.layout_rev),
+            host.apply_remote_layout(&up, viewer.layout_rev, &viewer.closed_ids()),
             Ok(RemoteApply::Applied)
         );
         assert_eq!(host.card(&a).unwrap().rect, rect(25., 40.));
@@ -1189,7 +1231,7 @@ mod snapshot_tests {
         viewer.card_mut(&moved).unwrap().rect = rect(70., 80.);
         let up = viewer.layout_snapshot();
         assert_eq!(
-            host.apply_remote_layout(&up, viewer.layout_rev),
+            host.apply_remote_layout(&up, viewer.layout_rev, &viewer.closed_ids()),
             Ok(RemoteApply::Applied),
             "an edit is never refused for arriving over a host change"
         );
@@ -1219,7 +1261,8 @@ mod snapshot_tests {
         host.card_mut(&a).unwrap().title = "the host's title".into();
         viewer.card_mut(&a).unwrap().rect = rect(2., 2.);
         let up = viewer.layout_snapshot();
-        host.apply_remote_layout(&up, viewer.layout_rev).unwrap();
+        host.apply_remote_layout(&up, viewer.layout_rev, &viewer.closed_ids())
+            .unwrap();
         assert_eq!(
             host.card(&a).unwrap().rect,
             rect(2., 2.),
@@ -1237,7 +1280,10 @@ mod snapshot_tests {
         let (mut host, mut viewer, a, b, _e) = host_and_viewer();
         viewer.close_card(&b, false);
         let up = viewer.layout_snapshot();
-        assert_eq!(host.apply_remote_layout(&up, 9999), Ok(RemoteApply::Stale));
+        assert_eq!(
+            host.apply_remote_layout(&up, 9999, &viewer.closed_ids()),
+            Ok(RemoteApply::Stale)
+        );
         assert!(host.card(&b).is_some(), "nothing was closed");
         assert!(host.card(&a).is_some());
     }
@@ -1251,7 +1297,8 @@ mod snapshot_tests {
         viewer.selection.focused_id = Some(a.clone());
         viewer.card_mut(&a).unwrap().rect = rect(5., 5.);
         let up = viewer.layout_snapshot();
-        host.apply_remote_layout(&up, viewer.layout_rev).unwrap();
+        host.apply_remote_layout(&up, viewer.layout_rev, &viewer.closed_ids())
+            .unwrap();
         assert_eq!(host.viewport.x, 321., "the viewer's pan is not the host's");
         assert_eq!(host.selection.focused_id, Some(b), "nor its focus");
     }
@@ -1262,7 +1309,8 @@ mod snapshot_tests {
         viewer.card_mut(&a).unwrap().rect = rect(1., 1.);
         let up = viewer.layout_snapshot();
         assert!(!host.dirty_layout);
-        host.apply_remote_layout(&up, viewer.layout_rev).unwrap();
+        host.apply_remote_layout(&up, viewer.layout_rev, &viewer.closed_ids())
+            .unwrap();
         assert!(
             host.dirty_layout,
             "the host's next save is the new revision"
@@ -1390,7 +1438,9 @@ mod agent_states_text_tests {
         viewer.close_card(&cover, false);
         assert!(viewer.card(&cover).is_none() && viewer.covers.is_empty());
         let up = viewer.layout_snapshot();
-        assert!(host.apply_remote_layout(&up, rev).is_ok());
+        assert!(host
+            .apply_remote_layout(&up, rev, &viewer.closed_ids())
+            .is_ok());
         assert!(host.card(&cover).is_none(), "closed on the host");
         assert!(host.covers.is_empty());
         assert!(replied(&mut host), "the waiting ift is answered");
@@ -1415,7 +1465,9 @@ mod agent_states_text_tests {
         assert!(viewer.card(&cover).is_none() && viewer.covers.is_empty());
 
         let up = viewer.layout_snapshot();
-        assert!(host.apply_remote_layout(&up, rev).is_ok());
+        assert!(host
+            .apply_remote_layout(&up, rev, &viewer.closed_ids())
+            .is_ok());
         assert!(host.card(&cover).is_none());
     }
 
@@ -1505,6 +1557,139 @@ mod agent_states_text_tests {
             .any(|c| c.path.as_deref() == Some("/home/ekin/.config/infiniterm/keybindings.json")));
     }
 
+    // ---- #588: a card missing from a viewer's layout is never a close ----
+
+    // The loss: a viewer's copy without a workspace's cards (stale, partial,
+    // still rejoining) was read as "closed them all". It is not a close.
+    #[test]
+    fn a_viewer_layout_missing_cards_closes_nothing_on_the_host() {
+        let (mut host, mut viewer, a, b, e) = host_and_viewer();
+        let base = viewer.layout_rev;
+        let before = host.cards.len();
+        // The viewer's copy loses the host's cards without closing them.
+        viewer.cards.retain(|c| c.id == e);
+        let up = viewer.layout_snapshot();
+        assert!(viewer.closed_ids().is_empty(), "nothing was closed");
+        let applied = host.apply_remote_layout(&up, base, &viewer.closed_ids());
+        assert_eq!(applied, Ok(RemoteApply::Applied));
+        assert_eq!(host.cards.len(), before, "every card is still the host's");
+        assert!(host.card(&a).is_some() && host.card(&b).is_some());
+
+        // An update from a viewer that sends no list at all closes nothing.
+        assert_eq!(
+            host.apply_remote_layout(&up, base, &[]),
+            Ok(RemoteApply::Applied)
+        );
+        assert_eq!(host.cards.len(), before);
+    }
+
+    // A viewer that closed one card closes exactly that card, by name, and the
+    // host's close is the normal one: it is on the reopen ring and comes back.
+    #[test]
+    fn a_viewer_close_closes_exactly_that_card_and_can_be_reopened() {
+        let (mut host, mut viewer, a, b, e) = host_and_viewer();
+        let base = viewer.layout_rev;
+        viewer.close_card(&b, false);
+        assert_eq!(viewer.closed_ids(), vec![b.clone()]);
+        let up = viewer.layout_snapshot();
+        // An id the host never had is no card of its to close.
+        let mut named = viewer.closed_ids();
+        named.push("not-a-card".into());
+        assert_eq!(
+            host.apply_remote_layout(&up, base, &named),
+            Ok(RemoteApply::Applied)
+        );
+        assert!(host.card(&b).is_none(), "the named card is closed");
+        assert!(host.card(&a).is_some() && host.card(&e).is_some());
+
+        // The normal close: Cmd+Shift+T has it.
+        assert_eq!(host.closed.last().map(|c| c.id.as_str()), Some(b.as_str()));
+        let card = host.closed.pop().unwrap();
+        host.reopen_card(card);
+        assert!(host.card(&b).is_some(), "reopened");
+
+        // A snapshot from the host answers the close: the list is cleared.
+        let text = host.save_text().unwrap();
+        viewer.apply_snapshot(&text).unwrap();
+        assert!(viewer.closed_ids().is_empty());
+    }
+
+    // The restart: revisions carry the host run, so an edit made on the OLD
+    // run's canvas applies nothing to the new run's, even when the count has
+    // reached the same number, and the viewer drops what it had not sent.
+    #[test]
+    fn an_edit_from_before_a_host_restart_applies_nothing_and_the_viewer_resyncs() {
+        let (mut old_host, mut viewer, _a, b, _e) = host_and_viewer();
+        let old_base = viewer.layout_rev;
+        // The host app restarts: a new run, the same cards from its save file,
+        // and enough publishes that the plain counts would collide.
+        let mut new_host = host_model();
+        let a2 = add(&mut new_host, rect(0., 0.));
+        let b2 = add(&mut new_host, rect(900., 0.));
+        let mut rev = 0;
+        for _ in 0..(old_base & 0xffff_ffff).max(1) + 2 {
+            let text = new_host.save_text().unwrap();
+            rev = new_host.record_published(&text);
+        }
+        assert_ne!(
+            crate::model::revision_epoch(old_base),
+            crate::model::revision_epoch(rev),
+            "two runs never share a revision number"
+        );
+        let _ = &mut old_host;
+
+        // The viewer closes a card of the OLD canvas and uploads.
+        viewer.close_card(&b, false);
+        let up = viewer.layout_snapshot();
+        let sent = viewer.closed_ids();
+        let before = new_host.cards.len();
+        assert_eq!(
+            new_host.apply_remote_layout(&up, old_base, &sent),
+            Ok(RemoteApply::Stale),
+            "another run's revision is stale"
+        );
+        assert_eq!(new_host.cards.len(), before, "nothing was closed");
+        assert!(new_host.card(&a2).is_some() && new_host.card(&b2).is_some());
+
+        // The new run's revision reaches the viewer: it drops the unsent close
+        // and says so, then takes the host's canvas.
+        viewer.take_effects();
+        assert!(viewer.note_host_revision(rev), "a new run");
+        assert!(viewer.closed_ids().is_empty() && !viewer.dirty_layout);
+        let text = new_host.save_text().unwrap();
+        viewer.apply_snapshot(&text).unwrap();
+        assert!(viewer.card(&a2).is_some() && viewer.card(&b2).is_some());
+        // The same run again is not a restart.
+        assert!(!viewer.note_host_revision(rev + 1));
+    }
+
+    // A card the viewer cannot parse (one with no folder, or a shape a newer
+    // build wrote) is not in its copy, so not in its upload; the host keeps
+    // it. (An unknown KIND reads as a terminal, so it is not the case; a card
+    // `parse_card` refuses is.)
+    #[test]
+    fn a_card_the_viewer_cannot_parse_is_kept_by_the_host() {
+        let (mut host, mut viewer, a, b, _e) = host_and_viewer();
+        let base = viewer.layout_rev;
+        // The host's published text, with card b unreadable by this build.
+        let text = host.publish_text().unwrap();
+        let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        for c in json["cards"].as_array_mut().unwrap() {
+            if c["id"] == b.as_str() {
+                c["cwd"] = "".into();
+            }
+        }
+        viewer.apply_snapshot(&json.to_string()).unwrap();
+        assert!(viewer.card(&b).is_none(), "the viewer could not read it");
+        assert!(viewer.card(&a).is_some());
+
+        let up = viewer.layout_snapshot();
+        assert!(host
+            .apply_remote_layout(&up, base, &viewer.closed_ids())
+            .is_ok());
+        assert!(host.card(&b).is_some(), "the host's card stays");
+    }
+
     // #580: the settings pair a viewer opens is made by the HOST (its merge
     // accepts exactly the host's own config files from a viewer) and stays;
     // before, the host ignored the cards and the next snapshot removed them.
@@ -1529,7 +1714,9 @@ mod agent_states_text_tests {
         let stray = editor_card(&mut viewer, rect(3000., 0.));
 
         let up = viewer.layout_snapshot();
-        assert!(host.apply_remote_layout(&up, base).is_ok());
+        assert!(host
+            .apply_remote_layout(&up, base, &viewer.closed_ids())
+            .is_ok());
         for (id, path) in &made {
             let card = host.card(id).expect("the host made the card, same id");
             assert_eq!(card.path.as_deref(), Some(path.as_str()));
@@ -1577,7 +1764,9 @@ mod agent_states_text_tests {
         // the host does not close it.
         viewer.card_mut(&term).unwrap().title = "renamed".into();
         let up = viewer.layout_snapshot();
-        assert!(host.apply_remote_layout(&up, rev).is_ok());
+        assert!(host
+            .apply_remote_layout(&up, rev, &viewer.closed_ids())
+            .is_ok());
         assert!(host.card(&cover).is_some(), "the editor is still open");
         assert_eq!(host.card(&term).unwrap().title, "renamed");
     }
