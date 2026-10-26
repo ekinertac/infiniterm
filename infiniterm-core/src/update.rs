@@ -291,14 +291,56 @@ pub fn staged_is_newer(staged: u64, on_disk: Option<u64>) -> bool {
 /// the second move fails the old one goes back, so a failed update is a
 /// plain restart rather than no app at all.
 #[cfg(not(windows))]
-pub fn swap_script(pid: u32, bundle: &str, staged: &str, aside: &str) -> String {
+pub fn swap_script(
+    pid: u32,
+    bundle: &str,
+    staged: &str,
+    aside: &str,
+    env: &[(String, String)],
+) -> String {
     let q = crate::drop::posix_quote;
     let (b, s, a) = (q(bundle), q(staged), q(aside));
     format!(
         "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; \
          if mv {b} {a}; then mv {s} {b} || mv {a} {b}; fi; \
-         exec open {b}"
+         exec {open}",
+        open = open_command(bundle, env)
     )
+}
+
+/// The shell command that starts the app at `bundle` again with `env`.
+///
+/// `open` hands the launch to LaunchServices, which gives the new process
+/// the login session's environment and NOT this process's: a viewer (`ift
+/// join`, started with `open --env`) came back as a plain app that held the
+/// join folder's socket and had no connection (#583). Every variable passed
+/// here is one `--env`. With any, `-n`: without it `open` only brings an
+/// already running copy of the app to the front (the Mac's own regular app,
+/// say, beside a viewer) and starts nothing with these variables.
+#[cfg(not(windows))]
+pub fn open_command(bundle: &str, env: &[(String, String)]) -> String {
+    let q = crate::drop::posix_quote;
+    let mut cmd = if env.is_empty() {
+        format!("open {}", q(bundle))
+    } else {
+        format!("open -n {}", q(bundle))
+    };
+    for (k, v) in env {
+        cmd.push_str(&format!(" --env {}", q(&format!("{k}={v}"))));
+    }
+    cmd
+}
+
+/// The variables that make this process the instance it is: every
+/// `INFINITERM_*` one in its environment (the data and config folders, a
+/// viewer's join host, name, colour and ssh), in a fixed order. A relaunch
+/// passes them on.
+pub fn relaunch_env() -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = std::env::vars()
+        .filter(|(k, _)| k.starts_with("INFINITERM_"))
+        .collect();
+    env.sort();
+    env
 }
 
 #[cfg(test)]
@@ -583,6 +625,7 @@ mod tests {
             "/Applications/infiniterm.app",
             "/tmp/u/infiniterm.app",
             "/tmp/u/old.app",
+            &[],
         );
         assert!(s.starts_with("while kill -0 42"));
         let aside = s
@@ -597,10 +640,51 @@ mod tests {
         let open = s.find("exec open /Applications/infiniterm.app").unwrap();
         assert!(aside < swap && swap < back && back < open);
         // A path with a space is quoted, not split.
-        let spaced = swap_script(1, "/Users/me/Applications/my term.app", "/a", "/b");
+        let spaced = swap_script(1, "/Users/me/Applications/my term.app", "/a", "/b", &[]);
         assert!(
             spaced.contains("'/Users/me/Applications/my term.app'"),
             "{spaced}"
         );
+    }
+
+    // #583: a relaunch keeps the instance's environment. `open` does not hand
+    // the new process this one's, so each variable is a quoted `--env`; the
+    // update's swap ends in the same command.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_relaunch_passes_every_instance_variable_to_open_quoted() {
+        let env = vec![
+            (
+                "INFINITERM_DATA_DIR".to_string(),
+                "/Users/me/.infiniterm/joins/mini m4".to_string(),
+            ),
+            ("INFINITERM_JOIN".to_string(), "mini-m4".to_string()),
+            ("INFINITERM_REMOTE_NAME".to_string(), "it's".to_string()),
+        ];
+        let cmd = open_command("/Applications/infiniterm.app", &env);
+        assert_eq!(
+            cmd,
+            "open -n /Applications/infiniterm.app \
+             --env 'INFINITERM_DATA_DIR=/Users/me/.infiniterm/joins/mini m4' \
+             --env INFINITERM_JOIN=mini-m4 \
+             --env 'INFINITERM_REMOTE_NAME=it'\\''s'"
+        );
+        assert_eq!(
+            open_command("/Applications/infiniterm.app", &[]),
+            "open /Applications/infiniterm.app",
+            "an ordinary app is relaunched as before"
+        );
+        let swap = swap_script(7, "/Applications/infiniterm.app", "/a", "/b", &env);
+        assert!(swap.ends_with(&format!("exec {cmd}")), "{swap}");
+    }
+
+    // Only the app's own variables are passed on, in a fixed order.
+    #[test]
+    fn the_relaunch_environment_is_the_instance_variables_only() {
+        let env = relaunch_env();
+        assert!(env.iter().all(|(k, _)| k.starts_with("INFINITERM_")));
+        let mut sorted = env.clone();
+        sorted.sort();
+        assert_eq!(env, sorted);
     }
 }

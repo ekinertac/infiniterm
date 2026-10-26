@@ -1965,6 +1965,10 @@ impl AppView {
             &u.bundle.to_string_lossy(),
             &staged.app.to_string_lossy(),
             &aside.to_string_lossy(),
+            // The new app starts as this one is (a viewer stays a viewer);
+            // Windows' waiter inherits the environment and needs nothing.
+            #[cfg(not(windows))]
+            &infiniterm_core::update::relaunch_env(),
         );
         self.flush_save();
         // `spawn_waiter`, not a bare `/bin/sh`, which is what this used to
@@ -2049,10 +2053,16 @@ fn spawn_waiter(script: &str) -> Result<(), String> {
 fn relaunch_after_exit() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let bundle = bundle_of(&exe).ok_or("not running from an .app bundle")?;
+    // `open` does not pass this process's environment on, so a viewer (or a
+    // scratch instance) would come back as a plain app: its variables go as
+    // `--env` (#583).
     spawn_waiter(&format!(
-        "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; exec open {bundle}",
+        "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; exec {open}",
         pid = std::process::id(),
-        bundle = infiniterm_core::drop::posix_quote(&bundle.to_string_lossy()),
+        open = infiniterm_core::update::open_command(
+            &bundle.to_string_lossy(),
+            &infiniterm_core::update::relaunch_env()
+        ),
     ))
 }
 
