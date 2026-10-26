@@ -5274,6 +5274,11 @@ mod tests {
 
         idle_until(&mut b, 1., |b| b.tree.is_some());
         assert_eq!(row_names(&b), vec!["a.txt"]);
+        assert_eq!(
+            b.buffer.text(),
+            "",
+            "the list arrived: no 'Loading' left in the text"
+        );
 
         // Enter on the row: the merged text, the added line marked.
         let path = b.tree.as_ref().unwrap().rows()[0].entry.path.clone();
