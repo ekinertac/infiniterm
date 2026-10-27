@@ -146,6 +146,9 @@ pub fn resolve_open(r: &OpenRequest) -> Result<OpenOnHost, String> {
 pub struct RemoteUpdate {
     pub base: u64,
     pub layout: String,
+    /// The ids the viewer closed (#588). The host closes exactly these; an
+    /// update from a viewer that sends none closes nothing.
+    pub closed: Vec<String>,
 }
 
 /// A canvas message as bytes: the length of the text, the kind, the text.
@@ -158,8 +161,8 @@ pub fn encode_canvas_message(kind: u8, text: &str) -> Vec<u8> {
 }
 
 /// The text of a `KIND_UPDATE` message: what `encode_canvas_message` carries.
-pub fn encode_update(base: u64, layout: &str) -> String {
-    serde_json::json!({ "base": base, "layout": layout }).to_string()
+pub fn encode_update(base: u64, layout: &str, closed: &[String]) -> String {
+    serde_json::json!({ "base": base, "layout": layout, "closed": closed }).to_string()
 }
 
 fn decode_update(text: &str) -> Option<RemoteUpdate> {
@@ -167,6 +170,16 @@ fn decode_update(text: &str) -> Option<RemoteUpdate> {
     Some(RemoteUpdate {
         base: v.get("base")?.as_u64()?,
         layout: v.get("layout")?.as_str()?.to_string(),
+        // No list (a viewer from before #588) is no closes.
+        closed: v
+            .get("closed")
+            .and_then(|c| c.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|id| id.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -850,7 +863,7 @@ mod tests {
             .unwrap();
         s.write_all(&encode_canvas_message(
             KIND_UPDATE,
-            &encode_update(7, "{\"cards\":[]}"),
+            &encode_update(7, "{\"cards\":[]}", &["gone".to_string()]),
         ))
         .unwrap();
         let got = updates.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -858,7 +871,8 @@ mod tests {
             got,
             RemoteUpdate {
                 base: 7,
-                layout: "{\"cards\":[]}".into()
+                layout: "{\"cards\":[]}".into(),
+                closed: vec!["gone".into()],
             }
         );
         assert!(updates.try_recv().is_err(), "the noise was dropped");
@@ -869,10 +883,24 @@ mod tests {
     fn an_update_survives_the_round_trip_through_its_text() {
         let layout = "{\"cards\":[{\"id\":\"a \\\"q\\\"\"}]}";
         assert_eq!(
-            decode_update(&encode_update(42, layout)),
+            decode_update(&encode_update(
+                42,
+                layout,
+                &["a".to_string(), "b".to_string()]
+            )),
             Some(RemoteUpdate {
                 base: 42,
-                layout: layout.into()
+                layout: layout.into(),
+                closed: vec!["a".into(), "b".into()],
+            })
+        );
+        // A viewer from before #588 sends no list: no closes.
+        assert_eq!(
+            decode_update("{\"base\": 3, \"layout\": \"x\"}"),
+            Some(RemoteUpdate {
+                base: 3,
+                layout: "x".into(),
+                closed: vec![],
             })
         );
         assert_eq!(decode_update("{}"), None);

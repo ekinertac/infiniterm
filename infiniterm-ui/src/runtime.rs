@@ -1135,6 +1135,7 @@ impl AppView {
             infiniterm_core::backend::join::RemoteUpdate {
                 base: self.model.layout_rev,
                 layout,
+                closed: self.model.closed_ids(),
             },
         ));
     }
@@ -1218,7 +1219,7 @@ impl AppView {
         let updates: Vec<_> = rx.try_iter().collect();
         let mut changed = false;
         for u in updates {
-            match self.model.apply_remote_layout(&u.layout, u.base) {
+            match self.model.apply_remote_layout(&u.layout, u.base, &u.closed) {
                 Ok(RemoteApply::Applied) => changed = true,
                 Ok(RemoteApply::Stale) => {
                     self.write_layout();
@@ -1342,7 +1343,9 @@ impl AppView {
                         self.model.notify(&why);
                     }
                 }
-                CanvasEvent::Revision(rev) => self.model.layout_rev = rev,
+                CanvasEvent::Revision(rev) => {
+                    self.model.note_host_revision(rev);
+                }
                 CanvasEvent::Agents(text) => self.model.apply_agent_states(&text),
                 CanvasEvent::Connected => {
                     self.viewer_poke = true;

@@ -107,9 +107,10 @@ fn run_uplink(mut stream: impl Write, edits: Arc<Mutex<Receiver<Uplink>>>, ended
         match next {
             Ok(up) => {
                 let message = match up {
-                    Uplink::Edit(edit) => {
-                        encode_canvas_message(KIND_UPDATE, &encode_update(edit.base, &edit.layout))
-                    }
+                    Uplink::Edit(edit) => encode_canvas_message(
+                        KIND_UPDATE,
+                        &encode_update(edit.base, &edit.layout, &edit.closed),
+                    ),
                     Uplink::Open(open) => encode_canvas_message(KIND_OPEN, &encode_open(&open)),
                 };
                 if stream
@@ -511,6 +512,7 @@ mod tests {
         tx.send(Uplink::Edit(RemoteUpdate {
             base: 5,
             layout: "{\"a\":1}".into(),
+            closed: vec![],
         }))
         .unwrap();
         tx.send(Uplink::Open(OpenRequest {
@@ -523,7 +525,7 @@ mod tests {
         far.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
         let (kind, text) = read_canvas_message(&mut far).unwrap().unwrap();
         assert_eq!(kind, KIND_UPDATE);
-        assert_eq!(text, encode_update(5, "{\"a\":1}"));
+        assert_eq!(text, encode_update(5, "{\"a\":1}", &[]));
         // In the order they were made, on the same connection.
         let (kind, text) = read_canvas_message(&mut far).unwrap().unwrap();
         assert_eq!(kind, KIND_OPEN);

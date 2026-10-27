@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-10-27
 
+- Fixed, a data loss in joined windows (`ift join`, #588): closing a card in a joined window after the host app had been restarted closed every card of a workspace on the host, and their shells ended. The host used to read "a card is missing from the viewer's canvas" as "the viewer closed it". Now the viewer names the cards it closed and the host closes exactly those, the normal way (Cmd+Shift+T brings them back, a shell is kept alive for a while). A change made before the host was restarted is dropped, with a notice ("the host was restarted; your last change was not applied"), instead of being applied to the new canvas. Update the viewer and the host together: a viewer from before this change can no longer close a card on the host.
+
 - New: "Default size" in the Cmd+Alt+S menu (command `card.size.default`). Every selected card goes back to the default card size from your settings (`cards.width` and `cards.height`, else the window's shape), placed one gutter from the card on its left and the card above it, so nothing overlaps; cards you did not select stay put. The "Full" row still resizes only the focused card. Cmd+Z undoes it in one step.
 - New: "Resize to window" in the Cmd+Alt+S menu (command `card.size.window`). The selected cards keep their width and get the height that gives the window's shape, so portrait cards from a host become landscape. Each card is placed one gutter right of the card on its left and one gutter below the card above it, so neighbours are pushed away or pulled closer and nothing overlaps; cards you did not select stay where they are. Cmd+Z undoes all of it in one step, and the view then fits the cards.
 

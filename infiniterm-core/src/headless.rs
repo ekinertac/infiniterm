@@ -490,7 +490,7 @@ impl Host {
         let updates: Vec<_> = rx.try_iter().collect();
         let mut changed = false;
         for u in updates {
-            match self.model.apply_remote_layout(&u.layout, u.base) {
+            match self.model.apply_remote_layout(&u.layout, u.base, &u.closed) {
                 Ok(RemoteApply::Applied) => changed = true,
                 Ok(RemoteApply::Stale) => {
                     self.write_layout();
