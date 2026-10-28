@@ -538,6 +538,8 @@ pub enum Pending {
     About,
     /// The custom hex colour of a window (`window.color`).
     WindowColor,
+    /// Width and height typed for the selection (`card.size.custom`).
+    CustomSize,
     /// `editor.goToLine`: the number typed lands in `card.line` for the body.
     GoToLine(String),
 }
@@ -802,6 +804,9 @@ pub struct Model {
     /// The colour the window had when its colour picker opened (`Some(None)`:
     /// none), which a dismissed picker puts back (`color_cmd.rs`).
     pub window_color_before_preview: Option<Option<crate::remote_identity::Rgb>>,
+    /// The last size typed in "Custom size…", in px, for the next prompt to
+    /// start from. Not saved: a restart starts from the default size again.
+    pub custom_size_last: Option<Size>,
     /// The local instance's colour, from `ui.windowColor` (`None`: the normal
     /// title bar). A remote instance wears its host's instead.
     pub local_color: Option<crate::remote_identity::Rgb>,
@@ -1000,6 +1005,7 @@ impl Model {
             theme_current: None,
             theme_before_preview: None,
             window_color_before_preview: None,
+            custom_size_last: None,
             local_color: None,
             start_dir: "/".into(),
             home: String::new(),

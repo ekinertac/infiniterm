@@ -5297,4 +5297,131 @@ mod tests {
         h.run("card.size.default");
         assert_eq!(rect_of(&h, &there), there_rect);
     }
+
+    // ----- custom size ------------------------------------------------------
+
+    /// Enter in the open prompt with `text`.
+    fn answer_prompt(h: &mut Harness, text: &str) {
+        let (pending, answer) = h.m.prompt.settle(Some(text)).expect("a prompt was open");
+        h.m.answer(pending, answer, |_| true);
+    }
+
+    #[test]
+    fn custom_size_opens_a_prompt_that_starts_from_the_default_then_the_last_value() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.run("card.size.custom");
+        assert!(h.m.prompt.is_open());
+        assert_eq!(
+            h.m.prompt.label,
+            "Custom size: width x height in grid squares"
+        );
+        assert_eq!(h.m.prompt.value, "69x80", "the default size from settings");
+        answer_prompt(&mut h, "60 x 90");
+        let r = rect_of(&h, &id);
+        assert_eq!((r.w, r.h), (1500., 2250.));
+        let note = h.m.notice.clone().unwrap();
+        assert!(
+            note.contains("60x90") && note.contains("1500 x 2250 px"),
+            "{note}"
+        );
+        h.run("card.size.custom");
+        assert_eq!(h.m.prompt.value, "60x90", "the last custom value");
+        // Also reached from the picker row.
+        h.m.prompt.settle(None);
+        h.run("card.size");
+        let rows = h.m.palette_items(Source::Sizes, &[]);
+        let row = rows.iter().find(|r| r.id == "custom").expect("the row");
+        assert_eq!(row.label, super::super::window_fit_cmd::CUSTOM_ROW.1);
+        h.m.palette_run(Source::Sizes, "custom");
+        assert!(h.m.prompt.is_open());
+    }
+
+    #[test]
+    fn custom_size_escape_changes_nothing_and_bad_input_keeps_the_prompt_with_the_reason() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        let before = rect_of(&h, &id);
+        h.run("card.size.custom");
+        h.m.prompt.settle(None);
+        assert_eq!(rect_of(&h, &id), before);
+        assert!(h.m.custom_size_last.is_none(), "a cancel remembers nothing");
+        for (typed, why) in [
+            ("sixty", "not a number"),
+            ("60", "two numbers"),
+            ("0x80", "more than zero"),
+            ("-3 80", "more than zero"),
+            ("500x80", "at most 400"),
+        ] {
+            h.run("card.size.custom");
+            answer_prompt(&mut h, typed);
+            assert!(h.m.prompt.is_open(), "{typed}: asks again");
+            assert_eq!(
+                h.m.prompt.value, typed,
+                "the typed text is kept for the fix"
+            );
+            assert!(
+                h.m.notice.as_deref().is_some_and(|n| n.contains(why)),
+                "{typed}"
+            );
+            assert_eq!(rect_of(&h, &id), before);
+            h.m.prompt.settle(None);
+        }
+    }
+
+    #[test]
+    fn custom_size_below_the_minimum_is_clamped_with_a_notice_and_the_same_size_says_so() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.run("card.size.custom");
+        answer_prompt(&mut h, "2,2");
+        let r = rect_of(&h, &id);
+        assert_eq!(
+            (r.w, r.h),
+            (crate::resize::MIN_CARD_W, crate::resize::MIN_CARD_H)
+        );
+        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("minimum")));
+        h.run("card.size.custom");
+        answer_prompt(&mut h, "8x4");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("already that size")));
+    }
+
+    #[test]
+    fn custom_size_reflows_the_selection_in_one_undo_step_and_keeps_the_rules() {
+        let mut h = Harness::new();
+        let ids = six_selected(&mut h);
+        let start: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        h.run("card.size.custom");
+        answer_prompt(&mut h, "60x30");
+        assert!(none_overlap(&h));
+        for i in &ids {
+            let r = rect_of(&h, i);
+            assert_eq!((r.w, r.h), (1500., 750.));
+        }
+        h.run("layout.undo");
+        let back: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        assert_eq!(back, start, "one step");
+        // An unselected card stays; a maximised card refuses before asking.
+        let outsider = ids[5].clone();
+        h.m.selection.extra = ids[1..5].to_vec();
+        let kept = rect_of(&h, &outsider);
+        h.run("card.size.custom");
+        answer_prompt(&mut h, "100x80");
+        assert!(none_overlap(&h));
+        assert_eq!(rect_of(&h, &outsider), kept);
+        h.m.selection.maximized = true;
+        h.m.prompt.settle(None);
+        h.m.notice = None;
+        h.run("card.size.custom");
+        assert!(!h.m.prompt.is_open());
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("maximised")));
+    }
 }

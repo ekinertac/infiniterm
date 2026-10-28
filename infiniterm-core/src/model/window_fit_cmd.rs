@@ -1,8 +1,10 @@
 //! "Resize to window" (`card.size.window`, #585): the selected cards keep
 //! their width and take the window's aspect ratio, reflowed so nothing
 //! overlaps. "Default size" (`card.size.default`): the selected cards take the
-//! default card size, same reflow. Both are the last rows of the `card.size`
-//! picker (Cmd+Alt+S), so the palette, the keymap and `ift run` reach them.
+//! default card size, same reflow. "Custom size…" (`card.size.custom`) asks
+//! for a width and height in grid squares (`custom_size.rs` parses) and applies
+//! them the same way. All are the last rows of the `card.size` picker
+//! (Cmd+Alt+S), so the palette, the keymap and `ift run` reach them.
 //!
 //! Called from `Model::palette_run` (`Source::Sizes`) and the registry. The
 //! geometry is `window_fit.rs`; this file gathers the bodies (the selection
@@ -23,6 +25,9 @@ use crate::window_fit::{reflow_to, Body, Target};
 /// The picker rows' ids and labels. The default-size label is Ekin's
 /// placeholder (he did not pick a name): a rename is this one line.
 pub const WINDOW_ROW: (&str, &str) = ("window", "Resize to window");
+pub const CUSTOM_ROW: (&str, &str) = ("custom", "Custom size…");
+/// The prompt's title; the unit is the one of `cards.width`.
+pub const CUSTOM_PROMPT: &str = "Custom size: width x height in grid squares";
 pub const DEFAULT_ROW: (&str, &str) = (
     "default",
     "Default size: reset every selected card to the size in settings",
@@ -46,14 +51,15 @@ impl Model {
 
     /// The selection resized to `target` and reflowed among the other cards
     /// of this workspace, as one undo step. `None` is a window with no size.
-    fn reflow_selection(&mut self, target: Option<Target>, unchanged: &str) {
+    /// True when cards moved or changed size.
+    fn reflow_selection(&mut self, target: Option<Target>, unchanged: &str) -> bool {
         if self.selection.maximized {
             self.notify("restore the card first: it is maximised");
-            return;
+            return false;
         }
         let Some(target) = target else {
             self.notify("the window has no size yet");
-            return;
+            return false;
         };
         let body = |c: &super::Card| Body {
             id: c.id.clone(),
@@ -62,7 +68,7 @@ impl Model {
         };
         let selected: Vec<Body> = self.selected().iter().map(|c| body(c)).collect();
         if selected.is_empty() {
-            return;
+            return false;
         }
         let fixed: Vec<Body> = self
             .here()
@@ -77,7 +83,7 @@ impl Model {
             .all(|(n, old)| n.rect == old.rect)
         {
             self.notify(unchanged);
-            return;
+            return false;
         }
         let ids: Vec<String> = selected.iter().map(|b| b.id.clone()).collect();
         self.remember_layout();
@@ -93,10 +99,61 @@ impl Model {
         if let Some(bounds) = bounding_rect(&rects) {
             self.apply_viewport(self.fit_viewport(bounds));
         }
+        true
+    }
+
+    /// "Custom size…": asks for width and height in grid squares, starting
+    /// from the last custom size or else the default size.
+    pub fn ask_custom_size(&mut self) {
+        if self.selection.maximized {
+            self.notify("restore the card first: it is maximised");
+            return;
+        }
+        if self.selection.focused_id.is_none() {
+            return;
+        }
+        let start = self
+            .custom_size_last
+            .map(crate::custom_size::squares)
+            .unwrap_or_else(|| crate::custom_size::squares(self.default_size()));
+        self.prompt
+            .ask(CUSTOM_PROMPT, &start, super::Pending::CustomSize);
+    }
+
+    /// The prompt's answer. Bad text asks again with what was typed and
+    /// says why (the prompt has no line of its own for it); a size applies
+    /// to the selection like "Default size", and the notice gives the
+    /// pixels, because the unit typed is a grid square.
+    pub fn answer_custom_size(&mut self, text: Option<String>) {
+        let Some(text) = text else { return };
+        let parsed = match crate::custom_size::parse(&text) {
+            Ok(p) => p,
+            Err(why) => {
+                self.prompt
+                    .ask(CUSTOM_PROMPT, text.trim(), super::Pending::CustomSize);
+                self.notify(why);
+                return;
+            }
+        };
+        self.custom_size_last = Some(parsed.size);
+        let shown = crate::custom_size::squares(parsed.size);
+        if self.reflow_selection(Some(Target::Size(parsed.size)), "already that size") {
+            let px = format!("{} x {} px", parsed.size.w, parsed.size.h);
+            self.notify(if parsed.clamped {
+                format!("{shown} squares ({px}): the minimum card, what you typed was smaller")
+            } else {
+                format!("{shown} squares ({px})")
+            });
+        }
     }
 }
 
 pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
+    r.register(
+        "card.size.custom",
+        &format!("Card: {}", CUSTOM_ROW.1),
+        |m| m.ask_custom_size(),
+    );
     r.register("card.size.window", "Card: resize to window", |m| {
         m.resize_to_window()
     });
