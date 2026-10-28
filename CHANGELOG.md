@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-28
+
+- New: "Custom size…" in the Cmd+Alt+S menu (command `card.size.custom`). A prompt asks for a width and height in grid squares, the unit of `cards.width` (50 is 1250 px), and accepts `60x90`, `60 x 90`, `60 90` or `60,90`. The selected cards take that size and are placed like "Default size": one gutter from the card on their left and the card above, nothing overlapping, unselected cards untouched. The prompt starts from the last size you typed, then from the default size. A size under the minimum card is raised to it with a notice, one over 400 squares a side is refused, and the notice after applying gives the size in pixels. Cmd+Z undoes it in one step.
+
 ### 2026-10-27
 
 - Fixed, a data loss in joined windows (`ift join`, #588): closing a card in a joined window after the host app had been restarted closed every card of a workspace on the host, and their shells ended. The host used to read "a card is missing from the viewer's canvas" as "the viewer closed it". Now the viewer names the cards it closed and the host closes exactly those, the normal way (Cmd+Shift+T brings them back, a shell is kept alive for a while). A change made before the host was restarted is dropped, with a notice ("the host was restarted; your last change was not applied"), instead of being applied to the new canvas. Update the viewer and the host together: a viewer from before this change can no longer close a card on the host.

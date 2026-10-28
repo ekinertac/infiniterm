@@ -407,6 +407,11 @@ impl Model {
                     label: super::window_fit_cmd::DEFAULT_ROW.1.into(),
                     hint: Some("every selected card".into()),
                 }))
+                .chain(std::iter::once(PaletteItem {
+                    id: super::window_fit_cmd::CUSTOM_ROW.0.into(),
+                    label: super::window_fit_cmd::CUSTOM_ROW.1.into(),
+                    hint: Some("type width x height".into()),
+                }))
                 .collect(),
             // The file's names, the first line as the hint, and the way to
             // the file last. Recency applies: the snippet you paste daily

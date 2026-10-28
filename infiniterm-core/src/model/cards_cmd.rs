@@ -506,6 +506,7 @@ impl Model {
                 Some(_) => self.save_then_close(ids, reclaim),
             },
             Pending::WindowColor => self.window_color_answer(text),
+            Pending::CustomSize => self.answer_custom_size(text),
             // Closing it is the whole answer; the update check is the app
             // menu's (`app.update.check`).
             Pending::About => {}
@@ -1192,6 +1193,8 @@ impl Model {
                     self.resize_to_window();
                 } else if id == super::window_fit_cmd::DEFAULT_ROW.0 {
                     self.reset_selection_to_default_size();
+                } else if id == super::window_fit_cmd::CUSTOM_ROW.0 {
+                    self.ask_custom_size();
                 }
             }
             Source::Snippets => self.paste_snippet(id),
