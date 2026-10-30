@@ -232,11 +232,12 @@ impl AppView {
         self.reconcile_bodies(window);
         self.reconcile_terminals(window);
         self.reconcile_decoys(window);
-        // A viewer builds no body for a card that is not a terminal: its file
-        // or page is on the host, and this Mac must not read a path of its own
-        // and show it as the host's (#423).
+        // A viewer's page and editor cards read the host's files through its
+        // file service (#560), never a path of this Mac's own shown as the
+        // host's (#423). Its transcript, diff and browser cards still have no
+        // body; the file service takes them one at a time.
+        self.reconcile_editors(window);
         if !self.viewer {
-            self.reconcile_editors(window);
             self.reconcile_browsers();
         }
         let t0 = std::time::Instant::now();
@@ -667,6 +668,7 @@ impl AppView {
                 } else {
                     self.bodies.get_mut(&card.id).map(|b| b.as_mut())
                 };
+                let has_body = body.is_some();
                 if let Some(body) = body {
                     // A ringed card's gradient reaches out to its ring
                     // (`chrome::CardRingGap`), so the clip grows with it.
@@ -695,8 +697,13 @@ impl AppView {
                 }
                 // A viewer's card that is not a terminal (#423) is a real card
                 // with no body (its file or page is on the host): its slot says
-                // where, and it moves, groups and closes like any card.
-                if self.viewer && card.kind != infiniterm_core::saved_layout::CardKind::Terminal {
+                // where, and it moves, groups and closes like any card. A card
+                // that reads its file through the host's file service (a page,
+                // #560) has a body and draws it instead.
+                if self.viewer
+                    && !has_body
+                    && card.kind != infiniterm_core::saved_layout::CardKind::Terminal
+                {
                     let host = self
                         .model
                         .remote

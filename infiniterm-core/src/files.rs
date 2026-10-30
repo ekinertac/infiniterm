@@ -44,6 +44,12 @@ pub fn resolve_link(path: &Path) -> std::path::PathBuf {
 /// stays atomic. A path that does not exist yet is made; a link to nothing is
 /// replaced by a file, there being nothing to write through to.
 pub fn write_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
+    write_bytes_atomically(path, contents.as_bytes())
+}
+
+/// `write_atomically` for bytes: what the join file service writes for a
+/// viewer, where the text is whatever the viewer's buffer held.
+pub fn write_bytes_atomically(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     let target = resolve_link(path);
     let path = target.as_path();
     let dir = path.parent().unwrap_or(Path::new("."));

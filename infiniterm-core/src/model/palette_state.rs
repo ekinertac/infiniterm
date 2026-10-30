@@ -211,8 +211,12 @@ impl Model {
             Source::Commands => {
                 let mut chords: Vec<(&str, String)> = vec![];
                 for (chord, id) in &self.keymap {
-                    if !chords.iter().any(|(i, _)| i == id) {
-                        chords.push((id, format_chord(chord, self.modifier_labels())));
+                    if chords.iter().any(|(i, _)| i == id) {
+                        continue;
+                    }
+                    // As this platform shows it (`shown_chord`).
+                    if let Some(shown) = self.shown_chord(chord) {
+                        chords.push((id, format_chord(&shown, self.modifier_labels())));
                     }
                 }
                 let mut items: Vec<PaletteItem> = command_labels
@@ -311,7 +315,8 @@ impl Model {
                     self.keymap
                         .iter()
                         .find(|(_, i)| i == id)
-                        .map(|(c, _)| format_chord(c, self.modifier_labels()))
+                        .and_then(|(c, _)| self.shown_chord(c))
+                        .map(|c| format_chord(&c, self.modifier_labels()))
                 };
                 vec![
                     (
@@ -391,6 +396,22 @@ impl Model {
                     label: (*label).into(),
                     hint: None,
                 })
+                // After the fractions: the window's proportions (#585).
+                .chain(std::iter::once(PaletteItem {
+                    id: super::window_fit_cmd::WINDOW_ROW.0.into(),
+                    label: super::window_fit_cmd::WINDOW_ROW.1.into(),
+                    hint: Some("the window's aspect, same width".into()),
+                }))
+                .chain(std::iter::once(PaletteItem {
+                    id: super::window_fit_cmd::DEFAULT_ROW.0.into(),
+                    label: super::window_fit_cmd::DEFAULT_ROW.1.into(),
+                    hint: Some("every selected card".into()),
+                }))
+                .chain(std::iter::once(PaletteItem {
+                    id: super::window_fit_cmd::CUSTOM_ROW.0.into(),
+                    label: super::window_fit_cmd::CUSTOM_ROW.1.into(),
+                    hint: Some("type width x height".into()),
+                }))
                 .collect(),
             // The file's names, the first line as the hint, and the way to
             // the file last. Recency applies: the snippet you paste daily

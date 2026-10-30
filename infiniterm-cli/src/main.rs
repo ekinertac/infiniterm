@@ -100,11 +100,17 @@ ift — drive infiniterm from a shell
                              ssh; --from <file> uses a file, --platform
                              linux-x86_64|linux-aarch64 skips asking the
                              host). Settings start with the defaults.
-  ift terminal <dir>...      a terminal card whose shell starts in each folder,
+  ift workspaces             workspaces left to right: id, name, cards, and *
+                             on the one on screen; a table on a terminal,
+                             tab separated without a header into a pipe
+  ift terminal [--workspace <id|name|new>] [--name <text>] [--] <dir>...
+                             a terminal card whose shell starts in each folder,
                              on the workspace on screen, the last one
                              focused; starts infiniterm first when it is not
                              running (what Finder's Services > Open in
-                             infiniterm does)
+                             infiniterm does). --workspace opens them on that
+                             workspace (an id or an exact name) and shows it;
+                             new makes one, named by --name
   ift send <card> [text] [--enter] [--key NAME]...
                              type into a card's shell, without moving the
                              focus; the card is its number (#7) or its id;
@@ -113,6 +119,10 @@ ift — drive infiniterm from a shell
   ift read <card> [--lines N] [--all]
                              print what a card's terminal shows (the last N
                              lines of it; --all reaches into the history)
+  ift focus <card>           go to a card as the palette does: show its
+                             workspace, focus it and fit it; needs a running
+                             app, and does not bring its window to the front
+                             (bare `ift` does that)
   ift close <card>           close a card like Cmd+W; a locked card refuses
   ift run <command-id>       run a registered command as the palette would,
                              on the card in focus (ift commands lists them)
@@ -169,9 +179,10 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 29] = [
+pub const SUBCOMMANDS: [&str; 31] = [
     "diff",
     "ls",
+    "workspaces",
     "sessions",
     "attach",
     "connect",
@@ -180,6 +191,7 @@ pub const SUBCOMMANDS: [&str; 29] = [
     "terminal",
     "send",
     "read",
+    "focus",
     "close",
     "run",
     "omni",
@@ -252,9 +264,11 @@ fn main() -> ExitCode {
         },
         Some("ls") if args.iter().any(|a| a == "--agents") => send("ls", rest()),
         Some("ls") => send_table("ls", &LS_HEADER),
+        Some("workspaces") => send_table("workspaces", &WORKSPACES_HEADER),
         Some("terminal") => terminal_cmd(&args[1..]),
         Some("send") => send("send", rest()),
         Some("read") => send("read", rest()),
+        Some("focus") => send("focus", rest()),
         Some("close") => send("close", rest()),
         Some("run") => send("run", rest()),
         Some("commands") => send_table("commands", &["id", "label", "key"]),
@@ -517,16 +531,26 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
 /// CEF and the canvas load take a few seconds on a cold start.
 const LAUNCH_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// `ift terminal <dir>...`: resolves each path here, since the app's working
-/// directory is not the caller's, and starts the app first when its socket
-/// is not there.
-fn terminal_cmd(paths: &[String]) -> ExitCode {
-    if paths.is_empty() {
+/// `ift terminal [flags] <dir>...`: resolves each path here, since the app's
+/// working directory is not the caller's, and starts the app first when its
+/// socket is not there. The flags go to the app untouched, which is where
+/// they are parsed, so the Finder service and a script see one behaviour.
+fn terminal_cmd(args: &[String]) -> ExitCode {
+    let parsed = match infiniterm_core::ift::parse_terminal_args(args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("ift: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if parsed.dirs.is_empty() {
         eprintln!("ift: terminal takes a directory");
         return ExitCode::from(2);
     }
-    let mut dirs = Vec::new();
-    for p in paths {
+    // The flags (and a `--` if given) go first, as typed. Resolved paths are
+    // absolute, so they can never be taken for a flag by the app.
+    let mut dirs: Vec<String> = args[..args.len() - parsed.dirs.len()].to_vec();
+    for &p in &parsed.dirs {
         match std::fs::canonicalize(p) {
             Ok(full) if full.is_dir() => dirs.push(full.to_string_lossy().into_owned()),
             Ok(_) => {
@@ -583,6 +607,8 @@ fn split_line(arg: &str) -> (&str, Option<u32>) {
 
 /// `ift ls`'s columns, the order the app answers in (`ift.rs`).
 const LS_HEADER: [&str; 6] = ["id", "group", "directory", "state", "remote", "card"];
+
+const WORKSPACES_HEADER: [&str; 4] = ["id", "name", "cards", "active"];
 
 /// A listing the app answers tab-separated: a table with a header on a
 /// terminal, the rows as they came into a pipe (`cut -f1` is the list of
@@ -1188,6 +1214,52 @@ mod tests {
         assert!(src.contains("pi.on(\"agent_settled\""));
     }
 
+    /// The stand-in for `infiniterm-hook`: one script for the whole test run,
+    /// written and made executable ONCE before any adapter runs, and never
+    /// written again. It records its arguments and stdin in the file
+    /// `$IFT_FAKE_LOG` names, so each call has its own log.
+    ///
+    /// Why not one per call (#563): a file that is open for writing cannot be
+    /// executed (ETXTBSY), and another test thread that forks while this one
+    /// has it open holds a copy of the descriptor until its own exec. The
+    /// adapter's exec of a hook written moments earlier then failed, the log
+    /// stayed empty, and `make check` failed one run in a few. The wait below
+    /// executes it until it runs: once it has, no process holds it open for
+    /// writing, and none can again.
+    fn fake_hook() -> &'static std::path::Path {
+        static HOOK: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        HOOK.get_or_init(|| {
+            let dir = std::env::temp_dir().join(format!("ift-fake-hook-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let hook = dir.join("hook.sh");
+            std::fs::write(
+                &hook,
+                "#!/bin/sh\necho \"$@\" > \"$IFT_FAKE_LOG\"\ncat >> \"$IFT_FAKE_LOG\"\n",
+            )
+            .unwrap();
+            // Windows has no execute bit; `sh` runs the script by path anyway.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+                for _ in 0..500 {
+                    let tried = std::process::Command::new(&hook)
+                        .env("IFT_FAKE_LOG", "/dev/null")
+                        .stdin(std::process::Stdio::null())
+                        .output();
+                    match tried {
+                        // ETXTBSY: a forked child still holds the write end.
+                        Err(e) if e.raw_os_error() == Some(26) => {
+                            std::thread::sleep(std::time::Duration::from_millis(10))
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            hook
+        })
+    }
+
     /// Runs an adapter script the way an agent does: JSON piped in, a card id
     /// in the environment, a stand-in for `infiniterm-hook` that records what
     /// it was called with. Two bugs hid here until a real run: python's stdin
@@ -1212,27 +1284,23 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("call.txt");
-        let fake = dir.join("hook.sh");
-        std::fs::write(
-            &fake,
-            format!("#!/bin/sh\necho \"$@\" > {0}\ncat >> {0}\n", log.display()),
-        )
-        .unwrap();
+        let fake = fake_hook();
+        // Only read by `sh`, never executed, so writing it per call is safe.
         let script = dir.join("adapter.sh");
-        std::fs::write(&script, adapter.replace("__INFINITERM_HOOK__", &fake.to_string_lossy()))
-            .unwrap();
-        // Windows has no execute bit; `sh` runs the script by path anyway.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            for f in [&fake, &script] {
-                std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
-            }
-        }
+        // The adapters give the hook half a second, so a slow agent is never
+        // held up by it. A loaded test machine (a build, other sessions,
+        // hundreds of python starts) can take longer than that to start the
+        // stand-in, and the adapter then kills it before it writes anything:
+        // the second cause of #563. The wait is the only thing changed.
+        let source = adapter
+            .replace("__INFINITERM_HOOK__", &fake.to_string_lossy())
+            .replace("timeout=0.5,", "timeout=60,");
+        std::fs::write(&script, source).unwrap();
         let mut child = Command::new("sh")
             .arg(&script)
             .arg(event_arg)
             .env("INFINITERM_CARD_ID", "card-1")
+            .env("IFT_FAKE_LOG", &log)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .spawn()
@@ -1264,6 +1332,27 @@ mod tests {
         let tool = r#"{"conversationId":"c1","toolCall":{"name":"run_command"}}"#;
         let out = run_adapter(ANTIGRAVITY_ADAPTER, "PreToolUse", tool).unwrap();
         assert!(out.contains(r#""tool_name": "run_command""#), "{out}");
+    }
+
+    // #563: 200 adapter runs at once, as a busy full test run has other
+    // threads forking beside each. Every one must reach the stand-in hook.
+    #[test]
+    fn two_hundred_adapter_runs_in_parallel_all_reach_the_hook() {
+        let prompt = r#"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"k1","cwd":"/work"}"#;
+        if run_adapter(CURSOR_ADAPTER, "", prompt).is_none() {
+            return;
+        }
+        let failures: usize = (0..200)
+            .map(|_| std::thread::spawn(move || run_adapter(CURSOR_ADAPTER, "", prompt)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .filter(|out| {
+                !out.as_deref()
+                    .is_some_and(|o| o.starts_with("UserPromptSubmit cursor"))
+            })
+            .count();
+        assert_eq!(failures, 0, "runs that never reached the hook");
     }
 
     #[test]

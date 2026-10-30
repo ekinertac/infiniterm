@@ -67,11 +67,24 @@ _ift_groups() {
   _describe -t groups 'group' groups
 }
 
+_ift_workspaces() {
+  # `ift workspaces` into a pipe: id, name, cards, active. The name is what
+  # a person types; `new` makes one.
+  local -a names
+  local id name rest
+  while IFS=$'\t' read -r id name rest; do
+    [[ -n $name && $name != - ]] && names+=("${name//:/\\:}")
+  done < <(ift workspaces 2>/dev/null)
+  names+=(new)
+  _describe -t workspaces 'workspace' names
+}
+
 _ift() {
   local -a cmds
   cmds=(
     'diff:changes against git HEAD, as a card'
     'ls:cards as a table'
+    'workspaces:workspaces as a table'
     'sessions:session daemons still running, app or no app'
     'attach:connect a session'\''s shell to this terminal'
     'connect:open a second infiniterm for a host'
@@ -80,6 +93,7 @@ _ift() {
     'terminal:a terminal card in each folder'
     'send:type into a card'\''s shell'
     'read:print what a card shows'
+    'focus:go to a card'
     'close:close a card'
     'run:run a registered command by id'
     'omni:what the omnibox would show for a term'
@@ -112,10 +126,11 @@ _ift() {
     connect) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_hosts' ;;
     send) (( CURRENT == 3 )) && _ift_cards ;;
     read) (( CURRENT == 3 )) && _ift_cards || _arguments '--lines[the last N lines only]:lines:' '--all[include the history]' ;;
+    focus) (( CURRENT == 3 )) && _ift_cards ;;
     close) (( CURRENT == 3 )) && _ift_cards ;;
     run) (( CURRENT == 3 )) && _ift_command_ids ;;
     diff) _files -/ ;;
-    terminal) _files -/ ;;
+    terminal) _arguments '--workspace[open on this workspace, or make one]:workspace:_ift_workspaces' '--name[a name for the new workspace]:name:' '*:folder:_files -/' ;;
     group) _ift_groups ;;
     install-pi-hooks) _arguments '--dry-run[show the edit, write nothing]' '1:agent dir:_files -/' ;;
     install-claude-hooks) _arguments '--dry-run[show the edit, write nothing]' ;;

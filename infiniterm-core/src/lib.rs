@@ -17,6 +17,10 @@ pub mod layout;
 
 pub mod resize;
 
+pub mod window_fit;
+
+pub mod custom_size;
+
 pub mod cards;
 
 pub mod navigate;
@@ -72,12 +76,16 @@ pub mod editor_keys;
 pub mod editor_theme;
 pub mod extensions;
 pub mod extracted_keys;
+pub mod file_proto;
+pub mod file_server;
+pub mod file_source;
 pub mod files;
 pub mod frame_rate;
 pub mod fullscreen;
 pub mod fuzzy;
 pub mod git;
 pub mod git_repo;
+pub mod host_pictures;
 pub mod menu_nav;
 // `ift serve` (a Linux host running `iftd`) rides on the daemon, the join hub
 // and unix sockets; none of it exists on Windows.

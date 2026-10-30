@@ -47,6 +47,9 @@ impl AppView {
     }
 
     pub fn reconcile_editors(&mut self, window: &Window) {
+        // A joined window reads a host's files and git through its file
+        // service (#560): page, editor, transcript and diff cards all do, so
+        // a viewer builds a body for each.
         self.reconcile_transcripts(window);
         self.reconcile_pages(window);
         self.reconcile_whats_new(window);
@@ -93,6 +96,7 @@ impl AppView {
             let is_diff = card.kind == CardKind::Diff;
             let fresh = self.editor_tabs_for(&card.id).is_none();
             if fresh {
+                let source = self.file_source();
                 let mut tabs = if is_diff {
                     // The diff's scope: the root it was opened on, else its
                     // file, else the directory it was opened from.
@@ -109,6 +113,7 @@ impl AppView {
                 // keys at once. The lock is the body's from here on, and the
                 // mirror below copies it back onto the card.
                 tabs.locked = card.locked;
+                tabs.source = source;
                 self.bodies.insert(card.id.clone(), Box::new(tabs));
             }
             let Some(tabs) = self.editor_tabs_for(&card.id) else {
@@ -135,7 +140,10 @@ impl AppView {
                 // diff (with the list as the card says), else it opens on
                 // the list of changed files.
                 if fresh {
+                    let source = tabs.source.clone();
                     if let Some(body) = tabs.active_body() {
+                        // A host's git and files, in a joined window.
+                        body.source = source;
                         body.diff_start(card.path.as_deref(), card.explorer);
                     }
                 }
@@ -192,10 +200,15 @@ impl AppView {
                 Wrap::Never => false,
                 Wrap::Prose => Language::is_prose(&path),
             };
-            body.read_only = is_diff || is_generated(&path) || Language::is_image(&path);
+            body.read_only = is_diff
+                || is_generated(&path)
+                || Language::is_image(&path)
+                // A host's file that is loading, or could not be read.
+                || body.host_locked;
             body.sidebar_top = card.sidebar_top;
             body.sidebar_w = sidebar_width(card.sidebar, sidebar_extent(world, card.sidebar_top));
-            // A diff's list is its own (changed files, not the folder).
+            // A diff's list is its own (changed files, not the folder). A
+            // host's folder is listed by the host (`host_dirs.rs`).
             if card.explorer && !is_diff {
                 if let Some(root) = card.root.clone() {
                     body.show_tree(&root);
@@ -279,7 +292,33 @@ impl AppView {
     /// One `PageBody` per Page card (#42). The chrome's text on the card's
     /// ground, the theme's blue for headings, green for code and cyan for
     /// links.
-    fn reconcile_pages(&mut self, window: &Window) {
+    /// Where this window's cards read their files: the host's, in a joined
+    /// window (one connection, made at the first request, #560), else this
+    /// machine's own disk.
+    #[cfg(unix)]
+    pub fn file_source(&mut self) -> std::sync::Arc<dyn infiniterm_core::file_source::FileSource> {
+        use infiniterm_core::file_source::{FileSource, LocalSource};
+        if self.viewer {
+            if let Some(s) = &self.host_files {
+                return s.clone();
+            }
+            if let Some(host) = infiniterm_core::backend::remote::join_from_env() {
+                let source: std::sync::Arc<dyn FileSource> =
+                    infiniterm_core::backend::file_client::HostSource::new(host);
+                self.host_files = Some(source.clone());
+                return source;
+            }
+        }
+        std::sync::Arc::new(LocalSource)
+    }
+
+    /// Joining is unix-only, so there is no host to read from elsewhere.
+    #[cfg(windows)]
+    pub fn file_source(&mut self) -> std::sync::Arc<dyn infiniterm_core::file_source::FileSource> {
+        std::sync::Arc::new(infiniterm_core::file_source::LocalSource)
+    }
+
+    pub fn reconcile_pages(&mut self, window: &Window) {
         let metrics = self.metrics(window);
         let theme_hex = |k: &str| {
             self.chrome
@@ -321,9 +360,16 @@ impl AppView {
                 .and_then(|b| b.as_any_mut().downcast_mut::<PageBody>())
                 .is_some();
             if !built {
+                let source = self.file_source();
                 self.bodies.insert(
                     card.id.clone(),
-                    Box::new(PageBody::new(path.clone(), &metrics, colors.clone(), world)),
+                    Box::new(PageBody::new(
+                        path.clone(),
+                        &metrics,
+                        colors.clone(),
+                        world,
+                        source,
+                    )),
                 );
             }
             let Some(body) = self.bodies.get_mut(&card.id) else {
@@ -386,6 +432,7 @@ impl AppView {
                 .is_some();
             if !exists {
                 let mut body = TranscriptBody::new(card.path.clone(), &metrics, world);
+                body.set_source(self.file_source());
                 body.idle(crate::now_ms());
                 self.bodies.insert(card.id.clone(), Box::new(body));
             }

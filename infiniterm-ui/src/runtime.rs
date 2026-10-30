@@ -16,6 +16,23 @@ use infiniterm_core::model::register::{describe_context, register_commands, run_
 use infiniterm_core::model::settings_in::{EMPTY_KEYBINDINGS, EMPTY_SETTINGS};
 use infiniterm_core::model::Effect;
 use infiniterm_core::paths::{home_dir, socket_path};
+
+/// Something dropped or pasted into a joined card that has to reach the host
+/// before its program can read it (#556).
+pub enum HostItem {
+    /// A file or folder on this Mac.
+    Path(std::path::PathBuf),
+    /// A clipboard image: its bytes and the extension its format has.
+    Image { ext: String, bytes: Vec<u8> },
+}
+
+/// A transfer that ended: the host's paths in the order sent, or why not.
+/// Joining is unix-only, so nothing makes one elsewhere.
+#[cfg(unix)]
+pub struct HostDrop {
+    pub card: String,
+    pub result: Result<Vec<String>, String>,
+}
 use infiniterm_core::settings_doc::default_settings_text;
 use infiniterm_core::themes_files::{ensure_themes_dir, list_themes, read_theme};
 use std::path::PathBuf;
@@ -80,7 +97,15 @@ impl AppView {
             #[cfg(unix)]
             join_updates: None,
             #[cfg(unix)]
+            host_files: None,
+            #[cfg(unix)]
+            host_config: None,
+            #[cfg(unix)]
+            join_opens: None,
+            #[cfg(unix)]
             uplink: None,
+            #[cfg(unix)]
+            host_drops: std::sync::mpsc::channel(),
             viewer: false,
             viewer_poke: false,
             #[cfg(unix)]
@@ -121,8 +146,6 @@ impl AppView {
             extracted_size: Default::default(),
             extract_request: None,
             page_menu_open: false,
-            platform_keys: Default::default(),
-            platform_keys_for: Vec::new(),
             #[cfg(not(target_os = "macos"))]
             title_press: None,
             menu_anchor: (0., 0.),
@@ -519,6 +542,7 @@ impl AppView {
                     self.model.ui_theme_names = infiniterm_core::config_files::list_ui_themes();
                 }
                 Effect::LoadTheme(name) => self.load_theme(&name),
+                Effect::AskHostConfig { keybindings } => self.ask_host_config(keybindings),
                 Effect::RefreshThemes => self.refresh_themes(),
                 Effect::RefreshSnippets => self.refresh_snippets(),
                 Effect::PasteText { card_id, text } => self.paste_text(&card_id, &text),
@@ -993,9 +1017,102 @@ impl AppView {
             if let Some(hub) = &self.join {
                 // Remembered by revision, so a viewer's edit can be compared
                 // with the canvas it started from and merged field by field.
+                // Viewers also get the in-place editors, which the file
+                // leaves out (#566).
+                let text = self.model.publish_text().unwrap_or(text);
                 let rev = self.model.record_published(&text);
                 hub.publish_layout(&text, rev);
             }
+        }
+    }
+
+    /// Sends what was dropped or pasted into a joined card to the host and
+    /// types the host's paths into it when they have arrived (#556). The
+    /// shell is on the host: a path on this Mac is one its program cannot read.
+    #[cfg(windows)]
+    pub fn send_to_host(&mut self, _card: &str, _items: Vec<HostItem>) {}
+
+    #[cfg(unix)]
+    pub fn send_to_host(&mut self, card: &str, items: Vec<HostItem>) {
+        let Some(host) = infiniterm_core::backend::remote::join_from_env() else {
+            return;
+        };
+        if items.is_empty() {
+            return;
+        }
+        self.model.notify(match items.len() {
+            1 => "sending 1 item to the host...".to_string(),
+            n => format!("sending {n} items to the host..."),
+        });
+        // Sent over the file connection (one request each, no login of its
+        // own); a folder, a file too big for it or an older host go over ssh.
+        let source = self.file_source();
+        let (tx, card) = (self.host_drops.0.clone(), card.to_string());
+        std::thread::spawn(move || {
+            use infiniterm_core::backend::host_drop::{new_id, send_image_via, send_path_via};
+            // One folder on the host for the whole drop.
+            let id = new_id();
+            let mut paths = Vec::new();
+            let mut failure = None;
+            for item in &items {
+                let sent = match item {
+                    HostItem::Path(p) => send_path_via(&*source, &host, p, &id),
+                    HostItem::Image { ext, bytes } => {
+                        send_image_via(&*source, &host, bytes, ext, &id)
+                    }
+                };
+                match sent {
+                    Ok(p) => paths.push(p),
+                    Err(e) => {
+                        failure = Some(e);
+                        break;
+                    }
+                }
+            }
+            let _ = tx.send(HostDrop {
+                card,
+                result: match failure {
+                    Some(e) => Err(e),
+                    None => Ok(paths),
+                },
+            });
+        });
+    }
+
+    /// Transfers that ended: the host's paths are typed into the card the
+    /// way a local drop's are (quoted, one line), or the reason is shown.
+    #[cfg(windows)]
+    pub fn drain_host_drops(&mut self) {}
+
+    #[cfg(unix)]
+    pub fn drain_host_drops(&mut self) {
+        while let Ok(done) = self.host_drops.1.try_recv() {
+            match done.result {
+                Ok(paths) => {
+                    // The host's shell, not this Mac's: POSIX quoting.
+                    let text = paths
+                        .iter()
+                        .map(|p| {
+                            infiniterm_core::drop::quote_for(
+                                p,
+                                infiniterm_core::shell_cmd::ShellKind::Posix,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    self.model.set_focus(Some(&done.card));
+                    if let Some(body) = self.live_body(&done.card).and_then(|b| {
+                        b.as_any_mut()
+                            .downcast_mut::<crate::terminal_body::TerminalBody>()
+                    }) {
+                        body.paste_text(&text);
+                    }
+                    self.flush_writes();
+                    self.model.notify("sent to the host");
+                }
+                Err(why) => self.model.notify(why),
+            }
+            self.redraw = true;
         }
     }
 
@@ -1014,10 +1131,74 @@ impl AppView {
             return;
         };
         let layout = self.model.layout_snapshot();
-        let _ = up.send(infiniterm_core::backend::join::RemoteUpdate {
-            base: self.model.layout_rev,
-            layout,
+        let _ = up.send(infiniterm_core::backend::join_client::Uplink::Edit(
+            infiniterm_core::backend::join::RemoteUpdate {
+                base: self.model.layout_rev,
+                layout,
+                closed: self.model.closed_ids(),
+            },
+        ));
+    }
+
+    /// A Cmd+click on a path in a joined terminal (#555): the path is the
+    /// HOST's, so the host is asked to open it. Said in a notice when it
+    /// cannot be sent.
+    #[cfg(windows)]
+    pub fn send_open_request(&mut self, _card: &str, _path: String, _line: Option<u64>) {}
+
+    #[cfg(unix)]
+    pub fn send_open_request(&mut self, card: &str, path: String, line: Option<u64>) {
+        let cwd = self
+            .model
+            .card(card)
+            .map(|c| c.cwd.clone())
+            .unwrap_or_default();
+        let sent = self.uplink.as_ref().is_some_and(|up| {
+            up.send(infiniterm_core::backend::join_client::Uplink::Open(
+                infiniterm_core::backend::join::OpenRequest {
+                    card: card.to_string(),
+                    cwd,
+                    path,
+                    line,
+                },
+            ))
+            .is_ok()
         });
+        if sent {
+            self.model.await_host_open();
+        } else {
+            self.model.notify("could not ask the host to open it");
+        }
+    }
+
+    /// A viewer's click on a path, found on this disk by the join server: an
+    /// editor or folder card beside the card it came from, as a Cmd+click in
+    /// this window is. True when a card was made.
+    #[cfg(windows)]
+    pub fn apply_remote_opens(&mut self) -> bool {
+        false
+    }
+
+    #[cfg(unix)]
+    pub fn apply_remote_opens(&mut self) -> bool {
+        let Some(rx) = &self.join_opens else {
+            return false;
+        };
+        let opens: Vec<_> = rx.try_iter().collect();
+        let mut changed = false;
+        for o in opens {
+            let kind = if o.directory {
+                infiniterm_core::ift::PathKind::Directory
+            } else {
+                infiniterm_core::ift::PathKind::File
+            };
+            let plan = infiniterm_core::ift::open_plan(&o.path, kind, o.line.map(|l| l as f64));
+            changed |= self.model.open_in_card(plan, Some(&o.card)).is_some();
+        }
+        if changed {
+            self.perform_effects();
+        }
+        changed
     }
 
     /// What the viewers sent up since the last tick (#423), applied to this
@@ -1038,7 +1219,7 @@ impl AppView {
         let updates: Vec<_> = rx.try_iter().collect();
         let mut changed = false;
         for u in updates {
-            match self.model.apply_remote_layout(&u.layout, u.base) {
+            match self.model.apply_remote_layout(&u.layout, u.base, &u.closed) {
                 Ok(RemoteApply::Applied) => changed = true,
                 Ok(RemoteApply::Stale) => {
                     self.write_layout();
@@ -1089,8 +1270,59 @@ impl AppView {
     #[cfg(windows)]
     pub fn drain_canvas(&mut self) {}
 
+    /// A viewer's open-settings needs the host's config folder: asked of the
+    /// file service on a thread (`home`), answered in `drain_canvas`.
+    #[cfg(windows)]
+    pub fn ask_host_config(&mut self, _keybindings: bool) {}
+
+    #[cfg(unix)]
+    pub fn ask_host_config(&mut self, keybindings: bool) {
+        let source = self.file_source();
+        if source.is_local() {
+            self.model.notify("this window has no host to ask");
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.host_config = Some(rx);
+        std::thread::spawn(move || {
+            let answer = source
+                .home()
+                .map(|h| h.config_dir)
+                .map_err(|e| e.to_string());
+            let _ = tx.send((keybindings, answer));
+        });
+        self.model
+            .notify("asking the host where its settings are...");
+    }
+
     #[cfg(unix)]
     pub fn drain_canvas(&mut self) {
+        self.take_host_config();
+        self.drain_canvas_events();
+    }
+
+    /// The host said where its config folder is (or could not): the settings
+    /// the command asked for open there.
+    #[cfg(unix)]
+    fn take_host_config(&mut self) {
+        let Some(rx) = &self.host_config else {
+            return;
+        };
+        let Ok((keybindings, answer)) = rx.try_recv() else {
+            return;
+        };
+        self.host_config = None;
+        match answer {
+            Ok(dir) => self.model.host_config_known(&dir, keybindings),
+            Err(why) => self
+                .model
+                .notify(format!("could not ask the host for its settings: {why}")),
+        }
+        self.redraw = true;
+    }
+
+    #[cfg(unix)]
+    fn drain_canvas_events(&mut self) {
         use infiniterm_core::backend::join_client::CanvasEvent;
         let Some(rx) = &self.canvas_rx else {
             return;
@@ -1111,7 +1343,9 @@ impl AppView {
                         self.model.notify(&why);
                     }
                 }
-                CanvasEvent::Revision(rev) => self.model.layout_rev = rev,
+                CanvasEvent::Revision(rev) => {
+                    self.model.note_host_revision(rev);
+                }
                 CanvasEvent::Agents(text) => self.model.apply_agent_states(&text),
                 CanvasEvent::Connected => {
                     self.viewer_poke = true;
@@ -1217,6 +1451,7 @@ fn start_join(app: &mut AppView) {
     match hub.serve(&infiniterm_core::paths::join_socket()) {
         Ok(()) => {
             app.join_updates = hub.take_updates();
+            app.join_opens = hub.take_opens();
             app.join = Some(hub);
         }
         Err(e) => eprintln!("[infiniterm/warn] ift join is off: {e}"),
@@ -1304,6 +1539,8 @@ pub fn startup(app: &mut AppView) {
     // is installed now. A first launch opens it (`seed_first_card`).
     {
         use infiniterm_core::welcome;
+        // The keys it names are the platform's (`Model::shown_keymap`).
+        app.sync_platform_keys();
         let env_path = |k: &str| std::env::var_os(k).map(std::path::PathBuf::from);
         let home = infiniterm_core::paths::home_dir();
         let agents = welcome::agents_on_this_mac(
@@ -1318,7 +1555,11 @@ pub fn startup(app: &mut AppView) {
             .and_then(|()| {
                 std::fs::write(
                     &path,
-                    welcome::render(&app.model.keymap, &agents, app.model.modifier_labels()),
+                    welcome::render(
+                        &app.model.shown_keymap(),
+                        &agents,
+                        app.model.modifier_labels(),
+                    ),
                 )
             });
         if let Err(e) = written {
@@ -1727,6 +1968,10 @@ impl AppView {
             &u.bundle.to_string_lossy(),
             &staged.app.to_string_lossy(),
             &aside.to_string_lossy(),
+            // The new app starts as this one is (a viewer stays a viewer);
+            // Windows' waiter inherits the environment and needs nothing.
+            #[cfg(not(windows))]
+            &infiniterm_core::update::relaunch_env(),
         );
         self.flush_save();
         // `spawn_waiter`, not a bare `/bin/sh`, which is what this used to
@@ -1811,10 +2056,16 @@ fn spawn_waiter(script: &str) -> Result<(), String> {
 fn relaunch_after_exit() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let bundle = bundle_of(&exe).ok_or("not running from an .app bundle")?;
+    // `open` does not pass this process's environment on, so a viewer (or a
+    // scratch instance) would come back as a plain app: its variables go as
+    // `--env` (#583).
     spawn_waiter(&format!(
-        "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; exec open {bundle}",
+        "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; exec {open}",
         pid = std::process::id(),
-        bundle = infiniterm_core::drop::posix_quote(&bundle.to_string_lossy()),
+        open = infiniterm_core::update::open_command(
+            &bundle.to_string_lossy(),
+            &infiniterm_core::update::relaunch_env()
+        ),
     ))
 }
 
