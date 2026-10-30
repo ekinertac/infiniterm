@@ -52,6 +52,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 - Fixed: Cmd+click on a file or folder path in a joined window's terminal (`ift join`) did nothing, because the path was looked up on your Mac instead of the host. It now asks the host, which opens an editor (or folder) card beside the terminal on its own canvas; the card appears in your window like any other. A path that is not on the host says so in a notice.
 
+### 2026-10-23
+
+- New: `ift workspaces` lists the workspaces (id, name, cards, and `*` on the one on screen). `ift terminal --workspace <id|name|new> [--name <text>] <dir>...` opens the terminals on that workspace and shows it; `new` makes a workspace first. Without `--workspace` nothing changes.
+
 ### 2026-10-22
 
 - `"ui.hideBuildNumber": true` in settings.json hides "build N" at the right end of the status bar.
