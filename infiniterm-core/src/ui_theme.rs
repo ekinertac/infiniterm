@@ -73,13 +73,16 @@ pub enum Kind {
     Bool,
     Text,
     TextOrList,
+    /// One of a fixed set of words (`ui.icon`); anything else rejects the file.
+    Choice(&'static [&'static str]),
 }
 
 /// Every look key the file accepts, with its value kind. These are the keys
 /// that left settings.json in #511. The `settings_doc` rule applies here too:
 /// a key someone can write is a key in this list, in `Ui::take_look_from`
 /// and in the docs; a test holds each of the three.
-pub const LOOK_KEYS: [(&str, Kind); 17] = [
+pub const LOOK_KEYS: [(&str, Kind); 18] = [
+    ("ui.icon", Kind::Choice(&crate::app_icon::NAMES)),
     ("ui.windowOpacity", Kind::Number),
     ("ui.windowBlur", Kind::Bool),
     ("ui.windowColor", Kind::Text),
@@ -226,6 +229,13 @@ fn border(key: &str, v: &Value) -> Result<BorderSpec, String> {
 }
 
 fn check_kind(key: &str, kind: Kind, v: &Value) -> Result<(), String> {
+    if let Kind::Choice(words) = kind {
+        if v.as_str().is_some_and(|s| words.contains(&s)) {
+            return Ok(());
+        }
+        let list: Vec<String> = words.iter().map(|w| format!("\"{w}\"")).collect();
+        return Err(format!("\"{key}\" must be {}", list.join(" or ")));
+    }
     let (ok, want) = match kind {
         Kind::Number => (v.is_number(), "a number"),
         Kind::Bool => (v.is_boolean(), "true or false"),
@@ -234,6 +244,7 @@ fn check_kind(key: &str, kind: Kind, v: &Value) -> Result<(), String> {
             v.is_string() || v.as_array().is_some_and(|a| a.iter().all(Value::is_string)),
             "text or a list of text",
         ),
+        Kind::Choice(_) => unreachable!("handled above"),
     };
     if ok {
         Ok(())
@@ -369,6 +380,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ui_icon_takes_default_or_filled_and_nothing_else() {
+        assert_eq!(
+            parse(r#"{"ui.icon": "filled"}"#).unwrap().look["ui.icon"],
+            json!("filled")
+        );
+        assert!(parse(r#"{"ui.icon": "default"}"#).is_ok());
+        for bad in [r#""outline""#, r#""Filled""#, "1", "true", r#""""#] {
+            let e = parse(&format!(r#"{{"ui.icon": {bad}}}"#)).unwrap_err();
+            assert!(
+                e.contains("ui.icon") && e.contains("\"default\" or \"filled\""),
+                "{e}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_typed_ui_icon_in_settings_json_is_dropped_with_its_name() {
+        let (rest, dropped) = strip_look(&json!({"ui.icon": "filled", "ui": {"icon": "filled"}}));
+        assert_eq!(dropped, ["ui.icon", "ui.icon"]);
+        assert_eq!(rest, json!({"ui": {}}));
+    }
+
     // A behaviour key is not a look key: it stays in settings.json.
     #[test]
     fn a_behaviour_key_or_a_typo_rejects_the_file() {
@@ -405,10 +439,12 @@ mod tests {
             let sample = match (key, kind) {
                 ("ui.backgroundImageFit", _) => json!("contain"),
                 ("ui.showGrid", _) => json!(false),
+                ("ui.icon", _) => json!("filled"),
                 (_, Kind::Bool) => json!(true),
                 (_, Kind::Number) => json!(0.5),
                 (_, Kind::Text) => json!("x"),
                 (_, Kind::TextOrList) => json!(["dusk"]),
+                (_, Kind::Choice(_)) => unreachable!("named above"),
             };
             let look = merge_config(&json!({ key: sample })).ui;
             let mut ui = default_config().ui;

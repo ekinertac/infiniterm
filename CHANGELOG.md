@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-31
+
+- New app icon: the four cards are now outlined in violet, yellow, red and green on a dark rounded square. A filled version comes with the app. Put `"ui.icon": "filled"` in a ui theme (`"default"` is the outline) and the Dock icon changes as you save, with no restart. The window colour badge stays on top. Finder and Launchpad keep the default icon: a running app cannot change them.
+
 ### 2026-10-28
 
 - New: "Custom size…" in the Cmd+Alt+S menu (command `card.size.custom`). A prompt asks for a width and height in grid squares, the unit of `cards.width` (50 is 1250 px), and accepts `60x90`, `60 x 90`, `60 90` or `60,90`. The selected cards take that size and are placed like "Default size": one gutter from the card on their left and the card above, nothing overlapping, unselected cards untouched. The prompt starts from the last size you typed, then from the default size. A size under the minimum card is raised to it with a notice, one over 400 squares a side is refused, and the notice after applying gives the size in pixels. Cmd+Z undoes it in one step.

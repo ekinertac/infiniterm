@@ -180,6 +180,9 @@ pub mod instance_icon {
     pub fn init() {}
     pub fn clear_badge() {}
     pub fn set_badge(_color: Rgb) {}
+    /// `ui.icon`: the window icon comes from the `.desktop` file or the
+    /// executable's resources, so there is no Dock image to swap.
+    pub fn set_base(_icon: infiniterm_core::app_icon::AppIcon) {}
 }
 
 /// A press on the bare title bar (`overlays.rs`; a tab or the "+" stop the
