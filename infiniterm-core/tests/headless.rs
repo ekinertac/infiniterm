@@ -172,7 +172,7 @@ fn a_host_with_no_window_holds_the_canvas_serves_a_viewer_and_hands_the_cards_on
     edited["cards"].as_array_mut().unwrap().push(made);
     viewer.send(&encode_canvas_message(
         KIND_UPDATE,
-        &encode_update(rev, &edited.to_string()),
+        &encode_update(rev, &edited.to_string(), &[]),
     ));
     assert!(
         tick_until(&mut host, |h| h
@@ -224,9 +224,11 @@ fn a_host_with_no_window_holds_the_canvas_serves_a_viewer_and_hands_the_cards_on
         .as_array_mut()
         .unwrap()
         .retain(|c| c["id"] != "viewer-made-card");
+    // The close is named (#588): a layout that merely lacks the card closes
+    // nothing.
     viewer.send(&encode_canvas_message(
         KIND_UPDATE,
-        &encode_update(rev, &edited.to_string()),
+        &encode_update(rev, &edited.to_string(), &["viewer-made-card".to_string()]),
     ));
     assert!(
         tick_until(&mut again, |h| h.model.card("viewer-made-card").is_none()),

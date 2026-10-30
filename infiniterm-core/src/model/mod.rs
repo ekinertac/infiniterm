@@ -37,6 +37,7 @@ pub mod reading_cmd;
 pub mod register;
 pub mod settings_in;
 pub mod tabs_cmd;
+pub mod window_fit_cmd;
 pub mod workspaces_cmd;
 
 use crate::agent_state::AgentState;
@@ -343,6 +344,12 @@ pub enum Effect {
         value: Value,
     },
     LoadTheme(String),
+    /// A viewer needs the host's config folder to open its settings (#559):
+    /// the app asks the file service (`home`) and answers with
+    /// `Model::host_config_known`.
+    AskHostConfig {
+        keybindings: bool,
+    },
     RefreshThemes,
     /// Read `ui-themes/<name>.json` and hand its text (`None`: no such file)
     /// to `Model::apply_ui_theme_text`. From `ui.theme` changing and from the
@@ -531,6 +538,8 @@ pub enum Pending {
     About,
     /// The custom hex colour of a window (`window.color`).
     WindowColor,
+    /// Width and height typed for the selection (`card.size.custom`).
+    CustomSize,
     /// `editor.goToLine`: the number typed lands in `card.line` for the body.
     GoToLine(String),
 }
@@ -563,6 +572,28 @@ const NOTICE_MAX_MS: f64 = 12000.;
 pub const NOTICE_MIN_SHOW_MS: f64 = 1500.;
 
 /// How long `text` stays in the status bar.
+/// Where a host run's revisions start: a random EPOCH in the high 32 bits,
+/// the count in the low ones. Revisions used to restart at 1 with every run
+/// of the host app, so a viewer that kept an old run's revision could name a
+/// revision a NEW run had also made, and the host compared its edit with a
+/// different canvas (#588). With the epoch in the number, two runs never
+/// share a revision: an edit on another run's revision is stale, applies
+/// nothing, and the viewer resyncs. 31 bits from the clock and the pid; they
+/// need to differ between runs, not to be secret.
+pub fn new_run_revision() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let mixed = nanos ^ (u64::from(std::process::id()) << 17) ^ (nanos >> 29);
+    ((mixed & 0x7fff_ffff).max(1)) << 32
+}
+
+/// The run a revision belongs to.
+pub fn revision_epoch(rev: u64) -> u64 {
+    rev >> 32
+}
+
 pub fn notice_duration_ms(text: &str) -> f64 {
     let extra = text.chars().count().saturating_sub(NOTICE_FREE_CHARS) as f64 * NOTICE_MS_PER_CHAR;
     (NOTICE_MS + extra).min(NOTICE_MAX_MS)
@@ -713,12 +744,24 @@ pub struct Model {
     /// A viewer has applied at least one host snapshot, so its viewport,
     /// zoom, focus and workspace are its own from here on.
     pub snapshot_seen: bool,
+    /// A viewer's host's config folder, once the file service has said where
+    /// it is (#559). The viewer's own is empty and never opened.
+    pub host_config_dir: Option<String>,
+    /// A viewer asked its host to open a path (#565): the cards it had then
+    /// and when it asked. The first card a snapshot brings that is not in the
+    /// list is the one the host made, and the viewer goes to it, as the host
+    /// does in its own window. It lapses after `OPEN_WAIT`.
+    pub awaiting_open: Option<(Vec<String>, std::time::Instant)>,
     /// The revision of the canvas a viewer and its host share (#423). On the
     /// host: the number of the last layout it published. On a viewer: the
     /// revision of the last snapshot it applied, which an edit it sends up
     /// names, so the host can tell an edit made on an old canvas from one made
     /// on the current one.
     pub layout_rev: u64,
+    /// The ids of the cards THIS viewer closed since the host's last canvas
+    /// reached it (#588). The upload carries them, and the host closes exactly
+    /// those: a card missing from an uploaded layout is never read as closed.
+    pub closed_by_viewer: Vec<String>,
     /// The last canvases the host published, by revision (#423). A viewer's
     /// edit names the revision it was made on; the host works out WHAT the
     /// viewer changed by comparing the edit with that canvas, and applies only
@@ -729,6 +772,10 @@ pub struct Model {
     /// Bindings with a `when` from keybindings.json (#269); the last one whose
     /// clause holds wins over `keymap` (`conditional_for`).
     pub conditional_keys: Vec<crate::keymap::CondBinding>,
+    /// Off the Mac: the two-way chord table for `keymap`, and the keymap it
+    /// was built from (`sync_platform_keys`, `platform_keys.rs`).
+    pub platform_keys: crate::platform_keys::PlatformKeys,
+    pub platform_keys_for: Keymap,
     /// What only the ui knows about the keyboard's context, written by it each
     /// frame (the completion popup, the editor's find panel and selection).
     pub ui_context: UiContext,
@@ -757,6 +804,9 @@ pub struct Model {
     /// The colour the window had when its colour picker opened (`Some(None)`:
     /// none), which a dismissed picker puts back (`color_cmd.rs`).
     pub window_color_before_preview: Option<Option<crate::remote_identity::Rgb>>,
+    /// The last size typed in "Custom size…", in px, for the next prompt to
+    /// start from. Not saved: a restart starts from the default size again.
+    pub custom_size_last: Option<Size>,
     /// The local instance's colour, from `ui.windowColor` (`None`: the normal
     /// title bar). A remote instance wears its host's instead.
     pub local_color: Option<crate::remote_identity::Rgb>,
@@ -802,6 +852,12 @@ impl Default for Model {
     }
 }
 
+/// The rule behind `Model::uses_platform_keys`, apart so it is tested for
+/// every platform on any one.
+pub fn uses_platform_keys(macos: bool, choice: crate::config::CommandModifier) -> bool {
+    !macos && choice == crate::config::CommandModifier::Ctrl
+}
+
 /// The lowest card number from 1 up that `used` does not hold. Pure, for
 /// `Model::take_number`, the load and a reopened card.
 pub fn lowest_free_number(used: &[u32]) -> u32 {
@@ -815,6 +871,66 @@ impl Model {
     /// rather than being a constant in `shortcuts.rs`.
     pub fn modifier_labels(&self) -> crate::shortcuts::ModifierLabels {
         crate::shortcuts::ModifierLabels::new(self.config.keyboard.command_modifier)
+    }
+
+    /// Whether chords are shown and read through the platform table: off
+    /// the Mac with `keyboard.commandModifier` = `ctrl` (`platform_keys.rs`).
+    pub fn uses_platform_keys(&self) -> bool {
+        uses_platform_keys(
+            cfg!(target_os = "macos"),
+            self.config.keyboard.command_modifier,
+        )
+    }
+
+    /// Rebuilds the two-way chord table when the keymap changed since it was
+    /// built; what could not be mapped comes back, for a notice. The ui
+    /// calls it before reading keys and before drawing chords.
+    pub fn sync_platform_keys(&mut self) -> Vec<String> {
+        if self.platform_keys_for == self.keymap {
+            return vec![];
+        }
+        let chords = self
+            .keymap
+            .iter()
+            .map(|(c, _)| c.as_str())
+            .chain(self.conditional_keys.iter().map(|b| b.chord.as_str()));
+        let (table, problems) = crate::platform_keys::PlatformKeys::build(chords);
+        self.platform_keys = table;
+        self.platform_keys_for = self.keymap.clone();
+        problems
+    }
+
+    /// A Mac chord as this platform shows it: itself on the Mac and with
+    /// `super`; the platform chord with `ctrl` (Ctrl+Shift+T for Cmd+T);
+    /// `None` for one with no key here (palette only). Every place a chord
+    /// is drawn goes through this or `shown_keymap`.
+    pub fn shown_chord(&self, mac: &str) -> Option<String> {
+        self.shown_chord_with(self.uses_platform_keys(), mac)
+    }
+
+    /// `shown_chord` with the platform rule given, so either side is tested
+    /// on any machine.
+    pub fn shown_chord_with(&self, platform_keys: bool, mac: &str) -> Option<String> {
+        if platform_keys {
+            self.platform_keys.platform(mac).map(String::from)
+        } else {
+            Some(mac.to_string())
+        }
+    }
+
+    /// The keymap as this platform shows it, chords with no key here left
+    /// out (`shown_chord`).
+    pub fn shown_keymap(&self) -> Keymap {
+        self.shown_keymap_with(self.uses_platform_keys())
+    }
+
+    pub fn shown_keymap_with(&self, platform_keys: bool) -> Keymap {
+        self.keymap
+            .iter()
+            .filter_map(|(chord, id)| {
+                Some((self.shown_chord_with(platform_keys, chord)?, id.clone()))
+            })
+            .collect()
     }
     pub fn new() -> Model {
         Model {
@@ -866,11 +982,16 @@ impl Model {
             read_only: false,
             dirty_layout: false,
             snapshot_seen: false,
-            layout_rev: 0,
+            host_config_dir: None,
+            awaiting_open: None,
+            layout_rev: new_run_revision(),
+            closed_by_viewer: Vec::new(),
             published: std::collections::VecDeque::new(),
             config: default_config(),
             keymap: default_keymap(),
             conditional_keys: vec![],
+            platform_keys: Default::default(),
+            platform_keys_for: Vec::new(),
             ui_context: UiContext::default(),
             settings_error: None,
             ui_theme: Default::default(),
@@ -884,6 +1005,7 @@ impl Model {
             theme_current: None,
             theme_before_preview: None,
             window_color_before_preview: None,
+            custom_size_last: None,
             local_color: None,
             start_dir: "/".into(),
             home: String::new(),

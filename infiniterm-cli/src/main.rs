@@ -1214,6 +1214,52 @@ mod tests {
         assert!(src.contains("pi.on(\"agent_settled\""));
     }
 
+    /// The stand-in for `infiniterm-hook`: one script for the whole test run,
+    /// written and made executable ONCE before any adapter runs, and never
+    /// written again. It records its arguments and stdin in the file
+    /// `$IFT_FAKE_LOG` names, so each call has its own log.
+    ///
+    /// Why not one per call (#563): a file that is open for writing cannot be
+    /// executed (ETXTBSY), and another test thread that forks while this one
+    /// has it open holds a copy of the descriptor until its own exec. The
+    /// adapter's exec of a hook written moments earlier then failed, the log
+    /// stayed empty, and `make check` failed one run in a few. The wait below
+    /// executes it until it runs: once it has, no process holds it open for
+    /// writing, and none can again.
+    fn fake_hook() -> &'static std::path::Path {
+        static HOOK: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        HOOK.get_or_init(|| {
+            let dir = std::env::temp_dir().join(format!("ift-fake-hook-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let hook = dir.join("hook.sh");
+            std::fs::write(
+                &hook,
+                "#!/bin/sh\necho \"$@\" > \"$IFT_FAKE_LOG\"\ncat >> \"$IFT_FAKE_LOG\"\n",
+            )
+            .unwrap();
+            // Windows has no execute bit; `sh` runs the script by path anyway.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+                for _ in 0..500 {
+                    let tried = std::process::Command::new(&hook)
+                        .env("IFT_FAKE_LOG", "/dev/null")
+                        .stdin(std::process::Stdio::null())
+                        .output();
+                    match tried {
+                        // ETXTBSY: a forked child still holds the write end.
+                        Err(e) if e.raw_os_error() == Some(26) => {
+                            std::thread::sleep(std::time::Duration::from_millis(10))
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            hook
+        })
+    }
+
     /// Runs an adapter script the way an agent does: JSON piped in, a card id
     /// in the environment, a stand-in for `infiniterm-hook` that records what
     /// it was called with. Two bugs hid here until a real run: python's stdin
@@ -1238,27 +1284,23 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("call.txt");
-        let fake = dir.join("hook.sh");
-        std::fs::write(
-            &fake,
-            format!("#!/bin/sh\necho \"$@\" > {0}\ncat >> {0}\n", log.display()),
-        )
-        .unwrap();
+        let fake = fake_hook();
+        // Only read by `sh`, never executed, so writing it per call is safe.
         let script = dir.join("adapter.sh");
-        std::fs::write(&script, adapter.replace("__INFINITERM_HOOK__", &fake.to_string_lossy()))
-            .unwrap();
-        // Windows has no execute bit; `sh` runs the script by path anyway.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            for f in [&fake, &script] {
-                std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
-            }
-        }
+        // The adapters give the hook half a second, so a slow agent is never
+        // held up by it. A loaded test machine (a build, other sessions,
+        // hundreds of python starts) can take longer than that to start the
+        // stand-in, and the adapter then kills it before it writes anything:
+        // the second cause of #563. The wait is the only thing changed.
+        let source = adapter
+            .replace("__INFINITERM_HOOK__", &fake.to_string_lossy())
+            .replace("timeout=0.5,", "timeout=60,");
+        std::fs::write(&script, source).unwrap();
         let mut child = Command::new("sh")
             .arg(&script)
             .arg(event_arg)
             .env("INFINITERM_CARD_ID", "card-1")
+            .env("IFT_FAKE_LOG", &log)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .spawn()
@@ -1290,6 +1332,27 @@ mod tests {
         let tool = r#"{"conversationId":"c1","toolCall":{"name":"run_command"}}"#;
         let out = run_adapter(ANTIGRAVITY_ADAPTER, "PreToolUse", tool).unwrap();
         assert!(out.contains(r#""tool_name": "run_command""#), "{out}");
+    }
+
+    // #563: 200 adapter runs at once, as a busy full test run has other
+    // threads forking beside each. Every one must reach the stand-in hook.
+    #[test]
+    fn two_hundred_adapter_runs_in_parallel_all_reach_the_hook() {
+        let prompt = r#"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"k1","cwd":"/work"}"#;
+        if run_adapter(CURSOR_ADAPTER, "", prompt).is_none() {
+            return;
+        }
+        let failures: usize = (0..200)
+            .map(|_| std::thread::spawn(move || run_adapter(CURSOR_ADAPTER, "", prompt)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .filter(|out| {
+                !out.as_deref()
+                    .is_some_and(|o| o.starts_with("UserPromptSubmit cursor"))
+            })
+            .count();
+        assert_eq!(failures, 0, "runs that never reached the hook");
     }
 
     #[test]

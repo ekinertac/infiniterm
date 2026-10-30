@@ -66,6 +66,8 @@ impl AppView {
             &metrics,
             colors,
             Size { w: 800., h: 600. },
+            // The app's own file, written at launch: always this disk.
+            std::sync::Arc::new(infiniterm_core::file_source::LocalSource),
         ));
     }
 

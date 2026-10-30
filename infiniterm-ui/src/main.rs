@@ -31,6 +31,7 @@ mod editor_body;
 mod editor_tabs;
 mod editors;
 mod field;
+mod host_dirs;
 // Seven modules talk to AppKit and CoreText. Elsewhere `not_macos.rs`
 // answers under the same names (its header says what each leaves undone).
 #[cfg(target_os = "macos")]
@@ -290,11 +291,6 @@ pub struct AppView {
     pub context_menu: Option<crate::browsers::CardContextMenu>,
     /// The page's native menu is open (`browsers.rs::show_page_menu`).
     pub page_menu_open: bool,
-    /// Off the Mac: the two-way chord table for the active keymap
-    /// (`platform_keys.rs`), and the keymap it was built from, so a change
-    /// rebuilds it (`input.rs::platform_keystroke`).
-    pub platform_keys: infiniterm_core::platform_keys::PlatformKeys,
-    pub platform_keys_for: infiniterm_core::keymap::Keymap,
     /// Off macOS: where a press on the bare title bar landed, kept until the
     /// pointer travels far enough to start a window move or the button comes
     /// up (`not_macos.rs::title_drag`).
@@ -327,9 +323,30 @@ pub struct AppView {
     #[cfg(unix)]
     pub join_updates:
         Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join::RemoteUpdate>>,
-    /// A viewer's edits on their way up to the host (viewer side).
+    /// A viewer's clicks on paths, already found on this disk (host side,
+    /// #555): opened beside the card they came from, in the poll.
     #[cfg(unix)]
-    pub uplink: Option<std::sync::mpsc::Sender<infiniterm_core::backend::join::RemoteUpdate>>,
+    pub join_opens: Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join::OpenOnHost>>,
+    /// The host's files for a joined window's cards (#560), made at the first
+    /// card that needs them.
+    #[cfg(unix)]
+    pub host_files: Option<std::sync::Arc<dyn infiniterm_core::file_source::FileSource>>,
+    /// The host's answer to "where is your config folder" for a viewer's
+    /// open-settings command (#559): whether it was for the keybindings, and
+    /// the folder or why not.
+    #[cfg(unix)]
+    pub host_config: Option<std::sync::mpsc::Receiver<(bool, Result<String, String>)>>,
+    /// A viewer's edits and clicks on their way up to the host (viewer side).
+    #[cfg(unix)]
+    pub uplink: Option<std::sync::mpsc::Sender<infiniterm_core::backend::join_client::Uplink>>,
+    /// Files, folders and images a joined window sent to the host (#556): the
+    /// transfers run on threads and answer here, and the poll types the
+    /// host's paths into the card.
+    #[cfg(unix)]
+    pub host_drops: (
+        std::sync::mpsc::Sender<crate::runtime::HostDrop>,
+        std::sync::mpsc::Receiver<crate::runtime::HostDrop>,
+    ),
     /// This window is a viewer (`ift join`, #423): the canvas is the host's,
     /// nothing is saved, nothing is seeded, no session is started.
     pub viewer: bool,
@@ -824,7 +841,9 @@ fn main() {
                         }
                         this.publish_agents();
                         // What viewers changed on this canvas (#423).
-                        if this.apply_remote_updates() {
+                        // Files a joined window sent to the host (#556).
+                        this.drain_host_drops();
+                        if this.apply_remote_opens() | this.apply_remote_updates() {
                             this.redraw = true;
                             cx.notify();
                         }

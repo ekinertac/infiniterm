@@ -255,6 +255,18 @@ pub fn run(args: &[String]) -> ExitCode {
     if args.first().map(String::as_str) == Some("join") {
         return run_join(&args[1..]);
     }
+    // `ift proxy files`: the host's end of the join file service (#560). A
+    // viewer starts it over ssh; it answers file requests on stdin and stdout
+    // until the viewer closes them. Needs no app and no `j.sock`.
+    if args.first().map(String::as_str) == Some("files") {
+        return match infiniterm_core::file_server::serve(std::io::stdin(), std::io::stdout()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("ift: {e}");
+                ExitCode::from(1)
+            }
+        };
+    }
     let parsed = match parse(args) {
         Ok(p) => p,
         Err(e) => {

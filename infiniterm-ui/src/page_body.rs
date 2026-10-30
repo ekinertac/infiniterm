@@ -20,9 +20,11 @@ use gpui::{
     fill, point, px, size, App, Bounds, FontStyle, FontWeight, Hsla, Keystroke, Pixels,
     SharedString, TextRun, UnderlineStyle, Window,
 };
-use infiniterm_core::files::file_mtime;
+use infiniterm_core::file_source::{Code, FileSource};
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::page::{layout, parse, Block, Line, LineKind};
+use std::sync::mpsc::{channel, Receiver};
+use std::sync::Arc;
 
 const PAD_X: f64 = 14.;
 const PAD_Y: f64 = 10.;
@@ -59,10 +61,42 @@ pub struct PageBody {
     last_poll: f64,
     dirty: bool,
     wheel_carry: crate::chrome::WheelCarry,
+    /// Where the document is: this machine's disk, or a host's (#560).
+    source: Arc<dyn FileSource>,
+    /// A read of a host's file in flight; its answer is taken in `idle`.
+    pending: Option<Receiver<PageLoad>>,
+    /// Whether a document has been shown yet: a failed first load says so on
+    /// the page, a failed poll keeps what is there.
+    loaded_once: bool,
+}
+
+/// What a host read answered.
+enum PageLoad {
+    /// The file's mtime is the one already shown.
+    Unchanged,
+    Loaded {
+        mtime: Option<u64>,
+        text: String,
+    },
+    Failed {
+        code: Code,
+        message: String,
+    },
+}
+
+/// The page's own text for a document that could not be read.
+fn cannot_read(path: &str, why: &str) -> String {
+    format!("# Cannot read this page\n\n`{path}`: {why}")
 }
 
 impl PageBody {
-    pub fn new(path: String, metrics: &Metrics, colors: PageColors, world: Size) -> PageBody {
+    pub fn new(
+        path: String,
+        metrics: &Metrics,
+        colors: PageColors,
+        world: Size,
+        source: Arc<dyn FileSource>,
+    ) -> PageBody {
         let mut b = PageBody {
             path,
             metrics: metrics.clone(),
@@ -77,6 +111,9 @@ impl PageBody {
             last_poll: 0.,
             dirty: true,
             wheel_carry: Default::default(),
+            source,
+            pending: None,
+            loaded_once: false,
         };
         b.reload();
         b
@@ -87,22 +124,109 @@ impl PageBody {
         self.laid_cols = 0;
     }
 
-    /// Re-reads the document when it changed on disk (`DISK_POLL_MS`).
+    /// Re-reads the document when it changed on disk (`DISK_POLL_MS`), and
+    /// takes the answer of a host read that was asked for earlier.
     pub fn idle(&mut self, now: f64) {
+        if let Some(rx) = &self.pending {
+            match rx.try_recv() {
+                Ok(answer) => {
+                    self.pending = None;
+                    self.apply(answer);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.pending = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            }
+        }
         if now - self.last_poll < DISK_POLL_MS {
             return;
         }
         self.last_poll = now;
-        if file_mtime(&self.path) != self.mtime {
-            self.reload();
+        if self.source.is_local() {
+            if self.source.stat(&self.path).ok().and_then(|s| s.mtime_ms) != self.mtime {
+                self.reload();
+            }
+        } else {
+            self.ask_host();
         }
     }
 
+    /// Loads the document. A local file is read now, as it always was; a
+    /// host's is asked for on a thread (it comes over ssh) and shown when it
+    /// arrives, with a line saying so meanwhile.
     fn reload(&mut self) {
-        self.mtime = file_mtime(&self.path);
-        let text = std::fs::read_to_string(&self.path)
-            .unwrap_or_else(|e| format!("# Cannot read this page\n\n`{}`: {e}", self.path));
-        self.blocks = parse(&text);
+        if self.source.is_local() {
+            let answer = match self.source.read(&self.path) {
+                Ok(d) => PageLoad::Loaded {
+                    mtime: d.mtime_ms,
+                    text: d.text(),
+                },
+                Err(e) => PageLoad::Failed {
+                    code: e.code,
+                    message: e.message,
+                },
+            };
+            self.apply(answer);
+        } else {
+            if !self.loaded_once {
+                self.blocks = parse("*Loading from the host...*");
+                self.laid_cols = 0;
+                self.dirty = true;
+            }
+            self.ask_host();
+        }
+    }
+
+    /// One read of the host's file: its mtime first, the text only when that
+    /// is not the one shown.
+    fn ask_host(&mut self) {
+        if self.pending.is_some() {
+            return;
+        }
+        let (tx, rx) = channel();
+        self.pending = Some(rx);
+        let (source, path, known) = (self.source.clone(), self.path.clone(), self.mtime);
+        let first = !self.loaded_once;
+        std::thread::spawn(move || {
+            let answer = (|| {
+                if !first {
+                    let stat = source.stat(&path)?;
+                    if stat.mtime_ms == known {
+                        return Ok(PageLoad::Unchanged);
+                    }
+                }
+                let d = source.read(&path)?;
+                Ok::<_, infiniterm_core::file_source::FileError>(PageLoad::Loaded {
+                    mtime: d.mtime_ms,
+                    text: d.text(),
+                })
+            })()
+            .unwrap_or_else(|e| PageLoad::Failed {
+                code: e.code,
+                message: e.message,
+            });
+            let _ = tx.send(answer);
+        });
+    }
+
+    fn apply(&mut self, answer: PageLoad) {
+        match answer {
+            PageLoad::Unchanged => {}
+            PageLoad::Loaded { mtime, text } => {
+                self.mtime = mtime;
+                self.blocks = parse(&text);
+                self.loaded_once = true;
+            }
+            // A shown document stays shown while the host cannot be reached;
+            // a first load says what went wrong on the page itself.
+            PageLoad::Failed { code, message } => {
+                if self.loaded_once && code == Code::Lost {
+                    return;
+                }
+                self.mtime = None;
+                self.blocks = parse(&cannot_read(&self.path, &message));
+                self.loaded_once = true;
+            }
+        }
         self.laid_cols = 0;
         self.dirty = true;
     }
@@ -182,10 +306,24 @@ impl PageBody {
                 path: None,
             };
         }
+        let file = target.split('#').next().unwrap_or(target);
+        // A document of a host's: the card that shows it is the host's too,
+        // so the host is asked to open it (#555), never a card of this
+        // window's own copy of the canvas. A host's path is POSIX text
+        // whatever this machine is, so it is joined as text, not with this
+        // platform's path rules.
+        if !self.source.is_local() {
+            let base = self.path.rsplit_once('/').map_or("", |(dir, _)| dir);
+            let path = if file.starts_with('/') {
+                file.to_string()
+            } else {
+                format!("{base}/{file}")
+            };
+            return BodyAction::OpenOnHost { path, line: None };
+        }
         let base = std::path::Path::new(&self.path)
             .parent()
             .unwrap_or(std::path::Path::new("/"));
-        let file = target.split('#').next().unwrap_or(target);
         let path = base.join(file).to_string_lossy().into_owned();
         BodyAction::Open(infiniterm_core::ift::OpenPlan::Page {
             cwd: base.to_string_lossy().into_owned(),
@@ -382,8 +520,210 @@ mod tests {
             &metrics,
             colors,
             Size { w: 400., h: 200. },
+            Arc::new(infiniterm_core::file_source::LocalSource),
         );
         (b, dir)
+    }
+
+    /// A source that is not local, answering from a script of replies, so the
+    /// page's way of asking a host can be tested with no ssh.
+    type Reply = Result<(String, Option<u64>), infiniterm_core::file_source::FileError>;
+
+    struct Scripted {
+        replies: std::sync::Mutex<Vec<Reply>>,
+        reads: std::sync::atomic::AtomicUsize,
+        stats: std::sync::atomic::AtomicUsize,
+        mtime: std::sync::Mutex<Option<u64>>,
+    }
+
+    impl FileSource for Scripted {
+        fn is_local(&self) -> bool {
+            false
+        }
+        fn write(
+            &self,
+            _: &str,
+            _: &[u8],
+            _: Option<u64>,
+        ) -> Result<Option<u64>, infiniterm_core::file_source::FileError> {
+            unreachable!("a page is read only")
+        }
+        fn home(
+            &self,
+        ) -> Result<infiniterm_core::file_source::HostPaths, infiniterm_core::file_source::FileError>
+        {
+            unreachable!()
+        }
+        fn stat(
+            &self,
+            _: &str,
+        ) -> Result<infiniterm_core::file_source::Stat, infiniterm_core::file_source::FileError>
+        {
+            self.stats.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(infiniterm_core::file_source::Stat {
+                kind: infiniterm_core::file_source::EntryKind::File,
+                size: 0,
+                mtime_ms: *self.mtime.lock().unwrap(),
+                symlink: false,
+            })
+        }
+        fn exists(
+            &self,
+            _: &[String],
+        ) -> Result<
+            Vec<Option<infiniterm_core::file_source::EntryKind>>,
+            infiniterm_core::file_source::FileError,
+        > {
+            unreachable!()
+        }
+        fn list(
+            &self,
+            _: &str,
+        ) -> Result<
+            Vec<infiniterm_core::file_source::ListEntry>,
+            infiniterm_core::file_source::FileError,
+        > {
+            unreachable!()
+        }
+        fn read(
+            &self,
+            _: &str,
+        ) -> Result<infiniterm_core::file_source::FileData, infiniterm_core::file_source::FileError>
+        {
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Slow, as an ssh is: the body must not be waiting on it.
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let next = self.replies.lock().unwrap().remove(0);
+            next.map(|(text, mtime_ms)| infiniterm_core::file_source::FileData {
+                bytes: text.into_bytes(),
+                mtime_ms,
+            })
+        }
+    }
+
+    fn host_page(replies: Vec<Reply>) -> (PageBody, Arc<Scripted>) {
+        let src = Arc::new(Scripted {
+            replies: std::sync::Mutex::new(replies),
+            reads: Default::default(),
+            stats: Default::default(),
+            mtime: std::sync::Mutex::new(Some(1)),
+        });
+        let (local, _) = page("x");
+        let mut b = local;
+        b.source = src.clone();
+        b.pending = None;
+        b.loaded_once = false;
+        b.mtime = None;
+        b.reload();
+        (b, src)
+    }
+
+    /// Waits until the host's answer is taken.
+    fn settle(b: &mut PageBody) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while b.pending.is_some() && std::time::Instant::now() < deadline {
+            b.idle(0.);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(b.pending.is_none(), "the host's answer never came");
+    }
+
+    fn text_of(b: &PageBody) -> String {
+        format!("{:?}", b.blocks)
+    }
+
+    // A host's document is asked for on a thread: the body shows a line saying
+    // so at once, never waits, and shows the document when it arrives.
+    #[test]
+    fn a_host_page_loads_without_waiting_and_then_shows_the_document() {
+        let started = std::time::Instant::now();
+        let (mut b, src) = host_page(vec![Ok(("# From the host\n\nbody".into(), Some(1)))]);
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(100),
+            "the first call waited on the host"
+        );
+        assert!(
+            text_of(&b).contains("Loading from the host"),
+            "{}",
+            text_of(&b)
+        );
+        settle(&mut b);
+        assert!(text_of(&b).contains("From the host"));
+        assert_eq!(src.reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(b.dirty, "a frame is owed for the new text");
+    }
+
+    // The poll asks only for the file's mtime; the text is read again when it
+    // moved, and a host that cannot be reached leaves the page as it was.
+    #[test]
+    fn a_host_page_rereads_only_when_the_mtime_moved_and_keeps_its_text_when_the_host_is_lost() {
+        let (mut b, src) = host_page(vec![
+            Ok(("first".into(), Some(1))),
+            Ok(("second".into(), Some(2))),
+            Err(infiniterm_core::file_source::FileError::new(
+                Code::Lost,
+                "gone",
+            )),
+        ]);
+        settle(&mut b);
+        let reads = || src.reads.load(std::sync::atomic::Ordering::SeqCst);
+        // Same mtime: one stat, no read.
+        b.last_poll = -1e9;
+        b.idle(DISK_POLL_MS * 10.);
+        settle(&mut b);
+        assert_eq!(reads(), 1);
+        assert!(src.stats.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+        // The mtime moved: the text is read again.
+        *src.mtime.lock().unwrap() = Some(2);
+        b.last_poll = -1e9;
+        b.idle(DISK_POLL_MS * 20.);
+        settle(&mut b);
+        assert_eq!(reads(), 2);
+        assert!(text_of(&b).contains("second"));
+        // The mtime moves once more and the host is gone: the page stays.
+        *src.mtime.lock().unwrap() = Some(3);
+        b.last_poll = -1e9;
+        b.idle(DISK_POLL_MS * 30.);
+        settle(&mut b);
+        assert!(
+            text_of(&b).contains("second"),
+            "a lost host must not blank the page"
+        );
+    }
+
+    // The first load failing says why on the page, in the page's own words.
+    #[test]
+    fn a_host_page_that_cannot_be_read_says_so_on_the_page() {
+        let (mut b, _) = host_page(vec![Err(infiniterm_core::file_source::FileError::new(
+            Code::NotFound,
+            "/x/y.md: No such file or directory",
+        ))]);
+        settle(&mut b);
+        let t = text_of(&b);
+        assert!(
+            t.contains("Cannot read this page") && t.contains("No such file"),
+            "{t}"
+        );
+    }
+
+    // A document linked from a host's page is the host's: it is opened there.
+    #[test]
+    fn a_link_from_a_host_page_asks_the_host_and_never_makes_a_local_card() {
+        let (b, _) = host_page(vec![Ok(("x".into(), Some(1)))]);
+        let mut b = b;
+        b.path = "/srv/docs/index.md".into();
+        match b.follow("other.md#top") {
+            BodyAction::OpenOnHost { path, line } => {
+                assert_eq!(path, "/srv/docs/other.md");
+                assert_eq!(line, None);
+            }
+            _ => panic!("a host page's link must go to the host"),
+        }
+        // A web address still goes to the browser on this Mac.
+        assert!(matches!(
+            b.follow("https://infiniterm.app/"),
+            BodyAction::OpenExternal { .. }
+        ));
     }
 
     fn key(s: &str) -> Keystroke {

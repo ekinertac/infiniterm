@@ -342,7 +342,7 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         "ui.hideLabelWhenFitted",
         &[
             "No label on the card Cmd+1 fitted to the window, like ui.hideLabelWhenMaximised",
-            "does for a maximised one. A ui theme key.",
+            "does for a maximised one, nor on the only card of a workspace. A ui theme key.",
         ],
     ),
     (
@@ -528,6 +528,10 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "ui.hideLabelWhenMaximised",
         &["No label on a maximised card: it fills the window and the status bar names it."],
+    ),
+    (
+        "ui.hideBuildNumber",
+        &["No \"build N\" at the right end of the status bar."],
     ),
     (
         "ui.cardLabelSize",

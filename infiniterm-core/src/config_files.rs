@@ -60,6 +60,21 @@ pub fn config_path(file: ConfigFile) -> PathBuf {
     config_dir().join(file.file_name())
 }
 
+/// Whether `path` is one of THIS machine's settings or keybindings files,
+/// defaults included. A joined window's "open settings" makes editor cards on
+/// these paths (the host's, which the viewer got from the file service), and
+/// the host accepts exactly those from a viewer (#580).
+pub fn is_config_file_path(path: &str) -> bool {
+    [
+        ConfigFile::Settings,
+        ConfigFile::SettingsDefault,
+        ConfigFile::Keybindings,
+        ConfigFile::KeybindingsDefault,
+    ]
+    .iter()
+    .any(|f| config_path(*f).to_string_lossy() == path)
+}
+
 /// The snippet picker's folder: one plain file per snippet (snippets.rs).
 /// A folder rather than a `ConfigFile` because its unit is many files.
 pub fn snippets_dir() -> PathBuf {
