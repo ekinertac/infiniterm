@@ -317,6 +317,10 @@ pub enum Effect {
         color: Option<crate::remote_identity::Rgb>,
         save: WindowColorSave,
     },
+    /// The ui theme in force names another Dock picture (`ui.icon`): the ui
+    /// sets it under the window-colour badge. Sent when the choice changes,
+    /// never twice for the same one.
+    AppIcon(crate::app_icon::AppIcon),
     /// `ift read`: the ui answers request `request_id` with the card's text,
     /// since only the terminal body holds its grid (#127).
     ReadCard {
@@ -810,6 +814,8 @@ pub struct Model {
     /// The local instance's colour, from `ui.windowColor` (`None`: the normal
     /// title bar). A remote instance wears its host's instead.
     pub local_color: Option<crate::remote_identity::Rgb>,
+    /// The Dock picture last handed to the ui (`Effect::AppIcon`).
+    pub app_icon: crate::app_icon::AppIcon,
     /// Where the FIRST card starts; every card after inherits from the one it
     /// was opened next to. The home directory, or `startingDir`.
     pub start_dir: String,
@@ -1007,6 +1013,7 @@ impl Model {
             window_color_before_preview: None,
             custom_size_last: None,
             local_color: None,
+            app_icon: crate::app_icon::AppIcon::Default,
             start_dir: "/".into(),
             home: String::new(),
             dev_build: cfg!(debug_assertions),

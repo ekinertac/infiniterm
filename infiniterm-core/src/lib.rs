@@ -11,6 +11,7 @@ pub mod grid;
 pub mod background;
 pub mod changelog;
 
+pub mod app_icon;
 pub mod remote_identity;
 
 pub mod layout;

@@ -92,7 +92,7 @@ The look of the app is not in `settings.json`. It lives in `ui-themes/<name>.jso
 
 A ui theme holds these keys:
 
-- the window: `ui.windowOpacity`, `ui.windowBlur`, `ui.windowColor`;
+- the window: `ui.windowOpacity`, `ui.windowBlur`, `ui.windowColor`, `ui.icon`;
 - the background picture: `ui.backgroundImage`, `ui.backgroundImageFit`, `ui.backgroundImageInterval`, `ui.backgroundImageFade`;
 - the cards and canvas: `ui.cardRadius`, `ui.cardOpacity`, `ui.showGrid`, `ui.inactiveDim`, `ui.unfocusedDim`, `ui.hideLabelWhenFitted`;
 - the interface font: `ui.fontFamily`, `ui.fontSize`, `ui.fontWeight`, `ui.fontWeightBold`;
@@ -107,6 +107,8 @@ The keys below go in a ui theme file, not in `settings.json`.
 `ui.windowOpacity` (0.1 to 1) lets the desktop show through the canvas, title bar and status bar, and `ui.windowBlur` blurs it. `ui.backgroundImage` puts a picture behind the canvas: `"dusk"`, `"aurora"` or `"ember"` come with the app, or give a path to your own; `ui.backgroundImageFit` is `"cover"` (crop to fill) or `"contain"`. A picture is opaque, so it hides the desktop. Give a list instead, `["dusk", "~/Pictures/lake.jpg"]`, and the pictures take turns in that order: each stays `ui.backgroundImageInterval` seconds (300 by default), with a crossfade of `ui.backgroundImageFade` seconds (2 by default, `0` for a cut). An entry that does not exist is skipped. Only two pictures are in memory at a time, so a long list costs no more than a short one. `ui.cardOpacity` lets the canvas and the picture show through card backgrounds while the text stays solid; browser cards stay opaque. `ui.cardRadius` rounds the corners of cards and group frames, in pixels at 100% zoom (0 to 40, default 0 for square corners); the border, the focus ring, the label and the tabs follow it. The window's own corners stay as macOS draws them. `"ui.showGrid": false` leaves the canvas plain.
 
 "Window: change the title bar and Dock colour" in the palette tints the title bar and the workspace tabs, and badges the Dock icon. Pick a named colour (each one shows as you move through the list, `Escape` puts it back) or "Custom hex colour…" for a code like `3b82f6`. The choice is saved as `ui.windowColor` in the ui theme in force, a name or a hex code, empty for none. In an `ift connect` window the same command sets that server's colour instead, and "Default: from the host name" goes back to the automatic one.
+
+`ui.icon` picks the picture in the Dock: `"default"` (four outlined cards) or `"filled"`. It changes when you save the file or switch the ui theme. The window colour badge stays on top of it. The icon in Finder and Launchpad stays the default, because a running app cannot change it.
 
 `ui.statusBarPwd` (off by default) shows the focused terminal card's folder in the status bar, with your home folder as `~`. It is left out when the card's label already is the path, and a long path is cut so the build number stays. `ui.statusBarPwdSide` puts it on the `"left"` (default) or the `"right"`.
 

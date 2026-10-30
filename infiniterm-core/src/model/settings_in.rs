@@ -71,8 +71,20 @@ impl Model {
                 self.ui_theme_name = name.to_string();
                 self.config.ui.take_look_from(&self.look_ui);
                 self.sync_local_color();
+                self.sync_app_icon();
             }
             Err(e) => self.effects.push(Effect::Warn(e)),
+        }
+    }
+
+    /// `ui.icon` is a look key, so a theme change moves the Dock picture.
+    /// Unlike the colour, a remote or joined window follows it too: the badge
+    /// still tells the windows apart.
+    fn sync_app_icon(&mut self) {
+        let icon = self.config.ui.icon;
+        if icon != self.app_icon {
+            self.app_icon = icon;
+            self.effects.push(Effect::AppIcon(icon));
         }
     }
 
