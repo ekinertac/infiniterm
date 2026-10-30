@@ -313,6 +313,19 @@ impl Model {
                 self.close_card_with(&id, false, true);
                 ok(String::new())
             }
+            // `ift focus <card>`: the palette's "go to that card" (#552):
+            // its workspace is shown if it is another, the card is focused
+            // and fitted, so the result is the same however you got there.
+            "focus" => {
+                let Some(target) = req.args.first() else {
+                    return err("focus takes a card");
+                };
+                let Some(id) = self.resolve_card_ref(target) else {
+                    return err(&format!("no card {target}"));
+                };
+                self.go_to_card(&id);
+                ok(String::new())
+            }
             // `ift terminal <dir>...`: a terminal card in each directory, on
             // the workspace on screen, the last one focused (the Finder
             // service's path, from a script). Absolute paths only: the cli
@@ -728,6 +741,86 @@ mod tests {
         );
         let r = ask(&mut m, "terminal", &["--workspace", "new", "--", &dir]);
         assert!(r.ok, "{}", r.text);
+    }
+
+    /// "a" on screen with one card, "b" behind it with one card.
+    fn card_on_each() -> (Model, String, String, String, String) {
+        let (mut m, a, b, dir) = two_ws();
+        let on_a = ask(&mut m, "terminal", &[&dir]).text;
+        let on_b = ask(&mut m, "terminal", &["--workspace", &b, &dir]).text;
+        m.show_workspace(&a);
+        m.effects.clear();
+        (m, a, b, on_a, on_b)
+    }
+
+    fn fits(m: &Model) -> usize {
+        m.effects
+            .iter()
+            .filter(|e| matches!(e, Effect::RunCommand(c) if c == "canvas.zoom.fitCard"))
+            .count()
+    }
+
+    #[test]
+    fn focus_goes_to_a_card_on_this_workspace_and_fits_it_once() {
+        let (mut m, a, _b, on_a, _on_b) = card_on_each();
+        m.set_focus(None);
+        let r = ask(&mut m, "focus", &[&on_a]);
+        assert!(r.ok && r.text.is_empty(), "{}", r.text);
+        assert_eq!(m.focused().map(|c| c.id.clone()), Some(on_a));
+        assert_eq!(m.active_workspace.as_deref(), Some(a.as_str()));
+        assert_eq!(fits(&m), 1);
+    }
+
+    #[test]
+    fn focus_switches_to_the_workspace_of_a_card_in_another() {
+        // By id, by number and by #number all reach the same card. Each
+        // round has a model of its own, so the argument is made from it.
+        let spell: [fn(&str, u32) -> String; 3] = [
+            |id, _| id.to_string(),
+            |_, n| n.to_string(),
+            |_, n| format!("#{n}"),
+        ];
+        for (i, arg_of) in spell.iter().enumerate() {
+            let (mut m, _a, b, _on_a, on_b) = card_on_each();
+            let arg = arg_of(&on_b, m.card(&on_b).unwrap().number);
+            let r = ask(&mut m, "focus", &[&arg]);
+            assert!(r.ok, "{i} {arg}: {}", r.text);
+            assert_eq!(m.active_workspace.as_deref(), Some(b.as_str()), "{i}");
+            assert_eq!(m.focused().map(|c| c.id.clone()), Some(on_b), "{i}");
+            assert_eq!(fits(&m), 1, "{i}");
+        }
+    }
+
+    #[test]
+    fn focus_refuses_an_unknown_card_and_changes_nothing() {
+        let (mut m, a, _b, _on_a, on_b) = card_on_each();
+        let focus = m.focused().map(|c| c.id.clone());
+        let r = ask(&mut m, "focus", &["999"]);
+        assert!(!r.ok && r.text == "no card 999", "{}", r.text);
+        let r = ask(&mut m, "focus", &[]);
+        assert!(!r.ok && r.text == "focus takes a card", "{}", r.text);
+        assert_eq!(m.active_workspace.as_deref(), Some(a.as_str()));
+        assert_eq!(m.focused().map(|c| c.id.clone()), focus);
+        assert_eq!(fits(&m), 0);
+        // A closed card is gone by its old id.
+        assert!(ask(&mut m, "close", &[&on_b]).ok);
+        let r = ask(&mut m, "focus", &[&on_b]);
+        assert!(!r.ok && r.text.starts_with("no card"), "{}", r.text);
+    }
+
+    // The lowest free number is handed out again, so a number names whichever
+    // card holds it now, not the one that closed.
+    #[test]
+    fn focus_by_a_reused_number_goes_to_the_newer_card() {
+        let (mut m, _a, _b, on_a, on_b) = card_on_each();
+        let number = m.card(&on_b).unwrap().number;
+        assert!(ask(&mut m, "close", &[&on_b]).ok);
+        let dir = std::env::temp_dir().canonicalize().unwrap();
+        let newer = ask(&mut m, "terminal", &[&dir.to_string_lossy()]).text;
+        assert_eq!(m.card(&newer).unwrap().number, number);
+        m.set_focus(Some(&on_a));
+        assert!(ask(&mut m, "focus", &[&number.to_string()]).ok);
+        assert_eq!(m.focused().map(|c| c.id.clone()), Some(newer));
     }
 
     #[test]

@@ -93,6 +93,7 @@ _ift() {
     'terminal:a terminal card in each folder'
     'send:type into a card'\''s shell'
     'read:print what a card shows'
+    'focus:go to a card'
     'close:close a card'
     'run:run a registered command by id'
     'omni:what the omnibox would show for a term'
@@ -125,6 +126,7 @@ _ift() {
     connect) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_hosts' ;;
     send) (( CURRENT == 3 )) && _ift_cards ;;
     read) (( CURRENT == 3 )) && _ift_cards || _arguments '--lines[the last N lines only]:lines:' '--all[include the history]' ;;
+    focus) (( CURRENT == 3 )) && _ift_cards ;;
     close) (( CURRENT == 3 )) && _ift_cards ;;
     run) (( CURRENT == 3 )) && _ift_command_ids ;;
     diff) _files -/ ;;
