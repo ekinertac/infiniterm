@@ -465,6 +465,8 @@ impl AppView {
                         }
                     }
                 }
+                // `ui.icon`: the Dock picture; the badge stays over it.
+                Effect::AppIcon(icon) => crate::instance_icon::set_base(icon),
                 Effect::ReadCard {
                     request_id,
                     card_id,

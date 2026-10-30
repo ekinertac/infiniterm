@@ -1649,6 +1649,50 @@ mod tests {
         );
     }
 
+    // `ui.icon` is a look key: the theme in force moves the Dock picture, once
+    // per change, and a theme that leaves it out puts the default back.
+    #[test]
+    fn a_ui_theme_change_emits_the_dock_icon_effect() {
+        use crate::app_icon::AppIcon;
+        let icon_effects = |h: &Harness| {
+            h.m.effects
+                .iter()
+                .filter_map(|e| match e {
+                    Effect::AppIcon(i) => Some(*i),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut h = Harness::new();
+        h.m.effects.clear();
+        h.m.apply_ui_theme_text("default", Some("{}"));
+        assert!(
+            icon_effects(&h).is_empty(),
+            "the default is already showing"
+        );
+        h.m.apply_ui_theme_text("default", Some(r#"{"ui.icon": "filled"}"#));
+        assert_eq!(icon_effects(&h), [AppIcon::Filled]);
+        h.m.effects.clear();
+        h.m.apply_ui_theme_text(
+            "default",
+            Some(r#"{"ui.icon": "filled", "ui.cardRadius": 4}"#),
+        );
+        assert!(
+            icon_effects(&h).is_empty(),
+            "same picture, nothing to redraw"
+        );
+        // A bad file is not applied and the picture stays.
+        h.m.apply_ui_theme_text("default", Some(r#"{"ui.icon": "outline"}"#));
+        assert!(icon_effects(&h).is_empty());
+        assert_eq!(h.m.config.ui.icon, AppIcon::Filled);
+        h.m.apply_ui_theme_text("other", Some("{}"));
+        assert_eq!(
+            icon_effects(&h),
+            [AppIcon::Default],
+            "a theme without the key"
+        );
+    }
+
     // A remote instance starts its cards in the server's home, not in the
     // Mac folder its seeded settings name, and keeps doing so when the
     // settings are applied again.

@@ -52,6 +52,11 @@ ditto assets/themes "$app/Contents/Resources/themes"
 [ -d assets/backgrounds ] || { echo "bundle: assets/backgrounds is missing" >&2; exit 1; }
 mkdir -p "$app/Contents/Resources/backgrounds"
 ditto assets/backgrounds "$app/Contents/Resources/backgrounds"
+# The pictures ui.icon can name (assets/icons): the Dock icon is set from them
+# while the app runs. `default` is the same picture as AppIcon.icns.
+[ -f assets/icons/default.png ] && [ -f assets/icons/filled.png ] || { echo "bundle: assets/icons/default.png or filled.png is missing" >&2; exit 1; }
+mkdir -p "$app/Contents/Resources/icons"
+ditto assets/icons "$app/Contents/Resources/icons"
 plist="$app/Contents/Info.plist"
 for kv in "CFBundleIconFile AppIcon" "CFBundleIconName AppIcon" "CFBundleName infiniterm" "LSMinimumSystemVersion 13.0"; do
     set -- $kv

@@ -339,6 +339,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.icon",
+        &[
+            "The picture in the Dock: \"default\" (four outlined cards) or \"filled\". A ui theme",
+            "key. The Finder and Launchpad icon stays the default: a running app cannot change it.",
+        ],
+    ),
+    (
         "ui.hideLabelWhenFitted",
         &[
             "No label on the card Cmd+1 fitted to the window, like ui.hideLabelWhenMaximised",
