@@ -16,8 +16,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::join::{
-    encode_canvas_message, encode_update, read_canvas_message, RemoteUpdate, KIND_AGENTS,
-    KIND_KEYBINDINGS, KIND_LAYOUT, KIND_REVISION, KIND_SETTINGS, KIND_UPDATE,
+    encode_canvas_message, encode_open, encode_update, read_canvas_message, OpenRequest,
+    RemoteUpdate, KIND_AGENTS, KIND_KEYBINDINGS, KIND_LAYOUT, KIND_NOTICE, KIND_OPEN,
+    KIND_REVISION, KIND_SETTINGS, KIND_UPDATE,
 };
 use super::remote::{connect_join_canvas, JoinFailure, RemoteHost};
 
@@ -73,6 +74,9 @@ pub fn pump_canvas(stream: &mut impl Read, tx: &Sender<CanvasEvent>) -> Ended {
             Ok(Some((KIND_AGENTS, text))) => CanvasEvent::Agents(text),
             Ok(Some((KIND_SETTINGS, text))) => CanvasEvent::Settings(text),
             Ok(Some((KIND_KEYBINDINGS, text))) => CanvasEvent::Keybindings(text),
+            // The host's answer to a click on a path that is not there: a
+            // sentence, shown as any status is.
+            Ok(Some((KIND_NOTICE, text))) => CanvasEvent::Status(text),
             Ok(Some(_)) => continue,
             Ok(None) | Err(_) => return Ended::Stream,
         };
@@ -82,6 +86,14 @@ pub fn pump_canvas(stream: &mut impl Read, tx: &Sender<CanvasEvent>) -> Ended {
     }
 }
 
+/// What the app sends up to the host, in the order it was made: an edit of
+/// the canvas, or a click on a path in a card's terminal (#555).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Uplink {
+    Edit(RemoteUpdate),
+    Open(OpenRequest),
+}
+
 /// How often the uplink writer looks for an edit to send, and for the end of
 /// its connection.
 const UPLINK_POLL: Duration = Duration::from_millis(100);
@@ -89,17 +101,18 @@ const UPLINK_POLL: Duration = Duration::from_millis(100);
 /// Sends the viewer's edits up one connection until it ends. The receiver is
 /// shared across reconnects, so an edit made while the connection was down is
 /// sent on the next one (and dropped by the host if it is stale by then).
-fn run_uplink(
-    mut stream: impl Write,
-    edits: Arc<Mutex<Receiver<RemoteUpdate>>>,
-    ended: Arc<AtomicBool>,
-) {
+fn run_uplink(mut stream: impl Write, edits: Arc<Mutex<Receiver<Uplink>>>, ended: Arc<AtomicBool>) {
     while !ended.load(Ordering::Relaxed) {
         let next = edits.lock().unwrap().recv_timeout(UPLINK_POLL);
         match next {
-            Ok(edit) => {
-                let message =
-                    encode_canvas_message(KIND_UPDATE, &encode_update(edit.base, &edit.layout));
+            Ok(up) => {
+                let message = match up {
+                    Uplink::Edit(edit) => encode_canvas_message(
+                        KIND_UPDATE,
+                        &encode_update(edit.base, &edit.layout, &edit.closed),
+                    ),
+                    Uplink::Open(open) => encode_canvas_message(KIND_OPEN, &encode_open(&open)),
+                };
                 if stream
                     .write_all(&message)
                     .and_then(|_| stream.flush())
@@ -116,7 +129,7 @@ fn run_uplink(
 
 /// Joins the host's canvas for as long as the app listens, and sends the
 /// edits the app makes (`edits`) up to the host.
-pub fn run_canvas_client(host: RemoteHost, tx: Sender<CanvasEvent>, edits: Receiver<RemoteUpdate>) {
+pub fn run_canvas_client(host: RemoteHost, tx: Sender<CanvasEvent>, edits: Receiver<Uplink>) {
     run_canvas_client_with(host, tx, edits, rejoin_wait)
 }
 
@@ -180,7 +193,7 @@ fn cut(text: &str, max: usize) -> String {
 fn run_canvas_client_with(
     host: RemoteHost,
     tx: Sender<CanvasEvent>,
-    edits: Receiver<RemoteUpdate>,
+    edits: Receiver<Uplink>,
     wait: impl Fn(u32) -> Duration,
 ) {
     let edits = Arc::new(Mutex::new(edits));
@@ -496,15 +509,30 @@ mod tests {
         let (near, mut far) = std::os::unix::net::UnixStream::pair().unwrap();
         let (edits, stop) = (Arc::new(Mutex::new(rx)), ended.clone());
         let writer = std::thread::spawn(move || run_uplink(near, edits, stop));
-        tx.send(RemoteUpdate {
+        tx.send(Uplink::Edit(RemoteUpdate {
             base: 5,
             layout: "{\"a\":1}".into(),
-        })
+            closed: vec![],
+        }))
+        .unwrap();
+        tx.send(Uplink::Open(OpenRequest {
+            card: "c1".into(),
+            cwd: "/srv".into(),
+            path: "src/a.rs".into(),
+            line: Some(42),
+        }))
         .unwrap();
         far.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
         let (kind, text) = read_canvas_message(&mut far).unwrap().unwrap();
         assert_eq!(kind, KIND_UPDATE);
-        assert_eq!(text, encode_update(5, "{\"a\":1}"));
+        assert_eq!(text, encode_update(5, "{\"a\":1}", &[]));
+        // In the order they were made, on the same connection.
+        let (kind, text) = read_canvas_message(&mut far).unwrap().unwrap();
+        assert_eq!(kind, KIND_OPEN);
+        assert_eq!(
+            crate::backend::join::decode_open(&text).unwrap().line,
+            Some(42)
+        );
         ended.store(true, Ordering::Relaxed);
         writer.join().unwrap();
     }

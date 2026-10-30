@@ -54,7 +54,15 @@ impl AppView {
             return;
         }
         self.keycasts.push(Keycast {
-            chord: chord_keys(chord, self.model.modifier_labels()).join(CHORD_SEPARATOR),
+            // As this platform shows it: Ctrl+Shift+T for Cmd+T off the Mac.
+            chord: chord_keys(
+                &self
+                    .model
+                    .shown_chord(chord)
+                    .unwrap_or_else(|| chord.to_string()),
+                self.model.modifier_labels(),
+            )
+            .join(CHORD_SEPARATOR),
             label: label.to_string(),
             at: now,
         });

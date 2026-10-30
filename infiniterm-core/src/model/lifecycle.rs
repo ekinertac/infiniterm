@@ -87,6 +87,13 @@ impl Model {
             return;
         }
 
+        // A viewer's close is told to the host by NAME (#588): the host closes
+        // what is listed and nothing it merely does not see. (A shell that
+        // ended is the host's own event, so it is not listed.)
+        if self.read_only && self.snapshot_seen && !already_exited {
+            self.closed_by_viewer.push(id.to_string());
+        }
+
         // An in-place editor closing is `:wq`, not a card going away: no
         // reopen ring, no undo step, no partner reclaiming its space (the
         // terminal under it already has it).

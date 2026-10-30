@@ -129,6 +129,19 @@ impl AppView {
         Hit::Nothing
     }
 
+    /// `Model::sync_platform_keys`, saying once what the new keymap could
+    /// not map. Before keys are read and before chords are drawn.
+    pub fn sync_platform_keys(&mut self) {
+        if !self.model.uses_platform_keys() {
+            return;
+        }
+        let problems = self.model.sync_platform_keys();
+        if !problems.is_empty() {
+            self.model
+                .notify(format!("keybindings: {}", problems.join("; ")));
+        }
+    }
+
     /// `keycode::roles` with this instance's setting, for the four MOUSE
     /// entry points below. Keys go through `platform_keystroke`.
     pub fn modifier_roles(&self, m: gpui::Modifiers) -> gpui::Modifiers {
@@ -169,34 +182,16 @@ impl AppView {
         k: &Keystroke,
         ctx: infiniterm_core::platform_keys::KeyContext,
     ) -> Keystroke {
-        use infiniterm_core::config::CommandModifier;
-        use infiniterm_core::platform_keys::PlatformKeys;
         // AltGr typing (Windows) arrives as Ctrl+Alt: take that off before a
         // chord is built or a key reaches a terminal, so `@` typed with
         // AltGr+Q is a plain key and no Ctrl+Alt row can fire on it.
         let k = &crate::keycode::without_altgr(k);
-        if cfg!(target_os = "macos")
-            || self.model.config.keyboard.command_modifier == CommandModifier::Super
-        {
+        if !self.model.uses_platform_keys() {
             return k.clone();
         }
         // The table follows the keymap: rebuilt when it changed, and what
         // it could not map is said once.
-        if self.platform_keys_for != self.model.keymap {
-            let chords = self
-                .model
-                .keymap
-                .iter()
-                .map(|(c, _)| c.as_str())
-                .chain(self.model.conditional_keys.iter().map(|b| b.chord.as_str()));
-            let (table, problems) = PlatformKeys::build(chords);
-            self.platform_keys = table;
-            self.platform_keys_for = self.model.keymap.clone();
-            if !problems.is_empty() {
-                self.model
-                    .notify(format!("keybindings: {}", problems.join("; ")));
-            }
-        }
+        self.sync_platform_keys();
         let m = &k.modifiers;
         let code = crate::keycode::last_code();
         let physical = chord_for(&KeyPress {
@@ -211,7 +206,7 @@ impl AppView {
                 m.shift
             },
         });
-        let Some(mac) = self.platform_keys.mac(&physical, ctx) else {
+        let Some(mac) = self.model.platform_keys.mac(&physical, ctx) else {
             return k.clone();
         };
         if std::env::var_os("INFINITERM_KEYLOG").is_some() {
@@ -1380,6 +1375,12 @@ impl AppView {
             crate::body::BodyAction::Open(plan) => {
                 self.model.open_in_card(plan, Some(id));
             }
+            crate::body::BodyAction::OpenOnHost { path, line } => {
+                self.send_open_request(id, path, line);
+            }
+            crate::body::BodyAction::PasteImage { ext, bytes } => {
+                self.send_to_host(id, vec![crate::runtime::HostItem::Image { ext, bytes }]);
+            }
             crate::body::BodyAction::OpenExternal { url, path } => {
                 let result = match (url, path) {
                     (Some(url), _) => infiniterm_core::links_fs::open_url(url.as_str()),
@@ -1442,6 +1443,22 @@ impl AppView {
             Hit::CardBody { id, .. } | Hit::CardEdge { id, .. } => self.model.card(id).cloned(),
             _ => None,
         };
+        // A terminal of a joined window runs on the host: a path on this Mac
+        // would be one its program cannot read, so the files go to the host
+        // first and the card gets THEIR path (#556).
+        if self.viewer {
+            if let Some(c) = card
+                .as_ref()
+                .filter(|c| c.kind == infiniterm_core::saved_layout::CardKind::Terminal)
+            {
+                let sent = items
+                    .iter()
+                    .map(|(p, _)| crate::runtime::HostItem::Path(p.into()))
+                    .collect();
+                self.send_to_host(&c.id.clone(), sent);
+                return;
+            }
+        }
         // The card's own shell, not this platform's idea of one: quoting a
         // dropped path is the whole security story of the drop, and POSIX
         // quoting does not survive PowerShell. `terminal.shell` when it is

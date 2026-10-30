@@ -306,6 +306,7 @@ impl AppView {
             // A padding change refits the grid through `refit_to` below.
             body.pad = padding;
             // A viewer's card draws the host's grid, whatever its own size.
+            body.remote_paths = self.viewer;
             // Kept when the connection is lost (no pane to ask any more): the
             // frozen screen must not reflow to this card's own size.
             if let Some((c, r)) = body.pane.and_then(|p| self.backend.pty.viewer_pane_size(p)) {
