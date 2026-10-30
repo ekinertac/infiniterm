@@ -2306,6 +2306,21 @@ mod tests {
         assert!(h.m.card_label_hidden(&a));
     }
 
+    // #548: a workspace with one card needs no Cmd+1 to lose its label.
+    #[test]
+    fn the_only_card_of_a_workspace_hides_its_label_when_the_ui_theme_asks() {
+        let mut h = Harness::new();
+        let a = h.focused().id.clone();
+        assert!(!h.m.card_label_hidden(&a), "off by default");
+        h.m.apply_ui_theme_text("default", Some(r#"{"ui.hideLabelWhenFitted": true}"#));
+        assert!(!h.m.framing);
+        assert_eq!(h.m.here().len(), 1);
+        assert!(h.m.card_label_hidden(&a));
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        assert!(!h.m.card_label_hidden(&b), "two cards: the label is back");
+    }
+
     #[test]
     fn hide_build_number_is_a_setting_off_by_default() {
         let mut h = Harness::new();

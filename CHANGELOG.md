@@ -55,6 +55,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-10-22
 
 - `"ui.hideBuildNumber": true` in settings.json hides "build N" at the right end of the status bar.
+- `ui.hideLabelWhenFitted` also hides the label of the only card on a workspace, without pressing Cmd+1.
 
 ## 0.6.3 (build 1196), 2026-10-22
 
