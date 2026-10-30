@@ -372,6 +372,8 @@ pub struct Ui {
     pub hide_label_when_maximised: bool,
     /// The same for the card Cmd+1 fitted to the window. A LOOK key (ui theme).
     pub hide_label_when_fitted: bool,
+    /// No "build N" at the right end of the status bar (#546).
+    pub hide_build_number: bool,
     pub group_label_size: f64,
     pub status_bar_size: f64,
     /// How far one press of `canvas.pan.*` moves the view, in screen pixels
@@ -580,6 +582,7 @@ pub fn default_config() -> Config {
             card_label_position: LabelCorner::TopRight,
             hide_label_when_maximised: false,
             hide_label_when_fitted: false,
+            hide_build_number: false,
             group_label_size: 15.,
             status_bar_size: 11.,
             pan_step: DEFAULT_PAN_STEP,
@@ -931,6 +934,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 u.get("hideLabelWhenFitted"),
                 d.ui.hide_label_when_fitted,
             ),
+            hide_build_number: bool_(u.get("hideBuildNumber"), d.ui.hide_build_number),
             group_label_size: num(u.get("groupLabelSize"), d.ui.group_label_size, 6., 64.),
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),
             pan_step: num(u.get("panStep"), d.ui.pan_step, MIN_PAN_STEP, MAX_PAN_STEP),

@@ -188,6 +188,10 @@ pub struct TerminalBody {
     /// and rows, since the shell wraps to those; set each frame from the
     /// pane, `None` everywhere else, where the card's size decides.
     pub fixed_cells: Option<(usize, usize)>,
+    /// A viewer's terminal (#555): its paths are the HOST's, so they are not
+    /// checked against this Mac's disk (that found nothing and dropped the
+    /// click); every path-like text is a link and a click asks the host.
+    pub remote_paths: bool,
     /// Each row shaped ONCE, keyed by what it was shaped from, so a row
     /// that did not change is not shaped again. htop repaints every second;
     /// the other 39 rows of the other 24 cards do not.
@@ -362,6 +366,7 @@ impl TerminalBody {
             scale: 1.,
             cols,
             fixed_cells: None,
+            remote_paths: false,
             rows,
             shaped: vec![],
         }
@@ -606,7 +611,13 @@ impl TerminalBody {
             self.link_texts[r].push_str(line);
             self.link_spans[r] = row.hyperlinks.clone();
             self.links[r] = if line.contains(['/', '.', '#']) || !row.hyperlinks.is_empty() {
-                Self::scan_links(line, &self.cwd, repo.as_ref(), &row.hyperlinks)
+                Self::scan_links(
+                    line,
+                    &self.cwd,
+                    repo.as_ref(),
+                    &row.hyperlinks,
+                    self.remote_paths,
+                )
             } else {
                 vec![]
             };
@@ -618,10 +629,23 @@ impl TerminalBody {
         cwd: &str,
         repo: Option<&Repo>,
         spans: &[(usize, usize, String)],
+        remote_paths: bool,
     ) -> Vec<(Found, Option<PathKind>)> {
         {
             {
                 let found = merge_hyperlinks(find_links_in(line, repo), line, spans);
+                // The paths are on another machine: nothing here can say
+                // whether they exist, so each is a link and the host decides
+                // when it is clicked (#555).
+                if remote_paths {
+                    return found
+                        .into_iter()
+                        .map(|f| {
+                            let kind = (f.kind == LinkKind::Path).then_some(PathKind::File);
+                            (f, kind)
+                        })
+                        .collect();
+                }
                 let paths: Vec<&str> = found
                     .iter()
                     .filter(|f| f.kind == LinkKind::Path)
@@ -734,6 +758,53 @@ pub fn rejoin_wait_ms(tries: u32) -> f64 {
     (REJOIN_FIRST_MS * 2f64.powi(tries.min(10) as i32)).min(REJOIN_LONGEST_MS)
 }
 
+/// The cause line of a lost card's banner is this much of the first line's
+/// size, in a duller red than its text.
+const DETAIL_FONT_RATIO: f32 = 0.8;
+const DETAIL_COLOR: u32 = 0xfca5a5;
+
+/// The banner leaves this share of the card's width (at most this many world
+/// px) free at the right, where the card's label chip sits.
+const CHIP_RESERVE_RATIO: f32 = 0.4;
+const CHIP_RESERVE_MAX_PX: f32 = 320.;
+
+/// The first line of a lost card's banner: short and the same every time, so
+/// it never wraps.
+const LOST_NOTE: &str = "Lost the connection to the host; joining again";
+
+/// A failure's text for the banner's second line: no socket path and no
+/// "(os error N)", which say nothing to a reader; "ift: " goes too. What is
+/// left is the sentence ("no running infiniterm to join on this host:
+/// Connection refused"). If trimming leaves nothing, the original is kept.
+pub fn short_cause(why: &str) -> String {
+    let mut out = String::new();
+    let mut rest = why.trim();
+    rest = rest.strip_prefix("ift: ").unwrap_or(rest);
+    // Walk the text, dropping any "(...)" that is a path or an os error.
+    while let Some(open) = rest.find('(') {
+        let (head, tail) = rest.split_at(open);
+        let Some(close) = tail.find(')') else { break };
+        let inner = &tail[1..close];
+        out.push_str(head);
+        if !(inner.contains('/') || inner.starts_with("os error")) {
+            out.push_str(&tail[..=close]);
+        }
+        rest = &tail[close + 1..];
+    }
+    out.push_str(rest);
+    let out = out
+        .replace(" :", ":")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let out = out.trim_matches(|c: char| c == ':' || c.is_whitespace());
+    if out.is_empty() {
+        why.trim().to_string()
+    } else {
+        out.to_string()
+    }
+}
+
 /// A viewer card that lost its session connection (#442).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LostLink {
@@ -744,6 +815,9 @@ pub struct LostLink {
     pub in_flight: bool,
     /// What the card says: the last failure, or that it is joining again.
     pub note: String,
+    /// The technical cause of the last failure, trimmed (`short_cause`), drawn
+    /// smaller under the note. None when the note says it all.
+    pub detail: Option<String>,
     /// The host answered and trying again will not change it (the session is
     /// gone there, a login refused). No more tries until the canvas
     /// reconnects.
@@ -756,7 +830,8 @@ impl LostLink {
             next_at: now + REJOIN_FIRST_MS,
             tries: 0,
             in_flight: false,
-            note: "the connection to the host was lost; joining again".into(),
+            note: LOST_NOTE.into(),
+            detail: None,
             fatal: false,
         }
     }
@@ -787,11 +862,15 @@ impl LostLink {
         self.fatal = fatal;
         self.tries += 1;
         self.next_at = now + rejoin_wait_ms(self.tries);
-        self.note = if fatal {
-            why.to_string()
+        // A final answer is the host's own sentence and is the note; any
+        // other failure keeps the one fixed line and the cause under it.
+        if fatal {
+            self.note = why.to_string();
+            self.detail = None;
         } else {
-            format!("the connection to the host was lost ({why}); joining again")
-        };
+            self.note = LOST_NOTE.to_string();
+            self.detail = Some(short_cause(why)).filter(|d| !d.is_empty());
+        }
     }
 
     /// The canvas is back, so the host is reachable: try now, whatever was
@@ -886,6 +965,7 @@ impl TerminalBody {
             Some(l) => l.note.as_str(),
             None => "attached from outside (ift attach); the card takes the shell back when that terminal detaches",
         };
+        let detail = self.lost.as_ref().and_then(|l| l.detail.as_deref());
         let mut size_px = px((ERROR_FONT_PX * scale) as f32);
         // A lost connection is news: readable on screen at any zoom, as
         // large as the card's width allows (a banner at the card's zoomed
@@ -902,18 +982,85 @@ impl TerminalBody {
         }
         let pad = (size_px * 0.5).max(px((ERROR_PAD_PX * scale) as f32));
         let line_h = size_px * ERROR_LINE_HEIGHT_RATIO as f32;
+        // The cause is smaller and under the note.
+        let detail_px = size_px * DETAIL_FONT_RATIO;
+        let detail_h = detail_px * ERROR_LINE_HEIGHT_RATIO as f32;
+        let height = line_h + pad * 2. + if detail.is_some() { detail_h } else { px(0.) };
         window.paint_quad(fill(
-            Bounds::new(bounds.origin, size(bounds.size.width, line_h + pad * 2.)),
+            Bounds::new(bounds.origin, size(bounds.size.width, height)),
             gpui::rgb(back),
         ));
+        // Clear of the card's label chip at the top right, and one line each:
+        // a cut with an ellipsis, never a wrap onto a second row.
+        let chip =
+            (bounds.size.width * CHIP_RESERVE_RATIO).min(px(CHIP_RESERVE_MAX_PX * scale as f32));
+        let room = f32::from((bounds.size.width - pad * 2. - chip).max(px(0.)));
         let f = term_font(&self.font_family);
-        let line = crate::text::shape(window, said, size_px, &f, gpui::rgb(fore).into());
-        let _ = line.paint(
-            point(bounds.origin.x + pad, bounds.origin.y + pad),
+        let paint_line = |text: &str,
+                          px_size: Pixels,
+                          h: Pixels,
+                          y: Pixels,
+                          color: u32,
+                          window: &mut Window,
+                          cx: &mut App| {
+            let text = crate::text::elide(text, room, |t| {
+                f32::from(crate::text::shape(window, t, px_size, &f, gpui::rgb(color).into()).width)
+            });
+            let line = crate::text::shape(window, &text, px_size, &f, gpui::rgb(color).into());
+            let _ = line.paint(point(bounds.origin.x + pad, y), h, window, cx);
+        };
+        paint_line(
+            said,
+            size_px,
             line_h,
+            bounds.origin.y + pad,
+            fore,
             window,
             cx,
         );
+        if let Some(detail) = detail {
+            paint_line(
+                detail,
+                detail_px,
+                detail_h,
+                bounds.origin.y + pad + line_h,
+                DETAIL_COLOR,
+                window,
+                cx,
+            );
+        }
+    }
+}
+
+/// What Ctrl+V does in a joined card: the image goes to the host only when
+/// this Mac's clipboard has an image and NO text. Text means the key is meant
+/// as a key (a program that pastes text itself), and nothing on the clipboard
+/// means there is nothing to send.
+pub fn ctrl_v_sends_image(clipboard_has_text: bool, clipboard_has_image: bool) -> bool {
+    clipboard_has_image && !clipboard_has_text
+}
+
+/// The first image on the clipboard: the extension its format has and its
+/// bytes (#556).
+fn clipboard_image(item: &ClipboardItem) -> Option<(String, Vec<u8>)> {
+    item.entries().iter().find_map(|e| match e {
+        gpui::ClipboardEntry::Image(image) => Some((
+            image_extension(image.format).to_string(),
+            image.bytes.clone(),
+        )),
+        _ => None,
+    })
+}
+
+fn image_extension(format: gpui::ImageFormat) -> &'static str {
+    match format {
+        gpui::ImageFormat::Png => "png",
+        gpui::ImageFormat::Jpeg => "jpg",
+        gpui::ImageFormat::Webp => "webp",
+        gpui::ImageFormat::Gif => "gif",
+        gpui::ImageFormat::Svg => "svg",
+        gpui::ImageFormat::Bmp => "bmp",
+        gpui::ImageFormat::Tiff => "tiff",
     }
 }
 
@@ -940,9 +1087,8 @@ impl CardBody for TerminalBody {
             self.paint_error(&error, bounds, scale, window, cx);
             return;
         }
-        if self.displaced {
-            self.paint_displaced(bounds, scale, window, cx);
-        }
+        // (A displaced card's banner is painted last, below: drawn here it
+        // went under the body's own background and never showed.)
         // A selection drag held past the edge: one step of scroll a frame,
         // and the selection's end follows to the edge row, so what scrolls
         // into view is selected as it arrives.
@@ -1078,6 +1224,9 @@ impl CardBody for TerminalBody {
                 }
             }
             self.frame = frame;
+            if self.displaced {
+                self.paint_displaced(bounds, scale, window, cx);
+            }
             self.paint_scrim(bounds, focused, window, cx);
             return;
         }
@@ -1196,6 +1345,9 @@ impl CardBody for TerminalBody {
         if visual {
             self.paint_visual_tag(bounds, scale, window, cx);
         }
+        if self.displaced {
+            self.paint_displaced(bounds, scale, window, cx);
+        }
         self.paint_scrim(bounds, focused, window, cx);
     }
 
@@ -1238,11 +1390,35 @@ impl CardBody for TerminalBody {
             return BodyAction::None;
         }
         if m.platform && k.key == "v" {
-            if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+            let clip = cx.read_from_clipboard();
+            if let Some(text) = clip.as_ref().and_then(|c| c.text()) {
                 let bracketed = self.grid.bracketed_paste();
                 self.write(paste(&text, bracketed));
+            } else if self.remote_paths {
+                // An image and no text, in a joined terminal: the program is
+                // on the host and cannot see this Mac's clipboard, so the
+                // image goes there and its path is typed (#556).
+                if let Some((ext, bytes)) = clip.as_ref().and_then(clipboard_image) {
+                    return BodyAction::PasteImage { ext, bytes };
+                }
             }
             return BodyAction::None;
+        }
+        // Ctrl+V is the paste chord of an agent in the card (Claude Code reads
+        // an image from the clipboard of the machine it runs on). In a joined
+        // card that is the HOST's clipboard, which holds nothing of what was
+        // copied on this Mac: with an image and no text here, the image goes
+        // to the host and its path is typed instead of the key (#556); with
+        // text, or no image, the key goes on as ever.
+        if self.remote_paths && m.control && !m.platform && !m.alt && k.key == "v" {
+            let clip = cx.read_from_clipboard();
+            let text = clip.as_ref().and_then(|c| c.text()).is_some();
+            let image = clip.as_ref().and_then(clipboard_image);
+            if ctrl_v_sends_image(text, image.is_some()) {
+                if let Some((ext, bytes)) = image {
+                    return BodyAction::PasteImage { ext, bytes };
+                }
+            }
         }
         let key = Key {
             name: &k.key,
@@ -1337,6 +1513,19 @@ impl CardBody for TerminalBody {
                 let home = infiniterm_core::paths::home_dir()
                     .to_string_lossy()
                     .into_owned();
+                // A path in a joined terminal is the host's: the host opens
+                // it (#555). The system's handler here would look on this
+                // Mac's disk, so Shift does nothing for a path.
+                if self.remote_paths && f.kind == LinkKind::Path {
+                    return if modifiers.shift {
+                        BodyAction::None
+                    } else {
+                        BodyAction::OpenOnHost {
+                            path: f.target,
+                            line: f.line,
+                        }
+                    };
+                }
                 if modifiers.shift {
                     return match f.kind {
                         LinkKind::Url => BodyAction::OpenExternal {
@@ -1881,6 +2070,60 @@ pub fn lost_session_tail(when: &str, resume: Option<&str>) -> String {
 mod tests {
     use super::*;
 
+    /// A joined terminal's paths are the host's (#555): this Mac's disk says
+    /// nothing about them, and checking it dropped every click.
+    #[test]
+    fn in_a_joined_terminal_a_path_is_a_link_without_a_look_at_this_disk() {
+        let line = "edited /no/such/dir/on/this/mac/disk.rs:42 just now";
+        let here = TerminalBody::scan_links(line, "/", None, &[], false);
+        assert!(
+            here.iter().all(|(f, _)| f.kind != LinkKind::Path),
+            "a path that is not on this disk is no link in a local terminal"
+        );
+        let joined = TerminalBody::scan_links(line, "/", None, &[], true);
+        let paths: Vec<_> = joined
+            .iter()
+            .filter(|(f, _)| f.kind == LinkKind::Path)
+            .collect();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].0.target, "/no/such/dir/on/this/mac/disk.rs");
+        assert_eq!(paths[0].0.line, Some(42));
+        assert!(paths[0].1.is_some(), "clickable");
+        // An address is still an address.
+        let url = TerminalBody::scan_links("see https://infiniterm.app/x", "/", None, &[], true);
+        assert!(url
+            .iter()
+            .any(|(f, k)| f.kind == LinkKind::Url && k.is_none()));
+    }
+
+    /// A pasted image in a joined terminal is found on the clipboard with the
+    /// extension its format has (#556); text alone is not an image.
+    #[test]
+    fn a_clipboard_image_is_found_with_its_extension_and_text_is_not_one() {
+        let png = gpui::Image::from_bytes(gpui::ImageFormat::Png, vec![1, 2, 3]);
+        let found = clipboard_image(&ClipboardItem::new_image(&png)).expect("an image");
+        assert_eq!(found, ("png".to_string(), vec![1, 2, 3]));
+        let jpg = gpui::Image::from_bytes(gpui::ImageFormat::Jpeg, vec![9]);
+        assert_eq!(
+            clipboard_image(&ClipboardItem::new_image(&jpg)).unwrap().0,
+            "jpg"
+        );
+        assert!(clipboard_image(&ClipboardItem::new_string("hello".into())).is_none());
+    }
+
+    /// Ctrl+V in a joined card (#556): an image here goes to the host; text, or
+    /// nothing, leaves the key to the program.
+    #[test]
+    fn ctrl_v_sends_an_image_only_when_there_is_one_and_no_text() {
+        assert!(ctrl_v_sends_image(false, true));
+        assert!(
+            !ctrl_v_sends_image(true, true),
+            "text wins: the key goes on"
+        );
+        assert!(!ctrl_v_sends_image(true, false));
+        assert!(!ctrl_v_sends_image(false, false));
+    }
+
     #[test]
     fn a_lost_card_waits_longer_after_each_failure_up_to_a_cap() {
         assert_eq!(rejoin_wait_ms(0), 2000.);
@@ -1898,15 +2141,40 @@ mod tests {
         l.in_flight = true;
         assert!(!l.due(9000.), "one try at a time");
         l.failed(5000., "Connection refused", false);
-        assert!(l.note.contains("Connection refused"));
+        assert_eq!(l.note, "Lost the connection to the host; joining again");
+        assert_eq!(l.detail.as_deref(), Some("Connection refused"));
         assert!(!l.due(5000.) && l.due(5000. + rejoin_wait_ms(1)));
         // The host said the session is gone: no more tries on its own...
         l.failed(6000., "no session s1 on this host", true);
         assert_eq!(l.note, "no session s1 on this host");
+        assert_eq!(l.detail, None, "a final answer is the note itself");
         assert!(!l.due(1e9));
         // ...until the canvas connection comes back: then at once.
         l.poke(7000.);
         assert!(l.due(7000.) && l.tries == 0 && !l.fatal);
+    }
+
+    // The cause under the banner has no socket path and no os error number.
+    #[test]
+    fn the_banner_cause_drops_paths_and_os_error_numbers() {
+        assert_eq!(
+            short_cause(
+                "ift: no running infiniterm to join on this host (/Users/x/.local/share/infiniterm/j.sock): Connection refused (os error 61)"
+            ),
+            "no running infiniterm to join on this host: Connection refused"
+        );
+        assert_eq!(short_cause("Connection refused"), "Connection refused");
+        // Parentheses that are not a path or an os error stay.
+        assert_eq!(
+            short_cause("host key changed (see ssh)"),
+            "host key changed (see ssh)"
+        );
+        // Nothing left after trimming: the original text is kept.
+        assert_eq!(short_cause("(os error 61)"), "(os error 61)");
+        // A failure with no text has no second line.
+        let mut l = LostLink::new(0.);
+        l.failed(1., "", false);
+        assert_eq!(l.detail, None);
     }
 
     #[test]

@@ -6,6 +6,7 @@ use crate::commands::CommandRegistry;
 
 pub fn register_commands(r: &mut CommandRegistry<Model>) {
     super::cards_cmd::register(r);
+    super::window_fit_cmd::register(r);
     super::focus_cmd::register(r);
     super::canvas_cmd::register(r);
     super::workspaces_cmd::register(r);
@@ -369,6 +370,69 @@ mod tests {
         assert!(h.m.palette.source.is_none(), "no palette, so no dim sheet");
     }
 
+    // Off the Mac with `ctrl`, every chord is shown as the platform's: the
+    // panel, the palette, the menus and the keycast all go through
+    // `shown_chord` / `shown_keymap` (#464). On the Mac, and with `super`,
+    // the chords are the Mac's.
+    #[test]
+    fn chords_are_shown_as_the_platform_writes_them() {
+        use crate::config::CommandModifier;
+        let mut h = Harness::new();
+        assert!(
+            h.m.sync_platform_keys().is_empty(),
+            "the default keymap maps cleanly"
+        );
+        assert_eq!(
+            h.m.shown_chord_with(true, "cmd+t").as_deref(),
+            Some("ctrl+shift+t")
+        );
+        assert_eq!(
+            h.m.shown_chord_with(true, "ctrl+2").as_deref(),
+            Some("alt+2")
+        );
+        assert_eq!(
+            h.m.shown_chord_with(true, "cmd+ctrl+space"),
+            None,
+            "palette only"
+        );
+        assert_eq!(
+            h.m.shown_chord_with(false, "cmd+t").as_deref(),
+            Some("cmd+t")
+        );
+        let shown = h.m.shown_keymap_with(true);
+        assert!(shown
+            .iter()
+            .any(|(c, id)| c == "ctrl+shift+t" && id == "card.new.terminal"));
+        assert!(
+            !shown.iter().any(|(_, id)| id == "app.emoji"),
+            "no key, no row"
+        );
+        assert!(
+            shown.iter().all(|(c, _)| !c.starts_with("cmd+")),
+            "no Cmd off the Mac"
+        );
+        // Which platforms use the table.
+        assert!(crate::model::uses_platform_keys(
+            false,
+            CommandModifier::Ctrl
+        ));
+        assert!(!crate::model::uses_platform_keys(
+            false,
+            CommandModifier::Super
+        ));
+        assert!(!crate::model::uses_platform_keys(
+            true,
+            CommandModifier::Ctrl
+        ));
+        // A changed keymap rebuilds the table.
+        h.m.keymap.push(("cmd+u".into(), "card.close".into()));
+        h.m.sync_platform_keys();
+        assert_eq!(
+            h.m.shown_chord_with(true, "cmd+u").as_deref(),
+            Some("ctrl+shift+u")
+        );
+    }
+
     // Release commits: the selected card is focused; Escape leaves things
     // where they were. A card in another workspace brings its workspace.
     #[test]
@@ -586,6 +650,7 @@ mod tests {
                             .find(|(_, c)| c == id)
                             .map(|(k, _)| k.clone())
                     },
+                    shown: &|c| Some(c.to_string()),
                 },
             );
             fn items(rows: &[Row], out: &mut Vec<(String, String)>) {
@@ -2254,6 +2319,14 @@ mod tests {
         h.run("card.new.terminal");
         let b = h.focused().id.clone();
         assert!(!h.m.card_label_hidden(&b), "two cards: the label is back");
+    }
+
+    #[test]
+    fn hide_build_number_is_a_setting_off_by_default() {
+        let mut h = Harness::new();
+        assert!(!h.m.config.ui.hide_build_number);
+        h.m.apply_settings_text(r#"{"ui.hideBuildNumber": true}"#);
+        assert!(h.m.config.ui.hide_build_number);
     }
 
     // The file is checked before it is applied, and a file with an error is not
@@ -4802,7 +4875,10 @@ mod tests {
 
     #[test]
     fn the_command_source_lists_every_command_but_the_palette_with_its_chord() {
-        let h = Harness::new();
+        let mut h = Harness::new();
+        // The ui syncs the platform table each frame; off the Mac the hint
+        // is read through it (`Model::shown_chord`).
+        h.m.sync_platform_keys();
         let labels: Vec<(&str, &str)> =
             h.r.all()
                 .iter()
@@ -4811,11 +4887,12 @@ mod tests {
         let items = h.m.palette_items(Source::Commands, &labels);
         assert!(items.iter().all(|i| i.id != "app.palette"));
         let close = items.iter().find(|i| i.id == "card.close").unwrap();
-        // Spelled through the same labels the app would use, because what
-        // the app's modifier is CALLED is per platform and per setting
-        // (`shortcuts::ModifierLabels`); the question here is that the hint
-        // is the chord for this command, not what that key is named.
-        let expected = crate::shortcuts::format_chord("cmd+w", h.m.modifier_labels());
+        // Spelled through the same labels and chord the app would show,
+        // because what the key is CALLED is per platform and per setting
+        // (`shortcuts::ModifierLabels`, `platform_keys.rs`); the question
+        // here is that the hint is the chord for this command.
+        let shown = h.m.shown_chord("cmd+w").unwrap();
+        let expected = crate::shortcuts::format_chord(&shown, h.m.modifier_labels());
         assert_eq!(close.hint.as_deref(), Some(expected.as_str()));
     }
 
@@ -5010,5 +5087,364 @@ mod tests {
             .take_effects()
             .iter()
             .any(|e| matches!(e, Effect::Editor { .. })));
+    }
+
+    // ----- resize to window (#585) -----------------------------------------
+
+    /// Six portrait cards (the harness card is 69x80 cells), in a 3x2 block,
+    /// all selected; the first stays focused.
+    fn six_selected(h: &mut Harness) -> Vec<String> {
+        for _ in 0..5 {
+            h.run("card.new.terminal");
+        }
+        let ids: Vec<String> = h.m.cards.iter().map(|c| c.id.clone()).collect();
+        h.m.set_focus(Some(&ids[0]));
+        h.m.selection.extra = ids[1..].to_vec();
+        ids
+    }
+
+    fn rect_of(h: &Harness, id: &str) -> crate::grid::Rect {
+        h.m.card(id).unwrap().rect
+    }
+
+    fn none_overlap(h: &Harness) -> bool {
+        let rs: Vec<_> = h.m.here().iter().map(|c| c.rect).collect();
+        (0..rs.len())
+            .all(|i| (i + 1..rs.len()).all(|j| !crate::layout::rects_overlap(rs[i], rs[j])))
+    }
+
+    #[test]
+    fn resize_to_window_takes_the_windows_shape_for_one_card_and_keeps_its_corner() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        let before = h.focused().rect;
+        h.run("card.size.window");
+        let after = rect_of(&h, &id);
+        assert_eq!((after.x, after.y), (before.x, before.y));
+        assert_eq!((after.w, after.h), (1725., 1075.), "same width, 1.6 aspect");
+        assert!((after.w / after.h - 1.6).abs() < 0.05);
+    }
+
+    #[test]
+    fn resize_to_window_reflows_six_portrait_cards_into_a_grid_with_one_undo() {
+        let mut h = Harness::new();
+        let ids = six_selected(&mut h);
+        let before: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        h.run("card.size.window");
+        assert!(none_overlap(&h));
+        // Three columns, two rows still: same row, same y; same column, same x.
+        let r: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        for c in &r {
+            assert_eq!((c.w, c.h), (1725., 1075.));
+        }
+        for i in 0..6 {
+            for j in 0..6 {
+                let (bi, bj) = (before[i], before[j]);
+                if bi.y == bj.y {
+                    assert_eq!(r[i].y, r[j].y, "same row stays a row");
+                }
+                if bi.x == bj.x {
+                    assert_eq!(r[i].x, r[j].x, "same column stays a column");
+                }
+            }
+        }
+        // One Cmd+Z puts all six back.
+        h.run("layout.undo");
+        let back: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        assert_eq!(back, before);
+    }
+
+    #[test]
+    fn resize_to_window_pushes_the_selection_clear_of_a_card_outside_it() {
+        let mut h = Harness::new();
+        let ids = six_selected(&mut h);
+        let outsider = ids[5].clone();
+        h.m.selection.extra = ids[1..5].to_vec();
+        let kept = rect_of(&h, &outsider);
+        h.run("card.size.window");
+        assert!(none_overlap(&h));
+        assert_eq!(rect_of(&h, &outsider), kept, "the outsider stays");
+    }
+
+    #[test]
+    fn resize_to_window_keeps_a_group_frame_around_its_cards_and_clear_of_others() {
+        let mut h = Harness::new();
+        let ids = six_selected(&mut h);
+        let g = h.m.add_group("pair");
+        for i in [0, 1] {
+            h.m.card_mut(&ids[i]).unwrap().group_id = Some(g.clone());
+        }
+        // Known ceiling: a selection that is only PART of the canvas can leave
+        // a group's bounding frame around an outsider (the sweep reads cards,
+        // not frames); with everything selected the frame stays clear.
+        h.run("card.size.window");
+        assert!(none_overlap(&h));
+        let ws = h.m.card(&ids[0]).unwrap().workspace_id.clone();
+        let frame = h.m.group_frame(&g, &ws).unwrap();
+        for i in [0, 1] {
+            let c = rect_of(&h, &ids[i]);
+            assert!(frame.x <= c.x && frame.y <= c.y);
+            assert!(frame.x + frame.w >= c.x + c.w && frame.y + frame.h >= c.y + c.h);
+        }
+        for id in &ids[2..] {
+            assert!(
+                !crate::layout::rects_overlap(frame, rect_of(&h, id)),
+                "frame {frame:?} is clear of {:?}; a {:?}, b {:?}",
+                rect_of(&h, id),
+                rect_of(&h, &ids[0]),
+                rect_of(&h, &ids[1])
+            );
+        }
+    }
+
+    #[test]
+    fn resize_to_window_never_touches_another_workspace_or_a_maximised_card() {
+        let mut h = Harness::new();
+        let first = h.focused().id.clone();
+        h.run("workspace.new");
+        h.run("card.new.terminal");
+        let there = h.focused().id.clone();
+        let there_rect = rect_of(&h, &there);
+        h.run("workspace.prev");
+        h.m.set_focus(Some(&first));
+        h.run("card.size.window");
+        assert_eq!(rect_of(&h, &there), there_rect);
+        // Maximised: refused with a reason, nothing changes.
+        let at = rect_of(&h, &first);
+        h.m.selection.maximized = true;
+        h.run("card.size.window");
+        assert_eq!(rect_of(&h, &first), at);
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("maximised")));
+    }
+
+    #[test]
+    fn resize_to_window_is_a_row_of_the_size_picker_and_says_when_nothing_changes() {
+        let mut h = Harness::new();
+        let ids = six_selected(&mut h);
+        h.run("card.size");
+        let rows = h.m.palette_items(Source::Sizes, &[]);
+        let ids_in_menu: Vec<_> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids_in_menu.contains(&"window"));
+        h.m.palette_run(Source::Sizes, "window");
+        assert!(none_overlap(&h));
+        assert_eq!(rect_of(&h, &ids[0]).h, 1075.);
+        h.m.notice = None;
+        h.m.palette_run(Source::Sizes, "window");
+        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("already")));
+    }
+
+    // ----- default size for the selection ----------------------------------
+
+    #[test]
+    fn default_size_takes_the_whole_selection_back_in_one_undo_step() {
+        let mut h = Harness::new();
+        let ids = six_selected(&mut h);
+        let start: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        h.run("card.size.window");
+        let shaped: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        assert_ne!(shaped, start);
+        h.run("card.size.default");
+        let back: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        assert_eq!(back, start, "the lattice and the 69x80 size return");
+        assert!(none_overlap(&h));
+        h.run("layout.undo");
+        let undone: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        assert_eq!(undone, shaped, "one step");
+        // Already there: says so.
+        h.run("card.size.default");
+        h.m.notice = None;
+        h.run("card.size.default");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("already the default size")));
+    }
+
+    #[test]
+    fn default_size_works_for_one_card_and_is_a_picker_row() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.palette_run(Source::Sizes, "quarter");
+        assert!(rect_of(&h, &id).w < 1725.);
+        h.run("card.size");
+        let rows = h.m.palette_items(Source::Sizes, &[]);
+        let row = rows.iter().find(|r| r.id == "default").expect("the row");
+        assert_eq!(row.label, super::super::window_fit_cmd::DEFAULT_ROW.1);
+        h.m.palette_run(Source::Sizes, "default");
+        let r = rect_of(&h, &id);
+        assert_eq!((r.w, r.h), (1725., 2000.));
+    }
+
+    #[test]
+    fn default_size_keeps_clear_of_outsiders_groups_other_workspaces_and_maximise() {
+        let mut h = Harness::new();
+        let ids = six_selected(&mut h);
+        // The outsider is the last card; the pair is a group.
+        let outsider = ids[5].clone();
+        h.m.selection.extra = ids[1..5].to_vec();
+        let g = h.m.add_group("pair");
+        for i in [0, 1] {
+            h.m.card_mut(&ids[i]).unwrap().group_id = Some(g.clone());
+        }
+        h.run("card.size.window");
+        let kept = rect_of(&h, &outsider);
+        h.run("card.size.default");
+        assert!(none_overlap(&h));
+        assert_eq!(rect_of(&h, &outsider), kept);
+        // Maximised refuses.
+        let at = rect_of(&h, &ids[0]);
+        h.m.selection.maximized = true;
+        h.m.notice = None;
+        h.run("card.size.window");
+        h.run("card.size.default");
+        assert_eq!(rect_of(&h, &ids[0]), at);
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("maximised")));
+        h.m.selection.maximized = false;
+        // Another workspace is never touched.
+        h.run("workspace.new");
+        h.run("card.new.terminal");
+        let there = h.focused().id.clone();
+        h.m.palette_run(Source::Sizes, "quarter");
+        let there_rect = rect_of(&h, &there);
+        h.run("workspace.prev");
+        h.m.set_focus(Some(&ids[0]));
+        h.run("card.size.default");
+        assert_eq!(rect_of(&h, &there), there_rect);
+    }
+
+    // ----- custom size ------------------------------------------------------
+
+    /// Enter in the open prompt with `text`.
+    fn answer_prompt(h: &mut Harness, text: &str) {
+        let (pending, answer) = h.m.prompt.settle(Some(text)).expect("a prompt was open");
+        h.m.answer(pending, answer, |_| true);
+    }
+
+    #[test]
+    fn custom_size_opens_a_prompt_that_starts_from_the_default_then_the_last_value() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.run("card.size.custom");
+        assert!(h.m.prompt.is_open());
+        assert_eq!(
+            h.m.prompt.label,
+            "Custom size: width x height in grid squares"
+        );
+        assert_eq!(h.m.prompt.value, "69x80", "the default size from settings");
+        answer_prompt(&mut h, "60 x 90");
+        let r = rect_of(&h, &id);
+        assert_eq!((r.w, r.h), (1500., 2250.));
+        let note = h.m.notice.clone().unwrap();
+        assert!(
+            note.contains("60x90") && note.contains("1500 x 2250 px"),
+            "{note}"
+        );
+        h.run("card.size.custom");
+        assert_eq!(h.m.prompt.value, "60x90", "the last custom value");
+        // Also reached from the picker row.
+        h.m.prompt.settle(None);
+        h.run("card.size");
+        let rows = h.m.palette_items(Source::Sizes, &[]);
+        let row = rows.iter().find(|r| r.id == "custom").expect("the row");
+        assert_eq!(row.label, super::super::window_fit_cmd::CUSTOM_ROW.1);
+        h.m.palette_run(Source::Sizes, "custom");
+        assert!(h.m.prompt.is_open());
+    }
+
+    #[test]
+    fn custom_size_escape_changes_nothing_and_bad_input_keeps_the_prompt_with_the_reason() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        let before = rect_of(&h, &id);
+        h.run("card.size.custom");
+        h.m.prompt.settle(None);
+        assert_eq!(rect_of(&h, &id), before);
+        assert!(h.m.custom_size_last.is_none(), "a cancel remembers nothing");
+        for (typed, why) in [
+            ("sixty", "not a number"),
+            ("60", "two numbers"),
+            ("0x80", "more than zero"),
+            ("-3 80", "more than zero"),
+            ("500x80", "at most 400"),
+        ] {
+            h.run("card.size.custom");
+            answer_prompt(&mut h, typed);
+            assert!(h.m.prompt.is_open(), "{typed}: asks again");
+            assert_eq!(
+                h.m.prompt.value, typed,
+                "the typed text is kept for the fix"
+            );
+            assert!(
+                h.m.notice.as_deref().is_some_and(|n| n.contains(why)),
+                "{typed}"
+            );
+            assert_eq!(rect_of(&h, &id), before);
+            h.m.prompt.settle(None);
+        }
+    }
+
+    #[test]
+    fn custom_size_below_the_minimum_is_clamped_with_a_notice_and_the_same_size_says_so() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.run("card.size.custom");
+        answer_prompt(&mut h, "2,2");
+        let r = rect_of(&h, &id);
+        assert_eq!(
+            (r.w, r.h),
+            (crate::resize::MIN_CARD_W, crate::resize::MIN_CARD_H)
+        );
+        assert!(h.m.notice.as_deref().is_some_and(|n| n.contains("minimum")));
+        h.run("card.size.custom");
+        answer_prompt(&mut h, "8x4");
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("already that size")));
+    }
+
+    #[test]
+    fn custom_size_reflows_the_selection_in_one_undo_step_and_keeps_the_rules() {
+        let mut h = Harness::new();
+        let ids = six_selected(&mut h);
+        let start: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        h.run("card.size.custom");
+        answer_prompt(&mut h, "60x30");
+        assert!(none_overlap(&h));
+        for i in &ids {
+            let r = rect_of(&h, i);
+            assert_eq!((r.w, r.h), (1500., 750.));
+        }
+        h.run("layout.undo");
+        let back: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        assert_eq!(back, start, "one step");
+        // An unselected card stays; a maximised card refuses before asking.
+        let outsider = ids[5].clone();
+        h.m.selection.extra = ids[1..5].to_vec();
+        let kept = rect_of(&h, &outsider);
+        h.run("card.size.custom");
+        answer_prompt(&mut h, "100x80");
+        assert!(none_overlap(&h));
+        assert_eq!(rect_of(&h, &outsider), kept);
+        h.m.selection.maximized = true;
+        h.m.prompt.settle(None);
+        h.m.notice = None;
+        h.run("card.size.custom");
+        assert!(!h.m.prompt.is_open());
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.contains("maximised")));
     }
 }

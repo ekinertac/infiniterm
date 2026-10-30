@@ -32,6 +32,14 @@ Drag a card by its top edge or its label. The card stays put while an outline fo
 
 `Cmd Ctrl Alt` + arrow slides the card that way into the next gap, which closes the space a resize (`Cmd Alt S`) leaves. The card stops one gutter short of the next card in line, or on the next grid slot when nothing is there, and never overlaps. `Cmd Z` undoes it.
 
+`Cmd Alt S` opens the size list. Full, Half, Quarter and Double resize the focused card. Three rows at the end act on every selected card (or on the focused card when none is selected). Each command is also in the palette and has an id for `ift run`.
+
+- **Resize to window** (`card.size.window`). Each card keeps its width and takes the window's proportions, so a portrait card from a joined host becomes a landscape card.
+- **Default size** (`card.size.default`). Each card goes back to `cards.width` by `cards.height`. Without those settings, it takes the window's shape.
+- **Custom size…** (`card.size.custom`). A prompt asks for a width and a height in grid squares. A square is 25 pixels, the unit of `cards.width`, so 50 is 1250 pixels. Type `60x90`, `60 x 90`, `60 90` or `60,90`. The prompt starts from the last size you typed, or from the default size. A side under 8 squares wide or 4 squares tall is raised to that minimum, and a notice says so. A side over 400 squares is refused. The notice after a resize gives the size in pixels.
+
+All three place the cards the same way. Each selected card sits one gutter right of the card on its left and one gutter below the card above it. A neighbour is pulled closer or pushed away, and nothing overlaps. Cards you did not select stay where they are. `Cmd Z` undoes the whole change in one step, and the view then fits the selected cards. A maximised card refuses, with a notice: restore it first.
+
 `Cmd Ctrl Shift` + arrow pans the canvas that way by 120 screen pixels a press, at any zoom, and a held key repeats. `ui.panStep` changes the step, from 20 to 1000 screen pixels; a smaller number is a slower pan. The focus stays where it is, as with the mouse. The commands are `canvas.pan.left`, `.right`, `.up` and `.down`, for the palette, `ift run` and your own bindings.
 
 `Cmd Ctrl Enter` grows a card into the gap it sits in, up to the default size, from whichever corner fills that gap. It grows an empty slot the same way: arrow onto a free slot (it has the size of the card you came from), press `Cmd Ctrl Enter`, and the card you make there has the new size.

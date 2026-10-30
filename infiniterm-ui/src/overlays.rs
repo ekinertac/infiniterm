@@ -251,7 +251,8 @@ impl AppView {
             .collect();
         let sections = filter_shortcuts(
             &shortcut_sections(
-                &self.model.keymap,
+                // As this platform shows its chords (`Model::shown_keymap`).
+                &self.model.shown_keymap(),
                 &labels_ref,
                 self.model.modifier_labels(),
             ),
@@ -429,6 +430,9 @@ impl AppView {
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_fields();
+        // Chords are drawn as the platform shows them; the table follows a
+        // changed keymap before anything below draws one.
+        self.sync_platform_keys();
         self.sync_window_background(window);
         if !self.window_titled {
             if let Some(r) = &self.model.remote {
@@ -439,9 +443,17 @@ impl Render for AppView {
         // A fade is an animation: the system's reduced-motion switch and
         // `ui.animations` turn it into a cut.
         let animate = self.model.config.ui.animations && !self.reduce_motion;
+        // A joined window's pictures are the host's files (#560).
+        let host = self
+            .viewer
+            .then(|| self.file_source())
+            .filter(|s| !s.is_local());
         self.background.update(
             &self.model.config.ui,
-            self.backgrounds_dir.as_deref(),
+            crate::background_show::Pictures {
+                bundled: self.backgrounds_dir.as_deref(),
+                host: host.as_ref(),
+            },
             animate,
             crate::now_ms(),
             window,
@@ -1099,11 +1111,15 @@ impl AppView {
                     ))
                     .child(div().text_color(fps_color).child(right))
                     // Which build this is, for a bug report from a friend.
-                    .children(self.build.map(|b| {
-                        div()
-                            .text_color(chrome.text_faint)
-                            .child(format!("build {b}"))
-                    })),
+                    .children(
+                        self.build
+                            .filter(|_| !m.config.ui.hide_build_number)
+                            .map(|b| {
+                                div()
+                                    .text_color(chrome.text_faint)
+                                    .child(format!("build {b}"))
+                            }),
+                    ),
             )
     }
 
@@ -1628,7 +1644,8 @@ impl AppView {
         let query = self.shortcuts_field.text.clone();
         let sections = filter_shortcuts(
             &shortcut_sections(
-                &self.model.keymap,
+                // As this platform shows its chords (`Model::shown_keymap`).
+                &self.model.shown_keymap(),
                 &labels_ref,
                 self.model.modifier_labels(),
             ),

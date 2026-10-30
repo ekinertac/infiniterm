@@ -14,7 +14,11 @@
 use crate::paths::home_dir;
 use std::path::{Path, PathBuf};
 
-fn resolve(cwd: &str, path: &str) -> PathBuf {
+/// A path as a terminal's link names it: `~` and `~/x` are this machine's
+/// home, anything else is relative to the card's directory (an absolute one
+/// stays itself). Public for the join host, which resolves a viewer's click
+/// on ITS disk (#555).
+pub fn resolve(cwd: &str, path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         return home_dir().join(rest);
     }
