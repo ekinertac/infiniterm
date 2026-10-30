@@ -56,6 +56,16 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 - Fixed: Cmd+click on a file or folder path in a joined window's terminal (`ift join`) did nothing, because the path was looked up on your Mac instead of the host. It now asks the host, which opens an editor (or folder) card beside the terminal on its own canvas; the card appears in your window like any other. A path that is not on the host says so in a notice.
 
+### 2026-10-23
+
+- New: `ift focus <card>` goes to a card by its number (`7` or `#7`) or id, as picking it in the palette does: it shows the card's workspace, focuses it and fits it.
+- New: `ift workspaces` lists the workspaces (id, name, cards, and `*` on the one on screen). `ift terminal --workspace <id|name|new> [--name <text>] <dir>...` opens the terminals on that workspace and shows it; `new` makes a workspace first. Without `--workspace` nothing changes.
+
+### 2026-10-22
+
+- `"ui.hideBuildNumber": true` in settings.json hides "build N" at the right end of the status bar.
+- `ui.hideLabelWhenFitted` also hides the label of the only card on a workspace, without pressing Cmd+1.
+
 ## 0.6.3 (build 1196), 2026-10-22
 
 ### Settings files

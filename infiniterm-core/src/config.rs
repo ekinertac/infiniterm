@@ -374,6 +374,8 @@ pub struct Ui {
     pub hide_label_when_fitted: bool,
     /// Which picture the Dock shows (`app_icon.rs`). A LOOK key (ui theme).
     pub icon: crate::app_icon::AppIcon,
+    /// No "build N" at the right end of the status bar (#546).
+    pub hide_build_number: bool,
     pub group_label_size: f64,
     pub status_bar_size: f64,
     /// How far one press of `canvas.pan.*` moves the view, in screen pixels
@@ -584,6 +586,7 @@ pub fn default_config() -> Config {
             hide_label_when_maximised: false,
             hide_label_when_fitted: false,
             icon: crate::app_icon::AppIcon::Default,
+            hide_build_number: false,
             group_label_size: 15.,
             status_bar_size: 11.,
             pan_step: DEFAULT_PAN_STEP,
@@ -940,6 +943,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 .and_then(Value::as_str)
                 .and_then(crate::app_icon::AppIcon::parse)
                 .unwrap_or_default(),
+            hide_build_number: bool_(u.get("hideBuildNumber"), d.ui.hide_build_number),
             group_label_size: num(u.get("groupLabelSize"), d.ui.group_label_size, 6., 64.),
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),
             pan_step: num(u.get("panStep"), d.ui.pan_step, MIN_PAN_STEP, MAX_PAN_STEP),

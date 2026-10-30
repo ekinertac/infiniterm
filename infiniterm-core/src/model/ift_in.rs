@@ -5,8 +5,9 @@
 use super::{Effect, Model};
 use crate::cli::{CliReply, CliRequest};
 use crate::ift::{
-    diff_plan, format_agents, format_card_list, open_plan, parse_card_ref, parse_read, parse_send,
-    CardRef, ListedCard, PathKind,
+    diff_plan, format_agents, format_card_list, format_workspace_list, open_plan, parse_card_ref,
+    parse_read, parse_send, parse_terminal_args, resolve_workspace, CardRef, ListedCard, PathKind,
+    WorkspaceTarget,
 };
 use crate::omni::OmniAction;
 
@@ -75,6 +76,23 @@ impl Model {
                     })
                     .collect();
                 ok(format_agents(&rows))
+            }
+            // `ift workspaces`: the tabs left to right, with the one on screen
+            // marked, for a launcher that asks where to open a folder.
+            "workspaces" => {
+                let rows: Vec<(&str, &str, usize, bool)> = self
+                    .workspaces
+                    .iter()
+                    .map(|w| {
+                        (
+                            w.id.as_str(),
+                            w.name.as_str(),
+                            self.cards_on(Some(&w.id)).len(),
+                            self.active_workspace.as_deref() == Some(w.id.as_str()),
+                        )
+                    })
+                    .collect();
+                ok(format_workspace_list(&rows))
             }
             "ls" => {
                 let listed: Vec<ListedCard> = self
@@ -295,16 +313,68 @@ impl Model {
                 self.close_card_with(&id, false, true);
                 ok(String::new())
             }
+            // `ift focus <card>`: the palette's "go to that card" (#552):
+            // its workspace is shown if it is another, the card is focused
+            // and fitted, so the result is the same however you got there.
+            "focus" => {
+                let Some(target) = req.args.first() else {
+                    return err("focus takes a card");
+                };
+                let Some(id) = self.resolve_card_ref(target) else {
+                    return err(&format!("no card {target}"));
+                };
+                self.go_to_card(&id);
+                ok(String::new())
+            }
             // `ift terminal <dir>...`: a terminal card in each directory, on
             // the workspace on screen, the last one focused (the Finder
             // service's path, from a script). Absolute paths only: the cli
             // resolves them, the app's own working directory means nothing.
+            // `--workspace <id|name|new> [--name <text>] [--]` first picks
+            // the workspace and shows it; everything is checked before
+            // anything is made, so an error leaves nothing behind.
             "terminal" => {
-                if req.args.is_empty() {
+                let parsed = match parse_terminal_args(&req.args) {
+                    Ok(p) => p,
+                    Err(e) => return err(&e),
+                };
+                if parsed.dirs.is_empty() {
                     return err("terminal takes a directory");
                 }
+                let known: Vec<(&str, &str)> = self
+                    .workspaces
+                    .iter()
+                    .map(|w| (w.id.as_str(), w.name.as_str()))
+                    .collect();
+                let target = match parsed.workspace.map(|v| resolve_workspace(&known, v)) {
+                    Some(Ok(t)) => Some(t),
+                    Some(Err(e)) => return err(&e),
+                    None => None,
+                };
+                if parsed.name.is_some() && target != Some(WorkspaceTarget::New) {
+                    return err("--name goes with --workspace new");
+                }
+                // A workspace made for directories that then fail would stay
+                // behind empty, so the checks open_terminal_at makes run first.
+                for dir in &parsed.dirs {
+                    let path = std::path::Path::new(dir);
+                    if !path.is_absolute() {
+                        return err(&format!("not an absolute path: {dir}"));
+                    }
+                    if !path.is_dir() {
+                        return err(&format!("not a directory: {dir}"));
+                    }
+                }
+                match target {
+                    Some(WorkspaceTarget::Existing(id)) => self.show_workspace(&id),
+                    Some(WorkspaceTarget::New) => {
+                        let id = self.add_workspace(parsed.name);
+                        self.show_workspace(&id);
+                    }
+                    None => {}
+                }
                 let mut made = Vec::new();
-                for dir in &req.args {
+                for dir in &parsed.dirs {
                     match self.open_terminal_at(dir) {
                         Ok(id) => made.push(id),
                         Err(e) => return err(&e),
@@ -577,6 +647,189 @@ mod tests {
         assert!(!r.ok);
         assert!(!ask(&mut m, "terminal", &[]).ok);
         assert_eq!(m.cards.len(), before + 2);
+    }
+
+    /// Two workspaces, "a" on screen and "b" behind it, plus a directory that exists.
+    fn two_ws() -> (Model, String, String, String) {
+        let mut m = Model::new();
+        let a = m.add_workspace(Some("a"));
+        let b = m.add_workspace(Some("b"));
+        m.show_workspace(&a);
+        let dir = std::env::temp_dir().canonicalize().unwrap();
+        (m, a, b, dir.to_string_lossy().into_owned())
+    }
+
+    #[test]
+    fn workspaces_lists_tabs_with_card_counts_and_the_one_on_screen() {
+        let (mut m, a, b, dir) = two_ws();
+        assert!(ask(&mut m, "terminal", &[&dir]).ok);
+        let r = ask(&mut m, "workspaces", &[]);
+        assert!(r.ok);
+        assert_eq!(r.text, format!("{a}\ta\t1\t*\n{b}\tb\t0\t-"));
+        m.show_workspace(&b);
+        let r = ask(&mut m, "workspaces", &[]);
+        assert_eq!(r.text, format!("{a}\ta\t1\t-\n{b}\tb\t0\t*"));
+    }
+
+    #[test]
+    fn terminal_by_id_or_name_shows_that_workspace_and_opens_there() {
+        let (mut m, a, b, dir) = two_ws();
+        let r = ask(&mut m, "terminal", &["--workspace", &b, &dir]);
+        assert!(r.ok, "{}", r.text);
+        assert_eq!(m.active_workspace.as_deref(), Some(b.as_str()));
+        assert_eq!(m.card(&r.text).unwrap().workspace_id, b);
+        let r = ask(&mut m, "terminal", &["--workspace", "a", &dir]);
+        assert!(r.ok, "{}", r.text);
+        assert_eq!(m.active_workspace.as_deref(), Some(a.as_str()));
+        assert_eq!(m.card(&r.text).unwrap().workspace_id, a);
+        assert_eq!(m.focused().map(|c| c.id.clone()), Some(r.text));
+    }
+
+    #[test]
+    fn terminal_workspace_new_makes_and_names_one() {
+        let (mut m, _a, _b, dir) = two_ws();
+        let r = ask(
+            &mut m,
+            "terminal",
+            &["--workspace", "new", "--name", "demo", &dir],
+        );
+        assert!(r.ok, "{}", r.text);
+        assert_eq!(m.workspaces.len(), 3);
+        let ws = m.workspaces.last().unwrap();
+        assert_eq!(ws.name, "demo");
+        assert_eq!(m.active_workspace.as_deref(), Some(ws.id.as_str()));
+        assert_eq!(m.card(&r.text).unwrap().workspace_id, ws.id);
+        // No name: the model's own default.
+        assert!(ask(&mut m, "terminal", &["--workspace", "new", &dir]).ok);
+        assert_eq!(m.workspaces.len(), 4);
+        assert!(m.workspaces.last().unwrap().name.starts_with("workspace "));
+    }
+
+    #[test]
+    fn terminal_workspace_errors_leave_nothing_behind() {
+        let (mut m, a, _b, dir) = two_ws();
+        m.workspaces.iter_mut().find(|w| w.id == a).unwrap().name = "b".into();
+        let before = (m.workspaces.len(), m.cards.len());
+        let r = ask(&mut m, "terminal", &["--workspace", "b", &dir]);
+        assert!(!r.ok && r.text.contains("ambiguous"), "{}", r.text);
+        let r = ask(&mut m, "terminal", &["--workspace", "zzz", &dir]);
+        assert!(!r.ok && r.text.contains("no workspace zzz"), "{}", r.text);
+        let r = ask(&mut m, "terminal", &["--name", "x", &dir]);
+        assert!(!r.ok && r.text.contains("--name"), "{}", r.text);
+        let r = ask(
+            &mut m,
+            "terminal",
+            &["--workspace", &a, "--name", "x", &dir],
+        );
+        assert!(!r.ok, "{}", r.text);
+        // A bad folder must not leave the workspace it was to open in.
+        let r = ask(&mut m, "terminal", &["--workspace", "new", "relative"]);
+        assert!(!r.ok);
+        let r = ask(&mut m, "terminal", &["--workspace", "new"]);
+        assert!(!r.ok && r.text.contains("takes a directory"), "{}", r.text);
+        assert_eq!((m.workspaces.len(), m.cards.len()), before);
+    }
+
+    #[test]
+    fn terminal_double_dash_ends_the_flags() {
+        let (mut m, _a, _b, dir) = two_ws();
+        let r = ask(&mut m, "terminal", &["--", "--workspace"]);
+        assert!(
+            !r.ok && r.text.contains("not an absolute path: --workspace"),
+            "{}",
+            r.text
+        );
+        let r = ask(&mut m, "terminal", &["--workspace", "new", "--", &dir]);
+        assert!(r.ok, "{}", r.text);
+    }
+
+    /// "a" on screen with one card, "b" behind it with one card.
+    fn card_on_each() -> (Model, String, String, String, String) {
+        let (mut m, a, b, dir) = two_ws();
+        let on_a = ask(&mut m, "terminal", &[&dir]).text;
+        let on_b = ask(&mut m, "terminal", &["--workspace", &b, &dir]).text;
+        m.show_workspace(&a);
+        m.effects.clear();
+        (m, a, b, on_a, on_b)
+    }
+
+    fn fits(m: &Model) -> usize {
+        m.effects
+            .iter()
+            .filter(|e| matches!(e, Effect::RunCommand(c) if c == "canvas.zoom.fitCard"))
+            .count()
+    }
+
+    #[test]
+    fn focus_goes_to_a_card_on_this_workspace_and_fits_it_once() {
+        let (mut m, a, _b, on_a, _on_b) = card_on_each();
+        m.set_focus(None);
+        let r = ask(&mut m, "focus", &[&on_a]);
+        assert!(r.ok && r.text.is_empty(), "{}", r.text);
+        assert_eq!(m.focused().map(|c| c.id.clone()), Some(on_a));
+        assert_eq!(m.active_workspace.as_deref(), Some(a.as_str()));
+        assert_eq!(fits(&m), 1);
+    }
+
+    #[test]
+    fn focus_switches_to_the_workspace_of_a_card_in_another() {
+        // By id, by number and by #number all reach the same card. Each
+        // round has a model of its own, so the argument is made from it.
+        let spell: [fn(&str, u32) -> String; 3] = [
+            |id, _| id.to_string(),
+            |_, n| n.to_string(),
+            |_, n| format!("#{n}"),
+        ];
+        for (i, arg_of) in spell.iter().enumerate() {
+            let (mut m, _a, b, _on_a, on_b) = card_on_each();
+            let arg = arg_of(&on_b, m.card(&on_b).unwrap().number);
+            let r = ask(&mut m, "focus", &[&arg]);
+            assert!(r.ok, "{i} {arg}: {}", r.text);
+            assert_eq!(m.active_workspace.as_deref(), Some(b.as_str()), "{i}");
+            assert_eq!(m.focused().map(|c| c.id.clone()), Some(on_b), "{i}");
+            assert_eq!(fits(&m), 1, "{i}");
+        }
+    }
+
+    #[test]
+    fn focus_refuses_an_unknown_card_and_changes_nothing() {
+        let (mut m, a, _b, _on_a, on_b) = card_on_each();
+        let focus = m.focused().map(|c| c.id.clone());
+        let r = ask(&mut m, "focus", &["999"]);
+        assert!(!r.ok && r.text == "no card 999", "{}", r.text);
+        let r = ask(&mut m, "focus", &[]);
+        assert!(!r.ok && r.text == "focus takes a card", "{}", r.text);
+        assert_eq!(m.active_workspace.as_deref(), Some(a.as_str()));
+        assert_eq!(m.focused().map(|c| c.id.clone()), focus);
+        assert_eq!(fits(&m), 0);
+        // A closed card is gone by its old id.
+        assert!(ask(&mut m, "close", &[&on_b]).ok);
+        let r = ask(&mut m, "focus", &[&on_b]);
+        assert!(!r.ok && r.text.starts_with("no card"), "{}", r.text);
+    }
+
+    // The lowest free number is handed out again, so a number names whichever
+    // card holds it now, not the one that closed.
+    #[test]
+    fn focus_by_a_reused_number_goes_to_the_newer_card() {
+        let (mut m, _a, _b, on_a, on_b) = card_on_each();
+        let number = m.card(&on_b).unwrap().number;
+        assert!(ask(&mut m, "close", &[&on_b]).ok);
+        let dir = std::env::temp_dir().canonicalize().unwrap();
+        let newer = ask(&mut m, "terminal", &[&dir.to_string_lossy()]).text;
+        assert_eq!(m.card(&newer).unwrap().number, number);
+        m.set_focus(Some(&on_a));
+        assert!(ask(&mut m, "focus", &[&number.to_string()]).ok);
+        assert_eq!(m.focused().map(|c| c.id.clone()), Some(newer));
+    }
+
+    #[test]
+    fn terminal_without_flags_stays_on_the_workspace_on_screen() {
+        let (mut m, a, _b, dir) = two_ws();
+        let r = ask(&mut m, "terminal", &[&dir]);
+        assert!(r.ok);
+        assert_eq!(m.workspaces.len(), 2);
+        assert_eq!(m.card(&r.text).unwrap().workspace_id, a);
     }
 
     #[test]
