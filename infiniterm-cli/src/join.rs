@@ -67,6 +67,50 @@ pub fn launch_env(p: &Parsed, data: &Path, config: &Path) -> Vec<(String, String
     env
 }
 
+/// Whether an app holds `socket` (a connect works): `Some(pid)` when it does,
+/// the pid being `None` if `lsof` could not name the holder.
+fn window_open(socket: &Path) -> Option<Option<u32>> {
+    std::os::unix::net::UnixStream::connect(socket).ok()?;
+    let out = Command::new("lsof").arg("-t").arg(socket).output().ok();
+    Some(out.and_then(|o| holder_pid(&String::from_utf8_lossy(&o.stdout))))
+}
+
+/// The holder from `lsof -t`'s lines (one pid each): the lowest, since a
+/// process that connected a moment ago can be listed beside the app.
+pub fn holder_pid(lsof_t: &str) -> Option<u32> {
+    lsof_t
+        .lines()
+        .filter_map(|l| l.trim().parse::<u32>().ok())
+        .min()
+}
+
+/// Brings the process `pid`'s window to the front, true when the system said
+/// yes. System Events, as the driver scripts do: `open` would only start
+/// another app.
+fn bring_to_front(pid: u32) -> bool {
+    Command::new("osascript")
+        .arg("-e")
+        .arg(front_script(pid))
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+pub fn front_script(pid: u32) -> String {
+    format!(
+        "tell application \"System Events\" to set frontmost of (first process whose unix id is {pid}) to true"
+    )
+}
+
+/// What `ift join` says when the viewer for `host` is already open.
+pub fn window_open_message(host: &str, pid: Option<u32>, fronted: bool) -> String {
+    let who = pid.map(|p| format!(" (pid {p})")).unwrap_or_default();
+    if fronted {
+        format!("{host}: a window for it is already open{who}; it is in front now")
+    } else {
+        format!("{host}: a window for it is already open{who}; find it among your windows")
+    }
+}
+
 /// `<app>.app` from this binary's real path, as `connect.rs` finds it.
 fn app_bundle() -> Option<PathBuf> {
     let exe = std::fs::canonicalize(std::env::current_exe().ok()?).ok()?;
@@ -195,8 +239,11 @@ pub fn run(args: &[String]) -> ExitCode {
         eprintln!("ift: {}: {e}", data.display());
         return ExitCode::from(1);
     }
-    if std::os::unix::net::UnixStream::connect(data.join("infiniterm.sock")).is_ok() {
-        println!("{}: already joined (its window is open)", p.host);
+    // A live app already holds this folder's socket: opening a second one
+    // would exit on the lock and show nothing. Say so, and bring it forward.
+    if let Some(pid) = window_open(&data.join("infiniterm.sock")) {
+        let fronted = pid.is_some_and(bring_to_front);
+        println!("{}", window_open_message(&p.host, pid, fronted));
         return ExitCode::SUCCESS;
     }
     if let Some(c) = p
@@ -271,6 +318,50 @@ mod tests {
         assert_eq!(get("INFINITERM_CONFIG_DIR"), Some("/d/config"));
         // The one thing that would start shells on the host.
         assert_eq!(get("INFINITERM_REMOTE"), None);
+    }
+
+    // #583: a live holder of the folder's socket is found, named and said,
+    // not "opened" as nothing; a socket nobody listens on is no holder.
+    #[test]
+    fn a_live_holder_of_the_joins_socket_is_found_and_a_dead_socket_is_not() {
+        let dir = std::env::temp_dir().join(format!("jn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = dir.join("infiniterm.sock");
+        assert_eq!(window_open(&sock), None, "no socket, no window");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let held = window_open(&sock).expect("a listening socket is a window");
+        // lsof is on every Mac; where it is not, the holder is unnamed.
+        if let Some(pid) = held {
+            assert_eq!(pid, std::process::id());
+        }
+        drop(listener);
+        // The file is left, nobody holds it. A test thread that forks while
+        // the listener is open leaves its child a copy of the descriptor until
+        // that child's exec, so the socket can stay live for a moment (the
+        // same fork trap as #563): wait for it to go.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while window_open(&sock).is_some() {
+            assert!(std::time::Instant::now() < until, "the socket stayed live");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_holder_is_the_lowest_pid_lsof_lists_and_the_message_is_one_sentence() {
+        assert_eq!(holder_pid("4242\n17\n"), Some(17));
+        assert_eq!(holder_pid(""), None);
+        assert_eq!(holder_pid("not a pid\n"), None);
+        assert!(front_script(17).contains("unix id is 17"));
+        assert_eq!(
+            window_open_message("mini-m4", Some(17), true),
+            "mini-m4: a window for it is already open (pid 17); it is in front now"
+        );
+        assert_eq!(
+            window_open_message("mini-m4", None, false),
+            "mini-m4: a window for it is already open; find it among your windows"
+        );
     }
 
     #[test]

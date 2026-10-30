@@ -283,6 +283,41 @@ pub fn ssh_args(host: &RemoteHost, id: &str, spawn: Option<&SpawnSpec>) -> Vec<S
 
 /// `ift proxy join session <id>`: the host app's join socket for one card
 /// (#423), quoted like `remote_command`.
+/// The remote command of the join file service (#560): the host's helper,
+/// which speaks `file_proto` on stdin and stdout.
+pub fn files_command(ift: &str) -> String {
+    format!("{} proxy files", shell_quote(ift))
+}
+
+/// Starts the host's file helper over ssh and says hello to it; the stream is
+/// ready for frames when this returns. `Err` is a sentence: ssh's, or the
+/// host's own (an `ift` too old to have `proxy files`).
+pub fn connect_files(host: &RemoteHost) -> Result<UnixStream, String> {
+    let (mut stream, stderr) = connect_command(host, files_command(&host.ift))
+        .map_err(|e| format!("could not run {}: {e}", host.ssh))?;
+    writeln!(stream, "{}", crate::file_proto::hello_line())
+        .map_err(|e| format!("{}: {e}", host.target))?;
+    match read_line(&mut stream, JOIN_ANSWER_WAIT) {
+        Ok(line) => crate::file_proto::check_answer(&line).map(|()| stream),
+        Err(answer) => {
+            // ssh may say why a moment after the stream ends.
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let said = stderr.text();
+            Err(match answer {
+                Answer::TimedOut => format!("{} did not answer in time", host.target),
+                _ if said.is_empty() => {
+                    format!("{} closed the connection before it answered", host.target)
+                }
+                _ => format!(
+                    "{}: {}",
+                    host.target,
+                    said.lines().last().unwrap_or("ssh failed")
+                ),
+            })
+        }
+    }
+}
+
 pub fn join_command(ift: &str, id: &str) -> String {
     format!(
         "{} proxy join session {}",

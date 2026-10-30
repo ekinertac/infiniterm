@@ -140,6 +140,12 @@ pub struct SavedCard {
     pub number: u32,
     /// `card.protect`: cannot be closed. Written only when true.
     pub protected: bool,
+    /// The terminal this card is an in-place editor over (`ift <file>` run in
+    /// it, cover.rs). Written only into the canvas the host PUBLISHES to a
+    /// viewer, never into the saved file: a cover lives as long as the `ift`
+    /// waiting on it, but a viewer must know it covers a terminal or it draws
+    /// the pair side by side.
+    pub cover_of: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -263,6 +269,11 @@ fn card_value(c: &SavedCard) -> Value {
             map.insert("protected".into(), Value::Bool(true));
         }
     }
+    if let Some(base) = &c.cover_of {
+        if let Some(map) = card.as_object_mut() {
+            map.insert("coverOf".into(), Value::String(base.clone()));
+        }
+    }
     // Same rule as `session`/`kittyKeys`/`agentSession`: written only when
     // there is more than one tab, so a card that never opened a second one
     // round-trips byte for byte.
@@ -365,6 +376,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
     let agent_title = non_empty(c.get("agentTitle"));
     let number = c.get("number").and_then(Value::as_u64).unwrap_or(0) as u32;
     let protected = c.get("protected").and_then(Value::as_bool).unwrap_or(false);
+    let cover_of = non_empty(c.get("coverOf"));
     let tabs: Vec<String> = c
         .get("tabs")
         .and_then(Value::as_array)
@@ -446,6 +458,7 @@ fn as_card(v: &Value) -> Option<SavedCard> {
         agent_title,
         number,
         protected,
+        cover_of,
     })
 }
 
@@ -647,6 +660,7 @@ mod tests {
             agent_title: None,
             number: 0,
             protected: false,
+            cover_of: None,
             title: "api".into(),
             cwd: "/Users/ekinertac/Code/api".into(),
             group_id: None,

@@ -205,21 +205,25 @@ impl AppView {
         cx: &mut Context<Self>,
     ) {
         self.sync_ui_context();
+        self.sync_platform_keys();
         let ctx = self.model.key_context();
         let rows = {
             let registry = &self.registry;
+            let model = &self.model;
             let keymap = &self.model.keymap;
             context_menu::rows(
                 area,
                 &Source {
                     context: &ctx,
                     label: &|id| registry.get(id).map(|c| c.label.clone()),
+                    // As this platform shows it (`Model::shown_chord`).
                     chord: &|id| {
                         keymap
                             .iter()
                             .find(|(_, bound)| bound == id)
-                            .map(|(chord, _)| chord.clone())
+                            .and_then(|(chord, _)| model.shown_chord(chord))
                     },
+                    shown: &|chord| model.shown_chord(chord),
                 },
             )
         };

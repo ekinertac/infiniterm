@@ -118,8 +118,9 @@ impl Model {
                             .keymap
                             .iter()
                             .find(|(_, cid)| cid == id)
-                            .map(|(chord, _)| {
-                                crate::shortcuts::format_chord(chord, self.modifier_labels())
+                            .and_then(|(chord, _)| self.shown_chord(chord))
+                            .map(|chord| {
+                                crate::shortcuts::format_chord(&chord, self.modifier_labels())
                             })
                             .unwrap_or_default();
                         (id.to_string(), label.to_string(), chord)
@@ -397,6 +398,9 @@ mod tests {
     fn commands_lists_every_registered_command_with_its_chord() {
         let mut m = Model::new();
         m.keymap = vec![("cmd+t".into(), "card.new.terminal".into())];
+        // What the ui does each frame: off the Mac the key column is the
+        // platform chord (`Model::shown_chord`).
+        m.sync_platform_keys();
         let reply = m.run_ift(
             &CliRequest {
                 id: 1,
