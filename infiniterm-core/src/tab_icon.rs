@@ -2,8 +2,9 @@
 //! workspace's focused card, turned into a Nerd Font glyph or a logo file.
 //!
 //! Where it fits: `render_title_bar` (infiniterm-ui/src/overlays.rs) asks
-//! `Model::workspace_icon_program` for the program, then `choose` for what to
-//! draw. The theme's `tab.icons`, `tab.iconStyle` and `tab.iconMap` keys
+//! `representative` for the program of the workspace's cards (and `paint_header`
+//! the card's own `proc`), then `choose` for what to draw; `IconFileCache`
+//! answers "does this logo file exist" without a stat every frame. The theme's `tab.icons`, `tab.iconStyle` and `tab.iconMap` keys
 //! (`ui_theme::TabTheme`) feed it; nothing is drawn unless `tab.icons` is on.
 //! Related: `ui_theme.rs` (the keys), `program_state.rs` (the process the card
 //! runs comes from the process table, `Card::proc`).
@@ -190,9 +191,153 @@ pub fn choose(
     built_in(FALLBACK_KEY).expect("the table has a default")
 }
 
+/// How long the answer for a theme's icon folder is trusted before the
+/// folder's mtime is looked at again. A tab is drawn every frame, and a stat
+/// per tab per frame is the cost this cache exists to avoid; half a second
+/// is quick enough for "I just dropped a logo in".
+pub const ICON_DIR_RECHECK_MS: f64 = 500.;
+
+/// Whether the logo files a theme names exist, remembered per file name.
+/// Forgotten when the folder changes (another theme), or when the folder's
+/// mtime moves (a file added or removed in it), which is looked at at most
+/// every `ICON_DIR_RECHECK_MS`. Pure: the clock, the mtime and the file test
+/// come in, so the rules test without a folder.
+#[derive(Debug, Default)]
+pub struct IconFileCache {
+    dir: Option<std::path::PathBuf>,
+    mtime: Option<std::time::SystemTime>,
+    checked_ms: f64,
+    known: std::collections::HashMap<String, bool>,
+}
+
+impl IconFileCache {
+    /// Whether `dir/file` exists. `mtime` is the folder's modification time
+    /// and `exists` the real file test; each is called only when needed.
+    pub fn has_file(
+        &mut self,
+        dir: &std::path::Path,
+        file: &str,
+        now_ms: f64,
+        mtime: impl FnOnce(&std::path::Path) -> Option<std::time::SystemTime>,
+        exists: impl FnOnce(&std::path::Path) -> bool,
+    ) -> bool {
+        if self.dir.as_deref() != Some(dir) {
+            *self = Self {
+                dir: Some(dir.to_path_buf()),
+                mtime: mtime(dir),
+                checked_ms: now_ms,
+                known: Default::default(),
+            };
+        } else if now_ms - self.checked_ms >= ICON_DIR_RECHECK_MS {
+            self.checked_ms = now_ms;
+            let latest = mtime(dir);
+            if latest != self.mtime {
+                self.mtime = latest;
+                self.known.clear();
+            }
+        }
+        if let Some(found) = self.known.get(file) {
+            return *found;
+        }
+        let found = exists(&dir.join(file));
+        self.known.insert(file.to_string(), found);
+        found
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+    use std::time::{Duration, SystemTime};
+
+    fn at(secs: u64) -> Option<SystemTime> {
+        Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+    }
+
+    #[test]
+    fn the_cache_asks_the_disk_once_per_file_until_the_folder_changes() {
+        let mut c = IconFileCache::default();
+        let dir = Path::new("/t/glass/icons");
+        let mut tests = 0;
+        for now in [0., 100., 200., 300., 400.] {
+            let has = c.has_file(
+                dir,
+                "bun.svg",
+                now,
+                |_| at(1),
+                |_| {
+                    tests += 1;
+                    true
+                },
+            );
+            assert!(has);
+        }
+        assert_eq!(
+            tests, 1,
+            "a file is tested once while the folder is as it was"
+        );
+    }
+
+    #[test]
+    fn the_folder_is_not_looked_at_between_rechecks() {
+        let mut c = IconFileCache::default();
+        let dir = Path::new("/t/glass/icons");
+        let mut stats = 0;
+        for now in [0., 10., 20., 499.] {
+            c.has_file(
+                dir,
+                "a.png",
+                now,
+                |_| {
+                    stats += 1;
+                    at(1)
+                },
+                |_| false,
+            );
+        }
+        assert_eq!(stats, 1, "only the first call (the folder is new) stats it");
+        c.has_file(
+            dir,
+            "a.png",
+            500.,
+            |_| {
+                stats += 1;
+                at(1)
+            },
+            |_| false,
+        );
+        assert_eq!(stats, 2);
+    }
+
+    #[test]
+    fn a_new_mtime_forgets_what_was_known() {
+        let mut c = IconFileCache::default();
+        let dir = Path::new("/t/glass/icons");
+        assert!(!c.has_file(dir, "bun.svg", 0., |_| at(1), |_| false));
+        // The logo is dropped in: the folder's mtime moves.
+        assert!(c.has_file(dir, "bun.svg", 600., |_| at(2), |_| true));
+        // And removed again.
+        assert!(!c.has_file(dir, "bun.svg", 1200., |_| at(3), |_| false));
+    }
+
+    #[test]
+    fn another_theme_folder_starts_clean() {
+        let mut c = IconFileCache::default();
+        let a = Path::new("/t/a/icons");
+        let b = Path::new("/t/b/icons");
+        assert!(c.has_file(a, "x.svg", 0., |_| at(1), |_| true));
+        assert!(!c.has_file(b, "x.svg", 1., |_| at(1), |_| false));
+        assert!(c.has_file(a, "x.svg", 2., |_| at(1), |_| true));
+    }
+
+    #[test]
+    fn a_missing_folder_is_cached_as_missing() {
+        let mut c = IconFileCache::default();
+        let dir = Path::new("/t/none/icons");
+        assert!(!c.has_file(dir, "x.svg", 0., |_| None, |_| false));
+        assert!(c.has_file(dir, "x.svg", 600., |_| at(5), |_| true));
+    }
 
     fn none(_: &str) -> bool {
         false

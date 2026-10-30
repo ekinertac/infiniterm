@@ -10,8 +10,6 @@
 //! and at 400%. Maximise paints the focused card alone, filling the view.
 use crate::{now_ms, AppView, SWAP_MS};
 
-/// Big text centred on a slot that stands for a card that is somewhere else:
-/// the card in its own window (#356), a host's card a viewer cannot show (#423).
 /// Sets `chrome::CardHeaderH` (the height the card ground reaches up under
 /// the header) only when it changes.
 fn set_header_h(cx: &mut gpui::App, height: Pixels) {
@@ -45,6 +43,8 @@ fn set_ring_gap(cx: &mut gpui::App, gap: Pixels) {
     }
 }
 
+/// Big text centred on a slot that stands for a card that is somewhere else:
+/// the card in its own window (#356), a host's card a viewer cannot show (#423).
 fn paint_slot_text(
     window: &mut Window,
     cx: &mut App,
@@ -969,8 +969,6 @@ impl AppView {
         crate::text::paint_in(window, cx, &line, tb, px(0.));
     }
 
-    /// The name (top-right), the kind badges beside it, the remote badge
-    /// (top-left, red) and the mid-zoom label. Pointer-inert, over the body.
     /// The card header (`card.header`, #544): the program's icon, the card's
     /// name and the buttons, over the top of the card. The ground under it is
     /// the card's own (`CardHeaderH` reaches the body's quad up here), so a
@@ -1004,7 +1002,17 @@ impl AppView {
                 std::env::var("SHELL").ok().as_deref(),
             );
             let dir = infiniterm_core::config_files::ui_theme_icons_dir(&self.model.ui_theme_name);
-            let has_file = |f: &str| dir.as_ref().is_some_and(|d| d.join(f).is_file());
+            let has_file = |f: &str| {
+                dir.as_ref().is_some_and(|d| {
+                    self.icon_files.borrow_mut().has_file(
+                        d,
+                        f,
+                        now_ms(),
+                        |p| p.metadata().and_then(|m| m.modified()).ok(),
+                        |p| p.is_file(),
+                    )
+                })
+            };
             let icon = infiniterm_core::tab_icon::choose(
                 card.proc.as_deref().unwrap_or(&shell),
                 tab.icon_style.unwrap_or_default(),
@@ -1089,6 +1097,8 @@ impl AppView {
         }
     }
 
+    /// The name (top-right), the kind badges beside it, the remote badge
+    /// (top-left, red) and the mid-zoom label. Pointer-inert, over the body.
     fn paint_labels(
         &mut self,
         card: &infiniterm_core::model::Card,

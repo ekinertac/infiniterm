@@ -751,7 +751,17 @@ impl AppView {
                         )
                     })
                     .collect();
-                let has_file = |f: &str| icons_dir.as_ref().is_some_and(|d| d.join(f).is_file());
+                let has_file = |f: &str| {
+                    icons_dir.as_ref().is_some_and(|d| {
+                        self.icon_files.borrow_mut().has_file(
+                            d,
+                            f,
+                            crate::now_ms(),
+                            |p| p.metadata().and_then(|m| m.modified()).ok(),
+                            |p| p.is_file(),
+                        )
+                    })
+                };
                 infiniterm_core::tab_icon::choose(
                     infiniterm_core::tab_icon::representative(&shown).unwrap_or(&shell),
                     icon_style,

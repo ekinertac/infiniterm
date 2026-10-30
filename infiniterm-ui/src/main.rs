@@ -421,6 +421,10 @@ pub struct AppView {
     pub marked: HashMap<String, Rect>,
     /// Each body's size as last told to it, so `resized` fires on a change.
     pub body_sizes: HashMap<String, infiniterm_core::grid::Size>,
+    /// Which logo files a ui theme's icon folder holds, so a tab or a card
+    /// header does not stat the disk every frame (#544). A RefCell because
+    /// the tab strip is drawn from `&self`.
+    pub icon_files: std::cell::RefCell<infiniterm_core::tab_icon::IconFileCache>,
     /// The status bar's frame rate, counted only over frames drawn back
     /// to back (`frame_rate.rs`).
     pub frame_rate: infiniterm_core::frame_rate::FrameRate,
