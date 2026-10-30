@@ -135,6 +135,7 @@ impl AppView {
             glides: Default::default(),
             marked: Default::default(),
             body_sizes: Default::default(),
+            icon_files: Default::default(),
             timing: (0., 0., 0, 0.),
             window_seen: None,
             window_save_due: None,

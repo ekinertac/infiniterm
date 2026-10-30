@@ -451,6 +451,31 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.cardGradient",
+        &[
+            "Paint a card's background as a gradient: two colours, [\"#3a2c27\", \"#1f1a18\"]",
+            "(#rgb, #rrggbb or #rrggbbaa; a stop's own alpha is kept). [] keeps the flat fill.",
+            "ui.cardOpacity multiplies the alpha of both stops, so the gradient stays",
+            "translucent over ui.windowOpacity and ui.windowBlur. Browser cards stay flat.",
+        ],
+    ),
+    (
+        "ui.cardGradientAngle",
+        &[
+            "The gradient's direction in degrees, 0 to 360: 0 points up, 90 right, 180 (the",
+            "default) runs from the first colour at the top to the second at the bottom.",
+            "Only used when ui.cardGradient is set.",
+        ],
+    ),
+    (
+        "ui.focusRingWidth",
+        &[
+            "The focus ring's width in screen pixels, 0 to 10, at every zoom. 0, the default,",
+            "keeps the built-in 3, 4 or 5 pixels by zoom. The strip of canvas between the card",
+            "and its ring is as wide as the ring, so a thinner ring also closes that gap.",
+        ],
+    ),
+    (
         "ui.glyphBudget",
         &[
             "How many terminal cells (text columns times rows, not cards.width squares) may be",

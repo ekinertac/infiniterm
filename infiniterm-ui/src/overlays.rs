@@ -33,6 +33,9 @@ const PALETTE_ROWS: usize = 14;
 const SNIPPET_HINT_MAX_W_PX: f32 = 360.;
 /// The workspace tabs' label size, shared by the "+" new-tab control.
 const TAB_LABEL_FONT_PX: f32 = 12.;
+/// A workspace tab's program icon, as a multiple of the label size, so a
+/// glyph or a logo reads a little larger than the lower-case text beside it.
+const TAB_ICON_SCALE: f32 = 1.25;
 /// A workspace tab's agent dots, one per agent card: a hint, not a badge.
 const TAB_DOT_PX: f32 = 6.;
 /// An idle card's dot is a lamp that is off: there, and no louder.
@@ -709,6 +712,20 @@ impl AppView {
         } = crate::chrome::tab_colors(chrome, wear, REMOTE_BAR_TINT);
         // The ui theme (#425, #511) wins over the tint for the ground and sets the edge.
         let bar_style = chrome.bar_style(&self.model.ui_theme.titlebar, bar);
+        // The tab keys of the same file (#544); unset keys are the tab as it was.
+        let tab_style = chrome.tab_style(&self.model.ui_theme.tab, chosen_fill);
+        let tab_radius = tab_style.radius.map(|r| px(r * ui));
+        // The program icons (#544): off unless the theme turns them on.
+        let tab_theme = &self.model.ui_theme.tab;
+        let icons_on = tab_theme.icons == Some(true);
+        let icon_style = tab_theme.icon_style.unwrap_or_default();
+        let icons_dir =
+            infiniterm_core::config_files::ui_theme_icons_dir(&self.model.ui_theme_name);
+        let focused_card = self.model.selection.focused_id.as_deref();
+        let shell = infiniterm_core::tab_icon::shell_name(
+            &self.model.config.terminal.shell,
+            std::env::var("SHELL").ok().as_deref(),
+        );
         let mut tabs = div().flex().items_center().gap_1();
         for (index, ws) in self.model.workspaces.iter().enumerate() {
             let cards = self.model.cards_on(Some(&ws.id));
@@ -722,6 +739,36 @@ impl AppView {
                 .into_iter()
                 .map(|i| cards[i].agent)
                 .collect();
+            // The icon of the program in the workspace's focused card (the
+            // first card when none is focused); an enabled icon always draws.
+            let icon = icons_on.then(|| {
+                let shown: Vec<(bool, Option<&str>)> = reading_order(&rects)
+                    .into_iter()
+                    .map(|i| {
+                        (
+                            focused_card == Some(cards[i].id.as_str()),
+                            cards[i].proc.as_deref(),
+                        )
+                    })
+                    .collect();
+                let has_file = |f: &str| {
+                    icons_dir.as_ref().is_some_and(|d| {
+                        self.icon_files.borrow_mut().has_file(
+                            d,
+                            f,
+                            crate::now_ms(),
+                            |p| p.metadata().and_then(|m| m.modified()).ok(),
+                            |p| p.is_file(),
+                        )
+                    })
+                };
+                infiniterm_core::tab_icon::choose(
+                    infiniterm_core::tab_icon::representative(&shown).unwrap_or(&shell),
+                    icon_style,
+                    &tab_theme.icon_map,
+                    &has_file,
+                )
+            });
             let id = ws.id.clone();
             let menu_id = ws.id.clone();
             let drop_line = chrome.text_bright;
@@ -738,7 +785,10 @@ impl AppView {
                 .border_color(gpui::transparent_black())
                 .px(px(6.))
                 .py_1()
-                .rounded_sm()
+                .map(|d| match tab_radius {
+                    Some(r) => d.rounded(r),
+                    None => d.rounded_sm(),
+                })
                 .text_size(px(tab_font_px))
                 .font_weight(if is_active {
                     chrome.typography.bold.weight
@@ -750,7 +800,14 @@ impl AppView {
                 } else {
                     idle_text
                 })
-                .when(is_active, |d| d.bg(chosen_fill))
+                .when_some(
+                    if is_active {
+                        Some(tab_style.active_fill)
+                    } else {
+                        tab_style.idle_fill
+                    },
+                    |d, fill| d.bg(fill.background()),
+                )
                 .cursor_pointer()
                 .when(!is_active, |d| {
                     d.hover(|s| s.bg(crate::chrome::hover_fill(chosen_fill)))
@@ -813,6 +870,42 @@ impl AppView {
                         cx.notify();
                     }),
                 )
+                .when_some(icon, |d, icon| match icon {
+                    // The icon font is only registered as a FALLBACK
+                    // (`icon_font.rs`), so the glyph goes through a run whose
+                    // font names it, like the terminal's text.
+                    infiniterm_core::tab_icon::Icon::Glyph(glyph) => {
+                        let run = gpui::TextRun {
+                            len: glyph.len(),
+                            font: crate::terminal_body::term_font(&chrome.typography.family),
+                            color: if is_active {
+                                chrome.text_bright
+                            } else {
+                                idle_text
+                            },
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        };
+                        d.child(
+                            div()
+                                .flex_none()
+                                .text_size(px(tab_font_px * TAB_ICON_SCALE))
+                                .child(gpui::StyledText::new(glyph).with_runs(vec![run])),
+                        )
+                    }
+                    infiniterm_core::tab_icon::Icon::File(file) => {
+                        let path = icons_dir.as_ref().map(|dir| dir.join(&file));
+                        d.when_some(path, |d, path| {
+                            d.child(
+                                gpui::img(path)
+                                    .flex_none()
+                                    .size(px(tab_font_px * TAB_ICON_SCALE))
+                                    .object_fit(gpui::ObjectFit::Contain),
+                            )
+                        })
+                    }
+                })
                 .child(ws.name.clone());
             // One dot per card, in the colour its border wears, so the
             // dots and the cards they send you to agree; grey for a card
@@ -834,6 +927,38 @@ impl AppView {
                         .rounded_full()
                         .bg(color),
                 );
+            }
+            // A one pixel outline over the tab's edge. It is a child, not the
+            // tab's own border, so the drop line's side borders stay put.
+            let outline = if is_active {
+                tab_style.active_border
+            } else {
+                tab_style.idle_border
+            };
+            if let Some(color) = outline {
+                tab = tab.relative().child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .map(|d| match tab_radius {
+                            Some(r) => d.rounded(r),
+                            None => d.rounded_sm(),
+                        })
+                        .border_1()
+                        .border_color(color),
+                );
+            }
+            // A line between two idle neighbours; none touches the chosen tab.
+            let after_active = index > 0
+                && active.as_deref() == self.model.workspaces.get(index - 1).map(|w| w.id.as_str());
+            if let (Some(color), true) = (
+                tab_style.separator,
+                index > 0 && !is_active && !after_active,
+            ) {
+                tabs = tabs.child(div().w(px(1.)).h(px(14. * ui)).bg(color));
             }
             tabs = tabs.child(tab);
         }
