@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-31
+
+- A ui theme that holds a settings.json key (for example `ui.hideBuildNumber`) is still refused whole, but the notice now says so: `"ui.hideBuildNumber" is a settings.json key, not a theme key: move it to settings.json`. Before it said only `unknown key`, which reads like a typo.
+
 ## 0.6.4 (build 1302), 2026-10-31
 
 ### Themes and icons
