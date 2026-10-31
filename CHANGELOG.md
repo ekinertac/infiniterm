@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-31
+
+- New `tab.paddingX` theme key sets the padding on each side of a workspace tab's content, 0 to 40 pixels. Unset keeps the 6 pixels the tabs always had.
+
 ## 0.6.4 (build 1302), 2026-10-31
 
 ### Themes and icons

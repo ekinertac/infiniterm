@@ -36,6 +36,9 @@ const TAB_LABEL_FONT_PX: f32 = 12.;
 /// A workspace tab's program icon, as a multiple of the label size, so a
 /// glyph or a logo reads a little larger than the lower-case text beside it.
 const TAB_ICON_SCALE: f32 = 1.25;
+/// A workspace tab's padding on each side of its content, before
+/// `tab.paddingX` has its say.
+const TAB_PAD_X_PX: f32 = 6.;
 /// A workspace tab's agent dots, one per agent card: a hint, not a badge.
 const TAB_DOT_PX: f32 = 6.;
 /// An idle card's dot is a lamp that is off: there, and no louder.
@@ -715,6 +718,7 @@ impl AppView {
         // The tab keys of the same file (#544); unset keys are the tab as it was.
         let tab_style = chrome.tab_style(&self.model.ui_theme.tab, chosen_fill);
         let tab_radius = tab_style.radius.map(|r| px(r * ui));
+        let tab_pad_x = tab_style.padding_x.unwrap_or(TAB_PAD_X_PX);
         // The program icons (#544): off unless the theme turns them on.
         let tab_theme = &self.model.ui_theme.tab;
         let icons_on = tab_theme.icons == Some(true);
@@ -778,12 +782,12 @@ impl AppView {
                 .items_center()
                 .gap_1()
                 // The side borders are always there (clear) so the drop line
-                // appears without moving the tabs: 2 px border + 6 px padding
-                // is the 8 px of `px_2`.
+                // appears without moving the tabs: 2 px border plus the
+                // padding (`tab.paddingX`, 6 px unless the theme sets it).
                 .border_l_2()
                 .border_r_2()
                 .border_color(gpui::transparent_black())
-                .px(px(6.))
+                .px(px(tab_pad_x))
                 .py_1()
                 .map(|d| match tab_radius {
                     Some(r) => d.rounded(r),

@@ -77,6 +77,8 @@ pub struct TabTheme {
     pub separator: Option<BorderSpec>,
     /// Corner radius in pixels, 0 to 40.
     pub radius: Option<f64>,
+    /// Padding on each side of a tab's content in pixels, 0 to 40.
+    pub padding_x: Option<f64>,
     /// Show the focused card's program as an icon on the tab. Off unless set.
     pub icons: Option<bool>,
     /// What the icon is made of (`tab_icon::IconStyle`); unset is a glyph.
@@ -179,7 +181,7 @@ pub const LOOK_KEYS: [(&str, Kind); 21] = [
 
 /// The bar keys (#425) and the tab keys (#544), with their docs. They exist
 /// only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 19] = [
+pub const BAR_KEYS: [(&str, &[&str], &str); 20] = [
     (
         "titlebar.background",
         &[
@@ -253,6 +255,11 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 19] = [
     (
         "tab.radius",
         &["Round the corners of workspace tabs, in pixels, 0 to 40. Unset keeps the small default."],
+        "6",
+    ),
+    (
+        "tab.paddingX",
+        &["Padding on each side of a workspace tab's content, in pixels, 0 to 40. Unset keeps the default."],
         "6",
     ),
     (
@@ -545,6 +552,7 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
             "tab.activeBorder" => theme.tab.active_border = Some(border(key, v)?),
             "tab.separator" => theme.tab.separator = Some(border(key, v)?),
             "tab.radius" => theme.tab.radius = Some(number(key, v, 0., 40.)?),
+            "tab.paddingX" => theme.tab.padding_x = Some(number(key, v, 0., 40.)?),
             "tab.icons" => {
                 theme.tab.icons = Some(v.as_bool().ok_or("\"tab.icons\" must be true or false")?)
             }
@@ -695,6 +703,7 @@ mod tests {
               "tab.activeBorder": "#fff",
               "tab.separator": "#ffffff22",
               "tab.radius": 9,
+              "tab.paddingX": 14,
             }"##,
         )
         .unwrap()
@@ -713,6 +722,7 @@ mod tests {
             Some(BorderSpec::Color(ColorSpec::Hex("#ffffff22".into())))
         );
         assert_eq!(t.radius, Some(9.));
+        assert_eq!(t.padding_x, Some(14.));
         assert_eq!(parse(r#"{"tab.gradient": []}"#).unwrap().tab.gradient, None);
     }
 
@@ -819,10 +829,11 @@ mod tests {
 
     #[test]
     fn tab_numbers_clamp_and_bad_tab_values_name_the_key() {
-        let t = parse(r#"{"tab.opacity": 0, "tab.radius": 99}"#)
+        let t = parse(r#"{"tab.opacity": 0, "tab.radius": 99, "tab.paddingX": -5}"#)
             .unwrap()
             .tab;
         assert_eq!((t.opacity, t.radius), (Some(0.1), Some(40.)));
+        assert_eq!(t.padding_x, Some(0.));
         for (bad, key) in [
             (r#"{"tab.background": "none"}"#, "tab.background"),
             (r#"{"tab.activeBackground": 3}"#, "tab.activeBackground"),
@@ -831,6 +842,7 @@ mod tests {
             (r##"{"tab.gradient": "#fff"}"##, "tab.gradient"),
             (r#"{"tab.opacity": "half"}"#, "tab.opacity"),
             (r#"{"tab.radius": true}"#, "tab.radius"),
+            (r#"{"tab.paddingX": "wide"}"#, "tab.paddingX"),
             (r#"{"tab.separator": "thin"}"#, "tab.separator"),
             (r#"{"tab.shadow": 1}"#, "tab.shadow"),
         ] {
