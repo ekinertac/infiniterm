@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-31
+
+- Choosing a workspace no longer shifts the other tabs sideways: the chosen tab's bold name and the `tab.separator` line that hides next to it both changed the row's width, and now each keeps its space (#600).
+
 ## 0.6.4 (build 1302), 2026-10-31
 
 ### Themes and icons
