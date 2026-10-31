@@ -94,11 +94,42 @@ A ui theme holds these keys:
 
 - the window: `ui.windowOpacity`, `ui.windowBlur`, `ui.windowColor`, `ui.icon`;
 - the background picture: `ui.backgroundImage`, `ui.backgroundImageFit`, `ui.backgroundImageInterval`, `ui.backgroundImageFade`;
-- the cards and canvas: `ui.cardRadius`, `ui.cardOpacity`, `ui.showGrid`, `ui.inactiveDim`, `ui.unfocusedDim`, `ui.hideLabelWhenFitted`;
+- the cards and canvas: `ui.cardRadius`, `ui.cardOpacity`, `ui.showGrid`, `ui.inactiveDim`, `ui.unfocusedDim`, `ui.hideLabelWhenFitted`, `ui.cardGradient`, `ui.cardGradientAngle`, `ui.focusRingWidth`;
 - the interface font: `ui.fontFamily`, `ui.fontSize`, `ui.fontWeight`, `ui.fontWeightBold`;
-- the bars: `titlebar.background`, `titlebar.border`, `statusbar.background` and `statusbar.border`. A background is `#rgb`, `#rrggbb`, `canvas`, `card`, `bar` or `transparent`. A border is a colour or `none`.
+- the bars: `titlebar.background`, `titlebar.border`, `statusbar.background` and `statusbar.border`. A background is `#rgb`, `#rrggbb`, `canvas`, `card`, `bar` or `transparent`. A border is a colour or `none`;
+- the workspace tabs: `tab.background`, `tab.activeBackground`, `tab.gradient`, `tab.opacity`, `tab.border`, `tab.activeBorder`, `tab.separator`, `tab.radius`, `tab.icons`, `tab.iconStyle`, `tab.iconMap`;
+- the card header: `card.header`, `card.headerIcons`, `card.headerButtons`, `card.headerButtonsActiveOnly`.
 
 The first launch that has this feature moves any of these keys out of your `settings.json` into `ui-themes/default.json`. Your comments stay, and a note in `settings.json` says where the keys went. After that, a look key typed into `settings.json` is ignored, with a notice. In a window opened with `ift join`, the host's settings apply but the look is your own.
+
+### Card gradient and focus ring
+
+Everything in this part and the next two is off until a theme sets it. A theme without these keys looks as before.
+
+`ui.cardGradient` takes two colours, `#rgb`, `#rrggbb` or `#rrggbbaa`, for example `["#3a2c27", "#1f1a18cc"]`. `ui.cardGradientAngle` is the direction in degrees, 0 to 360. The default, 180, runs top to bottom. `ui.cardOpacity` still applies to both colours, so the gradient stays translucent over the window. Browser cards stay flat. With a gradient on, the gradient reaches the focus ring and a resting card has no dark hairline border. A card with an agent in it keeps its coloured border.
+
+`ui.focusRingWidth` sets the width of the focus ring in screen pixels, 0 to 10, at every zoom. With 0, the default, the ring is 3, 4 or 5 pixels, by zoom. The gap between a card and its ring is as wide as the ring, so a thinner ring also closes the gap.
+
+### Workspace tabs
+
+- `tab.background` is the fill of a tab that is not chosen, and `tab.activeBackground` is the fill of the chosen tab. Values are `#rgb`, `#rrggbb`, `#rrggbbaa`, `canvas`, `card`, `bar` or `transparent`. Unset, an idle tab has no fill.
+- `tab.gradient` is two colours, top to bottom, for the chosen tab. It replaces `tab.activeBackground`. `[]` keeps the flat fill.
+- `tab.opacity`, 0.1 to 1, multiplies the alpha of every tab fill.
+- `tab.border` and `tab.activeBorder` are a one pixel outline, a colour or `none`.
+- `tab.separator` is a thin line between idle tabs, a colour or `none`. No line touches the chosen tab.
+- `tab.radius` rounds the corners, 0 to 40 pixels.
+
+`tab.icons: true` puts an icon on each tab for the program that runs in the workspace's focused card. When no card is focused, it uses the first card. A shell at its prompt shows the shell. `tab.iconStyle` is `"glyph"` (default) or `"image"`. A glyph is a Nerd Font glyph, and the app has glyphs for common shells, runtimes and coding agents. An image is a file in `ui-themes/<theme name>/icons/`, where the theme name is the file name without `.json`. The file is `<program>.svg` or `<program>.png`, or `default.svg` or `default.png` for the rest. A program with no file gets a glyph. `tab.iconMap` maps a program name to a glyph or to a file name ending in `.svg` or `.png`, for example `{"bun": "bun.svg", "default": ""}`. A file name must be a plain name, with no folder in it. The key `default` covers programs not listed.
+
+### Card header
+
+`card.header: true` adds a header row inside terminal, transcript and page cards. It shows the card's name, and the corner chip is not drawn while the header is on. The header is 30 pixels high at 100% zoom, and the card's body gets the rest. A terminal then has fewer rows and the same number of columns. Dragging the header moves the card. Editor, diff and browser cards keep their own tab strip and get no header.
+
+- `card.headerIcons: true` shows the program's icon at the left. It uses `tab.iconStyle` and `tab.iconMap`, so a card and its tab agree.
+- `card.headerButtons` lists the buttons, left to right, from `"split-right"`, `"split-down"`, `"maximise"` and `"close"`. Each runs the command of that name. No button shows unless listed.
+- `card.headerButtonsActiveOnly: true` shows the buttons only on the focused card. The other headers show the icon and the name, and nothing can be clicked where the buttons would be.
+
+With the header on, the chip's agent colour is not drawn. The card's border still shows the state.
 
 ## The window and the canvas
 
@@ -110,7 +141,7 @@ The keys below go in a ui theme file, not in `settings.json`.
 
 `ui.icon` picks the picture in the Dock: `"default"` (four outlined cards) or `"filled"`. It changes when you save the file or switch the ui theme. The window colour badge stays on top of it. The icon in Finder and Launchpad stays the default, because a running app cannot change it.
 
-`ui.statusBarPwd` (off by default) shows the focused terminal card's folder in the status bar, with your home folder as `~`. It is left out when the card's label already is the path, and a long path is cut so the build number stays. `ui.statusBarPwdSide` puts it on the `"left"` (default) or the `"right"`.
+`ui.statusBarPwd` (off by default) shows the focused terminal card's folder in the status bar, with your home folder as `~`. It is left out when the card's label already is the path, and a long path is cut so the build number stays. `ui.statusBarPwdSide` puts it on the `"left"` (default) or the `"right"`. `"ui.hideBuildNumber": true` in `settings.json` hides "build N" at the right end of the status bar.
 
 ## The interface font
 
