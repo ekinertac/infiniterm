@@ -718,6 +718,11 @@ impl AppView {
         // The program icons (#544): off unless the theme turns them on.
         let tab_theme = &self.model.ui_theme.tab;
         let icons_on = tab_theme.icons == Some(true);
+        // `tab.iconSize` follows the interface size like the label does.
+        let icon_px = infiniterm_core::tab_icon::size_px(
+            tab_theme.icon_size.map(|s| s * f64::from(ui)),
+            f64::from(tab_font_px * TAB_ICON_SCALE),
+        ) as f32;
         let icon_style = tab_theme.icon_style.unwrap_or_default();
         let icons_dir =
             infiniterm_core::config_files::ui_theme_icons_dir(&self.model.ui_theme_name);
@@ -890,7 +895,7 @@ impl AppView {
                         d.child(
                             div()
                                 .flex_none()
-                                .text_size(px(tab_font_px * TAB_ICON_SCALE))
+                                .text_size(px(icon_px))
                                 .child(gpui::StyledText::new(glyph).with_runs(vec![run])),
                         )
                     }
@@ -900,7 +905,7 @@ impl AppView {
                             d.child(
                                 gpui::img(path)
                                     .flex_none()
-                                    .size(px(tab_font_px * TAB_ICON_SCALE))
+                                    .size(px(icon_px))
                                     .object_fit(gpui::ObjectFit::Contain),
                             )
                         })

@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-10-31
+
+- A ui theme can set the size of the program icons: `tab.iconSize` for the workspace tab and `card.headerIconSize` for the card header, in pixels (6 to 64) and for a glyph or a logo alike. The tab icon grows and shrinks with the interface size; the header icon scales with the card. Unset keeps the built-in sizes, so a theme without them looks as before.
+
 ## 0.6.4 (build 1302), 2026-10-31
 
 ### Themes and icons

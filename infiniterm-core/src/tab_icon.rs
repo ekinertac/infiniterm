@@ -13,6 +13,15 @@
 //! file exists, comes in as a closure so the rules test without a folder.
 use std::collections::BTreeMap;
 
+/// The range `tab.iconSize` and `card.headerIconSize` take, in pixels.
+pub const ICON_SIZE_MIN: f64 = 6.;
+pub const ICON_SIZE_MAX: f64 = 64.;
+
+/// An icon's size: the theme's, when it set one, else the built-in `default`.
+pub fn size_px(set: Option<f64>, default: f64) -> f64 {
+    set.unwrap_or(default)
+}
+
 /// The `tab.iconMap` entry (and the built-in one) for a program nothing else
 /// names.
 pub const FALLBACK_KEY: &str = "default";
@@ -478,6 +487,12 @@ mod tests {
         assert_eq!(representative(&unfocused), Some("fish"));
         assert_eq!(representative(&[(true, None)]), None);
         assert_eq!(representative(&[]), None);
+    }
+
+    #[test]
+    fn a_set_size_beats_the_built_in_one() {
+        assert_eq!(size_px(None, 15.), 15.);
+        assert_eq!(size_px(Some(11.), 15.), 11.);
     }
 
     #[test]
