@@ -6,7 +6,9 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-10-31
+## 0.6.4 (build 1302), 2026-10-31
+
+### Themes and icons
 
 - A ui theme can paint cards as a gradient: `ui.cardGradient` takes two colours (`#rgb`, `#rrggbb` or `#rrggbbaa`) and `ui.cardGradientAngle` the direction in degrees (180, the default, runs top to bottom). `ui.cardOpacity` still applies to both colours, so the gradient stays translucent over the window. Off unless the theme sets it; browser cards stay flat. With a gradient on, the gradient reaches the focus ring (no dark strip between them) and a resting card has no dark hairline border; a card with an agent in it keeps its coloured border.
 - A ui theme can style the workspace tabs: `tab.background` and `tab.activeBackground` (fills, `#rrggbbaa` allowed), `tab.gradient` (two colours for the chosen tab, top to bottom), `tab.opacity` (multiplies every tab fill's alpha), `tab.border` and `tab.activeBorder` (a one pixel outline), `tab.separator` (a thin line between idle tabs, never next to the chosen one) and `tab.radius` (0 to 40). Bar colours accept `#rrggbbaa` too. A theme without the keys draws the tabs as before.
@@ -15,25 +17,21 @@ How this file is kept: work that has shipped to `master` but not to a release go
 - New `ui.focusRingWidth` theme key sets the focus ring's width in screen pixels at every zoom (0 to 10). 0, the default, keeps the built-in 3, 4 or 5 pixels by zoom. The gap between a card and its ring is as wide as the ring, so a thinner ring also closes the gap.
 - New app icon: the four cards are now outlined in violet, yellow, red and green on a dark rounded square. A filled version comes with the app. Put `"ui.icon": "filled"` in a ui theme (`"default"` is the outline) and the Dock icon changes as you save, with no restart. The window colour badge stays on top. Finder and Launchpad keep the default icon: a running app cannot change them.
 
-### 2026-10-28
+### Card sizes
 
 - New: "Custom size…" in the Cmd+Alt+S menu (command `card.size.custom`). A prompt asks for a width and height in grid squares, the unit of `cards.width` (50 is 1250 px), and accepts `60x90`, `60 x 90`, `60 90` or `60,90`. The selected cards take that size and are placed like "Default size": one gutter from the card on their left and the card above, nothing overlapping, unselected cards untouched. The prompt starts from the last size you typed, then from the default size. A size under the minimum card is raised to it with a notice, one over 400 squares a side is refused, and the notice after applying gives the size in pixels. Cmd+Z undoes it in one step.
-
-### 2026-10-27
-
-- Fixed, a data loss in joined windows (`ift join`, #588): closing a card in a joined window after the host app had been restarted closed every card of a workspace on the host, and their shells ended. The host used to read "a card is missing from the viewer's canvas" as "the viewer closed it". Now the viewer names the cards it closed and the host closes exactly those, the normal way (Cmd+Shift+T brings them back, a shell is kept alive for a while). A change made before the host was restarted is dropped, with a notice ("the host was restarted; your last change was not applied"), instead of being applied to the new canvas. Update the viewer and the host together: a viewer from before this change can no longer close a card on the host.
 
 - New: "Default size" in the Cmd+Alt+S menu (command `card.size.default`). Every selected card goes back to the default card size from your settings (`cards.width` and `cards.height`, else the window's shape), placed one gutter from the card on its left and the card above it, so nothing overlaps; cards you did not select stay put. The "Full" row still resizes only the focused card. Cmd+Z undoes it in one step.
 - New: "Resize to window" in the Cmd+Alt+S menu (command `card.size.window`). The selected cards keep their width and get the height that gives the window's shape, so portrait cards from a host become landscape. Each card is placed one gutter right of the card on its left and one gutter below the card above it, so neighbours are pushed away or pulled closer and nothing overlaps; cards you did not select stay where they are. Cmd+Z undoes all of it in one step, and the view then fits the cards.
 
-### 2026-10-26
+### Joined windows (`ift join`)
+
+- Fixed, a data loss in joined windows (`ift join`, #588): closing a card in a joined window after the host app had been restarted closed every card of a workspace on the host, and their shells ended. The host used to read "a card is missing from the viewer's canvas" as "the viewer closed it". Now the viewer names the cards it closed and the host closes exactly those, the normal way (Cmd+Shift+T brings them back, a shell is kept alive for a while). A change made before the host was restarted is dropped, with a notice ("the host was restarted; your last change was not applied"), instead of being applied to the new canvas. Update the viewer and the host together: a viewer from before this change can no longer close a card on the host.
 
 - Fixed: "App: restart", and the restart that installs an update, in a joined window (`ift join`) brought back a plain app with no connection to the host, which then stopped `ift join` from opening anything. A restart now starts the app with the same environment it had (`open -n` with each `INFINITERM_*` variable), so a viewer comes back as the same viewer. `ift join` for a host whose window is already open now says so ("a window for it is already open (pid N); it is in front now") and brings that window to the front.
 - Fixed, in a joined window (`ift join`): a diff card opened on a folder kept saying "Loading from the host..." in its text area after the list of changed files had arrived. The text is now empty until you pick a file, as on this Mac.
 
 - Fixed, in a joined window (`ift join`): "App: open settings" and "App: open keybindings" opened the host's files and then the cards closed at once. The host did not accept editor cards made in a viewer; it now accepts the ones on its own settings and keybindings files (and still refuses any other file, which would be a path on your Mac).
-
-### 2026-10-25
 
 - In a joined window (`ift join`) pictures from the host now show. A picture file opened in an editor card (from the tree, or Cmd+click on its path) is fetched from the host and drawn, and follows the file if it changes there. The canvas background list of the host's settings works too: a bundled name is this app's own, any other entry (`~/Pictures/x.jpg`, an absolute path) is a file on the host. The copies are kept in a `host-pictures` folder in the app's data folder.
 - In a joined window (`ift join`) a file dropped on a terminal, or an image pasted with Cmd+V or Ctrl+V, is now sent to the host over the connection the window already has for files, not a new ssh login each time. A folder, a file over 64 MB, or a host with an older `ift` still goes the old way (ssh), so nothing stops working. Where it lands is unchanged: `~/.infiniterm/drops/<id>/` on the host.
@@ -50,8 +48,6 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 - Fixed, in a joined window (`ift join`): the editor that `ift ./file` opens in a terminal could not be closed from your window. It came back after Cmd+W. Closing it there now closes it on the host too, and the `ift` waiting in the terminal ends.
 
-### 2026-10-24
-
 - Fixed, in a joined window (`ift join`): Cmd+click on a path opened the editor but your view stayed where it was. The window now moves to the new card and focuses it. Also fixed: `ift ./file` typed in a joined terminal showed no editor until the terminal was closed. The editor the host lays over the terminal now appears in your window too. With `INFINITERM_KEYLOG` set, each request to the host's files prints its time in ms, to tell a slow link from a bug.
 
 - An editor card in a joined window (`ift join`) now opens the host's file instead of an empty "editor on <host>" card: Cmd+click on a path in a terminal there shows the file in your window. You can edit and save it: the save goes to the host, which refuses it if the file changed on the host since you opened it (your changes are kept, and saving again overwrites on purpose). It follows changes on the host and keeps what it showed if the host cannot be reached; a file it could not read stays locked rather than risk being saved over. Not yet for a host's folders (no file list), pictures, git marks, diffs and transcripts.
@@ -61,12 +57,12 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 - Fixed: Cmd+click on a file or folder path in a joined window's terminal (`ift join`) did nothing, because the path was looked up on your Mac instead of the host. It now asks the host, which opens an editor (or folder) card beside the terminal on its own canvas; the card appears in your window like any other. A path that is not on the host says so in a notice.
 
-### 2026-10-23
+### ift commands
 
 - New: `ift focus <card>` goes to a card by its number (`7` or `#7`) or id, as picking it in the palette does: it shows the card's workspace, focuses it and fits it.
 - New: `ift workspaces` lists the workspaces (id, name, cards, and `*` on the one on screen). `ift terminal --workspace <id|name|new> [--name <text>] <dir>...` opens the terminals on that workspace and shows it; `new` makes a workspace first. Without `--workspace` nothing changes.
 
-### 2026-10-22
+### Settings
 
 - `"ui.hideBuildNumber": true` in settings.json hides "build N" at the right end of the status bar.
 - `ui.hideLabelWhenFitted` also hides the label of the only card on a workspace, without pressing Cmd+1.
