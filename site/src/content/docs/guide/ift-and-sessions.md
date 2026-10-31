@@ -24,6 +24,8 @@ Run inside a terminal card, `ift <file>` lays an editor over that card and waits
 
 `ift terminal <folder>...` makes a terminal card for each folder on the workspace you are looking at and focuses the last one. It starts infiniterm first when it is not running.
 
+`ift terminal --workspace <id|name|new> <folder>...` opens the cards on another workspace and shows it. Give the workspace's id or its exact name. `new` makes a workspace first, and `--name <text>` names it. Without `--workspace`, nothing changes. `ift workspaces` lists the workspaces from left to right: id, name, number of cards, and `*` on the one on screen. It prints a table on a terminal and tab-separated rows without a header into a pipe.
+
 `ift -t <path> [card]` adds the file as a tab of an editor card. Without a card it uses the focused editor card, and opens a card of its own when the focus is not on one. A file that is already open is switched to, not opened twice. A terminal, an unknown card and a directory are refused, and the message says why.
 
 A path beats a verb: a directory called `ls` in front of you opens the directory.
@@ -62,8 +64,11 @@ ift read 7                        # what card 7's terminal shows now
 ift read 7 --lines 20             # only the last 20 lines
 ift read 7 --all                  # the scrollback too
 ift close 7                       # close it, like Cmd+W
+ift focus 7                       # go to it: show its workspace, focus it, fit it
 ift run canvas.tidy               # run any command from `ift commands`
 ```
+
+`ift focus` moves the view to the card, as picking it in the palette does.
 
 `ift send` types into the card without moving the focus or the view. The text goes first, then the keys in the order you give them. `--enter` presses Enter; `--key` takes `enter`, `esc`, `tab`, `backspace`, `ctrl-c`, `ctrl-d`, `ctrl-l`, `ctrl-z`, `up`, `down`, `left` or `right`, and can be given more than once.
 
