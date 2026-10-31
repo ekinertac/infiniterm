@@ -1019,16 +1019,33 @@ impl AppView {
                 &tab.icon_map,
                 &has_file,
             );
-            let slot = Bounds::new(point(x, b.origin.y), size(h, h));
+            // `card.headerIconSize` is in pixels at 100% zoom, so it scales
+            // with the card like the rest of the header; unset keeps the
+            // built-in sizes (a glyph from the text size, a logo from the
+            // header's height). A big icon widens its slot, not the overlap.
+            let set_px = self
+                .model
+                .ui_theme
+                .card
+                .header_icon_size
+                .map(|s| px((s * scale) as f32));
+            let slot_w = h.max(set_px.unwrap_or(px(0.)));
+            let slot = Bounds::new(point(x, b.origin.y), size(slot_w, h));
             match icon {
                 infiniterm_core::tab_icon::Icon::Glyph(glyph) => {
-                    let line = crate::text::shape(window, &glyph, text_px * 1.25, &icon_font, ink);
+                    let line = crate::text::shape(
+                        window,
+                        &glyph,
+                        set_px.unwrap_or(text_px * 1.25),
+                        &icon_font,
+                        ink,
+                    );
                     crate::text::paint_in(
                         window,
                         cx,
                         &line,
                         slot,
-                        ((h - line.width) / 2.).max(px(0.)),
+                        ((slot_w - line.width) / 2.).max(px(0.)),
                     );
                 }
                 infiniterm_core::tab_icon::Icon::File(file) => {
@@ -1041,8 +1058,8 @@ impl AppView {
                         if let Some(Ok(image)) =
                             window.use_asset::<gpui::ImageAssetLoader>(&source, cx)
                         {
-                            let side = h * 0.6;
-                            let at = point(x + (h - side) / 2., b.origin.y + (h - side) / 2.);
+                            let side = set_px.unwrap_or(h * 0.6);
+                            let at = point(x + (slot_w - side) / 2., b.origin.y + (h - side) / 2.);
                             let _ = window.paint_image(
                                 Bounds::new(at, size(side, side)),
                                 gpui::Corners::default(),
@@ -1054,7 +1071,7 @@ impl AppView {
                     }
                 }
             }
-            x += h + h * HEADER_ICON_GAP_RATIO - pad / 2.;
+            x += slot_w + h * HEADER_ICON_GAP_RATIO - pad / 2.;
         }
         // The buttons, right-aligned; the title gets what is left.
         let buttons = self.model.ui_theme.card.buttons_for(focused).to_vec();

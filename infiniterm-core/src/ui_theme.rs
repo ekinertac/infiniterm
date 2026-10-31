@@ -83,6 +83,9 @@ pub struct TabTheme {
     pub icon_style: Option<crate::tab_icon::IconStyle>,
     /// Program name to a glyph or a logo file name (`tab_icon::choose`).
     pub icon_map: std::collections::BTreeMap<String, String>,
+    /// The icon's size in pixels, scaled with the interface size; unset keeps
+    /// the built-in size (a little over the label's).
+    pub icon_size: Option<f64>,
 }
 
 /// The card header's keys (#544); see `card_header.rs`. Unset is no header.
@@ -97,6 +100,9 @@ pub struct CardTheme {
     /// The program's icon at the header's left, from the tab icon keys
     /// (`tab.iconStyle`, `tab.iconMap`).
     pub header_icons: Option<bool>,
+    /// The header icon's size in pixels at 100% zoom (it scales with the
+    /// card); unset keeps the built-in size.
+    pub header_icon_size: Option<f64>,
 }
 
 impl CardTheme {
@@ -179,7 +185,7 @@ pub const LOOK_KEYS: [(&str, Kind); 21] = [
 
 /// The bar keys (#425) and the tab keys (#544), with their docs. They exist
 /// only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 19] = [
+pub const BAR_KEYS: [(&str, &[&str], &str); 21] = [
     (
         "titlebar.background",
         &[
@@ -282,6 +288,15 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 19] = [
         "{\"bun\": \"bun.svg\", \"default\": \"\\uf120\"}",
     ),
     (
+        "tab.iconSize",
+        &[
+            "The workspace tab icon's size in pixels, 6 to 64: a glyph's font size or a logo's",
+            "side. It grows and shrinks with the interface size (Cmd+Shift+= and Cmd+Shift+-).",
+            "Unset keeps the built-in size, a little larger than the tab's label.",
+        ],
+        "16",
+    ),
+    (
         "card.header",
         &[
             "A header row inside terminal, transcript and page cards, above the body: the",
@@ -316,6 +331,15 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 19] = [
             "tab.iconMap, so the card and its workspace tab agree. Default false.",
         ],
         "false",
+    ),
+    (
+        "card.headerIconSize",
+        &[
+            "The header icon's size in pixels at 100% zoom, 6 to 64: a glyph's font size or a",
+            "logo's side. It scales with the card, like the header. Unset keeps the built-in",
+            "size, about half the header's height.",
+        ],
+        "16",
     ),
 ];
 
@@ -556,6 +580,22 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
                 )
             }
             "tab.iconMap" => theme.tab.icon_map = icon_map(key, v)?,
+            "tab.iconSize" => {
+                theme.tab.icon_size = Some(number(
+                    key,
+                    v,
+                    crate::tab_icon::ICON_SIZE_MIN,
+                    crate::tab_icon::ICON_SIZE_MAX,
+                )?)
+            }
+            "card.headerIconSize" => {
+                theme.card.header_icon_size = Some(number(
+                    key,
+                    v,
+                    crate::tab_icon::ICON_SIZE_MIN,
+                    crate::tab_icon::ICON_SIZE_MAX,
+                )?)
+            }
             "card.header" => {
                 theme.card.header =
                     Some(v.as_bool().ok_or("\"card.header\" must be true or false")?)
@@ -811,6 +851,31 @@ mod tests {
             (r#"{"tab.iconMap": {"bun": ""}}"#, "tab.iconMap"),
             (r#"{"tab.iconMap": {"bun": "../bun.svg"}}"#, "tab.iconMap"),
             (r#"{"tab.iconMap": {"bun": "a/b.png"}}"#, "tab.iconMap"),
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains(key), "{e}");
+        }
+    }
+
+    #[test]
+    fn icon_sizes_are_unset_by_default_clamp_and_name_the_key_when_bad() {
+        let none = parse("{}").unwrap();
+        assert_eq!(
+            (none.tab.icon_size, none.card.header_icon_size),
+            (None, None)
+        );
+        let t = parse(r#"{"tab.iconSize": 14, "card.headerIconSize": 18.5}"#).unwrap();
+        assert_eq!(t.tab.icon_size, Some(14.));
+        assert_eq!(t.card.header_icon_size, Some(18.5));
+        let t = parse(r#"{"tab.iconSize": 1, "card.headerIconSize": 500}"#).unwrap();
+        assert_eq!(t.tab.icon_size, Some(crate::tab_icon::ICON_SIZE_MIN));
+        assert_eq!(
+            t.card.header_icon_size,
+            Some(crate::tab_icon::ICON_SIZE_MAX)
+        );
+        for (bad, key) in [
+            (r#"{"tab.iconSize": "big"}"#, "tab.iconSize"),
+            (r#"{"card.headerIconSize": true}"#, "card.headerIconSize"),
         ] {
             let e = parse(bad).unwrap_err();
             assert!(e.contains(key), "{e}");
