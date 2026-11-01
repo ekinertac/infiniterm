@@ -633,8 +633,10 @@ pub enum UndoStep {
     Closed(Box<Card>),
 }
 
-/// How many layout changes Cmd+Z can walk back.
-pub const LAYOUT_UNDO_DEPTH: usize = 100;
+/// How many layout changes Cmd+Z can walk back. Every close is a step, so
+/// the trail must hold a full reopen ring of closes plus ordinary moves
+/// between them, or undoing a closed workspace would run out first (#605).
+pub const LAYOUT_UNDO_DEPTH: usize = lifecycle::CLOSED_RING + 100;
 
 pub struct Model {
     pub cards: Vec<Card>,

@@ -6,6 +6,11 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-01
+
+- Joined window: Cmd+Z and Cmd+Shift+Z (moves, resizes and closes) now keep working after the host answers your edit; before, the host's reply emptied the undo trail and Cmd+Z said "nothing to undo". Undoing a close reopens the card on the host too.
+- Closing many cards at once (select all, close) can now be undone and reopened for every card; the reopen list held only the last 10 and the undo trail only 100 steps. They now hold 500 closes and 600 steps.
+
 ## 0.6.4 (build 1302), 2026-10-31
 
 ### Themes and icons
