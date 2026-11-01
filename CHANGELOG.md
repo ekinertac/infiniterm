@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-02
 
+- Joined window: a new card no longer disappears for a moment, taking the focus with it, while the host catches up; and a card you close with Cmd+W no longer comes back and needs a second Cmd+W. The window keeps your new, reopened and closed cards for up to five seconds until the host's canvas agrees.
+
 - Joined window: close a card, Cmd+Z, close it again quickly, Cmd+Z: the second Cmd+Z said "nothing to undo" and the card stayed gone or came back by itself. The host now closes a card you reopened and closed again before it answered, and the close stays on the undo list.
 
 ### 2026-11-01

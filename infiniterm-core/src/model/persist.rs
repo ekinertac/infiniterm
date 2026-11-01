@@ -8,7 +8,7 @@
 //! A file from a NEWER build is never written back (`read_only`). Saving is
 //! debounced by the ui (500 ms: a drag is one write, not sixty), which
 //! calls `save_text` when `dirty_layout` has been set and the window passed.
-use super::{Model, NewCard};
+use super::{Model, NewCard, UNCONFIRMED_MS};
 
 /// How many published canvases the host remembers, for working out what a
 /// viewer's edit changed. A viewer that edits a canvas older than this many
@@ -156,10 +156,8 @@ impl Model {
         let first = !self.snapshot_seen;
         self.snapshot_seen = true;
         // The host's canvas is the answer to what was sent: the closes it
-        // carried are done (or were not the host's to do). Kept for
-        // `prune_undo_to_canvas`: a canvas that still lists a card closed
-        // here is the host's answer to an EARLIER edit (the keys were faster
-        // than the host), and the card is about to go again (#607).
+        // carried are done (or were not the host's to do), unless the card is
+        // still listed: see `unconfirmed_closed` below.
         let just_closed = std::mem::take(&mut self.closed_by_viewer);
         let (host_viewport, host_scale, host_focus, host_active) = (
             saved.viewport,
@@ -201,10 +199,36 @@ impl Model {
             .filter_map(|c| Some((c.id.clone(), c.cover_of.clone()?)))
             .collect();
         let host_ids: Vec<String> = cards.iter().map(|c| c.id.clone()).collect();
+        // What this viewer did and the host has not confirmed yet (#609): a
+        // canvas older than the upload lacks a card made or reopened here
+        // (it vanished, and the focus with it) and still lists a card
+        // closed here (it came back, and the second Cmd+W had to close it
+        // again). Both are left as the viewer has them until the host's
+        // canvas agrees or `UNCONFIRMED_MS` is up.
+        let now = self.now_ms;
+        self.unconfirmed_closed.extend(
+            just_closed
+                .iter()
+                .map(|id| (id.clone(), now + UNCONFIRMED_MS)),
+        );
+        self.unconfirmed_closed
+            .retain(|(id, until)| host_ids.contains(id) && *until > now);
+        self.unconfirmed_new
+            .retain(|(id, until)| !host_ids.contains(id) && *until > now);
+        let hidden: Vec<String> = self
+            .unconfirmed_closed
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
+        let waiting: Vec<String> = self
+            .unconfirmed_new
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
         let gone: Vec<String> = self
             .cards
             .iter()
-            .filter(|c| !host_ids.contains(&c.id))
+            .filter(|c| !host_ids.contains(&c.id) && !waiting.contains(&c.id))
             .map(|c| c.id.clone())
             .collect();
         for id in gone {
@@ -218,6 +242,9 @@ impl Model {
         // edit, which already matches): see `prune_undo_to_canvas`.
         let mut host_moved: Vec<String> = Vec::new();
         for c in cards {
+            if hidden.contains(&c.id) {
+                continue;
+            }
             let cover_base = c.cover_of.clone();
             if let Some(card) = self.card_mut(&c.id) {
                 if card.rect != c.rect {
@@ -276,6 +303,9 @@ impl Model {
                 card.active_tab = c.active_tab;
             }
         }
+        // The host's own cards just added above are not waiting for anything.
+        self.unconfirmed_new
+            .retain(|(id, _)| !host_ids.contains(id));
         if first {
             self.active_workspace = host_active;
             self.viewport = host_viewport;
@@ -298,7 +328,7 @@ impl Model {
         // soon as the host replied (#605). Only steps the new canvas made
         // wrong are dropped; the rest keeps working, and what undo does
         // goes up to the host like any other edit.
-        self.prune_undo_to_canvas(&host_moved, &just_closed);
+        self.prune_undo_to_canvas(&host_moved);
         self.follow_host_open();
         Ok(())
     }
@@ -312,16 +342,9 @@ impl Model {
     /// undoing it would put the host's work back where it was. Pruning beats
     /// clearing because the host answers every viewer edit, so a cleared
     /// trail was empty in practice.
-    /// `just_closed` are the cards this viewer closed and had not heard back
-    /// about: a canvas that still lists one is a late answer, so their close
-    /// steps stay although the card shows for a moment (#607).
-    fn prune_undo_to_canvas(&mut self, host_moved: &[String], just_closed: &[String]) {
-        let present: std::collections::HashSet<&str> = self
-            .cards
-            .iter()
-            .map(|c| c.id.as_str())
-            .filter(|id| !just_closed.iter().any(|j| j == id))
-            .collect();
+    fn prune_undo_to_canvas(&mut self, host_moved: &[String]) {
+        let present: std::collections::HashSet<&str> =
+            self.cards.iter().map(|c| c.id.as_str()).collect();
         let keep = |step: &mut super::UndoStep| match step {
             super::UndoStep::Rects(snap) => {
                 snap.rects
@@ -1219,10 +1242,12 @@ mod snapshot_tests {
         host.card_mut(&_e).unwrap().title = "agent".into();
         let text = host.save_text().unwrap();
         let rev = host.record_published(&text);
-        // The snapshot lands on the viewer: its edit is gone locally...
+        // The snapshot lands on the viewer: the close and the move stay
+        // (#609: the card does not flash back, the second Cmd+W is not
+        // needed)...
         viewer.apply_snapshot(&text).unwrap();
         viewer.layout_rev = rev;
-        assert!(viewer.card(&b).is_some());
+        assert!(viewer.card(&b).is_none());
         // ...but the sent copy reaches the host, which applies it, and the
         // canvas it publishes next has the edit.
         assert_eq!(
@@ -1750,6 +1775,55 @@ mod agent_states_text_tests {
         }
     }
 
+    // #609: a card made in a joined window must not vanish (and take the
+    // focus with it) when a host canvas older than the upload arrives, and a
+    // card closed there must not come back.
+    #[test]
+    fn a_new_card_and_its_focus_survive_a_canvas_older_than_the_upload() {
+        let (mut host, mut viewer, _a, _b, _e) = host_and_viewer();
+        let old = host.save_text().unwrap();
+        let made = add(&mut viewer, rect(2000., 2000.));
+        viewer.set_focus(Some(&made));
+        viewer.apply_snapshot(&old).unwrap();
+        assert!(viewer.card(&made).is_some(), "still there");
+        assert_eq!(viewer.selection.focused_id.as_deref(), Some(made.as_str()));
+        // The host gets it; its canvas lists it; nothing is waiting any more.
+        let up = viewer.layout_snapshot();
+        let base = viewer.layout_rev;
+        host.apply_remote_layout(&up, base, &viewer.closed_ids())
+            .unwrap();
+        let text = host.save_text().unwrap();
+        viewer.apply_snapshot(&text).unwrap();
+        assert!(viewer.card(&made).is_some());
+        assert!(viewer.unconfirmed_new.is_empty());
+    }
+
+    #[test]
+    fn a_card_the_host_never_confirms_goes_after_the_wait() {
+        let (mut host, mut viewer, _a, _b, _e) = host_and_viewer();
+        let made = add(&mut viewer, rect(2000., 2000.));
+        viewer.now_ms = crate::model::UNCONFIRMED_MS + 1.;
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        assert!(viewer.card(&made).is_none());
+    }
+
+    #[test]
+    fn a_closed_card_stays_closed_through_every_older_canvas() {
+        let (mut host, mut viewer, _a, b, _e) = host_and_viewer();
+        let old = host.save_text().unwrap();
+        viewer.close_card(&b, false);
+        let up = viewer.layout_snapshot();
+        let sent = viewer.closed_ids();
+        let base = viewer.layout_rev;
+        viewer.apply_snapshot(&old).unwrap();
+        viewer.apply_snapshot(&old).unwrap();
+        assert!(viewer.card(&b).is_none(), "not back after two old canvases");
+        host.apply_remote_layout(&up, base, &sent).unwrap();
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        assert!(viewer.card(&b).is_none());
+        assert!(viewer.unconfirmed_closed.is_empty(), "confirmed");
+    }
+
     // The same, with the keys faster than the host: the second close comes
     // before the host's answer to the reopen reaches the viewer.
     #[test]
@@ -1961,7 +2035,10 @@ mod agent_states_text_tests {
         assert!(host.card(&stray).is_none(), "another path is still refused");
 
         // The host publishes; the viewer applies it. The pair is still there.
+        // The refused card waited for the host's word (#609) and the wait is
+        // over, so it goes.
         let text = host.publish_text().unwrap();
+        viewer.now_ms = crate::model::UNCONFIRMED_MS + 1.;
         viewer.apply_snapshot(&text).unwrap();
         for (id, _) in &made {
             assert!(viewer.card(id).is_some(), "the cards stay in the viewer");
