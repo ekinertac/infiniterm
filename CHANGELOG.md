@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-02
+
+- Joined window: close a card, Cmd+Z, close it again quickly, Cmd+Z: the second Cmd+Z said "nothing to undo" and the card stayed gone or came back by itself. The host now closes a card you reopened and closed again before it answered, and the close stays on the undo list.
+
 ### 2026-11-01
 
 - Joined window: Cmd+Z and Cmd+Shift+Z (moves, resizes and closes) now keep working after the host answers your edit; before, the host's reply emptied the undo trail and Cmd+Z said "nothing to undo". Undoing a close reopens the card on the host too.
