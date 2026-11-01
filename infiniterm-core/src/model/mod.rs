@@ -638,6 +638,12 @@ pub enum UndoStep {
 /// between them, or undoing a closed workspace would run out first (#605).
 pub const LAYOUT_UNDO_DEPTH: usize = lifecycle::CLOSED_RING + 100;
 
+/// How long a joined window keeps a card it made, reopened or closed against
+/// the host's canvases while the host has not confirmed it (#609). The upload
+/// waits 500 ms to debounce and the host answers in a frame or two; this is
+/// the ceiling for a slow link, after which the host's canvas wins as before.
+pub const UNCONFIRMED_MS: f64 = 5_000.;
+
 pub struct Model {
     pub cards: Vec<Card>,
     pub groups: Vec<Group>,
@@ -768,6 +774,13 @@ pub struct Model {
     /// reached it (#588). The upload carries them, and the host closes exactly
     /// those: a card missing from an uploaded layout is never read as closed.
     pub closed_by_viewer: Vec<String>,
+    /// A viewer's cards the host has not confirmed yet, with the time
+    /// (`now_ms`) the wait ends (#609): ones it made or reopened, which a
+    /// canvas older than the upload does not list, and ones it closed, which
+    /// that canvas still lists. `apply_snapshot` leaves both alone until the
+    /// host's canvas agrees or the time is up.
+    pub unconfirmed_new: Vec<(String, f64)>,
+    pub unconfirmed_closed: Vec<(String, f64)>,
     /// The last canvases the host published, by revision (#423). A viewer's
     /// edit names the revision it was made on; the host works out WHAT the
     /// viewer changed by comparing the edit with that canvas, and applies only
@@ -994,6 +1007,8 @@ impl Model {
             awaiting_open: None,
             layout_rev: new_run_revision(),
             closed_by_viewer: Vec::new(),
+            unconfirmed_new: Vec::new(),
+            unconfirmed_closed: Vec::new(),
             published: std::collections::VecDeque::new(),
             config: default_config(),
             keymap: default_keymap(),
@@ -1286,7 +1301,17 @@ impl Model {
         let id = card.id.clone();
         self.cards.push(card);
         self.dirty_layout = true;
+        self.note_unconfirmed_new(&id);
         id
+    }
+
+    /// A viewer's new card waits for the host to have it (#609). The host's
+    /// own cards, added by `apply_snapshot`, are dropped from the list there.
+    pub fn note_unconfirmed_new(&mut self, id: &str) {
+        if self.read_only && self.snapshot_seen {
+            self.unconfirmed_new
+                .push((id.to_string(), self.now_ms + UNCONFIRMED_MS));
+        }
     }
 
     /// The number a new card gets: the lowest one no card has. It counted
