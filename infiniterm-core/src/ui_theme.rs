@@ -578,6 +578,11 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
                     check_kind(key, *kind, v)?;
                     theme.look.insert(key.clone(), v.clone());
                 }
+                None if crate::settings_doc::SETTINGS_DOC.iter().any(|(k, _)| k == key) => {
+                    return Err(format!(
+                        "\"{key}\" is a settings.json key, not a theme key: move it to settings.json"
+                    ))
+                }
                 None => return Err(format!("unknown key \"{key}\"")),
             },
         }
@@ -590,6 +595,25 @@ mod tests {
     use super::*;
     use crate::config::{default_config, merge_config};
     use serde_json::json;
+
+    #[test]
+    fn a_settings_key_in_a_theme_says_to_move_it() {
+        for key in ["ui.hideBuildNumber", "ui.hideLabelWhenMaximised", "theme"] {
+            let err = parse(&format!("{{\"{key}\": true}}")).unwrap_err();
+            assert_eq!(
+                err,
+                format!(
+                    "\"{key}\" is a settings.json key, not a theme key: move it to settings.json"
+                )
+            );
+        }
+        // A real typo is still just unknown, and a look key still parses.
+        assert_eq!(
+            parse("{\"ui.nonsense\": 1}").unwrap_err(),
+            "unknown key \"ui.nonsense\""
+        );
+        assert!(parse("{\"ui.hideLabelWhenFitted\": true}").is_ok());
+    }
 
     #[test]
     fn empty_text_is_the_built_in_look() {
