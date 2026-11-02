@@ -8,7 +8,7 @@
 //! A file from a NEWER build is never written back (`read_only`). Saving is
 //! debounced by the ui (500 ms: a drag is one write, not sixty), which
 //! calls `save_text` when `dirty_layout` has been set and the window passed.
-use super::{Model, NewCard};
+use super::{Model, NewCard, UNCONFIRMED_MS};
 
 /// How many published canvases the host remembers, for working out what a
 /// viewer's edit changed. A viewer that edits a canvas older than this many
@@ -156,8 +156,9 @@ impl Model {
         let first = !self.snapshot_seen;
         self.snapshot_seen = true;
         // The host's canvas is the answer to what was sent: the closes it
-        // carried are done (or were not the host's to do).
-        self.closed_by_viewer.clear();
+        // carried are done (or were not the host's to do), unless the card is
+        // still listed: see `unconfirmed_closed` below.
+        let just_closed = std::mem::take(&mut self.closed_by_viewer);
         let (host_viewport, host_scale, host_focus, host_active) = (
             saved.viewport,
             saved.ui_scale,
@@ -198,10 +199,36 @@ impl Model {
             .filter_map(|c| Some((c.id.clone(), c.cover_of.clone()?)))
             .collect();
         let host_ids: Vec<String> = cards.iter().map(|c| c.id.clone()).collect();
+        // What this viewer did and the host has not confirmed yet (#609): a
+        // canvas older than the upload lacks a card made or reopened here
+        // (it vanished, and the focus with it) and still lists a card
+        // closed here (it came back, and the second Cmd+W had to close it
+        // again). Both are left as the viewer has them until the host's
+        // canvas agrees or `UNCONFIRMED_MS` is up.
+        let now = self.now_ms;
+        self.unconfirmed_closed.extend(
+            just_closed
+                .iter()
+                .map(|id| (id.clone(), now + UNCONFIRMED_MS)),
+        );
+        self.unconfirmed_closed
+            .retain(|(id, until)| host_ids.contains(id) && *until > now);
+        self.unconfirmed_new
+            .retain(|(id, until)| !host_ids.contains(id) && *until > now);
+        let hidden: Vec<String> = self
+            .unconfirmed_closed
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
+        let waiting: Vec<String> = self
+            .unconfirmed_new
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
         let gone: Vec<String> = self
             .cards
             .iter()
-            .filter(|c| !host_ids.contains(&c.id))
+            .filter(|c| !host_ids.contains(&c.id) && !waiting.contains(&c.id))
             .map(|c| c.id.clone())
             .collect();
         for id in gone {
@@ -211,9 +238,18 @@ impl Model {
         // editor of an `ift <file>` typed there: it takes the keys, as on the
         // host, so Cmd+W closes it (#570).
         let mut cover_to_focus: Option<String> = None;
+        // Cards whose rect the HOST changed (not the echo of the viewer's own
+        // edit, which already matches): see `prune_undo_to_canvas`.
+        let mut host_moved: Vec<String> = Vec::new();
         for c in cards {
+            if hidden.contains(&c.id) {
+                continue;
+            }
             let cover_base = c.cover_of.clone();
             if let Some(card) = self.card_mut(&c.id) {
+                if card.rect != c.rect {
+                    host_moved.push(c.id.clone());
+                }
                 card.workspace_id = c.workspace_id;
                 card.rect = c.rect;
                 card.z = c.z;
@@ -267,6 +303,9 @@ impl Model {
                 card.active_tab = c.active_tab;
             }
         }
+        // The host's own cards just added above are not waiting for anything.
+        self.unconfirmed_new
+            .retain(|(id, _)| !host_ids.contains(id));
         if first {
             self.active_workspace = host_active;
             self.viewport = host_viewport;
@@ -284,9 +323,39 @@ impl Model {
         }
         self.ensure_workspace();
         self.dirty_layout = false;
-        self.layout_undo.clear();
+        // The host's answer to an edit is also the echo of the viewer's own
+        // last edit, so clearing the trail here made Cmd+Z find nothing as
+        // soon as the host replied (#605). Only steps the new canvas made
+        // wrong are dropped; the rest keeps working, and what undo does
+        // goes up to the host like any other edit.
+        self.prune_undo_to_canvas(&host_moved);
         self.follow_host_open();
         Ok(())
+    }
+
+    /// Keeps the undo and redo trails through a host canvas, dropping only
+    /// what would do harm now: a `Rects` step loses the cards the host
+    /// removed (a step left with none goes), and a `Closed` step goes when
+    /// its card is on the canvas again (a twin on one id). The reopen ring
+    /// gets the same second rule. A `Rects` step also loses the cards the
+    /// host moved (`host_moved`): a step snapshots the whole workspace, so
+    /// undoing it would put the host's work back where it was. Pruning beats
+    /// clearing because the host answers every viewer edit, so a cleared
+    /// trail was empty in practice.
+    fn prune_undo_to_canvas(&mut self, host_moved: &[String]) {
+        let present: std::collections::HashSet<&str> =
+            self.cards.iter().map(|c| c.id.as_str()).collect();
+        let keep = |step: &mut super::UndoStep| match step {
+            super::UndoStep::Rects(snap) => {
+                snap.rects
+                    .retain(|(id, _)| present.contains(id.as_str()) && !host_moved.contains(id));
+                !snap.rects.is_empty()
+            }
+            super::UndoStep::Closed(card) => !present.contains(card.id.as_str()),
+        };
+        self.layout_undo.retain_mut(keep);
+        self.layout_redo.retain_mut(keep);
+        self.closed.retain(|c| !present.contains(c.id.as_str()));
     }
 
     /// Asks to be taken to the card the host is about to open (#565).
@@ -550,10 +619,12 @@ impl Model {
         // Closed in the viewer, closed here, by name. That includes an
         // in-place editor (a cover): published to viewers since #566, so a
         // viewer can close it, and the host's close ends the `ift` waiting in
-        // the terminal. Only cards the canvas the viewer edited had: an id
-        // from nowhere is no card of this host's to close.
+        // the terminal. The list is what the viewer closed, so a card the
+        // viewer reopened and closed again before the host answered (its
+        // base canvas has no such card) is closed too (#607); an id the host
+        // does not have is no card of this host's to close.
         for id in closed {
-            if was_card(id).is_some() && self.card(id).is_some() {
+            if self.card(id).is_some() {
                 self.close_card(id, false);
             }
         }
@@ -606,6 +677,10 @@ impl Model {
                     {
                         continue;
                     }
+                    // A viewer's undo of a close sends the card back up: it
+                    // is out of the reopen ring now, or Cmd+Shift+T here
+                    // would bring a twin (#605).
+                    self.closed.retain(|k| k.id != c.id);
                     if settings_file {
                         let path = c.path.clone().unwrap_or_default();
                         let id = self.add_card(
@@ -1167,10 +1242,12 @@ mod snapshot_tests {
         host.card_mut(&_e).unwrap().title = "agent".into();
         let text = host.save_text().unwrap();
         let rev = host.record_published(&text);
-        // The snapshot lands on the viewer: its edit is gone locally...
+        // The snapshot lands on the viewer: the close and the move stay
+        // (#609: the card does not flash back, the second Cmd+W is not
+        // needed)...
         viewer.apply_snapshot(&text).unwrap();
         viewer.layout_rev = rev;
-        assert!(viewer.card(&b).is_some());
+        assert!(viewer.card(&b).is_none());
         // ...but the sent copy reaches the host, which applies it, and the
         // canvas it publishes next has the edit.
         assert_eq!(
@@ -1614,6 +1691,239 @@ mod agent_states_text_tests {
         assert!(viewer.closed_ids().is_empty());
     }
 
+    // #605: the host answers every viewer edit with a canvas, and that echo
+    // used to empty the viewer's undo trail. These walk each step kind
+    // through the echo and a later host layout. (Making a card is no undo
+    // step by design, see `UndoStep`.)
+
+    /// Sends the viewer's canvas up and returns the host's answer to the
+    /// viewer, as the app does: apply, publish, snapshot back.
+    fn round_trip(host: &mut Model, viewer: &mut Model) {
+        let up = viewer.layout_snapshot();
+        let closed = viewer.closed_ids();
+        assert_eq!(
+            host.apply_remote_layout(&up, viewer.layout_rev, &closed),
+            Ok(RemoteApply::Applied)
+        );
+        let text = host.save_text().unwrap();
+        let rev = host.record_published(&text);
+        viewer.apply_snapshot(&text).unwrap();
+        viewer.layout_rev = rev;
+    }
+
+    fn registry() -> crate::commands::CommandRegistry<Model> {
+        let mut r = crate::commands::CommandRegistry::new(|_| {});
+        crate::model::register::register_commands(&mut r);
+        r
+    }
+
+    #[test]
+    fn a_viewer_move_undoes_and_redoes_through_the_hosts_echo_and_a_later_layout() {
+        let (mut host, mut viewer, a, _b, e) = host_and_viewer();
+        let start = viewer.card(&a).unwrap().rect;
+        viewer.remember_layout();
+        let moved = rect(300., 300.);
+        viewer.card_mut(&a).unwrap().rect = moved;
+        round_trip(&mut host, &mut viewer);
+        assert_eq!(host.card(&a).unwrap().rect, moved);
+
+        // The host moves another card meanwhile and publishes.
+        host.card_mut(&e).unwrap().rect = rect(50., 900.);
+        let text = host.save_text().unwrap();
+        let rev = host.record_published(&text);
+        viewer.apply_snapshot(&text).unwrap();
+        viewer.layout_rev = rev;
+
+        viewer.undo_layout(false);
+        assert_eq!(viewer.card(&a).unwrap().rect, start);
+        round_trip(&mut host, &mut viewer);
+        assert_eq!(host.card(&a).unwrap().rect, start, "the undo went up");
+        assert_eq!(host.card(&e).unwrap().rect, rect(50., 900.));
+
+        viewer.undo_layout(true);
+        assert_eq!(viewer.card(&a).unwrap().rect, moved, "redo survives too");
+        round_trip(&mut host, &mut viewer);
+        assert_eq!(host.card(&a).unwrap().rect, moved);
+    }
+
+    #[test]
+    fn a_viewer_resize_undoes_through_the_hosts_echo() {
+        let (mut host, mut viewer, a, _b, _e) = host_and_viewer();
+        let start = viewer.card(&a).unwrap().rect;
+        viewer.remember_layout();
+        viewer.card_mut(&a).unwrap().rect.w = 400.;
+        round_trip(&mut host, &mut viewer);
+        viewer.undo_layout(false);
+        assert_eq!(viewer.card(&a).unwrap().rect, start);
+        round_trip(&mut host, &mut viewer);
+        assert_eq!(host.card(&a).unwrap().rect, start);
+    }
+
+    // #607: close, undo, close, undo of the same card, each answered by the
+    // host, must work every time (Ekin: the second Cmd+Z said "nothing to undo").
+    #[test]
+    fn a_card_closed_and_undone_twice_comes_back_both_times() {
+        let (mut host, mut viewer, _a, b, _e) = host_and_viewer();
+        for round in 0..3 {
+            viewer.close_card(&b, false);
+            round_trip(&mut host, &mut viewer);
+            assert!(viewer.card(&b).is_none(), "closed in round {round}");
+            viewer.undo_layout(false);
+            assert!(viewer.card(&b).is_some(), "undone in round {round}");
+            round_trip(&mut host, &mut viewer);
+            assert!(host.card(&b).is_some(), "host has it in round {round}");
+        }
+    }
+
+    // #609: a card made in a joined window must not vanish (and take the
+    // focus with it) when a host canvas older than the upload arrives, and a
+    // card closed there must not come back.
+    #[test]
+    fn a_new_card_and_its_focus_survive_a_canvas_older_than_the_upload() {
+        let (mut host, mut viewer, _a, _b, _e) = host_and_viewer();
+        let old = host.save_text().unwrap();
+        let made = add(&mut viewer, rect(2000., 2000.));
+        viewer.set_focus(Some(&made));
+        viewer.apply_snapshot(&old).unwrap();
+        assert!(viewer.card(&made).is_some(), "still there");
+        assert_eq!(viewer.selection.focused_id.as_deref(), Some(made.as_str()));
+        // The host gets it; its canvas lists it; nothing is waiting any more.
+        let up = viewer.layout_snapshot();
+        let base = viewer.layout_rev;
+        host.apply_remote_layout(&up, base, &viewer.closed_ids())
+            .unwrap();
+        let text = host.save_text().unwrap();
+        viewer.apply_snapshot(&text).unwrap();
+        assert!(viewer.card(&made).is_some());
+        assert!(viewer.unconfirmed_new.is_empty());
+    }
+
+    #[test]
+    fn a_card_the_host_never_confirms_goes_after_the_wait() {
+        let (mut host, mut viewer, _a, _b, _e) = host_and_viewer();
+        let made = add(&mut viewer, rect(2000., 2000.));
+        viewer.now_ms = crate::model::UNCONFIRMED_MS + 1.;
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        assert!(viewer.card(&made).is_none());
+    }
+
+    #[test]
+    fn a_closed_card_stays_closed_through_every_older_canvas() {
+        let (mut host, mut viewer, _a, b, _e) = host_and_viewer();
+        let old = host.save_text().unwrap();
+        viewer.close_card(&b, false);
+        let up = viewer.layout_snapshot();
+        let sent = viewer.closed_ids();
+        let base = viewer.layout_rev;
+        viewer.apply_snapshot(&old).unwrap();
+        viewer.apply_snapshot(&old).unwrap();
+        assert!(viewer.card(&b).is_none(), "not back after two old canvases");
+        host.apply_remote_layout(&up, base, &sent).unwrap();
+        viewer.apply_snapshot(&host.save_text().unwrap()).unwrap();
+        assert!(viewer.card(&b).is_none());
+        assert!(viewer.unconfirmed_closed.is_empty(), "confirmed");
+    }
+
+    // The same, with the keys faster than the host: the second close comes
+    // before the host's answer to the reopen reaches the viewer.
+    #[test]
+    fn a_close_right_after_an_undo_survives_the_hosts_late_answer() {
+        let (mut host, mut viewer, _a, b, _e) = host_and_viewer();
+        viewer.close_card(&b, false);
+        round_trip(&mut host, &mut viewer);
+        viewer.undo_layout(false);
+        // The reopen goes up; the host applies it and answers, but the
+        // answer is still on its way.
+        let up = viewer.layout_snapshot();
+        let closed = viewer.closed_ids();
+        host.apply_remote_layout(&up, viewer.layout_rev, &closed)
+            .unwrap();
+        let late = host.save_text().unwrap();
+        let rev = host.record_published(&late);
+        viewer.close_card(&b, false);
+        // The app sends the close first, then the late canvas lands.
+        let up2 = viewer.layout_snapshot();
+        let closed2 = viewer.closed_ids();
+        let base2 = viewer.layout_rev;
+        viewer.apply_snapshot(&late).unwrap();
+        viewer.layout_rev = rev;
+        // The host applies the close and answers it.
+        host.apply_remote_layout(&up2, base2, &closed2).unwrap();
+        let answer = host.save_text().unwrap();
+        let rev2 = host.record_published(&answer);
+        viewer.apply_snapshot(&answer).unwrap();
+        viewer.layout_rev = rev2;
+        assert!(viewer.card(&b).is_none(), "closed for good");
+        viewer.undo_layout(false);
+        assert!(viewer.card(&b).is_some(), "the second Cmd+Z reopens it");
+    }
+
+    #[test]
+    fn a_viewer_close_undoes_through_the_hosts_echo_and_the_reopen_reaches_the_host() {
+        let (mut host, mut viewer, a, b, _e) = host_and_viewer();
+        viewer.close_card(&b, false);
+        round_trip(&mut host, &mut viewer);
+        assert!(host.card(&b).is_none() && viewer.card(&b).is_none());
+
+        viewer.undo_layout(false);
+        assert!(viewer.card(&b).is_some(), "Cmd+Z reopens it");
+        round_trip(&mut host, &mut viewer);
+        assert!(host.card(&b).is_some(), "and the host has it again");
+        assert!(host.card(&a).is_some());
+        assert!(
+            host.closed.iter().all(|c| c.id != b),
+            "no twin left in the host's reopen ring"
+        );
+    }
+
+    #[test]
+    fn a_step_the_host_made_wrong_is_dropped_not_the_whole_trail() {
+        let (mut host, mut viewer, a, b, _e) = host_and_viewer();
+        viewer.remember_layout();
+        viewer.card_mut(&a).unwrap().rect = rect(300., 300.);
+        viewer.close_card(&b, false);
+        round_trip(&mut host, &mut viewer);
+        // The host reopens b by itself: the Closed step would make a twin.
+        let card = host.closed.pop().unwrap();
+        host.reopen_card(card);
+        let text = host.save_text().unwrap();
+        viewer.apply_snapshot(&text).unwrap();
+        assert!(viewer
+            .layout_undo
+            .iter()
+            .all(|s| !matches!(s, crate::model::UndoStep::Closed(c) if c.id == b)));
+        assert!(
+            !viewer.layout_undo.is_empty(),
+            "the move step is still there"
+        );
+    }
+
+    #[test]
+    fn twenty_three_cards_closed_at_once_all_come_back_by_card_reopen() {
+        let (mut host, mut viewer, _a, _b, _e) = host_and_viewer();
+        let ids: Vec<String> = (0..23)
+            .map(|i| add(&mut host, rect(i as f64 * 900., 2000.)))
+            .collect();
+        let text = host.save_text().unwrap();
+        viewer.layout_rev = host.record_published(&text);
+        viewer.apply_snapshot(&text).unwrap();
+        for id in &ids {
+            viewer.close_card(id, false);
+        }
+        round_trip(&mut host, &mut viewer);
+        assert!(ids.iter().all(|id| host.card(id).is_none()));
+        assert_eq!(host.closed.len(), 23, "the host's ring holds them all");
+
+        let r = registry();
+        for _ in 0..23 {
+            crate::model::register::run_with_effects(&mut viewer, &r, "card.reopen");
+        }
+        assert!(ids.iter().all(|id| viewer.card(id).is_some()));
+        assert!(viewer.closed.is_empty());
+        round_trip(&mut host, &mut viewer);
+        assert!(ids.iter().all(|id| host.card(id).is_some()));
+    }
+
     // The restart: revisions carry the host run, so an edit made on the OLD
     // run's canvas applies nothing to the new run's, even when the count has
     // reached the same number, and the viewer drops what it had not sent.
@@ -1725,7 +2035,10 @@ mod agent_states_text_tests {
         assert!(host.card(&stray).is_none(), "another path is still refused");
 
         // The host publishes; the viewer applies it. The pair is still there.
+        // The refused card waited for the host's word (#609) and the wait is
+        // over, so it goes.
         let text = host.publish_text().unwrap();
+        viewer.now_ms = crate::model::UNCONFIRMED_MS + 1.;
         viewer.apply_snapshot(&text).unwrap();
         for (id, _) in &made {
             assert!(viewer.card(id).is_some(), "the cards stay in the viewer");
