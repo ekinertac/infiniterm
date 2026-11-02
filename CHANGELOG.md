@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-03
 
+- A ui theme can set the size of the program icons: `tab.iconSize` for the workspace tab and `card.headerIconSize` for the card header, in pixels (6 to 64) and for a glyph or a logo alike. The tab icon grows and shrinks with the interface size; the header icon scales with the card. Unset keeps the built-in sizes, so a theme without them looks as before.
 - New `tab.paddingX` theme key sets the padding on each side of a workspace tab's content, 0 to 40 pixels. Unset keeps the 6 pixels the tabs always had.
 - Choosing a workspace no longer shifts the other tabs sideways: the chosen tab's bold name and the `tab.separator` line that hides next to it both changed the row's width, and now each keeps its space (#600).
 - A ui theme that holds a settings.json key (for example `ui.hideBuildNumber`) is still refused whole, but the notice now says so: `"ui.hideBuildNumber" is a settings.json key, not a theme key: move it to settings.json`. Before it said only `unknown key`, which reads like a typo.
