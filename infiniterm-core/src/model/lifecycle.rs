@@ -31,9 +31,12 @@ fn short(id: &str) -> &str {
     &id[..id.len().min(8)]
 }
 
-/// How many closed cards can be reopened. Deep enough to undo a mistake,
-/// shallow enough that it is an undo and not a graveyard.
-pub const CLOSED_RING: usize = 10;
+/// How many closed cards can be reopened. It must hold a whole workspace
+/// closed at once (select all, close): Ekin closed about 23 cards by
+/// accident and a ring of 10 lost 13 of them (#605). 500 is far above any
+/// workspace and a closed `Card` is small, so it costs nothing; the host
+/// uses the same ring, so it holds what a viewer closed.
+pub const CLOSED_RING: usize = 500;
 
 /// How long a closed terminal card's program must be QUIET before it is
 /// ended: no output, nothing under its shell on the CPU (`inspect` `busy`),

@@ -559,6 +559,7 @@ pub struct TabStyle {
     pub active_border: Option<Hsla>,
     pub separator: Option<Hsla>,
     pub radius: Option<f32>,
+    pub padding_x: Option<f32>,
 }
 
 impl Chrome {
@@ -587,6 +588,7 @@ impl Chrome {
             active_border: line(&theme.active_border),
             separator: line(&theme.separator),
             radius: theme.radius.map(|r| r as f32),
+            padding_x: theme.padding_x.map(|p| p as f32),
         }
     }
 
@@ -857,6 +859,7 @@ mod tab_color_tests {
             (None, None, None)
         );
         assert_eq!(s.radius, None);
+        assert_eq!(s.padding_x, None);
     }
 
     #[test]
@@ -896,9 +899,11 @@ mod tab_color_tests {
             active_border: Some(BorderSpec::Color(ColorSpec::Hex("#abcdef".into()))),
             separator: Some(BorderSpec::Color(ColorSpec::Card)),
             radius: Some(9.),
+            padding_x: Some(14.),
             ..TabTheme::default()
         };
         let s = chrome.tab_style(&theme, chrome.control_bg);
+        assert_eq!(s.padding_x, Some(14.));
         assert_eq!(s.idle_border, None);
         assert_eq!(s.active_border, hex("#abcdef"));
         assert_eq!(s.separator, Some(chrome.card_bg));
