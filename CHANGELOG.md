@@ -6,16 +6,14 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-11-02
+## 0.6.5 (build 1310), 2026-11-02
 
-- Joined window: a new card no longer disappears for a moment, taking the focus with it, while the host catches up; and a card you close with Cmd+W no longer comes back and needs a second Cmd+W. The window keeps your new, reopened and closed cards for up to five seconds until the host's canvas agrees.
+### Joined window
 
-- Joined window: close a card, Cmd+Z, close it again quickly, Cmd+Z: the second Cmd+Z said "nothing to undo" and the card stayed gone or came back by itself. The host now closes a card you reopened and closed again before it answered, and the close stays on the undo list.
-
-### 2026-11-01
-
-- Joined window: Cmd+Z and Cmd+Shift+Z (moves, resizes and closes) now keep working after the host answers your edit; before, the host's reply emptied the undo trail and Cmd+Z said "nothing to undo". Undoing a close reopens the card on the host too.
+- Cmd+Z and Cmd+Shift+Z (moves, resizes and closes) now keep working after the host answers your edit; before, the host's reply emptied the undo trail and Cmd+Z said "nothing to undo". Undoing a close reopens the card on the host too.
 - Closing many cards at once (select all, close) can now be undone and reopened for every card; the reopen list held only the last 10 and the undo trail only 100 steps. They now hold 500 closes and 600 steps.
+- Close a card, Cmd+Z, close it again quickly, Cmd+Z: the second Cmd+Z said "nothing to undo" and the card stayed gone or came back by itself. The host now closes a card you reopened and closed again before it answered, and the close stays on the undo list.
+- A new card no longer disappears for a moment, taking the focus with it, while the host catches up; and a card you close with Cmd+W no longer comes back and needs a second Cmd+W. The window keeps your new, reopened and closed cards for up to five seconds until the host's canvas agrees.
 
 ## 0.6.4 (build 1302), 2026-10-31
 
