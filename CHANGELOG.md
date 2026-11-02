@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-03
 
+- Choosing a workspace no longer shifts the other tabs sideways: the chosen tab's bold name and the `tab.separator` line that hides next to it both changed the row's width, and now each keeps its space (#600).
 - A ui theme that holds a settings.json key (for example `ui.hideBuildNumber`) is still refused whole, but the notice now says so: `"ui.hideBuildNumber" is a settings.json key, not a theme key: move it to settings.json`. Before it said only `unknown key`, which reads like a typo.
 
 ## 0.6.5 (build 1310), 2026-11-02

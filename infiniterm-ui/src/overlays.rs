@@ -906,7 +906,28 @@ impl AppView {
                         })
                     }
                 })
-                .child(ws.name.clone());
+                // The name's slot is always as wide as the bold name, so the
+                // chosen tab's bold weight does not shift its neighbours: a
+                // hidden bold copy sizes the slot, the visible name is
+                // centred over it.
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            div()
+                                .invisible()
+                                .font_weight(chrome.typography.bold.weight)
+                                .child(ws.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .flex()
+                                .justify_center()
+                                .child(ws.name.clone()),
+                        ),
+                );
             // One dot per card, in the colour its border wears, so the
             // dots and the cards they send you to agree; grey for a card
             // with nothing to say, so the row reads as lamps.
@@ -954,11 +975,11 @@ impl AppView {
             // A line between two idle neighbours; none touches the chosen tab.
             let after_active = index > 0
                 && active.as_deref() == self.model.workspaces.get(index - 1).map(|w| w.id.as_str());
-            if let (Some(color), true) = (
-                tab_style.separator,
-                index > 0 && !is_active && !after_active,
-            ) {
-                tabs = tabs.child(div().w(px(1.)).h(px(14. * ui)).bg(color));
+            // The slot is always there (clear next to the chosen tab) so
+            // choosing a tab does not change the row's width.
+            if let (Some(color), true) = (tab_style.separator, index > 0) {
+                let shown = !is_active && !after_active;
+                tabs = tabs.child(div().w(px(1.)).h(px(14. * ui)).when(shown, |d| d.bg(color)));
             }
             tabs = tabs.child(tab);
         }
