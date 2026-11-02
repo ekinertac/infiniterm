@@ -775,6 +775,9 @@ impl Model {
         if self.card(&card.id).is_some() {
             return;
         }
+        // A joined window waits for the host to have it again (#609).
+        self.unconfirmed_closed.retain(|(id, _)| *id != card.id);
+        self.note_unconfirmed_new(&card.id);
         let ws = self.active_workspace.clone().unwrap_or_default();
         card.workspace_id = ws.clone();
         let taken: Vec<Rect> = self
