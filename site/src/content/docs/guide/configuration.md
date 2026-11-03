@@ -97,8 +97,8 @@ A ui theme holds these keys:
 - the cards and canvas: `ui.cardRadius`, `ui.cardOpacity`, `ui.showGrid`, `ui.inactiveDim`, `ui.unfocusedDim`, `ui.hideLabelWhenFitted`, `ui.cardGradient`, `ui.cardGradientAngle`, `ui.focusRingWidth`;
 - the interface font: `ui.fontFamily`, `ui.fontSize`, `ui.fontWeight`, `ui.fontWeightBold`;
 - the bars: `titlebar.background`, `titlebar.border`, `statusbar.background` and `statusbar.border`. A background is `#rgb`, `#rrggbb`, `canvas`, `card`, `bar` or `transparent`. A border is a colour or `none`;
-- the workspace tabs: `tab.background`, `tab.activeBackground`, `tab.gradient`, `tab.opacity`, `tab.border`, `tab.activeBorder`, `tab.separator`, `tab.radius`, `tab.icons`, `tab.iconStyle`, `tab.iconMap`;
-- the card header: `card.header`, `card.headerIcons`, `card.headerButtons`, `card.headerButtonsActiveOnly`.
+- the workspace tabs: `tab.background`, `tab.activeBackground`, `tab.gradient`, `tab.opacity`, `tab.border`, `tab.activeBorder`, `tab.separator`, `tab.radius`, `tab.paddingX`, `tab.icons`, `tab.iconStyle`, `tab.iconMap`, `tab.iconSize`;
+- the card header: `card.header`, `card.headerIcons`, `card.headerIconSize`, `card.headerButtons`, `card.headerButtonsActiveOnly`.
 
 The first launch that has this feature moves any of these keys out of your `settings.json` into `ui-themes/default.json`. Your comments stay, and a note in `settings.json` says where the keys went. After that, a look key typed into `settings.json` is ignored, with a notice. In a window opened with `ift join`, the host's settings apply but the look is your own.
 
@@ -118,6 +118,8 @@ Everything in this part and the next two is off until a theme sets it. A theme w
 - `tab.border` and `tab.activeBorder` are a one pixel outline, a colour or `none`.
 - `tab.separator` is a thin line between idle tabs, a colour or `none`. No line touches the chosen tab.
 - `tab.radius` rounds the corners, 0 to 40 pixels.
+- `tab.paddingX` is the space on each side of a tab's content, 0 to 40 pixels. Unset keeps 6.
+- `tab.iconSize` is the size of the tab icon in pixels, 6 to 64. Unset keeps the built-in size, which follows the tab's text.
 
 `tab.icons: true` puts an icon on each tab for the program that runs in the workspace's focused card. When no card is focused, it uses the first card. A shell at its prompt shows the shell. `tab.iconStyle` is `"glyph"` (default) or `"image"`. A glyph is a Nerd Font glyph, and the app has glyphs for common shells, runtimes and coding agents. An image is a file in `ui-themes/<theme name>/icons/`, where the theme name is the file name without `.json`. The file is `<program>.svg` or `<program>.png`, or `default.svg` or `default.png` for the rest. A program with no file gets a glyph. `tab.iconMap` maps a program name to a glyph or to a file name ending in `.svg` or `.png`, for example `{"bun": "bun.svg", "default": ""}`. A file name must be a plain name, with no folder in it. The key `default` covers programs not listed.
 
@@ -125,7 +127,7 @@ Everything in this part and the next two is off until a theme sets it. A theme w
 
 `card.header: true` adds a header row inside terminal, transcript and page cards. It shows the card's name, and the corner chip is not drawn while the header is on. The header is 30 pixels high at 100% zoom, and the card's body gets the rest. A terminal then has fewer rows and the same number of columns. Dragging the header moves the card. Editor, diff and browser cards keep their own tab strip and get no header.
 
-- `card.headerIcons: true` shows the program's icon at the left. It uses `tab.iconStyle` and `tab.iconMap`, so a card and its tab agree.
+- `card.headerIcons: true` shows the program's icon at the left. It uses `tab.iconStyle` and `tab.iconMap`, so a card and its tab agree. `card.headerIconSize` sets its size in pixels, 6 to 64; unset keeps the built-in size.
 - `card.headerButtons` lists the buttons, left to right, from `"split-right"`, `"split-down"`, `"maximise"` and `"close"`. Each runs the command of that name. No button shows unless listed.
 - `card.headerButtonsActiveOnly: true` shows the buttons only on the focused card. The other headers show the icon and the name, and nothing can be clicked where the buttons would be.
 
