@@ -553,6 +553,94 @@ mod tests {
         assert_eq!(m.card(&id).unwrap().path.as_deref(), Some("/h/b.rs"));
     }
 
+    // #572: Cmd+W on an editor opened on a folder closes one tab; the last
+    // tab, and a card with no folder, close the card as before.
+    #[test]
+    fn card_close_on_a_folder_editor_closes_the_active_tab_first() {
+        let mut m = Model::new();
+        m.home = "/h".into();
+        m.start_dir = "/h".into();
+        m.active_workspace = Some(String::new());
+        let id = m.add_card(
+            "/h/proj",
+            NewCard {
+                kind: CardKind::Editor,
+                root: Some("/h/proj".into()),
+                ..Default::default()
+            },
+        );
+        m.set_focus(Some(&id));
+        m.browser_tab_open(&id, Some("/h/proj/a.rs"));
+        m.browser_tab_open(&id, Some("/h/proj/b.rs"));
+        m.close_selected();
+        assert_eq!(m.card(&id).unwrap().tabs, vec!["", "/h/proj/a.rs"]);
+        m.close_selected();
+        assert_eq!(m.card(&id).unwrap().tabs, vec![""]);
+        m.close_selected();
+        assert!(m.card(&id).is_none(), "the last tab closes the card");
+    }
+
+    // The same sheet as a card's, for the active tab: Cancel keeps it, Don't
+    // Save closes it, Save closes it once the editor reports the file clean,
+    // and a save that never lands closes nothing.
+    #[test]
+    fn a_dirty_folder_tab_asks_before_cmd_w_closes_it() {
+        use crate::prompt::ButtonKind;
+        let setup = || {
+            let mut m = Model::new();
+            m.home = "/h".into();
+            m.start_dir = "/h".into();
+            m.active_workspace = Some(String::new());
+            let id = m.add_card(
+                "/h/proj",
+                NewCard {
+                    kind: CardKind::Editor,
+                    root: Some("/h/proj".into()),
+                    ..Default::default()
+                },
+            );
+            m.set_focus(Some(&id));
+            m.browser_tab_open(&id, Some("/h/proj/a.rs"));
+            m.card_mut(&id).unwrap().dirty = true; // the editor's mirror of the active tab
+            m.close_selected();
+            (m, id)
+        };
+        let press = |m: &mut Model, k: ButtonKind| {
+            let (pending, text) = m.prompt.press(k).unwrap();
+            m.answer(pending, text, |_| true);
+        };
+
+        let (mut m, id) = setup();
+        assert!(m.prompt.open && m.prompt.label == "save changes to a.rs?");
+        assert_eq!(m.card(&id).unwrap().tabs.len(), 2, "asked, not closed");
+        press(&mut m, ButtonKind::Cancel);
+        assert_eq!(m.card(&id).unwrap().tabs.len(), 2, "Cancel keeps it");
+
+        let (mut m, id) = setup();
+        press(&mut m, ButtonKind::Alt);
+        assert_eq!(m.card(&id).unwrap().tabs, vec![""], "Don't Save closes it");
+
+        let (mut m, id) = setup();
+        press(&mut m, ButtonKind::Primary);
+        assert_eq!(
+            m.card(&id).unwrap().tabs.len(),
+            2,
+            "not before the save lands"
+        );
+        m.card_mut(&id).unwrap().dirty = false;
+        m.tick(m.now_ms + 16.);
+        assert_eq!(m.card(&id).unwrap().tabs, vec![""], "saved, then closed");
+
+        let (mut m, id) = setup();
+        press(&mut m, ButtonKind::Primary);
+        m.tick(m.now_ms + 3000.);
+        assert_eq!(
+            m.card(&id).unwrap().tabs.len(),
+            2,
+            "a save that never landed closes nothing"
+        );
+    }
+
     #[test]
     fn a_non_browser_card_notifies_and_changes_nothing() {
         let mut m = Model::new();

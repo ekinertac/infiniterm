@@ -313,7 +313,12 @@ impl EditorTabs {
             .iter()
             .map(|(h, b)| {
                 let name = if h.is_empty() {
-                    "untitled".to_string()
+                    // A card opened on a folder starts on a blank tab with the
+                    // tree beside it (#571): the folder is its name, not "untitled".
+                    match b.tree_root() {
+                        Some(root) => format!("{}/", infiniterm_core::paths::base_name(root)),
+                        None => "untitled".to_string(),
+                    }
                 } else {
                     infiniterm_core::paths::base_name(h).to_string()
                 };
