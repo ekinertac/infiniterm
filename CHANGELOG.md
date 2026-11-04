@@ -8,7 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-04
 
-- With `tab.icons` or `card.headerIcons` on, a card shows an agent icon (a robot) while its coding agent is working or waiting on you, instead of the icon of the program (Claude Code used to show as Node). A theme can set it per agent in `tab.iconMap` (`claude`, `codex`, ...) or for all agents with `agent`. Done and failed cards show their program again.
+- With `tab.icons` or `card.headerIcons` on, a card shows an agent icon (a robot) while its coding agent is working or waiting on you, instead of the icon of the program (Claude Code used to show as Node). A theme can set it per agent in `tab.iconMap` (`claude`, `codex`, ...) or for all agents with `agent`. Done and failed cards show their program again, and a card running `claude`, `codex`, `opencode` or `cursor-agent` shows the same robot (it was a wand).
 
 ## 0.6.6 (build 1324), 2026-11-03
 

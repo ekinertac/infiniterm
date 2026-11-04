@@ -113,10 +113,10 @@ const BUILT_IN: &[(&str, &str)] = &[
     ("docker", "\u{e7b0}"),
     ("ssh", "\u{f023}"),
     (AGENT_KEY, "\u{f06a9}"),
-    ("claude", "\u{f0d0}"),
-    ("codex", "\u{f0d0}"),
-    ("opencode", "\u{f0d0}"),
-    ("cursor-agent", "\u{f0d0}"),
+    ("claude", "\u{f06a9}"),
+    ("codex", "\u{f06a9}"),
+    ("opencode", "\u{f06a9}"),
+    ("cursor-agent", "\u{f06a9}"),
     (FALLBACK_KEY, "\u{f120}"),
 ];
 
@@ -595,6 +595,18 @@ mod tests {
             choose_subject(Subject::Program("ruby"), IconStyle::Glyph, &empty, &none),
             glyph("\u{e739}")
         );
+    }
+
+    #[test]
+    fn a_card_running_an_agent_program_wears_the_agent_glyph_too() {
+        let empty = BTreeMap::new();
+        for program in ["claude", "codex", "opencode", "cursor-agent"] {
+            assert_eq!(
+                choose_subject(Subject::Program(program), IconStyle::Glyph, &empty, &none),
+                choose_subject(Subject::Agent(program), IconStyle::Glyph, &empty, &none),
+                "{program}"
+            );
+        }
     }
 
     #[test]
