@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "ift probe3",
+  "version": "1.0",
+  "permissions": ["tabs","activeTab","scripting","storage","contextMenus","notifications","downloads","bookmarks","history","sessions","topSites","identity","declarativeNetRequest","cookies","webRequest","browsingData","management","idle","offscreen","favicon","readingList","tabGroups","sidePanel","alarms","windows"],
+  "host_permissions": ["<all_urls>"],
+  "action": { "default_popup": "popup.html", "default_title": "ift probe3" },
+  "background": { "service_worker": "bg.js" },
+  "commands": { "ping": { "suggested_key": { "default": "Alt+Shift+P" }, "description": "ping" } }
+}
