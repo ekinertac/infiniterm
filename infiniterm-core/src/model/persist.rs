@@ -419,6 +419,50 @@ impl Model {
         serde_json::to_string(&map).unwrap_or_else(|_| "{}".into())
     }
 
+    /// Compares the card states with the last look and queues one
+    /// `Effect::PushNotify` for the cards that changed to waiting, failed or
+    /// done (#616). Every source of a state change (hooks, program marks, the
+    /// stale sweep) ends in `card.agent`, so this sees them all. The last
+    /// look is kept even when nothing is sent, so a switch turned on later or
+    /// the window coming to the back does not replay old states. A joined
+    /// viewer must not call it: its states are the host's.
+    pub fn push_tick(&mut self) {
+        let current: std::collections::BTreeMap<String, crate::agent_state::AgentState> = self
+            .cards
+            .iter()
+            .filter(|c| c.agent != crate::agent_state::AgentState::None)
+            .map(|c| (c.id.clone(), c.agent))
+            .collect();
+        let changed = crate::push_notify::changes(self.push_prev.as_ref(), &current);
+        self.push_prev = Some(current);
+        let n = &self.config.notify;
+        if !crate::push_notify::should_send(n.skip_when_focused, self.app_active) {
+            return;
+        }
+        let pushes: Vec<_> = changed
+            .into_iter()
+            .filter(|c| match c.state {
+                crate::agent_state::AgentState::Waiting => n.waiting,
+                crate::agent_state::AgentState::Failed => n.failed,
+                _ => n.done,
+            })
+            .filter_map(|c| {
+                let card = self.cards.iter().find(|k| k.id == c.card_id)?;
+                Some(crate::push_notify::message(
+                    card.number,
+                    &card.title,
+                    c.state,
+                ))
+            })
+            .collect();
+        if !pushes.is_empty() {
+            self.effects.push(super::Effect::PushNotify {
+                server: n.ntfy_server.clone(),
+                pushes,
+            });
+        }
+    }
+
     /// The file's text, or nothing while saving is not allowed.
     pub fn save_text(&mut self) -> Option<String> {
         if !self.loaded || self.read_only {
@@ -1445,6 +1489,96 @@ mod agent_states_text_tests {
     use super::*;
     use crate::agent_state::AgentState;
     use crate::grid::Size;
+
+    fn one_card() -> (Model, String) {
+        let mut m = Model::new();
+        m.view_size = Size { w: 1600., h: 1000. };
+        m.load_layout(None);
+        let ws = m.active_workspace.clone();
+        let id = m.add_card(
+            "/",
+            NewCard {
+                workspace_id: ws,
+                ..Default::default()
+            },
+        );
+        m.effects.clear();
+        (m, id)
+    }
+
+    fn pushes(m: &mut Model) -> Vec<crate::push_notify::Push> {
+        std::mem::take(&mut m.effects)
+            .into_iter()
+            .flat_map(|e| match e {
+                crate::model::Effect::PushNotify { pushes, .. } => pushes,
+                _ => vec![],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn push_tick_sends_nothing_for_what_was_there_at_the_first_look() {
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.card_mut(&id).unwrap().agent = AgentState::Waiting;
+        m.push_tick();
+        assert!(pushes(&mut m).is_empty());
+        m.push_tick();
+        assert!(
+            pushes(&mut m).is_empty(),
+            "same state twice is not a change"
+        );
+    }
+
+    #[test]
+    fn push_tick_sends_one_push_when_a_card_changes_to_waiting() {
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.push_tick();
+        let number = m.card_mut(&id).unwrap().number;
+        m.card_mut(&id).unwrap().agent = AgentState::Waiting;
+        m.push_tick();
+        let got = pushes(&mut m);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].message, "Waiting on you");
+        assert!(got[0].title.contains(&number.to_string()));
+        m.push_tick();
+        assert!(pushes(&mut m).is_empty());
+    }
+
+    #[test]
+    fn push_tick_stays_quiet_while_the_window_is_focused_and_does_not_replay() {
+        let (mut m, id) = one_card();
+        m.app_active = true;
+        m.push_tick();
+        m.card_mut(&id).unwrap().agent = AgentState::Failed;
+        m.push_tick();
+        assert!(pushes(&mut m).is_empty());
+        m.app_active = false;
+        m.push_tick();
+        assert!(pushes(&mut m).is_empty(), "the failure was already seen");
+        m.config.notify.skip_when_focused = false;
+        m.app_active = true;
+        m.card_mut(&id).unwrap().agent = AgentState::Done;
+        m.push_tick();
+        assert_eq!(pushes(&mut m).len(), 1);
+    }
+
+    #[test]
+    fn push_tick_follows_the_three_state_switches() {
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.config.notify.done = false;
+        m.push_tick();
+        m.card_mut(&id).unwrap().agent = AgentState::Done;
+        m.push_tick();
+        assert!(pushes(&mut m).is_empty());
+        m.card_mut(&id).unwrap().agent = AgentState::Working;
+        m.push_tick();
+        m.card_mut(&id).unwrap().agent = AgentState::Failed;
+        m.push_tick();
+        assert_eq!(pushes(&mut m).len(), 1);
+    }
 
     #[test]
     fn only_cards_with_a_state_are_listed_by_name() {

@@ -614,6 +614,7 @@ impl AppView {
                 Effect::Log(line) => eprintln!("[infiniterm] {line}"),
                 Effect::Warn(line) => eprintln!("[infiniterm/warn] {line}"),
                 Effect::AgentLog(line) => append_agent_log(&line),
+                Effect::PushNotify { server, pushes } => send_pushes(server, pushes),
                 Effect::Reload => {
                     self.flush_save();
                     leave_now();
@@ -1796,6 +1797,68 @@ fn append_agent_log(line: &str) {
 
 /// Enough for days of turns, small enough to open in an editor.
 const AGENT_LOG_MAX_BYTES: u64 = 512 * 1024;
+
+/// How long one ntfy request may take before it is given up (#616).
+const PUSH_TIMEOUT_SECS: &str = "5";
+
+/// Posts the pushes to ntfy from a background thread, with `curl` like the
+/// omnibox suggestions and the updater (no HTTP crate). The topic file is
+/// read now, so changing it needs no restart; with no topic nothing leaves
+/// the machine. A failure is one line in `agent.log`, never a notice.
+fn send_pushes(server: String, pushes: Vec<infiniterm_core::push_notify::Push>) {
+    use infiniterm_core::push_notify as pn;
+    let path = infiniterm_core::paths::config_dir().join(pn::TOPIC_FILE);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let topic = match pn::parse_topic_file(&text) {
+        Ok(Some(topic)) => topic,
+        Ok(None) => return,
+        Err(why) => {
+            append_agent_log(&format!("[push] {why}"));
+            return;
+        }
+    };
+    if !(server.starts_with("https://") || server.starts_with("http://")) {
+        append_agent_log(&format!("[push] notify.ntfy.server is not a URL: {server}"));
+        return;
+    }
+    std::thread::spawn(move || {
+        for push in &pushes {
+            if let Err(why) = post_json(&server, &pn::json_body(&topic, push)) {
+                append_agent_log(&format!("[push] {}: {why}", push.title));
+            }
+        }
+    });
+}
+
+fn post_json(url: &str, body: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("curl")
+        .args(["-fsS", "--max-time", PUSH_TIMEOUT_SECS])
+        .args([
+            "-H",
+            "Content-Type: application/json",
+            "--data-binary",
+            "@-",
+        ])
+        .args(["--url", url])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("curl: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(body.as_bytes());
+    }
+    let out = child.wait_with_output().map_err(|e| format!("curl: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    Err(err.lines().last().unwrap_or("failed").trim().to_string())
+}
 
 /// The `.app` an executable lives in: `.../x.app/Contents/MacOS/x` is three
 /// ancestors up. `None` for a bare binary, which is what `cargo run` and

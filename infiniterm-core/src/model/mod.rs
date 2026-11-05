@@ -399,6 +399,12 @@ pub enum Effect {
     /// colourless left no trace anywhere, which is exactly the event
     /// somebody needs to see.
     AgentLog(String),
+    /// Phone pushes for cards that now need you (#616). The ui reads the
+    /// topic file, and with no topic makes no request at all.
+    PushNotify {
+        server: String,
+        pushes: Vec<crate::push_notify::Push>,
+    },
     Reload,
     /// Quit and come back: the ui saves, arranges for something outside the
     /// process to reopen the bundle once it is gone, and exits. The window
@@ -665,6 +671,9 @@ pub struct Model {
     /// The focused done card and since when it has been watched, with the
     /// app in front (`clear_seen_done`). Session-only.
     pub done_watch: Option<(String, f64)>,
+    /// The card states `push_tick` saw last; `None` until its first look,
+    /// so what was already there at startup is not a change (#616).
+    pub push_prev: Option<std::collections::BTreeMap<String, AgentState>>,
     /// Every card focused this session, oldest first, each once. Closing
     /// the focused card goes back along it; not saved, a restart has no
     /// "before".
@@ -972,6 +981,7 @@ impl Model {
             last_focused: HashMap::new(),
             app_active: true,
             done_watch: None,
+            push_prev: None,
             focus_trail: Vec::new(),
             covers: HashMap::new(),
             cover_at: HashMap::new(),

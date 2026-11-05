@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-05
+
+- A card that starts waiting on you, fails or finishes can now push a message to your phone through ntfy, so you find out while you are away from the Mac. It is off until you put your topic in a one-line `ntfy-topic` file in the config folder. `notify.waiting`, `notify.failed`, `notify.done`, `notify.skipWhenFocused` and `notify.ntfy.server` tune it (#616).
+
 ### 2026-11-04
 
 - An editor card opened on a folder is named after the folder (`proj/`) in its title, and keeps that name as files open in its tabs.

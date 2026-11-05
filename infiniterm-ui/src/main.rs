@@ -844,6 +844,10 @@ fn main() {
                             cx.notify();
                         }
                         this.publish_agents();
+                        // A viewer's states are the host's: it never pushes.
+                        if !this.viewer {
+                            this.model.push_tick();
+                        }
                         // What viewers changed on this canvas (#423).
                         // Files a joined window sent to the host (#556).
                         this.drain_host_drops();

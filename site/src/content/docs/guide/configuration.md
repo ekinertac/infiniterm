@@ -157,12 +157,24 @@ The workspace tabs, card labels, status bar, palette and dialogs use the macOS s
 
 Snippets are plain files in `~/.config/infiniterm/snippets/`, one per snippet. The file name without its extension is the snippet's name; the contents are pasted as written, less one trailing line break. The picker's last row opens the folder.
 
+## Phone notifications
+
+infiniterm can push a message to your phone when a card starts waiting on you, fails or finishes, so you find out while you are away from the Mac. It uses [ntfy](https://ntfy.sh): install the free ntfy app on the phone and subscribe to a topic.
+
+Push is off until the file `ntfy-topic` exists in `~/.config/infiniterm/` with one line: your topic, made of letters, digits, `_` and `-`, at most 64 characters. Use 20 or more random ones. The topic is the only secret (anyone who knows it can read and post to it), so it is a file and not a setting, because `settings.json` is often synced or committed. Do not commit `ntfy-topic`. infiniterm never creates or writes it, and reads it each time a push is sent, so changing it needs no restart.
+
+- `notify.waiting`, `notify.failed` and `notify.done` (all on) choose which states push.
+- `notify.skipWhenFocused` (on) sends nothing while the infiniterm window is in front, because you can see the card colours. Another app in front still pushes.
+- `notify.ntfy.server` (`https://ntfy.sh`) names the server, so a self-hosted ntfy works.
+
+The title is the card's number and name, the body says what happened. A state that was already there when the app started, and a repeated report of the same state, send nothing. A failed send is one line in `agent.log`.
+
 ## What the app touches
 
 - Your shells, one per card, started as your login shell with `INFINITERM_CARD_ID` in the environment. Nothing is typed into them that you did not type.
 - `~/.config/infiniterm/` for settings, keybindings and snippets, and `~/Library/Application Support/dev.ekinertac.infiniterm/` for the canvas, drafts, themes, the window frame, `agent.log`, the browser profile and address-bar history. Deleting `workspace.json` there resets the canvas and leaves your settings alone. Any of these files can be a symlink: every file infiniterm writes is written where the link points, and the link stays.
 - macOS privacy prompts, only when a program in a card asks for something macOS guards (Photos, the camera, your Documents folder and others). Nothing is asked at install or launch. See [privacy prompts](../terminal/#privacy-prompts).
 - `ps`, `lsof` and `git` as subprocesses, to label cards and for the diff and blame cards.
-- The network only from browser cards, the update check, address-bar suggestions from Google, which are off unless you turn on `browser.suggestions`, one request to api.lemonsqueezy.com when you run `ift licence <email> <key>`, ssh to the hosts you name in `ift connect`, and a download from GitHub for `ift connect --install`.
+- The network only from browser cards, the update check, phone notifications to the ntfy server you chose (and only once you create `ntfy-topic`), address-bar suggestions from Google, which are off unless you turn on `browser.suggestions`, one request to api.lemonsqueezy.com when you run `ift licence <email> <key>`, ssh to the hosts you name in `ift connect`, and a download from GitHub for `ift connect --install`.
 
 No account, no telemetry.
