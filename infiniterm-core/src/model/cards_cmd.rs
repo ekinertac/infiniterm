@@ -270,6 +270,37 @@ impl Model {
         // keeps its own two-press dirty flow below.
         if let [id] = ids.as_slice() {
             let is_pair = self.config_pairs.iter().any(|p| p.ids.contains(id));
+            // A card opened on a folder is a workspace of files (#572): Cmd+W
+            // closes the active tab, and the last one goes the card's way.
+            let folder_tabs = self.card(id).is_some_and(|c| {
+                c.kind == CardKind::Editor && c.root.is_some() && c.tabs.len() > 1
+            });
+            if folder_tabs {
+                // `dirty` mirrors the ACTIVE tab, the one Cmd+W closes: the
+                // same save sheet as a card, for this tab alone.
+                let dirty_tab = self.card(id).filter(|c| c.dirty).map(|c| {
+                    let name = c
+                        .path
+                        .as_deref()
+                        .map_or("untitled", crate::paths::base_name);
+                    (format!("save changes to {name}?"), c.active_tab)
+                });
+                match dirty_tab {
+                    Some((label, index)) => {
+                        self.prompt.confirm3(
+                            &label,
+                            "Save",
+                            "Don't Save",
+                            Pending::UnsavedTabClose {
+                                id: id.clone(),
+                                index,
+                            },
+                        );
+                    }
+                    None => self.browser_tab_close(id),
+                }
+                return;
+            }
             if !is_pair {
                 if let Some(count) = self
                     .card(id)
@@ -370,6 +401,45 @@ impl Model {
             });
         }
         self.close_after_save = Some((ids, reclaim, self.now_ms + SAVE_CLOSE_MS));
+    }
+
+    /// Save the active tab of a folder editor, then close it. The save runs
+    /// in the editor a frame away, so `close_tab_when_saved` finishes the
+    /// close once the dirty flag clears. An untitled tab is only named here:
+    /// the save sheet does not carry a tab close, so Cmd+W again after it.
+    fn save_then_close_tab(&mut self, id: &str, index: usize) {
+        let Some(card) = self.card(id) else { return };
+        if card.path.is_none() {
+            self.open_save_as(id.to_string(), None);
+            return;
+        }
+        self.effects.push(Effect::Editor {
+            card_id: id.to_string(),
+            action: EditorAction::Save,
+        });
+        self.close_tab_after_save = Some((id.to_string(), index, self.now_ms + SAVE_CLOSE_MS));
+    }
+
+    /// The tab close `save_then_close_tab` is waiting on, run from `tick`.
+    /// Gives up with a notice on a save that did not happen, and quietly if
+    /// the card is gone or another tab was switched to meanwhile.
+    pub(super) fn close_tab_when_saved(&mut self) {
+        let Some((id, index, until)) = self.close_tab_after_save.clone() else {
+            return;
+        };
+        let Some(card) = self.card(&id) else {
+            self.close_tab_after_save = None;
+            return;
+        };
+        if card.active_tab != index {
+            self.close_tab_after_save = None;
+        } else if !card.dirty {
+            self.close_tab_after_save = None;
+            self.browser_tab_close_at(&id, index);
+        } else if self.now_ms >= until {
+            self.close_tab_after_save = None;
+            self.notify("not saved, so not closed");
+        }
     }
 
     /// The "save as" field for an untitled buffer, starting on its
@@ -500,6 +570,11 @@ impl Model {
                     self.close_card_with(&id, false, reclaim);
                 }
             }
+            Pending::UnsavedTabClose { id, index } => match text.as_deref() {
+                None => {}
+                Some(crate::prompt::ALT) => self.browser_tab_close_at(&id, index),
+                Some(_) => self.save_then_close_tab(&id, index),
+            },
             Pending::UnsavedClose { ids, reclaim } => match text.as_deref() {
                 None => {}
                 Some(crate::prompt::ALT) => self.close_selected_confirmed(ids, reclaim, true),

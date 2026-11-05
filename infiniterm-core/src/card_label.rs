@@ -123,6 +123,11 @@ pub fn card_label(card: &Labelled, home: &str) -> String {
             return name.strip_suffix(".md").unwrap_or(name).to_string();
         }
     }
+    // An editor opened on a folder keeps the folder's name as files open in
+    // its tabs (#571): the tab strip says which file, the card says where.
+    if let (Some(CardKind::Editor), Some(root)) = (card.kind, card.root) {
+        return format!("{}/", last_segment(root));
+    }
     if let Some(path) = card.path {
         return last_segment(path).to_string();
     }
@@ -389,6 +394,18 @@ mod tests {
     fn an_editor_on_a_directory_is_labelled_by_the_directory() {
         let ed = Labelled {
             cwd: "/x/proj",
+            root: Some("/x/proj"),
+            kind: Some(CardKind::Editor),
+            ..Default::default()
+        };
+        assert_eq!(card_label(&ed, ""), "proj/");
+    }
+
+    #[test]
+    fn an_editor_on_a_directory_keeps_the_directory_name_once_a_file_is_open() {
+        let ed = Labelled {
+            cwd: "/x/proj/src",
+            path: Some("/x/proj/src/main.rs"),
             root: Some("/x/proj"),
             kind: Some(CardKind::Editor),
             ..Default::default()

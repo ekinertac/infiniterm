@@ -41,6 +41,8 @@ pub struct EditorTabs {
     /// Mirrors `card.protected`: `card.protect`'s own lock, a different
     /// one from `locked` above (the keyboard's), shown beside `#N`.
     pub protected: bool,
+    /// `editor.folderScratchTab`, mirrored by `editors.rs` each frame.
+    pub scratch_tab: bool,
     pub style: StripStyle,
     /// Whether the strip is drawn. A diff card is one body in this wrapper
     /// with no tabs and no strip (`new_diff`): it takes the editor's lock and
@@ -68,7 +70,7 @@ impl EditorTabs {
         if !self.strip {
             return None;
         }
-        match strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
+        match self.hit(local) {
             Some(crate::body::TabClick::Switch(i) | crate::body::TabClick::Close(i)) => Some(i),
             _ => None,
         }
@@ -110,6 +112,7 @@ impl EditorTabs {
             ui_scale: 1.,
             card_number: 0,
             protected: false,
+            scratch_tab: true,
             style,
             strip: true,
             world,
@@ -307,8 +310,53 @@ impl EditorTabs {
         out
     }
 
+    /// The folder header over the tree: the folder's name and the tree's
+    /// width in world px. Only with the tree on the left (a tree above the
+    /// text has no column to sit over) and a strip to draw it in.
+    fn header(&self) -> Option<(String, f64)> {
+        if !self.strip {
+            return None;
+        }
+        let b = self.active_body_ref()?;
+        let root = b.tree_root()?;
+        (!b.sidebar_top && b.sidebar_w > 0.).then(|| {
+            (
+                format!("{}/", infiniterm_core::paths::base_name(root)),
+                b.sidebar_w,
+            )
+        })
+    }
+
+    fn header_w(&self) -> f64 {
+        self.header().map_or(0., |(_, w)| w)
+    }
+
+    /// The strip's hit test, past the folder header.
+    fn hit(&self, local: Point) -> Option<crate::body::TabClick> {
+        strip_hit(
+            local,
+            self.style.font_px,
+            self.ui_scale,
+            self.labels().len(),
+            self.header_w(),
+        )
+    }
+
+    /// `editor.folderScratchTab` off: a folder editor's blank first buffer
+    /// is neither a tab nor a place to type (`tabs_cmd.rs`).
+    fn scratch_hidden(&self) -> bool {
+        !self.scratch_tab
+            && self.tabs.len() == 1
+            && self.tabs[0].0.is_empty()
+            && self.header().is_some()
+    }
+
     /// A tab's label: the file's name, `untitled`, with a mark when dirty.
+    /// None while the scratch buffer is hidden.
     fn labels(&self) -> Vec<String> {
+        if self.scratch_hidden() {
+            return vec![];
+        }
         self.tabs
             .iter()
             .map(|(h, b)| {
@@ -351,6 +399,7 @@ impl CardBody for EditorTabs {
         };
         let strip_h = if self.strip {
             let labels = self.labels();
+            let header = self.header();
             paint_strip(
                 bounds,
                 scale,
@@ -359,6 +408,7 @@ impl CardBody for EditorTabs {
                 self.active,
                 self.card_number,
                 self.protected,
+                header.as_ref().map(|(n, w)| (n.as_str(), *w)),
                 &self.style,
                 window,
                 cx,
@@ -414,7 +464,7 @@ impl CardBody for EditorTabs {
         // Swallowed rather than ignored, so macOS neither repeats a Cmd key
         // nor hands a letter to the input context behind our back.
         if !self.locked {
-            if enters(k) {
+            if enters(k) && !self.scratch_hidden() {
                 self.locked = true;
                 self.dirty = true;
             }
@@ -459,11 +509,7 @@ impl CardBody for EditorTabs {
         modifiers: &gpui::Modifiers,
         clicks: usize,
     ) -> BodyAction {
-        if let Some(hit) = self
-            .strip
-            .then(|| strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()))
-            .flatten()
-        {
+        if let Some(hit) = self.strip.then(|| self.hit(local)).flatten() {
             if button == gpui::MouseButton::Left {
                 return BodyAction::BrowserTab(hit);
             }
@@ -476,7 +522,7 @@ impl CardBody for EditorTabs {
         let below = self.below_strip(local);
         // A click into the text locks; the tree and the find bar do not.
         let on_tree = self.active_body_ref().is_some_and(|b| b.is_on_tree(below));
-        if !on_tree && button == gpui::MouseButton::Left {
+        if !on_tree && button == gpui::MouseButton::Left && !self.scratch_hidden() {
             self.locked = true;
             self.dirty = true;
         }

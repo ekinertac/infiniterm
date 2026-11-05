@@ -70,11 +70,24 @@ fn number_label(card_number: u32, protected: bool) -> String {
 
 /// Which of the strip's affordances a click at `local` (world units) lands
 /// on, or `None` below the strip.
-pub fn strip_hit(local: Point, font_px: f64, ui_scale: f32, tab_count: usize) -> Option<TabClick> {
+///
+/// `left` is the width of the folder header ahead of the tabs (world units,
+/// 0 without one): a click on the header is no tab's.
+pub fn strip_hit(
+    local: Point,
+    font_px: f64,
+    ui_scale: f32,
+    tab_count: usize,
+    left: f64,
+) -> Option<TabClick> {
     let strip_h = strip_world_h(font_px, ui_scale);
-    if local.y < 0. || local.y >= strip_h {
+    if local.y < 0. || local.y >= strip_h || local.x < left {
         return None;
     }
+    let local = Point {
+        x: local.x - left,
+        y: local.y,
+    };
     let unit = font_px * ui_scale as f64;
     let tab_w = TAB_STRIP_TAB_WIDTH_RATIO * unit;
     let index = (local.x / tab_w).floor().max(0.) as usize;
@@ -93,6 +106,8 @@ pub fn strip_hit(local: Point, font_px: f64, ui_scale: f32, tab_count: usize) ->
 
 /// Draws the strip across the top of `bounds` (screen pixels, at `scale`)
 /// and returns its height, so the caller paints its content below.
+/// `header` is a folder editor's name and the width of its tree (world
+/// units): a box over the tree's column, with the tabs starting after it.
 #[allow(clippy::too_many_arguments)]
 pub fn paint_strip(
     bounds: Bounds<Pixels>,
@@ -102,6 +117,7 @@ pub fn paint_strip(
     active: usize,
     card_number: u32,
     protected: bool,
+    header: Option<(&str, f64)>,
     style: &StripStyle,
     window: &mut Window,
     cx: &mut App,
@@ -125,9 +141,29 @@ pub fn paint_strip(
     let close_left = px((close_band_left_ratio() * unit) as f32);
     if strip_font >= crate::chrome::legible_font_px(window.scale_factor()) {
         let pad = px((TAB_STRIP_LABEL_PAD_RATIO * unit) as f32);
+        let left = px(header.map_or(0., |(_, w)| w * scale) as f32);
+        if let Some((name, _)) = header {
+            let head = Bounds::new(strip.origin, size(left, strip_h));
+            let room = f32::from(left) - f32::from(pad) * 2.;
+            let shown = crate::text::elide(name, room, |t| {
+                f32::from(
+                    crate::text::shape(window, t, strip_font, &style.bold, style.text_bright).width,
+                )
+            });
+            let line =
+                crate::text::shape(window, &shown, strip_font, &style.bold, style.text_bright);
+            crate::text::paint_in(window, cx, &line, head, pad);
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(head.origin.x + left - border, head.origin.y),
+                    size(border, strip_h),
+                ),
+                style.border,
+            ));
+        }
         for (i, label) in labels.iter().enumerate() {
             let tab_bounds = Bounds::new(
-                point(strip.origin.x + tab_w * (i as f32), strip.origin.y),
+                point(strip.origin.x + left + tab_w * (i as f32), strip.origin.y),
                 size(tab_w, strip_h),
             );
             let (color, font) = if i == active {
@@ -161,7 +197,8 @@ pub fn paint_strip(
         let plus_w = px((TAB_STRIP_PLUS_WIDTH_RATIO * unit) as f32);
         let plus_bounds = Bounds::new(
             point(
-                strip.origin.x + tab_w * (labels.len() as f32) + plus_w / 2. - plus.width / 2.,
+                strip.origin.x + left + tab_w * (labels.len() as f32) + plus_w / 2.
+                    - plus.width / 2.,
                 strip.origin.y,
             ),
             size(plus.width, strip_h),
@@ -208,29 +245,65 @@ mod tests {
     fn a_click_lands_on_a_tab_its_close_or_the_plus() {
         let at = |x: f64, y: f64| Point { x, y };
         assert_eq!(
-            strip_hit(at(10., 10.), 10., 1., 2),
+            strip_hit(at(10., 10.), 10., 1., 2, 0.),
             Some(TabClick::Switch(0))
         );
         assert_eq!(
-            strip_hit(at(80., 10.), 10., 1., 2),
+            strip_hit(at(80., 10.), 10., 1., 2, 0.),
             Some(TabClick::Close(0))
         );
         assert_eq!(
-            strip_hit(at(100., 10.), 10., 1., 2),
+            strip_hit(at(100., 10.), 10., 1., 2, 0.),
             Some(TabClick::Switch(1))
         );
-        assert_eq!(strip_hit(at(190., 10.), 10., 1., 2), Some(TabClick::New));
         assert_eq!(
-            strip_hit(at(210., 10.), 10., 1., 2),
+            strip_hit(at(190., 10.), 10., 1., 2, 0.),
+            Some(TabClick::New)
+        );
+        assert_eq!(
+            strip_hit(at(210., 10.), 10., 1., 2, 0.),
             None,
             "past the plus's own slot, 25 wide after the last tab (#375)"
         );
-        assert_eq!(strip_hit(at(400., 10.), 10., 1., 2), None, "past the plus");
-        assert_eq!(strip_hit(at(10., 25.), 10., 1., 2), None, "below the strip");
+        assert_eq!(
+            strip_hit(at(400., 10.), 10., 1., 2, 0.),
+            None,
+            "past the plus"
+        );
+        assert_eq!(
+            strip_hit(at(10., 25.), 10., 1., 2, 0.),
+            None,
+            "below the strip"
+        );
         // Twice the interface scale: everything twice as big.
         assert_eq!(
-            strip_hit(at(100., 25.), 10., 2., 2),
+            strip_hit(at(100., 25.), 10., 2., 2, 0.),
             Some(TabClick::Switch(0))
+        );
+    }
+
+    // A folder editor's header takes the tree's width ahead of the tabs:
+    // a click on it is nobody's, and the tabs count from its right edge.
+    #[test]
+    fn the_folder_header_shifts_the_tabs_and_is_no_tab() {
+        let at = |x: f64, y: f64| Point { x, y };
+        assert_eq!(strip_hit(at(100., 10.), 10., 1., 2, 200.), None);
+        assert_eq!(
+            strip_hit(at(210., 10.), 10., 1., 2, 200.),
+            Some(TabClick::Switch(0))
+        );
+        assert_eq!(
+            strip_hit(at(280., 10.), 10., 1., 2, 200.),
+            Some(TabClick::Close(0))
+        );
+        assert_eq!(
+            strip_hit(at(390., 10.), 10., 1., 0, 200.),
+            None,
+            "no tab and past the plus"
+        );
+        assert_eq!(
+            strip_hit(at(205., 10.), 10., 1., 0, 200.),
+            Some(TabClick::New)
         );
     }
 

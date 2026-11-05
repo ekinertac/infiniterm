@@ -246,6 +246,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "editor.folderScratchTab",
+        &[
+            "An editor card opened on a folder starts with a blank, unsaved buffer in",
+            "its first tab. Off: the card has no buffer, only the folder's name over",
+            "the tree, and the pane stays empty until you open a file.",
+        ],
+    ),
+    (
         "editor.selectionColor",
         &[
             "Behind selected text, as a CSS colour. Empty is the theme's yellow: a",
