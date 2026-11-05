@@ -44,6 +44,7 @@ pub struct Config {
     pub editor: Editor,
     pub browser: Browser,
     pub join: Join,
+    pub notify: Notify,
     pub ui: Ui,
     pub keyboard: Keyboard,
 }
@@ -86,6 +87,23 @@ pub enum CommandModifier {
 pub struct Join {
     pub enabled: bool,
 }
+
+/// Phone pushes through ntfy (#616). The topic is not here: it is a secret
+/// and settings.json is often synced, so it is the file `ntfy-topic`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Notify {
+    /// The ntfy server the push is posted to. The key is `notify.ntfy.server`.
+    #[serde(rename = "ntfy.server")]
+    pub ntfy_server: String,
+    pub waiting: bool,
+    pub failed: bool,
+    pub done: bool,
+    /// No push while the infiniterm window is the key window.
+    pub skip_when_focused: bool,
+}
+
+pub const DEFAULT_NTFY_SERVER: &str = "https://ntfy.sh";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -560,6 +578,13 @@ pub fn default_config() -> Config {
             wrap: Wrap::Prose,
         },
         join: Join { enabled: true },
+        notify: Notify {
+            ntfy_server: DEFAULT_NTFY_SERVER.into(),
+            waiting: true,
+            failed: true,
+            done: true,
+            skip_when_focused: true,
+        },
         browser: Browser {
             zoom: 1.,
             search_engine: crate::omni::address::SEARCH_TEMPLATE.into(),
@@ -766,6 +791,7 @@ pub fn merge_config(raw: &Value) -> Config {
     let b = group(r, "browser");
     let k = group(r, "keyboard");
     let j = group(r, "join");
+    let n = group(r, "notify");
 
     Config {
         theme: match r.get("theme").and_then(Value::as_str) {
@@ -856,6 +882,15 @@ pub fn merge_config(raw: &Value) -> Config {
         },
         join: Join {
             enabled: bool_(j.get("enabled"), d.join.enabled),
+        },
+        notify: Notify {
+            ntfy_server: str_(n.get("ntfy.server"), &d.notify.ntfy_server)
+                .trim()
+                .to_string(),
+            waiting: bool_(n.get("waiting"), d.notify.waiting),
+            failed: bool_(n.get("failed"), d.notify.failed),
+            done: bool_(n.get("done"), d.notify.done),
+            skip_when_focused: bool_(n.get("skipWhenFocused"), d.notify.skip_when_focused),
         },
         browser: Browser {
             zoom: num(
@@ -1047,6 +1082,23 @@ mod tests {
             default_config().ui.card_label_position,
             LabelCorner::TopRight
         );
+    }
+
+    #[test]
+    fn notify_defaults_and_overrides() {
+        let d = default_config().notify;
+        assert_eq!(d.ntfy_server, "https://ntfy.sh");
+        assert!(d.waiting && d.failed && d.done && d.skip_when_focused);
+        let c = merge_config(&serde_json::json!({
+            "notify.ntfy.server": " https://ntfy.example.org ",
+            "notify.done": false,
+            "notify.skipWhenFocused": false,
+        }))
+        .notify;
+        assert_eq!(c.ntfy_server, "https://ntfy.example.org");
+        assert!(c.waiting && c.failed && !c.done && !c.skip_when_focused);
+        let blank = merge_config(&serde_json::json!({"notify.ntfy.server": "  "}));
+        assert_eq!(blank.notify.ntfy_server, "https://ntfy.sh");
     }
 
     // The four settings added for people coming from other terminals.

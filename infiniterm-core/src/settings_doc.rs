@@ -294,6 +294,25 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "notify.ntfy.server",
+        &[
+            "The ntfy server a phone push is posted to when a card needs you. Push is off",
+            "until the file `ntfy-topic` exists in this folder with one line: your topic.",
+            "The topic is a secret (anyone who knows it can read and post), so it is not a",
+            "setting and must not be committed. Use 20 or more random characters.",
+        ],
+    ),
+    (
+        "notify.waiting",
+        &["Push when a card starts waiting on you."],
+    ),
+    ("notify.failed", &["Push when a card fails."]),
+    ("notify.done", &["Push when a card finishes."]),
+    (
+        "notify.skipWhenFocused",
+        &["No push while the infiniterm window is in front: you can see the card colours."],
+    ),
+    (
         "browser.suggestions",
         &[
             "Ask Google to complete what you type in the omnibox.",
