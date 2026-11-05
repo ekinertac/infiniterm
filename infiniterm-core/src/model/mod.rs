@@ -531,6 +531,12 @@ pub enum Pending {
         ids: Vec<String>,
         reclaim: bool,
     },
+    /// Cmd+W on a folder editor's dirty active tab (#572): the card and the
+    /// index of the tab to close after a save, or without one.
+    UnsavedTabClose {
+        id: String,
+        index: usize,
+    },
     NavigateBrowser(String),
     /// Naming an untitled buffer (`open_save_as`); `then_close` is the
     /// close the save sheet's Save is waiting to finish.
@@ -684,6 +690,9 @@ pub struct Model {
     /// A close waiting for its Save to land (`save_then_close`): the ids,
     /// `reclaim`, and when to give up.
     pub close_after_save: Option<(Vec<String>, bool, f64)>,
+    /// The same wait for one tab of a folder editor (`UnsavedTabClose`): the
+    /// card, the tab's index, and when to give up.
+    pub close_tab_after_save: Option<(String, usize, f64)>,
     /// Each terminal card's escape-sequence scanner and the command in
     /// flight (`program_state`), by card id. Session-only: a command
     /// running across a restart is simply not known about.
@@ -979,6 +988,7 @@ impl Model {
             edit_waiters: HashMap::new(),
             reply_deferred: false,
             close_after_save: None,
+            close_tab_after_save: None,
             programs: std::collections::HashMap::new(),
             focus_visit: None,
             switcher: None,
@@ -1066,6 +1076,7 @@ impl Model {
         self.end_parked();
         self.sync_covers();
         self.close_when_saved();
+        self.close_tab_when_saved();
         if self.pending_notice_due(now_ms) {
             if let Some(text) = self.notice_pending.take() {
                 self.show_notice(text);

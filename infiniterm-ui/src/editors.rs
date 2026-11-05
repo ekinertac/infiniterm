@@ -128,6 +128,10 @@ impl AppView {
                 tabs.protected = card.protected;
                 tabs.mark_dirty();
             }
+            if tabs.scratch_tab != cfg.editor.folder_scratch_tab {
+                tabs.scratch_tab = cfg.editor.folder_scratch_tab;
+                tabs.mark_dirty();
+            }
             if tabs.style != style {
                 tabs.style = style.clone();
                 tabs.mark_dirty();

@@ -201,7 +201,14 @@ impl BrowserBody {
     /// The tab under a point of the card (a right-click's), `None` off the
     /// tabs, on the "+" and below the strip.
     pub fn tab_at(&self, local: Point) -> Option<usize> {
-        match strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
+        // A browser card has no folder header ahead of its tabs (0 wide).
+        match strip_hit(
+            local,
+            self.style.font_px,
+            self.ui_scale,
+            self.tabs.len(),
+            0.,
+        ) {
             Some(crate::body::TabClick::Switch(i) | crate::body::TabClick::Close(i)) => Some(i),
             _ => None,
         }
@@ -722,6 +729,7 @@ impl CardBody for BrowserBody {
             self.active,
             self.card_number,
             self.protected,
+            None,
             &self.style,
             window,
             cx,
@@ -782,7 +790,13 @@ impl CardBody for BrowserBody {
         // ours, a live button or dead space between them, never the page's.
         let strip_h = strip_world_h(self.style.font_px, self.ui_scale);
         if local.y < strip_h {
-            return match strip_hit(local, self.style.font_px, self.ui_scale, self.tabs.len()) {
+            return match strip_hit(
+                local,
+                self.style.font_px,
+                self.ui_scale,
+                self.tabs.len(),
+                0.,
+            ) {
                 Some(hit) if button == gpui::MouseButton::Left => BodyAction::BrowserTab(hit),
                 // Middle-click closes a tab, as in every browser.
                 Some(crate::body::TabClick::Switch(i)) if button == gpui::MouseButton::Middle => {

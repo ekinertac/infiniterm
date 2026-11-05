@@ -123,6 +123,8 @@ Everything in this part and the next two is off until a theme sets it. A theme w
 
 `tab.icons: true` puts an icon on each tab for the program that runs in the workspace's focused card. When no card is focused, it uses the first card. A shell at its prompt shows the shell. `tab.iconStyle` is `"glyph"` (default) or `"image"`. A glyph is a Nerd Font glyph, and the app has glyphs for common shells, runtimes and coding agents. An image is a file in `ui-themes/<theme name>/icons/`, where the theme name is the file name without `.json`. The file is `<program>.svg` or `<program>.png`, or `default.svg` or `default.png` for the rest. A program with no file gets a glyph. `tab.iconMap` maps a program name to a glyph or to a file name ending in `.svg` or `.png`, for example `{"bun": "bun.svg", "default": ""}`. A file name must be a plain name, with no folder in it. The key `default` covers programs not listed.
 
+While a coding agent is working or waiting on you in a card, that card's icon is the agent's, not the program's. The agent's name is the key (`claude`, `codex`, `pi`, ...), and `agent` covers all agents not listed; the built-in glyph is a robot. A card whose agent is done or failed shows its program again. The card header uses the same choice.
+
 ### Card header
 
 `card.header: true` adds a header row inside terminal, transcript and page cards. It shows the card's name, and the corner chip is not drawn while the header is on. The header is 30 pixels high at 100% zoom, and the card's body gets the rest. A terminal then has fewer rows and the same number of columns. Dragging the header moves the card. Editor, diff and browser cards keep their own tab strip and get no header.
