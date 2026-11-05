@@ -23,7 +23,7 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 
 /// Lines kept above the screen. Smaller than the host's own scrollback: this is
 /// a second copy per session, and a phone does not need ten thousand lines.
-pub const MIRROR_HISTORY: usize = 3000;
+pub const MIRROR_HISTORY: usize = 1000;
 
 /// The replies a program waits for (a cursor position, a colour) belong to the
 /// host's terminal. The mirror answers nobody.
