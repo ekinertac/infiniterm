@@ -1018,6 +1018,7 @@ impl AppView {
                     card.proc.as_deref(),
                     card.agent,
                     card.agent_kind.as_deref(),
+                    card.agent_session.as_deref(),
                 )
                 .unwrap_or(infiniterm_core::tab_icon::Subject::Program(&shell)),
                 tab.icon_style.unwrap_or_default(),
