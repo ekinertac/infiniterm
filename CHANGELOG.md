@@ -6,15 +6,20 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-11-05
+## 0.6.7 (build 1337), 2026-11-05
+
+### Notifications
 
 - A card that starts waiting on you, fails or finishes can now push a message to your phone through ntfy, so you find out while you are away from the Mac. It is off until you put your topic in a one-line `ntfy-topic` file in the config folder. `notify.waiting`, `notify.failed`, `notify.done`, `notify.skipWhenFocused` and `notify.ntfy.server` tune it (#616).
 
-### 2026-11-04
+### Editor
 
 - An editor card opened on a folder is named after the folder (`proj/`) in its title, and keeps that name as files open in its tabs.
 - A folder editor shows the folder's name in a box over the file tree, as wide as the tree, with the file tabs beside it. New setting `editor.folderScratchTab` (default on): turn it off and the card has no blank `untitled` buffer, the pane stays empty until a file opens.
 - Cmd+W on an editor card opened on a folder closes the active tab, asking to save first when it has unsaved changes; closing the last tab closes the card as before.
+
+### Themes and tabs
+
 - With `tab.icons` or `card.headerIcons` on, a card shows an agent icon (a robot) while its coding agent is working or waiting on you, instead of the icon of the program (Claude Code used to show as Node). A theme can set it per agent in `tab.iconMap` (`claude`, `codex`, ...) or for all agents with `agent`. Done and failed cards show their program again, and a card running `claude`, `codex`, `opencode` or `cursor-agent` shows the same robot (it was a wand).
 
 ## 0.6.6 (build 1324), 2026-11-03
