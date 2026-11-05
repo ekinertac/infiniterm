@@ -1,0 +1,123 @@
+diff --git chrome/browser/extensions/api/tabs/tabs_api.cc chrome/browser/extensions/api/tabs/tabs_api.cc
+index 420b290..70ec51c 100644
+--- chrome/browser/extensions/api/tabs/tabs_api.cc
++++ chrome/browser/extensions/api/tabs/tabs_api.cc
+@@ -44,6 +44,10 @@
+ #include "chrome/browser/web_applications/web_app_helpers.h"
+ #include "chrome/common/pref_names.h"
+ #include "chrome/common/webui_url_constants.h"
++#include "cef/libcef/features/features.h"
++#if BUILDFLAG(ENABLE_CEF)
++#include "cef/libcef/browser/chrome/extensions/alloy_extension_create_tab.h"
++#endif
+ #include "components/pref_registry/pref_registry_syncable.h"
+ #include "components/sessions/content/session_tab_helper.h"
+ #include "components/tabs/public/split_tab_data.h"
+@@ -977,6 +981,64 @@ ExtensionFunction::ResponseAction WindowsCreateFunction::Run() {
+   }
+ #endif
+ 
++#if BUILDFLAG(ENABLE_CEF)
++  // Alloy style: no native window. The client application opens the window
++  // (CefLifeSpanHandler::OnExtensionCreateTab with new_window = true).
++  if (cef::HasAlloyBrowser(Profile::FromBrowserContext(browser_context()))) {
++    if (create_data_ && create_data_->tab_id) {
++      // Moving an existing tab into a new window is not supported.
++      return RespondNow(Error("tabId is not supported for windows.create."));
++    }
++    cef::ExtensionCreateTabResult cef_result = cef::RequestExtensionCreateTab(
++        Profile::FromBrowserContext(browser_context()),
++        extension() ? extension()->id() : std::string(),
++        urls_.empty() ? GURL() : urls_[0], extension_misc::kUnknownWindowId,
++        /*active=*/true, /*new_window=*/true, GetSenderWebContents());
++    if (cef_result.status == cef::ExtensionCreateTabStatus::kRefused) {
++      return RespondNow(Error(std::move(cef_result.error)));
++    }
++    if (cef_result.status == cef::ExtensionCreateTabStatus::kHandled) {
++      // Further URLs become tabs of the window the client just opened.
++      int new_window_id = extension_misc::kUnknownWindowId;
++      if (cef_result.contents) {
++        new_window_id = ExtensionTabUtil::GetWindowIdOfTab(cef_result.contents);
++      }
++      for (size_t i = 1; i < urls_.size(); ++i) {
++        cef::ExtensionCreateTabResult more = cef::RequestExtensionCreateTab(
++            Profile::FromBrowserContext(browser_context()),
++            extension() ? extension()->id() : std::string(), urls_[i],
++            new_window_id, /*active=*/false, /*new_window=*/false,
++            GetSenderWebContents());
++        if (more.status == cef::ExtensionCreateTabStatus::kRefused) {
++          return RespondNow(Error(std::move(more.error)));
++        }
++      }
++      WindowController* new_window_controller =
++          new_window_id > 0 ? ExtensionTabUtil::GetControllerInProfileWithId(
++                                  Profile::FromBrowserContext(browser_context()),
++                                  new_window_id,
++                                  include_incognito_information(), nullptr)
++                            : nullptr;
++      if (new_window_controller) {
++        return RespondNow(WithArguments(
++            new_window_controller->CreateWindowValueForExtension(
++                extension(), WindowController::kPopulateTabs,
++                source_context_type())));
++      }
++      // The client opened the window but did not return a browser registered
++      // with CefBrowserHost::SetExtensionTabInfo. Answer with a placeholder.
++      base::DictValue placeholder;
++      placeholder.Set(extension_misc::kId, extension_misc::kUnknownWindowId);
++      placeholder.Set("type", "normal");
++      placeholder.Set("state", "normal");
++      placeholder.Set("focused", false);
++      placeholder.Set("incognito", browser_context()->IsOffTheRecord());
++      placeholder.Set("alwaysOnTop", false);
++      return RespondNow(WithArguments(std::move(placeholder)));
++    }
++  }
++#endif  // BUILDFLAG(ENABLE_CEF)
++
+   // Decide whether we are opening a normal window or an incognito window.
+   Profile* calling_profile = Profile::FromBrowserContext(browser_context());
+   windows_util::IncognitoResult incognito_result =
+@@ -2118,6 +2180,42 @@ ExtensionFunction::ResponseAction TabsCreateFunction::Run() {
+     }
+   }
+ 
++#if BUILDFLAG(ENABLE_CEF)
++  // Alloy style browsers have no native tab strip or window. If the profile
++  // has one, the client application decides where the tab goes
++  // (CefLifeSpanHandler::OnExtensionCreateTab). If the client does not
++  // handle it, the call fails; no native window is opened.
++  {
++    cef::ExtensionCreateTabResult cef_result = cef::RequestExtensionCreateTab(
++        Profile::FromBrowserContext(browser_context()),
++        extension() ? extension()->id() : std::string(), validated_url_,
++        create_properties.window_id.value_or(extension_misc::kUnknownWindowId),
++        active_.value_or(true), /*new_window=*/false, GetSenderWebContents());
++    if (cef_result.status == cef::ExtensionCreateTabStatus::kRefused) {
++      return RespondNow(Error(std::move(cef_result.error)));
++    }
++    if (cef_result.status == cef::ExtensionCreateTabStatus::kHandled) {
++      if (cef_result.contents) {
++        return RespondNow(WithArguments(
++            tabs_internal::CreateTabObjectHelper(
++                cef_result.contents, extension(), source_context_type(),
++                /*browser=*/nullptr, /*tab_index=*/-1)
++                .ToValue()));
++      }
++      // The client opened the tab but did not return its browser. Answer with
++      // a placeholder; the real tab arrives through tabs.onCreated.
++      api::tabs::Tab placeholder;
++      placeholder.index = -1;
++      placeholder.window_id = -1;
++      placeholder.highlighted = false;
++      placeholder.active = false;
++      placeholder.pinned = false;
++      placeholder.incognito = browser_context()->IsOffTheRecord();
++      return RespondNow(WithArguments(placeholder.ToValue()));
++    }
++  }
++#endif  // BUILDFLAG(ENABLE_CEF)
++
+   // Try to find a suitable browser.
+   // TODO(https://crbug.com/468223125): This is a wild set of tangle
+   // conditions, most of which are inconsistent.
