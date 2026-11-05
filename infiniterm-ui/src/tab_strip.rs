@@ -293,7 +293,7 @@ mod tests {
             Some(TabClick::Switch(0))
         );
         assert_eq!(
-            strip_hit(at(290., 10.), 10., 1., 2, 200.),
+            strip_hit(at(280., 10.), 10., 1., 2, 200.),
             Some(TabClick::Close(0))
         );
         assert_eq!(
