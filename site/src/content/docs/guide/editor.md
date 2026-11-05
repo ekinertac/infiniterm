@@ -10,6 +10,9 @@ An editor card is a file on the canvas: syntax highlighting for 17 languages thr
 - `ift some/file.rs` run inside a terminal card opens the file in an editor laid over that terminal, ready to type in, and waits until you close it, the way vim does. So `EDITOR=ift` or `GIT_EDITOR=ift` works for `git commit`.
 - `ift -n some/file.rs` opens it as a card of its own and returns at once. `ift file.rs:20` opens with line 20 in the middle of the view.
 - `ift ~/Code/project` opens a card with the file tree rooted there.
+- An editor opened on a folder is named after the folder. The name sits in a box over the file tree, as wide as the tree, with the file tabs beside it. The box shows only when the tree is on the left.
+- `Cmd W` on an editor with a tree and more than one tab closes the active tab. If that tab has unsaved changes, the save sheet asks about that tab only.
+- A new folder editor starts with a blank buffer. Set `editor.folderScratchTab` to `false` to start without one: the pane stays empty until you open a file, and the first file replaces the blank buffer.
 - "Editor: open this card's folder" in the command palette does the same from the card you are on: an editor beside it with its file tree on the folder the card is in. It is the twin of "Diff: this card against git HEAD".
 - "Editor: open a file…" in the palette opens the macOS file panel: a file opens in an editor card, a folder opens with its tree.
 
