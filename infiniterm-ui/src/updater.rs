@@ -66,6 +66,17 @@ pub enum UpdateEvent {
     Failed(String),
 }
 
+/// The answer to a check somebody asked for when it downloaded nothing new:
+/// "up to date", unless a newer build is already staged (the timer's check
+/// found and staged it earlier, and said so once). Saying "up to date" then
+/// hid a download that only needed a restart (#619).
+fn answer_asked(staged: Option<&Staged>) -> UpdateEvent {
+    match staged {
+        Some(s) => UpdateEvent::Ready(s.clone()),
+        None => UpdateEvent::UpToDate,
+    }
+}
+
 pub struct Updater {
     pub events: Receiver<UpdateEvent>,
     wake: Sender<()>,
@@ -123,15 +134,17 @@ pub fn start(bundle: PathBuf, running: u64, dir: PathBuf) -> Updater {
     let thread_dir = dir.clone();
     std::thread::spawn(move || {
         let mut staged_build: Option<u64> = None;
+        let mut last_staged: Option<Staged> = None;
         let mut asked = false;
         loop {
             match check(running, &thread_dir, staged_build) {
                 Ok(Some(s)) => {
                     staged_build = Some(s.build);
+                    last_staged = Some(s.clone());
                     let _ = tx.send(UpdateEvent::Ready(s));
                 }
                 Ok(None) if asked => {
-                    let _ = tx.send(UpdateEvent::UpToDate);
+                    let _ = tx.send(answer_asked(last_staged.as_ref()));
                 }
                 Ok(None) => {}
                 Err(e) if asked => {
@@ -186,6 +199,15 @@ pub fn start_notifier(running: u64, install: infiniterm_core::update::LinuxInsta
                 }
                 Ok(r) if asked && r.build <= running => {
                     let _ = tx.send(UpdateEvent::UpToDate);
+                }
+                // Told once already by the timer's check: say it again to the
+                // one who asks (#619), never "up to date".
+                Ok(r) if asked => {
+                    let _ = tx.send(UpdateEvent::Available {
+                        version: r.version,
+                        build: r.build,
+                        hint: linux_update_hint(install),
+                    });
                 }
                 Ok(_) => {}
                 Err(e) if asked => {
@@ -385,6 +407,22 @@ fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_check_somebody_asked_for_reports_a_staged_update_not_up_to_date() {
+        assert!(matches!(answer_asked(None), UpdateEvent::UpToDate));
+        let s = Staged {
+            version: "0.6.7".into(),
+            build: 1337,
+            app: PathBuf::from("/tmp/x.app"),
+        };
+        match answer_asked(Some(&s)) {
+            UpdateEvent::Ready(got) => {
+                assert_eq!((got.version.as_str(), got.build), ("0.6.7", 1337))
+            }
+            _ => panic!("a staged update must be reported as ready"),
+        }
+    }
 
     #[test]
     fn the_build_number_is_read_from_the_bundles_info_plist() {

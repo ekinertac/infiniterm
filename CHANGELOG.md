@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-06
+
+- "Check for Updates…" no longer says "infiniterm is up to date" when a newer build is already downloaded. The app downloads an update by itself and says so once; a later check you ask for now says "is ready: restart to install" again.
+
 ## 0.6.7 (build 1337), 2026-11-05
 
 ### Notifications
