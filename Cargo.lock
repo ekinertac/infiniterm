@@ -3111,6 +3111,7 @@ dependencies = [
 name = "infiniterm-core"
 version = "0.6.6"
 dependencies = [
+ "alacritty_terminal",
  "anyhow",
  "chrono",
  "portable-pty",

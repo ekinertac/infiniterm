@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-06
+
+- A viewer that joins a card (`ift join`, the phone app) now gets the card's scrollback and screen with their colours, not just the last bytes of output. Before, a card that had run Claude Code for an hour could show only a few dozen lines above the screen to a viewer, because most of the replayed output was repaints. Lines the program wrapped are re-wrapped to the viewer's own width.
+
 ### 2026-11-05
 
 - A card that starts waiting on you, fails or finishes can now push a message to your phone through ntfy, so you find out while you are away from the Mac. It is off until you put your topic in a one-line `ntfy-topic` file in the config folder. `notify.waiting`, `notify.failed`, `notify.done`, `notify.skipWhenFocused` and `notify.ntfy.server` tune it (#616).

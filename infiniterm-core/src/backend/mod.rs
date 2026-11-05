@@ -40,6 +40,8 @@ pub mod join;
 pub mod join_client;
 pub mod local_pty;
 #[cfg(unix)]
+pub mod mirror;
+#[cfg(unix)]
 pub mod relay;
 #[cfg(unix)]
 pub mod remote;
