@@ -42,16 +42,21 @@ pub enum Subject<'a> {
 /// The subject of a card: its agent while the agent is active (working, or
 /// waiting on you), else the foreground program. The hook's agent kind is
 /// reliable where the process name is not (Claude Code can show as `node`);
-/// `None` kind is Claude Code, as everywhere else. A done or failed card has
-/// no active agent, so it wears its program again.
+/// `None` kind with a session is Claude Code, as everywhere else. A card with
+/// neither never had an agent hook: its Working is a long command
+/// (`program_state`), so it keeps its program. A done or failed card has no
+/// active agent, so it wears its program again.
 pub fn subject<'a>(
     proc: Option<&'a str>,
     state: crate::agent_state::AgentState,
     kind: Option<&'a str>,
+    session: Option<&str>,
 ) -> Option<Subject<'a>> {
     use crate::agent_state::AgentState;
     match state {
-        AgentState::Working | AgentState::Waiting => Some(Subject::Agent(kind.unwrap_or("claude"))),
+        AgentState::Working | AgentState::Waiting if kind.is_some() || session.is_some() => {
+            Some(Subject::Agent(kind.unwrap_or("claude")))
+        }
         _ => proc.map(Subject::Program),
     }
 }
@@ -560,22 +565,27 @@ mod tests {
         use crate::agent_state::AgentState as S;
         for state in [S::Working, S::Waiting] {
             assert_eq!(
-                subject(Some("node"), state, None),
+                subject(Some("node"), state, None, Some("s")),
                 Some(Subject::Agent("claude")),
                 "no kind is Claude Code, whatever the process says"
             );
             assert_eq!(
-                subject(None, state, Some("codex")),
+                subject(None, state, Some("codex"), None),
                 Some(Subject::Agent("codex"))
             );
         }
         for state in [S::None, S::Done, S::Failed] {
             assert_eq!(
-                subject(Some("node"), state, Some("codex")),
+                subject(Some("node"), state, Some("codex"), Some("s")),
                 Some(Subject::Program("node"))
             );
         }
-        assert_eq!(subject(None, S::Done, None), None);
+        assert_eq!(subject(None, S::Done, None, None), None);
+        // A long command is Working with no agent identity: it keeps its program.
+        assert_eq!(
+            subject(Some("ruby"), S::Working, None, None),
+            Some(Subject::Program("ruby"))
+        );
     }
 
     #[test]
