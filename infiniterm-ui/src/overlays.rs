@@ -761,6 +761,7 @@ impl AppView {
                                     cards[i].proc.as_deref(),
                                     cards[i].agent,
                                     cards[i].agent_kind.as_deref(),
+                                    cards[i].agent_session.as_deref(),
                                 ),
                             )
                         })
