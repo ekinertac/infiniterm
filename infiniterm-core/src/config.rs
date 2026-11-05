@@ -245,6 +245,10 @@ pub struct Editor {
     /// The word popup: letters typed in an editor offer words from the file
     /// and the card's other tabs (`words.rs`).
     pub complete_words: bool,
+    /// An editor card opened on a folder starts on a blank, unsaved buffer
+    /// in a tab of its own. Off: no buffer, the pane stays empty until a
+    /// file opens (`tabs_cmd.rs::browser_tab_open`).
+    pub folder_scratch_tab: bool,
     /// Selected text's background and colour. Empty means the theme's yellow
     /// on the theme's background: a highlighter pen, visible on any scheme.
     pub selection_color: String,
@@ -554,6 +558,7 @@ pub fn default_config() -> Config {
         editor: Editor {
             highlight_line: true,
             complete_words: true,
+            folder_scratch_tab: true,
             selection_color: String::new(),
             selection_text_color: String::new(),
             cursor_color: String::new(),
@@ -841,6 +846,7 @@ pub fn merge_config(raw: &Value) -> Config {
         editor: Editor {
             highlight_line: bool_(e.get("highlightLine"), d.editor.highlight_line),
             complete_words: bool_(e.get("completeWords"), d.editor.complete_words),
+            folder_scratch_tab: bool_(e.get("folderScratchTab"), d.editor.folder_scratch_tab),
             selection_color: str_(e.get("selectionColor"), &d.editor.selection_color),
             selection_text_color: str_(e.get("selectionTextColor"), &d.editor.selection_text_color),
             cursor_color: str_(e.get("cursorColor"), &d.editor.cursor_color),

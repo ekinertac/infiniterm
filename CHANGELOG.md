@@ -8,7 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-04
 
-- An editor card opened on a folder is named after the folder (`proj/`), in its title and on its first tab, and keeps that name as files open in its tabs.
+- An editor card opened on a folder is named after the folder (`proj/`) in its title, and keeps that name as files open in its tabs.
+- A folder editor shows the folder's name in a box over the file tree, as wide as the tree, with the file tabs beside it. New setting `editor.folderScratchTab` (default on): turn it off and the card has no blank `untitled` buffer, the pane stays empty until a file opens.
 - Cmd+W on an editor card opened on a folder closes the active tab, asking to save first when it has unsaved changes; closing the last tab closes the card as before.
 
 ## 0.6.6 (build 1324), 2026-11-03

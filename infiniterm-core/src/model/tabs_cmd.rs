@@ -65,14 +65,33 @@ fn ensure_tabs(m: &mut Model, id: &str) {
     }
 }
 
+/// A folder editor still on its first, blank buffer and nothing else
+/// (`editor.folderScratchTab` decides whether that buffer shows as a tab).
+pub fn is_bare_folder_editor(card: &Card) -> bool {
+    card.kind == CardKind::Editor
+        && card.root.is_some()
+        && card.tabs.len() == 1
+        && card.tabs[0].is_empty()
+}
+
 impl Model {
     /// Appends a new tab at `url` (`None` is `about:blank`, the same
     /// default an empty browser card opens with) and makes it active.
     pub fn browser_tab_open(&mut self, card_id: &str, url: Option<&str>) {
         ensure_tabs(self, card_id);
+        let keep_scratch = self.config.editor.folder_scratch_tab;
         let Some(card) = self.card_mut(card_id) else {
             return;
         };
+        // Without the scratch tab, a folder editor's blank buffer is not a
+        // tab the user has: the first file takes its place.
+        if !keep_scratch && url.is_some() && is_bare_folder_editor(card) {
+            card.tabs[0] = url.unwrap_or_default().to_string();
+            card.active_tab = 0;
+            sync_handle(card);
+            self.dirty_layout = true;
+            return;
+        }
         card.tabs
             .push(url.unwrap_or(blank_handle(card.kind)).to_string());
         card.active_tab = card.tabs.len() - 1;
@@ -578,6 +597,43 @@ mod tests {
         assert_eq!(m.card(&id).unwrap().tabs, vec![""]);
         m.close_selected();
         assert!(m.card(&id).is_none(), "the last tab closes the card");
+    }
+
+    // `editor.folderScratchTab` off: the blank buffer is not a tab, so the
+    // first file takes its place and Cmd+W on that file closes the card.
+    #[test]
+    fn without_the_scratch_tab_the_first_file_replaces_the_blank_buffer() {
+        let setup = |scratch: bool| {
+            let mut m = Model::new();
+            m.config.editor.folder_scratch_tab = scratch;
+            m.home = "/h".into();
+            m.start_dir = "/h".into();
+            m.active_workspace = Some(String::new());
+            let id = m.add_card(
+                "/h/proj",
+                NewCard {
+                    kind: CardKind::Editor,
+                    root: Some("/h/proj".into()),
+                    ..Default::default()
+                },
+            );
+            m.set_focus(Some(&id));
+            (m, id)
+        };
+        let (mut m, id) = setup(false);
+        m.browser_tab_open(&id, Some("/h/proj/a.rs"));
+        assert_eq!(m.card(&id).unwrap().tabs, vec!["/h/proj/a.rs"]);
+        m.browser_tab_open(&id, Some("/h/proj/b.rs"));
+        assert_eq!(m.card(&id).unwrap().tabs.len(), 2, "later files add tabs");
+        m.browser_tab_open(&id, None);
+        assert_eq!(m.card(&id).unwrap().tabs.len(), 3, "+ still adds a tab");
+        let (mut m, id) = setup(false);
+        m.browser_tab_open(&id, Some("/h/proj/a.rs"));
+        m.close_selected();
+        assert!(m.card(&id).is_none(), "the only file closes the card");
+        let (mut m, id) = setup(true);
+        m.browser_tab_open(&id, Some("/h/proj/a.rs"));
+        assert_eq!(m.card(&id).unwrap().tabs, vec!["", "/h/proj/a.rs"]);
     }
 
     // The same sheet as a card's, for the active tab: Cancel keeps it, Don't
