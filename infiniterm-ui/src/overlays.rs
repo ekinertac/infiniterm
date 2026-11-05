@@ -751,15 +751,20 @@ impl AppView {
             // The icon of the program in the workspace's focused card (the
             // first card when none is focused); an enabled icon always draws.
             let icon = icons_on.then(|| {
-                let shown: Vec<(bool, Option<&str>)> = reading_order(&rects)
-                    .into_iter()
-                    .map(|i| {
-                        (
-                            focused_card == Some(cards[i].id.as_str()),
-                            cards[i].proc.as_deref(),
-                        )
-                    })
-                    .collect();
+                let shown: Vec<(bool, Option<infiniterm_core::tab_icon::Subject>)> =
+                    reading_order(&rects)
+                        .into_iter()
+                        .map(|i| {
+                            (
+                                focused_card == Some(cards[i].id.as_str()),
+                                infiniterm_core::tab_icon::subject(
+                                    cards[i].proc.as_deref(),
+                                    cards[i].agent,
+                                    cards[i].agent_kind.as_deref(),
+                                ),
+                            )
+                        })
+                        .collect();
                 let has_file = |f: &str| {
                     icons_dir.as_ref().is_some_and(|d| {
                         self.icon_files.borrow_mut().has_file(
@@ -771,8 +776,9 @@ impl AppView {
                         )
                     })
                 };
-                infiniterm_core::tab_icon::choose(
-                    infiniterm_core::tab_icon::representative(&shown).unwrap_or(&shell),
+                infiniterm_core::tab_icon::choose_subject(
+                    infiniterm_core::tab_icon::representative(&shown)
+                        .unwrap_or(infiniterm_core::tab_icon::Subject::Program(&shell)),
                     icon_style,
                     &tab_theme.icon_map,
                     &has_file,

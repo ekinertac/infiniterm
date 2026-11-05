@@ -26,6 +26,36 @@ pub fn size_px(set: Option<f64>, default: f64) -> f64 {
 /// names.
 pub const FALLBACK_KEY: &str = "default";
 
+/// The `tab.iconMap` entry (and the built-in one) for a card whose coding
+/// agent is active, when the map has nothing for that agent's own name.
+pub const AGENT_KEY: &str = "agent";
+
+/// What an icon is chosen for: the program in front of a card, or the coding
+/// agent working in it (`subject` decides which).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Subject<'a> {
+    Program(&'a str),
+    /// The agent's adapter name (`claude`, `codex`, `pi` ...).
+    Agent(&'a str),
+}
+
+/// The subject of a card: its agent while the agent is active (working, or
+/// waiting on you), else the foreground program. The hook's agent kind is
+/// reliable where the process name is not (Claude Code can show as `node`);
+/// `None` kind is Claude Code, as everywhere else. A done or failed card has
+/// no active agent, so it wears its program again.
+pub fn subject<'a>(
+    proc: Option<&'a str>,
+    state: crate::agent_state::AgentState,
+    kind: Option<&'a str>,
+) -> Option<Subject<'a>> {
+    use crate::agent_state::AgentState;
+    match state {
+        AgentState::Working | AgentState::Waiting => Some(Subject::Agent(kind.unwrap_or("claude"))),
+        _ => proc.map(Subject::Program),
+    }
+}
+
 /// Logo files a theme may ship, tried in this order.
 pub const IMAGE_EXTENSIONS: [&str; 2] = ["svg", "png"];
 
@@ -82,18 +112,54 @@ const BUILT_IN: &[(&str, &str)] = &[
     ("ruby", "\u{e739}"),
     ("docker", "\u{e7b0}"),
     ("ssh", "\u{f023}"),
-    ("claude", "\u{f0d0}"),
-    ("codex", "\u{f0d0}"),
-    ("opencode", "\u{f0d0}"),
-    ("cursor-agent", "\u{f0d0}"),
+    (AGENT_KEY, "\u{f06a9}"),
+    ("claude", "\u{f06a9}"),
+    ("codex", "\u{f06a9}"),
+    ("opencode", "\u{f06a9}"),
+    ("cursor-agent", "\u{f06a9}"),
     (FALLBACK_KEY, "\u{f120}"),
 ];
+
+/// The icon for a `subject`: a program as `choose` has it; an active agent
+/// asks the map for its own name, then for `agent` (a logo file of the same
+/// names comes first in the `Image` style), then the built-in agent glyph.
+pub fn choose_subject(
+    subject: Subject,
+    style: IconStyle,
+    map: &BTreeMap<String, String>,
+    has_file: &dyn Fn(&str) -> bool,
+) -> Icon {
+    let kind = match subject {
+        Subject::Program(proc) => return choose(proc, style, map, has_file),
+        Subject::Agent(kind) => program_key(kind),
+    };
+    for key in [kind.as_str(), AGENT_KEY]
+        .into_iter()
+        .filter(|k| !k.is_empty())
+    {
+        let named = map.get(key).and_then(|v| from_map_value(v));
+        match named {
+            Some(Icon::File(f)) if !has_file(&f) => {}
+            Some(icon) => return icon,
+            None => {}
+        }
+        if style == IconStyle::Image {
+            for ext in IMAGE_EXTENSIONS {
+                let file = format!("{key}.{ext}");
+                if safe_file(&file) && has_file(&file) {
+                    return Icon::File(file);
+                }
+            }
+        }
+    }
+    Icon::Glyph("\u{f06a9}".to_string())
+}
 
 /// The program a workspace's tab shows: the focused card's, else the first
 /// card's in reading order (a workspace you are not in has no focus of its
 /// own to ask). `cards` is `(is_focused, foreground process)` in reading order;
 /// `None` for a workspace with no card, or whose card has no process yet.
-pub fn representative<'a>(cards: &[(bool, Option<&'a str>)]) -> Option<&'a str> {
+pub fn representative<T: Copy>(cards: &[(bool, Option<T>)]) -> Option<T> {
     cards
         .iter()
         .find(|(focused, _)| *focused)
@@ -485,8 +551,90 @@ mod tests {
         assert_eq!(representative(&cards), Some("claude"));
         let unfocused = [(false, Some("fish")), (false, Some("bun"))];
         assert_eq!(representative(&unfocused), Some("fish"));
-        assert_eq!(representative(&[(true, None)]), None);
-        assert_eq!(representative(&[]), None);
+        assert_eq!(representative(&[(true, None::<&str>)]), None);
+        assert_eq!(representative::<&str>(&[]), None);
+    }
+
+    #[test]
+    fn an_active_agent_is_the_subject_and_any_other_state_is_the_program() {
+        use crate::agent_state::AgentState as S;
+        for state in [S::Working, S::Waiting] {
+            assert_eq!(
+                subject(Some("node"), state, None),
+                Some(Subject::Agent("claude")),
+                "no kind is Claude Code, whatever the process says"
+            );
+            assert_eq!(
+                subject(None, state, Some("codex")),
+                Some(Subject::Agent("codex"))
+            );
+        }
+        for state in [S::None, S::Done, S::Failed] {
+            assert_eq!(
+                subject(Some("node"), state, Some("codex")),
+                Some(Subject::Program("node"))
+            );
+        }
+        assert_eq!(subject(None, S::Done, None), None);
+    }
+
+    #[test]
+    fn an_agent_icon_asks_its_own_name_then_agent_then_the_built_in() {
+        let glyph = |s: &str| Icon::Glyph(s.to_string());
+        let m = map(&[("codex", "X"), ("agent", "A")]);
+        let a = |kind| choose_subject(Subject::Agent(kind), IconStyle::Glyph, &m, &none);
+        assert_eq!(a("codex"), glyph("X"));
+        assert_eq!(a("pi"), glyph("A"));
+        let empty = BTreeMap::new();
+        assert_eq!(
+            choose_subject(Subject::Agent("pi"), IconStyle::Glyph, &empty, &none),
+            glyph("\u{f06a9}")
+        );
+        // A program is still chosen as before.
+        assert_eq!(
+            choose_subject(Subject::Program("ruby"), IconStyle::Glyph, &empty, &none),
+            glyph("\u{e739}")
+        );
+    }
+
+    #[test]
+    fn a_card_running_an_agent_program_wears_the_agent_glyph_too() {
+        let empty = BTreeMap::new();
+        for program in ["claude", "codex", "opencode", "cursor-agent"] {
+            assert_eq!(
+                choose_subject(Subject::Program(program), IconStyle::Glyph, &empty, &none),
+                choose_subject(Subject::Agent(program), IconStyle::Glyph, &empty, &none),
+                "{program}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_agent_logo_file_comes_before_the_shared_agent_entry() {
+        let m = map(&[("agent", "A")]);
+        let only = |name: &'static str| move |f: &str| f == name;
+        assert_eq!(
+            choose_subject(
+                Subject::Agent("claude"),
+                IconStyle::Image,
+                &m,
+                &only("claude.svg")
+            ),
+            Icon::File("claude.svg".into())
+        );
+        assert_eq!(
+            choose_subject(Subject::Agent("claude"), IconStyle::Image, &m, &none),
+            Icon::Glyph("A".into())
+        );
+        assert_eq!(
+            choose_subject(
+                Subject::Agent("pi"),
+                IconStyle::Image,
+                &BTreeMap::new(),
+                &only("agent.png")
+            ),
+            Icon::File("agent.png".into())
+        );
     }
 
     #[test]
