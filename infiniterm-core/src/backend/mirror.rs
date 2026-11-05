@@ -84,42 +84,37 @@ impl Mirror {
     /// Rows the program wrapped (the grid marks them) are written without a line
     /// break, so a viewer of another width wraps them itself. A program that
     /// draws its own line breaks (Claude Code) leaves no mark, and its rows stay
-    /// as drawn. The alternate screen has no history: on it only the screen is
-    /// written, and the primary screen under it is not sent.
-    pub fn snapshot(&self) -> Vec<u8> {
-        let term = &self.term;
-        let mode = *term.mode();
-        let grid = term.grid();
-        let cols = term.columns();
-        let screen = term.screen_lines() as i32;
+    /// as drawn.
+    ///
+    /// While a full-screen program has the alternate screen, the primary screen
+    /// (with its scrollback) is written first, then the switch to the alternate
+    /// screen and its content, so that when the program quits the viewer is
+    /// back on the same primary screen the host shows. Only the primary screen
+    /// has history. Needs `&mut self`: the primary screen is read by swapping to
+    /// it and back, and the alternate screen is written back into the mirror
+    /// after the swap (entering it clears it).
+    pub fn snapshot(&mut self) -> Vec<u8> {
+        let mode = *self.term.mode();
         let alt = mode.contains(TermMode::ALT_SCREEN);
-        let top = if alt {
-            0
-        } else {
-            -(term.history_size() as i32)
-        };
 
         let mut out = Vec::new();
         // Hidden while it is painted, shown again at the end if the program had it on.
         out.extend_from_slice(b"\x1b[0m\x1b[?25l");
         if alt {
+            let alt_screen = self.paint(0);
+            self.term.swap_alt();
+            let top = -(self.term.history_size() as i32);
+            out.extend(self.paint(top));
+            self.term.swap_alt();
+            // The swap back cleared the alternate screen: put its content back.
+            self.advance(b"\x1b[H");
+            self.advance(&alt_screen);
             out.extend_from_slice(b"\x1b[?1049h\x1b[2J\x1b[H");
+            out.extend(alt_screen);
+        } else {
+            let top = -(self.term.history_size() as i32);
+            out.extend(self.paint(top));
         }
-        let mut style = Style::default();
-        for line in top..screen {
-            let row = &grid[Line(line)];
-            let wrapped = write_row(&mut out, &mut style, &row[Column(0)..Column(cols)]);
-            if !wrapped && line < screen - 1 {
-                style.reset(&mut out);
-                out.extend_from_slice(b"\r\n");
-            }
-        }
-        style.reset(&mut out);
-
-        let cursor = grid.cursor.point;
-        out.extend_from_slice(
-            format!("\x1b[{};{}H", cursor.line.0 + 1, cursor.column.0 + 1).as_bytes(),
-        );
         for (flag, set) in [
             (TermMode::APP_CURSOR, "\x1b[?1h"),
             (TermMode::APP_KEYPAD, "\x1b="),
@@ -139,6 +134,31 @@ impl Mirror {
         if !mode.contains(TermMode::LINE_WRAP) {
             out.extend_from_slice(b"\x1b[?7l");
         }
+        out
+    }
+
+    /// The rows of the screen that is showing, from line `top` (negative: into
+    /// its history) to its last row, then the cursor.
+    fn paint(&self, top: i32) -> Vec<u8> {
+        let term = &self.term;
+        let grid = term.grid();
+        let cols = term.columns();
+        let screen = term.screen_lines() as i32;
+        let mut out = Vec::new();
+        let mut style = Style::default();
+        for line in top..screen {
+            let row = &grid[Line(line)];
+            let wrapped = write_row(&mut out, &mut style, &row[Column(0)..Column(cols)]);
+            if !wrapped && line < screen - 1 {
+                style.reset(&mut out);
+                out.extend_from_slice(b"\r\n");
+            }
+        }
+        style.reset(&mut out);
+        let cursor = grid.cursor.point;
+        out.extend_from_slice(
+            format!("\x1b[{};{}H", cursor.line.0 + 1, cursor.column.0 + 1).as_bytes(),
+        );
         out
     }
 }
@@ -334,7 +354,7 @@ mod tests {
             .collect()
     }
 
-    fn rebuilt(m: &Mirror, cols: u16, rows: u16) -> Mirror {
+    fn rebuilt(m: &mut Mirror, cols: u16, rows: u16) -> Mirror {
         let mut fresh = Mirror::new(cols, rows);
         fresh.advance(&m.snapshot());
         fresh
@@ -360,7 +380,7 @@ mod tests {
         for i in 0..100 {
             m.advance(format!("line {i}\r\n").as_bytes());
         }
-        let r = rebuilt(&m, 40, 10);
+        let r = rebuilt(&mut m, 40, 10);
         assert_eq!(text(&r), text(&m));
         assert!(text(&r).starts_with("line 0\n"), "the oldest line is kept");
     }
@@ -370,16 +390,16 @@ mod tests {
         let mut m = Mirror::new(40, 5);
         m.advance(b"\x1b[1;31mred bold\x1b[0m \x1b[38;5;208morange\x1b[0m \x1b[48;2;1;2;3;4mon rgb\x1b[0m\r\n");
         m.advance(b"\x1b[7minverse\x1b[0m \x1b[94mbright\x1b[0m\r\n");
-        assert_eq!(dump(&rebuilt(&m, 40, 5)), dump(&m));
+        assert_eq!(dump(&rebuilt(&mut m, 40, 5)), dump(&m));
     }
 
     #[test]
     fn a_wrapped_line_is_rebuilt_as_one_line_and_wraps_again_on_a_narrower_viewer() {
         let mut m = Mirror::new(20, 5);
         m.advance(b"abcdefghij abcdefghij abcdefghij\r\nnext\r\n");
-        assert_eq!(dump(&rebuilt(&m, 20, 5)), dump(&m));
+        assert_eq!(dump(&rebuilt(&mut m, 20, 5)), dump(&m));
         // A viewer of another width wraps the same text itself.
-        let narrow = rebuilt(&m, 10, 8);
+        let narrow = rebuilt(&mut m, 10, 8);
         assert!(text(&narrow).contains("abcdefghij\n abcdefghi\nj abcdefgh\nij"));
     }
 
@@ -388,7 +408,7 @@ mod tests {
         let mut m = Mirror::new(20, 5);
         m.advance("日本語 ok\r\nsecond".as_bytes());
         m.advance(b"\x1b[2;4H");
-        let r = rebuilt(&m, 20, 5);
+        let r = rebuilt(&mut m, 20, 5);
         assert_eq!(dump(&r), dump(&m));
         assert_eq!(r.term.grid().cursor.point, m.term.grid().cursor.point);
     }
@@ -397,7 +417,7 @@ mod tests {
     fn the_modes_a_program_set_are_put_back() {
         let mut m = Mirror::new(20, 5);
         m.advance(b"\x1b[?2004h\x1b[?1h\x1b[?25l");
-        let r = rebuilt(&m, 20, 5);
+        let r = rebuilt(&mut m, 20, 5);
         let mode = *r.term.mode();
         assert!(mode.contains(TermMode::BRACKETED_PASTE));
         assert!(mode.contains(TermMode::APP_CURSOR));
@@ -405,12 +425,31 @@ mod tests {
     }
 
     #[test]
-    fn the_alternate_screen_is_sent_as_the_screen_alone() {
+    fn a_viewer_that_joins_during_vim_is_back_on_the_primary_screen_when_vim_quits() {
         let mut m = Mirror::new(20, 4);
-        m.advance(b"before\r\n\x1b[?1049h\x1b[Hfull screen");
-        let r = rebuilt(&m, 20, 4);
-        assert!(r.term.mode().contains(TermMode::ALT_SCREEN));
-        assert!(text(&r).contains("full screen"));
+        for i in 0..10 {
+            m.advance(format!("history {i}\r\n").as_bytes());
+        }
+        m.advance(b"$ vim\r\n\x1b[?1049h\x1b[H\x1b[2Jfull screen\x1b[3;5Hcursor here");
+        let before = dump(&m);
+
+        let mut viewer = rebuilt(&mut m, 20, 4);
+        assert!(viewer.term.mode().contains(TermMode::ALT_SCREEN));
+        assert_eq!(dump(&viewer), before, "the alternate screen is the same");
+        assert_eq!(viewer.term.grid().cursor.point, m.term.grid().cursor.point);
+
+        // Taking the snapshot must not have disturbed the host's own mirror.
+        assert_eq!(dump(&m), before);
+        assert_eq!(m.snapshot(), m.snapshot(), "and it can be taken again");
+
+        // vim quits: the viewer shows the shell the host shows, history and all.
+        m.advance(b"\x1b[?1049l");
+        viewer.advance(b"\x1b[?1049l");
+        assert!(!viewer.term.mode().contains(TermMode::ALT_SCREEN));
+        assert_eq!(dump(&viewer), dump(&m));
+        assert!(text(&viewer).contains("history 0"));
+        assert!(text(&viewer).contains("$ vim"));
+        assert_eq!(viewer.term.grid().cursor.point, m.term.grid().cursor.point);
     }
 
     #[test]
@@ -421,13 +460,80 @@ mod tests {
         assert!(text(&m).trim().is_empty());
     }
 
+    /// Not a test: the cost of a mirror, for the PR (#621). Run with
+    /// `cargo test -p infiniterm-core mirror_cost -- --ignored --nocapture`.
+    /// The dev profile optimises dependencies (Cargo.toml), and the parser is
+    /// the cost, so the numbers are close to a release build's.
+    #[test]
+    #[ignore]
+    fn mirror_cost() {
+        fn rss_mb() -> f64 {
+            let out = std::process::Command::new("ps")
+                .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .parse::<f64>()
+                .unwrap()
+                / 1024.0
+        }
+        // A screenful of output as a busy card writes it: text, colours, line breaks.
+        let chunk: String = (0..200)
+            .map(|i| format!("\x1b[3{}m{:>4} the quick brown fox jumps over the lazy dog, again and again and again and again and again and again and again and again and again and again and again and again and again\x1b[0m\r\n", i % 8, i))
+            .collect();
+
+        let base = rss_mb();
+        let mut idle: Vec<Mirror> = (0..20).map(|_| Mirror::new(200, 50)).collect();
+        let after_idle = rss_mb();
+        println!("20 fresh mirrors (200x50): +{:.1} MB", after_idle - base);
+
+        // Fill each to a full scrollback: 3000 lines of history plus the screen.
+        for m in idle.iter_mut() {
+            for _ in 0..(MIRROR_HISTORY / 200 + 2) {
+                m.advance(chunk.as_bytes());
+            }
+        }
+        let after_full = rss_mb();
+        println!(
+            "20 mirrors with a full scrollback ({} lines, 200 columns): +{:.1} MB, {:.1} MB each",
+            MIRROR_HISTORY,
+            after_full - after_idle,
+            (after_full - after_idle) / 20.0
+        );
+
+        // Parse speed: a few MB, as `cat` of a big file.
+        let mut m = Mirror::new(200, 50);
+        let mut fed = 0usize;
+        let start = std::time::Instant::now();
+        while fed < 16 * 1024 * 1024 {
+            m.advance(chunk.as_bytes());
+            fed += chunk.len();
+        }
+        let secs = start.elapsed().as_secs_f64();
+        println!(
+            "mirror parse: {:.1} MB in {:.2} s = {:.0} MB/s",
+            fed as f64 / 1048576.0,
+            secs,
+            fed as f64 / 1048576.0 / secs
+        );
+
+        let start = std::time::Instant::now();
+        let snapshot = m.snapshot();
+        println!(
+            "snapshot of a full scrollback: {:.1} KB in {:.0} ms",
+            snapshot.len() as f64 / 1024.0,
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+
     #[test]
     fn a_resize_keeps_the_text() {
         let mut m = Mirror::new(40, 10);
         m.advance(b"hello\r\nworld\r\n");
         m.resize(20, 6);
         assert!(text(&m).contains("hello\nworld"));
-        let r = rebuilt(&m, 20, 6);
+        let r = rebuilt(&mut m, 20, 6);
         assert_eq!(text(&r), text(&m));
     }
 }
