@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-06
+
+- New setting `cards.newCardInheritsDirectory` (off by default): when on, a new terminal card (Cmd+T) opened from a terminal card starts in that card's directory instead of `startingDir`.
+
 ## 0.6.8 (build 1350), 2026-11-06
 
 ### Updates

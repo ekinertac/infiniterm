@@ -215,6 +215,15 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "always starts at startingDir: a new card is a new place to work.",
         ],
     ),
+    (
+        "cards.newCardInheritsDirectory",
+        &[
+            "Whether a new terminal card (Cmd+T, Cmd+Alt+T) starts in the",
+            "directory of the terminal card you opened it from, instead of",
+            "startingDir. Off by default. From any other kind of card, or",
+            "with nothing selected, it still starts at startingDir.",
+        ],
+    ),
     ("canvas", &["The canvas itself: zooming and panning."]),
     (
         "canvas.zoomSensitivity",
