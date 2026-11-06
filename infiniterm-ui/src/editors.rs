@@ -88,6 +88,7 @@ impl AppView {
             .cloned()
             .collect();
         let mut locks: Vec<(String, bool)> = vec![];
+        let mut lines_taken: Vec<String> = vec![];
         for card in cards {
             let world = Size {
                 w: card.rect.w,
@@ -173,6 +174,14 @@ impl AppView {
                 if let Some(line) = card.line {
                     body.go_to_line(line as usize);
                 }
+            } else if let Some(line) = card.line {
+                // A line the model set for the tab it just opened or switched
+                // to (a Find in Files pick): the body is the active tab's, and
+                // a host's file may still be loading, which `pending_line`
+                // covers.
+                body.pending_line = Some(line);
+                body.go_to_line(line as usize);
+                lines_taken.push(card.id.clone());
             }
             if body.metrics != metrics {
                 body.metrics = metrics.clone();
@@ -283,6 +292,11 @@ impl AppView {
                         }
                     }
                 }
+            }
+        }
+        for id in lines_taken {
+            if let Some(c) = self.model.card_mut(&id) {
+                c.line = None;
             }
         }
         for (id, locked) in locks {
@@ -546,50 +560,12 @@ impl AppView {
                 }
             }
             EditorAction::GoToFile => {
-                // The folder the tree shows, else the open file's own folder,
-                // else the card's directory; on this machine the top of the
-                // git repository it is in, so the whole project is listed
-                // whichever file you are on. A repo lists from `git ls-files`;
-                // any other folder, or a host's, from a capped walk.
-                let source = self.file_source();
-                let base = card
-                    .root
-                    .clone()
-                    .or_else(|| {
-                        card.path
-                            .as_deref()
-                            .map(infiniterm_core::paths::parent_dir)
-                            .filter(|d| !d.is_empty())
-                    })
-                    .unwrap_or_else(|| card.cwd.clone());
-                let root = if source.is_local() {
-                    infiniterm_core::quick_files::repo_root(&base).unwrap_or(base)
-                } else {
-                    base
-                };
-                let files = if source.is_local() {
-                    infiniterm_core::quick_files::list_local_git(
-                        &root,
-                        infiniterm_core::quick_files::CAP,
-                    )
-                } else {
-                    None
-                }
-                .unwrap_or_else(|| {
-                    let cap = if source.is_local() {
-                        infiniterm_core::quick_files::CAP
-                    } else {
-                        infiniterm_core::quick_files::REMOTE_CAP
-                    };
-                    infiniterm_core::quick_files::walk(&root, cap, &mut |dir| {
-                        source
-                            .list(dir)
-                            .map(|es| es.into_iter().map(|e| (e.name, e.is_dir)).collect())
-                            .unwrap_or_default()
-                    })
-                });
+                let (root, files) = self.project_files(&card);
                 self.model.open_quick_files(card_id, &root, files);
             }
+            EditorAction::FindInFiles => self.find_in_files(card_id),
+            EditorAction::ReplaceInFilesCount => self.replace_in_files_count(card_id),
+            EditorAction::ReplaceInFilesApply => self.replace_in_files_apply(card_id),
             EditorAction::GoToLine => {
                 if let Some(line) = card.line {
                     if let Some(body) = self.editor_for(card_id) {

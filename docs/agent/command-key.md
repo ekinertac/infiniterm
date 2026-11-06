@@ -124,6 +124,7 @@ macOS chord, command, and the Linux and Windows chord with `keyboard.commandModi
 | `cmd+,` | `app.settings` | `ctrl+,` |
 | `cmd+shift+,` | `app.keybindings` | `ctrl+shift+,` |
 | `cmd+p` | `editor.goToFile` | palette only |
+| `cmd+shift+f` | `editor.findInFiles` | `ctrl+alt+shift+f` |
 | `cmd+shift+p` | `app.palette` | `ctrl+shift+p` |
 | `cmd+ctrl+space` | `app.emoji` | palette only |
 | `cmd+ctrl+f` | `app.fullscreen` | `f11` |

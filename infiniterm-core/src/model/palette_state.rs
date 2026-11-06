@@ -36,12 +36,20 @@ pub enum Source {
     /// `editor.goToFile` (Cmd+P, #602): every file under the editor's
     /// folder, fuzzy-matched on its path; a pick opens it as a tab.
     Files,
+    /// `editor.findInFiles` (Cmd+Shift+F, #602): the matching lines of the
+    /// project, in file order; typing narrows them, a pick opens the file at
+    /// the line.
+    Grep,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
 /// id in the Commands source. A command id never contains a colon.
 pub const CARD_ROW: &str = "card:";
 pub const WORKSPACE_ROW: &str = "workspace:";
+
+/// Between a hit's path and its line in a Grep row's id: a character no path
+/// holds, so a path with a colon in it still splits right.
+pub const GREP_SEP: char = '\u{1f}';
 
 /// The hint the theme picker puts beside the theme in force.
 pub const ACTIVE_THEME_HINT: &str = "active";
@@ -60,7 +68,14 @@ impl Source {
             Source::WindowColor => "windowColor",
             Source::UiThemes => "uiThemes",
             Source::Files => "files",
+            Source::Grep => "grep",
         }
+    }
+
+    /// Whether the rows are matched letter by letter (`fuzzy_match`) rather
+    /// than by word (`strict_match`): paths and source lines are not prose.
+    pub fn matches_loosely(self) -> bool {
+        matches!(self, Source::Files | Source::Grep)
     }
 
     /// Whether this source's rows stay where they were designed to be.
@@ -85,6 +100,8 @@ impl Source {
                 | Source::Themes
                 | Source::WindowColor
                 | Source::UiThemes
+                // The matches stay in file and line order: that is the map.
+                | Source::Grep
         )
     }
 
@@ -109,6 +126,7 @@ impl Source {
             Source::WindowColor => "Window colour…",
             Source::UiThemes => "Switch UI theme",
             Source::Files => "Go to file…",
+            Source::Grep => "Narrow the matches…",
         }
     }
 }
@@ -176,6 +194,40 @@ impl Model {
             files,
         });
         self.open_palette(Source::Files);
+    }
+
+    /// Find in Files' palette over `hits`, whose pick opens a tab of editor
+    /// card `card_id` at the hit's line.
+    pub fn open_grep(&mut self, card_id: &str, root: &str, hits: Vec<super::GrepHit>) {
+        self.grep = Some(super::GrepState {
+            card_id: card_id.into(),
+            root: root.trim_end_matches('/').into(),
+            hits,
+        });
+        self.open_palette(Source::Grep);
+    }
+
+    /// A Find in Files pick (`path<SEP>line`): the file as a tab, scrolled to
+    /// the line once its body exists (`card.line`, taken by the ui's
+    /// reconcile, since a new tab has no body yet to tell).
+    pub fn grep_pick(&mut self, id: &str) {
+        let Some(g) = self.grep.take() else {
+            return;
+        };
+        let Some((rel, line)) = id.split_once(GREP_SEP) else {
+            return;
+        };
+        let path = format!("{}/{rel}", g.root);
+        let existing = self
+            .card(&g.card_id)
+            .and_then(|c| c.tabs.iter().position(|h| *h == path));
+        match existing {
+            Some(i) => self.browser_tab_jump(&g.card_id, i),
+            None => self.browser_tab_open(&g.card_id, Some(&path)),
+        }
+        if let (Some(card), Ok(n)) = (self.card_mut(&g.card_id), line.parse::<u64>()) {
+            card.line = Some(n);
+        }
     }
 
     /// A Go to File pick: the tab that already shows the file, else a new
@@ -455,6 +507,17 @@ impl Model {
                 .map(|path| PaletteItem {
                     id: path.clone(),
                     label: path.clone(),
+                    hint: None,
+                })
+                .collect(),
+            // `path:line  the line`, the id carrying the two apart for the pick.
+            Source::Grep => self
+                .grep
+                .iter()
+                .flat_map(|g| g.hits.iter())
+                .map(|h| PaletteItem {
+                    id: format!("{}{GREP_SEP}{}", h.path, h.line),
+                    label: format!("{}:{}  {}", h.path, h.line, h.text),
                     hint: None,
                 })
                 .collect(),

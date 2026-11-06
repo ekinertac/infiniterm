@@ -152,7 +152,11 @@ impl AppView {
         // filters, and `rank` is stable, so what is left is in the order
         // the source listed it. See `Source::keeps_its_order`.
         if source.keeps_its_order() {
-            let ranked = rank(&items, &self.model.palette.query, MAX_RESULTS, |_| 0.);
+            let ranked = if source.matches_loosely() {
+                rank_loose(&items, &self.model.palette.query, MAX_RESULTS, |_| 0.)
+            } else {
+                rank(&items, &self.model.palette.query, MAX_RESULTS, |_| 0.)
+            };
             // The active theme stands apart from the choices: an untitled
             // heading after it is a rule (#72). Only while it leads the list;
             // typing may filter it away.
@@ -176,7 +180,7 @@ impl AppView {
         let usage = &self.model.usage;
         let bonus = |id: &str| usage_bonus(usage.get(&use_key(source.id(), id)));
         // Paths are matched loosely: `edbody` is `src/editor_body.rs`.
-        let ranked = if source == infiniterm_core::model::palette_state::Source::Files {
+        let ranked = if source.matches_loosely() {
             rank_loose(&items, &self.model.palette.query, MAX_RESULTS, bonus)
         } else {
             rank(&items, &self.model.palette.query, MAX_RESULTS, bonus)

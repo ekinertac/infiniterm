@@ -58,8 +58,9 @@ fn smart_case(query: &str, regex: bool) -> bool {
     false
 }
 
-/// The compiled pattern for `query`, or why it does not compile.
-fn build(query: &str, o: Options) -> Result<Regex, String> {
+/// The compiled pattern for `query`, or why it does not compile. Public so
+/// a search over many files (`grep.rs`) compiles once, not once per file.
+pub fn build(query: &str, o: Options) -> Result<Regex, String> {
     let mut pattern = if o.regex {
         query.to_string()
     } else {
