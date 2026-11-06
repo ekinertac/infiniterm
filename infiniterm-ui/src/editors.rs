@@ -529,6 +529,51 @@ impl AppView {
                     body.open_search(false);
                 }
             }
+            EditorAction::GoToFile => {
+                // The folder the tree shows, else the open file's own folder,
+                // else the card's directory; on this machine the top of the
+                // git repository it is in, so the whole project is listed
+                // whichever file you are on. A repo lists from `git ls-files`;
+                // any other folder, or a host's, from a capped walk.
+                let source = self.file_source();
+                let base = card
+                    .root
+                    .clone()
+                    .or_else(|| {
+                        card.path
+                            .as_deref()
+                            .map(infiniterm_core::paths::parent_dir)
+                            .filter(|d| !d.is_empty())
+                    })
+                    .unwrap_or_else(|| card.cwd.clone());
+                let root = if source.is_local() {
+                    infiniterm_core::quick_files::repo_root(&base).unwrap_or(base)
+                } else {
+                    base
+                };
+                let files = if source.is_local() {
+                    infiniterm_core::quick_files::list_local_git(
+                        &root,
+                        infiniterm_core::quick_files::CAP,
+                    )
+                } else {
+                    None
+                }
+                .unwrap_or_else(|| {
+                    let cap = if source.is_local() {
+                        infiniterm_core::quick_files::CAP
+                    } else {
+                        infiniterm_core::quick_files::REMOTE_CAP
+                    };
+                    infiniterm_core::quick_files::walk(&root, cap, &mut |dir| {
+                        source
+                            .list(dir)
+                            .map(|es| es.into_iter().map(|e| (e.name, e.is_dir)).collect())
+                            .unwrap_or_default()
+                    })
+                });
+                self.model.open_quick_files(card_id, &root, files);
+            }
             EditorAction::GoToLine => {
                 if let Some(line) = card.line {
                     if let Some(body) = self.editor_for(card_id) {

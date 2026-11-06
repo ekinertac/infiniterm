@@ -1,7 +1,7 @@
 //! Palette ranking, highlighting, navigation, and recent/rest sections.
 //! Port of palette.ts and its tests. UI sources provide items and usage weights.
 //! Label matches outrank hints; truncation reports the true total before limiting.
-use crate::fuzzy::{strict_match, Match};
+use crate::fuzzy::{fuzzy_match, strict_match, Match};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaletteItem {
     pub id: String,
@@ -26,19 +26,42 @@ pub fn rank(
     limit: usize,
     bonus: impl Fn(&str) -> f64,
 ) -> Ranked {
+    rank_with(items, query, limit, bonus, strict_match)
+}
+
+/// `rank` with the loose subsequence match: Go to File's rows are paths, and
+/// `edbody` has to find `src/editor_body.rs`, which `strict_match` (a word of
+/// four letters or more must be in the row, #490) is there to refuse for a
+/// list of commands.
+pub fn rank_loose(
+    items: &[PaletteItem],
+    query: &str,
+    limit: usize,
+    bonus: impl Fn(&str) -> f64,
+) -> Ranked {
+    rank_with(items, query, limit, bonus, fuzzy_match)
+}
+
+fn rank_with(
+    items: &[PaletteItem],
+    query: &str,
+    limit: usize,
+    bonus: impl Fn(&str) -> f64,
+    matcher: fn(&str, &str) -> Option<Match>,
+) -> Ranked {
     let mut scored = vec![];
     for item in items {
         let weight = bonus(&item.id);
         // `strict_match`: a word of four letters or more must be in the row
         // (#490); a shorter query is the loose abbreviation match as before.
-        let matched = if let Some(mut m) = strict_match(query, &item.label) {
+        let matched = if let Some(mut m) = matcher(query, &item.label) {
             m.score += weight;
             Some(m)
         } else {
             item.hint
                 .as_deref()
                 .filter(|h| !h.is_empty())
-                .and_then(|h| strict_match(query, h))
+                .and_then(|h| matcher(query, h))
                 .map(|m| Match {
                     score: m.score + weight - HINT_PENALTY,
                     matches: vec![],
@@ -309,6 +332,20 @@ mod tests {
     fn utf16_of(text: &str, unit: usize) -> char {
         let units: Vec<u16> = text.encode_utf16().collect();
         char::from_u32(units[unit] as u32).unwrap()
+    }
+
+    // Go to File matches a path loosely: the strict match refuses letters
+    // scattered over a word (`eobd` for `editor_body`).
+    #[test]
+    fn a_path_is_found_by_its_letters_when_ranked_loosely() {
+        let paths = vec![
+            item("a", "infiniterm-ui/src/editor_body.rs", None),
+            item("b", "infiniterm-ui/src/overlays.rs", None),
+        ];
+        assert_eq!(rank(&paths, "eobd", MAX_RESULTS, |_| 0.).total, 0);
+        let r = rank_loose(&paths, "eobd", MAX_RESULTS, |_| 0.);
+        assert_eq!(r.items.len(), 1);
+        assert_eq!(r.items[0].item.id, "a");
     }
 
     #[test]

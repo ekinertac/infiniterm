@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-06
+
+- Editor: Cmd+P opens "Go to file…", every file in the project fuzzy-matched on its path (`edbody` finds `src/editor_body.rs`), and Enter opens it as a tab, or switches to the tab that has it. The project is the git repository the open file is in (tracked and untracked files, nothing .gitignore hides), else the folder, with `node_modules`, `target` and similar left out. It works from inside the text of a locked editor too. If your `keybindings.json` already binds Cmd+P to something, that stays yours: bind `editor.goToFile` to any chord, or run "Editor: go to a file…" from the palette. Also in the editor's right-click menu.
+
 ## 0.6.8 (build 1350), 2026-11-06
 
 ### Updates
