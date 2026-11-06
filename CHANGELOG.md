@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-06
+
+- Editor: duplicate line (Cmd+Shift+D) and move line (Ctrl+Cmd+Up/Down) now act on every line a selection touches and keep the selection on the block. With the selection inside one line, duplicate copies the selected text after itself. Alt+Up/Down moves and Shift+Alt+Up/Down copies the lines too, as in VS Code and Cursor. Option+Up/Down no longer moves the caret in the editor.
+
 ## 0.6.8 (build 1350), 2026-11-06
 
 ### Updates
