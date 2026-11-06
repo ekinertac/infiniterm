@@ -33,6 +33,9 @@ pub enum Source {
     /// `uitheme.pick` (#511): the files in `ui-themes/`, previewed live like
     /// `Themes`, and a pick is written as the setting `ui.theme`.
     UiThemes,
+    /// `editor.goToSymbol` (#602): the functions, types and headings of the
+    /// open file, in file order; a pick moves the caret to its line.
+    Symbols,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
@@ -56,6 +59,7 @@ impl Source {
             Source::MoveGroupTo => "moveGroupTo",
             Source::WindowColor => "windowColor",
             Source::UiThemes => "uiThemes",
+            Source::Symbols => "symbols",
         }
     }
 
@@ -81,6 +85,8 @@ impl Source {
                 | Source::Themes
                 | Source::WindowColor
                 | Source::UiThemes
+                // The outline of a file is its order.
+                | Source::Symbols
         )
     }
 
@@ -104,6 +110,7 @@ impl Source {
             Source::MoveGroupTo => "Move the group to workspace…",
             Source::WindowColor => "Window colour…",
             Source::UiThemes => "Switch UI theme",
+            Source::Symbols => "Go to symbol…",
         }
     }
 }
@@ -160,6 +167,33 @@ impl Model {
             query: String::new(),
             index: 0,
         };
+    }
+
+    /// Go to Symbol's palette over `rows` of editor card `card_id`.
+    pub fn open_symbols(&mut self, card_id: &str, rows: Vec<super::SymbolRow>) {
+        self.symbols = Some(super::SymbolsState {
+            card_id: card_id.into(),
+            rows,
+        });
+        self.open_palette(Source::Symbols);
+    }
+
+    /// A Go to Symbol pick (the line as the id): the caret goes there, the
+    /// way `editor.goToLine` sends it.
+    pub fn symbol_pick(&mut self, id: &str) {
+        let Some(s) = self.symbols.take() else {
+            return;
+        };
+        let Ok(line) = id.parse::<u64>() else {
+            return;
+        };
+        if let Some(card) = self.card_mut(&s.card_id) {
+            card.line = Some(line);
+        }
+        self.effects.push(super::Effect::Editor {
+            card_id: s.card_id,
+            action: super::EditorAction::GoToLine,
+        });
     }
 
     /// `chosen` false means dismissed, and the source's preview is put back.
@@ -412,6 +446,18 @@ impl Model {
                     label: super::window_fit_cmd::CUSTOM_ROW.1.into(),
                     hint: Some("type width x height".into()),
                 }))
+                .collect(),
+            // Indented by depth so a method sits under its type, the kind as
+            // the hint, the line as the id.
+            Source::Symbols => self
+                .symbols
+                .iter()
+                .flat_map(|s| s.rows.iter())
+                .map(|r| PaletteItem {
+                    id: r.line.to_string(),
+                    label: format!("{}{}", "  ".repeat(r.depth), r.name),
+                    hint: (!r.kind.is_empty()).then(|| r.kind.to_string()),
+                })
                 .collect(),
             // The file's names, the first line as the hint, and the way to
             // the file last. Recency applies: the snippet you paste daily

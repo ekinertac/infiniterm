@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-06
+
+- Editor: Cmd+R inside the text opens "Go to symbol…": the functions, types, classes, methods, markdown headings, TOML tables and shell functions of the open file, in file order with their kind, indented under what contains them. Type letters to narrow (`grow`, or `gtsym` for `get_symbols`), Enter moves the caret to the line. It reads the syntax tree the highlighter already builds, so there is no language server and nothing to switch on. Works for Rust, JavaScript, TypeScript, TSX, Python, Go, C, shell, markdown and TOML; in HTML, CSS, JSON, YAML, SQL and Svelte the list is empty. Also "Editor: go to a symbol…" in the palette and the right-click menu.
+
 ## 0.6.8 (build 1350), 2026-11-06
 
 ### Updates

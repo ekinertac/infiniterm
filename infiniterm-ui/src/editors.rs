@@ -529,6 +529,13 @@ impl AppView {
                     body.open_search(false);
                 }
             }
+            EditorAction::GoToSymbol => {
+                let rows = self
+                    .editor_for(card_id)
+                    .map(|b| b.symbol_rows())
+                    .unwrap_or_default();
+                self.model.open_symbols(card_id, rows);
+            }
             EditorAction::GoToLine => {
                 if let Some(line) = card.line {
                     if let Some(body) = self.editor_for(card_id) {

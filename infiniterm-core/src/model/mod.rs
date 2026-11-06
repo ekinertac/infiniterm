@@ -460,6 +460,9 @@ pub enum EditorAction {
     Save,
     Find,
     GoToLine,
+    /// Cmd+R in a locked editor: the ui lists the open file's symbols and
+    /// hands them to `Model::open_symbols`.
+    GoToSymbol,
     ToggleBlame,
     ToggleExplorer,
     /// Leave the text: the lock is dropped and the card is an ordinary card
@@ -469,6 +472,24 @@ pub enum EditorAction {
     /// own, reachable only through the command palette, `cards_cmd.rs`'s
     /// `editor.transform.*` entries.
     Transform(TextTransform),
+}
+
+/// One row of Go to Symbol.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SymbolRow {
+    pub name: String,
+    /// "fn", "struct", ...; empty for a heading, whose name carries its level.
+    pub kind: String,
+    /// 1-based.
+    pub line: usize,
+    pub depth: usize,
+}
+
+/// What Go to Symbol lists and which card a pick moves.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SymbolsState {
+    pub card_id: String,
+    pub rows: Vec<SymbolRow>,
 }
 
 /// A pure function in `infiniterm_editor::transforms`, picked by name here
@@ -836,6 +857,8 @@ pub struct Model {
     /// the snippets folder's files, read by the ui when the picker opens
     /// (`Effect::RefreshSnippets`), the way `theme_names` is.
     pub snippets: Vec<crate::snippets::Snippet>,
+    /// The symbols Go to Symbol lists while its palette is up.
+    pub symbols: Option<SymbolsState>,
     pub theme_current: Option<String>,
     pub theme_before_preview: Option<String>,
     /// The colour the window had when its colour picker opened (`Some(None)`:
@@ -1045,6 +1068,7 @@ impl Model {
             look_ui: default_config().ui,
             theme_names: vec![],
             snippets: vec![],
+            symbols: None,
             theme_current: None,
             theme_before_preview: None,
             window_color_before_preview: None,
