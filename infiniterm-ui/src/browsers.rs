@@ -13,15 +13,15 @@ use crate::browser_body::BrowserBody;
 use crate::tab_strip::StripStyle;
 use crate::{now_ms, AppView};
 use infiniterm_core::grid::{Point, Size};
-use infiniterm_core::ift::{url_plan, OpenPlan};
+use infiniterm_core::ift::OpenPlan;
 use infiniterm_core::model::{BrowserAction, FindRequest};
 use infiniterm_core::saved_layout::CardKind;
 use infiniterm_core::viewport::screen_pos_of;
 
-/// A right-click's slim menu, positioned once at open time in content-area
-/// screen pixels. Not re-derived from the card each frame: the menu is up
-/// for a couple of clicks at most, and tracking a pan or zoom mid-menu
-/// would cost a frame of extra state for a case that does not come up.
+/// A page's right-click, waiting for the main loop to open its menu
+/// (`menus.rs::open_page_menu`): where it happened, in content-area screen
+/// pixels, and what Chromium said was under it. The menu itself is the tab
+/// strip's (`context_menu.rs`, #625); this only carries the click there.
 pub struct CardContextMenu {
     pub card_id: String,
     pub x: f64,
@@ -29,26 +29,6 @@ pub struct CardContextMenu {
     pub link_url: Option<String>,
     pub editable: bool,
     pub has_selection: bool,
-    pub can_go_back: bool,
-    pub can_go_forward: bool,
-    pub page_url: String,
-}
-
-/// What a slim menu item does. Copy-able so a render closure can capture it
-/// by value.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ContextMenuAction {
-    Back,
-    Forward,
-    Reload,
-    Cut,
-    Copy,
-    Paste,
-    CopyLinkAddress,
-    OpenLinkInNewCard,
-    OpenLinkInNewTab,
-    OpenInSystemBrowser,
-    OpenLinkInSystemBrowser,
 }
 
 /// What the body has to do to hold the tabs the card says it has.
@@ -266,9 +246,6 @@ impl AppView {
                 link_url: request.link_url,
                 editable: request.editable,
                 has_selection: request.has_selection,
-                can_go_back: request.can_go_back,
-                can_go_forward: request.can_go_forward,
-                page_url: request.page_url,
             });
         }
         for (id, urls) in retabs {
@@ -314,178 +291,12 @@ impl AppView {
         }
     }
 
-    /// A slim menu item was chosen: closes the menu and runs it. Copying the
-    /// link and opening it in a new card need no surface, everything else
-    /// does, which is why those two return early rather than sharing the
-    /// match below with a borrow of `self.bodies` already open.
-    pub fn context_menu_choose(&mut self, action: ContextMenuAction, cx: &mut gpui::App) {
-        let Some(menu) = self.context_menu.take() else {
-            return;
-        };
-        match action {
-            ContextMenuAction::CopyLinkAddress => {
-                if let Some(url) = menu.link_url {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(url));
-                }
-                return;
-            }
-            ContextMenuAction::OpenLinkInNewCard => {
-                if let Some(url) = menu.link_url {
-                    let plan = url_plan(&url, "");
-                    self.model.open_in_card(plan, Some(&menu.card_id));
-                }
-                return;
-            }
-            ContextMenuAction::OpenLinkInNewTab => {
-                if let Some(url) = menu.link_url {
-                    self.model.browser_tab_open(&menu.card_id, Some(&url));
-                }
-                return;
-            }
-            ContextMenuAction::OpenInSystemBrowser | ContextMenuAction::OpenLinkInSystemBrowser => {
-                let url = if action == ContextMenuAction::OpenLinkInSystemBrowser {
-                    menu.link_url
-                } else {
-                    Some(menu.page_url).filter(|u| !u.is_empty())
-                };
-                if let Some(url) = url {
-                    if let Err(e) = infiniterm_core::links_fs::open_url(&url) {
-                        self.model.notify(format!("could not open {url}"));
-                        eprintln!("[infiniterm] {e}");
-                    }
-                }
-                return;
-            }
-            _ => {}
-        }
-        let Some(surface) = self
-            .browser_for(&menu.card_id)
+    /// Whether the card's active page can go back and forward, for the
+    /// menu's Back and Forward rows (`canGoBack`, `canGoForward`).
+    pub fn browser_history_state(&mut self, card_id: &str) -> (bool, bool) {
+        self.browser_for(card_id)
             .and_then(|b| b.active_surface())
-        else {
-            return;
-        };
-        match action {
-            ContextMenuAction::Back => surface.back(),
-            ContextMenuAction::Forward => surface.forward(),
-            ContextMenuAction::Reload => surface.reload(),
-            ContextMenuAction::Cut => {
-                surface.edit_chord("x", false);
-            }
-            ContextMenuAction::Copy => {
-                surface.edit_chord("c", false);
-            }
-            ContextMenuAction::Paste => {
-                surface.edit_chord("v", false);
-            }
-            ContextMenuAction::CopyLinkAddress
-            | ContextMenuAction::OpenLinkInNewCard
-            | ContextMenuAction::OpenLinkInNewTab
-            | ContextMenuAction::OpenInSystemBrowser
-            | ContextMenuAction::OpenLinkInSystemBrowser => {
-                unreachable!("handled above, before the surface borrow")
-            }
-        }
-    }
-
-    /// The page's right-click menu, native like the others (#281): Chromium
-    /// said what is under the pointer (`context_menu`), this builds the rows
-    /// from it and opens them from a task, as every native menu must
-    /// (`native_menu.rs`). The choice goes through `context_menu_choose`; a
-    /// dismissed menu just forgets the request.
-    pub fn show_page_menu(&mut self, cx: &mut gpui::Context<Self>) {
-        use crate::native_menu::{pop_up, Row};
-        if self.page_menu_open {
-            return;
-        }
-        let Some(menu) = &self.context_menu else {
-            return;
-        };
-        let mut actions: Vec<ContextMenuAction> = vec![];
-        let mut item = |title: &str, action: ContextMenuAction, chord: &str| -> Row {
-            actions.push(action);
-            Row::Item {
-                tag: actions.len() as i64 - 1,
-                title: title.into(),
-                enabled: true,
-                chord: (!chord.is_empty()).then(|| chord.to_string()),
-            }
-        };
-        // What Chrome shows: Back, Forward and Reload belong to the page, so
-        // not on a link, a selection or a field, and Back and Forward only
-        // when there is somewhere to go.
-        let mut rows: Vec<Row> = vec![];
-        let on_page = menu.link_url.is_none() && !menu.editable && !menu.has_selection;
-        if on_page {
-            if menu.can_go_back {
-                rows.push(item("Back", ContextMenuAction::Back, ""));
-            }
-            if menu.can_go_forward {
-                rows.push(item("Forward", ContextMenuAction::Forward, ""));
-            }
-            rows.push(item("Reload", ContextMenuAction::Reload, ""));
-        }
-        if menu.editable || menu.has_selection {
-            if !rows.is_empty() {
-                rows.push(Row::Separator);
-            }
-            if menu.editable {
-                rows.push(item("Cut", ContextMenuAction::Cut, "cmd+x"));
-            }
-            rows.push(item("Copy", ContextMenuAction::Copy, "cmd+c"));
-            if menu.editable {
-                rows.push(item("Paste", ContextMenuAction::Paste, "cmd+v"));
-            }
-        }
-        if menu.link_url.is_some() {
-            if !rows.is_empty() {
-                rows.push(Row::Separator);
-            }
-            rows.push(item(
-                "Open Link in New Tab",
-                ContextMenuAction::OpenLinkInNewTab,
-                "",
-            ));
-            rows.push(item(
-                "Open Link in New Card",
-                ContextMenuAction::OpenLinkInNewCard,
-                "",
-            ));
-            rows.push(item(
-                "Copy Link Address",
-                ContextMenuAction::CopyLinkAddress,
-                "",
-            ));
-        }
-        // The footer of every browser menu.
-        if !rows.is_empty() {
-            rows.push(Row::Separator);
-        }
-        if menu.link_url.is_some() {
-            rows.push(item(
-                "Open Link in System Browser",
-                ContextMenuAction::OpenLinkInSystemBrowser,
-                "",
-            ));
-        } else {
-            rows.push(item(
-                "Open Page in System Browser",
-                ContextMenuAction::OpenInSystemBrowser,
-                "",
-            ));
-        }
-        self.page_menu_open = true;
-        cx.spawn(async move |view, cx| {
-            let chosen = pop_up(&rows);
-            let _ = view.update(cx, |this, cx| {
-                this.page_menu_open = false;
-                match chosen.and_then(|tag| actions.get(tag as usize).copied()) {
-                    Some(action) => this.context_menu_choose(action, cx),
-                    None => this.context_menu = None,
-                }
-                cx.notify();
-            });
-        })
-        .detach();
+            .map_or((false, false), |s| (s.can_go_back(), s.can_go_forward()))
     }
 }
 
@@ -511,6 +322,15 @@ impl AppView {
             BrowserAction::Back => surface.back(),
             BrowserAction::Forward => surface.forward(),
             BrowserAction::Reload => surface.reload(),
+            BrowserAction::Cut => {
+                surface.edit_chord("x", false);
+            }
+            BrowserAction::Copy => {
+                surface.edit_chord("c", false);
+            }
+            BrowserAction::Paste => {
+                surface.edit_chord("v", false);
+            }
             // Handled before the surface is looked up: it needs the port and
             // opens a card, not a call on the page.
             BrowserAction::DevTools => {}

@@ -41,6 +41,17 @@ pub struct Context {
     pub editor_has_selection: bool,
     /// The focused terminal has text selected.
     pub terminal_has_selection: bool,
+    /// A browser page's right-click landed on a link (set only while that
+    /// menu is open).
+    pub page_link: bool,
+    /// ... on an editable field.
+    pub page_editable: bool,
+    /// ... on selected text.
+    pub page_selection: bool,
+    /// The focused browser page has history to go back to.
+    pub can_go_back: bool,
+    /// ... and to go forward to.
+    pub can_go_forward: bool,
 }
 
 impl Context {
@@ -58,6 +69,11 @@ impl Context {
             find_widget_visible: false,
             editor_has_selection: false,
             terminal_has_selection: false,
+            page_link: false,
+            page_editable: false,
+            page_selection: false,
+            can_go_back: false,
+            can_go_forward: false,
         }
     }
 }
@@ -104,6 +120,26 @@ pub const KEYS: &[(&str, &str)] = &[
     (
         "terminalHasSelection",
         "the focused terminal has text selected",
+    ),
+    (
+        "pageLink",
+        "the right-click on a browser page is on a link (true in that menu only)",
+    ),
+    (
+        "pageEditable",
+        "the right-click on a browser page is on an editable field (true in that menu only)",
+    ),
+    (
+        "pageSelection",
+        "the right-click on a browser page is on selected text (true in that menu only)",
+    ),
+    (
+        "canGoBack",
+        "the focused browser page has history to go back to",
+    ),
+    (
+        "canGoForward",
+        "the focused browser page has history to go forward to",
     ),
 ];
 
@@ -186,6 +222,11 @@ fn lookup(key: &str, c: &Context) -> Value {
         "findWidgetVisible" => Value::Bool(c.find_widget_visible),
         "editorHasSelection" => Value::Bool(c.editor_has_selection),
         "terminalHasSelection" => Value::Bool(c.terminal_has_selection),
+        "pageLink" => Value::Bool(c.page_link),
+        "pageEditable" => Value::Bool(c.page_editable),
+        "pageSelection" => Value::Bool(c.page_selection),
+        "canGoBack" => Value::Bool(c.can_go_back),
+        "canGoForward" => Value::Bool(c.can_go_forward),
         _ => Value::Bool(false), // unreachable: parse refuses an unknown key
     }
 }

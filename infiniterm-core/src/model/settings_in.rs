@@ -233,6 +233,11 @@ impl Model {
             find_widget_visible: self.find.open || self.ui_context.find_widget_visible,
             editor_has_selection: self.ui_context.editor_has_selection,
             terminal_has_selection: self.ui_context.terminal_has_selection,
+            page_link: self.page_hit.as_ref().is_some_and(|h| h.link_url.is_some()),
+            page_editable: self.page_hit.as_ref().is_some_and(|h| h.editable),
+            page_selection: self.page_hit.as_ref().is_some_and(|h| h.selection),
+            can_go_back: self.ui_context.can_go_back,
+            can_go_forward: self.ui_context.can_go_forward,
         }
     }
 

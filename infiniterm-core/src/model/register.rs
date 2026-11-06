@@ -4127,6 +4127,53 @@ mod tests {
         }));
     }
 
+    // #625: the page menu's rows are commands. The edit ones go to the page;
+    // the link ones act on what the open menu was opened on and, with no
+    // menu open (the palette, `ift`), say there is no link.
+    #[test]
+    fn the_page_menu_commands_are_registered_and_act_on_the_clicked_link() {
+        use crate::model::{BrowserAction, PageHit};
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.set_focus(Some(&id));
+        for (cmd, action) in [
+            ("browser.cut", BrowserAction::Cut),
+            ("browser.copy", BrowserAction::Copy),
+            ("browser.paste", BrowserAction::Paste),
+        ] {
+            assert!(h.run(cmd).contains(&Effect::Browser {
+                card_id: id.clone(),
+                action,
+            }));
+        }
+        for cmd in [
+            "browser.link.copy",
+            "browser.link.newTab",
+            "browser.link.newCard",
+            "browser.link.external",
+        ] {
+            let effects = h.run(cmd);
+            assert!(h.m.notice.as_deref().unwrap_or("").contains("no link"));
+            assert!(effects.is_empty(), "{cmd} without a link does nothing");
+        }
+        h.m.page_hit = Some(PageHit {
+            link_url: Some("https://example.com/x".into()),
+            ..Default::default()
+        });
+        assert!(h
+            .run("browser.link.copy")
+            .contains(&Effect::Copy("https://example.com/x".into())));
+        assert!(h
+            .run("browser.link.external")
+            .contains(&Effect::OpenUrl("https://example.com/x".into())));
+        h.run("browser.link.newTab");
+        assert_eq!(
+            h.m.cards[0].tabs.last().map(String::as_str),
+            Some("https://example.com/x")
+        );
+    }
+
     // DevTools needs the debugging port, which the setting decides at
     // launch: with the setting off the command says so instead of asking the
     // ui for a port that was never opened.

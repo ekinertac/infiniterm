@@ -639,6 +639,11 @@ impl Surface {
         self.browser.can_go_back() == 1
     }
 
+    /// Whether the page has history ahead of it.
+    pub fn can_go_forward(&self) -> bool {
+        self.browser.can_go_forward() == 1
+    }
+
     pub fn reload(&self) {
         self.browser.reload();
     }

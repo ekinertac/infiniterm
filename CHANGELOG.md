@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-06
+
+- A browser card has one right-click menu. Right-clicking the page now shows the tab strip's menu (New Tab, Close Tab, Reopen Closed Tab, Reload, Copy Address, Open in System Browser) with its keyboard shortcuts, and right-clicking a tab shows Back and Forward too. On a link, a field or selected text the page adds its own rows (Open Link in New Tab or Card, Copy Link Address, Cut, Copy, Paste). Every row is a command, so the palette and `ift` can run them. Back and Forward are greyed instead of hidden when the page has nowhere to go.
+
 ## 0.6.8 (build 1350), 2026-11-06
 
 ### Updates

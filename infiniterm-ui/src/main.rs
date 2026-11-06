@@ -284,13 +284,10 @@ pub struct AppView {
     /// and `paint.rs` lights the band, because a frame you can drag looked
     /// exactly like one you cannot.
     pub hover_edge: Option<(String, Option<infiniterm_core::resize::Edge>)>,
-    /// A slim right-click menu open over a browser card. The position is
-    /// fixed at open time (content-area screen pixels), not re-derived from
-    /// the card each frame: simplest thing that works for a menu open for a
-    /// couple of clicks, at the cost of not tracking a pan mid-menu.
+    /// A right-click on a browser page, waiting for the main loop to open its
+    /// menu (`menus.rs::open_page_menu`). The position is fixed when the page
+    /// reports it (content-area screen pixels).
     pub context_menu: Option<crate::browsers::CardContextMenu>,
-    /// The page's native menu is open (`browsers.rs::show_page_menu`).
-    pub page_menu_open: bool,
     /// Off macOS: where a press on the bare title bar landed, kept until the
     /// pointer travels far enough to start a window move or the button comes
     /// up (`not_macos.rs::title_drag`).
@@ -865,7 +862,7 @@ fn main() {
                         // (#64). Its answer arrives later, on its own task.
                         this.answer_reads(now_ms(), cx);
                         if this.context_menu.is_some() {
-                            this.show_page_menu(cx);
+                            this.open_page_menu(cx);
                         }
                         if let Some(card) = this.paste_request.take() {
                             if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
