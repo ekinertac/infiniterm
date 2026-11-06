@@ -3130,6 +3130,7 @@ name = "infiniterm-editor"
 version = "0.6.8"
 dependencies = [
  "ropey",
+ "serde_json",
  "similar",
  "tree-sitter",
  "tree-sitter-bash",

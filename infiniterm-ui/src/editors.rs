@@ -199,6 +199,10 @@ impl AppView {
             body.highlight_line = cfg.editor.highlight_line;
             body.complete_words = cfg.editor.complete_words;
             body.format_on_save = cfg.editor.format_on_save;
+            body.lsp_enabled = cfg.editor.lsp.enabled;
+            if body.lsp_servers != cfg.editor.lsp.servers {
+                body.lsp_servers.clone_from(&cfg.editor.lsp.servers);
+            }
             if body.formatters != cfg.editor.formatters {
                 body.formatters.clone_from(&cfg.editor.formatters);
             }

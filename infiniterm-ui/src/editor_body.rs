@@ -257,6 +257,14 @@ pub struct EditorBody {
     /// `editor.formatOnSave` and `editor.formatters`, set by the reconcile.
     pub format_on_save: bool,
     pub formatters: std::collections::BTreeMap<String, String>,
+    /// `editor.lsp.enabled` and `editor.lsp.servers`, set by the reconcile,
+    /// and this buffer's connection to its language server, made on the
+    /// first completion it needs (`lsp_offer`).
+    pub lsp_enabled: bool,
+    pub lsp_servers: std::collections::BTreeMap<String, String>,
+    lsp: Option<LspState>,
+    /// A server that would not start or died: not tried again for this buffer.
+    lsp_failed: bool,
     /// The other tabs of the card, for the word list (`EditorTabs::key`).
     pub other_words: Vec<(String, Arc<Vec<String>>)>,
     /// This text's distinct words, for the other tabs' lists, cached like
@@ -431,6 +439,10 @@ impl EditorBody {
             complete_words: true,
             format_on_save: false,
             formatters: Default::default(),
+            lsp_enabled: false,
+            lsp_servers: Default::default(),
+            lsp: None,
+            lsp_failed: false,
             other_words: vec![],
             word_cache: (u64::MAX, 0, Arc::new(vec![])),
             visual_goal: None,
@@ -727,6 +739,7 @@ impl EditorBody {
             return;
         }
         self.take_host_answers(now);
+        self.lsp_poll();
         if self.draft_due.is_some_and(|due| now >= due) {
             self.draft_due = None;
             if self.is_dirty() {
@@ -2189,6 +2202,142 @@ impl EditorBody {
     /// Recomputes the completion popup from the text before the caret.
     /// Only for one plain caret in the text; the selected row stays on the
     /// same item while the list narrows around it.
+    /// What the language server offers at the caret, starting it and syncing
+    /// the text as needed. Everything here is a no-op with `editor.lsp.enabled`
+    /// off, for a file on a host, or for a language with no server.
+    fn lsp_offer(&mut self, text: &str, cursor: usize) -> LspAnswer {
+        use infiniterm_editor::lsp;
+        let Some(lang) = self.language else {
+            return LspAnswer::None;
+        };
+        let name = lang.badge();
+        let command = self
+            .lsp_servers
+            .get(name)
+            .cloned()
+            .or_else(|| lsp::default_server(name).map(String::from));
+        let Some(command) = command else {
+            return LspAnswer::None;
+        };
+        let (Some(path), true) = (self.path.clone(), self.source.is_local()) else {
+            return LspAnswer::None;
+        };
+        if !self.lsp_enabled {
+            self.lsp_hint(name, &command, &path);
+            return LspAnswer::None;
+        }
+        if self.read_only || self.lsp_failed {
+            return LspAnswer::None;
+        }
+        if self.lsp.as_ref().is_some_and(|s| s.client.is_dead()) {
+            self.lsp = None;
+            self.lsp_failed = true;
+            self.events
+                .push(EditorEvent::Notice("the language server stopped".into()));
+            return LspAnswer::None;
+        }
+        if self.lsp.is_none() {
+            match lsp::client_for(name, &lsp::project_root(&path), &command) {
+                Ok(client) => {
+                    self.lsp = Some(LspState {
+                        client,
+                        uri: lsp::file_uri(&path),
+                        synced: None,
+                        request: None,
+                        items: None,
+                    });
+                }
+                Err(why) => {
+                    self.lsp_failed = true;
+                    self.events
+                        .push(EditorEvent::Notice(format!("language server: {why}")));
+                    return LspAnswer::None;
+                }
+            }
+        }
+        let version = self.buffer.version;
+        let line = self.buffer.line_of(cursor);
+        let col = lsp::utf16_col(&self.buffer.line(line), self.buffer.col_of(cursor));
+        let Some(st) = self.lsp.as_mut() else {
+            return LspAnswer::None;
+        };
+        if st.synced != Some(version) {
+            st.client.sync(&st.uri, name, version, text);
+            st.synced = Some(version);
+        }
+        if let Some((v, c, items)) = &st.items {
+            if (*v, *c) == (version, cursor) {
+                return match lsp_popup(items, text, cursor) {
+                    Some(offer) => LspAnswer::Offer(offer),
+                    None => LspAnswer::None,
+                };
+            }
+        }
+        if st
+            .request
+            .is_none_or(|r| (r.version, r.cursor) != (version, cursor))
+        {
+            let id = st.client.request_completion(&st.uri, line, col);
+            st.request = Some(LspRequest {
+                id,
+                version,
+                cursor,
+            });
+        }
+        LspAnswer::Waiting
+    }
+
+    /// Takes the server's answer when it has come, and shows it if the caret
+    /// is still where it was asked. Called from `idle`.
+    fn lsp_poll(&mut self) {
+        let Some(st) = self.lsp.as_mut() else {
+            return;
+        };
+        let Some(req) = st.request else {
+            return;
+        };
+        if let Some(items) = st.client.take_completion(req.id) {
+            st.items = Some((req.version, req.cursor, items));
+            st.request = None;
+            if self.buffer.version == req.version && self.buffer.cursor() == req.cursor {
+                self.update_completion();
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// With the language server off, a note once per language and session
+    /// when its server is installed: the setting is easy to never find.
+    fn lsp_hint(&mut self, language: &'static str, command: &str, path: &str) {
+        use std::sync::{Mutex, OnceLock};
+        static HINTED: OnceLock<Mutex<std::collections::HashSet<&'static str>>> = OnceLock::new();
+        let hinted = HINTED.get_or_init(Default::default);
+        if hinted.lock().is_ok_and(|h| h.contains(language)) {
+            return;
+        }
+        let program = command.split_whitespace().next().unwrap_or("");
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
+        let dir = std::path::Path::new(path)
+            .parent()
+            .unwrap_or(std::path::Path::new("/"));
+        let found = infiniterm_editor::format::find_program(
+            program,
+            dir,
+            &std::env::var("PATH").unwrap_or_default(),
+            &home,
+        );
+        if let Ok(mut h) = hinted.lock() {
+            h.insert(language);
+        }
+        if found.is_some() {
+            self.events.push(EditorEvent::Notice(format!(
+                "{program} is installed: set editor.lsp.enabled for {language} completions"
+            )));
+        }
+    }
+
     fn update_completion(&mut self) {
         if self.buffer.cursor_count() != 1
             || self.buffer.selection().is_some()
@@ -2204,10 +2353,18 @@ impl EditorBody {
         // being true.
         let text = self.buffer.text();
         let cursor = self.buffer.cursor();
-        let schema_offer = self
-            .completer
-            .as_ref()
-            .and_then(|p| p.complete(&text, cursor));
+        // A language server, when one is on for this file, answers first;
+        // while it is still thinking the popup stays as it was.
+        let lsp_offer = match self.lsp_offer(&text, cursor) {
+            LspAnswer::Waiting => return,
+            LspAnswer::Offer(o) => Some(o),
+            LspAnswer::None => None,
+        };
+        let schema_offer = lsp_offer.or_else(|| {
+            self.completer
+                .as_ref()
+                .and_then(|p| p.complete(&text, cursor))
+        });
         let words_allowed = self
             .completer
             .as_ref()
@@ -3225,6 +3382,80 @@ impl EditorBody {
             crate::chrome::with_alpha(dim, crate::chrome::HAIRLINE_ALPHA),
         ));
     }
+}
+
+/// One buffer's side of a language-server connection: the shared client, this
+/// file's uri, the text version the server was last told, the completion
+/// asked for and the last answer. Dropping it tells the server the file closed.
+struct LspState {
+    client: std::sync::Arc<infiniterm_editor::lsp::Client>,
+    uri: String,
+    synced: Option<u64>,
+    request: Option<LspRequest>,
+    items: Option<(u64, usize, Vec<infiniterm_editor::lsp::Item>)>,
+}
+
+#[derive(Clone, Copy)]
+struct LspRequest {
+    id: u64,
+    version: u64,
+    cursor: usize,
+}
+
+impl Drop for LspState {
+    fn drop(&mut self) {
+        self.client.close(&self.uri);
+    }
+}
+
+/// What the language server has to say for the caret's state right now.
+enum LspAnswer {
+    /// Nothing: off, no server for this language, or it has no items for
+    /// the typed word. The popup falls back to words.
+    None,
+    /// Asked and waiting; the popup stays as it was.
+    Waiting,
+    Offer(Offer),
+}
+
+/// The popup for the server's items: the word being typed filters them, the
+/// closest first, up to the popup's limit. `None` when nothing is left.
+fn lsp_popup(items: &[infiniterm_editor::lsp::Item], text: &str, cursor: usize) -> Option<Offer> {
+    use infiniterm_core::complete::{Completion, MAX_ITEMS};
+    let typed: Vec<char> = text
+        .chars()
+        .take(cursor)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    let prefix: String = typed.iter().rev().collect();
+    let mut scored: Vec<(f64, &infiniterm_editor::lsp::Item)> = items
+        .iter()
+        .filter_map(|i| {
+            infiniterm_core::fuzzy::fuzzy_match(&prefix, &i.label).map(|m| (m.score, i))
+        })
+        .collect();
+    // Stable, so equal scores keep the server's own order.
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(MAX_ITEMS);
+    if scored.is_empty() {
+        return None;
+    }
+    Some(Offer {
+        typed: typed.len(),
+        items: scored
+            .into_iter()
+            .map(|(_, i)| Completion {
+                label: i.label.clone(),
+                insert: i.insert.clone(),
+                detail: i.detail.clone(),
+                doc: i.doc.clone(),
+            })
+            .collect(),
+        enter_accepts: false,
+    })
 }
 
 /// What `EditorBody::format_buffer` did.
@@ -4788,6 +5019,114 @@ mod tests {
             .take_events()
             .iter()
             .any(|e| matches!(e, EditorEvent::Notice(n) if n == "saved f.rs")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Language-server completion (#602), end to end through the body against
+    // a scripted server: off by default (nothing starts), and with the setting
+    // on the popup waits for the server, then shows its items filtered by the
+    // word being typed, with the server's insert text.
+    #[cfg(unix)]
+    #[test]
+    fn a_language_server_feeds_the_popup_only_when_it_is_turned_on() {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(python) = [
+            "/usr/bin/python3",
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+        ]
+        .iter()
+        .find(|p| std::path::Path::new(p).is_file()) else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("ift-editor-lsp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("server.py");
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env python3
+import sys, json
+def read():
+    n = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: return None
+        line = line.decode().strip()
+        if not line: break
+        if line.startswith("Content-Length:"): n = int(line.split(":")[1])
+    return json.loads(sys.stdin.buffer.read(n))
+def send(m):
+    b = json.dumps(m).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(b) + b); sys.stdout.buffer.flush()
+while True:
+    m = read()
+    if m is None: break
+    if m.get("method") == "initialize":
+        send({"jsonrpc": "2.0", "id": m["id"], "result": {"capabilities": {}}})
+    elif m.get("method") == "textDocument/completion":
+        send({"jsonrpc": "2.0", "id": m["id"], "result": [
+            {"label": "foo_bar", "detail": "fn()", "insertText": "foo_bar($0)", "insertTextFormat": 2},
+            {"label": "zzz"},
+            {"label": "foo_baz"}]})
+    elif m.get("method") == "exit": break
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.join("a.rs").to_string_lossy().to_string();
+        let mut b = body();
+        b.language = Some(Language::Rust);
+        b.path = Some(path);
+        b.buffer = Buffer::new("fo");
+        b.buffer.move_doc_end(false);
+        b.lsp_servers
+            .insert("rust".into(), format!("{python} {}", script.display()));
+        // Off (the default): no server starts, and a rust file just has words.
+        b.update_completion();
+        assert!(b.lsp.is_none(), "nothing runs with the setting off");
+        // On: the first ask starts the server and waits; the answer arrives
+        // in the idle step and fills the popup.
+        b.lsp_enabled = true;
+        b.update_completion();
+        assert!(b.lsp.is_some());
+        for _ in 0..200 {
+            b.lsp_poll();
+            if b.completion.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let popup = b.completion.as_ref().expect("the server's items");
+        let labels: Vec<_> = popup.offer.items.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec!["foo_bar", "foo_baz"],
+            "filtered by what was typed"
+        );
+        assert_eq!(popup.offer.typed, 2);
+        assert_eq!(
+            popup.offer.items[0].insert, "foo_bar()",
+            "snippet flattened"
+        );
+        assert_eq!(popup.offer.items[0].detail, "fn()");
+        // A server that is not installed is a note and not tried again.
+        let mut b = body();
+        b.language = Some(Language::Rust);
+        // Another folder, so another project: the first one's server is not
+        // handed back (a server is shared per language and project).
+        std::fs::create_dir_all(dir.join("other")).unwrap();
+        b.path = Some(dir.join("other/b.rs").to_string_lossy().to_string());
+        b.buffer = Buffer::new("x");
+        b.buffer.move_doc_end(false);
+        b.lsp_enabled = true;
+        b.lsp_servers
+            .insert("rust".into(), "definitely-not-a-server-xyz".into());
+        b.update_completion();
+        assert!(b.lsp_failed && b.lsp.is_none());
+        assert!(b
+            .take_events()
+            .iter()
+            .any(|e| matches!(e, EditorEvent::Notice(n) if n.starts_with("language server:"))));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

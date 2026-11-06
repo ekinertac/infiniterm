@@ -255,6 +255,17 @@ pub struct Canvas {
     pub momentum: bool,
 }
 
+/// Ask a language server for completions (`infiniterm-editor/src/lsp.rs`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Lsp {
+    /// Off by default: it runs a program that can hold a lot of memory.
+    pub enabled: bool,
+    /// Server commands by language name (`editor.lsp.servers.rust`), over the
+    /// built-in ones (rust-analyzer, typescript-language-server, pyright, gopls).
+    pub servers: std::collections::BTreeMap<String, String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Editor {
@@ -274,6 +285,8 @@ pub struct Editor {
     /// Formatter commands by language name (`editor.formatters.rust`), over
     /// the built-in defaults; see `format.rs` for the command's shape.
     pub formatters: std::collections::BTreeMap<String, String>,
+    /// Language-server completion (`editor.lsp.*`).
+    pub lsp: Lsp,
     /// Selected text's background and colour. Empty means the theme's yellow
     /// on the theme's background: a highlighter pen, visible on any scheme.
     pub selection_color: String,
@@ -586,6 +599,7 @@ pub fn default_config() -> Config {
             folder_scratch_tab: true,
             format_on_save: false,
             formatters: Default::default(),
+            lsp: Lsp::default(),
             selection_color: String::new(),
             selection_text_color: String::new(),
             cursor_color: String::new(),
@@ -894,6 +908,18 @@ pub fn merge_config(raw: &Value) -> Config {
                         .then(|| (language.to_string(), command.to_string()))
                 })
                 .collect(),
+            lsp: Lsp {
+                enabled: bool_(e.get("lsp.enabled"), d.editor.lsp.enabled),
+                servers: e
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        let language = k.strip_prefix("lsp.servers.")?;
+                        let command = v.as_str()?.trim();
+                        (!language.is_empty() && !command.is_empty())
+                            .then(|| (language.to_string(), command.to_string()))
+                    })
+                    .collect(),
+            },
             selection_color: str_(e.get("selectionColor"), &d.editor.selection_color),
             selection_text_color: str_(e.get("selectionTextColor"), &d.editor.selection_text_color),
             cursor_color: str_(e.get("cursorColor"), &d.editor.cursor_color),
@@ -1511,6 +1537,25 @@ mod tests {
             !e.formatters.contains_key("go"),
             "a blank command is no command"
         );
+    }
+
+    // The language server is off until asked for (#602), with its command per
+    // language read like the formatters'.
+    #[test]
+    fn lsp_is_off_by_default_and_servers_are_read_per_language() {
+        let d = m(json!({})).editor.lsp;
+        assert!(!d.enabled && d.servers.is_empty());
+        let l = m(json!({
+            "editor.lsp.enabled": true,
+            "editor.lsp.servers.python": "pylsp",
+            "editor": {"lsp": {"servers": {"rust": " ra ", "go": ""}}}
+        }))
+        .editor
+        .lsp;
+        assert!(l.enabled);
+        assert_eq!(l.servers.get("python").map(String::as_str), Some("pylsp"));
+        assert_eq!(l.servers.get("rust").map(String::as_str), Some("ra"));
+        assert!(!l.servers.contains_key("go"));
     }
 
     // A typo falls back rather than handing the terminal something it does not understand.
