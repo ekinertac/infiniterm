@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-06
+
+- Finder's "Open in infiniterm" service now says it belongs in Finder's menu, as the services that do appear there do. It was registered with macOS but missing from the right-click menu. Installed from this build, right-click a folder in Finder and look under Services or Quick Actions.
+
 ## 0.6.8 (build 1350), 2026-11-06
 
 ### Updates
