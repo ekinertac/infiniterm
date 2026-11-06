@@ -615,7 +615,9 @@ mod tests {
                 rows: 30
             }
         );
-        assert!(matches!(next_frame(&mut s, &mut r), Frame::Replay(b) if b.ends_with(b"old")));
+        assert!(
+            matches!(next_frame(&mut s, &mut r), Frame::Replay(b) if String::from_utf8_lossy(&b).contains("old"))
+        );
         assert_eq!(next_frame(&mut s, &mut r), Frame::ReplayEnd);
         relay.lock().unwrap().publish("abc", b"new");
         assert_eq!(next_frame(&mut s, &mut r), Frame::Data(b"new".to_vec()));

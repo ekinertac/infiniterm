@@ -21,7 +21,8 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 
-use super::session_protocol::{Frame, Ring, MAX_PAYLOAD};
+use super::mirror::Mirror;
+use super::session_protocol::{Frame, MAX_PAYLOAD};
 
 /// Frames queued for one viewer before it is dropped. Large enough for a
 /// full replay (the ring is cut into frames of `MAX_PAYLOAD`) and a burst of
@@ -29,16 +30,14 @@ use super::session_protocol::{Frame, Ring, MAX_PAYLOAD};
 /// a flood.
 pub const VIEWER_QUEUE: usize = 512;
 
-/// The bytes a viewer can catch up on: the ring's size per session. Matches
-/// the daemon's own ring so a viewer joining late sees what the card would.
-pub const RING_BYTES: usize = 256 * 1024;
-
 /// Chunk size for replay frames. Well under `MAX_PAYLOAD`, so a replay of a
-/// full ring is a handful of frames and never trips the frame size check.
+/// full scrollback is a handful of frames and never trips the frame size check.
 const REPLAY_CHUNK: usize = 64 * 1024;
 
 struct Session {
-    ring: Ring,
+    /// Follows the session like the host's own terminal does; a joining viewer
+    /// is given its scrollback and screen (see mirror.rs).
+    mirror: Mirror,
     viewers: Vec<SyncSender<Frame>>,
     hello: Frame,
 }
@@ -48,7 +47,7 @@ pub struct Relay {
     sessions: HashMap<String, Session>,
     /// Off when no join server runs (`join.enabled` is off, or this window is
     /// a viewer): the tap then keeps nothing, so a host that never serves
-    /// viewers does not hold a 256 KiB ring per session for no one.
+    /// viewers does not hold a mirrored terminal per session for no one.
     enabled: bool,
 }
 
@@ -76,10 +75,14 @@ impl Relay {
     /// the first thing a viewer reads: its grid must be the host's columns
     /// and rows, since the shell wraps to those.
     pub fn open(&mut self, id: &str, hello: Frame) {
+        let (cols, rows) = match hello {
+            Frame::Hello { cols, rows, .. } => (cols, rows),
+            _ => (80, 24),
+        };
         self.sessions
             .entry(id.to_string())
             .or_insert_with(|| Session {
-                ring: Ring::new(RING_BYTES),
+                mirror: Mirror::new(cols, rows),
                 viewers: Vec::new(),
                 hello,
             });
@@ -96,24 +99,26 @@ impl Relay {
         if let Frame::Hello { pid, .. } = s.hello {
             s.hello = Frame::Hello { pid, cols, rows };
         }
+        s.mirror.resize(cols, rows);
         s.viewers
             .retain(|tx| tx.try_send(Frame::Resize { cols, rows }).is_ok());
     }
 
-    /// Bytes the host itself was replayed on attach (the daemon's ring): kept
-    /// for viewers that join later, sent to nobody now. Without this a viewer
-    /// joining a session the host just adopted would see an empty screen.
+    /// Bytes the host itself was replayed on attach (the daemon's ring): taken
+    /// into the mirror for viewers that join later, sent to nobody now. Without
+    /// this a viewer joining a session the host just adopted would see an empty
+    /// screen.
     pub fn seed(&mut self, id: &str, bytes: &[u8]) {
         if !self.enabled {
             return;
         }
         if let Some(s) = self.sessions.get_mut(id) {
-            s.ring.push(bytes);
+            s.mirror.advance(bytes);
         }
     }
 
-    /// Output from the child, as the host read it. Kept in the ring for late
-    /// viewers and sent to every live viewer. A viewer whose queue is full is
+    /// Output from the child, as the host read it. Taken into the mirror for
+    /// late viewers and sent to every live viewer. A viewer whose queue is full is
     /// dropped here, not waited for.
     pub fn publish(&mut self, id: &str, bytes: &[u8]) {
         if !self.enabled {
@@ -122,7 +127,7 @@ impl Relay {
         let Some(s) = self.sessions.get_mut(id) else {
             return;
         };
-        s.ring.push(bytes);
+        s.mirror.advance(bytes);
         s.viewers
             .retain(|tx| match tx.try_send(Frame::Data(bytes.to_vec())) {
                 Ok(()) => true,
@@ -130,13 +135,14 @@ impl Relay {
             });
     }
 
-    /// A viewer joins. It gets the host's hello, the ring as replay frames,
-    /// the end of the replay, then live output. Returns `None` for a session
+    /// A viewer joins. It gets the host's hello, the mirror's snapshot (the
+    /// scrollback and the screen) as replay frames, the end of the replay, then
+    /// live output. Returns `None` for a session
     /// this host is not relaying.
     pub fn subscribe(&mut self, id: &str) -> Option<Receiver<Frame>> {
         let s = self.sessions.get_mut(id)?;
         let (tx, rx) = sync_channel(VIEWER_QUEUE);
-        let replay = s.ring.replay();
+        let replay = s.mirror.snapshot();
         let mut frames = vec![s.hello.clone()];
         frames.extend(
             replay
@@ -145,7 +151,7 @@ impl Relay {
         );
         frames.push(Frame::ReplayEnd);
         for f in frames {
-            // A queue this new has room for a replay of a full ring; if it
+            // A queue this new has room for a full snapshot; if it
             // ever did not, the viewer is refused rather than sent half a
             // screen.
             if tx.try_send(f).is_err() {
@@ -179,7 +185,6 @@ impl Relay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::session_protocol::PREAMBLE_BYTES;
 
     fn hello() -> Frame {
         Frame::Hello {
@@ -200,15 +205,41 @@ mod tests {
         r.publish("s", b"before");
         let rx = r.subscribe("s").expect("relayed");
         r.publish("s", b"after");
-        assert_eq!(
-            drain(&rx),
-            vec![
-                hello(),
-                Frame::Replay(b"\x1b[0mbefore".to_vec()),
-                Frame::ReplayEnd,
-                Frame::Data(b"after".to_vec()),
-            ]
+        let frames = drain(&rx);
+        assert_eq!(frames[0], hello());
+        assert!(
+            matches!(&frames[1], Frame::Replay(b) if String::from_utf8_lossy(b).contains("before"))
         );
+        assert_eq!(
+            frames[2..],
+            [Frame::ReplayEnd, Frame::Data(b"after".to_vec())]
+        );
+    }
+
+    #[test]
+    fn a_viewer_gets_the_scrollback_not_just_the_last_bytes() {
+        let mut r = Relay::new();
+        r.open("s", hello());
+        // 200 lines through a 24-row screen, then a flood of repaints that
+        // used to push those lines out of a byte ring.
+        for i in 0..200 {
+            r.publish("s", format!("history {i}\r\n").as_bytes());
+        }
+        for _ in 0..4000 {
+            r.publish("s", b"\x1b[2K\rspinner and status line repaint\r");
+        }
+        let rx = r.subscribe("s").unwrap();
+        let replay: Vec<u8> = drain(&rx)
+            .into_iter()
+            .filter_map(|f| match f {
+                Frame::Replay(b) => Some(b),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let text = String::from_utf8_lossy(&replay);
+        assert!(text.contains("history 0\r\n"), "the oldest line is there");
+        assert!(text.contains("history 199"));
     }
 
     #[test]
@@ -241,11 +272,11 @@ mod tests {
     }
 
     #[test]
-    fn a_full_ring_replays_in_chunks_under_the_frame_limit() {
+    fn a_full_scrollback_replays_in_chunks_under_the_frame_limit() {
         let mut r = Relay::new();
         r.open("s", hello());
-        let big = vec![b'z'; RING_BYTES];
-        r.publish("s", &big);
+        let line = format!("{}\r\n", "z".repeat(79));
+        r.publish("s", line.repeat(5000).as_bytes());
         let rx = r.subscribe("s").unwrap();
         let frames = drain(&rx);
         let replayed: usize = frames
@@ -255,9 +286,7 @@ mod tests {
                 _ => None,
             })
             .sum();
-        // The ring adds its reset prefix, and the preamble once it has
-        // trimmed (session_protocol.rs `Ring::replay`).
-        assert!(replayed > 0 && replayed <= RING_BYTES + PREAMBLE_BYTES + 4);
+        assert!(replayed > 0, "the snapshot has the scrollback in it");
         assert!(frames.iter().all(|f| match f {
             Frame::Replay(b) => b.len() <= REPLAY_CHUNK,
             _ => true,
@@ -326,7 +355,7 @@ mod tests {
         let frames = drain(&late);
         assert!(frames
             .iter()
-            .any(|f| matches!(f, Frame::Replay(b) if b.ends_with(b"from the daemon ring"))));
+            .any(|f| matches!(f, Frame::Replay(b) if String::from_utf8_lossy(b).contains("from the daemon ring"))));
     }
 
     #[test]
@@ -337,7 +366,18 @@ mod tests {
         r.publish("s", b"never kept");
         r.seed("s", b"nor this");
         let rx = r.subscribe("s").unwrap();
-        // Hello and the end of an empty replay: no bytes anywhere.
-        assert_eq!(drain(&rx), vec![hello(), Frame::ReplayEnd]);
+        // Hello, then a replay with no text in it (only the snapshot's own reset
+        // and cursor codes), then its end.
+        let frames = drain(&rx);
+        let text: String = frames
+            .iter()
+            .filter_map(|f| match f {
+                Frame::Replay(b) => Some(String::from_utf8_lossy(b).into_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(!text.contains("never kept") && !text.contains("nor this"));
+        assert_eq!(frames[0], hello());
+        assert_eq!(frames.last(), Some(&Frame::ReplayEnd));
     }
 }

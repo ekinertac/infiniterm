@@ -9,6 +9,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-06
 
 - "Check for Updates…" no longer says "infiniterm is up to date" when a newer build is already downloaded. The app downloads an update by itself and says so once; a later check you ask for now says "is ready: restart to install" again.
+- A viewer that joins a card (`ift join`, the phone app) now gets the card's scrollback and screen with their colours, not just the last bytes of output. Before, a card that had run Claude Code for an hour could show only a few dozen lines above the screen to a viewer, because most of the replayed output was repaints. Lines the program wrapped are re-wrapped to the viewer's own width.
 
 ## 0.6.7 (build 1337), 2026-11-05
 
