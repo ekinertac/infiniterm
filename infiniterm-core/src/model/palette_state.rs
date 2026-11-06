@@ -33,6 +33,14 @@ pub enum Source {
     /// `uitheme.pick` (#511): the files in `ui-themes/`, previewed live like
     /// `Themes`, and a pick is written as the setting `ui.theme`.
     UiThemes,
+    /// `editor.tab.moveToCard` (#265): the other editor cards on this
+    /// workspace; the focused card's active tab goes to the one picked.
+    MoveTab,
+    /// `editor.card.moveIntoCard` (#265): the same rows; every tab goes.
+    MoveCardInto,
+    /// `editor.openFileInCard` (#265): the editor cards, then the open panel;
+    /// the file opens as a tab of the one picked.
+    OpenInCard,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
@@ -56,6 +64,9 @@ impl Source {
             Source::MoveGroupTo => "moveGroupTo",
             Source::WindowColor => "windowColor",
             Source::UiThemes => "uiThemes",
+            Source::MoveTab => "moveTab",
+            Source::MoveCardInto => "moveCardInto",
+            Source::OpenInCard => "openInCard",
         }
     }
 
@@ -81,6 +92,9 @@ impl Source {
                 | Source::Themes
                 | Source::WindowColor
                 | Source::UiThemes
+                | Source::MoveTab
+                | Source::MoveCardInto
+                | Source::OpenInCard
         )
     }
 
@@ -104,6 +118,9 @@ impl Source {
             Source::MoveGroupTo => "Move the group to workspace…",
             Source::WindowColor => "Window colour…",
             Source::UiThemes => "Switch UI theme",
+            Source::MoveTab => "Move the tab to card…",
+            Source::MoveCardInto => "Move the card into card…",
+            Source::OpenInCard => "Open a file in card…",
         }
     }
 }
@@ -287,6 +304,10 @@ impl Model {
                     .collect()
             }
             Source::WindowColor => self.window_color_items(),
+            Source::MoveTab | Source::MoveCardInto => {
+                self.editor_card_rows(self.selection.focused_id.as_deref())
+            }
+            Source::OpenInCard => self.editor_card_rows(None),
             // The same shape as `Themes`: what you had when the picker opened
             // leads, under the "active" hint, and the rest keep the folder's order.
             Source::UiThemes => {

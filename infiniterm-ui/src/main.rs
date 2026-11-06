@@ -312,7 +312,8 @@ pub struct AppView {
     pub shortcuts_index: usize,
     /// "Open a file" asked for the open panel (`Effect::PickFile`); the idle
     /// timer, which has the app, shows it (#64). The card it opens beside.
-    pub pick_request: Option<Option<String>>,
+    /// And the editor card the file becomes a tab of, for "open a file in card…".
+    pub pick_request: Option<(Option<String>, Option<String>)>,
     /// The socket viewers join through (`ift join`, #423); `None` when the
     /// backend is not the daemon or the socket could not be bound.
     #[cfg(unix)]
@@ -872,7 +873,7 @@ fn main() {
                                 this.paste_text(&card, &text);
                             }
                         }
-                        if let Some(from) = this.pick_request.take() {
+                        if let Some((from, into)) = this.pick_request.take() {
                             let picked = cx.prompt_for_paths(gpui::PathPromptOptions {
                                 files: true,
                                 directories: true,
@@ -888,8 +889,15 @@ fn main() {
                                     .and_then(|paths| paths.into_iter().next());
                                 let Some(path) = path else { return };
                                 let _ = view.update(cx, |this, cx| {
-                                    this.model
-                                        .open_picked(&path.to_string_lossy(), from.as_deref());
+                                    let path = path.to_string_lossy();
+                                    match into.as_deref() {
+                                        Some(into) => {
+                                            this.model.open_picked_into(&path, into, from.as_deref())
+                                        }
+                                        None => {
+                                            this.model.open_picked(&path, from.as_deref());
+                                        }
+                                    }
                                     this.perform_effects();
                                     cx.notify();
                                 });

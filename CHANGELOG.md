@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-06
+
+- Editor tabs can move between cards. "Editor: move tab to card…" sends the active tab to another editor card, "Editor: move card into card…" sends every tab, and "Editor: open a file in card…" opens the file you pick as a tab of the card you pick. Both moves are also in the tab strip's right-click menu. A card left with no tabs closes, and a tab with unsaved changes stays until you save it.
+
 ## 0.6.8 (build 1350), 2026-11-06
 
 ### Updates

@@ -305,6 +305,8 @@ pub enum Effect {
     /// hands the pick to `Model::open_picked`, beside `from`.
     PickFile {
         from: Option<String>,
+        /// The editor card the file opens in as a tab (#265).
+        into: Option<String>,
     },
     /// Cmd+Shift+C: visual mode on this terminal card; the grid is the
     /// body's, so the ui turns it on (`Grid::visual_enter`).

@@ -155,6 +155,155 @@ impl Model {
         Ok(id)
     }
 
+    /// The editor cards of this workspace as palette rows ("#3 main.rs", the
+    /// card id as the row id), less `skip`: what the tab-moving pickers list.
+    pub fn editor_card_rows(&self, skip: Option<&str>) -> Vec<crate::palette::PaletteItem> {
+        self.cards_on(self.active_workspace.as_deref())
+            .into_iter()
+            .filter(|c| c.kind == CardKind::Editor && Some(c.id.as_str()) != skip)
+            .map(|c| {
+                let n = c.tabs.len().max(1);
+                crate::palette::PaletteItem {
+                    id: c.id.clone(),
+                    label: self.numbered_label(c),
+                    hint: Some(format!("{n} tab{}", if n == 1 { "" } else { "s" })),
+                }
+            })
+            .collect()
+    }
+
+    /// Opens a picker when there is something to pick, else says why not.
+    fn open_card_picker(&mut self, source: crate::model::palette_state::Source) {
+        let skip = (source != crate::model::palette_state::Source::OpenInCard)
+            .then(|| self.selection.focused_id.clone())
+            .flatten();
+        if self.editor_card_rows(skip.as_deref()).is_empty() {
+            self.notify("no other editor card on this workspace");
+            return;
+        }
+        self.open_palette(source);
+    }
+
+    /// Takes tab `index` out of an editor card's strip and returns its
+    /// handle. Nothing is remembered for "reopen closed tab": the tab did not
+    /// close, it moved. The caller closes the card when this was its last tab.
+    fn take_tab(&mut self, card_id: &str, index: usize) -> Option<String> {
+        let card = self.card_mut(card_id)?;
+        if index >= card.tabs.len() {
+            return None;
+        }
+        let handle = card.tabs.remove(index);
+        if index < card.active_tab {
+            card.active_tab -= 1;
+        } else if card.active_tab >= card.tabs.len() {
+            card.active_tab = card.tabs.len().saturating_sub(1);
+        }
+        sync_handle(card);
+        self.dirty_layout = true;
+        Some(handle)
+    }
+
+    /// Puts `handle` in `to`'s strip and returns its index there: the tab it
+    /// already has, when the file is open in that card, else a new last one.
+    fn adopt_tab(&mut self, to: &str, handle: &str) -> usize {
+        ensure_tabs(self, to);
+        let at = (!handle.is_empty())
+            .then(|| {
+                self.card(to)
+                    .and_then(|c| c.tabs.iter().position(|t| t == handle))
+            })
+            .flatten();
+        match at {
+            Some(i) => i,
+            None => {
+                self.browser_tab_open(to, (!handle.is_empty()).then_some(handle));
+                self.card(to).map_or(0, |c| c.tabs.len() - 1)
+            }
+        }
+    }
+
+    /// Both ends of a tab move, checked: two different editor cards.
+    fn check_move_ends(&self, from: &str, to: &str) -> Result<(), String> {
+        let is_editor = |id: &str| self.card(id).is_some_and(|c| c.kind == CardKind::Editor);
+        if from == to {
+            return Err("that is this card".into());
+        }
+        if !is_editor(from) || !is_editor(to) {
+            return Err("not an editor card".into());
+        }
+        Ok(())
+    }
+
+    /// The tab's unsaved text is the editor's, not the model's, and the tab
+    /// is rebuilt from the file in the other card: so a dirty one stays put.
+    /// `dirty` mirrors the active tab, which is the one a move takes.
+    fn check_move_clean(&self, from: &str) -> Result<(), String> {
+        match self.card(from).filter(|c| c.dirty) {
+            Some(c) => {
+                let name = c
+                    .path
+                    .as_deref()
+                    .map_or("untitled", crate::paths::base_name);
+                Err(format!("save {name} first, it has unsaved changes"))
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// `Editor: move tab to card…` (#265): the active tab of `from` becomes a
+    /// tab of `to`, which is focused. A file `to` already has open is
+    /// switched to instead. A card left with no tabs closes.
+    pub fn move_tab_to_card(&mut self, from: &str, to: &str) -> Result<(), String> {
+        self.check_move_ends(from, to)?;
+        self.check_move_clean(from)?;
+        ensure_tabs(self, from);
+        let index = self.card(from).map_or(0, |c| c.active_tab);
+        let only = self.card(from).is_some_and(|c| c.tabs.len() <= 1);
+        let handle = self
+            .take_tab(from, index)
+            .ok_or_else(|| "no tab to move".to_string())?;
+        let at = self.adopt_tab(to, &handle);
+        self.browser_tab_jump(to, at);
+        if only {
+            self.close_card_with(from, false, true);
+        }
+        self.set_focus(Some(to));
+        self.reveal_focused();
+        Ok(())
+    }
+
+    /// `Editor: move card into card…` (#265): every tab of `from` joins `to`,
+    /// the one that was showing stays the one showing, and `from` closes.
+    /// A folder editor's blank first buffer is not a tab to carry over.
+    pub fn move_card_into_card(&mut self, from: &str, to: &str) -> Result<(), String> {
+        self.check_move_ends(from, to)?;
+        self.check_move_clean(from)?;
+        ensure_tabs(self, from);
+        let Some(card) = self.card(from) else {
+            return Err("no such card".into());
+        };
+        let skip_blank = is_bare_folder_editor(card);
+        let showing = card.tabs.get(card.active_tab).cloned().unwrap_or_default();
+        let handles = card.tabs.clone();
+        let mut show = None;
+        for handle in handles {
+            if skip_blank && handle.is_empty() {
+                continue;
+            }
+            let at = self.adopt_tab(to, &handle);
+            if handle == showing {
+                show = Some(at);
+            }
+        }
+        if let Some(at) = show {
+            self.browser_tab_jump(to, at);
+        }
+        self.close_card_with(from, false, true);
+        self.set_focus(Some(to));
+        self.reveal_focused();
+        Ok(())
+    }
+
     /// Closes the active tab. Closes the whole card instead when it was
     /// the last tab, `Cmd+W`'s rule.
     pub fn browser_tab_close(&mut self, card_id: &str) {
@@ -325,6 +474,30 @@ pub fn register(r: &mut CommandRegistry<Model>) {
     r.register("editor.tab.new", "Editor: new tab", |m| {
         with_focused_editor(m, |m, id| m.browser_tab_open(&id, None));
     });
+    // Palette jobs, like `card.moveToWorkspace`: pick the command, then the card.
+    r.register(
+        "editor.tab.moveToCard",
+        "Editor: move tab to card…",
+        |m| {
+            with_focused_editor(m, |m, _| {
+                m.open_card_picker(crate::model::palette_state::Source::MoveTab)
+            });
+        },
+    );
+    r.register(
+        "editor.card.moveIntoCard",
+        "Editor: move card into card…",
+        |m| {
+            with_focused_editor(m, |m, _| {
+                m.open_card_picker(crate::model::palette_state::Source::MoveCardInto)
+            });
+        },
+    );
+    r.register(
+        "editor.openFileInCard",
+        "Editor: open a file in card…",
+        |m| m.open_card_picker(crate::model::palette_state::Source::OpenInCard),
+    );
     r.register("editor.tab.close", "Editor: close tab", |m| {
         with_focused_editor(m, |m, id| m.browser_tab_close(&id));
     });
@@ -695,6 +868,129 @@ mod tests {
             2,
             "a save that never landed closes nothing"
         );
+    }
+
+    /// Two editor cards: `a` with tabs a.rs and b.rs (b.rs showing), `b` with c.rs.
+    fn two_editors() -> (Model, String, String) {
+        let mut m = Model::new();
+        m.home = "/h".into();
+        m.start_dir = "/h".into();
+        m.active_workspace = Some(String::new());
+        let new = |m: &mut Model, path: &str| {
+            m.add_card(
+                "/h",
+                NewCard {
+                    kind: CardKind::Editor,
+                    path: Some(path.into()),
+                    ..Default::default()
+                },
+            )
+        };
+        let a = new(&mut m, "/h/a.rs");
+        let b = new(&mut m, "/h/c.rs");
+        m.browser_tab_open(&a, Some("/h/b.rs"));
+        m.set_focus(Some(&a));
+        (m, a, b)
+    }
+
+    #[test]
+    fn a_tab_moves_to_another_card_and_leaves_the_rest() {
+        let (mut m, a, b) = two_editors();
+        m.move_tab_to_card(&a, &b).unwrap();
+        let from = m.card(&a).unwrap();
+        assert_eq!(from.tabs, vec!["/h/a.rs"]);
+        assert_eq!(from.path.as_deref(), Some("/h/a.rs"));
+        assert!(from.closed_tabs.is_empty(), "moved, not closed");
+        let to = m.card(&b).unwrap();
+        assert_eq!(to.tabs, vec!["/h/c.rs", "/h/b.rs"]);
+        assert_eq!(to.active_tab, 1);
+        assert_eq!(to.path.as_deref(), Some("/h/b.rs"));
+        assert_eq!(m.selection.focused_id.as_deref(), Some(b.as_str()));
+    }
+
+    #[test]
+    fn the_last_tab_of_a_card_closes_it_when_it_moves() {
+        let (mut m, a, b) = two_editors();
+        m.move_tab_to_card(&b, &a).unwrap();
+        assert!(m.card(&b).is_none());
+        assert_eq!(
+            m.card(&a).unwrap().tabs,
+            vec!["/h/a.rs", "/h/b.rs", "/h/c.rs"]
+        );
+    }
+
+    #[test]
+    fn a_file_the_target_has_open_is_switched_to_not_doubled() {
+        let (mut m, a, b) = two_editors();
+        m.browser_tab_open(&b, Some("/h/b.rs"));
+        m.browser_tab_jump(&b, 0);
+        m.move_tab_to_card(&a, &b).unwrap();
+        let to = m.card(&b).unwrap();
+        assert_eq!(to.tabs, vec!["/h/c.rs", "/h/b.rs"]);
+        assert_eq!(to.active_tab, 1);
+    }
+
+    #[test]
+    fn a_dirty_tab_stays_where_it_is() {
+        let (mut m, a, b) = two_editors();
+        m.card_mut(&a).unwrap().dirty = true;
+        let err = m.move_tab_to_card(&a, &b).unwrap_err();
+        assert_eq!(err, "save b.rs first, it has unsaved changes");
+        assert_eq!(m.card(&a).unwrap().tabs.len(), 2);
+        assert_eq!(m.card(&b).unwrap().path.as_deref(), Some("/h/c.rs"));
+        assert!(m.card(&b).unwrap().tabs.len() <= 1, "nothing arrived");
+        assert!(m.move_card_into_card(&a, &b).is_err());
+    }
+
+    #[test]
+    fn a_card_moves_into_another_with_its_active_tab_showing() {
+        let (mut m, a, b) = two_editors();
+        m.move_card_into_card(&a, &b).unwrap();
+        assert!(m.card(&a).is_none(), "the emptied card closes");
+        let to = m.card(&b).unwrap();
+        assert_eq!(to.tabs, vec!["/h/c.rs", "/h/a.rs", "/h/b.rs"]);
+        assert_eq!(to.path.as_deref(), Some("/h/b.rs"), "b.rs was showing");
+    }
+
+    #[test]
+    fn moving_needs_two_different_editors() {
+        let (mut m, a, _) = two_editors();
+        assert_eq!(m.move_tab_to_card(&a, &a).unwrap_err(), "that is this card");
+        let term = m.add_card("/h", NewCard::default());
+        assert!(m.move_tab_to_card(&a, &term).is_err());
+        assert!(m.move_card_into_card(&term, &a).is_err());
+        assert_eq!(m.card(&a).unwrap().tabs.len(), 2);
+    }
+
+    #[test]
+    fn the_pickers_list_the_other_editor_cards() {
+        use crate::model::palette_state::Source;
+        let (mut m, a, b) = two_editors();
+        m.add_card("/h", NewCard::default()); // a terminal is never a row
+        let rows = m.palette_items(Source::MoveTab, &[]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, b);
+        assert_eq!(rows[0].hint.as_deref(), Some("1 tab"));
+        assert_eq!(m.palette_items(Source::OpenInCard, &[]).len(), 2);
+        m.palette_run(Source::MoveTab, &b);
+        assert_eq!(m.card(&b).unwrap().tabs.len(), 2);
+        assert_eq!(m.card(&a).unwrap().tabs.len(), 1);
+    }
+
+    #[test]
+    fn open_in_card_asks_the_open_panel_and_the_pick_becomes_a_tab() {
+        use crate::model::palette_state::Source;
+        use crate::model::Effect;
+        let (mut m, a, b) = two_editors();
+        m.palette_run(Source::OpenInCard, &b);
+        let effects = std::mem::take(&mut m.effects);
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::PickFile { from, into } if from.as_deref() == Some(a.as_str())
+                && into.as_deref() == Some(b.as_str())
+        )));
+        m.open_picked_into("/h/new.rs", &b, Some(&a));
+        assert_eq!(m.card(&b).unwrap().tabs, vec!["/h/c.rs", "/h/new.rs"]);
     }
 
     #[test]
