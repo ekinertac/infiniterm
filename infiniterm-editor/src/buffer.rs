@@ -13,6 +13,7 @@
 //! `infiniterm-ui` owns those and calls in.
 use ropey::Rope;
 use std::ops::Range;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Two spaces, CodeMirror's default indent unit and what `indentWithTab`
 /// inserts.
@@ -209,8 +210,72 @@ impl Buffer {
 
     // ----- movement -----
 
-    fn place(&mut self, idx: usize, select: bool) {
+    /// How many chars either side of a position are read to find the
+    /// grapheme-cluster boundaries around it: a cluster is a few chars (a
+    /// family emoji is eleven), never this many, and a line can be a megabyte.
+    const GRAPHEME_WINDOW: usize = 64;
+
+    /// The grapheme-cluster boundaries near `idx`, as char indices. A
+    /// cluster is what a person calls one character: a letter with its
+    /// combining accent, an emoji with its skin tone or a joined family, a
+    /// flag (two regional indicators), a CRLF. The caret and Backspace move
+    /// by these, so a caret never lands inside an emoji and Delete never
+    /// leaves half of one behind.
+    fn boundaries_near(&self, idx: usize) -> Vec<usize> {
+        let lo = idx.saturating_sub(Self::GRAPHEME_WINDOW);
+        let hi = (idx + Self::GRAPHEME_WINDOW).min(self.len_chars());
+        let s = self.slice(lo..hi);
+        let mut out = Vec::new();
+        let mut at = lo;
+        for g in s.graphemes(true) {
+            out.push(at);
+            at += g.chars().count();
+        }
+        out.push(at);
+        out
+    }
+
+    /// The boundary just before `idx` (the start of the cluster to its left).
+    pub fn grapheme_before(&self, idx: usize) -> usize {
         let idx = idx.min(self.len_chars());
+        if idx == 0 {
+            return 0;
+        }
+        let near = self.boundaries_near(idx);
+        near.iter()
+            .rev()
+            .find(|b| **b < idx)
+            .copied()
+            .unwrap_or(idx - 1)
+    }
+
+    /// The boundary just after `idx` (the end of the cluster to its right).
+    pub fn grapheme_after(&self, idx: usize) -> usize {
+        let len = self.len_chars();
+        if idx >= len {
+            return len;
+        }
+        let near = self.boundaries_near(idx);
+        near.iter().find(|b| **b > idx).copied().unwrap_or(idx + 1)
+    }
+
+    /// `idx` itself when it is a boundary, else the one before it: a click or
+    /// a vertical move can name a char in the middle of a cluster.
+    fn snap_to_boundary(&self, idx: usize) -> usize {
+        let idx = idx.min(self.len_chars());
+        if idx == 0 || idx == self.len_chars() {
+            return idx;
+        }
+        let near = self.boundaries_near(idx);
+        near.iter()
+            .rev()
+            .find(|b| **b <= idx)
+            .copied()
+            .unwrap_or(idx)
+    }
+
+    fn place(&mut self, idx: usize, select: bool) {
+        let idx = self.snap_to_boundary(idx);
         if select {
             if self.anchor.is_none() {
                 self.anchor = Some(self.cursor);
@@ -248,7 +313,7 @@ impl Buffer {
             self.place(r.start, false);
             return;
         }
-        self.place(self.cursor.saturating_sub(1), select);
+        self.place(self.grapheme_before(self.cursor), select);
     }
 
     pub fn move_right(&mut self, select: bool) {
@@ -257,7 +322,7 @@ impl Buffer {
             self.place(r.end, false);
             return;
         }
-        self.place(self.cursor + 1, select);
+        self.place(self.grapheme_after(self.cursor), select);
     }
 
     fn vertical(&mut self, delta: i64, select: bool) {
@@ -473,6 +538,14 @@ impl Buffer {
             self.select_range(r.start + 1..after);
             return;
         }
+        if self.selection().is_none() && matches!(c, '}' | ')' | ']') {
+            // Typed over an auto-inserted closer it is a step over, not a
+            // new bracket, and the dedent is the closer's own line's matter.
+            let over = self.cursor < self.len_chars() && self.text.char(self.cursor) == c;
+            if !over {
+                self.dedent_before_closer(now);
+            }
+        }
         let next = (self.cursor < self.len_chars()).then(|| self.text.char(self.cursor));
         if self.selection().is_none() {
             if let Some(close) = closing_of(c) {
@@ -524,7 +597,44 @@ impl Buffer {
                 return;
             }
         }
+        // After an opening bracket the next line is one level deeper, as in
+        // every editor: `if x {` then Enter. Looking left past spaces, so
+        // `foo(  ` counts; text to the right of the caret moves down with it.
+        let before_caret: String =
+            self.slice(self.line_start(self.line_of(self.cursor))..self.cursor);
+        let opens = before_caret
+            .trim_end_matches([' ', '\t'])
+            .chars()
+            .next_back()
+            .is_some_and(|c| matches!(c, '{' | '(' | '['));
+        let indent = if opens && self.selection().is_none() {
+            format!("{indent}{INDENT}")
+        } else {
+            indent
+        };
         self.insert(&format!("\n{indent}"), now);
+    }
+
+    /// Typing a closing bracket on a line that holds only indent takes one
+    /// level of it off first, so the `}` lines up with what opened the block.
+    /// A tab counts as a level; so does a run of `INDENT` spaces. Anything
+    /// else on the line, or no indent to take, leaves it alone.
+    fn dedent_before_closer(&mut self, now: f64) {
+        let line_start = self.line_start(self.line_of(self.cursor));
+        let before = self.slice(line_start..self.cursor);
+        if before.is_empty() || !before.chars().all(|c| c == ' ' || c == '\t') {
+            return;
+        }
+        let cut = if before.ends_with('\t') {
+            1
+        } else if before.ends_with(INDENT) {
+            INDENT.chars().count()
+        } else {
+            return;
+        };
+        let at = self.cursor - cut;
+        let old = self.slice(at..self.cursor);
+        self.apply(at, old, String::new(), at, false, now);
     }
 
     /// Cmd+Shift+D: a copy of the current line inserted right below it,
@@ -1376,13 +1486,16 @@ impl Buffer {
         let prev = self.text.char(self.cursor - 1);
         let next = (self.cursor < self.len_chars()).then(|| self.text.char(self.cursor));
         // Between an auto-inserted pair, both go.
-        let n = if closing_of(prev).is_some() && next == closing_of(prev) {
-            2
+        let pair = closing_of(prev).is_some() && next == closing_of(prev);
+        // Otherwise the whole cluster to the left: an emoji, a letter and its
+        // accent, a CRLF, not half of one.
+        let at = if pair {
+            self.cursor - 1
         } else {
-            1
+            self.grapheme_before(self.cursor)
         };
-        let at = self.cursor - 1;
-        let old = self.slice(at..at + n);
+        let end = if pair { self.cursor + 1 } else { self.cursor };
+        let old = self.slice(at..end);
         self.apply(at, old, String::new(), at, false, now);
     }
 
@@ -1396,7 +1509,7 @@ impl Buffer {
             return;
         }
         let at = self.cursor;
-        let old = self.slice(at..at + 1);
+        let old = self.slice(at..self.grapheme_after(at));
         self.apply(at, old, String::new(), at, false, now);
     }
 
@@ -1602,6 +1715,56 @@ mod tests {
         assert_eq!(b.cursor(), 8);
     }
 
+    // After an opening bracket the next line is one level deeper, and a
+    // closing bracket typed on an indent-only line steps back out (#602).
+    #[test]
+    fn enter_after_an_opening_bracket_indents_and_a_closer_dedents() {
+        let mut b = Buffer::new("if x {");
+        b.move_doc_end(false);
+        b.newline(0.);
+        assert_eq!(b.text(), "if x {\n  ");
+        b.type_char('}', 1.);
+        assert_eq!(b.text(), "if x {\n}", "the closer lines up with the opener");
+        // Under existing indent, trailing spaces after the bracket, a tab.
+        let mut b = Buffer::new("  call(  ");
+        b.move_doc_end(false);
+        b.newline(0.);
+        assert_eq!(b.text(), "  call(  \n    ");
+        let mut b = Buffer::new("\tfn f() {");
+        b.move_doc_end(false);
+        b.newline(0.);
+        assert_eq!(
+            b.text(),
+            "\tfn f() {\n\t  ",
+            "a tab keeps its tab, plus one level"
+        );
+        // Text after the caret moves down with the new indent.
+        let mut b = Buffer::new("a [b]");
+        b.set_cursor(3);
+        b.newline(0.);
+        assert_eq!(b.text(), "a [\n  b]");
+        // No opener: as before. A selection is replaced, not indented.
+        let mut b = Buffer::new("x = 1");
+        b.move_doc_end(false);
+        b.newline(0.);
+        assert_eq!(b.text(), "x = 1\n");
+        // A closer after text on the line is a plain character, and over an
+        // existing closer it is a step over, never a dedent.
+        let mut b = Buffer::new("  a ");
+        b.move_doc_end(false);
+        b.type_char(')', 0.);
+        assert_eq!(b.text(), "  a )");
+        let mut b = Buffer::new("f(\n  )");
+        b.set_cursor(5);
+        b.type_char(')', 0.);
+        assert_eq!(b.text(), "f(\n  )", "stepped over");
+        assert_eq!(b.cursor(), 6);
+        // A closer with no indent to take is untouched.
+        let mut b = Buffer::new("");
+        b.type_char('}', 0.);
+        assert_eq!(b.text(), "}");
+    }
+
     #[test]
     fn selection_replaces_and_movement_collapses_it() {
         let mut b = Buffer::new("hello world");
@@ -1745,6 +1908,81 @@ mod tests {
         b.set_cursor(4); // on "c", the last line
         b.swap_line_down(3.);
         assert_eq!(b.text(), "a\nb\nc");
+    }
+
+    // A person's "one character" is a grapheme cluster (#602): the caret and
+    // the deletions move by those, so an emoji is never split in half.
+    #[test]
+    fn the_caret_and_deletions_move_by_grapheme_cluster() {
+        // Family (5 chars), a flag (2), a thumbs up with a skin tone (2), an
+        // "e" with a combining acute (2), a CRLF (2), and plain letters.
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        let flag = "\u{1F1F9}\u{1F1F7}";
+        let thumb = "\u{1F44D}\u{1F3FD}";
+        let acute = "e\u{0301}";
+        let text = format!("a{family}{flag}{thumb}{acute}\r\nb");
+        let mut b = Buffer::new(&text);
+        b.set_cursor(1);
+        let mut stops = vec![b.cursor()];
+        for _ in 0..6 {
+            b.move_right(false);
+            stops.push(b.cursor());
+        }
+        // a | family | flag | thumb | e+acute | CRLF | b
+        assert_eq!(stops, vec![1, 6, 8, 10, 12, 14, 15]);
+        for expect in [14, 12, 10, 8, 6, 1] {
+            b.move_left(false);
+            assert_eq!(b.cursor(), expect);
+        }
+        // A click or a vertical move into the middle of a cluster snaps back.
+        b.set_cursor(3);
+        assert_eq!(b.cursor(), 1);
+        b.set_cursor(7);
+        assert_eq!(b.cursor(), 6);
+        // Shift+arrow selects whole clusters.
+        b.set_cursor(1);
+        b.move_right(true);
+        assert_eq!(b.selection(), Some(1..6));
+        // Backspace and Delete take a whole cluster.
+        let mut b = Buffer::new(&text);
+        b.set_cursor(6);
+        b.backspace(0.);
+        assert_eq!(b.text(), format!("a{flag}{thumb}{acute}\r\nb"));
+        b.set_cursor(1);
+        b.delete_forward(1.);
+        assert_eq!(b.text(), format!("a{thumb}{acute}\r\nb"));
+        let mut b = Buffer::new("x\r\ny");
+        b.set_cursor(3);
+        b.backspace(0.);
+        assert_eq!(b.text(), "xy", "a CRLF is one line break, not two");
+        // Plain text is unchanged, and the ends are still the ends.
+        let mut b = Buffer::new("ab");
+        b.move_left(false);
+        assert_eq!(b.cursor(), 0);
+        b.move_right(false);
+        b.move_right(false);
+        b.move_right(false);
+        assert_eq!(b.cursor(), 2);
+        b.backspace(0.);
+        assert_eq!(b.text(), "a");
+    }
+
+    #[test]
+    fn a_pair_still_goes_together_and_a_long_line_is_not_read_whole() {
+        let mut b = Buffer::new("()");
+        b.set_cursor(1);
+        b.backspace(0.);
+        assert_eq!(b.text(), "");
+        // A megabyte line: a step reads a window, not the line.
+        let long = "x".repeat(1_000_000);
+        let mut b = Buffer::new(&long);
+        b.set_cursor(500_000);
+        let started = std::time::Instant::now();
+        for _ in 0..200 {
+            b.move_right(false);
+        }
+        assert_eq!(b.cursor(), 500_200);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     #[test]
