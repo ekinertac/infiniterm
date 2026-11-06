@@ -3129,6 +3129,7 @@ dependencies = [
 name = "infiniterm-editor"
 version = "0.6.8"
 dependencies = [
+ "regex",
  "ropey",
  "similar",
  "tree-sitter",

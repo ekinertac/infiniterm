@@ -459,6 +459,9 @@ pub enum EditorAction {
     Tree(TreeAct),
     Save,
     Find,
+    /// A toggle of the find panel (#602), for the palette and the keymap as
+    /// well as the panel's buttons; it opens the panel when it is closed.
+    FindToggle(FindToggle),
     GoToLine,
     ToggleBlame,
     ToggleExplorer,
@@ -469,6 +472,16 @@ pub enum EditorAction {
     /// own, reachable only through the command palette, `cards_cmd.rs`'s
     /// `editor.transform.*` entries.
     Transform(TextTransform),
+}
+
+/// The find panel's switches: what a query means, and where it looks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FindToggle {
+    Regex,
+    MatchCase,
+    WholeWord,
+    /// Only inside the selection the toggle was pressed with.
+    InSelection,
 }
 
 /// A pure function in `infiniterm_editor::transforms`, picked by name here
@@ -485,6 +498,8 @@ pub enum TextTransform {
     UniqueLines,
     ReverseLines,
     TrimTrailingWhitespace,
+    RemoveBlankLines,
+    StripLineNumbers,
     IndentTabsToSpaces,
     IndentSpacesToTabs,
 }

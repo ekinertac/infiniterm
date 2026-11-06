@@ -8,7 +8,7 @@ use super::{
     BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
     TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
 };
-use super::{TerminalAction, TreeAct};
+use super::{FindToggle, TerminalAction, TreeAct};
 use crate::card_label::{card_label, tilde_path, Labelled};
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
 use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
@@ -1636,6 +1636,32 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("editor.find", "Editor: find", |m| {
         m.editor_action(EditorAction::Find)
     });
+    for (id, label, t) in [
+        (
+            "editor.find.regex",
+            "Editor: find with a regular expression",
+            FindToggle::Regex,
+        ),
+        (
+            "editor.find.matchCase",
+            "Editor: find with exact case",
+            FindToggle::MatchCase,
+        ),
+        (
+            "editor.find.wholeWord",
+            "Editor: find whole words only",
+            FindToggle::WholeWord,
+        ),
+        (
+            "editor.find.inSelection",
+            "Editor: find in the selection only",
+            FindToggle::InSelection,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.editor_action(EditorAction::FindToggle(t))
+        });
+    }
     r.register("editor.goToLine", "Editor: go to a line…", |m| {
         m.with_active_card(|m, id| {
             if m.card(&id).is_some_and(|c| c.kind == CardKind::Editor) {
@@ -1696,6 +1722,16 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             "editor.transform.trimTrailingWhitespace",
             "Editor: Trim Trailing Whitespace",
             TextTransform::TrimTrailingWhitespace,
+        ),
+        (
+            "editor.transform.removeBlankLines",
+            "Editor: Remove Blank Lines",
+            TextTransform::RemoveBlankLines,
+        ),
+        (
+            "editor.transform.stripLineNumbers",
+            "Editor: Strip Line Numbers",
+            TextTransform::StripLineNumbers,
         ),
         (
             "editor.transform.indentTabsToSpaces",
