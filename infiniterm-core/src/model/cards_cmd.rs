@@ -8,7 +8,7 @@ use super::{
     BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
     TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
 };
-use super::{TerminalAction, TreeAct};
+use super::{ChangeAct, TerminalAction, TreeAct};
 use crate::card_label::{card_label, tilde_path, Labelled};
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
 use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
@@ -1636,6 +1636,40 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("editor.find", "Editor: find", |m| {
         m.editor_action(EditorAction::Find)
     });
+    // Reviewing what changed under an open editor (#602): when the file is
+    // rewritten on disk (an agent in a terminal card), the gutter marks the
+    // changed lines, and these step through them or put them back.
+    for (id, label, act) in [
+        (
+            "editor.change.revert",
+            "Editor: revert the change at the caret",
+            ChangeAct::Revert,
+        ),
+        (
+            "editor.change.revertAll",
+            "Editor: revert every change since the file changed on disk",
+            ChangeAct::RevertAll,
+        ),
+        (
+            "editor.change.accept",
+            "Editor: accept the changes since the file changed on disk",
+            ChangeAct::Accept,
+        ),
+        (
+            "editor.change.next",
+            "Editor: go to the next change",
+            ChangeAct::Next,
+        ),
+        (
+            "editor.change.prev",
+            "Editor: go to the previous change",
+            ChangeAct::Prev,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.editor_action(EditorAction::Change(act))
+        });
+    }
     r.register("editor.goToLine", "Editor: go to a line…", |m| {
         m.with_active_card(|m, id| {
             if m.card(&id).is_some_and(|c| c.kind == CardKind::Editor) {

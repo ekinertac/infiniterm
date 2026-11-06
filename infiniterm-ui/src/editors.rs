@@ -529,6 +529,18 @@ impl AppView {
                     body.open_search(false);
                 }
             }
+            EditorAction::Change(act) => {
+                use infiniterm_core::model::ChangeAct;
+                if let Some(body) = self.editor_for(card_id) {
+                    match act {
+                        ChangeAct::Revert => body.change_revert(now),
+                        ChangeAct::RevertAll => body.change_revert_all(now),
+                        ChangeAct::Accept => body.change_accept(),
+                        ChangeAct::Next => body.change_jump(true),
+                        ChangeAct::Prev => body.change_jump(false),
+                    }
+                }
+            }
             EditorAction::GoToLine => {
                 if let Some(line) = card.line {
                     if let Some(body) = self.editor_for(card_id) {

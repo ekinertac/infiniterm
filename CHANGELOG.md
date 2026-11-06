@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-06
+
+- Editor: when an agent (or a formatter, or `git checkout`) rewrites a file that is open in an editor card, the card takes the new text as before, and now also marks what changed. The gutter shows the lines changed since the file changed on disk (instead of since HEAD) and the status bar says how many parts changed. Palette commands step through them ("Editor: go to the next change" and "previous"), put the one under the caret back ("Editor: revert the change at the caret", one Cmd+Z undoes it, and saving writes the reverted text), put them all back ("revert every change since the file changed on disk"), or keep them ("accept the changes..."), which returns the gutter to HEAD. A second change on disk before you accept is reviewed together with the first. A buffer with unsaved edits is unaffected: it keeps them and says the file changed, as before.
+
 ## 0.6.8 (build 1350), 2026-11-06
 
 ### Updates

@@ -460,6 +460,8 @@ pub enum EditorAction {
     Save,
     Find,
     GoToLine,
+    /// Reviewing what changed on disk under the buffer (an agent's edit).
+    Change(ChangeAct),
     ToggleBlame,
     ToggleExplorer,
     /// Leave the text: the lock is dropped and the card is an ordinary card
@@ -469,6 +471,18 @@ pub enum EditorAction {
     /// own, reachable only through the command palette, `cards_cmd.rs`'s
     /// `editor.transform.*` entries.
     Transform(TextTransform),
+}
+
+/// What a reviewer does with the parts of a file that changed on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeAct {
+    /// Put the changed part under the caret back.
+    Revert,
+    RevertAll,
+    /// Keep the changes; the gutter goes back to showing HEAD's.
+    Accept,
+    Next,
+    Prev,
 }
 
 /// A pure function in `infiniterm_editor::transforms`, picked by name here
