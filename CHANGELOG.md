@@ -6,10 +6,19 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-11-06
+## 0.6.8 (build 1350), 2026-11-06
+
+### Updates
 
 - "Check for Updates…" no longer says "infiniterm is up to date" when a newer build is already downloaded. The app downloads an update by itself and says so once; a later check you ask for now says "is ready: restart to install" again.
+
+### Joined window
+
 - A viewer that joins a card (`ift join`, the phone app) now gets the card's scrollback and screen with their colours, not just the last bytes of output. Before, a card that had run Claude Code for an hour could show only a few dozen lines above the screen to a viewer, because most of the replayed output was repaints. Lines the program wrapped are re-wrapped to the viewer's own width.
+
+### Themes and tabs
+
+- A card running a long command (a build, `git`, a script) keeps its program's icon on the tab and in the card header. Since 0.6.7 it showed the agent icon instead, as if an agent were working there. The agent icon now needs an agent on the card.
 
 ## 0.6.7 (build 1337), 2026-11-05
 
