@@ -3187,7 +3187,8 @@ impl EditorBody {
             }
             if which == Focus::Query {
                 let count = match (&s.error, s.current, s.matches.len()) {
-                    (Some(_), _, _) => "invalid regex".into(),
+                    // Fits the count column (`SEARCH_COUNT_COLS`).
+                    (Some(_), _, _) => "bad regex".into(),
                     (None, _, 0) if s.query.is_empty() => String::new(),
                     (None, _, 0) => "no matches".into(),
                     (None, Some(i), n) => format!("{} of {n}", i + 1),

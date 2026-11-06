@@ -8,7 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-06
 
-- Editor: find and replace has regular expressions (`$1` and `${name}` in the replacement, `\n` and `\t` too), a whole-word switch, an exact-case switch and a "Sel" switch that looks only inside the selection. Open find with several lines selected and it searches only those lines. The switches are buttons on the find row and palette commands (`Editor: find with a regular expression` and the others). Replace all is one Cmd+Z and says how many it replaced ("14 replaced"). A pattern that does not compile says "invalid regex" instead of finding nothing.
+- Editor: find and replace has regular expressions (`$1` and `${name}` in the replacement, `\n` and `\t` too), a whole-word switch, an exact-case switch and a "Sel" switch that looks only inside the selection. Open find with several lines selected and it searches only those lines. The switches are buttons on the find row and palette commands (`Editor: find with a regular expression` and the others). Replace all is one Cmd+Z and says how many it replaced ("14 replaced"). A pattern that does not compile says "bad regex" instead of finding nothing.
 - Editor: two new palette transforms, "Remove Blank Lines" and "Strip Line Numbers" (for code copied with its line numbers; it only acts when every line has one). Both are in the right-click Transform menu too.
 
 ## 0.6.8 (build 1350), 2026-11-06
