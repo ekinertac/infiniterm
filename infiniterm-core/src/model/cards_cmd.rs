@@ -1636,6 +1636,9 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("editor.find", "Editor: find", |m| {
         m.editor_action(EditorAction::Find)
     });
+    r.register("editor.format", "Editor: format document", |m| {
+        m.editor_action(EditorAction::Format)
+    });
     r.register("editor.goToLine", "Editor: go to a line…", |m| {
         m.with_active_card(|m, id| {
             if m.card(&id).is_some_and(|c| c.kind == CardKind::Editor) {

@@ -254,6 +254,9 @@ pub struct EditorBody {
     completion_closed_at: Option<u64>,
     /// `editor.completeWords`: plain words when nothing else answers.
     pub complete_words: bool,
+    /// `editor.formatOnSave` and `editor.formatters`, set by the reconcile.
+    pub format_on_save: bool,
+    pub formatters: std::collections::BTreeMap<String, String>,
     /// The other tabs of the card, for the word list (`EditorTabs::key`).
     pub other_words: Vec<(String, Arc<Vec<String>>)>,
     /// This text's distinct words, for the other tabs' lists, cached like
@@ -426,6 +429,8 @@ impl EditorBody {
             completion: None,
             completion_closed_at: None,
             complete_words: true,
+            format_on_save: false,
+            formatters: Default::default(),
             other_words: vec![],
             word_cache: (u64::MAX, 0, Arc::new(vec![])),
             visual_goal: None,
@@ -629,6 +634,14 @@ impl EditorBody {
             self.start_host_save(path, now);
             return;
         }
+        // Format on save (#602): the text is formatted first, so what goes to
+        // disk is what the buffer shows. Whatever goes wrong leaves the text
+        // as it is and the save goes on.
+        let formatted = if self.format_on_save && !self.read_only {
+            self.format_buffer(path, now)
+        } else {
+            FormatOutcome::NoFormatter
+        };
         let text = self.buffer.text();
         match file_write(path, &text) {
             Ok(()) => {
@@ -636,10 +649,12 @@ impl EditorBody {
                 self.disk_stamp = file_mtime(path);
                 self.draft_due = None;
                 let _ = draft_delete(&self.card_id);
-                self.events.push(EditorEvent::Notice(format!(
-                    "saved {}",
-                    infiniterm_core::paths::base_name(path)
-                )));
+                let name = infiniterm_core::paths::base_name(path);
+                self.events.push(EditorEvent::Notice(match formatted {
+                    FormatOutcome::Changed => format!("saved {name}, formatted"),
+                    FormatOutcome::Failed(why) => format!("saved {name}, not formatted: {why}"),
+                    _ => format!("saved {name}"),
+                }));
             }
             Err(e) => {
                 eprintln!("[infiniterm/warn] could not save {path}: {e}");
@@ -649,6 +664,58 @@ impl EditorBody {
         }
         self.dirty = true;
         self.blink_epoch = now;
+    }
+
+    /// Runs the language's formatter over the text (`infiniterm_editor::
+    /// format`): the `editor.formatters.<language>` command, else the
+    /// built-in one. The caret keeps its line and column, and the result is
+    /// one undo step. Local files only.
+    pub fn format_buffer(&mut self, path: &str, now: f64) -> FormatOutcome {
+        use infiniterm_editor::format;
+        if !self.source.is_local() {
+            return FormatOutcome::Failed("only files on this machine".into());
+        }
+        let Some(lang) = self.language else {
+            return FormatOutcome::NoFormatter;
+        };
+        let Some(command) = self
+            .formatters
+            .get(lang.badge())
+            .map(String::as_str)
+            .or_else(|| format::default_command(lang))
+        else {
+            return FormatOutcome::NoFormatter;
+        };
+        let text = self.buffer.text();
+        let new = match format::run(command, path, &text, format::TIMEOUT) {
+            Ok(new) => new,
+            Err(why) => return FormatOutcome::Failed(why),
+        };
+        if new == text {
+            return FormatOutcome::Unchanged;
+        }
+        let (line, col) = (
+            self.buffer.line_of(self.buffer.cursor()),
+            self.buffer.col_of(self.buffer.cursor()),
+        );
+        self.buffer.set_text(&new, now);
+        let line = line.min(self.buffer.line_count().saturating_sub(1));
+        let room = self.buffer.line(line).chars().count();
+        self.buffer
+            .set_cursor(self.buffer.line_start(line) + col.min(room));
+        self.now_dirty(now);
+        FormatOutcome::Changed
+    }
+
+    /// `editor.format`: format now, and say what happened in the status bar.
+    pub fn format_document(&mut self, path: &str, now: f64) {
+        let note = match self.format_buffer(path, now) {
+            FormatOutcome::Changed => "formatted".to_string(),
+            FormatOutcome::Unchanged => "already formatted".to_string(),
+            FormatOutcome::NoFormatter => "no formatter for this file".to_string(),
+            FormatOutcome::Failed(why) => format!("not formatted: {why}"),
+        };
+        self.events.push(EditorEvent::Notice(note));
     }
 
     /// Housekeeping between frames: the draft, the disk poll.
@@ -3160,6 +3227,17 @@ impl EditorBody {
     }
 }
 
+/// What `EditorBody::format_buffer` did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FormatOutcome {
+    /// The language has no formatter (and none was set): nothing to say.
+    NoFormatter,
+    Unchanged,
+    Changed,
+    /// The formatter was missing, failed, printed nothing or timed out.
+    Failed(String),
+}
+
 fn parent_of(path: &str) -> String {
     infiniterm_core::paths::parent_dir(path)
 }
@@ -4664,6 +4742,55 @@ mod tests {
 
     // A picture is shown, never read into the buffer, and a save must not
     // write the empty buffer over it: the file is still the picture after.
+    // Format on save (#602): the text is formatted before it is written, the
+    // caret keeps its line and column, one undo brings the old text back, and
+    // a formatter that is missing leaves the text alone and the file still
+    // gets saved, with the reason in the status bar. Off, nothing runs.
+    #[cfg(unix)]
+    #[test]
+    fn saving_formats_first_and_a_broken_formatter_still_saves() {
+        let dir = std::env::temp_dir().join(format!("ift-editor-fmt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f.rs").to_string_lossy().to_string();
+        let mut b = body();
+        b.language = Some(Language::Rust);
+        b.buffer = Buffer::new("abc\ndef");
+        b.buffer.set_cursor(5); // line 2, column 1
+        b.formatters.insert("rust".into(), "tr a-z A-Z".into());
+        b.save(&path, 1.);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "abc\ndef",
+            "off: nothing runs"
+        );
+        b.format_on_save = true;
+        b.save(&path, 2.);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "ABC\nDEF");
+        assert_eq!(b.buffer.text(), "ABC\nDEF");
+        assert_eq!(b.buffer.cursor(), 5, "the caret kept its line and column");
+        assert!(b
+            .take_events()
+            .iter()
+            .any(|e| matches!(e, EditorEvent::Notice(n) if n == "saved f.rs, formatted")));
+        b.buffer.undo();
+        assert_eq!(b.buffer.text(), "abc\ndef", "formatting is one undo");
+        b.formatters
+            .insert("rust".into(), "definitely-not-installed-xyz".into());
+        b.save(&path, 3.);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "abc\ndef");
+        assert!(b.take_events().iter().any(
+            |e| matches!(e, EditorEvent::Notice(n) if n.starts_with("saved f.rs, not formatted:"))
+        ));
+        // A language with no formatter says nothing.
+        b.language = Some(Language::Toml);
+        b.save(&path, 4.);
+        assert!(b
+            .take_events()
+            .iter()
+            .any(|e| matches!(e, EditorEvent::Notice(n) if n == "saved f.rs")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_picture_is_never_read_as_text_nor_written_back() {
         let dir = std::env::temp_dir().join(format!(

@@ -460,6 +460,8 @@ pub enum EditorAction {
     Save,
     Find,
     GoToLine,
+    /// `editor.format`: run the language's formatter over the text now.
+    Format,
     ToggleBlame,
     ToggleExplorer,
     /// Leave the text: the lock is dropped and the card is an ordinary card

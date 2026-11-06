@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-06
+
+- Editor: format on save. Turn on `"editor.formatOnSave": true` and Cmd+S runs the file's formatter over the text first: Prettier for JavaScript, TypeScript, TSX, JSON, CSS, SCSS, HTML, markdown and YAML, `rustfmt`, `gofmt` and `black` for their languages. It is off by default because it rewrites the file and runs a program. The formatter is found in the project's `node_modules/.bin`, on `PATH` and in the usual Homebrew, cargo, asdf and volta folders, and runs in the file's folder so its own config applies. Use your own with `"editor.formatters.python": "ruff format --stdin-filename {path} -"` (`{path}` is the file). A formatter that is missing, fails or takes over eight seconds leaves your text as it is, the file is saved anyway, and the status bar says why. One Cmd+Z undoes the formatting, and the caret keeps its line and column. "Editor: format document" in the palette formats without saving. Only files on this machine.
+
 ## 0.6.8 (build 1350), 2026-11-06
 
 ### Updates

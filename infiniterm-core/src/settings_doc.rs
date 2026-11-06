@@ -254,6 +254,32 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "editor.formatOnSave",
+        &[
+            "Run the file's formatter over an editor's text when you save it (Cmd+S).",
+            "Off by default, because it rewrites the file and runs a program. The",
+            "formatter is Prettier for JavaScript, TypeScript, TSX, JSON, CSS, SCSS,",
+            "HTML, markdown and YAML, rustfmt for Rust, gofmt for Go and black for",
+            "Python, found in the project's node_modules/.bin, on PATH or in the usual",
+            "Homebrew and cargo folders. A formatter that is missing, fails or takes",
+            "longer than eight seconds leaves your text as it is and the file is saved",
+            "anyway, with a note in the status bar. Only files on this machine.",
+        ],
+    ),
+    (
+        "editor.formatters",
+        &[
+            "Your own formatter per language, as editor.formatters.<language>, with",
+            "the language's name as the status bar shows it (rust, javascript,",
+            "typescript, tsx, json, css, scss, html, markdown, yaml, go, python, c,",
+            "shell, toml, sql, svelte). The command is words separated by spaces, no",
+            "shell: the text goes to its stdin and the formatted text is read from its",
+            "stdout, and {path} is replaced by the file's path. For example",
+            "\"editor.formatters.python\": \"ruff format --stdin-filename {path} -\".",
+            "The Editor: format document command uses these too.",
+        ],
+    ),
+    (
         "editor.selectionColor",
         &[
             "Behind selected text, as a CSS colour. Empty is the theme's yellow: a",
