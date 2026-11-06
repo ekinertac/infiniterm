@@ -10,6 +10,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 - Editor: find and replace has regular expressions (`$1` and `${name}` in the replacement, `\n` and `\t` too), a whole-word switch, an exact-case switch and a "Sel" switch that looks only inside the selection. Open find with several lines selected and it searches only those lines. The switches are buttons on the find row and palette commands (`Editor: find with a regular expression` and the others). Replace all is one Cmd+Z and says how many it replaced ("14 replaced"). A pattern that does not compile says "bad regex" instead of finding nothing.
 - Editor: two new palette transforms, "Remove Blank Lines" and "Strip Line Numbers" (for code copied with its line numbers; it only acts when every line has one). Both are in the right-click Transform menu too.
+- Editor: Cmd+P opens "Go to file…", every file in the project fuzzy-matched on its path (`edbody` finds `src/editor_body.rs`), and Enter opens it as a tab, or switches to the tab that has it. The project is the git repository the open file is in (tracked and untracked files, nothing .gitignore hides), else the folder, with `node_modules`, `target` and similar left out. It works from inside the text of a locked editor too. If your `keybindings.json` already binds Cmd+P to something, that stays yours: bind `editor.goToFile` to any chord, or run "Editor: go to a file…" from the palette. Also in the editor's right-click menu.
 
 ## 0.6.8 (build 1350), 2026-11-06
 
