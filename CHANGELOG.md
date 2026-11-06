@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-06
+
+- Editor: with several cursors, one Cmd+Z undoes what a keypress did at every cursor and puts all the cursors back (Cmd+Shift+Z redoes it). Before, it undid one cursor's edit at a time. Typing a word at several cursors undoes as one step, like typing at one.
+
 ## 0.6.8 (build 1350), 2026-11-06
 
 ### Updates
