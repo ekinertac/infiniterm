@@ -198,6 +198,112 @@ pub fn remove_gone(devices: &[Device], gone: &[String]) -> Vec<Device> {
         .collect()
 }
 
+/// A card that is coloured (waiting, failed or done), as the relay lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColouredCard {
+    pub id: String,
+    pub number: u32,
+    pub card: String,
+    pub workspace: String,
+    pub state: AgentState,
+    pub since: u64,
+}
+
+/// The card a push is about. `None` in `relay_body` means a body that only
+/// refreshes the card list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelayAlert {
+    pub number: u32,
+    pub card: String,
+    pub workspace: String,
+    pub state: AgentState,
+}
+
+/// The state word the relay and the phone use.
+pub fn state_word(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Waiting => "waiting",
+        AgentState::Failed => "failed",
+        AgentState::Done => "done",
+        AgentState::Working => "working",
+        AgentState::None => "none",
+    }
+}
+
+/// At most `max_chars` characters. Counts characters, not bytes, so a
+/// multibyte name is never split in the middle of a character.
+pub fn cut(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
+}
+
+const RELAY_NAME_MAX: usize = 60;
+const RELAY_CARDS_MAX: usize = 20;
+
+/// The body to POST to a relay: who to push, the one alert (or null), and the
+/// newest coloured cards for the widget. The cap keeps the body small, the
+/// name cut keeps one long title from filling a notification.
+pub fn relay_body(
+    ids: &[&str],
+    host: &str,
+    alert: Option<&RelayAlert>,
+    cards: &[ColouredCard],
+) -> String {
+    let mut sorted: Vec<&ColouredCard> = cards.iter().collect();
+    sorted.sort_by(|a, b| b.since.cmp(&a.since));
+    let cards: Vec<_> = sorted
+        .into_iter()
+        .take(RELAY_CARDS_MAX)
+        .map(|c| {
+            json!({
+                "id": c.id,
+                "number": c.number,
+                "card": cut(&c.card, RELAY_NAME_MAX),
+                "workspace": cut(&c.workspace, RELAY_NAME_MAX),
+                "state": state_word(c.state),
+                "since": c.since,
+            })
+        })
+        .collect();
+    let alert = alert.map(|a| {
+        json!({
+            "number": a.number,
+            "card": cut(&a.card, RELAY_NAME_MAX),
+            "workspace": cut(&a.workspace, RELAY_NAME_MAX),
+            "state": state_word(a.state),
+        })
+    });
+    json!({ "ids": ids, "host": host, "alert": alert, "cards": cards }).to_string()
+}
+
+/// Ids grouped by relay url, in order of first appearance, so each relay
+/// gets one request.
+pub fn group_by_url(devices: &[Device]) -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    for d in devices {
+        match out.iter_mut().find(|(url, _)| *url == d.url) {
+            Some((_, ids)) => ids.push(d.id.clone()),
+            None => out.push((d.url.clone(), vec![d.id.clone()])),
+        }
+    }
+    out
+}
+
+/// The ids a relay's reply marks `gone`. A reply that is not the expected
+/// shape is an error, so it is never mistaken for "nobody is gone".
+pub fn gone_ids(reply: &str) -> Result<Vec<String>, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(reply).map_err(|e| format!("relay reply is not JSON: {e}"))?;
+    let results = v
+        .get("results")
+        .and_then(|r| r.as_object())
+        .ok_or("relay reply has no results object")?;
+    Ok(results
+        .iter()
+        .filter(|(_, status)| status.as_str() == Some("gone"))
+        .map(|(id, _)| id.clone())
+        .collect())
+}
+
 /// The body to POST to the server's root.
 pub fn json_body(topic: &str, push: &Push) -> String {
     json!({
@@ -417,5 +523,101 @@ mod tests {
         assert_eq!(text, "https://a/ one\nhttps://b/x two\n");
         assert_eq!(parse_devices_file(&text), Ok(list));
         assert_eq!(devices_file_text(&[]), "");
+    }
+
+    fn cc(id: &str, since: u64, name: &str) -> ColouredCard {
+        ColouredCard {
+            id: id.to_string(),
+            number: 3,
+            card: name.to_string(),
+            workspace: "MyWorkspace".to_string(),
+            state: Waiting,
+            since,
+        }
+    }
+
+    #[test]
+    fn relay_body_has_ids_host_alert_and_cards() {
+        let alert = RelayAlert {
+            number: 3,
+            card: "MyProject".to_string(),
+            workspace: "MyWorkspace".to_string(),
+            state: Waiting,
+        };
+        let body = relay_body(
+            &["a", "b"],
+            "My Mac",
+            Some(&alert),
+            &[cc("c1", 1762540000, "MyProject")],
+        );
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ids"], json!(["a", "b"]));
+        assert_eq!(v["host"], "My Mac");
+        assert_eq!(v["alert"]["number"], 3);
+        assert_eq!(v["alert"]["card"], "MyProject");
+        assert_eq!(v["alert"]["workspace"], "MyWorkspace");
+        assert_eq!(v["alert"]["state"], "waiting");
+        assert_eq!(
+            v["cards"],
+            json!([{
+                "id": "c1", "number": 3, "card": "MyProject",
+                "workspace": "MyWorkspace", "state": "waiting", "since": 1762540000u64
+            }])
+        );
+    }
+
+    #[test]
+    fn relay_body_alert_null_for_drop_only() {
+        let v: serde_json::Value =
+            serde_json::from_str(&relay_body(&["a"], "Mac", None, &[])).unwrap();
+        assert!(v["alert"].is_null());
+        assert_eq!(v["cards"], json!([]));
+    }
+
+    #[test]
+    fn relay_body_caps_cards_at_20_newest_first_and_cuts_names_to_60_chars() {
+        let long = "é".repeat(70);
+        let mut cards: Vec<_> = (0..25).map(|i| cc(&format!("c{i}"), i, &long)).collect();
+        cards.reverse();
+        let v: serde_json::Value =
+            serde_json::from_str(&relay_body(&["a"], "Mac", None, &cards)).unwrap();
+        let out = v["cards"].as_array().unwrap();
+        assert_eq!(out.len(), 20);
+        assert_eq!(out[0]["since"], 24);
+        assert_eq!(out[19]["since"], 5);
+        assert_eq!(out[0]["card"].as_str().unwrap().chars().count(), 60);
+        assert_eq!(cut("abc", 60), "abc");
+    }
+
+    #[test]
+    fn group_by_url_merges_ids_on_one_relay() {
+        let list = vec![
+            dev("https://a/", "one"),
+            dev("https://b/", "two"),
+            dev("https://a/", "three"),
+        ];
+        assert_eq!(
+            group_by_url(&list),
+            [
+                (
+                    "https://a/".to_string(),
+                    vec!["one".to_string(), "three".to_string()]
+                ),
+                ("https://b/".to_string(), vec!["two".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn gone_ids_reads_results() {
+        let reply = r#"{"results":{"a":"ok","b":"gone","c":"error"}}"#;
+        assert_eq!(gone_ids(reply), Ok(vec!["b".to_string()]));
+    }
+
+    #[test]
+    fn gone_ids_rejects_non_json_and_missing_results() {
+        assert!(gone_ids("nope").is_err());
+        assert!(gone_ids("{}").is_err());
+        assert!(gone_ids(r#"{"results":[1]}"#).is_err());
     }
 }
