@@ -230,6 +230,8 @@ const TAB: &[Def] = &[
 const EDITOR_TOP: &[Def] = &[
     titled("card.save", "Save"),
     titled("card.find", "Find\u{2026}"),
+    titled("editor.goToSymbol", "Go to Symbol\u{2026}"),
+    titled("editor.goToFile", "Go to File\u{2026}"),
     titled("editor.goToLine", "Go to Line\u{2026}"),
     Def::Separator,
     Def::Submenu {
@@ -249,6 +251,8 @@ const EDITOR_TOP: &[Def] = &[
                 "editor.transform.trimTrailingWhitespace",
                 "Trim Trailing Whitespace",
             ),
+            titled("editor.transform.removeBlankLines", "Remove Blank Lines"),
+            titled("editor.transform.stripLineNumbers", "Strip Line Numbers"),
             Def::Separator,
             titled(
                 "editor.transform.indentTabsToSpaces",
@@ -372,6 +376,20 @@ const TAB_STRIP: &[Def] = &[
         "browserFocus",
         "",
         "cmd+shift+t",
+    ),
+    full(
+        "editor.tab.moveToCard",
+        Some("Move Tab to Card…"),
+        "editorFocus",
+        "",
+        "",
+    ),
+    full(
+        "editor.card.moveIntoCard",
+        Some("Move Card into Card…"),
+        "editorFocus",
+        "",
+        "",
     ),
     Def::Separator,
     full(

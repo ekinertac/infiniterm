@@ -39,9 +39,10 @@ use infiniterm_core::files::{
 };
 use infiniterm_core::git::git_show_head;
 use infiniterm_core::grid::{Point, Size};
+use infiniterm_core::model::FindToggle;
 use infiniterm_core::words::{complete_words, unique_words, Other};
 use infiniterm_editor::buffer::Buffer;
-use infiniterm_editor::diff::{gutter_marks, GutterMark};
+use infiniterm_editor::diff::{gutter_marks, hunk_at, hunks, revert_hunk, GutterMark, Hunk};
 use infiniterm_editor::explorer::{Entry, Tree, TreeAction};
 use infiniterm_editor::highlight::{Highlighting, Span};
 use infiniterm_editor::jumps::Jumps;
@@ -139,6 +140,19 @@ const SEARCH_ROW_HEIGHT_SCALE: f64 = 1.3;
 /// Columns reserved for the "find"/"replace" label plus its gap before the
 /// field box starts.
 const SEARCH_LABEL_COLS: f64 = 9.;
+/// The panel's right-hand column: the match count (label-font columns), and
+/// before it the toggle buttons, each its label's width plus this padding.
+const SEARCH_COUNT_COLS: f64 = 11.;
+const SEARCH_TOGGLE_PAD_COLS: f64 = 2.;
+/// The toggles, left to right, with what each button says.
+const FIND_TOGGLES: [(FindToggle, &str); 4] = [
+    (FindToggle::Regex, ".*"),
+    (FindToggle::MatchCase, "Aa"),
+    (FindToggle::WholeWord, "W"),
+    (FindToggle::InSelection, "Sel"),
+];
+/// An engaged toggle's ground is the selection colour at this alpha.
+const FIND_TOGGLE_ON_ALPHA: f32 = 0.6;
 /// The panel's inset from its own top edge.
 const SEARCH_PANEL_TOP_PAD_PX: f64 = 3.;
 /// A field box sits this far inside its row, top and bottom.
@@ -239,6 +253,13 @@ pub struct EditorBody {
     /// HEAD's text for the current path (`refresh_git_head`); `None`
     /// outside a git repo, or for a file HEAD does not have.
     git_head: Option<String>,
+    /// What this buffer held before the file last changed under it (#602):
+    /// an agent, a formatter or a `git checkout` rewrote it on disk and the
+    /// clean buffer took the new text. While it is set, the gutter marks the
+    /// lines changed since then instead of since HEAD, and the changed parts
+    /// can be stepped through, reverted one at a time, or accepted
+    /// (`change_*`). A second change on disk keeps the first baseline.
+    agent_base: Option<String>,
     last_git_check: f64,
     /// The git gutter's marks, cached the same way `spans` is: the
     /// buffer's version and the load count, so switching files does not
@@ -254,6 +275,17 @@ pub struct EditorBody {
     completion_closed_at: Option<u64>,
     /// `editor.completeWords`: plain words when nothing else answers.
     pub complete_words: bool,
+    /// `editor.formatOnSave` and `editor.formatters`, set by the reconcile.
+    pub format_on_save: bool,
+    pub formatters: std::collections::BTreeMap<String, String>,
+    /// `editor.lsp.enabled` and `editor.lsp.servers`, set by the reconcile,
+    /// and this buffer's connection to its language server, made on the
+    /// first completion it needs (`lsp_offer`).
+    pub lsp_enabled: bool,
+    pub lsp_servers: std::collections::BTreeMap<String, String>,
+    lsp: Option<LspState>,
+    /// A server that would not start or died: not tried again for this buffer.
+    lsp_failed: bool,
     /// The other tabs of the card, for the word list (`EditorTabs::key`).
     pub other_words: Vec<(String, Arc<Vec<String>>)>,
     /// This text's distinct words, for the other tabs' lists, cached like
@@ -263,6 +295,9 @@ pub struct EditorBody {
     /// set for: a caret moved by anything else forgets it.
     visual_goal: Option<(usize, usize)>,
     pub search: Option<Search>,
+    /// What the last replace all did ("14 replaced"), shown in the panel's
+    /// replace row until the query or the replacement changes.
+    find_note: Option<String>,
     query: Field,
     replacement: Field,
     focus: Focus,
@@ -419,6 +454,7 @@ impl EditorBody {
             spans: (u64::MAX, 0, vec![]),
             loads: 0,
             git_head: None,
+            agent_base: None,
             last_git_check: 0.,
             gutter: (u64::MAX, 0, vec![], vec![]),
             jumps: Jumps::default(),
@@ -426,10 +462,17 @@ impl EditorBody {
             completion: None,
             completion_closed_at: None,
             complete_words: true,
+            format_on_save: false,
+            formatters: Default::default(),
+            lsp_enabled: false,
+            lsp_servers: Default::default(),
+            lsp: None,
+            lsp_failed: false,
             other_words: vec![],
             word_cache: (u64::MAX, 0, Arc::new(vec![])),
             visual_goal: None,
             search: None,
+            find_note: None,
             query: Field::default(),
             replacement: Field::default(),
             focus: Focus::Buffer,
@@ -528,6 +571,7 @@ impl EditorBody {
         self.completer = provider_for(path);
         self.completion = None;
         self.warned_stale = false;
+        self.agent_base = None;
         self.scroll_line = 0;
         self.scroll_x = 0.;
         self.shaped.clear();
@@ -629,6 +673,14 @@ impl EditorBody {
             self.start_host_save(path, now);
             return;
         }
+        // Format on save (#602): the text is formatted first, so what goes to
+        // disk is what the buffer shows. Whatever goes wrong leaves the text
+        // as it is and the save goes on.
+        let formatted = if self.format_on_save && !self.read_only {
+            self.format_buffer(path, now)
+        } else {
+            FormatOutcome::NoFormatter
+        };
         let text = self.buffer.text();
         match file_write(path, &text) {
             Ok(()) => {
@@ -636,10 +688,12 @@ impl EditorBody {
                 self.disk_stamp = file_mtime(path);
                 self.draft_due = None;
                 let _ = draft_delete(&self.card_id);
-                self.events.push(EditorEvent::Notice(format!(
-                    "saved {}",
-                    infiniterm_core::paths::base_name(path)
-                )));
+                let name = infiniterm_core::paths::base_name(path);
+                self.events.push(EditorEvent::Notice(match formatted {
+                    FormatOutcome::Changed => format!("saved {name}, formatted"),
+                    FormatOutcome::Failed(why) => format!("saved {name}, not formatted: {why}"),
+                    _ => format!("saved {name}"),
+                }));
             }
             Err(e) => {
                 eprintln!("[infiniterm/warn] could not save {path}: {e}");
@@ -651,6 +705,58 @@ impl EditorBody {
         self.blink_epoch = now;
     }
 
+    /// Runs the language's formatter over the text (`infiniterm_editor::
+    /// format`): the `editor.formatters.<language>` command, else the
+    /// built-in one. The caret keeps its line and column, and the result is
+    /// one undo step. Local files only.
+    pub fn format_buffer(&mut self, path: &str, now: f64) -> FormatOutcome {
+        use infiniterm_editor::format;
+        if !self.source.is_local() {
+            return FormatOutcome::Failed("only files on this machine".into());
+        }
+        let Some(lang) = self.language else {
+            return FormatOutcome::NoFormatter;
+        };
+        let Some(command) = self
+            .formatters
+            .get(lang.badge())
+            .map(String::as_str)
+            .or_else(|| format::default_command(lang))
+        else {
+            return FormatOutcome::NoFormatter;
+        };
+        let text = self.buffer.text();
+        let new = match format::run(command, path, &text, format::TIMEOUT) {
+            Ok(new) => new,
+            Err(why) => return FormatOutcome::Failed(why),
+        };
+        if new == text {
+            return FormatOutcome::Unchanged;
+        }
+        let (line, col) = (
+            self.buffer.line_of(self.buffer.cursor()),
+            self.buffer.col_of(self.buffer.cursor()),
+        );
+        self.buffer.set_text(&new, now);
+        let line = line.min(self.buffer.line_count().saturating_sub(1));
+        let room = self.buffer.line(line).chars().count();
+        self.buffer
+            .set_cursor(self.buffer.line_start(line) + col.min(room));
+        self.now_dirty(now);
+        FormatOutcome::Changed
+    }
+
+    /// `editor.format`: format now, and say what happened in the status bar.
+    pub fn format_document(&mut self, path: &str, now: f64) {
+        let note = match self.format_buffer(path, now) {
+            FormatOutcome::Changed => "formatted".to_string(),
+            FormatOutcome::Unchanged => "already formatted".to_string(),
+            FormatOutcome::NoFormatter => "no formatter for this file".to_string(),
+            FormatOutcome::Failed(why) => format!("not formatted: {why}"),
+        };
+        self.events.push(EditorEvent::Notice(note));
+    }
+
     /// Housekeeping between frames: the draft, the disk poll.
     pub fn idle(&mut self, now: f64) {
         // A diff has its own poll: the disk poll below would read `path` into
@@ -660,6 +766,7 @@ impl EditorBody {
             return;
         }
         self.take_host_answers(now);
+        self.lsp_poll();
         if self.draft_due.is_some_and(|due| now >= due) {
             self.draft_due = None;
             if self.is_dirty() {
@@ -737,9 +844,125 @@ impl EditorBody {
             self.saved = text; // dirty now means "differs from the disk now"
             return;
         }
+        // The text before the change is what a reviewer compares with. Kept
+        // from the first change until accepted, so two edits in a row review
+        // as one. Not for a buffer that was empty or loading.
+        let before = self.buffer.text();
         self.saved = text.clone();
         self.buffer.set_text(&text, now);
         self.dirty = true;
+        if self.agent_base.is_none() && !before.is_empty() && self.diff.is_none() {
+            self.agent_base = Some(before);
+        }
+        self.gutter.0 = u64::MAX;
+        match self.agent_base.as_deref().map(|b| hunks(b, &text).len()) {
+            Some(0) => self.agent_base = None,
+            Some(n) => self.events.push(EditorEvent::Notice(format!(
+                "{} changed on disk: {n} changed part{} marked in the gutter, \
+                 see Editor: revert change in the palette",
+                infiniterm_core::paths::base_name(path),
+                if n == 1 { " is" } else { "s are" },
+            ))),
+            None => {}
+        }
+    }
+
+    /// The changed parts since the file last changed under this buffer
+    /// (`agent_base`), empty when there is nothing to review.
+    fn change_hunks(&self) -> Vec<Hunk> {
+        self.agent_base
+            .as_deref()
+            .map(|b| hunks(b, &self.buffer.text()))
+            .unwrap_or_default()
+    }
+
+    fn note(&mut self, text: &str) {
+        self.events.push(EditorEvent::Notice(text.to_string()));
+    }
+
+    /// `editor.change.revert`: put the changed part under the caret back as
+    /// it was. One undo step; the buffer is then different from the disk, so
+    /// saving writes the reverted text.
+    pub fn change_revert(&mut self, now: f64) {
+        let list = self.change_hunks();
+        let line = self.buffer.line_of(self.buffer.cursor());
+        let Some(h) = hunk_at(&list, line).map(|i| &list[i]) else {
+            return self.note(if list.is_empty() {
+                "no changes to review"
+            } else {
+                "no changed part at the caret"
+            });
+        };
+        let new = revert_hunk(&self.buffer.text(), h);
+        self.replace_text_keeping_caret(&new, now);
+        let left = self.change_hunks().len();
+        if left == 0 {
+            self.agent_base = None;
+        }
+        self.note(&format!(
+            "reverted; {left} changed part{} left",
+            if left == 1 { "" } else { "s" }
+        ));
+    }
+
+    /// `editor.change.revertAll`: the text as it was before the file changed.
+    pub fn change_revert_all(&mut self, now: f64) {
+        let Some(base) = self.agent_base.take() else {
+            return self.note("no changes to review");
+        };
+        self.replace_text_keeping_caret(&base, now);
+        self.note("reverted every change");
+    }
+
+    /// `editor.change.accept`: the changes are the new baseline.
+    pub fn change_accept(&mut self) {
+        if self.agent_base.take().is_none() {
+            return self.note("no changes to review");
+        }
+        self.gutter.0 = u64::MAX;
+        self.dirty = true;
+        self.note("changes accepted");
+    }
+
+    /// `editor.change.next` and `.prev`: the caret to the next or previous
+    /// changed part, wrapping.
+    pub fn change_jump(&mut self, forward: bool) {
+        let list = self.change_hunks();
+        if list.is_empty() {
+            return self.note("no changes to review");
+        }
+        let line = self.buffer.line_of(self.buffer.cursor());
+        let target = if forward {
+            list.iter().find(|h| h.new.start > line).unwrap_or(&list[0])
+        } else {
+            list.iter()
+                .rev()
+                .find(|h| h.new.start < line)
+                .unwrap_or(&list[list.len() - 1])
+        };
+        self.note_jump();
+        let at = self
+            .buffer
+            .line_start(target.new.start.min(self.buffer.line_count() - 1));
+        self.buffer.set_cursor(at);
+        self.ensure_cursor_visible();
+        self.dirty = true;
+    }
+
+    /// A whole-text replace that leaves the caret on its line and column,
+    /// as one undo step.
+    fn replace_text_keeping_caret(&mut self, text: &str, now: f64) {
+        let (line, col) = (
+            self.buffer.line_of(self.buffer.cursor()),
+            self.buffer.col_of(self.buffer.cursor()),
+        );
+        self.buffer.set_text(text, now);
+        let line = line.min(self.buffer.line_count().saturating_sub(1));
+        let room = self.buffer.line(line).chars().count();
+        self.buffer
+            .set_cursor(self.buffer.line_start(line) + col.min(room));
+        self.gutter.0 = u64::MAX;
+        self.now_dirty(now);
     }
 
     // ---- A host's file (#560): every call is asked on a thread and its
@@ -1193,6 +1416,23 @@ impl EditorBody {
         }
     }
 
+    /// The functions, types and headings of the text, for Go to Symbol
+    /// (`infiniterm_editor::symbols`); none for a language without a table.
+    pub fn symbol_rows(&self) -> Vec<infiniterm_core::model::SymbolRow> {
+        let Some(lang) = self.language else {
+            return vec![];
+        };
+        infiniterm_editor::symbols::symbols(lang, &self.buffer.text())
+            .into_iter()
+            .map(|s| infiniterm_core::model::SymbolRow {
+                name: s.name,
+                kind: s.kind.to_string(),
+                line: s.line,
+                depth: s.depth,
+            })
+            .collect()
+    }
+
     pub fn go_to_line(&mut self, line: usize) {
         self.note_jump();
         self.buffer.go_to_line(line);
@@ -1242,6 +1482,8 @@ impl EditorBody {
             TextTransform::UniqueLines => tf::unique_lines,
             TextTransform::ReverseLines => tf::reverse_lines,
             TextTransform::TrimTrailingWhitespace => tf::trim_trailing_whitespace,
+            TextTransform::RemoveBlankLines => tf::remove_blank_lines,
+            TextTransform::StripLineNumbers => tf::strip_line_numbers,
             TextTransform::IndentTabsToSpaces => {
                 return self.replace_transform_range(|s| tf::indent_tabs_to_spaces(s, width), now)
             }
@@ -1267,10 +1509,15 @@ impl EditorBody {
 
     pub fn open_search(&mut self, replacing: bool) {
         let mut s = self.search.take().unwrap_or_default();
-        // The selection seeds the query, as every editor's find does.
-        if let Some(sel) = self.buffer.selected_text().filter(|s| !s.contains('\n')) {
-            s.query = sel;
+        // The selection seeds the query, as every editor's find does. One
+        // that spans lines is not a query but the place to look: replace in
+        // selection, as VS Code does.
+        match self.buffer.selected_text() {
+            Some(sel) if !sel.contains('\n') => s.query = sel,
+            Some(_) => s.scope = self.buffer.selection().map(|r| (r.start, r.end)),
+            None => {}
         }
+        self.find_note = None;
         s.replacing = s.replacing || replacing;
         self.query = Field::open(&s.query, !s.query.is_empty());
         self.replacement = Field::open(&s.replacement, false);
@@ -1284,7 +1531,31 @@ impl EditorBody {
         self.dirty = true;
     }
 
+    /// A find-panel switch (a button, the palette or the keymap). It opens
+    /// the panel when it is closed. In-selection takes the buffer's selection
+    /// as the place to look and, pressed again, lets go of it.
+    pub fn toggle_find(&mut self, t: FindToggle) {
+        if self.search.is_none() {
+            self.open_search(false);
+        }
+        let selection = self.buffer.selection().map(|r| (r.start, r.end));
+        if let Some(s) = self.search.as_mut() {
+            match t {
+                FindToggle::Regex => s.regex = !s.regex,
+                FindToggle::MatchCase => s.match_case = !s.match_case,
+                FindToggle::WholeWord => s.whole_word = !s.whole_word,
+                FindToggle::InSelection => {
+                    s.scope = if s.scope.is_some() { None } else { selection };
+                }
+            }
+        }
+        self.find_note = None;
+        self.refresh_search();
+        self.dirty = true;
+    }
+
     fn close_search(&mut self) {
+        self.find_note = None;
         self.search = None;
         self.focus = Focus::Buffer;
         self.dirty = true;
@@ -2122,6 +2393,142 @@ impl EditorBody {
     /// Recomputes the completion popup from the text before the caret.
     /// Only for one plain caret in the text; the selected row stays on the
     /// same item while the list narrows around it.
+    /// What the language server offers at the caret, starting it and syncing
+    /// the text as needed. Everything here is a no-op with `editor.lsp.enabled`
+    /// off, for a file on a host, or for a language with no server.
+    fn lsp_offer(&mut self, text: &str, cursor: usize) -> LspAnswer {
+        use infiniterm_editor::lsp;
+        let Some(lang) = self.language else {
+            return LspAnswer::None;
+        };
+        let name = lang.badge();
+        let command = self
+            .lsp_servers
+            .get(name)
+            .cloned()
+            .or_else(|| lsp::default_server(name).map(String::from));
+        let Some(command) = command else {
+            return LspAnswer::None;
+        };
+        let (Some(path), true) = (self.path.clone(), self.source.is_local()) else {
+            return LspAnswer::None;
+        };
+        if !self.lsp_enabled {
+            self.lsp_hint(name, &command, &path);
+            return LspAnswer::None;
+        }
+        if self.read_only || self.lsp_failed {
+            return LspAnswer::None;
+        }
+        if self.lsp.as_ref().is_some_and(|s| s.client.is_dead()) {
+            self.lsp = None;
+            self.lsp_failed = true;
+            self.events
+                .push(EditorEvent::Notice("the language server stopped".into()));
+            return LspAnswer::None;
+        }
+        if self.lsp.is_none() {
+            match lsp::client_for(name, &lsp::project_root(&path), &command) {
+                Ok(client) => {
+                    self.lsp = Some(LspState {
+                        client,
+                        uri: lsp::file_uri(&path),
+                        synced: None,
+                        request: None,
+                        items: None,
+                    });
+                }
+                Err(why) => {
+                    self.lsp_failed = true;
+                    self.events
+                        .push(EditorEvent::Notice(format!("language server: {why}")));
+                    return LspAnswer::None;
+                }
+            }
+        }
+        let version = self.buffer.version;
+        let line = self.buffer.line_of(cursor);
+        let col = lsp::utf16_col(&self.buffer.line(line), self.buffer.col_of(cursor));
+        let Some(st) = self.lsp.as_mut() else {
+            return LspAnswer::None;
+        };
+        if st.synced != Some(version) {
+            st.client.sync(&st.uri, name, version, text);
+            st.synced = Some(version);
+        }
+        if let Some((v, c, items)) = &st.items {
+            if (*v, *c) == (version, cursor) {
+                return match lsp_popup(items, text, cursor) {
+                    Some(offer) => LspAnswer::Offer(offer),
+                    None => LspAnswer::None,
+                };
+            }
+        }
+        if st
+            .request
+            .is_none_or(|r| (r.version, r.cursor) != (version, cursor))
+        {
+            let id = st.client.request_completion(&st.uri, line, col);
+            st.request = Some(LspRequest {
+                id,
+                version,
+                cursor,
+            });
+        }
+        LspAnswer::Waiting
+    }
+
+    /// Takes the server's answer when it has come, and shows it if the caret
+    /// is still where it was asked. Called from `idle`.
+    fn lsp_poll(&mut self) {
+        let Some(st) = self.lsp.as_mut() else {
+            return;
+        };
+        let Some(req) = st.request else {
+            return;
+        };
+        if let Some(items) = st.client.take_completion(req.id) {
+            st.items = Some((req.version, req.cursor, items));
+            st.request = None;
+            if self.buffer.version == req.version && self.buffer.cursor() == req.cursor {
+                self.update_completion();
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// With the language server off, a note once per language and session
+    /// when its server is installed: the setting is easy to never find.
+    fn lsp_hint(&mut self, language: &'static str, command: &str, path: &str) {
+        use std::sync::{Mutex, OnceLock};
+        static HINTED: OnceLock<Mutex<std::collections::HashSet<&'static str>>> = OnceLock::new();
+        let hinted = HINTED.get_or_init(Default::default);
+        if hinted.lock().is_ok_and(|h| h.contains(language)) {
+            return;
+        }
+        let program = command.split_whitespace().next().unwrap_or("");
+        let home = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
+        let dir = std::path::Path::new(path)
+            .parent()
+            .unwrap_or(std::path::Path::new("/"));
+        let found = infiniterm_editor::format::find_program(
+            program,
+            dir,
+            &std::env::var("PATH").unwrap_or_default(),
+            &home,
+        );
+        if let Ok(mut h) = hinted.lock() {
+            h.insert(language);
+        }
+        if found.is_some() {
+            self.events.push(EditorEvent::Notice(format!(
+                "{program} is installed: set editor.lsp.enabled for {language} completions"
+            )));
+        }
+    }
+
     fn update_completion(&mut self) {
         if self.buffer.cursor_count() != 1
             || self.buffer.selection().is_some()
@@ -2137,10 +2544,18 @@ impl EditorBody {
         // being true.
         let text = self.buffer.text();
         let cursor = self.buffer.cursor();
-        let schema_offer = self
-            .completer
-            .as_ref()
-            .and_then(|p| p.complete(&text, cursor));
+        // A language server, when one is on for this file, answers first;
+        // while it is still thinking the popup stays as it was.
+        let lsp_offer = match self.lsp_offer(&text, cursor) {
+            LspAnswer::Waiting => return,
+            LspAnswer::Offer(o) => Some(o),
+            LspAnswer::None => None,
+        };
+        let schema_offer = lsp_offer.or_else(|| {
+            self.completer
+                .as_ref()
+                .and_then(|p| p.complete(&text, cursor))
+        });
         let words_allowed = self
             .completer
             .as_ref()
@@ -2366,12 +2781,12 @@ impl EditorBody {
                 "right" => self.buffer.for_each_cursor(|b| b.move_line_end(shift)),
                 "up" if m.control => {
                     if !ro {
-                        self.buffer.swap_line_up(now)
+                        self.buffer.for_each_cursor(|b| b.swap_line_up(now))
                     }
                 }
                 "down" if m.control => {
                     if !ro {
-                        self.buffer.swap_line_down(now)
+                        self.buffer.for_each_cursor(|b| b.swap_line_down(now))
                     }
                 }
                 "up" => {
@@ -2389,7 +2804,7 @@ impl EditorBody {
                 }
                 "d" if shift => {
                     if !ro {
-                        self.buffer.duplicate_line(now)
+                        self.buffer.for_each_cursor(|b| b.duplicate_line(now))
                     }
                 }
                 "d" => self.buffer.select_word_or_next(),
@@ -2450,8 +2865,21 @@ impl EditorBody {
                         self.buffer.for_each_cursor(|b| b.delete_word_back(now))
                     }
                 }
-                "up" => self.buffer.for_each_cursor(|b| b.move_up(shift)),
-                "down" => self.buffer.for_each_cursor(|b| b.move_down(shift)),
+                // Alt+Up/Down move the lines, Shift+Alt+Up/Down copy them:
+                // the VS Code and Cursor chords beside the Sublime ones
+                // (#602). They replace the caret moves Option+Up/Down had.
+                "up" | "down" => {
+                    if !ro {
+                        let up = key == "up";
+                        self.buffer.for_each_cursor(|b| {
+                            if shift {
+                                b.copy_lines(up, now)
+                            } else {
+                                b.move_lines(up, now)
+                            }
+                        })
+                    }
+                }
                 _ => {
                     // Option+letter types the character macOS composed.
                     if let Some(ch) = k.key_char.as_deref().filter(|c| !ro && !c.is_empty()) {
@@ -2630,23 +3058,28 @@ impl EditorBody {
                     return;
                 }
                 self.refresh_search();
-                let replacement = self.replacement.text.clone();
-                if m.platform {
-                    // Cmd+Enter: every match, last to first so the ranges hold.
-                    let matches = self
-                        .search
-                        .as_ref()
-                        .map(|s| s.matches.clone())
-                        .unwrap_or_default();
-                    for (a, b) in matches.into_iter().rev() {
-                        self.buffer.replace_range(a..b, &replacement, now);
-                    }
-                } else if let Some((a, b)) = self.search.as_ref().and_then(|s| s.current_range()) {
-                    self.buffer.replace_range(a..b, &replacement, now);
+                let text = self.buffer.text();
+                let edits = match self.search.as_ref() {
+                    Some(s) if m.platform => s.edits(&text),
+                    Some(s) => s.current_edit(&text).into_iter().collect(),
+                    None => vec![],
+                };
+                // Replace all is one edit, so one Cmd+Z undoes all of it.
+                let n = self.buffer.replace_ranges(&edits, now);
+                // The scope is a range of the text this just changed.
+                let delta: i64 = edits
+                    .iter()
+                    .map(|(a, b, new)| new.chars().count() as i64 - (b - a) as i64)
+                    .sum();
+                if let Some(s) = self.search.as_mut() {
+                    s.scope = s
+                        .scope
+                        .map(|(a, b)| (a, (b as i64 + delta).max(a as i64) as usize));
                 }
                 self.now_dirty(now);
                 self.refresh_search();
                 self.show_match();
+                self.find_note = (m.platform && n > 0).then(|| format!("{n} replaced"));
                 return;
             }
             "f" if m.platform && m.alt => {
@@ -2686,6 +3119,7 @@ impl EditorBody {
         }
         match edit {
             Edit::Changed | Edit::Cut(_) => {
+                self.find_note = None;
                 self.refresh_search();
                 if self.focus == Focus::Query {
                     self.show_match();
@@ -2863,8 +3297,10 @@ impl EditorBody {
     /// diff against (no repo, or an untitled buffer).
     fn gutter_for(&mut self) -> (&[GutterMark], &[usize]) {
         if (self.gutter.0, self.gutter.1) != (self.buffer.version, self.loads) {
-            let (marks, deleted) = match &self.git_head {
-                Some(head) => gutter_marks(head, &self.buffer.text()),
+            // While a change on disk is under review the gutter shows what it
+            // changed; otherwise what differs from HEAD.
+            let (marks, deleted) = match self.agent_base.as_ref().or(self.git_head.as_ref()) {
+                Some(base) => gutter_marks(base, &self.buffer.text()),
                 None => (vec![], vec![]),
             };
             self.gutter = (self.buffer.version, self.loads, marks, deleted);
@@ -3051,6 +3487,7 @@ impl EditorBody {
         let pad = px((PAD_X * scale) as f32);
         let row_h = line_h * SEARCH_ROW_HEIGHT_SCALE as f32;
         let label_w = px((self.metrics.cell_w * SEARCH_LABEL_COLS * scale) as f32);
+        let label_cw_px = self.metrics.cell_w * SEARCH_LABEL_FONT_SCALE * scale;
         let mut y = area.origin.y + px((SEARCH_PANEL_TOP_PAD_PX * scale) as f32);
         let rows: Vec<(&str, &Field, Focus)> = if s.replacing {
             vec![
@@ -3070,10 +3507,7 @@ impl EditorBody {
                     y + px(FIELD_ROW_INSET_PX as f32),
                 ),
                 size(
-                    area.size.width
-                        - pad * 2.
-                        - label_w
-                        - px((self.metrics.cell_w * SEARCH_LABEL_COLS * scale) as f32),
+                    area.size.width - pad * 2. - label_w - px(find_right_w(label_cw_px) as f32),
                     row_h - px(FIELD_ROW_INSET_TOTAL_PX as f32),
                 ),
             );
@@ -3133,13 +3567,72 @@ impl EditorBody {
                 let _ = line.paint(point(x, ty), th, window, cx);
             }
             if which == Focus::Query {
-                let count = match (s.current, s.matches.len()) {
-                    (_, 0) if s.query.is_empty() => String::new(),
-                    (_, 0) => "no matches".into(),
-                    (Some(i), n) => format!("{} of {n}", i + 1),
-                    (None, n) => format!("{n}"),
+                let count = match (&s.error, s.current, s.matches.len()) {
+                    // Fits the count column (`SEARCH_COUNT_COLS`).
+                    (Some(_), _, _) => "bad regex".into(),
+                    (None, _, 0) if s.query.is_empty() => String::new(),
+                    (None, _, 0) => "no matches".into(),
+                    (None, Some(i), n) => format!("{} of {n}", i + 1),
+                    (None, None, n) => format!("{n}"),
                 };
-                let c = crate::text::shape(window, &count, font_size, &f, dim);
+                let count_fg = if s.error.is_some() {
+                    hex(&self.colors.foreground)
+                } else {
+                    dim
+                };
+                let c = crate::text::shape(window, &count, font_size, &f, count_fg);
+                let _ = c.paint(
+                    point(area.origin.x + area.size.width - pad - c.width, y),
+                    row_h,
+                    window,
+                    cx,
+                );
+                // The toggles, an engaged one on the selection's ground.
+                let on = |t: FindToggle| match t {
+                    FindToggle::Regex => s.regex,
+                    FindToggle::MatchCase => s.match_case,
+                    FindToggle::WholeWord => s.whole_word,
+                    FindToggle::InSelection => s.scope.is_some(),
+                };
+                for (t, left, right) in find_toggle_rects(
+                    f64::from(f32::from(area.origin.x)),
+                    f64::from(f32::from(area.size.width)),
+                    f64::from(f32::from(pad)),
+                    label_cw_px,
+                ) {
+                    let label = FIND_TOGGLES
+                        .iter()
+                        .find(|(k, _)| *k == t)
+                        .map_or("", |(_, l)| l);
+                    let b = Bounds::new(
+                        point(px(left as f32), y + px(FIELD_ROW_INSET_PX as f32)),
+                        size(
+                            px((right - left) as f32),
+                            row_h - px(FIELD_ROW_INSET_TOTAL_PX as f32),
+                        ),
+                    );
+                    if on(t) {
+                        window.paint_quad(fill(
+                            b,
+                            crate::chrome::with_alpha(sel_bg, FIND_TOGGLE_ON_ALPHA),
+                        ));
+                    }
+                    let l = crate::text::shape(
+                        window,
+                        label,
+                        font_size,
+                        &f,
+                        if on(t) { fg } else { dim },
+                    );
+                    let _ = l.paint(
+                        point(b.origin.x + (b.size.width - l.width) / 2., y),
+                        row_h,
+                        window,
+                        cx,
+                    );
+                }
+            } else if let Some(note) = &self.find_note {
+                let c = crate::text::shape(window, note, font_size, &f, dim);
                 let _ = c.paint(
                     point(area.origin.x + area.size.width - pad - c.width, y),
                     row_h,
@@ -3158,6 +3651,116 @@ impl EditorBody {
             crate::chrome::with_alpha(dim, crate::chrome::HAIRLINE_ALPHA),
         ));
     }
+}
+
+/// One buffer's side of a language-server connection: the shared client, this
+/// file's uri, the text version the server was last told, the completion
+/// asked for and the last answer. Dropping it tells the server the file closed.
+struct LspState {
+    client: std::sync::Arc<infiniterm_editor::lsp::Client>,
+    uri: String,
+    synced: Option<u64>,
+    request: Option<LspRequest>,
+    items: Option<(u64, usize, Vec<infiniterm_editor::lsp::Item>)>,
+}
+
+#[derive(Clone, Copy)]
+struct LspRequest {
+    id: u64,
+    version: u64,
+    cursor: usize,
+}
+
+impl Drop for LspState {
+    fn drop(&mut self) {
+        self.client.close(&self.uri);
+    }
+}
+
+/// What the language server has to say for the caret's state right now.
+enum LspAnswer {
+    /// Nothing: off, no server for this language, or it has no items for
+    /// the typed word. The popup falls back to words.
+    None,
+    /// Asked and waiting; the popup stays as it was.
+    Waiting,
+    Offer(Offer),
+}
+
+/// The popup for the server's items: the word being typed filters them, the
+/// closest first, up to the popup's limit. `None` when nothing is left.
+fn lsp_popup(items: &[infiniterm_editor::lsp::Item], text: &str, cursor: usize) -> Option<Offer> {
+    use infiniterm_core::complete::{Completion, MAX_ITEMS};
+    let typed: Vec<char> = text
+        .chars()
+        .take(cursor)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    let prefix: String = typed.iter().rev().collect();
+    let mut scored: Vec<(f64, &infiniterm_editor::lsp::Item)> = items
+        .iter()
+        .filter_map(|i| {
+            infiniterm_core::fuzzy::fuzzy_match(&prefix, &i.label).map(|m| (m.score, i))
+        })
+        .collect();
+    // Stable, so equal scores keep the server's own order.
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(MAX_ITEMS);
+    if scored.is_empty() {
+        return None;
+    }
+    Some(Offer {
+        typed: typed.len(),
+        items: scored
+            .into_iter()
+            .map(|(_, i)| Completion {
+                label: i.label.clone(),
+                insert: i.insert.clone(),
+                detail: i.detail.clone(),
+                doc: i.doc.clone(),
+            })
+            .collect(),
+        enter_accepts: false,
+    })
+}
+
+/// What `EditorBody::format_buffer` did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FormatOutcome {
+    /// The language has no formatter (and none was set): nothing to say.
+    NoFormatter,
+    Unchanged,
+    Changed,
+    /// The formatter was missing, failed, printed nothing or timed out.
+    Failed(String),
+}
+
+/// The find panel's right column in world px, `cw` being one column of the
+/// panel's label font: the toggle buttons, a column of air, the count.
+fn find_right_w(cw: f64) -> f64 {
+    let toggles: f64 = FIND_TOGGLES
+        .iter()
+        .map(|(_, l)| l.chars().count() as f64 + SEARCH_TOGGLE_PAD_COLS)
+        .sum();
+    (toggles + 1. + SEARCH_COUNT_COLS) * cw
+}
+
+/// Where each toggle button sits, as `(toggle, left, right)` in world px,
+/// for a panel `x` to `x + w` wide with `pad` of margin: packed against the
+/// count, which is against the right margin.
+fn find_toggle_rects(x: f64, w: f64, pad: f64, cw: f64) -> Vec<(FindToggle, f64, f64)> {
+    let mut right = x + w - pad - SEARCH_COUNT_COLS * cw;
+    let mut out = Vec::with_capacity(FIND_TOGGLES.len());
+    for (t, label) in FIND_TOGGLES.iter().rev() {
+        let width = (label.chars().count() as f64 + SEARCH_TOGGLE_PAD_COLS) * cw;
+        out.push((*t, right - width, right));
+        right -= width;
+    }
+    out.reverse();
+    out
 }
 
 fn parent_of(path: &str) -> String {
@@ -3828,12 +4431,22 @@ impl CardBody for EditorBody {
                 };
             }
         }
-        let (t_origin, _) = self.text_area(world);
+        let (t_origin, t_size) = self.text_area(world);
         if self.search.is_some() && local.y < t_origin.y {
             // The panel: the lower row is replace when it shows.
             let row_h = self.line_h() * SEARCH_ROW_HEIGHT_SCALE;
             let in_replace = self.search.as_ref().is_some_and(|s| s.replacing)
                 && local.y - (t_origin.y - self.panel_h()) > row_h;
+            if !in_replace {
+                let cw = self.metrics.cell_w * SEARCH_LABEL_FONT_SCALE;
+                let hit = find_toggle_rects(t_origin.x, t_size.w, PAD_X, cw)
+                    .into_iter()
+                    .find(|(_, l, r)| local.x >= *l && local.x < *r);
+                if let Some((t, _, _)) = hit {
+                    self.toggle_find(t);
+                    return BodyAction::None;
+                }
+            }
             self.focus = if in_replace {
                 Focus::Replace
             } else {
@@ -4392,6 +5005,65 @@ mod tests {
         Keystroke::parse(name).unwrap()
     }
 
+    // The buttons sit side by side against the count, inside the column the
+    // field leaves for them, so a click on one is never a click on another
+    // or on the field.
+    #[test]
+    fn the_find_toggles_fit_the_column_the_field_leaves() {
+        let (x, w, pad, cw) = (100., 800., 12., 7.);
+        let rects = find_toggle_rects(x, w, pad, cw);
+        assert_eq!(rects.len(), FIND_TOGGLES.len());
+        for pair in rects.windows(2) {
+            assert_eq!(pair[0].2, pair[1].1, "packed, no overlap");
+            assert_ne!(pair[0].0, pair[1].0);
+        }
+        let field_right = x + w - pad - find_right_w(cw);
+        assert!(rects[0].1 >= field_right, "left of the first button");
+        assert!(rects.last().unwrap().2 <= x + w - pad - SEARCH_COUNT_COLS * cw + 0.001);
+    }
+
+    #[test]
+    fn a_click_on_a_toggle_flips_it_and_a_find_toggle_opens_the_panel() {
+        let mut b = body();
+        assert!(b.search.is_none());
+        b.toggle_find(FindToggle::Regex);
+        assert!(b.search.as_ref().unwrap().regex, "opened, then flipped");
+        b.toggle_find(FindToggle::Regex);
+        assert!(!b.search.as_ref().unwrap().regex);
+        // In selection needs a selection, and lets go when pressed again.
+        b.buffer = Buffer::new("a\nb\nc");
+        b.buffer.select_range(0..3);
+        b.toggle_find(FindToggle::InSelection);
+        assert_eq!(b.search.as_ref().unwrap().scope, Some((0, 3)));
+        b.toggle_find(FindToggle::InSelection);
+        assert_eq!(b.search.as_ref().unwrap().scope, None);
+    }
+
+    // Opening the panel over lines makes them the place to look, and replace
+    // all there is one undo step that leaves the rest alone.
+    #[test]
+    fn a_multi_line_selection_scopes_the_find_and_replace_all_is_one_undo() {
+        let mut b = body();
+        b.buffer = Buffer::new("a a\na a\na a");
+        b.buffer.select_range(0..7); // the first two lines
+        b.open_search(true);
+        {
+            let s = b.search.as_mut().unwrap();
+            assert_eq!(s.scope, Some((0, 7)));
+            s.query = "a".into();
+            s.replacement = "bb".into();
+        }
+        b.query = Field::open("a", false);
+        b.replacement = Field::open("bb", false);
+        b.refresh_search();
+        assert_eq!(b.search.as_ref().unwrap().matches.len(), 4);
+        let edits = b.search.as_ref().unwrap().edits(&b.buffer.text());
+        assert_eq!(b.buffer.replace_ranges(&edits, 0.), 4);
+        assert_eq!(b.buffer.text(), "bb bb\nbb bb\na a");
+        b.buffer.undo();
+        assert_eq!(b.buffer.text(), "a a\na a\na a");
+    }
+
     fn settings_provider() -> Option<Box<dyn Provider>> {
         let dir = infiniterm_core::paths::config_dir();
         provider_for(&dir.join("settings.json").to_string_lossy())
@@ -4664,6 +5336,212 @@ mod tests {
 
     // A picture is shown, never read into the buffer, and a save must not
     // write the empty buffer over it: the file is still the picture after.
+    // Format on save (#602): the text is formatted before it is written, the
+    // caret keeps its line and column, one undo brings the old text back, and
+    // a formatter that is missing leaves the text alone and the file still
+    // gets saved, with the reason in the status bar. Off, nothing runs.
+    #[cfg(unix)]
+    #[test]
+    fn saving_formats_first_and_a_broken_formatter_still_saves() {
+        let dir = std::env::temp_dir().join(format!("ift-editor-fmt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f.rs").to_string_lossy().to_string();
+        let mut b = body();
+        b.language = Some(Language::Rust);
+        b.buffer = Buffer::new("abc\ndef");
+        b.buffer.set_cursor(5); // line 2, column 1
+        b.formatters.insert("rust".into(), "tr a-z A-Z".into());
+        b.save(&path, 1.);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "abc\ndef",
+            "off: nothing runs"
+        );
+        b.format_on_save = true;
+        b.save(&path, 2.);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "ABC\nDEF");
+        assert_eq!(b.buffer.text(), "ABC\nDEF");
+        assert_eq!(b.buffer.cursor(), 5, "the caret kept its line and column");
+        assert!(b
+            .take_events()
+            .iter()
+            .any(|e| matches!(e, EditorEvent::Notice(n) if n == "saved f.rs, formatted")));
+        b.buffer.undo();
+        assert_eq!(b.buffer.text(), "abc\ndef", "formatting is one undo");
+        b.formatters
+            .insert("rust".into(), "definitely-not-installed-xyz".into());
+        b.save(&path, 3.);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "abc\ndef");
+        assert!(b.take_events().iter().any(
+            |e| matches!(e, EditorEvent::Notice(n) if n.starts_with("saved f.rs, not formatted:"))
+        ));
+        // A language with no formatter says nothing.
+        b.language = Some(Language::Toml);
+        b.save(&path, 4.);
+        assert!(b
+            .take_events()
+            .iter()
+            .any(|e| matches!(e, EditorEvent::Notice(n) if n == "saved f.rs")));
+    }
+
+    // Review what changed under the buffer (#602): the clean buffer takes the
+    // disk's text, remembers what it had, marks the difference and lets each
+    // changed part be stepped to, reverted or accepted.
+    #[test]
+    fn a_file_changed_on_disk_is_reviewed_and_reverted_part_by_part() {
+        let dir = std::env::temp_dir().join(format!("ift-editor-review-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("r.txt").to_string_lossy().to_string();
+        std::fs::write(&path, "a\nb\nc\nd\ne\n").unwrap();
+        let mut b = body();
+        b.load(&path, false, 0.);
+        assert!(b.agent_base.is_none());
+        b.apply_disk_text(&path, "a\nB\nc\nd\nE\n".into(), 1.);
+        assert_eq!(b.change_hunks().len(), 2);
+        assert!(b.take_events().iter().any(|e| matches!(e,
+            EditorEvent::Notice(n) if n.contains("2 changed parts are marked"))));
+        // A second change on disk keeps the first baseline.
+        b.apply_disk_text(&path, "a\nB\nc\nd\nE\nf\n".into(), 2.);
+        assert_eq!(b.change_hunks().len(), 2, "e became E and f, one part");
+        // Step to the next change from the top, then back around.
+        b.buffer.set_cursor(0);
+        b.change_jump(true);
+        assert_eq!(b.buffer.line_of(b.buffer.cursor()), 1);
+        b.change_jump(true);
+        assert_eq!(b.buffer.line_of(b.buffer.cursor()), 4);
+        b.change_jump(false);
+        assert_eq!(b.buffer.line_of(b.buffer.cursor()), 1);
+        // Revert the one under the caret: the other stays, it is one undo.
+        b.change_revert(3.);
+        assert_eq!(b.buffer.text(), "a\nb\nc\nd\nE\nf\n");
+        assert_eq!(b.change_hunks().len(), 1);
+        assert!(b.is_dirty(), "the buffer now differs from the disk");
+        b.buffer.undo();
+        assert_eq!(b.buffer.text(), "a\nB\nc\nd\nE\nf\n");
+        // Off a changed part there is nothing to revert.
+        b.buffer.set_cursor(0);
+        b.change_revert(4.);
+        assert_eq!(b.buffer.text(), "a\nB\nc\nd\nE\nf\n");
+        b.change_accept();
+        assert!(b.agent_base.is_none());
+        assert!(b.change_hunks().is_empty());
+        // Revert everything back to the baseline taken at the next change.
+        b.apply_disk_text(&path, "x\n".into(), 5.);
+        assert!(b.agent_base.is_some());
+        b.change_revert_all(6.);
+        assert_eq!(b.buffer.text(), "a\nB\nc\nd\nE\nf\n");
+        assert!(b.agent_base.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Language-server completion (#602), end to end through the body against
+    // a scripted server: off by default (nothing starts), and with the setting
+    // on the popup waits for the server, then shows its items filtered by the
+    // word being typed, with the server's insert text.
+    #[cfg(unix)]
+    #[test]
+    fn a_language_server_feeds_the_popup_only_when_it_is_turned_on() {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(python) = [
+            "/usr/bin/python3",
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+        ]
+        .iter()
+        .find(|p| std::path::Path::new(p).is_file()) else {
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!("ift-editor-lsp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("server.py");
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env python3
+import sys, json
+def read():
+    n = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: return None
+        line = line.decode().strip()
+        if not line: break
+        if line.startswith("Content-Length:"): n = int(line.split(":")[1])
+    return json.loads(sys.stdin.buffer.read(n))
+def send(m):
+    b = json.dumps(m).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(b) + b); sys.stdout.buffer.flush()
+while True:
+    m = read()
+    if m is None: break
+    if m.get("method") == "initialize":
+        send({"jsonrpc": "2.0", "id": m["id"], "result": {"capabilities": {}}})
+    elif m.get("method") == "textDocument/completion":
+        send({"jsonrpc": "2.0", "id": m["id"], "result": [
+            {"label": "foo_bar", "detail": "fn()", "insertText": "foo_bar($0)", "insertTextFormat": 2},
+            {"label": "zzz"},
+            {"label": "foo_baz"}]})
+    elif m.get("method") == "exit": break
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.join("a.rs").to_string_lossy().to_string();
+        let mut b = body();
+        b.language = Some(Language::Rust);
+        b.path = Some(path);
+        b.buffer = Buffer::new("fo");
+        b.buffer.move_doc_end(false);
+        b.lsp_servers
+            .insert("rust".into(), format!("{python} {}", script.display()));
+        // Off (the default): no server starts, and a rust file just has words.
+        b.update_completion();
+        assert!(b.lsp.is_none(), "nothing runs with the setting off");
+        // On: the first ask starts the server and waits; the answer arrives
+        // in the idle step and fills the popup.
+        b.lsp_enabled = true;
+        b.update_completion();
+        assert!(b.lsp.is_some());
+        for _ in 0..200 {
+            b.lsp_poll();
+            if b.completion.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let popup = b.completion.as_ref().expect("the server's items");
+        let labels: Vec<_> = popup.offer.items.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec!["foo_bar", "foo_baz"],
+            "filtered by what was typed"
+        );
+        assert_eq!(popup.offer.typed, 2);
+        assert_eq!(
+            popup.offer.items[0].insert, "foo_bar()",
+            "snippet flattened"
+        );
+        assert_eq!(popup.offer.items[0].detail, "fn()");
+        // A server that is not installed is a note and not tried again.
+        let mut b = body();
+        b.language = Some(Language::Rust);
+        // Another folder, so another project: the first one's server is not
+        // handed back (a server is shared per language and project).
+        std::fs::create_dir_all(dir.join("other")).unwrap();
+        b.path = Some(dir.join("other/b.rs").to_string_lossy().to_string());
+        b.buffer = Buffer::new("x");
+        b.buffer.move_doc_end(false);
+        b.lsp_enabled = true;
+        b.lsp_servers
+            .insert("rust".into(), "definitely-not-a-server-xyz".into());
+        b.update_completion();
+        assert!(b.lsp_failed && b.lsp.is_none());
+        assert!(b
+            .take_events()
+            .iter()
+            .any(|e| matches!(e, EditorEvent::Notice(n) if n.starts_with("language server:"))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_picture_is_never_read_as_text_nor_written_back() {
         let dir = std::env::temp_dir().join(format!(

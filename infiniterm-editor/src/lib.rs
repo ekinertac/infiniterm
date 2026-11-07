@@ -5,10 +5,14 @@
 pub mod buffer;
 pub mod diff;
 pub mod explorer;
+pub mod format;
+pub mod grep;
 pub mod highlight;
 pub mod jumps;
 pub mod language;
+pub mod lsp;
 pub mod search;
 pub mod status;
+pub mod symbols;
 pub mod transforms;
 pub mod wrap;

@@ -104,11 +104,19 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
         .keymap
         .iter()
         .any(|(c, id)| c == chord && id == "app.palette");
+    // Go to File and Find in Files (#602) are what you reach for from inside
+    // the text, so a lock must not hide them either: whatever chord the
+    // keymap binds to them.
+    let opens_files = kind == Some(crate::saved_layout::CardKind::Editor)
+        && m.keymap.iter().any(|(c, id)| {
+            c == chord && matches!(id.as_str(), "editor.goToFile" | "editor.findInFiles")
+        });
     if locked
         && !is_workspace_switch(chord)
         && !is_locked_carveout(chord, kind)
         && !leaves
         && !opens_palette
+        && !opens_files
     {
         let id = if kind == Some(crate::saved_layout::CardKind::Diff) {
             crate::editor_keys::diff_lock_override(chord)
@@ -853,6 +861,26 @@ mod tests {
         assert!(second.x > first.x, "{second:?} beside {first:?}");
     }
 
+    // #509: opt-in. A new terminal card opened from a terminal card starts
+    // in that card's directory; anything else still starts at startingDir.
+    #[test]
+    fn a_new_card_can_inherit_the_directory_when_the_setting_is_on() {
+        let mut h = Harness::new();
+        let first = h.focused().id.clone();
+        h.m.card_mut(&first).unwrap().cwd = "/Users/me/Code/api".into();
+        let start = h.m.start_dir.clone();
+        h.run("card.new.terminal");
+        assert_eq!(h.focused().cwd, start, "off by default");
+
+        h.m.apply_settings_text(r#"{"cards.newCardInheritsDirectory": true}"#);
+        h.m.set_focus(Some(&first));
+        h.run("card.new.terminal");
+        assert_eq!(h.focused().cwd, "/Users/me/Code/api");
+        h.m.set_focus(Some(&first));
+        h.run("card.new.ungrouped");
+        assert_eq!(h.focused().cwd, "/Users/me/Code/api");
+    }
+
     // A new card takes the GROUP and not the directory. Opening a card to
     // start something else and landing in the last card's directory is a
     // surprise you only notice after you have run the wrong command there.
@@ -1313,6 +1341,244 @@ mod tests {
         h.run("card.size.reset");
         assert_eq!(h.m.card(&kept).unwrap().rect, original);
         assert_eq!(h.m.card(&kept).unwrap().soft_group_id, None);
+    }
+
+    // Cmd+R in a locked editor (#602): the ui is asked for the file's symbols,
+    // they are the palette's rows in order with their kind as the hint, and a
+    // pick is a go-to-line.
+    #[test]
+    fn go_to_symbol_lists_the_outline_and_a_pick_goes_to_the_line() {
+        use crate::model::SymbolRow;
+        use crate::saved_layout::CardKind;
+        let mut h = Harness::new();
+        let id = h.m.add_card(
+            "/h",
+            NewCard {
+                kind: CardKind::Editor,
+                path: Some("/h/a.rs".into()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&id));
+        h.m.card_mut(&id).unwrap().locked = true;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+r").as_deref(),
+            Some("editor.goToSymbol"),
+            "in the text, Cmd+R is not the terminal's redraw"
+        );
+        let effects = h.run("editor.goToSymbol");
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::GoToSymbol,
+                ..
+            }
+        )));
+        h.m.open_symbols(
+            &id,
+            vec![
+                SymbolRow {
+                    name: "S".into(),
+                    kind: "struct".into(),
+                    line: 3,
+                    depth: 0,
+                },
+                SymbolRow {
+                    name: "new".into(),
+                    kind: "fn".into(),
+                    line: 8,
+                    depth: 1,
+                },
+            ],
+        );
+        assert_eq!(h.m.palette.source, Some(Source::Symbols));
+        assert!(Source::Symbols.keeps_its_order());
+        let items = h.m.palette_items(Source::Symbols, &[]);
+        assert_eq!(items[1].label, "  new");
+        assert_eq!(items[1].hint.as_deref(), Some("fn"));
+        h.m.effects.clear();
+        h.m.palette_run(Source::Symbols, &items[1].id);
+        assert_eq!(h.m.card(&id).unwrap().line, Some(8));
+        assert!(h.m.effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::GoToLine,
+                ..
+            }
+        )));
+    }
+
+    // Cmd+P (#602): in an editor card it asks the ui for the file list; the
+    // list becomes the palette's rows; a pick is a tab, and a file already
+    // open is switched to rather than opened twice. Anywhere else it is
+    // nothing.
+    #[test]
+    fn go_to_file_lists_the_folder_and_a_pick_opens_or_switches_to_a_tab() {
+        use crate::saved_layout::CardKind;
+        let mut h = Harness::new();
+        assert!(
+            !h.run("editor.goToFile")
+                .iter()
+                .any(|e| matches!(e, Effect::Editor { .. })),
+            "not on a terminal"
+        );
+        let id = h.m.add_card(
+            "/h",
+            NewCard {
+                kind: CardKind::Editor,
+                path: Some("/h/a.rs".into()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&id));
+        let effects = h.run("editor.goToFile");
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::GoToFile,
+                ..
+            }
+        )));
+        // The ui would have listed the folder; stand in for it.
+        h.m.open_quick_files(&id, "/h/", vec!["a.rs".into(), "src/b.rs".into()]);
+        assert_eq!(h.m.palette.source, Some(Source::Files));
+        let items = h.m.palette_items(Source::Files, &[]);
+        assert_eq!(
+            items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            ["a.rs", "src/b.rs"]
+        );
+        h.m.palette_run(Source::Files, "src/b.rs");
+        assert_eq!(h.m.card(&id).unwrap().tabs, vec!["/h/a.rs", "/h/src/b.rs"]);
+        assert_eq!(h.m.card(&id).unwrap().path.as_deref(), Some("/h/src/b.rs"));
+        h.m.open_quick_files(&id, "/h", vec!["a.rs".into()]);
+        h.m.palette_run(Source::Files, "a.rs");
+        let card = h.m.card(&id).unwrap();
+        assert_eq!(card.tabs.len(), 2, "switched, not opened again");
+        assert_eq!(card.path.as_deref(), Some("/h/a.rs"));
+    }
+
+    // Cmd+Shift+F (#602): the pattern is asked, the ui is told to search, the
+    // hits are the palette's rows, and a pick opens the file as a tab with the
+    // line set for the body.
+    #[test]
+    fn find_in_files_asks_then_lists_the_hits_and_a_pick_opens_the_line() {
+        use crate::model::palette_state::GREP_SEP;
+        use crate::model::GrepHit;
+        use crate::saved_layout::CardKind;
+        let mut h = Harness::new();
+        let id = h.m.add_card(
+            "/h",
+            NewCard {
+                kind: CardKind::Editor,
+                path: Some("/h/a.rs".into()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&id));
+        h.run("editor.findInFiles");
+        assert!(h.m.prompt.is_open());
+        answer_prompt(&mut h, "needle");
+        let job = h.m.files_job.clone().expect("the job is kept for the ui");
+        assert_eq!((job.find.as_str(), job.regex), ("needle", false));
+        assert!(h.m.effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::FindInFiles,
+                ..
+            }
+        )));
+        h.m.open_grep(
+            &id,
+            "/h/",
+            vec![
+                GrepHit {
+                    path: "src/b.rs".into(),
+                    line: 12,
+                    text: "let needle = 1;".into(),
+                },
+                GrepHit {
+                    path: "a.rs".into(),
+                    line: 3,
+                    text: "needle()".into(),
+                },
+            ],
+        );
+        assert_eq!(h.m.palette.source, Some(Source::Grep));
+        let items = h.m.palette_items(Source::Grep, &[]);
+        assert_eq!(items[0].label, "src/b.rs:12  let needle = 1;");
+        assert_eq!(items[0].id, format!("src/b.rs{GREP_SEP}12"));
+        h.m.palette_run(Source::Grep, &items[0].id);
+        let card = h.m.card(&id).unwrap();
+        assert_eq!(card.path.as_deref(), Some("/h/src/b.rs"));
+        assert_eq!(card.line, Some(12), "the body is told when it exists");
+        // An empty pattern does nothing.
+        h.m.effects.clear();
+        h.run("editor.findInFiles");
+        answer_prompt(&mut h, "");
+        assert!(h.m.effects.is_empty());
+    }
+
+    // Replace in files asks for the find, then the replacement (which may be
+    // empty), then the ui counts and asks a third time; only that yes writes.
+    #[test]
+    fn replace_in_files_asks_twice_and_the_write_waits_for_the_count_to_be_confirmed() {
+        use crate::saved_layout::CardKind;
+        let mut h = Harness::new();
+        let id = h.m.add_card(
+            "/h",
+            NewCard {
+                kind: CardKind::Editor,
+                path: Some("/h/a.rs".into()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&id));
+        h.run("editor.replaceInFiles.regex");
+        answer_prompt(&mut h, r"(\w+)!");
+        assert!(
+            h.m.prompt.is_open(),
+            "the replacement is the second question"
+        );
+        assert!(h.m.files_job.is_none());
+        answer_prompt(&mut h, "$1?");
+        let job = h.m.files_job.clone().unwrap();
+        assert_eq!(
+            (job.find.as_str(), job.replace.as_str(), job.regex),
+            (r"(\w+)!", "$1?", true)
+        );
+        assert!(h.m.effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::ReplaceInFilesCount,
+                ..
+            }
+        )));
+        // Nothing is written by the answers above.
+        assert!(!h.m.effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::ReplaceInFilesApply,
+                ..
+            }
+        )));
+        // The ui asked its question; the yes is what applies.
+        h.m.prompt
+            .confirm("Replace 3 matches?", "Replace", Pending::ReplaceInFilesYes);
+        let (pending, answer) = h.m.prompt.settle(Some("")).unwrap();
+        h.m.answer(pending, answer, |_| true);
+        assert!(h.m.effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::ReplaceInFilesApply,
+                ..
+            }
+        )));
+        // A deletion is a replacement too.
+        h.m.effects.clear();
+        h.run("editor.replaceInFiles");
+        answer_prompt(&mut h, "x");
+        answer_prompt(&mut h, "");
+        assert_eq!(h.m.files_job.as_ref().unwrap().replace, "");
     }
 
     // Cmd+Ctrl+S: the file's names, a paste into the focused card, and the
@@ -4345,6 +4611,11 @@ mod tests {
         assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the comment toggle");
         assert_eq!(resolve_chord(&h.m, "cmd+z"), None, "the buffer's undo");
         assert_eq!(resolve_chord(&h.m, "cmd+s").as_deref(), Some("card.save"));
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+p").as_deref(),
+            Some("editor.goToFile"),
+            "go to file works from inside the text"
+        );
     }
 
     // A diff card is the editor's body in a read-only mode, so it locks the

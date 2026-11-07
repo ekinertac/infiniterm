@@ -215,6 +215,15 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "always starts at startingDir: a new card is a new place to work.",
         ],
     ),
+    (
+        "cards.newCardInheritsDirectory",
+        &[
+            "Whether a new terminal card (Cmd+T, Cmd+Alt+T) starts in the",
+            "directory of the terminal card you opened it from, instead of",
+            "startingDir. Off by default. From any other kind of card, or",
+            "with nothing selected, it still starts at startingDir.",
+        ],
+    ),
     ("canvas", &["The canvas itself: zooming and panning."]),
     (
         "canvas.zoomSensitivity",
@@ -251,6 +260,55 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "An editor card opened on a folder starts with a blank, unsaved buffer in",
             "its first tab. Off: the card has no buffer, only the folder's name over",
             "the tree, and the pane stays empty until you open a file.",
+        ],
+    ),
+    (
+        "editor.formatOnSave",
+        &[
+            "Run the file's formatter over an editor's text when you save it (Cmd+S).",
+            "Off by default, because it rewrites the file and runs a program. The",
+            "formatter is Prettier for JavaScript, TypeScript, TSX, JSON, CSS, SCSS,",
+            "HTML, markdown and YAML, rustfmt for Rust, gofmt for Go and black for",
+            "Python, found in the project's node_modules/.bin, on PATH or in the usual",
+            "Homebrew and cargo folders. A formatter that is missing, fails or takes",
+            "longer than eight seconds leaves your text as it is and the file is saved",
+            "anyway, with a note in the status bar. Only files on this machine.",
+        ],
+    ),
+    (
+        "editor.formatters",
+        &[
+            "Your own formatter per language, as editor.formatters.<language>, with",
+            "the language's name as the status bar shows it (rust, javascript,",
+            "typescript, tsx, json, css, scss, html, markdown, yaml, go, python, c,",
+            "shell, toml, sql, svelte). The command is words separated by spaces, no",
+            "shell: the text goes to its stdin and the formatted text is read from its",
+            "stdout, and {path} is replaced by the file's path. For example",
+            "\"editor.formatters.python\": \"ruff format --stdin-filename {path} -\".",
+            "The Editor: format document command uses these too.",
+        ],
+    ),
+    (
+        "editor.lsp.enabled",
+        &[
+            "Ask a language server for completions while you type in an editor.",
+            "Off by default: a server is an external program (rust-analyzer,",
+            "typescript-language-server, pyright, gopls) you install yourself, and",
+            "rust-analyzer on a large crate holds a lot of memory. A server starts",
+            "when you first type in a file of its language and stops when the last",
+            "tab of that language closes; with this off nothing runs. Used for",
+            "Rust, JavaScript, TypeScript, TSX, Python and Go; markdown, JSON, YAML",
+            "and TOML keep their own completions. Only files on this machine.",
+        ],
+    ),
+    (
+        "editor.lsp.servers",
+        &[
+            "Your own server per language, as editor.lsp.servers.<language>, with the",
+            "language's name as the status bar shows it (rust, javascript, typescript,",
+            "tsx, python, go). The command is words separated by spaces, no shell, and",
+            "must speak LSP over stdin and stdout, for example",
+            "\"editor.lsp.servers.python\": \"pylsp\".",
         ],
     ),
     (
@@ -443,7 +501,12 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     ),
     (
         "ui.backgroundImageFit",
-        &["\"cover\" fills the window and crops the edges; \"contain\" shows the whole picture."],
+        &[
+            "\"cover\" fills the window and crops the edges; \"contain\" shows the whole picture;",
+            "\"top-left\" fills like cover but pins the picture's top-left corner to the window's,",
+            "so only the right and bottom are cropped; \"actual-size\" draws it at its own size from",
+            "the top-left corner and never rescales it when the window is resized.",
+        ],
     ),
     (
         "ui.workspaceIsolation",
