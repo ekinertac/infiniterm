@@ -1307,7 +1307,9 @@ impl Model {
                     self.go_to_card(card_id);
                 } else if let Some(ws) = id.strip_prefix(WORKSPACE_ROW) {
                     self.show_workspace(ws);
-                } else {
+                } else if self.command_enabled(id) {
+                    // A greyed row is listed (it still matches the search)
+                    // but picking it does nothing.
                     self.effects.push(Effect::RunCommand(id.to_string()));
                 }
             }

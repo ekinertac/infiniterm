@@ -5809,4 +5809,120 @@ mod tests {
             .as_deref()
             .is_some_and(|n| n.contains("maximised")));
     }
+
+    /// Three cards, the first sized by "Custom size…" to `squares`; returns
+    /// the ids with the first focused and alone in the selection.
+    fn three_with_first_sized(h: &mut Harness, squares: &str) -> Vec<String> {
+        h.run("card.new.terminal");
+        h.run("card.new.terminal");
+        let ids: Vec<String> = h.m.cards.iter().map(|c| c.id.clone()).collect();
+        h.m.set_focus(Some(&ids[0]));
+        h.m.selection.extra.clear();
+        h.run("card.size.custom");
+        answer_prompt(h, squares);
+        ids
+    }
+
+    #[test]
+    fn copy_size_then_paste_on_another_card_gives_it_the_width_and_height() {
+        let mut h = Harness::new();
+        let ids = three_with_first_sized(&mut h, "40x30");
+        h.run("card.size.copy");
+        assert_eq!(
+            h.m.copied_size,
+            Some(crate::grid::Size { w: 1000., h: 750. })
+        );
+        h.m.set_focus(Some(&ids[1]));
+        let before = rect_of(&h, &ids[1]);
+        h.run("card.size.paste");
+        let after = rect_of(&h, &ids[1]);
+        assert_eq!((after.w, after.h), (1000., 750.));
+        // The resize rows' rule (`window_fit.rs`): one gap right of the card
+        // on its left, which shrank first, so it is pulled in; same row.
+        let left = rect_of(&h, &ids[0]);
+        assert_eq!(after.x, left.x + left.w + h.m.gap());
+        assert_eq!(after.y, before.y);
+        assert!(none_overlap(&h));
+    }
+
+    #[test]
+    fn paste_size_sizes_every_card_of_a_selection_and_undoes_in_one_step() {
+        let mut h = Harness::new();
+        let ids = six_selected(&mut h);
+        h.m.selection.extra.clear();
+        h.run("card.size.custom");
+        answer_prompt(&mut h, "30x20");
+        h.run("card.size.copy");
+        let start: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        h.m.set_focus(Some(&ids[1]));
+        h.m.selection.extra = ids[2..].to_vec();
+        h.run("card.size.paste");
+        for i in &ids[1..] {
+            let r = rect_of(&h, i);
+            assert_eq!((r.w, r.h), (750., 500.), "{i}");
+        }
+        assert!(none_overlap(&h));
+        h.run("layout.undo");
+        let back: Vec<_> = ids.iter().map(|i| rect_of(&h, i)).collect();
+        assert_eq!(back, start, "one undo step restores every card");
+    }
+
+    #[test]
+    fn paste_size_with_nothing_copied_does_nothing_and_is_greyed() {
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        let before = rect_of(&h, &id);
+        assert!(!h.m.command_enabled("card.size.paste"));
+        assert!(h.m.command_enabled("card.size.copy"));
+        assert!(
+            h.m.command_enabled("card.new.terminal"),
+            "unlisted: enabled"
+        );
+        h.run("card.size.paste");
+        assert_eq!(rect_of(&h, &id), before);
+        assert!(h.m.notice.is_none(), "silent");
+        // A palette pick of the greyed row runs nothing.
+        h.m.effects.clear();
+        h.m.palette_run(Source::Commands, "card.size.paste");
+        assert!(!h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::RunCommand(_))));
+        h.run("card.size.copy");
+        assert!(h.m.command_enabled("card.size.paste"));
+        assert!(h.m.key_context().size_copied);
+        h.m.palette_run(Source::Commands, "card.size.paste");
+        assert!(h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::RunCommand(c) if c == "card.size.paste")));
+    }
+
+    #[test]
+    fn paste_size_that_would_overlap_a_card_reflows_the_pasted_card_only() {
+        let mut h = Harness::new();
+        let ids = three_with_first_sized(&mut h, "200x160");
+        h.run("card.size.copy");
+        h.m.set_focus(Some(&ids[1]));
+        let others: Vec<_> = [&ids[0], &ids[2]].iter().map(|i| rect_of(&h, i)).collect();
+        h.run("card.size.paste");
+        let r = rect_of(&h, &ids[1]);
+        assert_eq!((r.w, r.h), (5000., 4000.));
+        assert!(none_overlap(&h), "never lands over another card");
+        let kept: Vec<_> = [&ids[0], &ids[2]].iter().map(|i| rect_of(&h, i)).collect();
+        assert_eq!(kept, others, "the cards not pasted on stay where they are");
+    }
+
+    #[test]
+    fn copy_and_paste_size_labels_ask_for_nothing_more() {
+        let h = Harness::new();
+        for (id, label) in [
+            ("card.size.copy", "Card: copy size"),
+            ("card.size.paste", "Card: paste size"),
+        ] {
+            assert_eq!(h.r.get(id).map(|c| c.label.as_str()), Some(label));
+        }
+    }
 }

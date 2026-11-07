@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-07
+
+- "Card: copy size" and "Card: paste size" in the palette make cards the same size. Copy remembers the focused card's width and height; paste gives them to the focused card, or to every card of a selection. The cards are placed like the Cmd+Alt+S size rows place them, so none lands on another, and one Cmd+Z undoes the paste. Paste is greyed until you copy a size, and the size is forgotten when the app quits. No default keys: bind them in `keybindings.json`.
+
 ## 0.6.9 (build 1403), 2026-11-07
 
 ### Browser
