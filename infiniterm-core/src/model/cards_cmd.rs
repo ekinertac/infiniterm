@@ -8,8 +8,7 @@ use super::{
     BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
     TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
 };
-use super::{FindToggle, TerminalAction, TreeAct};
-use super::{ChangeAct, TerminalAction, TreeAct};
+use super::{ChangeAct, FindToggle, TerminalAction, TreeAct};
 use crate::card_label::{card_label, tilde_path, Labelled};
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
 use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
@@ -1675,6 +1674,8 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     ] {
         r.register(id, label, move |m| {
             m.editor_action(EditorAction::FindToggle(t))
+        });
+    }
     r.register("editor.goToSymbol", "Editor: go to a symbol…", |m| {
         m.with_active_card(|m, id| {
             if m.card(&id).is_some_and(|c| c.kind == CardKind::Editor) {

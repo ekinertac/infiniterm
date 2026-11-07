@@ -490,6 +490,8 @@ pub enum FindToggle {
     WholeWord,
     /// Only inside the selection the toggle was pressed with.
     InSelection,
+}
+
 /// One row of Go to Symbol.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolRow {

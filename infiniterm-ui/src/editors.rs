@@ -543,6 +543,8 @@ impl AppView {
                 }
                 if let Some(body) = self.editor_for(card_id) {
                     body.toggle_find(t);
+                }
+            }
             EditorAction::GoToSymbol => {
                 let rows = self
                     .editor_for(card_id)
