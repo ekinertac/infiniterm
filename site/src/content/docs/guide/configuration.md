@@ -171,6 +171,8 @@ Push is off until the file `ntfy-topic` exists in `~/.config/infiniterm/` with o
 
 The title is the card's number and name, the body says what happened. A state that was already there when the app started, and a repeated report of the same state, send nothing. A failed send is one line in `agent.log`.
 
+The infiniterm iPhone app can also be told when a card needs you while the app is closed. When its "Notify when the app is closed" switch is on, it registers itself on the Mac with `ift push add`, and the file `push-devices` in `~/.config/infiniterm/` then holds one line per phone. Those ids let anyone push to the phone, so do not commit that file. `ift push list` shows the phones (the start of each id only) and `ift push remove <id>` removes one. These pushes use the same `notify.*` settings, and go through a small relay that sees card and workspace names on the way.
+
 ## What the app touches
 
 - Your shells, one per card, started as your login shell with `INFINITERM_CARD_ID` in the environment. Nothing is typed into them that you did not type.
