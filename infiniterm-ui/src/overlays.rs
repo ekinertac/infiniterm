@@ -1284,15 +1284,14 @@ impl AppView {
                         },
                     ))
                     .child(div().text_color(fps_color).child(right))
-                    // Which build this is, for a bug report from a friend.
+                    // Which version and build this is, for a bug report from a
+                    // friend. Each part has its own hide setting.
                     .children(
-                        self.build
-                            .filter(|_| !m.config.ui.hide_build_number)
-                            .map(|b| {
-                                div()
-                                    .text_color(chrome.text_faint)
-                                    .child(format!("build {b}"))
-                            }),
+                        status_version_text(
+                            (!m.config.ui.hide_version).then_some(env!("CARGO_PKG_VERSION")),
+                            self.build.filter(|_| !m.config.ui.hide_build_number),
+                        )
+                        .map(|text| div().text_color(chrome.text_faint).child(text)),
                     ),
             )
     }
@@ -1996,5 +1995,44 @@ impl AppView {
                         .child(list),
                 ),
             )
+    }
+}
+
+/// The status bar's right end: the version and the build, whichever are not
+/// hidden (`ui.hideVersion`, `ui.hideBuildNumber`), or nothing when both are.
+fn status_version_text(version: Option<&str>, build: Option<u64>) -> Option<String> {
+    let parts: Vec<String> = [
+        version.map(str::to_string),
+        build.map(|b| format!("build {b}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+#[cfg(test)]
+mod status_version_tests {
+    use super::status_version_text;
+
+    #[test]
+    fn the_status_bar_shows_the_version_and_the_build_unless_hidden() {
+        assert_eq!(
+            status_version_text(Some("0.6.9"), Some(1403)).as_deref(),
+            Some("0.6.9 · build 1403")
+        );
+        assert_eq!(
+            status_version_text(None, Some(1403)).as_deref(),
+            Some("build 1403")
+        );
+        assert_eq!(
+            status_version_text(Some("0.6.9"), None).as_deref(),
+            Some("0.6.9")
+        );
+        assert_eq!(
+            status_version_text(None, None),
+            None,
+            "both hidden: nothing"
+        );
     }
 }

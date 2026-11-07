@@ -145,6 +145,8 @@ The keys below go in a ui theme file, not in `settings.json`.
 
 `ui.icon` picks the picture in the Dock: `"default"` (four outlined cards) or `"filled"`. It changes when you save the file or switch the ui theme. The window colour badge stays on top of it. The icon in Finder and Launchpad stays the default, because a running app cannot change it.
 
+The right end of the status bar shows the version and the build, like `0.6.9 · build 1403`. `ui.hideVersion` and `ui.hideBuildNumber` (both off by default) hide one part each. They are settings.json keys, not theme keys.
+
 `ui.statusBarPwd` (off by default) shows the focused terminal card's folder in the status bar, with your home folder as `~`. It is left out when the card's label already is the path, and a long path is cut so the build number stays. `ui.statusBarPwdSide` puts it on the `"left"` (default) or the `"right"`. `"ui.hideBuildNumber": true` in `settings.json` hides "build N" at the right end of the status bar.
 
 ## The interface font
