@@ -323,12 +323,13 @@ pub fn gone_ids(reply: &str) -> Result<Vec<String>, String> {
 pub const RELAY_IDS_MAX: usize = 16;
 
 /// Which of the ids sent are gone, from the relay's HTTP answer. A 404 with
-/// an empty body means the relay knows none of them, so all are gone. Any
-/// other status than 200 is an error and removes nothing.
+/// an empty body means the relay knows none of them, so all are gone. A 404
+/// with a body (a wrong path says "Not found") and any other status than 200
+/// is an error and removes nothing.
 pub fn relay_gone(status: u16, body: &str, sent: &[&str]) -> Result<Vec<String>, String> {
     match status {
         200 => gone_ids(body),
-        404 => Ok(sent.iter().map(|s| s.to_string()).collect()),
+        404 if body.trim().is_empty() => Ok(sent.iter().map(|s| s.to_string()).collect()),
         other => Err(format!("relay answered {other}")),
     }
 }
@@ -686,6 +687,9 @@ mod tests {
             Err("relay answered 429".to_string())
         );
         assert!(relay_gone(413, "", &["a"]).is_err());
+        // A wrong path also gives 404, but with a body: not "gone".
+        assert!(relay_gone(404, "Not found", &["a"]).is_err());
+        assert_eq!(relay_gone(404, "\n", &["a"]), Ok(vec!["a".to_string()]));
     }
 
     #[test]

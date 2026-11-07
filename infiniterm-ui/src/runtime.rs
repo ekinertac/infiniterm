@@ -1861,17 +1861,43 @@ fn short_id(id: &str) -> String {
     format!("{}…", id.chars().take(6).collect::<String>())
 }
 
-/// Posts to the relays in the devices file from a background thread, one
-/// request per url (split at the relay's id cap). Ids the relay reports gone
-/// are dropped from the file. The file is read now, so `ift push add` needs
-/// no restart; with no file nothing leaves the machine. A failure is one
-/// line in `agent.log`, never a notice.
+struct RelayJob {
+    host: String,
+    alert: Option<infiniterm_core::push_notify::RelayAlert>,
+    cards: Vec<infiniterm_core::push_notify::ColouredCard>,
+}
+
+/// Queues a relay push for the one sender thread. One thread, not one per
+/// effect: the card list is state, so an older list must never reach the
+/// relay after a newer one. The thread also keeps the file reads and the
+/// clean-up writes off the UI thread and one at a time.
 fn send_relay_pushes(
     host: String,
     alert: Option<infiniterm_core::push_notify::RelayAlert>,
     cards: Vec<infiniterm_core::push_notify::ColouredCard>,
 ) {
+    use std::sync::{mpsc, OnceLock};
+    static SENDER: OnceLock<mpsc::Sender<RelayJob>> = OnceLock::new();
+    let tx = SENDER.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<RelayJob>();
+        std::thread::spawn(move || {
+            for job in rx {
+                run_relay_job(job);
+            }
+        });
+        tx
+    });
+    let _ = tx.send(RelayJob { host, alert, cards });
+}
+
+/// Posts to the relays in the devices file, one request per url (split at
+/// the relay's id cap). Ids the relay reports gone are dropped from the
+/// file. The file is read per job, so `ift push add` needs no restart; with
+/// no file nothing leaves the machine. A failure is one line in
+/// `agent.log`, never a notice.
+fn run_relay_job(job: RelayJob) {
     use infiniterm_core::push_notify as pn;
+    let RelayJob { host, alert, cards } = job;
     let path = infiniterm_core::paths::config_dir().join(pn::DEVICES_FILE);
     let Ok(text) = std::fs::read_to_string(&path) else {
         return;
@@ -1883,49 +1909,47 @@ fn send_relay_pushes(
             return;
         }
     };
-    let groups = pn::group_by_url(&devices);
-    if groups.is_empty() {
-        return;
-    }
-    std::thread::spawn(move || {
-        let mut gone: Vec<String> = Vec::new();
-        for (url, ids) in &groups {
-            let endpoint = format!("{}/v1/push", url.trim_end_matches('/'));
-            for chunk in ids.chunks(pn::RELAY_IDS_MAX) {
-                let sent: Vec<&str> = chunk.iter().map(String::as_str).collect();
-                let body = pn::relay_body(&sent, &host, alert.as_ref(), &cards);
-                let result = post_json_reply(&endpoint, &body)
-                    .and_then(|(status, reply)| pn::relay_gone(status, &reply, &sent));
-                match result {
-                    Ok(ids) => gone.extend(ids),
-                    Err(why) => {
-                        let first = sent.first().map(|s| short_id(s)).unwrap_or_default();
-                        append_agent_log(&format!("[push] relay {url} ({first}): {why}"));
-                    }
+    let mut gone: Vec<String> = Vec::new();
+    for (url, ids) in &pn::group_by_url(&devices) {
+        let endpoint = format!("{}/v1/push", url.trim_end_matches('/'));
+        for chunk in ids.chunks(pn::RELAY_IDS_MAX) {
+            let sent: Vec<&str> = chunk.iter().map(String::as_str).collect();
+            let body = pn::relay_body(&sent, &host, alert.as_ref(), &cards);
+            let result = post_json_reply(&endpoint, &body)
+                .and_then(|(status, reply)| pn::relay_gone(status, &reply, &sent));
+            match result {
+                Ok(ids) => gone.extend(ids),
+                Err(why) => {
+                    let first = sent.first().map(|s| short_id(s)).unwrap_or_default();
+                    append_agent_log(&format!("[push] relay {url} ({first}): {why}"));
                 }
             }
         }
-        if gone.is_empty() {
-            return;
-        }
-        // Read again: `ift push add` may have changed the file meanwhile.
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return;
-        };
-        let Ok(current) = pn::parse_devices_file(&text) else {
-            return;
-        };
-        let kept = pn::remove_gone(&current, &gone);
-        if kept.len() == current.len() {
-            return;
-        }
-        // Private: the ids address phones.
-        if let Err(e) =
-            infiniterm_core::files::write_private_atomically(&path, &pn::devices_file_text(&kept))
-        {
-            append_agent_log(&format!("[push] cannot update {}: {e}", pn::DEVICES_FILE));
-        }
-    });
+    }
+    if gone.is_empty() {
+        return;
+    }
+    // Read again: `ift push add` may have changed the file meanwhile. An add
+    // from another process between this read and the rename is lost; the
+    // phone adds itself again on its next connect.
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(current) = pn::parse_devices_file(&text) else {
+        return;
+    };
+    let kept = pn::remove_gone(&current, &gone);
+    if kept.len() == current.len() {
+        return;
+    }
+    // Private: the ids address phones.
+    match infiniterm_core::files::write_private_atomically(&path, &pn::devices_file_text(&kept)) {
+        Ok(()) => append_agent_log(&format!(
+            "[push] dropped {} device(s) the relay no longer knows",
+            current.len() - kept.len()
+        )),
+        Err(e) => append_agent_log(&format!("[push] cannot update {}: {e}", pn::DEVICES_FILE)),
+    }
 }
 
 /// Like `post_json`, but returns the HTTP status and the body, because the
