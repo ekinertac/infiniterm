@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-07
+
+- `ui.backgroundImageFit` has two new values. `"top-left"` fills the window like `"cover"` but keeps the picture's top-left corner at the window's, so only the right and bottom are cropped. `"actual-size"` draws the picture at its own size from the top-left corner and never rescales it when the window is resized.
+
 ## 0.6.8 (build 1350), 2026-11-06
 
 ### Updates
