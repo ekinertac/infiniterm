@@ -392,6 +392,9 @@ impl Model {
                 self.effects.push(Effect::RunCommand(id.to_string()));
                 ok(String::new())
             }
+            // `ift update status`: the updater's last word, so a caller of
+            // `app.update.check` knows when `app.update.install` can run.
+            "update-status" => ok(self.update_state.status_line()),
             "dev-run" => {
                 if !self.dev_build {
                     return err("not a development build");
@@ -462,6 +465,31 @@ mod tests {
         assert!(reply.text.contains("Hacker News"), "{}", reply.text);
         assert!(reply.text.contains("open https://news.ycombinator.com"));
         assert_eq!(m.omni.query, "left alone");
+    }
+
+    #[test]
+    fn update_status_answers_with_what_the_updater_last_said() {
+        use crate::update::UpdateState;
+        let mut m = Model::new();
+        let ask = |m: &mut Model| {
+            m.run_ift(
+                &CliRequest {
+                    id: 1,
+                    cmd: "update-status".into(),
+                    args: vec![],
+                    card_id: None,
+                },
+                &[],
+            )
+        };
+        assert_eq!(ask(&mut m).text, "off");
+        m.update_state = UpdateState::Ready {
+            version: "0.6.9".into(),
+            build: 1105,
+        };
+        let reply = ask(&mut m);
+        assert!(reply.ok);
+        assert_eq!(reply.text, "ready\t0.6.9\t1105");
     }
 
     #[test]

@@ -129,6 +129,11 @@ ift — drive infiniterm from a shell
   ift usage [days]           the commands and mouse gestures you used in the
                              last 30 days (or [days]), then the ones you
                              never did; from a log kept only on this Mac
+  ift update status          the app's update state, one line: off, checking,
+                             current, ready (a download waits for a restart),
+                             available or failed, then version and build or
+                             the reason, tab separated. app.update.check asks
+                             for a check, app.update.install restarts into it
   ift commands               every command the app registers: id, label,
                              key; the palette's list as text (the default
                              keybindings file has only the bound ones)
@@ -179,7 +184,7 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 31] = [
+pub const SUBCOMMANDS: [&str; 32] = [
     "diff",
     "ls",
     "workspaces",
@@ -197,6 +202,7 @@ pub const SUBCOMMANDS: [&str; 31] = [
     "omni",
     "commands",
     "usage",
+    "update",
     "name",
     "group",
     "install",
@@ -273,6 +279,13 @@ fn main() -> ExitCode {
         Some("run") => send("run", rest()),
         Some("commands") => send_table("commands", &["id", "label", "key"]),
         Some("usage") => send("usage", rest()),
+        Some("update") => match args.get(1).map(String::as_str) {
+            Some("status") => send("update-status", vec![]),
+            _ => {
+                eprintln!("ift: update takes one word: status");
+                ExitCode::from(2)
+            }
+        },
         Some("sessions") => attach::sessions_cmd(args.contains(&"--full".to_string())),
         Some("attach") => match args.get(1) {
             Some(id) => attach::attach(id),
