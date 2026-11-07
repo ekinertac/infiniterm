@@ -5,6 +5,7 @@
 pub mod buffer;
 pub mod diff;
 pub mod explorer;
+pub mod format;
 pub mod grep;
 pub mod highlight;
 pub mod jumps;

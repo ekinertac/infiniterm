@@ -463,6 +463,8 @@ pub enum EditorAction {
     /// well as the panel's buttons; it opens the panel when it is closed.
     FindToggle(FindToggle),
     GoToLine,
+    /// `editor.format`: run the language's formatter over the text now.
+    Format,
     /// Cmd+R in a locked editor: the ui lists the open file's symbols and
     /// hands them to `Model::open_symbols`.
     GoToSymbol,

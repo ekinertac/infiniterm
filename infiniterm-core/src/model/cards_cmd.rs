@@ -1712,6 +1712,9 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("editor.find", "Editor: find", |m| {
         m.editor_action(EditorAction::Find)
     });
+    r.register("editor.format", "Editor: format document", |m| {
+        m.editor_action(EditorAction::Format)
+    });
     for (id, label, t) in [
         (
             "editor.find.regex",

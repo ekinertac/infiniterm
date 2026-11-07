@@ -277,6 +277,13 @@ pub struct Editor {
     /// in a tab of its own. Off: no buffer, the pane stays empty until a
     /// file opens (`tabs_cmd.rs::browser_tab_open`).
     pub folder_scratch_tab: bool,
+    /// Run the file's formatter over the text when it is saved
+    /// (`infiniterm-editor/src/format.rs`). Off by default: it rewrites the
+    /// file, and it runs a program.
+    pub format_on_save: bool,
+    /// Formatter commands by language name (`editor.formatters.rust`), over
+    /// the built-in defaults; see `format.rs` for the command's shape.
+    pub formatters: std::collections::BTreeMap<String, String>,
     /// Selected text's background and colour. Empty means the theme's yellow
     /// on the theme's background: a highlighter pen, visible on any scheme.
     pub selection_color: String,
@@ -588,6 +595,8 @@ pub fn default_config() -> Config {
             highlight_line: true,
             complete_words: true,
             folder_scratch_tab: true,
+            format_on_save: false,
+            formatters: Default::default(),
             selection_color: String::new(),
             selection_text_color: String::new(),
             cursor_color: String::new(),
@@ -888,6 +897,18 @@ pub fn merge_config(raw: &Value) -> Config {
             highlight_line: bool_(e.get("highlightLine"), d.editor.highlight_line),
             complete_words: bool_(e.get("completeWords"), d.editor.complete_words),
             folder_scratch_tab: bool_(e.get("folderScratchTab"), d.editor.folder_scratch_tab),
+            format_on_save: bool_(e.get("formatOnSave"), d.editor.format_on_save),
+            // `editor.formatters.rust` and so on: the flat reader leaves them
+            // as dotted keys under the section.
+            formatters: e
+                .iter()
+                .filter_map(|(k, v)| {
+                    let language = k.strip_prefix("formatters.")?;
+                    let command = v.as_str()?.trim();
+                    (!language.is_empty() && !command.is_empty())
+                        .then(|| (language.to_string(), command.to_string()))
+                })
+                .collect(),
             selection_color: str_(e.get("selectionColor"), &d.editor.selection_color),
             selection_text_color: str_(e.get("selectionTextColor"), &d.editor.selection_text_color),
             cursor_color: str_(e.get("cursorColor"), &d.editor.cursor_color),
@@ -1478,6 +1499,34 @@ mod tests {
                 .terminal
                 .cursor_style,
             CursorStyle::Bar
+        );
+    }
+
+    // Format on save is off until asked for (#602), and the per-language
+    // commands read as dotted keys or as a nested object, blanks dropped.
+    #[test]
+    fn format_on_save_is_off_by_default_and_formatters_are_read_per_language() {
+        let d = m(json!({})).editor;
+        assert!(!d.format_on_save);
+        assert!(d.formatters.is_empty());
+        let e = m(json!({
+            "editor.formatOnSave": true,
+            "editor.formatters.python": "ruff format -",
+            "editor": {"formatters": {"rust": " rustfmt ", "go": "  "}}
+        }))
+        .editor;
+        assert!(e.format_on_save);
+        assert_eq!(
+            e.formatters.get("python").map(String::as_str),
+            Some("ruff format -")
+        );
+        assert_eq!(
+            e.formatters.get("rust").map(String::as_str),
+            Some("rustfmt")
+        );
+        assert!(
+            !e.formatters.contains_key("go"),
+            "a blank command is no command"
         );
     }
 

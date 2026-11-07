@@ -207,6 +207,10 @@ impl AppView {
             body.blink = cfg.terminal.cursor_blink;
             body.highlight_line = cfg.editor.highlight_line;
             body.complete_words = cfg.editor.complete_words;
+            body.format_on_save = cfg.editor.format_on_save;
+            if body.formatters != cfg.editor.formatters {
+                body.formatters.clone_from(&cfg.editor.formatters);
+            }
             let path = body.path.clone().unwrap_or_default();
             body.wrap = match cfg.editor.wrap {
                 Wrap::Always => true,
@@ -549,6 +553,13 @@ impl AppView {
                 }
                 if let Some(body) = self.editor_for(card_id) {
                     body.open_search(false);
+                }
+            }
+            EditorAction::Format => {
+                if let Some(path) = card.path.clone() {
+                    if let Some(body) = self.editor_for(card_id) {
+                        body.format_document(&path, now);
+                    }
                 }
             }
             EditorAction::FindToggle(t) => {
