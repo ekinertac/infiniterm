@@ -527,78 +527,117 @@ impl Buffer {
         self.insert(&format!("\n{indent}"), now);
     }
 
-    /// Cmd+Shift+D: a copy of the current line inserted right below it,
-    /// caret on the copy at the same column.
+    /// The first and last line the selection touches, or the caret's line.
+    /// A selection that ends at column 0 of a line leaves that line out,
+    /// as VS Code and Sublime do, so a Cmd+L selection moves one line.
+    fn touched_lines(&self) -> (usize, usize) {
+        match self.selection() {
+            Some(r) => {
+                let first = self.line_of(r.start);
+                let mut last = self.line_of(r.end);
+                if last > first && self.col_of(r.end) == 0 {
+                    last -= 1;
+                }
+                (first, last)
+            }
+            None => {
+                let line = self.line_of(self.cursor);
+                (line, line)
+            }
+        }
+    }
+
+    /// Puts the selection back after a line edit moved its text by `shift`
+    /// chars; `apply` leaves only a caret.
+    fn reselect(&mut self, anchor: Option<usize>, shift: i64) {
+        let len = self.len_chars();
+        self.anchor = anchor.map(|a| ((a as i64 + shift).max(0) as usize).min(len));
+    }
+
+    /// Cmd+Shift+D: a selection inside one line is copied right after
+    /// itself and the copy stays selected; otherwise every line the
+    /// selection touches (or the caret's line) is copied below, caret and
+    /// selection on the copy.
     pub fn duplicate_line(&mut self, now: f64) {
-        let line = self.line_of(self.cursor);
-        let col = self.col_of(self.cursor);
-        let text = self.line(line);
-        let last = line + 1 >= self.line_count();
-        let at = if last {
-            self.len_chars()
+        if let Some(r) = self.selection() {
+            if self.line_of(r.start) == self.line_of(r.end) {
+                let text = self.slice(r.clone());
+                let len = text.chars().count();
+                let backwards = self.anchor.is_some_and(|a| a > self.cursor);
+                self.apply(r.end, String::new(), text, r.end + len, false, now);
+                let (from, to) = (r.end, r.end + len);
+                let (a, c) = if backwards { (to, from) } else { (from, to) };
+                self.anchor = Some(a);
+                self.cursor = c;
+                return;
+            }
+        }
+        self.copy_lines(false, now);
+    }
+
+    /// Shift+Alt+Down (below) and Shift+Alt+Up (above): copies every line
+    /// the selection touches. The caret and selection go with the copy, so
+    /// below they move down by the block and above they keep their place.
+    pub fn copy_lines(&mut self, up: bool, now: f64) {
+        let (first, last) = self.touched_lines();
+        let (anchor, cursor) = (self.anchor, self.cursor);
+        let start = self.line_start(first);
+        let body = self.slice(start..self.line_end(last));
+        let body_len = body.chars().count() as i64;
+        let no_newline = self.line_span_end(last) == self.line_end(last);
+        let (at, new, shift) = if up {
+            (start, format!("{body}\n"), 0)
+        } else if no_newline {
+            (self.len_chars(), format!("\n{body}"), body_len + 1)
         } else {
-            self.line_start(line + 1)
+            (self.line_span_end(last), format!("{body}\n"), body_len + 1)
         };
-        let new = if last {
-            format!("\n{text}")
-        } else {
-            format!("{text}\n")
-        };
-        let cursor_after = at + usize::from(last) + col.min(text.chars().count());
+        let cursor_after = (cursor as i64 + shift) as usize;
         self.apply(at, String::new(), new, cursor_after, false, now);
+        self.reselect(anchor, shift);
     }
 
-    /// Ctrl+Cmd+Up: the current line trades places with the one above it.
+    /// Alt+Up / Alt+Down: every line the selection touches trades places
+    /// with the line above or below it, and the selection moves with them.
+    pub fn move_lines(&mut self, up: bool, now: f64) {
+        let (first, last) = self.touched_lines();
+        if (up && first == 0) || (!up && last + 1 >= self.line_count()) {
+            return;
+        }
+        let (anchor, cursor) = (self.anchor, self.cursor);
+        let neighbour = if up { first - 1 } else { last + 1 };
+        let (lo, hi) = if up {
+            (neighbour, last)
+        } else {
+            (first, neighbour)
+        };
+        let start = self.line_start(lo);
+        let end = self.line_span_end(hi);
+        let old = self.slice(start..end);
+        let body = self.slice(self.line_start(first)..self.line_end(last));
+        let other = self.line(neighbour);
+        let other_len = other.chars().count() as i64;
+        let tail = if end > self.line_end(hi) { "\n" } else { "" };
+        let (new, shift) = if up {
+            (format!("{body}\n{other}{tail}"), -(other_len + 1))
+        } else {
+            (format!("{other}\n{body}{tail}"), other_len + 1)
+        };
+        let cursor_after = (cursor as i64 + shift).max(0) as usize;
+        self.apply(start, old, new, cursor_after, false, now);
+        self.reselect(anchor, shift);
+    }
+
+    /// Ctrl+Cmd+Up: the line (or every selected line) trades places with
+    /// the one above it.
     pub fn swap_line_up(&mut self, now: f64) {
-        let line = self.line_of(self.cursor);
-        if line == 0 {
-            return;
-        }
-        let col = self.col_of(self.cursor);
-        let start = self.line_start(line - 1);
-        let last = line + 1 >= self.line_count();
-        let end = if last {
-            self.len_chars()
-        } else {
-            self.line_start(line + 1)
-        };
-        let old = self.slice(start..end);
-        let cur = self.line(line);
-        let prev = self.line(line - 1);
-        let new = if last {
-            format!("{cur}\n{prev}")
-        } else {
-            format!("{cur}\n{prev}\n")
-        };
-        let cursor_after = start + col.min(cur.chars().count());
-        self.apply(start, old, new, cursor_after, false, now);
+        self.move_lines(true, now);
     }
 
-    /// Ctrl+Cmd+Down: the current line trades places with the one below it.
+    /// Ctrl+Cmd+Down: the line (or every selected line) trades places with
+    /// the one below it.
     pub fn swap_line_down(&mut self, now: f64) {
-        let line = self.line_of(self.cursor);
-        if line + 1 >= self.line_count() {
-            return;
-        }
-        let col = self.col_of(self.cursor);
-        let start = self.line_start(line);
-        let last = line + 2 >= self.line_count();
-        let end = if last {
-            self.len_chars()
-        } else {
-            self.line_start(line + 2)
-        };
-        let old = self.slice(start..end);
-        let cur = self.line(line);
-        let next = self.line(line + 1);
-        let new = if last {
-            format!("{next}\n{cur}")
-        } else {
-            format!("{next}\n{cur}\n")
-        };
-        let cur_start_after = start + next.chars().count() + 1;
-        let cursor_after = cur_start_after + col.min(cur.chars().count());
-        self.apply(start, old, new, cursor_after, false, now);
+        self.move_lines(false, now);
     }
 
     /// The char just past line `line`'s own text: where the next line's
@@ -1745,6 +1784,71 @@ mod tests {
         b.set_cursor(4); // on "c", the last line
         b.swap_line_down(3.);
         assert_eq!(b.text(), "a\nb\nc");
+    }
+
+    #[test]
+    fn move_lines_carries_the_whole_selection() {
+        let mut b = Buffer::new("a\nb\nc\nd");
+        b.select_range(2..5); // "b\nc", anchor first
+        b.move_lines(true, 0.);
+        assert_eq!(b.text(), "b\nc\na\nd");
+        assert_eq!(b.selection(), Some(0..3));
+        b.move_lines(false, 1.);
+        assert_eq!(b.text(), "a\nb\nc\nd");
+        assert_eq!(b.selection(), Some(2..5));
+        // Down onto the last line, which has no newline of its own.
+        b.move_lines(false, 2.);
+        assert_eq!(b.text(), "a\nd\nb\nc");
+        assert_eq!(b.selection(), Some(4..7));
+        b.move_lines(false, 3.);
+        assert_eq!(b.text(), "a\nd\nb\nc");
+    }
+
+    #[test]
+    fn move_lines_leaves_out_a_line_the_selection_only_reaches_the_start_of() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.select_range(2..4); // "b\n", ends at column 0 of "c"
+        b.move_lines(false, 0.);
+        assert_eq!(b.text(), "a\nc\nb");
+    }
+
+    #[test]
+    fn move_lines_keeps_a_backwards_selection_backwards() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.set_cursor(3);
+        b.select_to(2);
+        b.move_lines(true, 0.);
+        assert_eq!(b.text(), "b\na\nc");
+        assert_eq!(b.anchor(), Some(1));
+        assert_eq!(b.cursor(), 0);
+    }
+
+    #[test]
+    fn duplicate_line_on_a_selection() {
+        // Inside one line: the selected text is copied after itself.
+        let mut b = Buffer::new("foo bar");
+        b.select_range(0..3);
+        b.duplicate_line(0.);
+        assert_eq!(b.text(), "foofoo bar");
+        assert_eq!(b.selection(), Some(3..6));
+        // Across lines: the block is copied below and stays selected.
+        let mut b = Buffer::new("a\nb\nc");
+        b.select_range(0..3);
+        b.duplicate_line(0.);
+        assert_eq!(b.text(), "a\nb\na\nb\nc");
+        assert_eq!(b.selection(), Some(4..7));
+    }
+
+    #[test]
+    fn copy_lines_above_keeps_the_selection_on_the_upper_copy() {
+        let mut b = Buffer::new("a\nb");
+        b.set_cursor(2);
+        b.copy_lines(true, 0.);
+        assert_eq!(b.text(), "a\nb\nb");
+        assert_eq!(b.cursor(), 2);
+        b.copy_lines(false, 1.);
+        assert_eq!(b.text(), "a\nb\nb\nb");
+        assert_eq!(b.cursor(), 4);
     }
 
     #[test]
