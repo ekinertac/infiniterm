@@ -33,6 +33,9 @@ pub enum Source {
     /// `uitheme.pick` (#511): the files in `ui-themes/`, previewed live like
     /// `Themes`, and a pick is written as the setting `ui.theme`.
     UiThemes,
+    /// `editor.goToFile` (Cmd+P, #602): every file under the editor's
+    /// folder, fuzzy-matched on its path; a pick opens it as a tab.
+    Files,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
@@ -56,6 +59,7 @@ impl Source {
             Source::MoveGroupTo => "moveGroupTo",
             Source::WindowColor => "windowColor",
             Source::UiThemes => "uiThemes",
+            Source::Files => "files",
         }
     }
 
@@ -104,6 +108,7 @@ impl Source {
             Source::MoveGroupTo => "Move the group to workspace…",
             Source::WindowColor => "Window colour…",
             Source::UiThemes => "Switch UI theme",
+            Source::Files => "Go to file…",
         }
     }
 }
@@ -160,6 +165,33 @@ impl Model {
             query: String::new(),
             index: 0,
         };
+    }
+
+    /// Go to File's palette over `files` (paths relative to `root`), whose
+    /// pick opens a tab in editor card `card_id`.
+    pub fn open_quick_files(&mut self, card_id: &str, root: &str, files: Vec<String>) {
+        self.quick_open = Some(super::QuickOpen {
+            card_id: card_id.into(),
+            root: root.trim_end_matches('/').into(),
+            files,
+        });
+        self.open_palette(Source::Files);
+    }
+
+    /// A Go to File pick: the tab that already shows the file, else a new
+    /// one (what Enter on a file in the tree does).
+    pub fn quick_open_pick(&mut self, rel: &str) {
+        let Some(q) = self.quick_open.take() else {
+            return;
+        };
+        let path = format!("{}/{rel}", q.root);
+        let existing = self
+            .card(&q.card_id)
+            .and_then(|c| c.tabs.iter().position(|h| *h == path));
+        match existing {
+            Some(i) => self.browser_tab_jump(&q.card_id, i),
+            None => self.browser_tab_open(&q.card_id, Some(&path)),
+        }
     }
 
     /// `chosen` false means dismissed, and the source's preview is put back.
@@ -412,6 +444,19 @@ impl Model {
                     label: super::window_fit_cmd::CUSTOM_ROW.1.into(),
                     hint: Some("type width x height".into()),
                 }))
+                .collect(),
+            // Paths relative to the folder, matched whole, so `edbody` finds
+            // `src/editor_body.rs`. Recency applies: the file you reopen all
+            // day rises.
+            Source::Files => self
+                .quick_open
+                .iter()
+                .flat_map(|q| q.files.iter())
+                .map(|path| PaletteItem {
+                    id: path.clone(),
+                    label: path.clone(),
+                    hint: None,
+                })
                 .collect(),
             // The file's names, the first line as the hint, and the way to
             // the file last. Recency applies: the snippet you paste daily

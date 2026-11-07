@@ -460,6 +460,9 @@ pub enum EditorAction {
     Save,
     Find,
     GoToLine,
+    /// Cmd+P: the ui lists the files under the card's folder and hands them
+    /// to `Model::open_quick_files`.
+    GoToFile,
     /// Reviewing what changed on disk under the buffer (an agent's edit).
     Change(ChangeAct),
     ToggleBlame,
@@ -471,6 +474,15 @@ pub enum EditorAction {
     /// own, reachable only through the command palette, `cards_cmd.rs`'s
     /// `editor.transform.*` entries.
     Transform(TextTransform),
+}
+
+/// What Go to File lists and which card a pick opens into.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuickOpen {
+    pub card_id: String,
+    /// The folder the paths are relative to.
+    pub root: String,
+    pub files: Vec<String>,
 }
 
 /// What a reviewer does with the parts of a file that changed on disk.
@@ -850,6 +862,9 @@ pub struct Model {
     /// the snippets folder's files, read by the ui when the picker opens
     /// (`Effect::RefreshSnippets`), the way `theme_names` is.
     pub snippets: Vec<crate::snippets::Snippet>,
+    /// The files Go to File (Cmd+P) lists, read by the ui when it opens
+    /// (`EditorAction::GoToFile`) and kept while its palette is up.
+    pub quick_open: Option<QuickOpen>,
     pub theme_current: Option<String>,
     pub theme_before_preview: Option<String>,
     /// The colour the window had when its colour picker opened (`Some(None)`:
@@ -1059,6 +1074,7 @@ impl Model {
             look_ui: default_config().ui,
             theme_names: vec![],
             snippets: vec![],
+            quick_open: None,
             theme_current: None,
             theme_before_preview: None,
             window_color_before_preview: None,
