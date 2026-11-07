@@ -845,7 +845,10 @@ fn main() {
                         this.publish_agents();
                         // A viewer's states are the host's: it never pushes.
                         if !this.viewer {
-                            this.model.push_tick();
+                            let secs = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0.0, |d| d.as_secs_f64());
+                            this.model.push_tick(secs);
                         }
                         // What viewers changed on this canvas (#423).
                         // Files a joined window sent to the host (#556).

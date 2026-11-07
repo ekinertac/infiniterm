@@ -80,6 +80,21 @@ pub fn changes(
         .collect()
 }
 
+/// True when a card that was in a pushable state no longer is (it went back
+/// to working, was cleared or closed). The relay list changes then even
+/// though no alert is due, so the phone's colour list needs a refresh.
+pub fn dropped(
+    previous: Option<&BTreeMap<String, AgentState>>,
+    current: &BTreeMap<String, AgentState>,
+) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+    previous.iter().any(|(id, state)| {
+        is_pushable(*state) && !current.get(id).copied().is_some_and(is_pushable)
+    })
+}
+
 /// `#<number> <title>`, or `card <number>` when the title is empty; the body
 /// says the state in words.
 pub fn message(card_number: u32, card_title: &str, state: AgentState) -> Push {
@@ -329,6 +344,19 @@ mod tests {
 
     fn map(rows: &[(&str, AgentState)]) -> BTreeMap<String, AgentState> {
         rows.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    #[test]
+    fn dropped_is_true_only_when_a_card_leaves_a_pushable_state() {
+        let before = map(&[("a", Waiting), ("b", Working)]);
+        assert!(!dropped(None, &before));
+        assert!(dropped(Some(&before), &map(&[("b", Working)])));
+        assert!(dropped(Some(&before), &map(&[("a", Working)])));
+        assert!(!dropped(Some(&before), &map(&[("a", Done)])));
+        assert!(!dropped(
+            Some(&before),
+            &map(&[("a", Waiting), ("b", Done)])
+        ));
     }
 
     #[test]

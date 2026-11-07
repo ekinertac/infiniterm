@@ -614,6 +614,8 @@ impl AppView {
                 Effect::Warn(line) => eprintln!("[infiniterm/warn] {line}"),
                 Effect::AgentLog(line) => append_agent_log(&line),
                 Effect::PushNotify { server, pushes } => send_pushes(server, pushes),
+                // The relay sender lands with the runtime wiring (#649).
+                Effect::PushRelay { .. } => {}
                 Effect::Reload => {
                     self.flush_save();
                     leave_now();
