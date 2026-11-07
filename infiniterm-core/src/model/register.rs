@@ -1342,6 +1342,71 @@ mod tests {
         assert_eq!(h.m.card(&kept).unwrap().soft_group_id, None);
     }
 
+    // Cmd+R in a locked editor (#602): the ui is asked for the file's symbols,
+    // they are the palette's rows in order with their kind as the hint, and a
+    // pick is a go-to-line.
+    #[test]
+    fn go_to_symbol_lists_the_outline_and_a_pick_goes_to_the_line() {
+        use crate::model::SymbolRow;
+        use crate::saved_layout::CardKind;
+        let mut h = Harness::new();
+        let id = h.m.add_card(
+            "/h",
+            NewCard {
+                kind: CardKind::Editor,
+                path: Some("/h/a.rs".into()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&id));
+        h.m.card_mut(&id).unwrap().locked = true;
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+r").as_deref(),
+            Some("editor.goToSymbol"),
+            "in the text, Cmd+R is not the terminal's redraw"
+        );
+        let effects = h.run("editor.goToSymbol");
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::GoToSymbol,
+                ..
+            }
+        )));
+        h.m.open_symbols(
+            &id,
+            vec![
+                SymbolRow {
+                    name: "S".into(),
+                    kind: "struct".into(),
+                    line: 3,
+                    depth: 0,
+                },
+                SymbolRow {
+                    name: "new".into(),
+                    kind: "fn".into(),
+                    line: 8,
+                    depth: 1,
+                },
+            ],
+        );
+        assert_eq!(h.m.palette.source, Some(Source::Symbols));
+        assert!(Source::Symbols.keeps_its_order());
+        let items = h.m.palette_items(Source::Symbols, &[]);
+        assert_eq!(items[1].label, "  new");
+        assert_eq!(items[1].hint.as_deref(), Some("fn"));
+        h.m.effects.clear();
+        h.m.palette_run(Source::Symbols, &items[1].id);
+        assert_eq!(h.m.card(&id).unwrap().line, Some(8));
+        assert!(h.m.effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::GoToLine,
+                ..
+            }
+        )));
+    }
+
     // Cmd+P (#602): in an editor card it asks the ui for the file list; the
     // list becomes the palette's rows; a pick is a tab, and a file already
     // open is switched to rather than opened twice. Anywhere else it is

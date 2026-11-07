@@ -1288,6 +1288,7 @@ impl Model {
                 }
             }
             Source::Snippets => self.paste_snippet(id),
+            Source::Symbols => self.symbol_pick(id),
             Source::Files => self.quick_open_pick(id),
             Source::MoveTo => self.move_selection_to(id),
             Source::MoveGroupTo => self.move_group_to(id),
@@ -1648,6 +1649,16 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     );
     r.register("editor.find", "Editor: find", |m| {
         m.editor_action(EditorAction::Find)
+    });
+    r.register("editor.goToSymbol", "Editor: go to a symbol…", |m| {
+        m.with_active_card(|m, id| {
+            if m.card(&id).is_some_and(|c| c.kind == CardKind::Editor) {
+                m.effects.push(Effect::Editor {
+                    card_id: id,
+                    action: EditorAction::GoToSymbol,
+                });
+            }
+        })
     });
     r.register("editor.goToFile", "Editor: go to a file…", |m| {
         m.with_active_card(|m, id| {

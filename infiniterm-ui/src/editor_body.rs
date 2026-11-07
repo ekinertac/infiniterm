@@ -1318,6 +1318,23 @@ impl EditorBody {
         }
     }
 
+    /// The functions, types and headings of the text, for Go to Symbol
+    /// (`infiniterm_editor::symbols`); none for a language without a table.
+    pub fn symbol_rows(&self) -> Vec<infiniterm_core::model::SymbolRow> {
+        let Some(lang) = self.language else {
+            return vec![];
+        };
+        infiniterm_editor::symbols::symbols(lang, &self.buffer.text())
+            .into_iter()
+            .map(|s| infiniterm_core::model::SymbolRow {
+                name: s.name,
+                kind: s.kind.to_string(),
+                line: s.line,
+                depth: s.depth,
+            })
+            .collect()
+    }
+
     pub fn go_to_line(&mut self, line: usize) {
         self.note_jump();
         self.buffer.go_to_line(line);
