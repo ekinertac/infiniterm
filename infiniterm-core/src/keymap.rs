@@ -322,6 +322,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "editor.goToFile",
         "Sublime and VS Code's go to file",
     ),
+    // Find in Files (#602): asks for the pattern, then lists the matching
+    // lines of the project. In an editor card only.
+    (
+        "cmd+shift+f",
+        "editor.findInFiles",
+        "Sublime and VS Code's find in files",
+    ),
     // The command palette. Cmd+Shift+P is what editors use; Cmd+K is
     // deliberately NOT taken, because in a terminal that means clear.
     (

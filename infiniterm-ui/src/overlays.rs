@@ -153,8 +153,10 @@ impl AppView {
         // the source listed it. See `Source::keeps_its_order`.
         if source.keeps_its_order() {
             // A symbol is found by its letters (`gtsym` for `get_symbols`), as
-            // a path is, not by whole words as a command is.
-            let ranked = if source == infiniterm_core::model::palette_state::Source::Symbols {
+            // a path or a source line is, not by whole words as a command is.
+            let ranked = if source.matches_loosely()
+                || source == infiniterm_core::model::palette_state::Source::Symbols
+            {
                 rank_loose(&items, &self.model.palette.query, MAX_RESULTS, |_| 0.)
             } else {
                 rank(&items, &self.model.palette.query, MAX_RESULTS, |_| 0.)
@@ -182,7 +184,7 @@ impl AppView {
         let usage = &self.model.usage;
         let bonus = |id: &str| usage_bonus(usage.get(&use_key(source.id(), id)));
         // Paths are matched loosely: `edbody` is `src/editor_body.rs`.
-        let ranked = if source == infiniterm_core::model::palette_state::Source::Files {
+        let ranked = if source.matches_loosely() {
             rank_loose(&items, &self.model.palette.query, MAX_RESULTS, bonus)
         } else {
             rank(&items, &self.model.palette.query, MAX_RESULTS, bonus)
