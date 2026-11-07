@@ -2491,12 +2491,12 @@ impl EditorBody {
                 "right" => self.buffer.for_each_cursor(|b| b.move_line_end(shift)),
                 "up" if m.control => {
                     if !ro {
-                        self.buffer.swap_line_up(now)
+                        self.buffer.for_each_cursor(|b| b.swap_line_up(now))
                     }
                 }
                 "down" if m.control => {
                     if !ro {
-                        self.buffer.swap_line_down(now)
+                        self.buffer.for_each_cursor(|b| b.swap_line_down(now))
                     }
                 }
                 "up" => {
@@ -2514,7 +2514,7 @@ impl EditorBody {
                 }
                 "d" if shift => {
                     if !ro {
-                        self.buffer.duplicate_line(now)
+                        self.buffer.for_each_cursor(|b| b.duplicate_line(now))
                     }
                 }
                 "d" => self.buffer.select_word_or_next(),
@@ -2575,8 +2575,21 @@ impl EditorBody {
                         self.buffer.for_each_cursor(|b| b.delete_word_back(now))
                     }
                 }
-                "up" => self.buffer.for_each_cursor(|b| b.move_up(shift)),
-                "down" => self.buffer.for_each_cursor(|b| b.move_down(shift)),
+                // Alt+Up/Down move the lines, Shift+Alt+Up/Down copy them:
+                // the VS Code and Cursor chords beside the Sublime ones
+                // (#602). They replace the caret moves Option+Up/Down had.
+                "up" | "down" => {
+                    if !ro {
+                        let up = key == "up";
+                        self.buffer.for_each_cursor(|b| {
+                            if shift {
+                                b.copy_lines(up, now)
+                            } else {
+                                b.move_lines(up, now)
+                            }
+                        })
+                    }
+                }
                 _ => {
                     // Option+letter types the character macOS composed.
                     if let Some(ch) = k.key_char.as_deref().filter(|c| !ro && !c.is_empty()) {
