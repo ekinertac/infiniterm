@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-07
+
+- `ift update status` prints the app's update state on one line: `off`, `checking`, `current`, `ready` (a download waits for a restart) or `available` (Linux) with the version and build after a tab, or `failed` with the reason. A script that runs `app.update.check` with `ift run` can now tell when `app.update.install` will work.
+
 ## 0.6.9 (build 1403), 2026-11-07
 
 ### Browser

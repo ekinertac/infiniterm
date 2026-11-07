@@ -1003,6 +1003,8 @@ pub struct Model {
     pub start_dir: String,
     pub home: String,
     pub dev_build: bool,
+    /// What the updater last said, set by the ui; `ift update status` reads it.
+    pub update_state: crate::update::UpdateState,
     /// Config pairs that are open: both ids and the card to return to.
     pub config_pairs: Vec<ConfigPair>,
     /// The last few cards closed, newest last, so a close can be undone.
@@ -1208,6 +1210,7 @@ impl Model {
             start_dir: "/".into(),
             home: String::new(),
             dev_build: cfg!(debug_assertions),
+            update_state: crate::update::UpdateState::Off,
             config_pairs: vec![],
             closed: vec![],
             parked: vec![],
