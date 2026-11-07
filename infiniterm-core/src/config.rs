@@ -160,12 +160,19 @@ pub struct Terminal {
 }
 
 /// How the background picture fills the window (`ui.backgroundImageFit`,
-/// #97): `cover` fills it and crops, `contain` shows all of it.
+/// #97): `cover` fills it and crops, `contain` shows all of it, `top-left`
+/// fills like cover but pins the picture's corner to the window's, so the crop
+/// falls on the right and bottom, `actual-size` draws it at its own size from
+/// the corner, so resizing the window never rescales it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackgroundFit {
     Cover,
     Contain,
+    #[serde(rename = "top-left")]
+    TopLeft,
+    #[serde(rename = "actual-size")]
+    ActualSize,
 }
 
 /// A card label's corner (`ui.cardLabelPosition`). Written "top right";
@@ -241,6 +248,9 @@ pub struct Cards {
     /// Whether a card carved out of another (a split) keeps its
     /// directory. A plain new card always starts at `starting_dir`.
     pub inherit_directory: bool,
+    /// Whether a plain new card (Cmd+T) starts in the directory of the
+    /// terminal card it was opened from instead of `starting_dir` (#509).
+    pub new_card_inherits_directory: bool,
     /// The space between cards, in pixels (`cards.gap`). Every placement,
     /// split, tidy and growth works from it; 25 is the grid.
     pub gap: f64,
@@ -574,6 +584,7 @@ pub fn default_config() -> Config {
             height: 0.,
             shape: "16:9".into(),
             inherit_directory: true,
+            new_card_inherits_directory: false,
             gap: crate::cards::GUTTER,
         },
         canvas: Canvas {
@@ -870,6 +881,10 @@ pub fn merge_config(raw: &Value) -> Config {
                 _ => d.cards.shape.clone(),
             },
             inherit_directory: bool_(c.get("inheritDirectory"), d.cards.inherit_directory),
+            new_card_inherits_directory: bool_(
+                c.get("newCardInheritsDirectory"),
+                d.cards.new_card_inherits_directory,
+            ),
             // 0 packs cards edge to edge; above 200 a gap is a gulf and the
             // placement maths has no use for it.
             gap: num(c.get("gap"), d.cards.gap, 0., 200.),
@@ -979,6 +994,8 @@ pub fn merge_config(raw: &Value) -> Config {
             ),
             background_image_fit: match u.get("backgroundImageFit").and_then(Value::as_str) {
                 Some(s) if s.eq_ignore_ascii_case("contain") => BackgroundFit::Contain,
+                Some(s) if s.eq_ignore_ascii_case("top-left") => BackgroundFit::TopLeft,
+                Some(s) if s.eq_ignore_ascii_case("actual-size") => BackgroundFit::ActualSize,
                 _ => BackgroundFit::Cover,
             },
             workspace_isolation: bool_(u.get("workspaceIsolation"), d.ui.workspace_isolation),
@@ -1580,6 +1597,18 @@ mod tests {
         let ui = m(json!({"ui.backgroundImage": " dusk ", "ui.backgroundImageFit": "Contain"})).ui;
         assert_eq!(ui.background_image, ["dusk"]);
         assert_eq!(ui.background_image_fit, BackgroundFit::Contain);
+        assert_eq!(
+            m(json!({"ui.backgroundImageFit": "top-left"}))
+                .ui
+                .background_image_fit,
+            BackgroundFit::TopLeft
+        );
+        assert_eq!(
+            m(json!({"ui.backgroundImageFit": "actual-size"}))
+                .ui
+                .background_image_fit,
+            BackgroundFit::ActualSize
+        );
         assert_eq!(
             m(json!({"ui.backgroundImageFit": "stretch"}))
                 .ui

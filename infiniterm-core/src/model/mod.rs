@@ -459,9 +459,27 @@ pub enum EditorAction {
     Tree(TreeAct),
     Save,
     Find,
+    /// A toggle of the find panel (#602), for the palette and the keymap as
+    /// well as the panel's buttons; it opens the panel when it is closed.
+    FindToggle(FindToggle),
     GoToLine,
     /// `editor.format`: run the language's formatter over the text now.
     Format,
+    /// Cmd+R in a locked editor: the ui lists the open file's symbols and
+    /// hands them to `Model::open_symbols`.
+    GoToSymbol,
+    /// Cmd+P: the ui lists the files under the card's folder and hands them
+    /// to `Model::open_quick_files`.
+    GoToFile,
+    /// Cmd+Shift+F: the ui searches the project for `Model::files_job`'s
+    /// find and hands the hits to `Model::open_grep`.
+    FindInFiles,
+    /// Replace in files, first half: the ui counts the matches and asks.
+    ReplaceInFilesCount,
+    /// Replace in files, second half, after the yes: the ui writes the files.
+    ReplaceInFilesApply,
+    /// Reviewing what changed on disk under the buffer (an agent's edit).
+    Change(ChangeAct),
     ToggleBlame,
     ToggleExplorer,
     /// Leave the text: the lock is dropped and the card is an ordinary card
@@ -471,6 +489,82 @@ pub enum EditorAction {
     /// own, reachable only through the command palette, `cards_cmd.rs`'s
     /// `editor.transform.*` entries.
     Transform(TextTransform),
+}
+
+/// The find panel's switches: what a query means, and where it looks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FindToggle {
+    Regex,
+    MatchCase,
+    WholeWord,
+    /// Only inside the selection the toggle was pressed with.
+    InSelection,
+}
+
+/// One matching line of a project search.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrepHit {
+    /// Relative to the searched folder.
+    pub path: String,
+    pub line: usize,
+    pub text: String,
+}
+
+/// What Find in Files lists and which card a pick opens into.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrepState {
+    pub card_id: String,
+    pub root: String,
+    pub hits: Vec<GrepHit>,
+}
+
+/// A project-wide find (and replace): what was typed, for the ui to run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FilesJob {
+    pub card_id: String,
+    pub find: String,
+    /// Empty for a plain find.
+    pub replace: String,
+    pub regex: bool,
+}
+
+/// One row of Go to Symbol.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SymbolRow {
+    pub name: String,
+    /// "fn", "struct", ...; empty for a heading, whose name carries its level.
+    pub kind: String,
+    /// 1-based.
+    pub line: usize,
+    pub depth: usize,
+}
+
+/// What Go to Symbol lists and which card a pick moves.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SymbolsState {
+    pub card_id: String,
+    pub rows: Vec<SymbolRow>,
+}
+
+/// What Go to File lists and which card a pick opens into.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuickOpen {
+    pub card_id: String,
+    /// The folder the paths are relative to.
+    pub root: String,
+    pub files: Vec<String>,
+}
+
+/// What a reviewer does with the parts of a file that changed on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeAct {
+    /// Put the changed part under the caret back.
+    Revert,
+    RevertAll,
+    /// Keep the changes; the gutter goes back to showing HEAD's.
+    Accept,
+    Next,
+    Prev,
 }
 
 /// A pure function in `infiniterm_editor::transforms`, picked by name here
@@ -487,6 +581,8 @@ pub enum TextTransform {
     UniqueLines,
     ReverseLines,
     TrimTrailingWhitespace,
+    RemoveBlankLines,
+    StripLineNumbers,
     IndentTabsToSpaces,
     IndentSpacesToTabs,
 }
@@ -560,6 +656,26 @@ pub enum Pending {
     CustomSize,
     /// `editor.goToLine`: the number typed lands in `card.line` for the body.
     GoToLine(String),
+    /// `editor.findInFiles`: the text typed is the pattern to look for.
+    FindInFiles {
+        card_id: String,
+        regex: bool,
+    },
+    /// `editor.replaceInFiles`: the first of two questions, the pattern.
+    ReplaceFind {
+        card_id: String,
+        regex: bool,
+    },
+    /// The second: what to put there.
+    ReplaceWith {
+        card_id: String,
+        regex: bool,
+        find: String,
+    },
+    /// "Replace N matches in M files?", asked once the ui has counted them.
+    ReplaceInFilesYes,
+    /// A message with one button that needs no follow-up.
+    Notice,
 }
 
 /// What a colour change asks to be saved.
@@ -838,6 +954,16 @@ pub struct Model {
     /// the snippets folder's files, read by the ui when the picker opens
     /// (`Effect::RefreshSnippets`), the way `theme_names` is.
     pub snippets: Vec<crate::snippets::Snippet>,
+    /// The symbols Go to Symbol lists while its palette is up.
+    pub symbols: Option<SymbolsState>,
+    /// The files Go to File (Cmd+P) lists, read by the ui when it opens
+    /// (`EditorAction::GoToFile`) and kept while its palette is up.
+    pub quick_open: Option<QuickOpen>,
+    /// The matches Find in Files (Cmd+Shift+F) lists while its palette is up.
+    pub grep: Option<GrepState>,
+    /// What the typed find and replace of a project-wide search say, between
+    /// the prompts and the ui that runs them (`EditorAction::FindInFiles`).
+    pub files_job: Option<FilesJob>,
     pub theme_current: Option<String>,
     pub theme_before_preview: Option<String>,
     /// The colour the window had when its colour picker opened (`Some(None)`:
@@ -1047,6 +1173,10 @@ impl Model {
             look_ui: default_config().ui,
             theme_names: vec![],
             snippets: vec![],
+            symbols: None,
+            quick_open: None,
+            grep: None,
+            files_job: None,
             theme_current: None,
             theme_before_preview: None,
             window_color_before_preview: None,

@@ -56,6 +56,9 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
         // Cmd+S rather than left to fall through to the body, which has no
         // prompt of its own to open.
         "ctrl+g" => "editor.goToLine",
+        // Sublime's Go to Symbol (#602). Cmd+R is the terminal's redraw and
+        // the browser's reload on the canvas; in the text it is this.
+        "cmd+r" => "editor.goToSymbol",
         // Not a tab command, but the one app chord a locked editor cannot
         // do without: an unmatched chord falls through to the body, which
         // has no save of its own, so Cmd+S saved nothing until the lock

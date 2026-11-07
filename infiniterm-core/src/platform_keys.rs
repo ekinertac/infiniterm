@@ -42,6 +42,12 @@ pub const CMD_CTRL_LAYER: &[(&str, Option<&str>)] = &[
     ("cmd+ctrl+enter", Some("ctrl+alt+enter")),
     ("cmd+ctrl+t", Some("ctrl+alt+p")),
     ("cmd+ctrl+s", Some("ctrl+alt+v")),
+    // Go to File (#602) is not a Cmd+Ctrl chord, but it needs the same
+    // explicit answer: Ctrl+P is a terminal's history-up on the canvas, and
+    // Ctrl+Shift+P is the palette's (VS Code's own), which the twin rule
+    // would push to Ctrl+Alt+Shift+P. In a locked editor plain Ctrl is Cmd,
+    // so Ctrl+P works there without a table entry.
+    ("cmd+p", None),
     ("cmd+ctrl+space", None),
     ("cmd+ctrl+shift+r", None),
     ("cmd+ctrl+alt+arrowleft", None),
@@ -124,7 +130,10 @@ pub fn platform_chord(mac: &str, all: &HashSet<String>) -> Option<String> {
             twin.remove("shift");
             twin.remove("ctrl");
             twin.insert("cmd");
-            if all.contains(&join(&twin, key)) {
+            let twin = join(&twin, key);
+            // A twin with an explicit answer of its own claims no key here.
+            let explicit = CMD_CTRL_LAYER.iter().any(|(m, _)| *m == twin);
+            if all.contains(&twin) && !explicit {
                 rest.insert("alt");
             }
         } else if !rest.contains("alt") {
