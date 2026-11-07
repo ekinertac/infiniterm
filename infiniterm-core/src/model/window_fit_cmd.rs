@@ -5,6 +5,10 @@
 //! for a width and height in grid squares (`custom_size.rs` parses) and applies
 //! them the same way. All are the last rows of the `card.size` picker
 //! (Cmd+Alt+S), so the palette, the keymap and `ift run` reach them.
+//! "Copy size" (`card.size.copy`, #645) remembers the focused card's width and
+//! height for the session; "Paste size" (`card.size.paste`) gives it to the
+//! selection through the same reflow. Those two are commands only, not picker
+//! rows, and have no default keys.
 //!
 //! Called from `Model::palette_run` (`Source::Sizes`) and the registry. The
 //! geometry is `window_fit.rs`; this file gathers the bodies (the selection
@@ -16,6 +20,12 @@
 //! keyboard lock of a browser or editor and does not stop a resize. Cards in
 //! other workspaces are never read. The view fits the selection afterwards,
 //! because the point is to see the cards in the window's shape.
+//!
+//! Copy reads the card's rect even while it is maximised (the rect is still
+//! its size on the canvas); paste refuses there like the rows do. A paste with
+//! nothing copied does nothing: the palette greys it (`sizeCopied`,
+//! `Model::command_enabled`) and a key or `ift run` finds nothing to give.
+//! The copied size is in px, the unit of `Target::Size`, and is not saved.
 use super::Model;
 use crate::cards::viewport_measured;
 use crate::grid::Rect;
@@ -47,6 +57,29 @@ impl Model {
     pub fn reset_selection_to_default_size(&mut self) {
         let target = Target::Size(self.default_size());
         self.reflow_selection(Some(target), "already the default size");
+    }
+
+    /// "Copy size": remembers the focused card's width and height.
+    pub fn copy_size(&mut self) {
+        let Some(card) = self
+            .selection
+            .focused_id
+            .as_deref()
+            .and_then(|id| self.card(id))
+        else {
+            return;
+        };
+        self.copied_size = Some(crate::grid::Size {
+            w: card.rect.w,
+            h: card.rect.h,
+        });
+    }
+
+    /// "Paste size": the copied size for every selected card, placed and
+    /// reflowed like "Default size" (`window_fit.rs`), one undo step.
+    pub fn paste_size(&mut self) {
+        let Some(size) = self.copied_size else { return };
+        self.reflow_selection(Some(Target::Size(size)), "already that size");
     }
 
     /// The selection resized to `target` and reflowed among the other cards
@@ -160,4 +193,6 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("card.size.default", DEFAULT_ROW.1, |m| {
         m.reset_selection_to_default_size()
     });
+    r.register("card.size.copy", "Card: copy size", |m| m.copy_size());
+    r.register("card.size.paste", "Card: paste size", |m| m.paste_size());
 }
