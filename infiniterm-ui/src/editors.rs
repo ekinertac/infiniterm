@@ -535,6 +535,7 @@ impl AppView {
                     .map(|b| b.symbol_rows())
                     .unwrap_or_default();
                 self.model.open_symbols(card_id, rows);
+            }
             EditorAction::GoToFile => {
                 // The folder the tree shows, else the open file's own folder,
                 // else the card's directory; on this machine the top of the

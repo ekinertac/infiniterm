@@ -495,6 +495,8 @@ pub struct SymbolRow {
 pub struct SymbolsState {
     pub card_id: String,
     pub rows: Vec<SymbolRow>,
+}
+
 /// What Go to File lists and which card a pick opens into.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuickOpen {

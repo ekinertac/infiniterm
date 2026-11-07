@@ -199,6 +199,8 @@ impl Model {
             card_id: s.card_id,
             action: super::EditorAction::GoToLine,
         });
+    }
+
     /// Go to File's palette over `files` (paths relative to `root`), whose
     /// pick opens a tab in editor card `card_id`.
     pub fn open_quick_files(&mut self, card_id: &str, root: &str, files: Vec<String>) {
@@ -487,6 +489,8 @@ impl Model {
                     id: r.line.to_string(),
                     label: format!("{}{}", "  ".repeat(r.depth), r.name),
                     hint: (!r.kind.is_empty()).then(|| r.kind.to_string()),
+                })
+                .collect(),
             // Paths relative to the folder, matched whole, so `edbody` finds
             // `src/editor_body.rs`. Recency applies: the file you reopen all
             // day rises.

@@ -1405,6 +1405,8 @@ mod tests {
                 ..
             }
         )));
+    }
+
     // Cmd+P (#602): in an editor card it asks the ui for the file list; the
     // list becomes the palette's rows; a pick is a tab, and a file already
     // open is switched to rather than opened twice. Anywhere else it is
