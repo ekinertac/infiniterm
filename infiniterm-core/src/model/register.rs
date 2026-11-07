@@ -860,6 +860,26 @@ mod tests {
         assert!(second.x > first.x, "{second:?} beside {first:?}");
     }
 
+    // #509: opt-in. A new terminal card opened from a terminal card starts
+    // in that card's directory; anything else still starts at startingDir.
+    #[test]
+    fn a_new_card_can_inherit_the_directory_when_the_setting_is_on() {
+        let mut h = Harness::new();
+        let first = h.focused().id.clone();
+        h.m.card_mut(&first).unwrap().cwd = "/Users/me/Code/api".into();
+        let start = h.m.start_dir.clone();
+        h.run("card.new.terminal");
+        assert_eq!(h.focused().cwd, start, "off by default");
+
+        h.m.apply_settings_text(r#"{"cards.newCardInheritsDirectory": true}"#);
+        h.m.set_focus(Some(&first));
+        h.run("card.new.terminal");
+        assert_eq!(h.focused().cwd, "/Users/me/Code/api");
+        h.m.set_focus(Some(&first));
+        h.run("card.new.ungrouped");
+        assert_eq!(h.focused().cwd, "/Users/me/Code/api");
+    }
+
     // A new card takes the GROUP and not the directory. Opening a card to
     // start something else and landing in the last card's directory is a
     // surprise you only notice after you have run the wrong command there.

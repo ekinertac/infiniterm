@@ -463,6 +463,8 @@ pub enum EditorAction {
     /// Cmd+P: the ui lists the files under the card's folder and hands them
     /// to `Model::open_quick_files`.
     GoToFile,
+    /// Reviewing what changed on disk under the buffer (an agent's edit).
+    Change(ChangeAct),
     ToggleBlame,
     ToggleExplorer,
     /// Leave the text: the lock is dropped and the card is an ordinary card
@@ -481,6 +483,18 @@ pub struct QuickOpen {
     /// The folder the paths are relative to.
     pub root: String,
     pub files: Vec<String>,
+}
+
+/// What a reviewer does with the parts of a file that changed on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeAct {
+    /// Put the changed part under the caret back.
+    Revert,
+    RevertAll,
+    /// Keep the changes; the gutter goes back to showing HEAD's.
+    Accept,
+    Next,
+    Prev,
 }
 
 /// A pure function in `infiniterm_editor::transforms`, picked by name here
