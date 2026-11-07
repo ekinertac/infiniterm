@@ -334,6 +334,14 @@ impl Model {
                 }
             }
         }
+        // A selection of several: asked first (#643). One card, and a config
+        // pair that closes as one, keep Cmd+W as it was.
+        if ids.len() > 1 {
+            let label = format!("close {} cards?", ids.len());
+            self.prompt
+                .confirm(&label, "Close cards", Pending::CloseCards { ids, reclaim });
+            return;
+        }
         self.close_selected_confirmed(ids, reclaim, false);
     }
 
@@ -580,6 +588,12 @@ impl Model {
             Pending::CloseCard { id, reclaim } => {
                 if text.is_some() {
                     self.close_card_with(&id, false, reclaim);
+                }
+            }
+            // Yes: the close goes on to its own unsaved-changes question.
+            Pending::CloseCards { ids, reclaim } => {
+                if text.is_some() {
+                    self.close_selected_confirmed(ids, reclaim, false);
                 }
             }
             Pending::UnsavedTabClose { id, index } => match text.as_deref() {
@@ -1307,7 +1321,9 @@ impl Model {
                     self.go_to_card(card_id);
                 } else if let Some(ws) = id.strip_prefix(WORKSPACE_ROW) {
                     self.show_workspace(ws);
-                } else {
+                } else if self.command_enabled(id) {
+                    // A greyed row is listed (it still matches the search)
+                    // but picking it does nothing.
                     self.effects.push(Effect::RunCommand(id.to_string()));
                 }
             }

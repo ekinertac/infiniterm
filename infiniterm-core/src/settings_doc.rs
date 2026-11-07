@@ -656,6 +656,10 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["No \"build N\" at the right end of the status bar."],
     ),
     (
+        "ui.hideVersion",
+        &["No version number (like 0.6.9) at the right end of the status bar."],
+    ),
+    (
         "ui.cardLabelSize",
         &[
             "Screen pixels, before the Cmd+Shift+= multiplier, at 60% zoom and closer;",

@@ -711,6 +711,13 @@ impl Model {
                 // joined window opens on the host's paths (#559). Refusing
                 // those made the cards vanish at the next snapshot (#580).
                 None => {
+                    // A card the HOST closed and still holds in its reopen
+                    // ring comes back as that card (#643), not as a new one:
+                    // a terminal takes its parked session back, and an editor
+                    // or any card that is not a terminal is not refused.
+                    if self.card(&c.id).is_none() && self.reopen_for_viewer(c) {
+                        continue;
+                    }
                     use crate::saved_layout::CardKind;
                     let settings_file = c.kind == CardKind::Editor
                         && c.path
@@ -856,6 +863,30 @@ impl Model {
         // every viewer, the sender included.
         self.dirty_layout = true;
         Ok(RemoteApply::Applied)
+    }
+
+    /// A viewer's undo of a close sends the card back up (#643). When the
+    /// host closed that card itself and still holds it in its reopen ring, it
+    /// comes back as the host's own card: a terminal adopts its parked session
+    /// (the program still mid-work), an editor or any non-terminal card is
+    /// not refused as a viewer-made file. It lands where the viewer put it.
+    /// The host's own focus is not moved: the reopen is the viewer's.
+    fn reopen_for_viewer(&mut self, c: &SavedCard) -> bool {
+        let Some(i) = self.closed.iter().position(|k| k.id == c.id) else {
+            return false;
+        };
+        let mut card = self.closed.remove(i);
+        card.workspace_id = c.workspace_id.clone();
+        card.rect = c.rect;
+        card.group_id = c.group_id.clone();
+        card.soft_group_id = c.soft_group_id.clone();
+        if card.number == 0 || self.cards.iter().any(|k| k.number == card.number) {
+            card.number = self.take_number();
+        }
+        self.unpark(&mut card);
+        self.cards.push(card);
+        self.dirty_layout = true;
+        true
     }
 
     /// Opens the first card, once, when the layout has been read, the canvas
@@ -1895,6 +1926,38 @@ mod agent_states_text_tests {
 
     // #607: close, undo, close, undo of the same card, each answered by the
     // host, must work every time (Ekin: the second Cmd+Z said "nothing to undo").
+    // #643: Cmd+Z in a joined window after closing a whole workspace (Cmd+A,
+    // Cmd+W). The host's own reopen ring has the closed cards; an undo that
+    // sends them up as new cards loses an editor (the host refuses a card
+    // that is not a terminal) and a terminal's session (it gets a fresh shell).
+    #[test]
+    fn a_viewer_undo_of_a_close_brings_back_the_hosts_own_card_with_its_session() {
+        use crate::saved_layout::CardKind;
+        let (mut host, mut viewer, a, b, e) = host_and_viewer();
+        host.card_mut(&a).unwrap().session = Some("session-a".into());
+        let text = host.save_text().unwrap();
+        viewer.layout_rev = host.record_published(&text);
+        viewer.apply_snapshot(&text).unwrap();
+        for id in [&a, &b, &e] {
+            viewer.close_card(id, false);
+        }
+        round_trip(&mut host, &mut viewer);
+        assert!(host.card(&a).is_none() && host.card(&e).is_none());
+        for _ in 0..3 {
+            viewer.undo_layout(false);
+        }
+        round_trip(&mut host, &mut viewer);
+        for id in [&a, &b, &e] {
+            assert!(host.card(id).is_some(), "the host has {id} again");
+        }
+        assert_eq!(host.card(&e).unwrap().kind, CardKind::Editor);
+        assert_eq!(
+            host.card(&a).unwrap().session.as_deref(),
+            Some("session-a"),
+            "the terminal is the host's own card, not a fresh one"
+        );
+    }
+
     #[test]
     fn a_card_closed_and_undone_twice_comes_back_both_times() {
         let (mut host, mut viewer, _a, b, _e) = host_and_viewer();

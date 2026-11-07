@@ -12,6 +12,10 @@ use crate::jsonc::{parse_jsonc, patch_json_text};
 use crate::keymap::{default_keymap, merge_keymap, parse_keymap};
 use crate::settings_doc::default_settings_text;
 
+/// Commands that can be greyed, with the `when` clause that enables each
+/// (`Model::command_enabled`). A command not listed is always enabled.
+pub const ENABLE_WHEN: &[(&str, &str)] = &[("card.size.paste", "sizeCopied")];
+
 /// The first thing a new `settings.json` says, since an empty file explains nothing.
 pub const EMPTY_SETTINGS: &str = "// Your settings. Anything here overrides settings.default.json beside it,\n// which lists everything that can be set, with comments.\n// Docs: https://infiniterm.app/reference/settings/\n//\n// Comments and trailing commas are allowed.\n{\n}\n";
 
@@ -191,6 +195,18 @@ impl Model {
         }
     }
 
+    /// Whether `id` can run now: false greys its row in the palette (and a
+    /// palette pick of it does nothing). Evaluated through `when`, so a menu
+    /// row naming the same clause in `enable` cannot disagree.
+    pub fn command_enabled(&self, id: &str) -> bool {
+        ENABLE_WHEN
+            .iter()
+            .find(|(cmd, _)| *cmd == id)
+            .is_none_or(|(_, clause)| {
+                crate::when::When::parse(clause).is_ok_and(|w| w.eval(&self.key_context()))
+            })
+    }
+
     /// What a binding's `when` can ask about, as of this moment (#269).
     pub fn key_context(&self) -> crate::when::Context {
         use crate::saved_layout::CardKind;
@@ -238,6 +254,7 @@ impl Model {
             page_selection: self.page_hit.as_ref().is_some_and(|h| h.selection),
             can_go_back: self.ui_context.can_go_back,
             can_go_forward: self.ui_context.can_go_forward,
+            size_copied: self.copied_size.is_some(),
         }
     }
 
