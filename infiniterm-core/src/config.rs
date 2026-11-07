@@ -160,12 +160,19 @@ pub struct Terminal {
 }
 
 /// How the background picture fills the window (`ui.backgroundImageFit`,
-/// #97): `cover` fills it and crops, `contain` shows all of it.
+/// #97): `cover` fills it and crops, `contain` shows all of it, `top-left`
+/// fills like cover but pins the picture's corner to the window's, so the crop
+/// falls on the right and bottom, `actual-size` draws it at its own size from
+/// the corner, so resizing the window never rescales it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackgroundFit {
     Cover,
     Contain,
+    #[serde(rename = "top-left")]
+    TopLeft,
+    #[serde(rename = "actual-size")]
+    ActualSize,
 }
 
 /// A card label's corner (`ui.cardLabelPosition`). Written "top right";
@@ -966,6 +973,8 @@ pub fn merge_config(raw: &Value) -> Config {
             ),
             background_image_fit: match u.get("backgroundImageFit").and_then(Value::as_str) {
                 Some(s) if s.eq_ignore_ascii_case("contain") => BackgroundFit::Contain,
+                Some(s) if s.eq_ignore_ascii_case("top-left") => BackgroundFit::TopLeft,
+                Some(s) if s.eq_ignore_ascii_case("actual-size") => BackgroundFit::ActualSize,
                 _ => BackgroundFit::Cover,
             },
             workspace_isolation: bool_(u.get("workspaceIsolation"), d.ui.workspace_isolation),
@@ -1539,6 +1548,18 @@ mod tests {
         let ui = m(json!({"ui.backgroundImage": " dusk ", "ui.backgroundImageFit": "Contain"})).ui;
         assert_eq!(ui.background_image, ["dusk"]);
         assert_eq!(ui.background_image_fit, BackgroundFit::Contain);
+        assert_eq!(
+            m(json!({"ui.backgroundImageFit": "top-left"}))
+                .ui
+                .background_image_fit,
+            BackgroundFit::TopLeft
+        );
+        assert_eq!(
+            m(json!({"ui.backgroundImageFit": "actual-size"}))
+                .ui
+                .background_image_fit,
+            BackgroundFit::ActualSize
+        );
         assert_eq!(
             m(json!({"ui.backgroundImageFit": "stretch"}))
                 .ui
