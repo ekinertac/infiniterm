@@ -559,9 +559,28 @@ impl AppView {
                     body.toggle_find(t);
                 }
             }
+            EditorAction::GoToSymbol => {
+                let rows = self
+                    .editor_for(card_id)
+                    .map(|b| b.symbol_rows())
+                    .unwrap_or_default();
+                self.model.open_symbols(card_id, rows);
+            }
             EditorAction::GoToFile => {
                 let (root, files) = self.project_files(&card);
                 self.model.open_quick_files(card_id, &root, files);
+            }
+            EditorAction::Change(act) => {
+                use infiniterm_core::model::ChangeAct;
+                if let Some(body) = self.editor_for(card_id) {
+                    match act {
+                        ChangeAct::Revert => body.change_revert(now),
+                        ChangeAct::RevertAll => body.change_revert_all(now),
+                        ChangeAct::Accept => body.change_accept(),
+                        ChangeAct::Next => body.change_jump(true),
+                        ChangeAct::Prev => body.change_jump(false),
+                    }
+                }
             }
             EditorAction::FindInFiles => self.find_in_files(card_id),
             EditorAction::ReplaceInFilesCount => self.replace_in_files_count(card_id),

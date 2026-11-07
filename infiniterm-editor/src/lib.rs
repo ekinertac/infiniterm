@@ -11,5 +11,6 @@ pub mod jumps;
 pub mod language;
 pub mod search;
 pub mod status;
+pub mod symbols;
 pub mod transforms;
 pub mod wrap;

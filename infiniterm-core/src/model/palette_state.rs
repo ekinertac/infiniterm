@@ -33,6 +33,9 @@ pub enum Source {
     /// `uitheme.pick` (#511): the files in `ui-themes/`, previewed live like
     /// `Themes`, and a pick is written as the setting `ui.theme`.
     UiThemes,
+    /// `editor.goToSymbol` (#602): the functions, types and headings of the
+    /// open file, in file order; a pick moves the caret to its line.
+    Symbols,
     /// `editor.goToFile` (Cmd+P, #602): every file under the editor's
     /// folder, fuzzy-matched on its path; a pick opens it as a tab.
     Files,
@@ -67,6 +70,7 @@ impl Source {
             Source::MoveGroupTo => "moveGroupTo",
             Source::WindowColor => "windowColor",
             Source::UiThemes => "uiThemes",
+            Source::Symbols => "symbols",
             Source::Files => "files",
             Source::Grep => "grep",
         }
@@ -102,6 +106,8 @@ impl Source {
                 | Source::UiThemes
                 // The matches stay in file and line order: that is the map.
                 | Source::Grep
+                // The outline of a file is its order.
+                | Source::Symbols
         )
     }
 
@@ -125,6 +131,7 @@ impl Source {
             Source::MoveGroupTo => "Move the group to workspace…",
             Source::WindowColor => "Window colour…",
             Source::UiThemes => "Switch UI theme",
+            Source::Symbols => "Go to symbol…",
             Source::Files => "Go to file…",
             Source::Grep => "Narrow the matches…",
         }
@@ -183,6 +190,33 @@ impl Model {
             query: String::new(),
             index: 0,
         };
+    }
+
+    /// Go to Symbol's palette over `rows` of editor card `card_id`.
+    pub fn open_symbols(&mut self, card_id: &str, rows: Vec<super::SymbolRow>) {
+        self.symbols = Some(super::SymbolsState {
+            card_id: card_id.into(),
+            rows,
+        });
+        self.open_palette(Source::Symbols);
+    }
+
+    /// A Go to Symbol pick (the line as the id): the caret goes there, the
+    /// way `editor.goToLine` sends it.
+    pub fn symbol_pick(&mut self, id: &str) {
+        let Some(s) = self.symbols.take() else {
+            return;
+        };
+        let Ok(line) = id.parse::<u64>() else {
+            return;
+        };
+        if let Some(card) = self.card_mut(&s.card_id) {
+            card.line = Some(line);
+        }
+        self.effects.push(super::Effect::Editor {
+            card_id: s.card_id,
+            action: super::EditorAction::GoToLine,
+        });
     }
 
     /// Go to File's palette over `files` (paths relative to `root`), whose
@@ -496,6 +530,18 @@ impl Model {
                     label: super::window_fit_cmd::CUSTOM_ROW.1.into(),
                     hint: Some("type width x height".into()),
                 }))
+                .collect(),
+            // Indented by depth so a method sits under its type, the kind as
+            // the hint, the line as the id.
+            Source::Symbols => self
+                .symbols
+                .iter()
+                .flat_map(|s| s.rows.iter())
+                .map(|r| PaletteItem {
+                    id: r.line.to_string(),
+                    label: format!("{}{}", "  ".repeat(r.depth), r.name),
+                    hint: (!r.kind.is_empty()).then(|| r.kind.to_string()),
+                })
                 .collect(),
             // Paths relative to the folder, matched whole, so `edbody` finds
             // `src/editor_body.rs`. Recency applies: the file you reopen all
