@@ -524,6 +524,8 @@ pub struct FilesJob {
     /// Empty for a plain find.
     pub replace: String,
     pub regex: bool,
+}
+
 /// One row of Go to Symbol.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolRow {

@@ -8,8 +8,7 @@ use super::{
     BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
     TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
 };
-use super::{FilesJob, FindToggle, TerminalAction, TreeAct};
-use super::{ChangeAct, FindToggle, TerminalAction, TreeAct};
+use super::{ChangeAct, FilesJob, FindToggle, TerminalAction, TreeAct};
 use crate::card_label::{card_label, tilde_path, Labelled};
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
 use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
