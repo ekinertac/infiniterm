@@ -52,6 +52,9 @@ pub struct Context {
     pub can_go_back: bool,
     /// ... and to go forward to.
     pub can_go_forward: bool,
+    /// A card's size has been copied (`card.size.copy`), so a paste has
+    /// something to give.
+    pub size_copied: bool,
 }
 
 impl Context {
@@ -74,6 +77,7 @@ impl Context {
             page_selection: false,
             can_go_back: false,
             can_go_forward: false,
+            size_copied: false,
         }
     }
 }
@@ -140,6 +144,10 @@ pub const KEYS: &[(&str, &str)] = &[
     (
         "canGoForward",
         "the focused browser page has history to go forward to",
+    ),
+    (
+        "sizeCopied",
+        "a card's size has been copied (Card: copy size), so Card: paste size has one to give",
     ),
 ];
 
@@ -227,6 +235,7 @@ fn lookup(key: &str, c: &Context) -> Value {
         "pageSelection" => Value::Bool(c.page_selection),
         "canGoBack" => Value::Bool(c.can_go_back),
         "canGoForward" => Value::Bool(c.can_go_forward),
+        "sizeCopied" => Value::Bool(c.size_copied),
         _ => Value::Bool(false), // unreachable: parse refuses an unknown key
     }
 }
@@ -517,6 +526,17 @@ mod tests {
             assert!(!holds(key, &t), "{key}");
         }
         assert!(holds("terminalFocus && overlay == 'none'", &t));
+    }
+
+    #[test]
+    fn size_copied_is_its_own_truth() {
+        let t = Context::terminal_focused();
+        assert!(!holds("sizeCopied", &t));
+        let copied = Context {
+            size_copied: true,
+            ..t
+        };
+        assert!(holds("sizeCopied && terminalFocus", &copied));
     }
 
     #[test]

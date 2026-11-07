@@ -1387,12 +1387,19 @@ impl AppView {
             let fitted = fit_label(&item.item.label, &item.matched.matches, room, |t| {
                 measure(t, false)
             });
+            // A command that cannot run now is listed greyed (#645): still
+            // found by the search, so it is clear it exists.
+            let greyed = matches!(
+                source,
+                infiniterm_core::model::palette_state::Source::Commands
+            ) && !self.model.command_enabled(&id);
             let mut label = div()
                 .flex()
                 .gap_0()
                 .min_w_0()
                 .overflow_hidden()
-                .whitespace_nowrap();
+                .whitespace_nowrap()
+                .when(greyed, |d| d.text_color(chrome.text_faint));
             for run in highlight(&fitted.text, &fitted.matches) {
                 label = label.child(
                     div()

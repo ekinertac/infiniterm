@@ -1000,6 +1000,9 @@ pub struct Model {
     /// The last size typed in "Custom size…", in px, for the next prompt to
     /// start from. Not saved: a restart starts from the default size again.
     pub custom_size_last: Option<Size>,
+    /// The size `card.size.copy` took, in px, for `card.size.paste` (#645).
+    /// Session only: never saved and never on the system clipboard.
+    pub copied_size: Option<Size>,
     /// The local instance's colour, from `ui.windowColor` (`None`: the normal
     /// title bar). A remote instance wears its host's instead.
     pub local_color: Option<crate::remote_identity::Rgb>,
@@ -1210,6 +1213,7 @@ impl Model {
             theme_before_preview: None,
             window_color_before_preview: None,
             custom_size_last: None,
+            copied_size: None,
             local_color: None,
             app_icon: crate::app_icon::AppIcon::Default,
             start_dir: "/".into(),
