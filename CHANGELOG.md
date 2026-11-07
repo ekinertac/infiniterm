@@ -10,6 +10,15 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 - Editor: the arrow keys, Backspace and Delete move by what a person calls one character, not by code point. A family or flag emoji, an emoji with a skin tone, a letter with its combining accent and a Windows line break (CRLF) are one step, so the caret no longer lands inside an emoji and Backspace no longer leaves half of one behind. A click that falls inside one snaps to its edge.
 - Editor: Enter after an opening bracket (`{`, `(` or `[`) starts the next line one level deeper, and typing a closing bracket on a line that holds only indent takes one level back off, so `}` lines up with the `if` that opened it. Enter between a typed pair still opens it onto three lines, as before.
+- Editor: with several cursors, one Cmd+Z undoes what a keypress did at every cursor and puts all the cursors back (Cmd+Shift+Z redoes it). Before, it undid one cursor's edit at a time. Typing a word at several cursors undoes as one step, like typing at one.
+- Editor: duplicate line (Cmd+Shift+D) and move line (Ctrl+Cmd+Up/Down) now act on every line a selection touches and keep the selection on the block. With the selection inside one line, duplicate copies the selected text after itself. Alt+Up/Down moves and Shift+Alt+Up/Down copies the lines too, as in VS Code and Cursor. Option+Up/Down no longer moves the caret in the editor.
+### 2026-11-07
+
+- `ui.backgroundImageFit` has two new values. `"top-left"` fills the window like `"cover"` but keeps the picture's top-left corner at the window's, so only the right and bottom are cropped. `"actual-size"` draws the picture at its own size from the top-left corner and never rescales it when the window is resized.
+### 2026-11-06
+
+- New setting `cards.newCardInheritsDirectory` (off by default): when on, a new terminal card (Cmd+T) opened from a terminal card starts in that card's directory instead of `startingDir`.
+- Finder's "Open in infiniterm" service now says it belongs in Finder's menu, as the services that do appear there do. It was registered with macOS but missing from the right-click menu. Installed from this build, right-click a folder in Finder and look under Services or Quick Actions.
 
 ## 0.6.8 (build 1350), 2026-11-06
 
