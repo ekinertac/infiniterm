@@ -1089,6 +1089,16 @@ impl Model {
             .any(|c| occupied.iter().any(|o| rects_overlap(c.rect, *o)))
     }
 
+    /// The link the open page menu was opened on. Without one (a command run
+    /// from the palette or `ift`) the notice says what is missing.
+    fn page_link(&mut self) -> Option<String> {
+        let url = self.page_hit.as_ref().and_then(|h| h.link_url.clone());
+        if url.is_none() {
+            self.notify("no link: right-click one on a page");
+        }
+        url
+    }
+
     fn page_zoom(&self, card: &Card) -> f64 {
         card.zoom.unwrap_or(self.config.browser.zoom)
     }
@@ -1718,6 +1728,56 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             }
         })
     });
+    // The page's own right-click rows (#625). Edit commands go to the page;
+    // the link ones read what the open page menu was opened on (`page_hit`)
+    // and say so when there is none, from the palette or `ift`.
+    r.register("browser.cut", "Browser: cut", |m| {
+        m.browser_history(BrowserAction::Cut)
+    });
+    r.register("browser.copy", "Browser: copy the selection", |m| {
+        m.browser_history(BrowserAction::Copy)
+    });
+    r.register("browser.paste", "Browser: paste", |m| {
+        m.browser_history(BrowserAction::Paste)
+    });
+    r.register(
+        "browser.link.copy",
+        "Browser: copy the link's address",
+        |m| {
+            if let Some(url) = m.page_link() {
+                m.notify("address copied");
+                m.effects.push(Effect::Copy(url));
+            }
+        },
+    );
+    r.register(
+        "browser.link.newTab",
+        "Browser: open the link in a new tab",
+        |m| {
+            if let (Some(url), Some(id)) = (m.page_link(), m.selection.focused_id.clone()) {
+                m.browser_tab_open(&id, Some(&url));
+            }
+        },
+    );
+    r.register(
+        "browser.link.newCard",
+        "Browser: open the link in a new card",
+        |m| {
+            if let (Some(url), Some(id)) = (m.page_link(), m.selection.focused_id.clone()) {
+                let plan = crate::ift::url_plan(&url, "");
+                m.open_in_card(plan, Some(&id));
+            }
+        },
+    );
+    r.register(
+        "browser.link.external",
+        "Browser: open the link in the system browser",
+        |m| {
+            if let Some(url) = m.page_link() {
+                m.effects.push(Effect::OpenUrl(url));
+            }
+        },
+    );
     r.register("browser.zoom.in", "Browser: zoom the page in", |m| {
         m.browser_zoom(Some(ZOOM_STEP))
     });

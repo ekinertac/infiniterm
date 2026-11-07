@@ -432,6 +432,19 @@ pub struct UiContext {
     pub find_widget_visible: bool,
     pub editor_has_selection: bool,
     pub terminal_has_selection: bool,
+    /// The focused browser page's history, both ways.
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+}
+
+/// What a browser page's right-click landed on, kept while that menu is open
+/// so its rows (`pageLink` ...) and the link commands can see it. Cleared
+/// when the menu closes, whichever way.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PageHit {
+    pub link_url: Option<String>,
+    pub editable: bool,
+    pub selection: bool,
 }
 
 /// What a terminal card's context menu asks of the ui.
@@ -596,6 +609,10 @@ pub enum BrowserAction {
     Back,
     Forward,
     Reload,
+    /// The page's edit commands, for its context menu and the palette.
+    Cut,
+    Copy,
+    Paste,
     /// Open DevTools for this page in a card beside it (the ui owns the
     /// port and the page's target id).
     DevTools,
@@ -936,6 +953,8 @@ pub struct Model {
     /// What only the ui knows about the keyboard's context, written by it each
     /// frame (the completion popup, the editor's find panel and selection).
     pub ui_context: UiContext,
+    /// What the open browser page menu was opened on (`PageHit`).
+    pub page_hit: Option<PageHit>,
     pub settings_error: Option<String>,
     /// The ui theme in force (#511): its bar overrides (#425) and look keys,
     /// kept while a later edit is bad. Per client: a joined viewer keeps its own.
@@ -1166,6 +1185,7 @@ impl Model {
             platform_keys: Default::default(),
             platform_keys_for: Vec::new(),
             ui_context: UiContext::default(),
+            page_hit: None,
             settings_error: None,
             ui_theme: Default::default(),
             ui_theme_name: String::new(),

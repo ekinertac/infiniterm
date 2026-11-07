@@ -10,15 +10,14 @@
 //!
 //! Off macOS there is no `NSMenu` (#464): the same rows open as
 //! `Model::menu`, drawn by `menu_view.rs` and walked with `menu_nav.rs`, and
-//! `close_menu` runs the choice. Both paths end in `finish_menu`. The
-//! browser page's own menu (`browsers.rs`) is not drawn this way: its rows
-//! carry actions, not commands, and browser cards are not built on Linux.
+//! `close_menu` runs the choice. Both paths end in `finish_menu`. A browser
+//! page's right-click comes in from Chromium (`browsers.rs`) and opens the
+//! tab strip's menu with what it landed on added (`open_page_menu`, #625).
 //!
 //! Constraints: the Mac popup blocks and re-enters gpui, so it runs from a
 //! spawned task (a handler holds the app borrowed: `native_menu.rs`). A
 //! terminal whose program asked for the mouse keeps its right-click unless
-//! Shift is held, as `TerminalBody::mouse_down` already decides. A browser
-//! card keeps its own menu (browsers.rs) for now.
+//! Shift is held, as `TerminalBody::mouse_down` already decides.
 
 use crate::input::Hit;
 #[cfg(target_os = "macos")]
@@ -140,6 +139,24 @@ impl AppView {
         self.show_menu(area, lit, None, cx);
     }
 
+    /// A browser page's right-click, once the main loop picks the request up:
+    /// the same menu as the tab strip's, with the rows of what Chromium said
+    /// was under the pointer. The click's card is the one the commands act
+    /// on, and `page_hit` carries the link until the menu is gone.
+    pub fn open_page_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(req) = self.context_menu.take() else {
+            return;
+        };
+        self.menu_anchor = (req.x as f32, (req.y + self.titlebar_h() as f64) as f32);
+        self.focus_for_menu(&req.card_id);
+        self.model.page_hit = Some(infiniterm_core::model::PageHit {
+            link_url: req.link_url,
+            editable: req.editable,
+            selection: req.has_selection,
+        });
+        self.show_menu(Area::TabStrip, None, None, cx);
+    }
+
     /// The menu for a workspace tab. The tab is not switched to on the click:
     /// only a command chosen from the menu takes you there, so its commands
     /// act on it.
@@ -175,6 +192,8 @@ impl AppView {
                 self.perform_effects();
             }
         }
+        // The page menu's link is only for the commands it just ran.
+        self.model.page_hit = None;
         self.clear_lit_row(lit);
     }
 

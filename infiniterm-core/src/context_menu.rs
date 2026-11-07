@@ -33,7 +33,9 @@ pub enum Area {
     Editor,
     /// A row of an editor's file tree.
     Tree,
-    /// A tab of an editor's or a browser's tab strip.
+    /// A tab of an editor's or a browser's tab strip, and a browser page:
+    /// the page's right-click is this menu with the rows of what it landed
+    /// on added (`pageLink` ...), one table for both (#625).
     TabStrip,
 }
 
@@ -271,7 +273,67 @@ const TREE: &[Def] = &[
     titled("editor.tree.copyRelativePath", "Copy Relative Path"),
 ];
 
+/// A `show` clause: a browser card, and a right-click that is not on a link,
+/// a field or selected text. From the tab strip all three are false, so the
+/// strip shows the page-wide rows a plain click on the page shows (#625).
+const PLAIN_PAGE: &str = "browserFocus && !pageLink && !pageEditable && !pageSelection";
+
+/// The one menu of a browser card, for its tab strip and its page (#625).
+/// The rows above the tab rows are the page's own: they follow what the
+/// right-click landed on (`pageLink`, `pageEditable`, `pageSelection`, set
+/// only while that menu is open), so the strip, which sets none of them,
+/// shows the same menu without them. The editor's tab strip shares the
+/// table; its rows are gated by `editorFocus`.
 const TAB_STRIP: &[Def] = &[
+    full("browser.back", Some("Back"), PLAIN_PAGE, "canGoBack", ""),
+    full(
+        "browser.forward",
+        Some("Forward"),
+        PLAIN_PAGE,
+        "canGoForward",
+        "",
+    ),
+    full("browser.reload", Some("Reload"), PLAIN_PAGE, "", ""),
+    Def::Separator,
+    full("browser.cut", Some("Cut"), "pageEditable", "", "cmd+x"),
+    full(
+        "browser.copy",
+        Some("Copy"),
+        "pageEditable || pageSelection",
+        "",
+        "cmd+c",
+    ),
+    full("browser.paste", Some("Paste"), "pageEditable", "", "cmd+v"),
+    Def::Separator,
+    full(
+        "browser.link.newTab",
+        Some("Open Link in New Tab"),
+        "pageLink",
+        "",
+        "",
+    ),
+    full(
+        "browser.link.newCard",
+        Some("Open Link in New Card"),
+        "pageLink",
+        "",
+        "",
+    ),
+    full(
+        "browser.link.copy",
+        Some("Copy Link Address"),
+        "pageLink",
+        "",
+        "",
+    ),
+    full(
+        "browser.link.external",
+        Some("Open Link in System Browser"),
+        "pageLink",
+        "",
+        "",
+    ),
+    Def::Separator,
     full(
         "editor.tab.new",
         Some("New Tab"),
@@ -330,7 +392,6 @@ const TAB_STRIP: &[Def] = &[
         "",
     ),
     Def::Separator,
-    full("browser.reload", Some("Reload"), "browserFocus", "", ""),
     full(
         "browser.copyUrl",
         Some("Copy Address"),
@@ -341,7 +402,7 @@ const TAB_STRIP: &[Def] = &[
     full(
         "browser.external",
         Some("Open in System Browser"),
-        "browserFocus",
+        "browserFocus && !pageLink",
         "",
         "",
     ),
@@ -833,5 +894,126 @@ mod tests {
         ] {
             assert!(many.iter().any(|c| c == id), "{id} for several");
         }
+    }
+
+    fn browser() -> Context {
+        Context {
+            card_kind: "browser",
+            ..ctx()
+        }
+    }
+
+    fn commands(rows: &[Row]) -> Vec<(String, bool)> {
+        rows.iter()
+            .filter_map(|r| match r {
+                Row::Item {
+                    command, enabled, ..
+                } => Some((command.clone(), *enabled)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // #625: the tab strip and the page are one menu. A plain click on the page
+    // is the strip's menu; a click on something adds rows over it and never
+    // takes the strip's away.
+    #[test]
+    fn a_plain_click_on_the_page_is_the_tab_strips_menu() {
+        let strip = built(Area::TabStrip, &browser());
+        let ids: Vec<_> = commands(&strip).into_iter().map(|(c, _)| c).collect();
+        for id in [
+            "browser.back",
+            "browser.forward",
+            "browser.reload",
+            "browser.tab.new",
+            "browser.tab.close",
+            "browser.tab.reopenClosed",
+            "browser.copyUrl",
+            "browser.external",
+        ] {
+            assert!(ids.iter().any(|c| c == id), "{id} in the strip's menu");
+        }
+        for id in ["browser.cut", "browser.link.copy", "browser.link.newTab"] {
+            assert!(!ids.iter().any(|c| c == id), "{id} is for a click on it");
+        }
+    }
+
+    #[test]
+    fn history_rows_follow_the_pages_history() {
+        let none = commands(&built(Area::TabStrip, &browser()));
+        assert!(none.contains(&("browser.back".into(), false)));
+        assert!(none.contains(&("browser.forward".into(), false)));
+        let some = commands(&built(
+            Area::TabStrip,
+            &Context {
+                can_go_back: true,
+                ..browser()
+            },
+        ));
+        assert!(some.contains(&("browser.back".into(), true)));
+        assert!(some.contains(&("browser.forward".into(), false)));
+    }
+
+    #[test]
+    fn a_link_adds_its_rows_and_swaps_the_page_rows_for_them() {
+        let on_link = commands(&built(
+            Area::TabStrip,
+            &Context {
+                page_link: true,
+                ..browser()
+            },
+        ));
+        let ids: Vec<_> = on_link.into_iter().map(|(c, _)| c).collect();
+        for id in [
+            "browser.link.newTab",
+            "browser.link.newCard",
+            "browser.link.copy",
+            "browser.link.external",
+            "browser.tab.close",
+            "browser.copyUrl",
+        ] {
+            assert!(ids.iter().any(|c| c == id), "{id} on a link");
+        }
+        for id in ["browser.back", "browser.reload", "browser.external"] {
+            assert!(!ids.iter().any(|c| c == id), "{id} is not for a link");
+        }
+    }
+
+    #[test]
+    fn a_field_gets_cut_copy_paste_and_a_selection_only_copy() {
+        let ids = |ctx: Context| -> Vec<String> {
+            commands(&built(Area::TabStrip, &ctx))
+                .into_iter()
+                .map(|(c, _)| c)
+                .collect()
+        };
+        let field = ids(Context {
+            page_editable: true,
+            ..browser()
+        });
+        for id in ["browser.cut", "browser.copy", "browser.paste"] {
+            assert!(field.iter().any(|c| c == id), "{id} in a field");
+        }
+        let text = ids(Context {
+            page_selection: true,
+            ..browser()
+        });
+        assert!(text.iter().any(|c| c == "browser.copy"));
+        assert!(!text
+            .iter()
+            .any(|c| c == "browser.cut" || c == "browser.paste"));
+    }
+
+    #[test]
+    fn the_editors_strip_has_none_of_the_pages_rows() {
+        let editor = Context {
+            card_kind: "editor",
+            ..ctx()
+        };
+        let ids: Vec<_> = commands(&built(Area::TabStrip, &editor))
+            .into_iter()
+            .map(|(c, _)| c)
+            .collect();
+        assert!(!ids.iter().any(|c| c.starts_with("browser.")));
     }
 }

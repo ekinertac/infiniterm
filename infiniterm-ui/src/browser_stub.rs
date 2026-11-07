@@ -183,9 +183,10 @@ impl AppView {
     /// No Chromium, no find results to drain.
     pub fn drain_find(&mut self) {}
 
-    /// The page's native menu. There is no page to ask, so there is no menu
-    /// to open; `overlays.rs` and `main.rs` go on calling it without a cfg.
-    pub fn show_page_menu(&mut self, _cx: &mut gpui::Context<Self>) {}
+    /// A page's history, for the menu's Back and Forward rows. No page, none.
+    pub fn browser_history_state(&mut self, _card_id: &str) -> (bool, bool) {
+        (false, false)
+    }
 
     /// The mouse's back and forward buttons over a page. There is no page.
     pub fn mouse_navigate(&mut self, _e: &gpui::MouseDownEvent, _forward: bool) {}

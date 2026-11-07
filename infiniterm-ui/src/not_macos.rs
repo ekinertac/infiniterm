@@ -10,11 +10,9 @@
 //! library.
 //!
 //! What each stub leaves undone on Windows, and what would finish it:
-//! - `native_menu`: `pop_up` answers "dismissed". The app's own right-click
-//!   menus no longer use it where there is no `NSMenu` (they are drawn by
-//!   gpui, `menu_view.rs`), but the browser page's menu
-//!   (`browsers.rs::show_page_menu`) still does, so on Windows that one
-//!   does nothing until it is drawn the same way.
+//! - `native_menu`: `pop_up` answers "dismissed". The app's right-click
+//!   menus, a browser page's included, no longer use it where there is no
+//!   `NSMenu` (they are drawn by gpui, `menu_view.rs`).
 //! - `fullscreen`: on Windows the toggle works (gpui's own full screen, asked
 //!   for through a request the poll loop carries out, see `toggle`);
 //!   `ui.fullscreen` ("cover" or "native") is a Mac notch setting and does

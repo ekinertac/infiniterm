@@ -1039,6 +1039,9 @@ impl AppView {
             .as_ref()
             .and_then(|id| self.terminal_body(id).map(|b| b.grid.has_selection()))
             .unwrap_or(false);
+        if let Some(id) = &id {
+            (flags.can_go_back, flags.can_go_forward) = self.browser_history_state(id);
+        }
         self.model.ui_context = flags;
     }
 
