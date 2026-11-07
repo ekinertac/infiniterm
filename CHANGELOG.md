@@ -9,6 +9,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-07
 
 - "Card: copy size" and "Card: paste size" in the palette make cards the same size. Copy remembers the focused card's width and height; paste gives them to the focused card, or to every card of a selection. The cards are placed like the Cmd+Alt+S size rows place them, so none lands on another, and one Cmd+Z undoes the paste. Paste is greyed until you copy a size, and the size is forgotten when the app quits. No default keys: bind them in `keybindings.json`.
+- Cmd+W on more than one selected card now asks "close N cards?" first. Cmd+A with the keyboard not in an editor selects every card of the workspace, and the next Cmd+W closed them all, shells and Claude sessions with them. One card, and a split pair, close as before.
+- Joined window: Cmd+Z after a close now brings back the host's own card. A terminal comes back with its running session (the host keeps a closed shell for a while), where before it came back as a fresh shell; an editor card comes back too, where before the host refused it and it vanished.
 
 ## 0.6.9 (build 1403), 2026-11-07
 

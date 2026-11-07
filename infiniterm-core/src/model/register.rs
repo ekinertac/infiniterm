@@ -1878,6 +1878,41 @@ mod tests {
         assert!(h.m.card(&id).is_none(), "confirmed: closed");
     }
 
+    // #643: Cmd+W on several selected cards asks first. Ekin hit Cmd+A with the
+    // keyboard not in an editor (it selects every card), then Cmd+W, and a
+    // workspace of Claude sessions was gone.
+    #[test]
+    fn closing_several_selected_cards_asks_first_and_one_card_does_not() {
+        let mut h = Harness::new();
+        for _ in 0..2 {
+            h.run("card.new.terminal");
+        }
+        let ids: Vec<String> = h.m.cards.iter().map(|c| c.id.clone()).collect();
+        h.m.set_focus(Some(&ids[0]));
+        h.m.selection.extra = ids[1..].to_vec();
+
+        h.run("card.close");
+        assert_eq!(h.m.cards.len(), 3, "asked, nothing closed");
+        assert!(h.m.prompt.is_open() && h.m.prompt.confirm);
+        // No: nothing closes.
+        let (pending, text) = h.m.prompt.settle(None).unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert_eq!(h.m.cards.len(), 3, "declined");
+
+        // Yes: all three close.
+        h.run("card.close");
+        let (pending, text) = h.m.prompt.settle(Some("")).unwrap();
+        h.m.answer(pending, text, |_| true);
+        assert_eq!(h.m.cards.len(), 0, "confirmed: every selected card closed");
+
+        // One card: no question, as before.
+        h.run("card.new.terminal");
+        assert_eq!(h.m.cards.len(), 1);
+        h.run("card.close");
+        assert!(!h.m.prompt.is_open());
+        assert_eq!(h.m.cards.len(), 0);
+    }
+
     // #160, #511: the local colour is the look key `ui.windowColor` of the ui
     // theme, applied when the theme is, and a remote window ignores it.
     #[test]

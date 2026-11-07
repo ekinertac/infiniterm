@@ -642,6 +642,13 @@ pub enum Pending {
         id: String,
         reclaim: bool,
     },
+    /// Cmd+W on more than one selected card (#643): asked before anything
+    /// closes, because a selection is easy to make by accident (Cmd+A on the
+    /// canvas, Cmd+click on a card) and each closed shell is lost.
+    CloseCards {
+        ids: Vec<String>,
+        reclaim: bool,
+    },
     /// Closing cards with unsaved changes: the ids and `reclaim` to close
     /// with, after a save or without one.
     UnsavedClose {
