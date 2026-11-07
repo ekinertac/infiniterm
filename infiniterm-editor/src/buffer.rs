@@ -1677,6 +1677,30 @@ impl Buffer {
         self.apply(r.start, old, s.to_string(), after, false, now);
     }
 
+    /// Replace all: every `(start, end, new text)` in one edit, so one
+    /// Cmd+Z puts the whole document back. `edits` is in order and does not
+    /// overlap (`search::replace_edits`). The caret goes to the end of the
+    /// last replacement, so a single replace steps on to the next match;
+    /// returns how many were made.
+    pub fn replace_ranges(&mut self, edits: &[(usize, usize, String)], now: f64) -> usize {
+        let (Some(first), Some(last)) = (edits.first(), edits.last()) else {
+            return 0;
+        };
+        let (start, end) = (first.0, last.1);
+        let old = self.slice(start..end);
+        let mut new = String::with_capacity(old.len());
+        let mut at = start;
+        for (a, b, text) in edits {
+            new.push_str(&self.slice(at..*a));
+            new.push_str(text);
+            at = *b;
+        }
+        self.collapse_to_primary();
+        let after = start + new.chars().count();
+        self.apply(start, old, new, after, false, now);
+        edits.len()
+    }
+
     /// Undoes the last edit, or every edit of the last multi-cursor group
     /// and puts all its cursors back.
     pub fn undo(&mut self) {
@@ -2306,6 +2330,19 @@ mod tests {
         b.copy_lines(false, 1.);
         assert_eq!(b.text(), "a\nb\nb\nb");
         assert_eq!(b.cursor(), 4);
+    }
+
+    #[test]
+    fn replace_ranges_is_one_undo_step() {
+        let mut b = Buffer::new("a-é-a-b");
+        let n = b.replace_ranges(&[(0, 1, "xx".into()), (4, 5, "".into())], 0.);
+        assert_eq!(n, 2);
+        assert_eq!(b.text(), "xx-é--b");
+        assert_eq!(b.cursor(), 5); // the end of the last replacement
+        b.undo();
+        assert_eq!(b.text(), "a-é-a-b");
+        assert!(!b.can_undo());
+        assert_eq!(b.replace_ranges(&[], 1.), 0);
     }
 
     #[test]

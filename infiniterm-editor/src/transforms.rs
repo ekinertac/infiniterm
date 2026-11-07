@@ -123,6 +123,53 @@ pub fn trim_trailing_whitespace(s: &str) -> String {
         .join("\n")
 }
 
+/// Every line that is empty or only whitespace gone.
+pub fn remove_blank_lines(s: &str) -> String {
+    s.split('\n')
+        .filter(|l| !l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The byte length of a line-number prefix (`  12`, `12:`, `12|`, `12→`,
+/// `12<tab>`, `12)` and one space after), if the line has one.
+fn line_number_prefix(l: &str) -> Option<usize> {
+    let lead = l.len() - l.trim_start_matches([' ', '\t']).len();
+    let digits = l[lead..].chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
+    }
+    let after = &l[lead + digits..];
+    let sep = after.chars().next()?;
+    if !matches!(sep, ':' | '|' | '→' | '\t' | ')' | ' ') {
+        return None;
+    }
+    let mut len = lead + digits + sep.len_utf8();
+    if !matches!(sep, '\t' | ' ') && l[len..].starts_with(' ') {
+        len += 1;
+    }
+    Some(len)
+}
+
+/// The line numbers copied along with code (`cat -n`, a terminal or a web
+/// listing) gone. Only when every non-blank line has one: a list that merely
+/// starts with a year or a count is left alone.
+pub fn strip_line_numbers(s: &str) -> String {
+    let lines: Vec<&str> = s.split('\n').collect();
+    let all_numbered = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .all(|l| line_number_prefix(l).is_some());
+    if !all_numbered {
+        return s.to_string();
+    }
+    lines
+        .iter()
+        .map(|l| line_number_prefix(l).map_or(*l, |n| &l[n..]))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Leading tabs, `width` spaces apiece; the rest of the line untouched.
 pub fn indent_tabs_to_spaces(s: &str, width: usize) -> String {
     let unit = " ".repeat(width);
@@ -180,6 +227,24 @@ mod tests {
         assert_eq!(unique_lines("a\nb\na\nc\nb"), "a\nb\nc");
         assert_eq!(reverse_lines("a\nb\nc"), "c\nb\na");
         assert_eq!(trim_trailing_whitespace("a  \nb\t\nc"), "a\nb\nc");
+    }
+
+    #[test]
+    fn blank_lines_go_whitespace_only_ones_too() {
+        assert_eq!(remove_blank_lines("a\n\n  \nb\n"), "a\nb");
+    }
+
+    #[test]
+    fn line_numbers_go_only_when_every_line_has_one() {
+        assert_eq!(strip_line_numbers("  1\tfn a() {\n  2\t}"), "fn a() {\n}");
+        assert_eq!(strip_line_numbers("1: a\n2: b\n\n3: c"), "a\nb\n\nc");
+        assert_eq!(strip_line_numbers("10| x\n11| y"), "x\ny");
+        assert_eq!(strip_line_numbers("1→a"), "a");
+        // A year at the start of one line is not a numbered listing.
+        assert_eq!(
+            strip_line_numbers("2024 was\nnot numbered"),
+            "2024 was\nnot numbered"
+        );
     }
 
     #[test]

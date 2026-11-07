@@ -498,6 +498,14 @@ impl AppView {
                         body.open_search(false);
                     }
                 }
+                EditorAction::FindToggle(t) => {
+                    if let Some(tabs) = self.editor_tabs_for(card_id) {
+                        tabs.locked = true;
+                    }
+                    if let Some(body) = self.editor_for(card_id) {
+                        body.toggle_find(t);
+                    }
+                }
                 EditorAction::Unlock => {
                     if let Some(t) = self.editor_tabs_for(card_id) {
                         t.locked = false;
@@ -527,6 +535,14 @@ impl AppView {
                 }
                 if let Some(body) = self.editor_for(card_id) {
                     body.open_search(false);
+                }
+            }
+            EditorAction::FindToggle(t) => {
+                if let Some(tabs) = self.editor_tabs_for(card_id) {
+                    tabs.locked = true;
+                }
+                if let Some(body) = self.editor_for(card_id) {
+                    body.toggle_find(t);
                 }
             }
             EditorAction::GoToSymbol => {

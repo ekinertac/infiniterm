@@ -39,6 +39,7 @@ use infiniterm_core::files::{
 };
 use infiniterm_core::git::git_show_head;
 use infiniterm_core::grid::{Point, Size};
+use infiniterm_core::model::FindToggle;
 use infiniterm_core::words::{complete_words, unique_words, Other};
 use infiniterm_editor::buffer::Buffer;
 use infiniterm_editor::diff::{gutter_marks, hunk_at, hunks, revert_hunk, GutterMark, Hunk};
@@ -139,6 +140,19 @@ const SEARCH_ROW_HEIGHT_SCALE: f64 = 1.3;
 /// Columns reserved for the "find"/"replace" label plus its gap before the
 /// field box starts.
 const SEARCH_LABEL_COLS: f64 = 9.;
+/// The panel's right-hand column: the match count (label-font columns), and
+/// before it the toggle buttons, each its label's width plus this padding.
+const SEARCH_COUNT_COLS: f64 = 11.;
+const SEARCH_TOGGLE_PAD_COLS: f64 = 2.;
+/// The toggles, left to right, with what each button says.
+const FIND_TOGGLES: [(FindToggle, &str); 4] = [
+    (FindToggle::Regex, ".*"),
+    (FindToggle::MatchCase, "Aa"),
+    (FindToggle::WholeWord, "W"),
+    (FindToggle::InSelection, "Sel"),
+];
+/// An engaged toggle's ground is the selection colour at this alpha.
+const FIND_TOGGLE_ON_ALPHA: f32 = 0.6;
 /// The panel's inset from its own top edge.
 const SEARCH_PANEL_TOP_PAD_PX: f64 = 3.;
 /// A field box sits this far inside its row, top and bottom.
@@ -270,6 +284,9 @@ pub struct EditorBody {
     /// set for: a caret moved by anything else forgets it.
     visual_goal: Option<(usize, usize)>,
     pub search: Option<Search>,
+    /// What the last replace all did ("14 replaced"), shown in the panel's
+    /// replace row until the query or the replacement changes.
+    find_note: Option<String>,
     query: Field,
     replacement: Field,
     focus: Focus,
@@ -438,6 +455,7 @@ impl EditorBody {
             word_cache: (u64::MAX, 0, Arc::new(vec![])),
             visual_goal: None,
             search: None,
+            find_note: None,
             query: Field::default(),
             replacement: Field::default(),
             focus: Focus::Buffer,
@@ -1384,6 +1402,8 @@ impl EditorBody {
             TextTransform::UniqueLines => tf::unique_lines,
             TextTransform::ReverseLines => tf::reverse_lines,
             TextTransform::TrimTrailingWhitespace => tf::trim_trailing_whitespace,
+            TextTransform::RemoveBlankLines => tf::remove_blank_lines,
+            TextTransform::StripLineNumbers => tf::strip_line_numbers,
             TextTransform::IndentTabsToSpaces => {
                 return self.replace_transform_range(|s| tf::indent_tabs_to_spaces(s, width), now)
             }
@@ -1409,10 +1429,15 @@ impl EditorBody {
 
     pub fn open_search(&mut self, replacing: bool) {
         let mut s = self.search.take().unwrap_or_default();
-        // The selection seeds the query, as every editor's find does.
-        if let Some(sel) = self.buffer.selected_text().filter(|s| !s.contains('\n')) {
-            s.query = sel;
+        // The selection seeds the query, as every editor's find does. One
+        // that spans lines is not a query but the place to look: replace in
+        // selection, as VS Code does.
+        match self.buffer.selected_text() {
+            Some(sel) if !sel.contains('\n') => s.query = sel,
+            Some(_) => s.scope = self.buffer.selection().map(|r| (r.start, r.end)),
+            None => {}
         }
+        self.find_note = None;
         s.replacing = s.replacing || replacing;
         self.query = Field::open(&s.query, !s.query.is_empty());
         self.replacement = Field::open(&s.replacement, false);
@@ -1426,7 +1451,31 @@ impl EditorBody {
         self.dirty = true;
     }
 
+    /// A find-panel switch (a button, the palette or the keymap). It opens
+    /// the panel when it is closed. In-selection takes the buffer's selection
+    /// as the place to look and, pressed again, lets go of it.
+    pub fn toggle_find(&mut self, t: FindToggle) {
+        if self.search.is_none() {
+            self.open_search(false);
+        }
+        let selection = self.buffer.selection().map(|r| (r.start, r.end));
+        if let Some(s) = self.search.as_mut() {
+            match t {
+                FindToggle::Regex => s.regex = !s.regex,
+                FindToggle::MatchCase => s.match_case = !s.match_case,
+                FindToggle::WholeWord => s.whole_word = !s.whole_word,
+                FindToggle::InSelection => {
+                    s.scope = if s.scope.is_some() { None } else { selection };
+                }
+            }
+        }
+        self.find_note = None;
+        self.refresh_search();
+        self.dirty = true;
+    }
+
     fn close_search(&mut self) {
+        self.find_note = None;
         self.search = None;
         self.focus = Focus::Buffer;
         self.dirty = true;
@@ -2785,23 +2834,28 @@ impl EditorBody {
                     return;
                 }
                 self.refresh_search();
-                let replacement = self.replacement.text.clone();
-                if m.platform {
-                    // Cmd+Enter: every match, last to first so the ranges hold.
-                    let matches = self
-                        .search
-                        .as_ref()
-                        .map(|s| s.matches.clone())
-                        .unwrap_or_default();
-                    for (a, b) in matches.into_iter().rev() {
-                        self.buffer.replace_range(a..b, &replacement, now);
-                    }
-                } else if let Some((a, b)) = self.search.as_ref().and_then(|s| s.current_range()) {
-                    self.buffer.replace_range(a..b, &replacement, now);
+                let text = self.buffer.text();
+                let edits = match self.search.as_ref() {
+                    Some(s) if m.platform => s.edits(&text),
+                    Some(s) => s.current_edit(&text).into_iter().collect(),
+                    None => vec![],
+                };
+                // Replace all is one edit, so one Cmd+Z undoes all of it.
+                let n = self.buffer.replace_ranges(&edits, now);
+                // The scope is a range of the text this just changed.
+                let delta: i64 = edits
+                    .iter()
+                    .map(|(a, b, new)| new.chars().count() as i64 - (b - a) as i64)
+                    .sum();
+                if let Some(s) = self.search.as_mut() {
+                    s.scope = s
+                        .scope
+                        .map(|(a, b)| (a, (b as i64 + delta).max(a as i64) as usize));
                 }
                 self.now_dirty(now);
                 self.refresh_search();
                 self.show_match();
+                self.find_note = (m.platform && n > 0).then(|| format!("{n} replaced"));
                 return;
             }
             "f" if m.platform && m.alt => {
@@ -2841,6 +2895,7 @@ impl EditorBody {
         }
         match edit {
             Edit::Changed | Edit::Cut(_) => {
+                self.find_note = None;
                 self.refresh_search();
                 if self.focus == Focus::Query {
                     self.show_match();
@@ -3208,6 +3263,7 @@ impl EditorBody {
         let pad = px((PAD_X * scale) as f32);
         let row_h = line_h * SEARCH_ROW_HEIGHT_SCALE as f32;
         let label_w = px((self.metrics.cell_w * SEARCH_LABEL_COLS * scale) as f32);
+        let label_cw_px = self.metrics.cell_w * SEARCH_LABEL_FONT_SCALE * scale;
         let mut y = area.origin.y + px((SEARCH_PANEL_TOP_PAD_PX * scale) as f32);
         let rows: Vec<(&str, &Field, Focus)> = if s.replacing {
             vec![
@@ -3227,10 +3283,7 @@ impl EditorBody {
                     y + px(FIELD_ROW_INSET_PX as f32),
                 ),
                 size(
-                    area.size.width
-                        - pad * 2.
-                        - label_w
-                        - px((self.metrics.cell_w * SEARCH_LABEL_COLS * scale) as f32),
+                    area.size.width - pad * 2. - label_w - px(find_right_w(label_cw_px) as f32),
                     row_h - px(FIELD_ROW_INSET_TOTAL_PX as f32),
                 ),
             );
@@ -3290,13 +3343,72 @@ impl EditorBody {
                 let _ = line.paint(point(x, ty), th, window, cx);
             }
             if which == Focus::Query {
-                let count = match (s.current, s.matches.len()) {
-                    (_, 0) if s.query.is_empty() => String::new(),
-                    (_, 0) => "no matches".into(),
-                    (Some(i), n) => format!("{} of {n}", i + 1),
-                    (None, n) => format!("{n}"),
+                let count = match (&s.error, s.current, s.matches.len()) {
+                    // Fits the count column (`SEARCH_COUNT_COLS`).
+                    (Some(_), _, _) => "bad regex".into(),
+                    (None, _, 0) if s.query.is_empty() => String::new(),
+                    (None, _, 0) => "no matches".into(),
+                    (None, Some(i), n) => format!("{} of {n}", i + 1),
+                    (None, None, n) => format!("{n}"),
                 };
-                let c = crate::text::shape(window, &count, font_size, &f, dim);
+                let count_fg = if s.error.is_some() {
+                    hex(&self.colors.foreground)
+                } else {
+                    dim
+                };
+                let c = crate::text::shape(window, &count, font_size, &f, count_fg);
+                let _ = c.paint(
+                    point(area.origin.x + area.size.width - pad - c.width, y),
+                    row_h,
+                    window,
+                    cx,
+                );
+                // The toggles, an engaged one on the selection's ground.
+                let on = |t: FindToggle| match t {
+                    FindToggle::Regex => s.regex,
+                    FindToggle::MatchCase => s.match_case,
+                    FindToggle::WholeWord => s.whole_word,
+                    FindToggle::InSelection => s.scope.is_some(),
+                };
+                for (t, left, right) in find_toggle_rects(
+                    f64::from(f32::from(area.origin.x)),
+                    f64::from(f32::from(area.size.width)),
+                    f64::from(f32::from(pad)),
+                    label_cw_px,
+                ) {
+                    let label = FIND_TOGGLES
+                        .iter()
+                        .find(|(k, _)| *k == t)
+                        .map_or("", |(_, l)| l);
+                    let b = Bounds::new(
+                        point(px(left as f32), y + px(FIELD_ROW_INSET_PX as f32)),
+                        size(
+                            px((right - left) as f32),
+                            row_h - px(FIELD_ROW_INSET_TOTAL_PX as f32),
+                        ),
+                    );
+                    if on(t) {
+                        window.paint_quad(fill(
+                            b,
+                            crate::chrome::with_alpha(sel_bg, FIND_TOGGLE_ON_ALPHA),
+                        ));
+                    }
+                    let l = crate::text::shape(
+                        window,
+                        label,
+                        font_size,
+                        &f,
+                        if on(t) { fg } else { dim },
+                    );
+                    let _ = l.paint(
+                        point(b.origin.x + (b.size.width - l.width) / 2., y),
+                        row_h,
+                        window,
+                        cx,
+                    );
+                }
+            } else if let Some(note) = &self.find_note {
+                let c = crate::text::shape(window, note, font_size, &f, dim);
                 let _ = c.paint(
                     point(area.origin.x + area.size.width - pad - c.width, y),
                     row_h,
@@ -3315,6 +3427,31 @@ impl EditorBody {
             crate::chrome::with_alpha(dim, crate::chrome::HAIRLINE_ALPHA),
         ));
     }
+}
+
+/// The find panel's right column in world px, `cw` being one column of the
+/// panel's label font: the toggle buttons, a column of air, the count.
+fn find_right_w(cw: f64) -> f64 {
+    let toggles: f64 = FIND_TOGGLES
+        .iter()
+        .map(|(_, l)| l.chars().count() as f64 + SEARCH_TOGGLE_PAD_COLS)
+        .sum();
+    (toggles + 1. + SEARCH_COUNT_COLS) * cw
+}
+
+/// Where each toggle button sits, as `(toggle, left, right)` in world px,
+/// for a panel `x` to `x + w` wide with `pad` of margin: packed against the
+/// count, which is against the right margin.
+fn find_toggle_rects(x: f64, w: f64, pad: f64, cw: f64) -> Vec<(FindToggle, f64, f64)> {
+    let mut right = x + w - pad - SEARCH_COUNT_COLS * cw;
+    let mut out = Vec::with_capacity(FIND_TOGGLES.len());
+    for (t, label) in FIND_TOGGLES.iter().rev() {
+        let width = (label.chars().count() as f64 + SEARCH_TOGGLE_PAD_COLS) * cw;
+        out.push((*t, right - width, right));
+        right -= width;
+    }
+    out.reverse();
+    out
 }
 
 fn parent_of(path: &str) -> String {
@@ -3985,12 +4122,22 @@ impl CardBody for EditorBody {
                 };
             }
         }
-        let (t_origin, _) = self.text_area(world);
+        let (t_origin, t_size) = self.text_area(world);
         if self.search.is_some() && local.y < t_origin.y {
             // The panel: the lower row is replace when it shows.
             let row_h = self.line_h() * SEARCH_ROW_HEIGHT_SCALE;
             let in_replace = self.search.as_ref().is_some_and(|s| s.replacing)
                 && local.y - (t_origin.y - self.panel_h()) > row_h;
+            if !in_replace {
+                let cw = self.metrics.cell_w * SEARCH_LABEL_FONT_SCALE;
+                let hit = find_toggle_rects(t_origin.x, t_size.w, PAD_X, cw)
+                    .into_iter()
+                    .find(|(_, l, r)| local.x >= *l && local.x < *r);
+                if let Some((t, _, _)) = hit {
+                    self.toggle_find(t);
+                    return BodyAction::None;
+                }
+            }
             self.focus = if in_replace {
                 Focus::Replace
             } else {
@@ -4547,6 +4694,65 @@ mod tests {
 
     fn key(name: &str) -> Keystroke {
         Keystroke::parse(name).unwrap()
+    }
+
+    // The buttons sit side by side against the count, inside the column the
+    // field leaves for them, so a click on one is never a click on another
+    // or on the field.
+    #[test]
+    fn the_find_toggles_fit_the_column_the_field_leaves() {
+        let (x, w, pad, cw) = (100., 800., 12., 7.);
+        let rects = find_toggle_rects(x, w, pad, cw);
+        assert_eq!(rects.len(), FIND_TOGGLES.len());
+        for pair in rects.windows(2) {
+            assert_eq!(pair[0].2, pair[1].1, "packed, no overlap");
+            assert_ne!(pair[0].0, pair[1].0);
+        }
+        let field_right = x + w - pad - find_right_w(cw);
+        assert!(rects[0].1 >= field_right, "left of the first button");
+        assert!(rects.last().unwrap().2 <= x + w - pad - SEARCH_COUNT_COLS * cw + 0.001);
+    }
+
+    #[test]
+    fn a_click_on_a_toggle_flips_it_and_a_find_toggle_opens_the_panel() {
+        let mut b = body();
+        assert!(b.search.is_none());
+        b.toggle_find(FindToggle::Regex);
+        assert!(b.search.as_ref().unwrap().regex, "opened, then flipped");
+        b.toggle_find(FindToggle::Regex);
+        assert!(!b.search.as_ref().unwrap().regex);
+        // In selection needs a selection, and lets go when pressed again.
+        b.buffer = Buffer::new("a\nb\nc");
+        b.buffer.select_range(0..3);
+        b.toggle_find(FindToggle::InSelection);
+        assert_eq!(b.search.as_ref().unwrap().scope, Some((0, 3)));
+        b.toggle_find(FindToggle::InSelection);
+        assert_eq!(b.search.as_ref().unwrap().scope, None);
+    }
+
+    // Opening the panel over lines makes them the place to look, and replace
+    // all there is one undo step that leaves the rest alone.
+    #[test]
+    fn a_multi_line_selection_scopes_the_find_and_replace_all_is_one_undo() {
+        let mut b = body();
+        b.buffer = Buffer::new("a a\na a\na a");
+        b.buffer.select_range(0..7); // the first two lines
+        b.open_search(true);
+        {
+            let s = b.search.as_mut().unwrap();
+            assert_eq!(s.scope, Some((0, 7)));
+            s.query = "a".into();
+            s.replacement = "bb".into();
+        }
+        b.query = Field::open("a", false);
+        b.replacement = Field::open("bb", false);
+        b.refresh_search();
+        assert_eq!(b.search.as_ref().unwrap().matches.len(), 4);
+        let edits = b.search.as_ref().unwrap().edits(&b.buffer.text());
+        assert_eq!(b.buffer.replace_ranges(&edits, 0.), 4);
+        assert_eq!(b.buffer.text(), "bb bb\nbb bb\na a");
+        b.buffer.undo();
+        assert_eq!(b.buffer.text(), "a a\na a\na a");
     }
 
     fn settings_provider() -> Option<Box<dyn Provider>> {

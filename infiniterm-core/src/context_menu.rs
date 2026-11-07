@@ -249,6 +249,8 @@ const EDITOR_TOP: &[Def] = &[
                 "editor.transform.trimTrailingWhitespace",
                 "Trim Trailing Whitespace",
             ),
+            titled("editor.transform.removeBlankLines", "Remove Blank Lines"),
+            titled("editor.transform.stripLineNumbers", "Strip Line Numbers"),
             Def::Separator,
             titled(
                 "editor.transform.indentTabsToSpaces",
