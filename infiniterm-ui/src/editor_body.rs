@@ -4706,7 +4706,7 @@ mod tests {
         assert_eq!(rects.len(), FIND_TOGGLES.len());
         for pair in rects.windows(2) {
             assert_eq!(pair[0].2, pair[1].1, "packed, no overlap");
-            assert_eq!(pair[0].0 == pair[1].0, false);
+            assert_ne!(pair[0].0, pair[1].0);
         }
         let field_right = x + w - pad - find_right_w(cw);
         assert!(rects[0].1 >= field_right, "left of the first button");
