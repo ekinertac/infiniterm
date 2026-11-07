@@ -501,6 +501,8 @@ impl Model {
                 card: c.title.clone(),
                 workspace: ws_name(&c.workspace_id),
                 state: c.agent,
+                // For a card already coloured at startup this is the first tick
+                // that saw it, not the true change time.
                 since: self.push_since.get(&c.id).copied().unwrap_or(now).max(0.0) as u64,
             })
             .collect();
@@ -523,6 +525,11 @@ impl Model {
             // Debounced: a card that flips away and back within a moment
             // should not cost the phone a refresh.
             self.relay_drop_due = Some(now + 1.5);
+        }
+        // The wall clock can step back; never hold a drop further out than
+        // the debounce.
+        if let Some(due) = self.relay_drop_due {
+            self.relay_drop_due = Some(due.min(now + 1.5));
         }
         if self.relay_drop_due.is_some_and(|due| due <= now) {
             self.relay_drop_due = None;
@@ -1753,6 +1760,44 @@ mod agent_states_text_tests {
         assert!(got[0].1.is_empty());
         m.push_tick(3.0);
         assert!(relays(&mut m).is_empty(), "sent once");
+    }
+
+    #[test]
+    fn push_tick_an_alert_clears_a_pending_drop() {
+        let (mut m, a) = one_card();
+        let b = second_card(&mut m);
+        m.app_active = false;
+        m.card_mut(&a).unwrap().agent = AgentState::Waiting;
+        m.push_tick(0.0);
+        m.card_mut(&a).unwrap().agent = AgentState::Working;
+        m.push_tick(0.0);
+        assert!(relays(&mut m).is_empty());
+        m.card_mut(&b).unwrap().agent = AgentState::Failed;
+        m.push_tick(1.0);
+        let got = relays(&mut m);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].0.is_some());
+        m.push_tick(2.0);
+        assert!(relays(&mut m).is_empty(), "no drop-only after the alert");
+    }
+
+    #[test]
+    fn push_tick_a_second_drop_keeps_the_first_due() {
+        let (mut m, a) = one_card();
+        let b = second_card(&mut m);
+        m.app_active = false;
+        m.card_mut(&a).unwrap().agent = AgentState::Waiting;
+        m.card_mut(&b).unwrap().agent = AgentState::Waiting;
+        m.push_tick(0.0);
+        m.card_mut(&a).unwrap().agent = AgentState::Working;
+        m.push_tick(0.0);
+        m.card_mut(&b).unwrap().agent = AgentState::Working;
+        m.push_tick(1.0);
+        assert!(relays(&mut m).is_empty());
+        m.push_tick(1.6);
+        let got = relays(&mut m);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].0.is_none());
     }
 
     #[test]
