@@ -319,6 +319,33 @@ pub fn gone_ids(reply: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// The relay accepts at most this many ids in one request.
+pub const RELAY_IDS_MAX: usize = 16;
+
+/// Which of the ids sent are gone, from the relay's HTTP answer. A 404 with
+/// an empty body means the relay knows none of them, so all are gone. Any
+/// other status than 200 is an error and removes nothing.
+pub fn relay_gone(status: u16, body: &str, sent: &[&str]) -> Result<Vec<String>, String> {
+    match status {
+        200 => gone_ids(body),
+        404 => Ok(sent.iter().map(|s| s.to_string()).collect()),
+        other => Err(format!("relay answered {other}")),
+    }
+}
+
+/// The name the phone shows for this Mac: the computer name, else the
+/// hostname, else "Mac".
+pub fn host_label(scutil: &str, hostname: &str) -> String {
+    let (scutil, hostname) = (scutil.trim(), hostname.trim());
+    if !scutil.is_empty() {
+        scutil.to_string()
+    } else if !hostname.is_empty() {
+        hostname.to_string()
+    } else {
+        "Mac".to_string()
+    }
+}
+
 /// The body to POST to the server's root.
 pub fn json_body(topic: &str, push: &Push) -> String {
     json!({
@@ -640,6 +667,32 @@ mod tests {
     fn gone_ids_reads_results() {
         let reply = r#"{"results":{"a":"ok","b":"gone","c":"error"}}"#;
         assert_eq!(gone_ids(reply), Ok(vec!["b".to_string()]));
+    }
+
+    #[test]
+    fn relay_gone_by_status() {
+        let body = r#"{"results":{"a":"ok","b":"gone"}}"#;
+        assert_eq!(
+            relay_gone(200, body, &["a", "b"]),
+            Ok(vec!["b".to_string()])
+        );
+        assert_eq!(
+            relay_gone(404, "", &["a", "b"]),
+            Ok(vec!["a".to_string(), "b".to_string()])
+        );
+        assert!(relay_gone(200, "nope", &["a"]).is_err());
+        assert_eq!(
+            relay_gone(429, "", &["a"]),
+            Err("relay answered 429".to_string())
+        );
+        assert!(relay_gone(413, "", &["a"]).is_err());
+    }
+
+    #[test]
+    fn host_label_falls_back() {
+        assert_eq!(host_label("  Tarik's Mac\n", "box"), "Tarik's Mac");
+        assert_eq!(host_label("\n", " box.local\n"), "box.local");
+        assert_eq!(host_label("", "  "), "Mac");
     }
 
     #[test]
