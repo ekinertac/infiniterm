@@ -43,6 +43,7 @@ ift group backend      # creates the group if needed
 ift ls                 # cards: id, group, directory, state, remote, number
 ift commands           # every command: id, label, key
 ift usage 30           # which commands and gestures you used in 30 days, and which you never did
+ift update status      # the app's update state on one line: off, checking, current, ready, failed
 ift omni rust          # what the address bar would show for "rust"
 ift --version          # the version of this ift
 ```

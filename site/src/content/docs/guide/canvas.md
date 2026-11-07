@@ -150,7 +150,7 @@ A label that ends in an ellipsis, in the menu and in the command palette, asks y
 
 ## Closing and protecting
 
-A card closes when its shell exits, so `exit` or Ctrl+D does what `Cmd W` does. `Cmd Shift T` reopens the last card you closed, where it was, as in a browser.
+A card closes when its shell exits, so `exit` or Ctrl+D does what `Cmd W` does. `Cmd Shift T` reopens the last card you closed, where it was, as in a browser. `Cmd W` with more than one card selected asks "close N cards?" first, because `Cmd A` with the keyboard not in an editor selects every card of the workspace.
 
 Closing a terminal card does not kill its program on the spot: a build or an agent mid-turn runs to its end, and `Cmd Shift T` or `Cmd Z` brings the card back with it still live. See [Terminal cards](../terminal/#closing-a-card).
 
