@@ -49,10 +49,14 @@ pub fn place(
     }
     let (sx, sy) = (aw / nw, ah / nh);
     let scale = match fit {
-        BackgroundFit::Cover => sx.max(sy),
+        BackgroundFit::Cover | BackgroundFit::TopLeft => sx.max(sy),
         BackgroundFit::Contain => sx.min(sy),
+        BackgroundFit::ActualSize => 1.,
     };
     let (w, h) = (nw * scale, nh * scale);
+    if matches!(fit, BackgroundFit::TopLeft | BackgroundFit::ActualSize) {
+        return Some((0., 0., w, h));
+    }
     Some(((aw - w) / 2., (ah - h) / 2., w, h))
 }
 
@@ -267,6 +271,21 @@ mod tests {
         let (x, y, w, h) = place((200., 100.), (100., 100.), BackgroundFit::Contain).unwrap();
         assert_eq!((w, h), (100., 50.));
         assert_eq!((x, y), (0., 25.), "centred, bars above and below");
+    }
+
+    #[test]
+    fn top_left_fills_like_cover_but_keeps_the_corner() {
+        let (x, y, w, h) = place((200., 100.), (100., 100.), BackgroundFit::TopLeft).unwrap();
+        assert_eq!((w, h), (200., 100.));
+        assert_eq!((x, y), (0., 0.), "only the right side is cropped");
+    }
+
+    #[test]
+    fn actual_size_keeps_the_pictures_size_whatever_the_area() {
+        for area in [(100., 100.), (400., 50.), (3000., 2000.)] {
+            let r = place((200., 100.), area, BackgroundFit::ActualSize).unwrap();
+            assert_eq!(r, (0., 0., 200., 100.));
+        }
     }
 
     #[test]

@@ -145,8 +145,9 @@ impl Model {
     }
 
     /// `inherit` decides whether the new card joins the active card's group.
-    /// The DIRECTORY is not inherited either way: a new card is a new place
-    /// to work and starts at `startingDir`. A split is the opposite case
+    /// The DIRECTORY is not inherited either way unless
+    /// `cards.newCardInheritsDirectory` is on (#509): a new card is a new
+    /// place to work and starts at `startingDir`. A split is the opposite case
     /// and keeps inheriting, because it is carved out of the card it came
     /// from and is plainly about continuing there.
     pub fn new_card(&mut self, inherit: bool) {
@@ -166,8 +167,19 @@ impl Model {
                 None
             };
             let ws = self.active_workspace.clone().unwrap_or_default();
+            // Off by default (#509): a new card is a new place to work.
+            let dir = match from.as_ref() {
+                Some(c)
+                    if self.config.cards.new_card_inherits_directory
+                        && c.kind == CardKind::Terminal
+                        && !c.cwd.is_empty() =>
+                {
+                    c.cwd.clone()
+                }
+                _ => self.start_dir.clone(),
+            };
             let id = self.add_card(
-                &self.start_dir.clone(),
+                &dir,
                 NewCard {
                     avoid: self.other_frames(group_id.as_deref(), &ws),
                     group_id,
