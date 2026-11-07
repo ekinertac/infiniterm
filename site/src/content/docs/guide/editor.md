@@ -18,6 +18,7 @@ An editor card is a file on the canvas: syntax highlighting for 17 languages thr
 
 Drag the line between the tree and the text to make the tree wider or narrower; the card keeps that width. "Card: sidebar wider" and "narrower" in the palette do the same from the keyboard.
 - `Cmd N` opens an empty editor, and `Cmd` + click on a path in a terminal opens the file beside it.
+- "Editor: move tab to card…" sends the active tab to another editor card. "Editor: move card into card…" sends every tab, and the emptied card closes. "Editor: open a file in card…" opens a file as a tab of a card you pick. A tab with unsaved changes stays where it is until you save it. Both move commands are also in the tab strip's right-click menu.
 
 A file that does not exist yet opens empty, and the first save creates it; closing without saving leaves nothing on disk.
 
@@ -26,6 +27,26 @@ A file that does not exist yet opens empty, and the first save creates it; closi
 An editor you arrived at with the arrows is a card like any other and takes no keys, so nothing typed at the canvas can land in a file. Click into the text or press `Enter` to lock the keyboard to it: the ring turns the warning colour and the status bar says so. While locked, `Cmd T` / `Cmd W` open and close tabs, `Cmd 1` to `Cmd 9` jump between them, and `Cmd S` saves. Middle-click on a tab closes it. `Escape` lets go once it has nothing else to close: the first press closes a completion list, the find bar, extra cursors or a selection, and the next one unlocks. `Cmd Escape` unlocks at once, and `Cmd Shift P` opens the command palette from a locked editor, as from any card. To use another chord for it, set `"cmd+escape": null` and, for example, `"cmd+shift+e": "browser.leave"` in `keybindings.json`. A chord can also apply only while an editor is locked, see [bindings that apply only sometimes](../configuration/#bindings-that-apply-only-sometimes).
 
 Typing a quote, a backtick or an opening bracket over selected text wraps it: select `foo`, type `(`, get `(foo)`. The text stays selected, so a second press wraps it again.
+
+## Finding, jumping and replacing
+
+These work in a locked editor. Each is also in the command palette.
+
+- `Cmd F` finds in the file. The panel has switches for a regular expression, exact case, whole words and "only in the selection". With a regular expression, `$1` and `${name}` in the replacement give the groups, and `\n` and `\t` give a new line and a tab.
+- `Cmd P` is "Go to file…": every file of the project, matched by letters of its path (`edbody` finds `src/editor_body.rs`). Enter opens it as a tab, or goes to the tab that already has it. Off the Mac this is a palette command only.
+- `Cmd R` is "Go to symbol…": the functions, types, methods, Markdown headings and TOML tables of the file, in file order. Typing narrows the list. Enter puts the caret there.
+- `Cmd Shift F` is "Find in files": it asks for the text, then lists every matching line of the project. Enter opens the line. "Replace in files" in the palette shows what it will change and asks first.
+- When a program rewrites a file you have open (an agent in a terminal card, a formatter, `git checkout`), a card without unsaved changes takes the new text and marks the changed lines in the gutter. "Editor: revert the change at the caret", "revert every change" and "accept the changes" are in the palette.
+- With several cursors, one `Cmd Z` undoes what a key did at every cursor.
+- Enter after `{`, `(` or `[` starts the next line one level deeper. Typing a closing bracket on a line that holds only indent takes one level off.
+- Arrow keys, Backspace and Delete move over what a person sees as one character, so a flag or a family emoji is one step.
+
+## Formatting and language servers
+
+Both are off by default, because one rewrites your file and the other starts a program.
+
+- `editor.formatOnSave: true` makes `Cmd S` run the file's formatter first. Prettier, `rustfmt`, `gofmt` and `black` are known. `editor.formatters` sets another command for a language. A missing or failing formatter never blocks the save: the file is saved as it is and the status bar says why. One `Cmd Z` undoes the formatting. "Editor: format document" formats without saving.
+- `editor.lsp.enabled: true` asks a language server for completions: rust-analyzer, typescript-language-server, pyright and gopls are known. The server starts when you first ask for a completion and stops when the last tab of that language closes. While the setting is off, the status bar tells you once when it finds an installed server.
 
 ## Words from your files
 

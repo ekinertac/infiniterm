@@ -6,9 +6,14 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-11-06
+## 0.6.9 (build 1403), 2026-11-07
+
+### Browser
 
 - A browser card has one right-click menu. Right-clicking the page now shows the tab strip's menu (New Tab, Close Tab, Reopen Closed Tab, Reload, Copy Address, Open in System Browser) with its keyboard shortcuts, and right-clicking a tab shows Back and Forward too. On a link, a field or selected text the page adds its own rows (Open Link in New Tab or Card, Copy Link Address, Cut, Copy, Paste). Every row is a command, so the palette and `ift` can run them. Back and Forward are greyed instead of hidden when the page has nowhere to go.
+
+### Editor
+
 - Editor tabs can move between cards. "Editor: move tab to card…" sends the active tab to another editor card, "Editor: move card into card…" sends every tab, and "Editor: open a file in card…" opens the file you pick as a tab of the card you pick. Both moves are also in the tab strip's right-click menu. A card left with no tabs closes, and a tab with unsaved changes stays until you save it.
 - Editor: language server completion, off by default. Turn on `"editor.lsp.enabled": true` and typing in a Rust, JavaScript, TypeScript, TSX, Python or Go file asks that language's server (rust-analyzer, typescript-language-server, pyright-langserver, gopls: install them yourself) and shows its completions in the same popup, filtered by the word you are typing, with its signature and docs. A server starts when you first type in a file of its language and stops when the last tab of that language closes; with the setting off no process runs. If the server is not installed, or stops, the popup falls back to words and the status bar says so. With the setting off, the status bar mentions once per language that its server is installed. Use another server with `"editor.lsp.servers.python": "pylsp"`. Markdown, JSON, YAML and TOML keep their own completions, and files on a host are not covered.
 - Editor: format on save. Turn on `"editor.formatOnSave": true` and Cmd+S runs the file's formatter over the text first: Prettier for JavaScript, TypeScript, TSX, JSON, CSS, SCSS, HTML, markdown and YAML, `rustfmt`, `gofmt` and `black` for their languages. It is off by default because it rewrites the file and runs a program. The formatter is found in the project's `node_modules/.bin`, on `PATH` and in the usual Homebrew, cargo, asdf and volta folders, and runs in the file's folder so its own config applies. Use your own with `"editor.formatters.python": "ruff format --stdin-filename {path} -"` (`{path}` is the file). A formatter that is missing, fails or takes over eight seconds leaves your text as it is, the file is saved anyway, and the status bar says why. One Cmd+Z undoes the formatting, and the caret keeps its line and column. "Editor: format document" in the palette formats without saving. Only files on this machine.
@@ -22,10 +27,12 @@ How this file is kept: work that has shipped to `master` but not to a release go
 - Editor: Enter after an opening bracket (`{`, `(` or `[`) starts the next line one level deeper, and typing a closing bracket on a line that holds only indent takes one level back off, so `}` lines up with the `if` that opened it. Enter between a typed pair still opens it onto three lines, as before.
 - Editor: with several cursors, one Cmd+Z undoes what a keypress did at every cursor and puts all the cursors back (Cmd+Shift+Z redoes it). Before, it undid one cursor's edit at a time. Typing a word at several cursors undoes as one step, like typing at one.
 - Editor: duplicate line (Cmd+Shift+D) and move line (Ctrl+Cmd+Up/Down) now act on every line a selection touches and keep the selection on the block. With the selection inside one line, duplicate copies the selected text after itself. Alt+Up/Down moves and Shift+Alt+Up/Down copies the lines too, as in VS Code and Cursor. Option+Up/Down no longer moves the caret in the editor.
-### 2026-11-07
+
+### Themes
 
 - `ui.backgroundImageFit` has two new values. `"top-left"` fills the window like `"cover"` but keeps the picture's top-left corner at the window's, so only the right and bottom are cropped. `"actual-size"` draws the picture at its own size from the top-left corner and never rescales it when the window is resized.
-### 2026-11-06
+
+### Cards and Finder
 
 - New setting `cards.newCardInheritsDirectory` (off by default): when on, a new terminal card (Cmd+T) opened from a terminal card starts in that card's directory instead of `startingDir`.
 - Finder's "Open in infiniterm" service now says it belongs in Finder's menu, as the services that do appear there do. It was registered with macOS but missing from the right-click menu. Installed from this build, right-click a folder in Finder and look under Services or Quick Actions.

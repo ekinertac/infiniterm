@@ -112,6 +112,10 @@ Every card has a label in its corner: the name you gave it (`Cmd Shift R`), else
 
 The label sits top right by default. `"ui.cardLabelPosition"` moves it to `"top left"`, `"bottom left"` or `"bottom right"` (the words in either order); a card in an ssh session shows its ssh badge at the other end of the same edge.
 
+### The browser card's right-click menu
+
+A right-click on a browser card's page or on its tab strip opens one menu. Back and Forward are greyed when there is nowhere to go. Reload, New Tab, Close Tab, Reopen Closed Tab, Copy Address and Open in System Browser are always there. Click on a link and the link rows come first: Open Link in New Tab, in New Card, Copy Link Address and Open Link in System Browser. Click in a text field and Cut, Copy and Paste come first. With selected text, Copy does.
+
 ### Locking a browser card
 
 A page needs the keyboard for itself, so a browser card works like a locked editor. Click into the page, or press `Enter` on a card you arrived at with the arrows, and the keyboard is the page's: the ring turns the warning colour and the status bar says so. Chrome's own chords work then (`Cmd T`, `Cmd W`, `Cmd 1` to `Cmd 9` for tabs). Press `Escape` twice within 400 ms to let go; a single `Escape` goes to the page, which uses it. `Cmd Escape` lets go at once. `Cmd Shift P` opens the command palette from a locked page too.
