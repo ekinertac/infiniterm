@@ -315,6 +315,13 @@ pub const DEFAULT_KEYMAP: &[(&str, &str, &str)] = &[
         "the macOS convention for preferences",
     ),
     ("cmd+shift+,", "app.keybindings", ""),
+    // Go to File in an editor card (#602): Sublime's and VS Code's chord.
+    // Anywhere but an editor card it does nothing.
+    (
+        "cmd+p",
+        "editor.goToFile",
+        "Sublime and VS Code's go to file",
+    ),
     // The command palette. Cmd+Shift+P is what editors use; Cmd+K is
     // deliberately NOT taken, because in a terminal that means clear.
     (

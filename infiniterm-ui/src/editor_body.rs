@@ -42,7 +42,7 @@ use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::model::FindToggle;
 use infiniterm_core::words::{complete_words, unique_words, Other};
 use infiniterm_editor::buffer::Buffer;
-use infiniterm_editor::diff::{gutter_marks, GutterMark};
+use infiniterm_editor::diff::{gutter_marks, hunk_at, hunks, revert_hunk, GutterMark, Hunk};
 use infiniterm_editor::explorer::{Entry, Tree, TreeAction};
 use infiniterm_editor::highlight::{Highlighting, Span};
 use infiniterm_editor::jumps::Jumps;
@@ -253,6 +253,13 @@ pub struct EditorBody {
     /// HEAD's text for the current path (`refresh_git_head`); `None`
     /// outside a git repo, or for a file HEAD does not have.
     git_head: Option<String>,
+    /// What this buffer held before the file last changed under it (#602):
+    /// an agent, a formatter or a `git checkout` rewrote it on disk and the
+    /// clean buffer took the new text. While it is set, the gutter marks the
+    /// lines changed since then instead of since HEAD, and the changed parts
+    /// can be stepped through, reverted one at a time, or accepted
+    /// (`change_*`). A second change on disk keeps the first baseline.
+    agent_base: Option<String>,
     last_git_check: f64,
     /// The git gutter's marks, cached the same way `spans` is: the
     /// buffer's version and the load count, so switching files does not
@@ -436,6 +443,7 @@ impl EditorBody {
             spans: (u64::MAX, 0, vec![]),
             loads: 0,
             git_head: None,
+            agent_base: None,
             last_git_check: 0.,
             gutter: (u64::MAX, 0, vec![], vec![]),
             jumps: Jumps::default(),
@@ -546,6 +554,7 @@ impl EditorBody {
         self.completer = provider_for(path);
         self.completion = None;
         self.warned_stale = false;
+        self.agent_base = None;
         self.scroll_line = 0;
         self.scroll_x = 0.;
         self.shaped.clear();
@@ -755,9 +764,125 @@ impl EditorBody {
             self.saved = text; // dirty now means "differs from the disk now"
             return;
         }
+        // The text before the change is what a reviewer compares with. Kept
+        // from the first change until accepted, so two edits in a row review
+        // as one. Not for a buffer that was empty or loading.
+        let before = self.buffer.text();
         self.saved = text.clone();
         self.buffer.set_text(&text, now);
         self.dirty = true;
+        if self.agent_base.is_none() && !before.is_empty() && self.diff.is_none() {
+            self.agent_base = Some(before);
+        }
+        self.gutter.0 = u64::MAX;
+        match self.agent_base.as_deref().map(|b| hunks(b, &text).len()) {
+            Some(0) => self.agent_base = None,
+            Some(n) => self.events.push(EditorEvent::Notice(format!(
+                "{} changed on disk: {n} changed part{} marked in the gutter, \
+                 see Editor: revert change in the palette",
+                infiniterm_core::paths::base_name(path),
+                if n == 1 { " is" } else { "s are" },
+            ))),
+            None => {}
+        }
+    }
+
+    /// The changed parts since the file last changed under this buffer
+    /// (`agent_base`), empty when there is nothing to review.
+    fn change_hunks(&self) -> Vec<Hunk> {
+        self.agent_base
+            .as_deref()
+            .map(|b| hunks(b, &self.buffer.text()))
+            .unwrap_or_default()
+    }
+
+    fn note(&mut self, text: &str) {
+        self.events.push(EditorEvent::Notice(text.to_string()));
+    }
+
+    /// `editor.change.revert`: put the changed part under the caret back as
+    /// it was. One undo step; the buffer is then different from the disk, so
+    /// saving writes the reverted text.
+    pub fn change_revert(&mut self, now: f64) {
+        let list = self.change_hunks();
+        let line = self.buffer.line_of(self.buffer.cursor());
+        let Some(h) = hunk_at(&list, line).map(|i| &list[i]) else {
+            return self.note(if list.is_empty() {
+                "no changes to review"
+            } else {
+                "no changed part at the caret"
+            });
+        };
+        let new = revert_hunk(&self.buffer.text(), h);
+        self.replace_text_keeping_caret(&new, now);
+        let left = self.change_hunks().len();
+        if left == 0 {
+            self.agent_base = None;
+        }
+        self.note(&format!(
+            "reverted; {left} changed part{} left",
+            if left == 1 { "" } else { "s" }
+        ));
+    }
+
+    /// `editor.change.revertAll`: the text as it was before the file changed.
+    pub fn change_revert_all(&mut self, now: f64) {
+        let Some(base) = self.agent_base.take() else {
+            return self.note("no changes to review");
+        };
+        self.replace_text_keeping_caret(&base, now);
+        self.note("reverted every change");
+    }
+
+    /// `editor.change.accept`: the changes are the new baseline.
+    pub fn change_accept(&mut self) {
+        if self.agent_base.take().is_none() {
+            return self.note("no changes to review");
+        }
+        self.gutter.0 = u64::MAX;
+        self.dirty = true;
+        self.note("changes accepted");
+    }
+
+    /// `editor.change.next` and `.prev`: the caret to the next or previous
+    /// changed part, wrapping.
+    pub fn change_jump(&mut self, forward: bool) {
+        let list = self.change_hunks();
+        if list.is_empty() {
+            return self.note("no changes to review");
+        }
+        let line = self.buffer.line_of(self.buffer.cursor());
+        let target = if forward {
+            list.iter().find(|h| h.new.start > line).unwrap_or(&list[0])
+        } else {
+            list.iter()
+                .rev()
+                .find(|h| h.new.start < line)
+                .unwrap_or(&list[list.len() - 1])
+        };
+        self.note_jump();
+        let at = self
+            .buffer
+            .line_start(target.new.start.min(self.buffer.line_count() - 1));
+        self.buffer.set_cursor(at);
+        self.ensure_cursor_visible();
+        self.dirty = true;
+    }
+
+    /// A whole-text replace that leaves the caret on its line and column,
+    /// as one undo step.
+    fn replace_text_keeping_caret(&mut self, text: &str, now: f64) {
+        let (line, col) = (
+            self.buffer.line_of(self.buffer.cursor()),
+            self.buffer.col_of(self.buffer.cursor()),
+        );
+        self.buffer.set_text(text, now);
+        let line = line.min(self.buffer.line_count().saturating_sub(1));
+        let room = self.buffer.line(line).chars().count();
+        self.buffer
+            .set_cursor(self.buffer.line_start(line) + col.min(room));
+        self.gutter.0 = u64::MAX;
+        self.now_dirty(now);
     }
 
     // ---- A host's file (#560): every call is asked on a thread and its
@@ -1209,6 +1334,23 @@ impl EditorBody {
             self.centre_cursor();
             self.centre_pending = true;
         }
+    }
+
+    /// The functions, types and headings of the text, for Go to Symbol
+    /// (`infiniterm_editor::symbols`); none for a language without a table.
+    pub fn symbol_rows(&self) -> Vec<infiniterm_core::model::SymbolRow> {
+        let Some(lang) = self.language else {
+            return vec![];
+        };
+        infiniterm_editor::symbols::symbols(lang, &self.buffer.text())
+            .into_iter()
+            .map(|s| infiniterm_core::model::SymbolRow {
+                name: s.name,
+                kind: s.kind.to_string(),
+                line: s.line,
+                depth: s.depth,
+            })
+            .collect()
     }
 
     pub fn go_to_line(&mut self, line: usize) {
@@ -2415,12 +2557,12 @@ impl EditorBody {
                 "right" => self.buffer.for_each_cursor(|b| b.move_line_end(shift)),
                 "up" if m.control => {
                     if !ro {
-                        self.buffer.swap_line_up(now)
+                        self.buffer.for_each_cursor(|b| b.swap_line_up(now))
                     }
                 }
                 "down" if m.control => {
                     if !ro {
-                        self.buffer.swap_line_down(now)
+                        self.buffer.for_each_cursor(|b| b.swap_line_down(now))
                     }
                 }
                 "up" => {
@@ -2438,7 +2580,7 @@ impl EditorBody {
                 }
                 "d" if shift => {
                     if !ro {
-                        self.buffer.duplicate_line(now)
+                        self.buffer.for_each_cursor(|b| b.duplicate_line(now))
                     }
                 }
                 "d" => self.buffer.select_word_or_next(),
@@ -2499,8 +2641,21 @@ impl EditorBody {
                         self.buffer.for_each_cursor(|b| b.delete_word_back(now))
                     }
                 }
-                "up" => self.buffer.for_each_cursor(|b| b.move_up(shift)),
-                "down" => self.buffer.for_each_cursor(|b| b.move_down(shift)),
+                // Alt+Up/Down move the lines, Shift+Alt+Up/Down copy them:
+                // the VS Code and Cursor chords beside the Sublime ones
+                // (#602). They replace the caret moves Option+Up/Down had.
+                "up" | "down" => {
+                    if !ro {
+                        let up = key == "up";
+                        self.buffer.for_each_cursor(|b| {
+                            if shift {
+                                b.copy_lines(up, now)
+                            } else {
+                                b.move_lines(up, now)
+                            }
+                        })
+                    }
+                }
                 _ => {
                     // Option+letter types the character macOS composed.
                     if let Some(ch) = k.key_char.as_deref().filter(|c| !ro && !c.is_empty()) {
@@ -2918,8 +3073,10 @@ impl EditorBody {
     /// diff against (no repo, or an untitled buffer).
     fn gutter_for(&mut self) -> (&[GutterMark], &[usize]) {
         if (self.gutter.0, self.gutter.1) != (self.buffer.version, self.loads) {
-            let (marks, deleted) = match &self.git_head {
-                Some(head) => gutter_marks(head, &self.buffer.text()),
+            // While a change on disk is under review the gutter shows what it
+            // changed; otherwise what differs from HEAD.
+            let (marks, deleted) = match self.agent_base.as_ref().or(self.git_head.as_ref()) {
+                Some(base) => gutter_marks(base, &self.buffer.text()),
                 None => (vec![], vec![]),
             };
             self.gutter = (self.buffer.version, self.loads, marks, deleted);
@@ -4870,6 +5027,56 @@ mod tests {
 
     // A picture is shown, never read into the buffer, and a save must not
     // write the empty buffer over it: the file is still the picture after.
+    // Review what changed under the buffer (#602): the clean buffer takes the
+    // disk's text, remembers what it had, marks the difference and lets each
+    // changed part be stepped to, reverted or accepted.
+    #[test]
+    fn a_file_changed_on_disk_is_reviewed_and_reverted_part_by_part() {
+        let dir = std::env::temp_dir().join(format!("ift-editor-review-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("r.txt").to_string_lossy().to_string();
+        std::fs::write(&path, "a\nb\nc\nd\ne\n").unwrap();
+        let mut b = body();
+        b.load(&path, false, 0.);
+        assert!(b.agent_base.is_none());
+        b.apply_disk_text(&path, "a\nB\nc\nd\nE\n".into(), 1.);
+        assert_eq!(b.change_hunks().len(), 2);
+        assert!(b.take_events().iter().any(|e| matches!(e,
+            EditorEvent::Notice(n) if n.contains("2 changed parts are marked"))));
+        // A second change on disk keeps the first baseline.
+        b.apply_disk_text(&path, "a\nB\nc\nd\nE\nf\n".into(), 2.);
+        assert_eq!(b.change_hunks().len(), 2, "e became E and f, one part");
+        // Step to the next change from the top, then back around.
+        b.buffer.set_cursor(0);
+        b.change_jump(true);
+        assert_eq!(b.buffer.line_of(b.buffer.cursor()), 1);
+        b.change_jump(true);
+        assert_eq!(b.buffer.line_of(b.buffer.cursor()), 4);
+        b.change_jump(false);
+        assert_eq!(b.buffer.line_of(b.buffer.cursor()), 1);
+        // Revert the one under the caret: the other stays, it is one undo.
+        b.change_revert(3.);
+        assert_eq!(b.buffer.text(), "a\nb\nc\nd\nE\nf\n");
+        assert_eq!(b.change_hunks().len(), 1);
+        assert!(b.is_dirty(), "the buffer now differs from the disk");
+        b.buffer.undo();
+        assert_eq!(b.buffer.text(), "a\nB\nc\nd\nE\nf\n");
+        // Off a changed part there is nothing to revert.
+        b.buffer.set_cursor(0);
+        b.change_revert(4.);
+        assert_eq!(b.buffer.text(), "a\nB\nc\nd\nE\nf\n");
+        b.change_accept();
+        assert!(b.agent_base.is_none());
+        assert!(b.change_hunks().is_empty());
+        // Revert everything back to the baseline taken at the next change.
+        b.apply_disk_text(&path, "x\n".into(), 5.);
+        assert!(b.agent_base.is_some());
+        b.change_revert_all(6.);
+        assert_eq!(b.buffer.text(), "a\nB\nc\nd\nE\nf\n");
+        assert!(b.agent_base.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_picture_is_never_read_as_text_nor_written_back() {
         let dir = std::env::temp_dir().join(format!(

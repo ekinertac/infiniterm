@@ -228,6 +228,8 @@ const TAB: &[Def] = &[
 const EDITOR_TOP: &[Def] = &[
     titled("card.save", "Save"),
     titled("card.find", "Find\u{2026}"),
+    titled("editor.goToSymbol", "Go to Symbol\u{2026}"),
+    titled("editor.goToFile", "Go to File\u{2026}"),
     titled("editor.goToLine", "Go to Line\u{2026}"),
     Def::Separator,
     Def::Submenu {

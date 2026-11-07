@@ -18,7 +18,7 @@ use gpui::{
 use infiniterm_core::agent_state::AgentState;
 use infiniterm_core::format_zoom::format_zoom;
 use infiniterm_core::palette::{
-    fit_label, highlight, rank, sectionise, step_index, RankedItem, MAX_RESULTS,
+    fit_label, highlight, rank, rank_loose, sectionise, step_index, RankedItem, MAX_RESULTS,
 };
 use infiniterm_core::palette_usage::{recent_keys, usage_bonus, use_key, RECENT_LIMIT};
 use infiniterm_core::saved_layout::CardKind;
@@ -152,7 +152,13 @@ impl AppView {
         // filters, and `rank` is stable, so what is left is in the order
         // the source listed it. See `Source::keeps_its_order`.
         if source.keeps_its_order() {
-            let ranked = rank(&items, &self.model.palette.query, MAX_RESULTS, |_| 0.);
+            // A symbol is found by its letters (`gtsym` for `get_symbols`), as
+            // a path is, not by whole words as a command is.
+            let ranked = if source == infiniterm_core::model::palette_state::Source::Symbols {
+                rank_loose(&items, &self.model.palette.query, MAX_RESULTS, |_| 0.)
+            } else {
+                rank(&items, &self.model.palette.query, MAX_RESULTS, |_| 0.)
+            };
             // The active theme stands apart from the choices: an untitled
             // heading after it is a rule (#72). Only while it leads the list;
             // typing may filter it away.
@@ -174,9 +180,13 @@ impl AppView {
             return (ranked.items, ranked.total, heads);
         }
         let usage = &self.model.usage;
-        let ranked = rank(&items, &self.model.palette.query, MAX_RESULTS, |id| {
-            usage_bonus(usage.get(&use_key(source.id(), id)))
-        });
+        let bonus = |id: &str| usage_bonus(usage.get(&use_key(source.id(), id)));
+        // Paths are matched loosely: `edbody` is `src/editor_body.rs`.
+        let ranked = if source == infiniterm_core::model::palette_state::Source::Files {
+            rank_loose(&items, &self.model.palette.query, MAX_RESULTS, bonus)
+        } else {
+            rank(&items, &self.model.palette.query, MAX_RESULTS, bonus)
+        };
         let recent = recent_keys(usage, RECENT_LIMIT);
         // Both halves are titled: the five you actually use, then everything
         // else. Without a heading on the second one the list read as one run
