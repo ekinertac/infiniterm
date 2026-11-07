@@ -635,6 +635,7 @@ impl AppView {
                 Effect::CheckForUpdate => match &self.updater {
                     Some(u) => {
                         u.check_now();
+                        self.model.update_state = infiniterm_core::update::UpdateState::Checking;
                         self.model.notify("checking for updates…");
                     }
                     None => self
@@ -1921,6 +1922,7 @@ fn start_updater(app: &mut AppView) {
             .and_then(|exe| infiniterm_core::update::linux_install(exe.parent()?, &home_dir()));
         if let (Some(install), Some(running)) = (install, app.build) {
             app.updater = Some(crate::updater::start_notifier(running, install));
+            app.model.update_state = infiniterm_core::update::UpdateState::Current;
         }
     }
     // macOS and Windows: download, check, stage, swap at the next restart.
@@ -1945,6 +1947,7 @@ fn start_updater(app: &mut AppView) {
             return;
         };
         app.updater = Some(crate::updater::start(bundle.to_path_buf(), running, dir));
+        app.model.update_state = infiniterm_core::update::UpdateState::Current;
     }
 }
 
@@ -1962,6 +1965,10 @@ impl AppView {
                         "infiniterm {} ({}) is ready: restart to install (Cmd+Ctrl+Shift+R)",
                         s.version, s.build
                     );
+                    self.model.update_state = infiniterm_core::update::UpdateState::Ready {
+                        version: s.version.clone(),
+                        build: s.build,
+                    };
                     u.staged = Some(s);
                     text
                 }
@@ -1971,10 +1978,21 @@ impl AppView {
                     hint,
                 } => {
                     u.available = Some((build, hint));
+                    self.model.update_state = infiniterm_core::update::UpdateState::Available {
+                        version: version.clone(),
+                        build,
+                    };
                     format!("infiniterm {version} ({build}) is out. To install it: {hint}")
                 }
-                crate::updater::UpdateEvent::UpToDate => "infiniterm is up to date".into(),
-                crate::updater::UpdateEvent::Failed(e) => format!("update check failed: {e}"),
+                crate::updater::UpdateEvent::UpToDate => {
+                    self.model.update_state = infiniterm_core::update::UpdateState::Current;
+                    "infiniterm is up to date".into()
+                }
+                crate::updater::UpdateEvent::Failed(e) => {
+                    self.model.update_state =
+                        infiniterm_core::update::UpdateState::Failed(e.clone());
+                    format!("update check failed: {e}")
+                }
             });
         }
         if let Some(text) = said {

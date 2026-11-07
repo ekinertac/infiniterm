@@ -343,8 +343,80 @@ pub fn relaunch_env() -> Vec<(String, String)> {
     env
 }
 
+/// What the updater last said, kept on the model so `ift update status` can
+/// answer from the running app. A caller of `app.update.check` has no other
+/// way to know when the download is staged and `app.update.install` is safe.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum UpdateState {
+    /// No updater runs here: a development build, a scratch instance, or an
+    /// app that is not in Applications.
+    #[default]
+    Off,
+    /// A check was asked for and has not answered.
+    Checking,
+    /// Nothing newer is staged.
+    Current,
+    /// A newer build is downloaded and verified; a restart installs it.
+    Ready {
+        version: String,
+        build: u64,
+    },
+    /// Linux: a newer build is out and nothing is downloaded.
+    Available {
+        version: String,
+        build: u64,
+    },
+    Failed(String),
+}
+
+impl UpdateState {
+    /// The `ift update status` line: the state, then tab separated details.
+    /// One line whatever the reason says, so a script can split it on tabs.
+    pub fn status_line(&self) -> String {
+        match self {
+            UpdateState::Off => "off".into(),
+            UpdateState::Checking => "checking".into(),
+            UpdateState::Current => "current".into(),
+            UpdateState::Ready { version, build } => format!("ready\t{version}\t{build}"),
+            UpdateState::Available { version, build } => format!("available\t{version}\t{build}"),
+            UpdateState::Failed(reason) => {
+                format!(
+                    "failed\t{}",
+                    reason.split_whitespace().collect::<Vec<_>>().join(" ")
+                )
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_status_line_names_the_state_and_its_details() {
+        use super::UpdateState::*;
+        assert_eq!(Off.status_line(), "off");
+        assert_eq!(Checking.status_line(), "checking");
+        assert_eq!(Current.status_line(), "current");
+        let ready = Ready {
+            version: "0.6.9".into(),
+            build: 1105,
+        };
+        assert_eq!(ready.status_line(), "ready\t0.6.9\t1105");
+        let out = Available {
+            version: "0.6.9".into(),
+            build: 1105,
+        };
+        assert_eq!(out.status_line(), "available\t0.6.9\t1105");
+    }
+
+    // A reason with a line break or a tab would split the one line.
+    #[test]
+    fn a_failure_reason_stays_on_one_line() {
+        let line = super::UpdateState::Failed("curl:\n\texit 22".into()).status_line();
+        assert_eq!(line, "failed\tcurl: exit 22");
+        assert_eq!(line.lines().count(), 1);
+        assert_eq!(line.matches('\t').count(), 1);
+    }
 
     // Windows has no install location to name, so the rule is the opposite
     // shape: anywhere a person unpacked it, except a build tree.
