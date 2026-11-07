@@ -3505,6 +3505,8 @@ pub enum FormatOutcome {
     Changed,
     /// The formatter was missing, failed, printed nothing or timed out.
     Failed(String),
+}
+
 /// The find panel's right column in world px, `cw` being one column of the
 /// panel's label font: the toggle buttons, a column of air, the count.
 fn find_right_w(cw: f64) -> f64 {
@@ -5149,6 +5151,8 @@ mod tests {
             .take_events()
             .iter()
             .any(|e| matches!(e, EditorEvent::Notice(n) if n == "saved f.rs")));
+    }
+
     // Review what changed under the buffer (#602): the clean buffer takes the
     // disk's text, remembers what it had, marks the difference and lets each
     // changed part be stepped to, reverted or accepted.
