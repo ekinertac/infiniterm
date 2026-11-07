@@ -124,7 +124,11 @@ NSSystemAdministrationUsageDescription|do administrator tasks"
 # stack a second entry. NSSendFileTypes, not NSSendTypes: Finder sends files,
 # and a service for a selected file or folder is matched by its file type;
 # NSSendTypes names pasteboard types, and public.folder is not one, so the
-# item never showed (2026-10-10). No entitlement: the app is not sandboxed.
+# item never showed (2026-10-10). It still did not show on macOS 15 with that
+# fix, so NSRequiredContext names Finder as the sender: the three Finder
+# services installed on the dev Mac that do show (Open in Cursor, iTerm2,
+# VSCode) all carry it and ours was the one without. No entitlement: the app
+# is not sandboxed.
 /usr/libexec/PlistBuddy -c "Delete :NSServices" "$plist" 2>/dev/null || true
 for cmd in \
     "Add :NSServices array" \
@@ -133,6 +137,8 @@ for cmd in \
     "Add :NSServices:0:NSMenuItem:default string Open in infiniterm" \
     "Add :NSServices:0:NSMessage string openFolder" \
     "Add :NSServices:0:NSPortName string infiniterm" \
+    "Add :NSServices:0:NSRequiredContext dict" \
+    "Add :NSServices:0:NSRequiredContext:NSApplicationIdentifier string com.apple.finder" \
     "Add :NSServices:0:NSSendFileTypes array" \
     "Add :NSServices:0:NSSendFileTypes:0 string public.folder"; do
     /usr/libexec/PlistBuddy -c "$cmd" "$plist"
