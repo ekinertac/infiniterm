@@ -104,11 +104,18 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
         .keymap
         .iter()
         .any(|(c, id)| c == chord && id == "app.palette");
+    // Go to File (#602) is what you reach for from inside the text, so a lock
+    // must not hide it either: whatever chord the keymap binds to it.
+    let opens_files = kind == Some(crate::saved_layout::CardKind::Editor)
+        && m.keymap
+            .iter()
+            .any(|(c, id)| c == chord && id == "editor.goToFile");
     if locked
         && !is_workspace_switch(chord)
         && !is_locked_carveout(chord, kind)
         && !leaves
         && !opens_palette
+        && !opens_files
     {
         let id = if kind == Some(crate::saved_layout::CardKind::Diff) {
             crate::editor_keys::diff_lock_override(chord)
@@ -853,6 +860,26 @@ mod tests {
         assert!(second.x > first.x, "{second:?} beside {first:?}");
     }
 
+    // #509: opt-in. A new terminal card opened from a terminal card starts
+    // in that card's directory; anything else still starts at startingDir.
+    #[test]
+    fn a_new_card_can_inherit_the_directory_when_the_setting_is_on() {
+        let mut h = Harness::new();
+        let first = h.focused().id.clone();
+        h.m.card_mut(&first).unwrap().cwd = "/Users/me/Code/api".into();
+        let start = h.m.start_dir.clone();
+        h.run("card.new.terminal");
+        assert_eq!(h.focused().cwd, start, "off by default");
+
+        h.m.apply_settings_text(r#"{"cards.newCardInheritsDirectory": true}"#);
+        h.m.set_focus(Some(&first));
+        h.run("card.new.terminal");
+        assert_eq!(h.focused().cwd, "/Users/me/Code/api");
+        h.m.set_focus(Some(&first));
+        h.run("card.new.ungrouped");
+        assert_eq!(h.focused().cwd, "/Users/me/Code/api");
+    }
+
     // A new card takes the GROUP and not the directory. Opening a card to
     // start something else and landing in the last card's directory is a
     // surprise you only notice after you have run the wrong command there.
@@ -1378,6 +1405,53 @@ mod tests {
                 ..
             }
         )));
+    // Cmd+P (#602): in an editor card it asks the ui for the file list; the
+    // list becomes the palette's rows; a pick is a tab, and a file already
+    // open is switched to rather than opened twice. Anywhere else it is
+    // nothing.
+    #[test]
+    fn go_to_file_lists_the_folder_and_a_pick_opens_or_switches_to_a_tab() {
+        use crate::saved_layout::CardKind;
+        let mut h = Harness::new();
+        assert!(
+            !h.run("editor.goToFile")
+                .iter()
+                .any(|e| matches!(e, Effect::Editor { .. })),
+            "not on a terminal"
+        );
+        let id = h.m.add_card(
+            "/h",
+            NewCard {
+                kind: CardKind::Editor,
+                path: Some("/h/a.rs".into()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&id));
+        let effects = h.run("editor.goToFile");
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::GoToFile,
+                ..
+            }
+        )));
+        // The ui would have listed the folder; stand in for it.
+        h.m.open_quick_files(&id, "/h/", vec!["a.rs".into(), "src/b.rs".into()]);
+        assert_eq!(h.m.palette.source, Some(Source::Files));
+        let items = h.m.palette_items(Source::Files, &[]);
+        assert_eq!(
+            items.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            ["a.rs", "src/b.rs"]
+        );
+        h.m.palette_run(Source::Files, "src/b.rs");
+        assert_eq!(h.m.card(&id).unwrap().tabs, vec!["/h/a.rs", "/h/src/b.rs"]);
+        assert_eq!(h.m.card(&id).unwrap().path.as_deref(), Some("/h/src/b.rs"));
+        h.m.open_quick_files(&id, "/h", vec!["a.rs".into()]);
+        h.m.palette_run(Source::Files, "a.rs");
+        let card = h.m.card(&id).unwrap();
+        assert_eq!(card.tabs.len(), 2, "switched, not opened again");
+        assert_eq!(card.path.as_deref(), Some("/h/a.rs"));
     }
 
     // Cmd+Ctrl+S: the file's names, a paste into the focused card, and the
@@ -4363,6 +4437,11 @@ mod tests {
         assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the comment toggle");
         assert_eq!(resolve_chord(&h.m, "cmd+z"), None, "the buffer's undo");
         assert_eq!(resolve_chord(&h.m, "cmd+s").as_deref(), Some("card.save"));
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+p").as_deref(),
+            Some("editor.goToFile"),
+            "go to file works from inside the text"
+        );
     }
 
     // A diff card is the editor's body in a read-only mode, so it locks the

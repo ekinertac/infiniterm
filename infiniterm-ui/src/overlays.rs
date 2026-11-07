@@ -180,9 +180,13 @@ impl AppView {
             return (ranked.items, ranked.total, heads);
         }
         let usage = &self.model.usage;
-        let ranked = rank(&items, &self.model.palette.query, MAX_RESULTS, |id| {
-            usage_bonus(usage.get(&use_key(source.id(), id)))
-        });
+        let bonus = |id: &str| usage_bonus(usage.get(&use_key(source.id(), id)));
+        // Paths are matched loosely: `edbody` is `src/editor_body.rs`.
+        let ranked = if source == infiniterm_core::model::palette_state::Source::Files {
+            rank_loose(&items, &self.model.palette.query, MAX_RESULTS, bonus)
+        } else {
+            rank(&items, &self.model.palette.query, MAX_RESULTS, bonus)
+        };
         let recent = recent_keys(usage, RECENT_LIMIT);
         // Both halves are titled: the five you actually use, then everything
         // else. Without a heading on the second one the list read as one run

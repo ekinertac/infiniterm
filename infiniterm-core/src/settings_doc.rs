@@ -215,6 +215,15 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "always starts at startingDir: a new card is a new place to work.",
         ],
     ),
+    (
+        "cards.newCardInheritsDirectory",
+        &[
+            "Whether a new terminal card (Cmd+T, Cmd+Alt+T) starts in the",
+            "directory of the terminal card you opened it from, instead of",
+            "startingDir. Off by default. From any other kind of card, or",
+            "with nothing selected, it still starts at startingDir.",
+        ],
+    ),
     ("canvas", &["The canvas itself: zooming and panning."]),
     (
         "canvas.zoomSensitivity",
@@ -443,7 +452,12 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     ),
     (
         "ui.backgroundImageFit",
-        &["\"cover\" fills the window and crops the edges; \"contain\" shows the whole picture."],
+        &[
+            "\"cover\" fills the window and crops the edges; \"contain\" shows the whole picture;",
+            "\"top-left\" fills like cover but pins the picture's top-left corner to the window's,",
+            "so only the right and bottom are cropped; \"actual-size\" draws it at its own size from",
+            "the top-left corner and never rescales it when the window is resized.",
+        ],
     ),
     (
         "ui.workspaceIsolation",

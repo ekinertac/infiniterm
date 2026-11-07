@@ -13,6 +13,7 @@
 //! `infiniterm-ui` owns those and calls in.
 use ropey::Rope;
 use std::ops::Range;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Two spaces, CodeMirror's default indent unit and what `indentWithTab`
 /// inserts.
@@ -37,6 +38,21 @@ struct Edit {
     /// Whether the next typed character may merge into this step.
     typing: bool,
     when: f64,
+    /// The multi-cursor pass this edit belongs to (`for_each_cursor`), 0
+    /// for an edit of its own. Undo and redo take every edit of a group in
+    /// one step, so Cmd+Z undoes what one keypress did at every cursor.
+    group: u32,
+}
+
+/// What a group of edits needs beyond the edits: every cursor before it and
+/// after it, so undo and redo bring the whole set back, not only the one the
+/// last edit happened at. `typing` is whether every edit was plain typed
+/// text, which lets the next keypress at the same cursors join the group.
+#[derive(Clone, Debug)]
+struct GroupRec {
+    before: Vec<CursorState>,
+    after: Vec<CursorState>,
+    typing: bool,
 }
 
 /// One cursor's own state, standing in for the primary's three fields
@@ -72,6 +88,14 @@ pub struct Buffer {
     fixed_folds: Vec<(usize, usize)>,
     undo: Vec<Edit>,
     redo: Vec<Edit>,
+    /// The records of the multi-cursor groups the stacks hold, by id.
+    groups: std::collections::HashMap<u32, GroupRec>,
+    /// The id the last group got; ids only grow.
+    last_group_id: u32,
+    /// The group `apply` stamps its edits with while `for_each_cursor` runs
+    /// (0 outside it), and whether every edit of the pass was plain typing.
+    open_group: u32,
+    group_typing: bool,
     /// Bumped by every change, so a view can cache against it.
     pub version: u64,
 }
@@ -92,6 +116,10 @@ impl Buffer {
             fixed_folds: vec![],
             undo: vec![],
             redo: vec![],
+            groups: Default::default(),
+            last_group_id: 0,
+            open_group: 0,
+            group_typing: true,
             version: 0,
         }
     }
@@ -209,8 +237,72 @@ impl Buffer {
 
     // ----- movement -----
 
-    fn place(&mut self, idx: usize, select: bool) {
+    /// How many chars either side of a position are read to find the
+    /// grapheme-cluster boundaries around it: a cluster is a few chars (a
+    /// family emoji is eleven), never this many, and a line can be a megabyte.
+    const GRAPHEME_WINDOW: usize = 64;
+
+    /// The grapheme-cluster boundaries near `idx`, as char indices. A
+    /// cluster is what a person calls one character: a letter with its
+    /// combining accent, an emoji with its skin tone or a joined family, a
+    /// flag (two regional indicators), a CRLF. The caret and Backspace move
+    /// by these, so a caret never lands inside an emoji and Delete never
+    /// leaves half of one behind.
+    fn boundaries_near(&self, idx: usize) -> Vec<usize> {
+        let lo = idx.saturating_sub(Self::GRAPHEME_WINDOW);
+        let hi = (idx + Self::GRAPHEME_WINDOW).min(self.len_chars());
+        let s = self.slice(lo..hi);
+        let mut out = Vec::new();
+        let mut at = lo;
+        for g in s.graphemes(true) {
+            out.push(at);
+            at += g.chars().count();
+        }
+        out.push(at);
+        out
+    }
+
+    /// The boundary just before `idx` (the start of the cluster to its left).
+    pub fn grapheme_before(&self, idx: usize) -> usize {
         let idx = idx.min(self.len_chars());
+        if idx == 0 {
+            return 0;
+        }
+        let near = self.boundaries_near(idx);
+        near.iter()
+            .rev()
+            .find(|b| **b < idx)
+            .copied()
+            .unwrap_or(idx - 1)
+    }
+
+    /// The boundary just after `idx` (the end of the cluster to its right).
+    pub fn grapheme_after(&self, idx: usize) -> usize {
+        let len = self.len_chars();
+        if idx >= len {
+            return len;
+        }
+        let near = self.boundaries_near(idx);
+        near.iter().find(|b| **b > idx).copied().unwrap_or(idx + 1)
+    }
+
+    /// `idx` itself when it is a boundary, else the one before it: a click or
+    /// a vertical move can name a char in the middle of a cluster.
+    fn snap_to_boundary(&self, idx: usize) -> usize {
+        let idx = idx.min(self.len_chars());
+        if idx == 0 || idx == self.len_chars() {
+            return idx;
+        }
+        let near = self.boundaries_near(idx);
+        near.iter()
+            .rev()
+            .find(|b| **b <= idx)
+            .copied()
+            .unwrap_or(idx)
+    }
+
+    fn place(&mut self, idx: usize, select: bool) {
+        let idx = self.snap_to_boundary(idx);
         if select {
             if self.anchor.is_none() {
                 self.anchor = Some(self.cursor);
@@ -248,7 +340,7 @@ impl Buffer {
             self.place(r.start, false);
             return;
         }
-        self.place(self.cursor.saturating_sub(1), select);
+        self.place(self.grapheme_before(self.cursor), select);
     }
 
     pub fn move_right(&mut self, select: bool) {
@@ -257,7 +349,7 @@ impl Buffer {
             self.place(r.end, false);
             return;
         }
-        self.place(self.cursor + 1, select);
+        self.place(self.grapheme_after(self.cursor), select);
     }
 
     fn vertical(&mut self, delta: i64, select: bool) {
@@ -419,10 +511,14 @@ impl Buffer {
         self.goal_col = None;
         self.version += 1;
         self.redo.clear();
+        if self.open_group != 0 {
+            self.group_typing &= typing && old.is_empty();
+        }
         // A typed character extends the step before it when that step was
-        // typing too, ended where this begins, and is recent.
-        if typing && old.is_empty() {
-            if let Some(last) = self.undo.last_mut() {
+        // typing too, ended where this begins, and is recent. Never across a
+        // multi-cursor group: the group joins whole (`for_each_cursor`).
+        if typing && old.is_empty() && self.open_group == 0 {
+            if let Some(last) = self.undo.last_mut().filter(|l| l.group == 0) {
                 let end = last.at + last.new.chars().count();
                 if last.typing && last.old.is_empty() && end == at && now - last.when <= GROUP_MS {
                     last.new.push_str(&new);
@@ -440,6 +536,7 @@ impl Buffer {
             cursor_after: self.cursor,
             typing,
             when: now,
+            group: self.open_group,
         });
     }
 
@@ -472,6 +569,14 @@ impl Buffer {
             self.apply(r.start, inner, new, after, false, now);
             self.select_range(r.start + 1..after);
             return;
+        }
+        if self.selection().is_none() && matches!(c, '}' | ')' | ']') {
+            // Typed over an auto-inserted closer it is a step over, not a
+            // new bracket, and the dedent is the closer's own line's matter.
+            let over = self.cursor < self.len_chars() && self.text.char(self.cursor) == c;
+            if !over {
+                self.dedent_before_closer(now);
+            }
         }
         let next = (self.cursor < self.len_chars()).then(|| self.text.char(self.cursor));
         if self.selection().is_none() {
@@ -524,81 +629,157 @@ impl Buffer {
                 return;
             }
         }
+        // After an opening bracket the next line is one level deeper, as in
+        // every editor: `if x {` then Enter. Looking left past spaces, so
+        // `foo(  ` counts; text to the right of the caret moves down with it.
+        let before_caret: String =
+            self.slice(self.line_start(self.line_of(self.cursor))..self.cursor);
+        let opens = before_caret
+            .trim_end_matches([' ', '\t'])
+            .chars()
+            .next_back()
+            .is_some_and(|c| matches!(c, '{' | '(' | '['));
+        let indent = if opens && self.selection().is_none() {
+            format!("{indent}{INDENT}")
+        } else {
+            indent
+        };
         self.insert(&format!("\n{indent}"), now);
     }
 
-    /// Cmd+Shift+D: a copy of the current line inserted right below it,
-    /// caret on the copy at the same column.
+    /// Typing a closing bracket on a line that holds only indent takes one
+    /// level of it off first, so the `}` lines up with what opened the block.
+    /// A tab counts as a level; so does a run of `INDENT` spaces. Anything
+    /// else on the line, or no indent to take, leaves it alone.
+    fn dedent_before_closer(&mut self, now: f64) {
+        let line_start = self.line_start(self.line_of(self.cursor));
+        let before = self.slice(line_start..self.cursor);
+        if before.is_empty() || !before.chars().all(|c| c == ' ' || c == '\t') {
+            return;
+        }
+        let cut = if before.ends_with('\t') {
+            1
+        } else if before.ends_with(INDENT) {
+            INDENT.chars().count()
+        } else {
+            return;
+        };
+        let at = self.cursor - cut;
+        let old = self.slice(at..self.cursor);
+        self.apply(at, old, String::new(), at, false, now);
+    }
+
+    /// The first and last line the selection touches, or the caret's line.
+    /// A selection that ends at column 0 of a line leaves that line out,
+    /// as VS Code and Sublime do, so a Cmd+L selection moves one line.
+    fn touched_lines(&self) -> (usize, usize) {
+        match self.selection() {
+            Some(r) => {
+                let first = self.line_of(r.start);
+                let mut last = self.line_of(r.end);
+                if last > first && self.col_of(r.end) == 0 {
+                    last -= 1;
+                }
+                (first, last)
+            }
+            None => {
+                let line = self.line_of(self.cursor);
+                (line, line)
+            }
+        }
+    }
+
+    /// Puts the selection back after a line edit moved its text by `shift`
+    /// chars; `apply` leaves only a caret.
+    fn reselect(&mut self, anchor: Option<usize>, shift: i64) {
+        let len = self.len_chars();
+        self.anchor = anchor.map(|a| ((a as i64 + shift).max(0) as usize).min(len));
+    }
+
+    /// Cmd+Shift+D: a selection inside one line is copied right after
+    /// itself and the copy stays selected; otherwise every line the
+    /// selection touches (or the caret's line) is copied below, caret and
+    /// selection on the copy.
     pub fn duplicate_line(&mut self, now: f64) {
-        let line = self.line_of(self.cursor);
-        let col = self.col_of(self.cursor);
-        let text = self.line(line);
-        let last = line + 1 >= self.line_count();
-        let at = if last {
-            self.len_chars()
+        if let Some(r) = self.selection() {
+            if self.line_of(r.start) == self.line_of(r.end) {
+                let text = self.slice(r.clone());
+                let len = text.chars().count();
+                let backwards = self.anchor.is_some_and(|a| a > self.cursor);
+                self.apply(r.end, String::new(), text, r.end + len, false, now);
+                let (from, to) = (r.end, r.end + len);
+                let (a, c) = if backwards { (to, from) } else { (from, to) };
+                self.anchor = Some(a);
+                self.cursor = c;
+                return;
+            }
+        }
+        self.copy_lines(false, now);
+    }
+
+    /// Shift+Alt+Down (below) and Shift+Alt+Up (above): copies every line
+    /// the selection touches. The caret and selection go with the copy, so
+    /// below they move down by the block and above they keep their place.
+    pub fn copy_lines(&mut self, up: bool, now: f64) {
+        let (first, last) = self.touched_lines();
+        let (anchor, cursor) = (self.anchor, self.cursor);
+        let start = self.line_start(first);
+        let body = self.slice(start..self.line_end(last));
+        let body_len = body.chars().count() as i64;
+        let no_newline = self.line_span_end(last) == self.line_end(last);
+        let (at, new, shift) = if up {
+            (start, format!("{body}\n"), 0)
+        } else if no_newline {
+            (self.len_chars(), format!("\n{body}"), body_len + 1)
         } else {
-            self.line_start(line + 1)
+            (self.line_span_end(last), format!("{body}\n"), body_len + 1)
         };
-        let new = if last {
-            format!("\n{text}")
-        } else {
-            format!("{text}\n")
-        };
-        let cursor_after = at + usize::from(last) + col.min(text.chars().count());
+        let cursor_after = (cursor as i64 + shift) as usize;
         self.apply(at, String::new(), new, cursor_after, false, now);
+        self.reselect(anchor, shift);
     }
 
-    /// Ctrl+Cmd+Up: the current line trades places with the one above it.
+    /// Alt+Up / Alt+Down: every line the selection touches trades places
+    /// with the line above or below it, and the selection moves with them.
+    pub fn move_lines(&mut self, up: bool, now: f64) {
+        let (first, last) = self.touched_lines();
+        if (up && first == 0) || (!up && last + 1 >= self.line_count()) {
+            return;
+        }
+        let (anchor, cursor) = (self.anchor, self.cursor);
+        let neighbour = if up { first - 1 } else { last + 1 };
+        let (lo, hi) = if up {
+            (neighbour, last)
+        } else {
+            (first, neighbour)
+        };
+        let start = self.line_start(lo);
+        let end = self.line_span_end(hi);
+        let old = self.slice(start..end);
+        let body = self.slice(self.line_start(first)..self.line_end(last));
+        let other = self.line(neighbour);
+        let other_len = other.chars().count() as i64;
+        let tail = if end > self.line_end(hi) { "\n" } else { "" };
+        let (new, shift) = if up {
+            (format!("{body}\n{other}{tail}"), -(other_len + 1))
+        } else {
+            (format!("{other}\n{body}{tail}"), other_len + 1)
+        };
+        let cursor_after = (cursor as i64 + shift).max(0) as usize;
+        self.apply(start, old, new, cursor_after, false, now);
+        self.reselect(anchor, shift);
+    }
+
+    /// Ctrl+Cmd+Up: the line (or every selected line) trades places with
+    /// the one above it.
     pub fn swap_line_up(&mut self, now: f64) {
-        let line = self.line_of(self.cursor);
-        if line == 0 {
-            return;
-        }
-        let col = self.col_of(self.cursor);
-        let start = self.line_start(line - 1);
-        let last = line + 1 >= self.line_count();
-        let end = if last {
-            self.len_chars()
-        } else {
-            self.line_start(line + 1)
-        };
-        let old = self.slice(start..end);
-        let cur = self.line(line);
-        let prev = self.line(line - 1);
-        let new = if last {
-            format!("{cur}\n{prev}")
-        } else {
-            format!("{cur}\n{prev}\n")
-        };
-        let cursor_after = start + col.min(cur.chars().count());
-        self.apply(start, old, new, cursor_after, false, now);
+        self.move_lines(true, now);
     }
 
-    /// Ctrl+Cmd+Down: the current line trades places with the one below it.
+    /// Ctrl+Cmd+Down: the line (or every selected line) trades places with
+    /// the one below it.
     pub fn swap_line_down(&mut self, now: f64) {
-        let line = self.line_of(self.cursor);
-        if line + 1 >= self.line_count() {
-            return;
-        }
-        let col = self.col_of(self.cursor);
-        let start = self.line_start(line);
-        let last = line + 2 >= self.line_count();
-        let end = if last {
-            self.len_chars()
-        } else {
-            self.line_start(line + 2)
-        };
-        let old = self.slice(start..end);
-        let cur = self.line(line);
-        let next = self.line(line + 1);
-        let new = if last {
-            format!("{next}\n{cur}")
-        } else {
-            format!("{next}\n{cur}\n")
-        };
-        let cur_start_after = start + next.chars().count() + 1;
-        let cursor_after = cur_start_after + col.min(cur.chars().count());
-        self.apply(start, old, new, cursor_after, false, now);
+        self.move_lines(false, now);
     }
 
     /// The char just past line `line`'s own text: where the next line's
@@ -1150,15 +1331,75 @@ impl Buffer {
     /// (`extra` empty, overwhelmingly the common case) it is one direct
     /// call, no allocation.
     ///
-    /// Known limit (v1, 2026-09-25): each cursor's edit still goes through
-    /// `apply` on its own, so a multi-cursor edit is several undo steps,
-    /// not one; Cmd+Z undoes them one cursor at a time, right to left,
-    /// rather than the whole set at once.
+    /// Each cursor's edit still goes through `apply` on its own, but the
+    /// edits of one pass share a group (`Edit::group`), so one Cmd+Z undoes
+    /// the pass at every cursor and brings every cursor back. Typed
+    /// characters at the same set of cursors, within the typing window, join
+    /// the previous group, as they do for one cursor.
     pub fn for_each_cursor(&mut self, mut f: impl FnMut(&mut Self)) {
         if self.extra.is_empty() {
             f(self);
             return;
         }
+        let before_states = self.all_cursor_states();
+        let first_edit = self.undo.len();
+        self.last_group_id += 1;
+        self.open_group = self.last_group_id;
+        self.group_typing = true;
+        self.run_cursors(&mut f);
+        self.open_group = 0;
+        if self.undo.len() > first_edit {
+            self.close_group(first_edit, before_states);
+        }
+    }
+
+    /// Files the edits a pass made from `first_edit` on as one group, or as
+    /// a continuation of the previous one.
+    fn close_group(&mut self, first_edit: usize, before: Vec<CursorState>) {
+        let id = self.last_group_id;
+        let after = self.all_cursor_states();
+        let positions = |states: &[CursorState]| {
+            let mut v: Vec<usize> = states.iter().map(|c| c.cursor).collect();
+            v.sort_unstable();
+            v
+        };
+        let joins = first_edit
+            .checked_sub(1)
+            .and_then(|i| self.undo.get(i))
+            .filter(|prev| prev.group != 0)
+            .and_then(|prev| {
+                let rec = self.groups.get(&prev.group)?;
+                let recent = self
+                    .undo
+                    .last()
+                    .is_some_and(|e| e.when - prev.when <= GROUP_MS);
+                let same_spots = positions(&rec.after) == positions(&before)
+                    && before.iter().all(|c| c.anchor.is_none());
+                (self.group_typing && rec.typing && recent && same_spots).then_some(prev.group)
+            });
+        match joins {
+            Some(prev) => {
+                for e in &mut self.undo[first_edit..] {
+                    e.group = prev;
+                }
+                if let Some(rec) = self.groups.get_mut(&prev) {
+                    rec.after = after;
+                }
+            }
+            None => {
+                self.groups.insert(
+                    id,
+                    GroupRec {
+                        before,
+                        after,
+                        typing: self.group_typing,
+                    },
+                );
+            }
+        }
+    }
+
+    fn run_cursors(&mut self, f: &mut impl FnMut(&mut Self)) {
         let mut states = self.all_cursor_states();
         states.sort_by_key(|c| std::cmp::Reverse(c.cursor.max(c.anchor.unwrap_or(c.cursor))));
         let mut updated: Vec<CursorState> = Vec::with_capacity(states.len());
@@ -1376,13 +1617,16 @@ impl Buffer {
         let prev = self.text.char(self.cursor - 1);
         let next = (self.cursor < self.len_chars()).then(|| self.text.char(self.cursor));
         // Between an auto-inserted pair, both go.
-        let n = if closing_of(prev).is_some() && next == closing_of(prev) {
-            2
+        let pair = closing_of(prev).is_some() && next == closing_of(prev);
+        // Otherwise the whole cluster to the left: an emoji, a letter and its
+        // accent, a CRLF, not half of one.
+        let at = if pair {
+            self.cursor - 1
         } else {
-            1
+            self.grapheme_before(self.cursor)
         };
-        let at = self.cursor - 1;
-        let old = self.slice(at..at + n);
+        let end = if pair { self.cursor + 1 } else { self.cursor };
+        let old = self.slice(at..end);
         self.apply(at, old, String::new(), at, false, now);
     }
 
@@ -1396,7 +1640,7 @@ impl Buffer {
             return;
         }
         let at = self.cursor;
-        let old = self.slice(at..at + 1);
+        let old = self.slice(at..self.grapheme_after(at));
         self.apply(at, old, String::new(), at, false, now);
     }
 
@@ -1433,10 +1677,25 @@ impl Buffer {
         self.apply(r.start, old, s.to_string(), after, false, now);
     }
 
+    /// Undoes the last edit, or every edit of the last multi-cursor group
+    /// and puts all its cursors back.
     pub fn undo(&mut self) {
         let Some(e) = self.undo.pop() else {
             return;
         };
+        let group = e.group;
+        self.undo_edit(e);
+        if group != 0 {
+            while let Some(e) = self.undo.pop_if(|e| e.group == group) {
+                self.undo_edit(e);
+            }
+            if let Some(rec) = self.groups.get(&group).cloned() {
+                self.restore_cursors(&rec.before);
+            }
+        }
+    }
+
+    fn undo_edit(&mut self, e: Edit) {
         let new_len = e.new.chars().count();
         self.text.remove(e.at..e.at + new_len);
         self.text.insert(e.at, &e.old);
@@ -1452,6 +1711,19 @@ impl Buffer {
         let Some(e) = self.redo.pop() else {
             return;
         };
+        let group = e.group;
+        self.redo_edit(e);
+        if group != 0 {
+            while let Some(e) = self.redo.pop_if(|e| e.group == group) {
+                self.redo_edit(e);
+            }
+            if let Some(rec) = self.groups.get(&group).cloned() {
+                self.restore_cursors(&rec.after);
+            }
+        }
+    }
+
+    fn redo_edit(&mut self, e: Edit) {
         let old_len = e.old.chars().count();
         self.text.remove(e.at..e.at + old_len);
         self.text.insert(e.at, &e.new);
@@ -1461,6 +1733,24 @@ impl Buffer {
         self.goal_col = None;
         self.version += 1;
         self.undo.push(e);
+    }
+
+    /// The cursors of a group's before or after, the first as the primary.
+    fn restore_cursors(&mut self, states: &[CursorState]) {
+        let len = self.len_chars();
+        let clamp = |c: &CursorState| CursorState {
+            cursor: c.cursor.min(len),
+            anchor: c.anchor.map(|a| a.min(len)),
+            goal_col: None,
+        };
+        let Some((first, rest)) = states.split_first() else {
+            return;
+        };
+        let first = clamp(first);
+        self.cursor = first.cursor;
+        self.anchor = first.anchor;
+        self.goal_col = None;
+        self.extra = rest.iter().map(clamp).collect();
     }
 
     /// The bracket matching the one at or just before the cursor, for the
@@ -1548,6 +1838,87 @@ mod tests {
         }
     }
 
+    /// Three cursors at the start of three lines.
+    fn three_cursors() -> Buffer {
+        let mut b = Buffer::new("x\ny\nz");
+        b.set_cursor(0);
+        b.add_cursor_line(true);
+        b.add_cursor_line(true);
+        assert_eq!(b.cursor_count(), 3);
+        b
+    }
+
+    fn type_at_every_cursor(b: &mut Buffer, s: &str, now: &mut f64) {
+        for c in s.chars() {
+            b.for_each_cursor(|b| b.type_char(c, *now));
+            *now += 10.;
+        }
+    }
+
+    #[test]
+    fn a_multi_cursor_edit_is_one_undo_step_that_restores_every_cursor() {
+        let mut b = three_cursors();
+        let cursors = b.all_selections();
+        b.for_each_cursor(|b| b.type_char('a', 0.));
+        b.for_each_cursor(|b| b.move_line_end(false));
+        let at_ends = b.all_selections();
+        b.for_each_cursor(|b| b.type_char('!', 1000.));
+        assert_eq!(b.text(), "ax!\nay!\naz!");
+        b.undo();
+        assert_eq!(b.text(), "ax\nay\naz", "the typing at all three");
+        assert_eq!(b.all_selections(), at_ends);
+        b.undo();
+        assert_eq!(b.text(), "x\ny\nz");
+        assert_eq!(b.all_selections(), cursors);
+        b.redo();
+        b.redo();
+        assert_eq!(b.text(), "ax!\nay!\naz!");
+        assert_eq!(b.cursor_count(), 3);
+    }
+
+    #[test]
+    fn typing_at_every_cursor_in_one_run_is_one_step_and_a_pause_starts_another() {
+        let mut b = three_cursors();
+        let mut t = 0.;
+        type_at_every_cursor(&mut b, "ab", &mut t);
+        t += 1000.;
+        type_at_every_cursor(&mut b, "c", &mut t);
+        assert_eq!(b.text(), "abcx\nabcy\nabcz");
+        b.undo();
+        assert_eq!(b.text(), "abx\naby\nabz");
+        b.undo();
+        assert_eq!(b.text(), "x\ny\nz");
+        assert!(!b.can_undo());
+        b.redo();
+        b.redo();
+        assert_eq!(b.text(), "abcx\nabcy\nabcz");
+    }
+
+    #[test]
+    fn moving_the_cursors_ends_the_typing_run() {
+        let mut b = three_cursors();
+        let mut t = 0.;
+        type_at_every_cursor(&mut b, "a", &mut t);
+        b.for_each_cursor(|b| b.move_left(false));
+        type_at_every_cursor(&mut b, "b", &mut t);
+        assert_eq!(b.text(), "bax\nbay\nbaz");
+        b.undo();
+        assert_eq!(b.text(), "ax\nay\naz");
+    }
+
+    #[test]
+    fn a_single_cursor_edit_never_joins_a_group() {
+        let mut b = three_cursors();
+        let mut t = 0.;
+        type_at_every_cursor(&mut b, "a", &mut t);
+        b.collapse_to_primary();
+        b.type_char('b', t);
+        b.undo();
+        assert_eq!(b.text(), "ax\nay\naz", "only the lone b");
+        b.undo();
+        assert_eq!(b.text(), "x\ny\nz");
+    }
+
     // CodeMirror's history: keys within 500 ms of each other are one step.
     #[test]
     fn typing_in_one_run_is_one_undo_step() {
@@ -1600,6 +1971,56 @@ mod tests {
         b.newline(0.);
         assert_eq!(b.text(), "  foo\n  ");
         assert_eq!(b.cursor(), 8);
+    }
+
+    // After an opening bracket the next line is one level deeper, and a
+    // closing bracket typed on an indent-only line steps back out (#602).
+    #[test]
+    fn enter_after_an_opening_bracket_indents_and_a_closer_dedents() {
+        let mut b = Buffer::new("if x {");
+        b.move_doc_end(false);
+        b.newline(0.);
+        assert_eq!(b.text(), "if x {\n  ");
+        b.type_char('}', 1.);
+        assert_eq!(b.text(), "if x {\n}", "the closer lines up with the opener");
+        // Under existing indent, trailing spaces after the bracket, a tab.
+        let mut b = Buffer::new("  call(  ");
+        b.move_doc_end(false);
+        b.newline(0.);
+        assert_eq!(b.text(), "  call(  \n    ");
+        let mut b = Buffer::new("\tfn f() {");
+        b.move_doc_end(false);
+        b.newline(0.);
+        assert_eq!(
+            b.text(),
+            "\tfn f() {\n\t  ",
+            "a tab keeps its tab, plus one level"
+        );
+        // Text after the caret moves down with the new indent.
+        let mut b = Buffer::new("a [b]");
+        b.set_cursor(3);
+        b.newline(0.);
+        assert_eq!(b.text(), "a [\n  b]");
+        // No opener: as before. A selection is replaced, not indented.
+        let mut b = Buffer::new("x = 1");
+        b.move_doc_end(false);
+        b.newline(0.);
+        assert_eq!(b.text(), "x = 1\n");
+        // A closer after text on the line is a plain character, and over an
+        // existing closer it is a step over, never a dedent.
+        let mut b = Buffer::new("  a ");
+        b.move_doc_end(false);
+        b.type_char(')', 0.);
+        assert_eq!(b.text(), "  a )");
+        let mut b = Buffer::new("f(\n  )");
+        b.set_cursor(5);
+        b.type_char(')', 0.);
+        assert_eq!(b.text(), "f(\n  )", "stepped over");
+        assert_eq!(b.cursor(), 6);
+        // A closer with no indent to take is untouched.
+        let mut b = Buffer::new("");
+        b.type_char('}', 0.);
+        assert_eq!(b.text(), "}");
     }
 
     #[test]
@@ -1745,6 +2166,146 @@ mod tests {
         b.set_cursor(4); // on "c", the last line
         b.swap_line_down(3.);
         assert_eq!(b.text(), "a\nb\nc");
+    }
+
+    // A person's "one character" is a grapheme cluster (#602): the caret and
+    // the deletions move by those, so an emoji is never split in half.
+    #[test]
+    fn the_caret_and_deletions_move_by_grapheme_cluster() {
+        // Family (5 chars), a flag (2), a thumbs up with a skin tone (2), an
+        // "e" with a combining acute (2), a CRLF (2), and plain letters.
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        let flag = "\u{1F1F9}\u{1F1F7}";
+        let thumb = "\u{1F44D}\u{1F3FD}";
+        let acute = "e\u{0301}";
+        let text = format!("a{family}{flag}{thumb}{acute}\r\nb");
+        let mut b = Buffer::new(&text);
+        b.set_cursor(1);
+        let mut stops = vec![b.cursor()];
+        for _ in 0..6 {
+            b.move_right(false);
+            stops.push(b.cursor());
+        }
+        // a | family | flag | thumb | e+acute | CRLF | b
+        assert_eq!(stops, vec![1, 6, 8, 10, 12, 14, 15]);
+        for expect in [14, 12, 10, 8, 6, 1] {
+            b.move_left(false);
+            assert_eq!(b.cursor(), expect);
+        }
+        // A click or a vertical move into the middle of a cluster snaps back.
+        b.set_cursor(3);
+        assert_eq!(b.cursor(), 1);
+        b.set_cursor(7);
+        assert_eq!(b.cursor(), 6);
+        // Shift+arrow selects whole clusters.
+        b.set_cursor(1);
+        b.move_right(true);
+        assert_eq!(b.selection(), Some(1..6));
+        // Backspace and Delete take a whole cluster.
+        let mut b = Buffer::new(&text);
+        b.set_cursor(6);
+        b.backspace(0.);
+        assert_eq!(b.text(), format!("a{flag}{thumb}{acute}\r\nb"));
+        b.set_cursor(1);
+        b.delete_forward(1.);
+        assert_eq!(b.text(), format!("a{thumb}{acute}\r\nb"));
+        let mut b = Buffer::new("x\r\ny");
+        b.set_cursor(3);
+        b.backspace(0.);
+        assert_eq!(b.text(), "xy", "a CRLF is one line break, not two");
+        // Plain text is unchanged, and the ends are still the ends.
+        let mut b = Buffer::new("ab");
+        b.move_left(false);
+        assert_eq!(b.cursor(), 0);
+        b.move_right(false);
+        b.move_right(false);
+        b.move_right(false);
+        assert_eq!(b.cursor(), 2);
+        b.backspace(0.);
+        assert_eq!(b.text(), "a");
+    }
+
+    #[test]
+    fn a_pair_still_goes_together_and_a_long_line_is_not_read_whole() {
+        let mut b = Buffer::new("()");
+        b.set_cursor(1);
+        b.backspace(0.);
+        assert_eq!(b.text(), "");
+        // A megabyte line: a step reads a window, not the line.
+        let long = "x".repeat(1_000_000);
+        let mut b = Buffer::new(&long);
+        b.set_cursor(500_000);
+        let started = std::time::Instant::now();
+        for _ in 0..200 {
+            b.move_right(false);
+        }
+        assert_eq!(b.cursor(), 500_200);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn move_lines_carries_the_whole_selection() {
+        let mut b = Buffer::new("a\nb\nc\nd");
+        b.select_range(2..5); // "b\nc", anchor first
+        b.move_lines(true, 0.);
+        assert_eq!(b.text(), "b\nc\na\nd");
+        assert_eq!(b.selection(), Some(0..3));
+        b.move_lines(false, 1.);
+        assert_eq!(b.text(), "a\nb\nc\nd");
+        assert_eq!(b.selection(), Some(2..5));
+        // Down onto the last line, which has no newline of its own.
+        b.move_lines(false, 2.);
+        assert_eq!(b.text(), "a\nd\nb\nc");
+        assert_eq!(b.selection(), Some(4..7));
+        b.move_lines(false, 3.);
+        assert_eq!(b.text(), "a\nd\nb\nc");
+    }
+
+    #[test]
+    fn move_lines_leaves_out_a_line_the_selection_only_reaches_the_start_of() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.select_range(2..4); // "b\n", ends at column 0 of "c"
+        b.move_lines(false, 0.);
+        assert_eq!(b.text(), "a\nc\nb");
+    }
+
+    #[test]
+    fn move_lines_keeps_a_backwards_selection_backwards() {
+        let mut b = Buffer::new("a\nb\nc");
+        b.set_cursor(3);
+        b.select_to(2);
+        b.move_lines(true, 0.);
+        assert_eq!(b.text(), "b\na\nc");
+        assert_eq!(b.anchor(), Some(1));
+        assert_eq!(b.cursor(), 0);
+    }
+
+    #[test]
+    fn duplicate_line_on_a_selection() {
+        // Inside one line: the selected text is copied after itself.
+        let mut b = Buffer::new("foo bar");
+        b.select_range(0..3);
+        b.duplicate_line(0.);
+        assert_eq!(b.text(), "foofoo bar");
+        assert_eq!(b.selection(), Some(3..6));
+        // Across lines: the block is copied below and stays selected.
+        let mut b = Buffer::new("a\nb\nc");
+        b.select_range(0..3);
+        b.duplicate_line(0.);
+        assert_eq!(b.text(), "a\nb\na\nb\nc");
+        assert_eq!(b.selection(), Some(4..7));
+    }
+
+    #[test]
+    fn copy_lines_above_keeps_the_selection_on_the_upper_copy() {
+        let mut b = Buffer::new("a\nb");
+        b.set_cursor(2);
+        b.copy_lines(true, 0.);
+        assert_eq!(b.text(), "a\nb\nb");
+        assert_eq!(b.cursor(), 2);
+        b.copy_lines(false, 1.);
+        assert_eq!(b.text(), "a\nb\nb\nb");
+        assert_eq!(b.cursor(), 4);
     }
 
     #[test]

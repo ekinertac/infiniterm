@@ -463,6 +463,11 @@ pub enum EditorAction {
     /// Cmd+R in a locked editor: the ui lists the open file's symbols and
     /// hands them to `Model::open_symbols`.
     GoToSymbol,
+    /// Cmd+P: the ui lists the files under the card's folder and hands them
+    /// to `Model::open_quick_files`.
+    GoToFile,
+    /// Reviewing what changed on disk under the buffer (an agent's edit).
+    Change(ChangeAct),
     ToggleBlame,
     ToggleExplorer,
     /// Leave the text: the lock is dropped and the card is an ordinary card
@@ -490,6 +495,25 @@ pub struct SymbolRow {
 pub struct SymbolsState {
     pub card_id: String,
     pub rows: Vec<SymbolRow>,
+/// What Go to File lists and which card a pick opens into.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuickOpen {
+    pub card_id: String,
+    /// The folder the paths are relative to.
+    pub root: String,
+    pub files: Vec<String>,
+}
+
+/// What a reviewer does with the parts of a file that changed on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeAct {
+    /// Put the changed part under the caret back.
+    Revert,
+    RevertAll,
+    /// Keep the changes; the gutter goes back to showing HEAD's.
+    Accept,
+    Next,
+    Prev,
 }
 
 /// A pure function in `infiniterm_editor::transforms`, picked by name here
@@ -859,6 +883,9 @@ pub struct Model {
     pub snippets: Vec<crate::snippets::Snippet>,
     /// The symbols Go to Symbol lists while its palette is up.
     pub symbols: Option<SymbolsState>,
+    /// The files Go to File (Cmd+P) lists, read by the ui when it opens
+    /// (`EditorAction::GoToFile`) and kept while its palette is up.
+    pub quick_open: Option<QuickOpen>,
     pub theme_current: Option<String>,
     pub theme_before_preview: Option<String>,
     /// The colour the window had when its colour picker opened (`Some(None)`:
@@ -1069,6 +1096,7 @@ impl Model {
             theme_names: vec![],
             snippets: vec![],
             symbols: None,
+            quick_open: None,
             theme_current: None,
             theme_before_preview: None,
             window_color_before_preview: None,
