@@ -62,6 +62,41 @@ pub fn write_bytes_atomically(path: &Path, contents: &[u8]) -> std::io::Result<(
     std::fs::rename(&tmp, path)
 }
 
+/// `write_atomically` for a file only its owner may read (ids that let anyone
+/// push to a phone). The temp file is made 0600 before any byte goes in, and
+/// set again in case a crash left one behind with wider rights, so there is
+/// no moment the contents are readable by others. The result is 0600 even
+/// when the target existed at 0644. Elsewhere than unix it is the plain write.
+pub fn write_private_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let target = resolve_link(path);
+        let path = target.as_path();
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let tmp = dir.join(format!(".{name}.infiniterm-tmp"));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(contents.as_bytes())?;
+        drop(file);
+        std::fs::rename(&tmp, path)
+    }
+    #[cfg(not(unix))]
+    {
+        write_atomically(path, contents)
+    }
+}
+
 /// Sublime's hot exit: one file per editor card holding its UNSAVED buffer,
 /// written as you type and read back in place of the file when the card is
 /// restored. A draft exists only while the buffer differs from the file:
@@ -164,6 +199,27 @@ pub fn dir_list(path: &str) -> Result<Vec<DirEntry>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_write_is_0600_even_over_a_wider_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("infiniterm-private-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secret");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        // A temp left by a crash with wide rights must not leak either.
+        let stale = dir.join(".secret.infiniterm-tmp");
+        std::fs::write(&stale, "x").unwrap();
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_private_atomically(&path, "new\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\n");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert!(!stale.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // Symlinks need a privilege on Windows; the rule they test is the Mac's.
     #[cfg(unix)]

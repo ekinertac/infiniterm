@@ -28,7 +28,7 @@ fn parse(args: &[String]) -> Result<Action<'_>, &'static str> {
             let mut url = None;
             let mut rest = args[1..].iter().map(String::as_str);
             while let Some(a) = rest.next() {
-                if a == "--server" {
+                if a == "--server" && url.is_none() {
                     url = Some(rest.next().ok_or(ADD_USAGE)?);
                 } else if id.is_none() && !a.starts_with("--") {
                     id = Some(a);
@@ -52,11 +52,18 @@ fn parse(args: &[String]) -> Result<Action<'_>, &'static str> {
     }
 }
 
-/// An https url with no whitespace: the file is split on whitespace, so a
-/// space would make a line the parser rejects.
+/// An https url with a host and no whitespace: the file is split on
+/// whitespace, so a space would make a line the parser rejects. The host is
+/// what follows `https://` up to the first `/`, `?` or `#`; it must not be
+/// empty or start with `@` (a user-info part with nothing after it).
 fn valid_url(url: &str) -> bool {
-    url.len() > "https://".len()
-        && url.starts_with("https://")
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    !authority.is_empty()
+        && !authority.starts_with('@')
+        && !authority.ends_with('@')
         && !url.chars().any(char::is_whitespace)
 }
 
@@ -103,7 +110,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 Err(e) => fail(&path, &e),
             }
         }
-        Action::Remove { id } => match write(&path, &remove_device(&devices, id)) {
+        Action::Remove { id } => match remove(&path, &devices, id) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => fail(&path, &e),
         },
@@ -128,15 +135,17 @@ fn write(path: &Path, devices: &[Device]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    infiniterm_core::files::write_atomically(path, &devices_file_text(devices))?;
-    // The ids are capabilities to push to a phone: owner only, even when the
-    // file already existed with wider permissions.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    // The ids are capabilities to push to a phone: owner only from the first
+    // byte, even when the file already existed with wider permissions.
+    infiniterm_core::files::write_private_atomically(path, &devices_file_text(devices))
+}
+
+/// Writes nothing, and makes no directory or file, when the id is not there.
+fn remove(path: &Path, devices: &[Device], id: &str) -> std::io::Result<()> {
+    if devices.iter().all(|d| d.id != id) {
+        return Ok(());
     }
-    Ok(())
+    write(path, &remove_device(devices, id))
 }
 
 #[cfg(test)]
@@ -166,6 +175,18 @@ mod tests {
             a(&["add", "abc", "--server"]),
             a(&["add", "abc", "--server", "http://x.example"]),
             a(&["add", "abc", "--server", "https://"]),
+            a(&["add", "abc", "--server", "https:///x"]),
+            a(&["add", "abc", "--server", "https://@host.example"]),
+            a(&["add", "abc", "--server", "https://@"]),
+            a(&["add", "abc", "--server", "https://?q=1"]),
+            a(&[
+                "add",
+                "abc",
+                "--server",
+                "https://a.example",
+                "--server",
+                "https://b.example",
+            ]),
             a(&["add", "bad id", "--server", "https://x.example"]),
             a(&["add", "a/b", "--server", "https://x.example"]),
             a(&["add", "abc", "def", "--server", "https://x.example"]),
@@ -190,6 +211,27 @@ mod tests {
         ] {
             assert_eq!(parse(&bad), Err(USAGE), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn removing_an_absent_id_writes_nothing() {
+        let dir = std::env::temp_dir().join(format!("infiniterm-pushcmd-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("sub").join(DEVICES_FILE);
+        remove(&path, &[], "abc").unwrap();
+        assert!(!dir.exists(), "no directory or file made");
+
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(DEVICES_FILE);
+        let d = Device {
+            url: "https://x.example".into(),
+            id: "abc".into(),
+        };
+        remove(&path, std::slice::from_ref(&d), "other").unwrap();
+        assert!(!path.exists());
+        remove(&path, &[d], "abc").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
