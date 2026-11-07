@@ -289,6 +289,29 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "editor.lsp.enabled",
+        &[
+            "Ask a language server for completions while you type in an editor.",
+            "Off by default: a server is an external program (rust-analyzer,",
+            "typescript-language-server, pyright, gopls) you install yourself, and",
+            "rust-analyzer on a large crate holds a lot of memory. A server starts",
+            "when you first type in a file of its language and stops when the last",
+            "tab of that language closes; with this off nothing runs. Used for",
+            "Rust, JavaScript, TypeScript, TSX, Python and Go; markdown, JSON, YAML",
+            "and TOML keep their own completions. Only files on this machine.",
+        ],
+    ),
+    (
+        "editor.lsp.servers",
+        &[
+            "Your own server per language, as editor.lsp.servers.<language>, with the",
+            "language's name as the status bar shows it (rust, javascript, typescript,",
+            "tsx, python, go). The command is words separated by spaces, no shell, and",
+            "must speak LSP over stdin and stdout, for example",
+            "\"editor.lsp.servers.python\": \"pylsp\".",
+        ],
+    ),
+    (
         "editor.selectionColor",
         &[
             "Behind selected text, as a CSS colour. Empty is the theme's yellow: a",

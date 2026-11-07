@@ -9,6 +9,7 @@ publish.workspace = true
 # logic tests run headless, the way `infiniterm-term` does for the grid.
 [dependencies]
 ropey = "1.6"
+serde_json = "1"
 regex = "1"
 unicode-segmentation = "1"
 similar = "2"
