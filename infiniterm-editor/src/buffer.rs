@@ -37,6 +37,21 @@ struct Edit {
     /// Whether the next typed character may merge into this step.
     typing: bool,
     when: f64,
+    /// The multi-cursor pass this edit belongs to (`for_each_cursor`), 0
+    /// for an edit of its own. Undo and redo take every edit of a group in
+    /// one step, so Cmd+Z undoes what one keypress did at every cursor.
+    group: u32,
+}
+
+/// What a group of edits needs beyond the edits: every cursor before it and
+/// after it, so undo and redo bring the whole set back, not only the one the
+/// last edit happened at. `typing` is whether every edit was plain typed
+/// text, which lets the next keypress at the same cursors join the group.
+#[derive(Clone, Debug)]
+struct GroupRec {
+    before: Vec<CursorState>,
+    after: Vec<CursorState>,
+    typing: bool,
 }
 
 /// One cursor's own state, standing in for the primary's three fields
@@ -72,6 +87,14 @@ pub struct Buffer {
     fixed_folds: Vec<(usize, usize)>,
     undo: Vec<Edit>,
     redo: Vec<Edit>,
+    /// The records of the multi-cursor groups the stacks hold, by id.
+    groups: std::collections::HashMap<u32, GroupRec>,
+    /// The id the last group got; ids only grow.
+    last_group_id: u32,
+    /// The group `apply` stamps its edits with while `for_each_cursor` runs
+    /// (0 outside it), and whether every edit of the pass was plain typing.
+    open_group: u32,
+    group_typing: bool,
     /// Bumped by every change, so a view can cache against it.
     pub version: u64,
 }
@@ -92,6 +115,10 @@ impl Buffer {
             fixed_folds: vec![],
             undo: vec![],
             redo: vec![],
+            groups: Default::default(),
+            last_group_id: 0,
+            open_group: 0,
+            group_typing: true,
             version: 0,
         }
     }
@@ -419,10 +446,14 @@ impl Buffer {
         self.goal_col = None;
         self.version += 1;
         self.redo.clear();
+        if self.open_group != 0 {
+            self.group_typing &= typing && old.is_empty();
+        }
         // A typed character extends the step before it when that step was
-        // typing too, ended where this begins, and is recent.
-        if typing && old.is_empty() {
-            if let Some(last) = self.undo.last_mut() {
+        // typing too, ended where this begins, and is recent. Never across a
+        // multi-cursor group: the group joins whole (`for_each_cursor`).
+        if typing && old.is_empty() && self.open_group == 0 {
+            if let Some(last) = self.undo.last_mut().filter(|l| l.group == 0) {
                 let end = last.at + last.new.chars().count();
                 if last.typing && last.old.is_empty() && end == at && now - last.when <= GROUP_MS {
                     last.new.push_str(&new);
@@ -440,6 +471,7 @@ impl Buffer {
             cursor_after: self.cursor,
             typing,
             when: now,
+            group: self.open_group,
         });
     }
 
@@ -1189,15 +1221,75 @@ impl Buffer {
     /// (`extra` empty, overwhelmingly the common case) it is one direct
     /// call, no allocation.
     ///
-    /// Known limit (v1, 2026-09-25): each cursor's edit still goes through
-    /// `apply` on its own, so a multi-cursor edit is several undo steps,
-    /// not one; Cmd+Z undoes them one cursor at a time, right to left,
-    /// rather than the whole set at once.
+    /// Each cursor's edit still goes through `apply` on its own, but the
+    /// edits of one pass share a group (`Edit::group`), so one Cmd+Z undoes
+    /// the pass at every cursor and brings every cursor back. Typed
+    /// characters at the same set of cursors, within the typing window, join
+    /// the previous group, as they do for one cursor.
     pub fn for_each_cursor(&mut self, mut f: impl FnMut(&mut Self)) {
         if self.extra.is_empty() {
             f(self);
             return;
         }
+        let before_states = self.all_cursor_states();
+        let first_edit = self.undo.len();
+        self.last_group_id += 1;
+        self.open_group = self.last_group_id;
+        self.group_typing = true;
+        self.run_cursors(&mut f);
+        self.open_group = 0;
+        if self.undo.len() > first_edit {
+            self.close_group(first_edit, before_states);
+        }
+    }
+
+    /// Files the edits a pass made from `first_edit` on as one group, or as
+    /// a continuation of the previous one.
+    fn close_group(&mut self, first_edit: usize, before: Vec<CursorState>) {
+        let id = self.last_group_id;
+        let after = self.all_cursor_states();
+        let positions = |states: &[CursorState]| {
+            let mut v: Vec<usize> = states.iter().map(|c| c.cursor).collect();
+            v.sort_unstable();
+            v
+        };
+        let joins = first_edit
+            .checked_sub(1)
+            .and_then(|i| self.undo.get(i))
+            .filter(|prev| prev.group != 0)
+            .and_then(|prev| {
+                let rec = self.groups.get(&prev.group)?;
+                let recent = self
+                    .undo
+                    .last()
+                    .is_some_and(|e| e.when - prev.when <= GROUP_MS);
+                let same_spots = positions(&rec.after) == positions(&before)
+                    && before.iter().all(|c| c.anchor.is_none());
+                (self.group_typing && rec.typing && recent && same_spots).then_some(prev.group)
+            });
+        match joins {
+            Some(prev) => {
+                for e in &mut self.undo[first_edit..] {
+                    e.group = prev;
+                }
+                if let Some(rec) = self.groups.get_mut(&prev) {
+                    rec.after = after;
+                }
+            }
+            None => {
+                self.groups.insert(
+                    id,
+                    GroupRec {
+                        before,
+                        after,
+                        typing: self.group_typing,
+                    },
+                );
+            }
+        }
+    }
+
+    fn run_cursors(&mut self, f: &mut impl FnMut(&mut Self)) {
         let mut states = self.all_cursor_states();
         states.sort_by_key(|c| std::cmp::Reverse(c.cursor.max(c.anchor.unwrap_or(c.cursor))));
         let mut updated: Vec<CursorState> = Vec::with_capacity(states.len());
@@ -1472,10 +1564,25 @@ impl Buffer {
         self.apply(r.start, old, s.to_string(), after, false, now);
     }
 
+    /// Undoes the last edit, or every edit of the last multi-cursor group
+    /// and puts all its cursors back.
     pub fn undo(&mut self) {
         let Some(e) = self.undo.pop() else {
             return;
         };
+        let group = e.group;
+        self.undo_edit(e);
+        if group != 0 {
+            while let Some(e) = self.undo.pop_if(|e| e.group == group) {
+                self.undo_edit(e);
+            }
+            if let Some(rec) = self.groups.get(&group).cloned() {
+                self.restore_cursors(&rec.before);
+            }
+        }
+    }
+
+    fn undo_edit(&mut self, e: Edit) {
         let new_len = e.new.chars().count();
         self.text.remove(e.at..e.at + new_len);
         self.text.insert(e.at, &e.old);
@@ -1491,6 +1598,19 @@ impl Buffer {
         let Some(e) = self.redo.pop() else {
             return;
         };
+        let group = e.group;
+        self.redo_edit(e);
+        if group != 0 {
+            while let Some(e) = self.redo.pop_if(|e| e.group == group) {
+                self.redo_edit(e);
+            }
+            if let Some(rec) = self.groups.get(&group).cloned() {
+                self.restore_cursors(&rec.after);
+            }
+        }
+    }
+
+    fn redo_edit(&mut self, e: Edit) {
         let old_len = e.old.chars().count();
         self.text.remove(e.at..e.at + old_len);
         self.text.insert(e.at, &e.new);
@@ -1500,6 +1620,24 @@ impl Buffer {
         self.goal_col = None;
         self.version += 1;
         self.undo.push(e);
+    }
+
+    /// The cursors of a group's before or after, the first as the primary.
+    fn restore_cursors(&mut self, states: &[CursorState]) {
+        let len = self.len_chars();
+        let clamp = |c: &CursorState| CursorState {
+            cursor: c.cursor.min(len),
+            anchor: c.anchor.map(|a| a.min(len)),
+            goal_col: None,
+        };
+        let Some((first, rest)) = states.split_first() else {
+            return;
+        };
+        let first = clamp(first);
+        self.cursor = first.cursor;
+        self.anchor = first.anchor;
+        self.goal_col = None;
+        self.extra = rest.iter().map(clamp).collect();
     }
 
     /// The bracket matching the one at or just before the cursor, for the
@@ -1585,6 +1723,87 @@ mod tests {
                 b.type_char(c, *t);
             }
         }
+    }
+
+    /// Three cursors at the start of three lines.
+    fn three_cursors() -> Buffer {
+        let mut b = Buffer::new("x\ny\nz");
+        b.set_cursor(0);
+        b.add_cursor_line(true);
+        b.add_cursor_line(true);
+        assert_eq!(b.cursor_count(), 3);
+        b
+    }
+
+    fn type_at_every_cursor(b: &mut Buffer, s: &str, now: &mut f64) {
+        for c in s.chars() {
+            b.for_each_cursor(|b| b.type_char(c, *now));
+            *now += 10.;
+        }
+    }
+
+    #[test]
+    fn a_multi_cursor_edit_is_one_undo_step_that_restores_every_cursor() {
+        let mut b = three_cursors();
+        let cursors = b.all_selections();
+        b.for_each_cursor(|b| b.type_char('a', 0.));
+        b.for_each_cursor(|b| b.move_line_end(false));
+        let at_ends = b.all_selections();
+        b.for_each_cursor(|b| b.type_char('!', 1000.));
+        assert_eq!(b.text(), "ax!\nay!\naz!");
+        b.undo();
+        assert_eq!(b.text(), "ax\nay\naz", "the typing at all three");
+        assert_eq!(b.all_selections(), at_ends);
+        b.undo();
+        assert_eq!(b.text(), "x\ny\nz");
+        assert_eq!(b.all_selections(), cursors);
+        b.redo();
+        b.redo();
+        assert_eq!(b.text(), "ax!\nay!\naz!");
+        assert_eq!(b.cursor_count(), 3);
+    }
+
+    #[test]
+    fn typing_at_every_cursor_in_one_run_is_one_step_and_a_pause_starts_another() {
+        let mut b = three_cursors();
+        let mut t = 0.;
+        type_at_every_cursor(&mut b, "ab", &mut t);
+        t += 1000.;
+        type_at_every_cursor(&mut b, "c", &mut t);
+        assert_eq!(b.text(), "abcx\nabcy\nabcz");
+        b.undo();
+        assert_eq!(b.text(), "abx\naby\nabz");
+        b.undo();
+        assert_eq!(b.text(), "x\ny\nz");
+        assert!(!b.can_undo());
+        b.redo();
+        b.redo();
+        assert_eq!(b.text(), "abcx\nabcy\nabcz");
+    }
+
+    #[test]
+    fn moving_the_cursors_ends_the_typing_run() {
+        let mut b = three_cursors();
+        let mut t = 0.;
+        type_at_every_cursor(&mut b, "a", &mut t);
+        b.for_each_cursor(|b| b.move_left(false));
+        type_at_every_cursor(&mut b, "b", &mut t);
+        assert_eq!(b.text(), "bax\nbay\nbaz");
+        b.undo();
+        assert_eq!(b.text(), "ax\nay\naz");
+    }
+
+    #[test]
+    fn a_single_cursor_edit_never_joins_a_group() {
+        let mut b = three_cursors();
+        let mut t = 0.;
+        type_at_every_cursor(&mut b, "a", &mut t);
+        b.collapse_to_primary();
+        b.type_char('b', t);
+        b.undo();
+        assert_eq!(b.text(), "ax\nay\naz", "only the lone b");
+        b.undo();
+        assert_eq!(b.text(), "x\ny\nz");
     }
 
     // CodeMirror's history: keys within 500 ms of each other are one step.

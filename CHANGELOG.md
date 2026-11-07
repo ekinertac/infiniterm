@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-06
 
+- Editor: with several cursors, one Cmd+Z undoes what a keypress did at every cursor and puts all the cursors back (Cmd+Shift+Z redoes it). Before, it undid one cursor's edit at a time. Typing a word at several cursors undoes as one step, like typing at one.
 - Editor: duplicate line (Cmd+Shift+D) and move line (Ctrl+Cmd+Up/Down) now act on every line a selection touches and keep the selection on the block. With the selection inside one line, duplicate copies the selected text after itself. Alt+Up/Down moves and Shift+Alt+Up/Down copies the lines too, as in VS Code and Cursor. Option+Up/Down no longer moves the caret in the editor.
 ### 2026-11-07
 
