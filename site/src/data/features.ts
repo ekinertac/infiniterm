@@ -36,6 +36,7 @@ export const featureGroups: FeatureGroup[] = [
       { text: '`Cmd 1` on a fitted terminal card zooms to 150% at its bottom, and `Cmd Up` / `Cmd Down` pan inside it.', href: 'guide/canvas/#zooming-in-on-a-cards-bottom' },
       { text: '`Cmd Ctrl Alt` + arrow slides a card into the next gap; `Cmd Alt Shift` + arrow moves a whole selection one block.', href: 'guide/canvas/#moving-and-resizing' },
       { text: '`Cmd Ctrl Shift` + arrow pans the canvas from the keyboard.', href: 'guide/canvas/#moving-and-resizing' },
+      { text: '"Card: copy size" and "Card: paste size" give a card, or a whole selection, the size of another card.', href: 'guide/canvas/#moving-and-resizing' },
       { text: '`Cmd Alt` + two fingers moves the focus between cards, and `Cmd Shift` + two fingers sideways switches workspace.', href: 'guide/canvas/#zoom' },
       { text: 'Select several cards with a drag or `Cmd` + click, then move, close, fit or group them together.' },
       { text: '`Cmd Alt` + arrow moves to the neighbour; `Ctrl Tab` walks the cards you used, most recent first.' },
