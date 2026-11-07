@@ -1355,6 +1355,26 @@ impl Model {
             Source::MoveTo => self.move_selection_to(id),
             Source::MoveGroupTo => self.move_group_to(id),
             Source::WindowColor => self.window_color_run(id),
+            Source::MoveTab | Source::MoveCardInto => {
+                let Some(from) = self.selection.focused_id.clone() else {
+                    return;
+                };
+                let done = if source == Source::MoveTab {
+                    self.move_tab_to_card(&from, id)
+                } else {
+                    self.move_card_into_card(&from, id)
+                };
+                if let Err(why) = done {
+                    self.notify(why);
+                }
+            }
+            Source::OpenInCard => {
+                let from = self.selection.focused_id.clone();
+                self.effects.push(Effect::PickFile {
+                    from,
+                    into: Some(id.to_string()),
+                });
+            }
             Source::SlotKind => match id {
                 "terminal" => {
                     self.fill_phantom(CardKind::Terminal, None);
@@ -1421,7 +1441,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // still opens a typed one.
     r.register("card.open.file", "Editor: open a file…", |m| {
         let from = m.selection.focused_id.clone();
-        m.effects.push(Effect::PickFile { from });
+        m.effects.push(Effect::PickFile { from, into: None });
     });
     // The agents with an adapter: each gets a new-card entry, in the active
     // card's directory like any new card.
@@ -2240,5 +2260,15 @@ impl Model {
             PathKind::File
         };
         self.open_in_card(open_plan(path, kind, None), from)
+    }
+
+    /// The same pick, for "Editor: open a file in card…" (#265): a file
+    /// becomes a tab of `into`; a folder has no tab to be and opens beside.
+    pub fn open_picked_into(&mut self, path: &str, into: &str, from: Option<&str>) {
+        if std::path::Path::new(path).is_dir() {
+            self.open_picked(path, from);
+        } else if let Err(why) = self.open_file_tab(path, Some(into), from) {
+            self.notify(why);
+        }
     }
 }

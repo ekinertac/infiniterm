@@ -315,6 +315,20 @@ const TAB_STRIP: &[Def] = &[
         "",
         "cmd+shift+t",
     ),
+    full(
+        "editor.tab.moveToCard",
+        Some("Move Tab to Card…"),
+        "editorFocus",
+        "",
+        "",
+    ),
+    full(
+        "editor.card.moveIntoCard",
+        Some("Move Card into Card…"),
+        "editorFocus",
+        "",
+        "",
+    ),
     Def::Separator,
     full("browser.reload", Some("Reload"), "browserFocus", "", ""),
     full(

@@ -604,7 +604,7 @@ impl AppView {
                 // for a clipboard is the wrong trade. The frame flushes it,
                 // the same way a terminal's OSC 52 text is flushed.
                 Effect::Copy(text) => self.clipboard_out = Some(text),
-                Effect::PickFile { from } => self.pick_request = Some(from),
+                Effect::PickFile { from, into } => self.pick_request = Some((from, into)),
                 Effect::Visual(card_id) => {
                     if let Some(b) = self.terminal_body(&card_id) {
                         b.grid.visual_enter();
