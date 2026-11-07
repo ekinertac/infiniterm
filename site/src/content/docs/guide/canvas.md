@@ -40,6 +40,13 @@ Drag a card by its top edge or its label. The card stays put while an outline fo
 
 All three place the cards the same way. Each selected card sits one gutter right of the card on its left and one gutter below the card above it. A neighbour is pulled closer or pushed away, and nothing overlaps. Cards you did not select stay where they are. `Cmd Z` undoes the whole change in one step, and the view then fits the selected cards. A maximised card refuses, with a notice: restore it first.
 
+To give several cards the size of one you already have, use two palette commands. They have no default keys.
+
+- **Card: copy size** (`card.size.copy`) remembers the focused card's width and height. The copy lives for the session only: it is not saved and not on the system clipboard.
+- **Card: paste size** (`card.size.paste`) gives that size to the focused card, or to every selected card. It is greyed until something has been copied. `Cmd Z` undoes it in one step.
+
+A pasted card is placed like the rows above: it usually keeps its top-left corner, but it can move into the gap beside a left neighbour that became smaller.
+
 `Cmd Ctrl Shift` + arrow pans the canvas that way by 120 screen pixels a press, at any zoom, and a held key repeats. `ui.panStep` changes the step, from 20 to 1000 screen pixels; a smaller number is a slower pan. The focus stays where it is, as with the mouse. The commands are `canvas.pan.left`, `.right`, `.up` and `.down`, for the palette, `ift run` and your own bindings.
 
 `Cmd Ctrl Enter` grows a card into the gap it sits in, up to the default size, from whichever corner fills that gap. It grows an empty slot the same way: arrow onto a free slot (it has the size of the card you came from), press `Cmd Ctrl Enter`, and the card you make there has the new size.
