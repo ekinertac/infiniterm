@@ -128,6 +128,76 @@ pub fn parse_topic_file(text: &str) -> Result<Option<String>, String> {
     }
 }
 
+/// The file of relay destinations, one `<url> <id>` per line.
+pub const DEVICES_FILE: &str = "push-devices";
+
+/// One phone registered with a push relay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Device {
+    pub url: String,
+    pub id: String,
+}
+
+/// The same characters and length as a topic: the id ends up in a JSON body
+/// and in the log, so nothing else is let through.
+pub fn valid_device_id(id: &str) -> bool {
+    valid_topic(id)
+}
+
+/// Blank lines are skipped and each line is trimmed (CRLF included). Any other
+/// line that is not `https://... <id>` makes the whole file invalid, so a typo
+/// is reported once instead of silently dropping a phone.
+pub fn parse_devices_file(text: &str) -> Result<Vec<Device>, String> {
+    let mut devices = Vec::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let bad = || format!("{DEVICES_FILE}: each line is an https:// relay url and a push id");
+        let mut words = line.split_whitespace();
+        let (Some(url), Some(id), None) = (words.next(), words.next(), words.next()) else {
+            return Err(bad());
+        };
+        if !url.starts_with("https://") || !valid_device_id(id) {
+            return Err(bad());
+        }
+        devices.push(Device {
+            url: url.to_string(),
+            id: id.to_string(),
+        });
+    }
+    Ok(devices)
+}
+
+/// One line per device, each ending in a newline.
+pub fn devices_file_text(devices: &[Device]) -> String {
+    devices
+        .iter()
+        .map(|d| format!("{} {}\n", d.url, d.id))
+        .collect()
+}
+
+/// A device with an id already in the list replaces that line (a phone that
+/// registers again, maybe with a new relay), keeping its place.
+pub fn add_device(devices: &[Device], device: Device) -> Vec<Device> {
+    let mut out = devices.to_vec();
+    match out.iter_mut().find(|d| d.id == device.id) {
+        Some(slot) => *slot = device,
+        None => out.push(device),
+    }
+    out
+}
+
+pub fn remove_device(devices: &[Device], id: &str) -> Vec<Device> {
+    devices.iter().filter(|d| d.id != id).cloned().collect()
+}
+
+/// Drops every device the relay reported as gone.
+pub fn remove_gone(devices: &[Device], gone: &[String]) -> Vec<Device> {
+    devices
+        .iter()
+        .filter(|d| !gone.contains(&d.id))
+        .cloned()
+        .collect()
+}
+
 /// The body to POST to the server's root.
 pub fn json_body(topic: &str, push: &Push) -> String {
     json!({
@@ -263,5 +333,89 @@ mod tests {
         assert!(should_send(true, false));
         assert!(should_send(false, true));
         assert!(should_send(false, false));
+    }
+
+    fn dev(url: &str, id: &str) -> Device {
+        Device {
+            url: url.into(),
+            id: id.into(),
+        }
+    }
+
+    #[test]
+    fn devices_file_parses_url_and_id_per_line() {
+        assert_eq!(
+            parse_devices_file("https://r.example/ abc_1\n"),
+            Ok(vec![dev("https://r.example/", "abc_1")])
+        );
+    }
+
+    #[test]
+    fn devices_file_skips_blank_lines_and_trims_crlf() {
+        assert_eq!(
+            parse_devices_file("\r\n https://r.example/ abc \r\n"),
+            Ok(vec![dev("https://r.example/", "abc")])
+        );
+        assert_eq!(parse_devices_file(""), Ok(vec![]));
+    }
+
+    #[test]
+    fn devices_file_rejects_http_url_and_bad_id() {
+        assert!(parse_devices_file("http://x a").is_err());
+        assert!(parse_devices_file("https://x a/b").is_err());
+        assert!(parse_devices_file(&format!("https://x {}", "a".repeat(65))).is_err());
+        // One bad line makes the whole file invalid.
+        assert!(parse_devices_file("https://x a\nhttp://y b\n").is_err());
+    }
+
+    #[test]
+    fn devices_file_rejects_a_line_without_two_words() {
+        assert!(parse_devices_file("https://x\n").is_err());
+        assert!(parse_devices_file("https://x a extra\n").is_err());
+    }
+
+    #[test]
+    fn add_device_replaces_the_same_id() {
+        let list = vec![dev("https://a/", "one"), dev("https://b/", "two")];
+        assert_eq!(
+            add_device(&list, dev("https://c/", "one")),
+            [dev("https://c/", "one"), dev("https://b/", "two")]
+        );
+        assert_eq!(
+            add_device(&list, dev("https://c/", "three")),
+            [
+                dev("https://a/", "one"),
+                dev("https://b/", "two"),
+                dev("https://c/", "three")
+            ]
+        );
+    }
+
+    #[test]
+    fn remove_device_and_remove_gone() {
+        let list = vec![
+            dev("https://a/", "one"),
+            dev("https://a/", "two"),
+            dev("https://a/", "three"),
+        ];
+        assert_eq!(
+            remove_device(&list, "two"),
+            [dev("https://a/", "one"), dev("https://a/", "three")]
+        );
+        assert_eq!(remove_device(&list, "nope"), list);
+        assert_eq!(
+            remove_gone(&list, &["one".to_string(), "three".to_string()]),
+            [dev("https://a/", "two")]
+        );
+        assert_eq!(remove_gone(&list, &[]), list);
+    }
+
+    #[test]
+    fn devices_file_text_round_trips() {
+        let list = vec![dev("https://a/", "one"), dev("https://b/x", "two")];
+        let text = devices_file_text(&list);
+        assert_eq!(text, "https://a/ one\nhttps://b/x two\n");
+        assert_eq!(parse_devices_file(&text), Ok(list));
+        assert_eq!(devices_file_text(&[]), "");
     }
 }
