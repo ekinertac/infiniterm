@@ -160,12 +160,19 @@ pub struct Terminal {
 }
 
 /// How the background picture fills the window (`ui.backgroundImageFit`,
-/// #97): `cover` fills it and crops, `contain` shows all of it.
+/// #97): `cover` fills it and crops, `contain` shows all of it, `top-left`
+/// fills like cover but pins the picture's corner to the window's, so the crop
+/// falls on the right and bottom, `actual-size` draws it at its own size from
+/// the corner, so resizing the window never rescales it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackgroundFit {
     Cover,
     Contain,
+    #[serde(rename = "top-left")]
+    TopLeft,
+    #[serde(rename = "actual-size")]
+    ActualSize,
 }
 
 /// A card label's corner (`ui.cardLabelPosition`). Written "top right";
@@ -241,6 +248,9 @@ pub struct Cards {
     /// Whether a card carved out of another (a split) keeps its
     /// directory. A plain new card always starts at `starting_dir`.
     pub inherit_directory: bool,
+    /// Whether a plain new card (Cmd+T) starts in the directory of the
+    /// terminal card it was opened from instead of `starting_dir` (#509).
+    pub new_card_inherits_directory: bool,
     /// The space between cards, in pixels (`cards.gap`). Every placement,
     /// split, tidy and growth works from it; 25 is the grid.
     pub gap: f64,
@@ -255,6 +265,17 @@ pub struct Canvas {
     pub momentum: bool,
 }
 
+/// Ask a language server for completions (`infiniterm-editor/src/lsp.rs`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Lsp {
+    /// Off by default: it runs a program that can hold a lot of memory.
+    pub enabled: bool,
+    /// Server commands by language name (`editor.lsp.servers.rust`), over the
+    /// built-in ones (rust-analyzer, typescript-language-server, pyright, gopls).
+    pub servers: std::collections::BTreeMap<String, String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Editor {
@@ -267,6 +288,15 @@ pub struct Editor {
     /// in a tab of its own. Off: no buffer, the pane stays empty until a
     /// file opens (`tabs_cmd.rs::browser_tab_open`).
     pub folder_scratch_tab: bool,
+    /// Run the file's formatter over the text when it is saved
+    /// (`infiniterm-editor/src/format.rs`). Off by default: it rewrites the
+    /// file, and it runs a program.
+    pub format_on_save: bool,
+    /// Formatter commands by language name (`editor.formatters.rust`), over
+    /// the built-in defaults; see `format.rs` for the command's shape.
+    pub formatters: std::collections::BTreeMap<String, String>,
+    /// Language-server completion (`editor.lsp.*`).
+    pub lsp: Lsp,
     /// Selected text's background and colour. Empty means the theme's yellow
     /// on the theme's background: a highlighter pen, visible on any scheme.
     pub selection_color: String,
@@ -567,6 +597,7 @@ pub fn default_config() -> Config {
             height: 0.,
             shape: "16:9".into(),
             inherit_directory: true,
+            new_card_inherits_directory: false,
             gap: crate::cards::GUTTER,
         },
         canvas: Canvas {
@@ -577,6 +608,9 @@ pub fn default_config() -> Config {
             highlight_line: true,
             complete_words: true,
             folder_scratch_tab: true,
+            format_on_save: false,
+            formatters: Default::default(),
+            lsp: Lsp::default(),
             selection_color: String::new(),
             selection_text_color: String::new(),
             cursor_color: String::new(),
@@ -861,6 +895,10 @@ pub fn merge_config(raw: &Value) -> Config {
                 _ => d.cards.shape.clone(),
             },
             inherit_directory: bool_(c.get("inheritDirectory"), d.cards.inherit_directory),
+            new_card_inherits_directory: bool_(
+                c.get("newCardInheritsDirectory"),
+                d.cards.new_card_inherits_directory,
+            ),
             // 0 packs cards edge to edge; above 200 a gap is a gulf and the
             // placement maths has no use for it.
             gap: num(c.get("gap"), d.cards.gap, 0., 200.),
@@ -873,6 +911,30 @@ pub fn merge_config(raw: &Value) -> Config {
             highlight_line: bool_(e.get("highlightLine"), d.editor.highlight_line),
             complete_words: bool_(e.get("completeWords"), d.editor.complete_words),
             folder_scratch_tab: bool_(e.get("folderScratchTab"), d.editor.folder_scratch_tab),
+            format_on_save: bool_(e.get("formatOnSave"), d.editor.format_on_save),
+            // `editor.formatters.rust` and so on: the flat reader leaves them
+            // as dotted keys under the section.
+            formatters: e
+                .iter()
+                .filter_map(|(k, v)| {
+                    let language = k.strip_prefix("formatters.")?;
+                    let command = v.as_str()?.trim();
+                    (!language.is_empty() && !command.is_empty())
+                        .then(|| (language.to_string(), command.to_string()))
+                })
+                .collect(),
+            lsp: Lsp {
+                enabled: bool_(e.get("lsp.enabled"), d.editor.lsp.enabled),
+                servers: e
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        let language = k.strip_prefix("lsp.servers.")?;
+                        let command = v.as_str()?.trim();
+                        (!language.is_empty() && !command.is_empty())
+                            .then(|| (language.to_string(), command.to_string()))
+                    })
+                    .collect(),
+            },
             selection_color: str_(e.get("selectionColor"), &d.editor.selection_color),
             selection_text_color: str_(e.get("selectionTextColor"), &d.editor.selection_text_color),
             cursor_color: str_(e.get("cursorColor"), &d.editor.cursor_color),
@@ -958,6 +1020,8 @@ pub fn merge_config(raw: &Value) -> Config {
             ),
             background_image_fit: match u.get("backgroundImageFit").and_then(Value::as_str) {
                 Some(s) if s.eq_ignore_ascii_case("contain") => BackgroundFit::Contain,
+                Some(s) if s.eq_ignore_ascii_case("top-left") => BackgroundFit::TopLeft,
+                Some(s) if s.eq_ignore_ascii_case("actual-size") => BackgroundFit::ActualSize,
                 _ => BackgroundFit::Cover,
             },
             workspace_isolation: bool_(u.get("workspaceIsolation"), d.ui.workspace_isolation),
@@ -1464,6 +1528,53 @@ mod tests {
         );
     }
 
+    // Format on save is off until asked for (#602), and the per-language
+    // commands read as dotted keys or as a nested object, blanks dropped.
+    #[test]
+    fn format_on_save_is_off_by_default_and_formatters_are_read_per_language() {
+        let d = m(json!({})).editor;
+        assert!(!d.format_on_save);
+        assert!(d.formatters.is_empty());
+        let e = m(json!({
+            "editor.formatOnSave": true,
+            "editor.formatters.python": "ruff format -",
+            "editor": {"formatters": {"rust": " rustfmt ", "go": "  "}}
+        }))
+        .editor;
+        assert!(e.format_on_save);
+        assert_eq!(
+            e.formatters.get("python").map(String::as_str),
+            Some("ruff format -")
+        );
+        assert_eq!(
+            e.formatters.get("rust").map(String::as_str),
+            Some("rustfmt")
+        );
+        assert!(
+            !e.formatters.contains_key("go"),
+            "a blank command is no command"
+        );
+    }
+
+    // The language server is off until asked for (#602), with its command per
+    // language read like the formatters'.
+    #[test]
+    fn lsp_is_off_by_default_and_servers_are_read_per_language() {
+        let d = m(json!({})).editor.lsp;
+        assert!(!d.enabled && d.servers.is_empty());
+        let l = m(json!({
+            "editor.lsp.enabled": true,
+            "editor.lsp.servers.python": "pylsp",
+            "editor": {"lsp": {"servers": {"rust": " ra ", "go": ""}}}
+        }))
+        .editor
+        .lsp;
+        assert!(l.enabled);
+        assert_eq!(l.servers.get("python").map(String::as_str), Some("pylsp"));
+        assert_eq!(l.servers.get("rust").map(String::as_str), Some("ra"));
+        assert!(!l.servers.contains_key("go"));
+    }
+
     // A typo falls back rather than handing the terminal something it does not understand.
     #[test]
     fn an_unknown_cursor_style_falls_back_to_the_default() {
@@ -1531,6 +1642,18 @@ mod tests {
         let ui = m(json!({"ui.backgroundImage": " dusk ", "ui.backgroundImageFit": "Contain"})).ui;
         assert_eq!(ui.background_image, ["dusk"]);
         assert_eq!(ui.background_image_fit, BackgroundFit::Contain);
+        assert_eq!(
+            m(json!({"ui.backgroundImageFit": "top-left"}))
+                .ui
+                .background_image_fit,
+            BackgroundFit::TopLeft
+        );
+        assert_eq!(
+            m(json!({"ui.backgroundImageFit": "actual-size"}))
+                .ui
+                .background_image_fit,
+            BackgroundFit::ActualSize
+        );
         assert_eq!(
             m(json!({"ui.backgroundImageFit": "stretch"}))
                 .ui

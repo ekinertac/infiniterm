@@ -53,6 +53,9 @@ pub struct Prompt<P> {
     /// save sheet's Save opening the save-as field in the same answer;
     /// watching `open` alone left that field empty, 2026-09-26).
     pub serial: u64,
+    /// A text prompt where an empty answer is an answer (`replace with`:
+    /// nothing, which deletes), not a cancel as it is everywhere else.
+    pub empty_ok: bool,
     pending: Option<P>,
 }
 
@@ -88,6 +91,7 @@ impl<P> Default for Prompt<P> {
             choice: 0,
             select: None,
             serial: 0,
+            empty_ok: false,
             pending: None,
         }
     }
@@ -106,9 +110,22 @@ impl<P> Prompt<P> {
         self.choice = 0;
         self.select = None;
         self.serial += 1;
+        self.empty_ok = false;
         self.label = label.into();
         self.value = initial.into();
         self.pending = Some(pending);
+        displaced
+    }
+
+    /// A text prompt that takes an empty answer as one (`empty_ok`).
+    pub fn ask_allowing_empty(
+        &mut self,
+        label: &str,
+        initial: &str,
+        pending: P,
+    ) -> Option<Answer<P>> {
+        let displaced = self.ask(label, initial, pending);
+        self.empty_ok = true;
         displaced
     }
 
@@ -255,7 +272,7 @@ impl<P> Prompt<P> {
             pending,
             value
                 .map(str::trim)
-                .filter(|t| !t.is_empty())
+                .filter(|t| self.empty_ok || !t.is_empty())
                 .map(String::from),
         ))
     }

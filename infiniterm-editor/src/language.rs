@@ -175,6 +175,32 @@ impl Language {
             .any(|e| lower.ends_with(e))
     }
 
+    /// Just the tree-sitter grammar, for what parses without highlighting
+    /// (`symbols.rs`). The same grammars as `highlight_config` builds with.
+    pub fn grammar(self) -> Option<tree_sitter::Language> {
+        Some(match self {
+            Language::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Language::JavaScript | Language::Json => tree_sitter_javascript::LANGUAGE.into(),
+            Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Language::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Language::Python => tree_sitter_python::LANGUAGE.into(),
+            Language::Toml => tree_sitter_toml_ng::LANGUAGE.into(),
+            Language::Yaml => tree_sitter_yaml::LANGUAGE.into(),
+            Language::Bash => tree_sitter_bash::LANGUAGE.into(),
+            Language::Css => tree_sitter_css::LANGUAGE.into(),
+            Language::Html => tree_sitter_html::LANGUAGE.into(),
+            Language::Go => tree_sitter_go::LANGUAGE.into(),
+            Language::C => tree_sitter_c::LANGUAGE.into(),
+            Language::Markdown => tree_sitter_md::LANGUAGE.into(),
+            Language::Svelte => tree_sitter_svelte_ng::LANGUAGE.into(),
+            Language::Sql => tree_sitter_sequel::LANGUAGE.into(),
+            #[cfg(not(windows))]
+            Language::Scss => tree_sitter_scss::language(),
+            #[cfg(windows)]
+            Language::Scss => return None,
+        })
+    }
+
     /// The grammar and its highlight query, ready to run. Built once per
     /// language by the caller and kept: a configuration is a compiled
     /// query and costs a few ms.

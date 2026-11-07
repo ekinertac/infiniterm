@@ -8,7 +8,7 @@ use super::{
     BrowserAction, Card, EditorAction, Effect, LayoutSnapshot, Model, NewCard, Pending,
     TextTransform, UndoStep, LAYOUT_UNDO_DEPTH,
 };
-use super::{TerminalAction, TreeAct};
+use super::{ChangeAct, FilesJob, FindToggle, TerminalAction, TreeAct};
 use crate::card_label::{card_label, tilde_path, Labelled};
 use crate::config::{BROWSER_ZOOM_MAX, BROWSER_ZOOM_MIN};
 use crate::grid::{snap_rect, Point, Rect, HALF_CELL};
@@ -145,8 +145,9 @@ impl Model {
     }
 
     /// `inherit` decides whether the new card joins the active card's group.
-    /// The DIRECTORY is not inherited either way: a new card is a new place
-    /// to work and starts at `startingDir`. A split is the opposite case
+    /// The DIRECTORY is not inherited either way unless
+    /// `cards.newCardInheritsDirectory` is on (#509): a new card is a new
+    /// place to work and starts at `startingDir`. A split is the opposite case
     /// and keeps inheriting, because it is carved out of the card it came
     /// from and is plainly about continuing there.
     pub fn new_card(&mut self, inherit: bool) {
@@ -166,8 +167,19 @@ impl Model {
                 None
             };
             let ws = self.active_workspace.clone().unwrap_or_default();
+            // Off by default (#509): a new card is a new place to work.
+            let dir = match from.as_ref() {
+                Some(c)
+                    if self.config.cards.new_card_inherits_directory
+                        && c.kind == CardKind::Terminal
+                        && !c.cwd.is_empty() =>
+                {
+                    c.cwd.clone()
+                }
+                _ => self.start_dir.clone(),
+            };
             let id = self.add_card(
-                &self.start_dir.clone(),
+                &dir,
                 NewCard {
                     avoid: self.other_frames(group_id.as_deref(), &ws),
                     group_id,
@@ -637,6 +649,67 @@ impl Model {
                     self.save_as(id, path, then_close);
                 }
             }
+            Pending::FindInFiles { card_id, regex } => {
+                let Some(find) = text.filter(|t| !t.is_empty()) else {
+                    return;
+                };
+                self.files_job = Some(FilesJob {
+                    card_id: card_id.clone(),
+                    find,
+                    replace: String::new(),
+                    regex,
+                });
+                self.effects.push(Effect::Editor {
+                    card_id,
+                    action: EditorAction::FindInFiles,
+                });
+            }
+            Pending::ReplaceFind { card_id, regex } => {
+                let Some(find) = text.filter(|t| !t.is_empty()) else {
+                    return;
+                };
+                self.prompt.ask_allowing_empty(
+                    "replace with (empty deletes)",
+                    "",
+                    Pending::ReplaceWith {
+                        card_id,
+                        regex,
+                        find,
+                    },
+                );
+            }
+            Pending::ReplaceWith {
+                card_id,
+                regex,
+                find,
+            } => {
+                // An empty replacement is a deletion; only a cancel stops.
+                let Some(replace) = text else {
+                    return;
+                };
+                self.files_job = Some(FilesJob {
+                    card_id: card_id.clone(),
+                    find,
+                    replace,
+                    regex,
+                });
+                self.effects.push(Effect::Editor {
+                    card_id,
+                    action: EditorAction::ReplaceInFilesCount,
+                });
+            }
+            Pending::ReplaceInFilesYes => {
+                if text.is_none() {
+                    return;
+                }
+                if let Some(job) = &self.files_job {
+                    self.effects.push(Effect::Editor {
+                        card_id: job.card_id.clone(),
+                        action: EditorAction::ReplaceInFilesApply,
+                    });
+                }
+            }
+            Pending::Notice => {}
             Pending::GoToLine(id) => {
                 let Some(n) = text
                     .and_then(|t| t.trim().parse::<u64>().ok())
@@ -1276,6 +1349,9 @@ impl Model {
                 }
             }
             Source::Snippets => self.paste_snippet(id),
+            Source::Symbols => self.symbol_pick(id),
+            Source::Files => self.quick_open_pick(id),
+            Source::Grep => self.grep_pick(id),
             Source::MoveTo => self.move_selection_to(id),
             Source::MoveGroupTo => self.move_group_to(id),
             Source::WindowColor => self.window_color_run(id),
@@ -1656,6 +1732,135 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("editor.find", "Editor: find", |m| {
         m.editor_action(EditorAction::Find)
     });
+    r.register("editor.format", "Editor: format document", |m| {
+        m.editor_action(EditorAction::Format)
+    });
+    for (id, label, t) in [
+        (
+            "editor.find.regex",
+            "Editor: find with a regular expression",
+            FindToggle::Regex,
+        ),
+        (
+            "editor.find.matchCase",
+            "Editor: find with exact case",
+            FindToggle::MatchCase,
+        ),
+        (
+            "editor.find.wholeWord",
+            "Editor: find whole words only",
+            FindToggle::WholeWord,
+        ),
+        (
+            "editor.find.inSelection",
+            "Editor: find in the selection only",
+            FindToggle::InSelection,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.editor_action(EditorAction::FindToggle(t))
+        });
+    }
+    // Cmd+Shift+F and its siblings (#602): a project-wide find, and a
+    // replace that asks twice and then once more with the count.
+    for (id, label, regex) in [
+        ("editor.findInFiles", "Editor: find in files…", false),
+        (
+            "editor.findInFiles.regex",
+            "Editor: find in files with a regular expression…",
+            true,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.with_active_card(|m, card_id| {
+                if m.card(&card_id).is_some_and(|c| c.kind == CardKind::Editor) {
+                    let label = if regex {
+                        "find in files (regular expression)"
+                    } else {
+                        "find in files"
+                    };
+                    m.prompt
+                        .ask(label, "", Pending::FindInFiles { card_id, regex });
+                }
+            })
+        });
+    }
+    for (id, label, regex) in [
+        ("editor.replaceInFiles", "Editor: replace in files…", false),
+        (
+            "editor.replaceInFiles.regex",
+            "Editor: replace in files with a regular expression…",
+            true,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.with_active_card(|m, card_id| {
+                if m.card(&card_id).is_some_and(|c| c.kind == CardKind::Editor) {
+                    let label = if regex {
+                        "replace in files: find (regular expression)"
+                    } else {
+                        "replace in files: find"
+                    };
+                    m.prompt
+                        .ask(label, "", Pending::ReplaceFind { card_id, regex });
+                }
+            })
+        });
+    }
+    r.register("editor.goToSymbol", "Editor: go to a symbol…", |m| {
+        m.with_active_card(|m, id| {
+            if m.card(&id).is_some_and(|c| c.kind == CardKind::Editor) {
+                m.effects.push(Effect::Editor {
+                    card_id: id,
+                    action: EditorAction::GoToSymbol,
+                });
+            }
+        })
+    });
+    r.register("editor.goToFile", "Editor: go to a file…", |m| {
+        m.with_active_card(|m, id| {
+            if m.card(&id).is_some_and(|c| c.kind == CardKind::Editor) {
+                m.effects.push(Effect::Editor {
+                    card_id: id,
+                    action: EditorAction::GoToFile,
+                });
+            }
+        })
+    });
+    // Reviewing what changed under an open editor (#602): when the file is
+    // rewritten on disk (an agent in a terminal card), the gutter marks the
+    // changed lines, and these step through them or put them back.
+    for (id, label, act) in [
+        (
+            "editor.change.revert",
+            "Editor: revert the change at the caret",
+            ChangeAct::Revert,
+        ),
+        (
+            "editor.change.revertAll",
+            "Editor: revert every change since the file changed on disk",
+            ChangeAct::RevertAll,
+        ),
+        (
+            "editor.change.accept",
+            "Editor: accept the changes since the file changed on disk",
+            ChangeAct::Accept,
+        ),
+        (
+            "editor.change.next",
+            "Editor: go to the next change",
+            ChangeAct::Next,
+        ),
+        (
+            "editor.change.prev",
+            "Editor: go to the previous change",
+            ChangeAct::Prev,
+        ),
+    ] {
+        r.register(id, label, move |m| {
+            m.editor_action(EditorAction::Change(act))
+        });
+    }
     r.register("editor.goToLine", "Editor: go to a line…", |m| {
         m.with_active_card(|m, id| {
             if m.card(&id).is_some_and(|c| c.kind == CardKind::Editor) {
@@ -1716,6 +1921,16 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             "editor.transform.trimTrailingWhitespace",
             "Editor: Trim Trailing Whitespace",
             TextTransform::TrimTrailingWhitespace,
+        ),
+        (
+            "editor.transform.removeBlankLines",
+            "Editor: Remove Blank Lines",
+            TextTransform::RemoveBlankLines,
+        ),
+        (
+            "editor.transform.stripLineNumbers",
+            "Editor: Strip Line Numbers",
+            TextTransform::StripLineNumbers,
         ),
         (
             "editor.transform.indentTabsToSpaces",

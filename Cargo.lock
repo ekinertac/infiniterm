@@ -3129,7 +3129,9 @@ dependencies = [
 name = "infiniterm-editor"
 version = "0.6.8"
 dependencies = [
+ "regex",
  "ropey",
+ "serde_json",
  "similar",
  "tree-sitter",
  "tree-sitter-bash",
@@ -3149,6 +3151,7 @@ dependencies = [
  "tree-sitter-toml-ng",
  "tree-sitter-typescript",
  "tree-sitter-yaml",
+ "unicode-segmentation",
 ]
 
 [[package]]
