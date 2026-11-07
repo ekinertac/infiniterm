@@ -88,6 +88,7 @@ impl AppView {
             .cloned()
             .collect();
         let mut locks: Vec<(String, bool)> = vec![];
+        let mut lines_taken: Vec<String> = vec![];
         for card in cards {
             let world = Size {
                 w: card.rect.w,
@@ -173,6 +174,14 @@ impl AppView {
                 if let Some(line) = card.line {
                     body.go_to_line(line as usize);
                 }
+            } else if let Some(line) = card.line {
+                // A line the model set for the tab it just opened or switched
+                // to (a Find in Files pick): the body is the active tab's, and
+                // a host's file may still be loading, which `pending_line`
+                // covers.
+                body.pending_line = Some(line);
+                body.go_to_line(line as usize);
+                lines_taken.push(card.id.clone());
             }
             if body.metrics != metrics {
                 body.metrics = metrics.clone();
@@ -291,6 +300,11 @@ impl AppView {
                         }
                     }
                 }
+            }
+        }
+        for id in lines_taken {
+            if let Some(c) = self.model.card_mut(&id) {
+                c.line = None;
             }
         }
         for (id, locked) in locks {
@@ -506,6 +520,14 @@ impl AppView {
                         body.open_search(false);
                     }
                 }
+                EditorAction::FindToggle(t) => {
+                    if let Some(tabs) = self.editor_tabs_for(card_id) {
+                        tabs.locked = true;
+                    }
+                    if let Some(body) = self.editor_for(card_id) {
+                        body.toggle_find(t);
+                    }
+                }
                 EditorAction::Unlock => {
                     if let Some(t) = self.editor_tabs_for(card_id) {
                         t.locked = false;
@@ -544,6 +566,40 @@ impl AppView {
                     }
                 }
             }
+            EditorAction::FindToggle(t) => {
+                if let Some(tabs) = self.editor_tabs_for(card_id) {
+                    tabs.locked = true;
+                }
+                if let Some(body) = self.editor_for(card_id) {
+                    body.toggle_find(t);
+                }
+            }
+            EditorAction::GoToSymbol => {
+                let rows = self
+                    .editor_for(card_id)
+                    .map(|b| b.symbol_rows())
+                    .unwrap_or_default();
+                self.model.open_symbols(card_id, rows);
+            }
+            EditorAction::GoToFile => {
+                let (root, files) = self.project_files(&card);
+                self.model.open_quick_files(card_id, &root, files);
+            }
+            EditorAction::Change(act) => {
+                use infiniterm_core::model::ChangeAct;
+                if let Some(body) = self.editor_for(card_id) {
+                    match act {
+                        ChangeAct::Revert => body.change_revert(now),
+                        ChangeAct::RevertAll => body.change_revert_all(now),
+                        ChangeAct::Accept => body.change_accept(),
+                        ChangeAct::Next => body.change_jump(true),
+                        ChangeAct::Prev => body.change_jump(false),
+                    }
+                }
+            }
+            EditorAction::FindInFiles => self.find_in_files(card_id),
+            EditorAction::ReplaceInFilesCount => self.replace_in_files_count(card_id),
+            EditorAction::ReplaceInFilesApply => self.replace_in_files_apply(card_id),
             EditorAction::GoToLine => {
                 if let Some(line) = card.line {
                     if let Some(body) = self.editor_for(card_id) {

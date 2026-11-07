@@ -33,12 +33,26 @@ pub enum Source {
     /// `uitheme.pick` (#511): the files in `ui-themes/`, previewed live like
     /// `Themes`, and a pick is written as the setting `ui.theme`.
     UiThemes,
+    /// `editor.goToSymbol` (#602): the functions, types and headings of the
+    /// open file, in file order; a pick moves the caret to its line.
+    Symbols,
+    /// `editor.goToFile` (Cmd+P, #602): every file under the editor's
+    /// folder, fuzzy-matched on its path; a pick opens it as a tab.
+    Files,
+    /// `editor.findInFiles` (Cmd+Shift+F, #602): the matching lines of the
+    /// project, in file order; typing narrows them, a pick opens the file at
+    /// the line.
+    Grep,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
 /// id in the Commands source. A command id never contains a colon.
 pub const CARD_ROW: &str = "card:";
 pub const WORKSPACE_ROW: &str = "workspace:";
+
+/// Between a hit's path and its line in a Grep row's id: a character no path
+/// holds, so a path with a colon in it still splits right.
+pub const GREP_SEP: char = '\u{1f}';
 
 /// The hint the theme picker puts beside the theme in force.
 pub const ACTIVE_THEME_HINT: &str = "active";
@@ -56,7 +70,16 @@ impl Source {
             Source::MoveGroupTo => "moveGroupTo",
             Source::WindowColor => "windowColor",
             Source::UiThemes => "uiThemes",
+            Source::Symbols => "symbols",
+            Source::Files => "files",
+            Source::Grep => "grep",
         }
+    }
+
+    /// Whether the rows are matched letter by letter (`fuzzy_match`) rather
+    /// than by word (`strict_match`): paths and source lines are not prose.
+    pub fn matches_loosely(self) -> bool {
+        matches!(self, Source::Files | Source::Grep)
     }
 
     /// Whether this source's rows stay where they were designed to be.
@@ -81,6 +104,10 @@ impl Source {
                 | Source::Themes
                 | Source::WindowColor
                 | Source::UiThemes
+                // The matches stay in file and line order: that is the map.
+                | Source::Grep
+                // The outline of a file is its order.
+                | Source::Symbols
         )
     }
 
@@ -104,6 +131,9 @@ impl Source {
             Source::MoveGroupTo => "Move the group to workspace…",
             Source::WindowColor => "Window colour…",
             Source::UiThemes => "Switch UI theme",
+            Source::Symbols => "Go to symbol…",
+            Source::Files => "Go to file…",
+            Source::Grep => "Narrow the matches…",
         }
     }
 }
@@ -160,6 +190,94 @@ impl Model {
             query: String::new(),
             index: 0,
         };
+    }
+
+    /// Go to Symbol's palette over `rows` of editor card `card_id`.
+    pub fn open_symbols(&mut self, card_id: &str, rows: Vec<super::SymbolRow>) {
+        self.symbols = Some(super::SymbolsState {
+            card_id: card_id.into(),
+            rows,
+        });
+        self.open_palette(Source::Symbols);
+    }
+
+    /// A Go to Symbol pick (the line as the id): the caret goes there, the
+    /// way `editor.goToLine` sends it.
+    pub fn symbol_pick(&mut self, id: &str) {
+        let Some(s) = self.symbols.take() else {
+            return;
+        };
+        let Ok(line) = id.parse::<u64>() else {
+            return;
+        };
+        if let Some(card) = self.card_mut(&s.card_id) {
+            card.line = Some(line);
+        }
+        self.effects.push(super::Effect::Editor {
+            card_id: s.card_id,
+            action: super::EditorAction::GoToLine,
+        });
+    }
+
+    /// Go to File's palette over `files` (paths relative to `root`), whose
+    /// pick opens a tab in editor card `card_id`.
+    pub fn open_quick_files(&mut self, card_id: &str, root: &str, files: Vec<String>) {
+        self.quick_open = Some(super::QuickOpen {
+            card_id: card_id.into(),
+            root: root.trim_end_matches('/').into(),
+            files,
+        });
+        self.open_palette(Source::Files);
+    }
+
+    /// Find in Files' palette over `hits`, whose pick opens a tab of editor
+    /// card `card_id` at the hit's line.
+    pub fn open_grep(&mut self, card_id: &str, root: &str, hits: Vec<super::GrepHit>) {
+        self.grep = Some(super::GrepState {
+            card_id: card_id.into(),
+            root: root.trim_end_matches('/').into(),
+            hits,
+        });
+        self.open_palette(Source::Grep);
+    }
+
+    /// A Find in Files pick (`path<SEP>line`): the file as a tab, scrolled to
+    /// the line once its body exists (`card.line`, taken by the ui's
+    /// reconcile, since a new tab has no body yet to tell).
+    pub fn grep_pick(&mut self, id: &str) {
+        let Some(g) = self.grep.take() else {
+            return;
+        };
+        let Some((rel, line)) = id.split_once(GREP_SEP) else {
+            return;
+        };
+        let path = format!("{}/{rel}", g.root);
+        let existing = self
+            .card(&g.card_id)
+            .and_then(|c| c.tabs.iter().position(|h| *h == path));
+        match existing {
+            Some(i) => self.browser_tab_jump(&g.card_id, i),
+            None => self.browser_tab_open(&g.card_id, Some(&path)),
+        }
+        if let (Some(card), Ok(n)) = (self.card_mut(&g.card_id), line.parse::<u64>()) {
+            card.line = Some(n);
+        }
+    }
+
+    /// A Go to File pick: the tab that already shows the file, else a new
+    /// one (what Enter on a file in the tree does).
+    pub fn quick_open_pick(&mut self, rel: &str) {
+        let Some(q) = self.quick_open.take() else {
+            return;
+        };
+        let path = format!("{}/{rel}", q.root);
+        let existing = self
+            .card(&q.card_id)
+            .and_then(|c| c.tabs.iter().position(|h| *h == path));
+        match existing {
+            Some(i) => self.browser_tab_jump(&q.card_id, i),
+            None => self.browser_tab_open(&q.card_id, Some(&path)),
+        }
     }
 
     /// `chosen` false means dismissed, and the source's preview is put back.
@@ -412,6 +530,42 @@ impl Model {
                     label: super::window_fit_cmd::CUSTOM_ROW.1.into(),
                     hint: Some("type width x height".into()),
                 }))
+                .collect(),
+            // Indented by depth so a method sits under its type, the kind as
+            // the hint, the line as the id.
+            Source::Symbols => self
+                .symbols
+                .iter()
+                .flat_map(|s| s.rows.iter())
+                .map(|r| PaletteItem {
+                    id: r.line.to_string(),
+                    label: format!("{}{}", "  ".repeat(r.depth), r.name),
+                    hint: (!r.kind.is_empty()).then(|| r.kind.to_string()),
+                })
+                .collect(),
+            // Paths relative to the folder, matched whole, so `edbody` finds
+            // `src/editor_body.rs`. Recency applies: the file you reopen all
+            // day rises.
+            Source::Files => self
+                .quick_open
+                .iter()
+                .flat_map(|q| q.files.iter())
+                .map(|path| PaletteItem {
+                    id: path.clone(),
+                    label: path.clone(),
+                    hint: None,
+                })
+                .collect(),
+            // `path:line  the line`, the id carrying the two apart for the pick.
+            Source::Grep => self
+                .grep
+                .iter()
+                .flat_map(|g| g.hits.iter())
+                .map(|h| PaletteItem {
+                    id: format!("{}{GREP_SEP}{}", h.path, h.line),
+                    label: format!("{}:{}  {}", h.path, h.line, h.text),
+                    hint: None,
+                })
                 .collect(),
             // The file's names, the first line as the hint, and the way to
             // the file last. Recency applies: the snippet you paste daily

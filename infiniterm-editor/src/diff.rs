@@ -272,6 +272,54 @@ pub fn gutter_marks(original: &str, current: &str) -> (Vec<GutterMark>, Vec<usiz
     (marks, deleted_before)
 }
 
+/// One changed stretch between a baseline text and the current one: the
+/// lines it covers NOW (`new`, 0-based, possibly empty for a pure deletion,
+/// where it is the line the deleted ones sat before) and the lines the
+/// baseline had there (`old`, newlines kept).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hunk {
+    pub new: std::ops::Range<usize>,
+    pub old: String,
+}
+
+/// The changed stretches of `current` against `baseline`, in order: what a
+/// reviewer steps through after an agent rewrote a file (#602), and what
+/// `revert_hunk` can put back one at a time.
+pub fn hunks(baseline: &str, current: &str) -> Vec<Hunk> {
+    let diff = TextDiff::from_lines(baseline, current);
+    let old_lines: Vec<&str> = baseline.split_inclusive('\n').collect();
+    diff.ops()
+        .iter()
+        .filter(|op| op.tag() != similar::DiffTag::Equal)
+        .map(|op| Hunk {
+            new: op.new_range(),
+            old: old_lines[op.old_range()].concat(),
+        })
+        .collect()
+}
+
+/// The hunk the caret's 0-based `line` is in: one that covers it, or a pure
+/// deletion made right before it.
+pub fn hunk_at(hunks: &[Hunk], line: usize) -> Option<usize> {
+    hunks
+        .iter()
+        .position(|h| h.new.contains(&line) || (h.new.is_empty() && h.new.start == line))
+}
+
+/// `current` with `hunk` put back as the baseline had it. The hunk's range
+/// is in `current`'s lines, so a hunk list taken from this very text applies.
+pub fn revert_hunk(current: &str, hunk: &Hunk) -> String {
+    let lines: Vec<&str> = current.split_inclusive('\n').collect();
+    let (start, end) = (
+        hunk.new.start.min(lines.len()),
+        hunk.new.end.min(lines.len()),
+    );
+    let mut out = lines[..start].concat();
+    out.push_str(&hunk.old);
+    out.push_str(&lines[end..].concat());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +492,50 @@ mod tests {
         assert_eq!(m.lines[0].kind, Placeholder);
         assert_eq!(m.text.lines().next().unwrap(), "⋯ 10 unchanged lines");
         assert_eq!(m.folds, vec![(0, 10)]);
+    }
+
+    #[test]
+    fn hunks_are_the_changed_stretches_and_reverting_one_leaves_the_others() {
+        let base = "a\nb\nc\nd\ne\nf\n";
+        // b changed, d removed, a line added after f.
+        let now = "a\nB\nc\ne\nf\ng\n";
+        let h = hunks(base, now);
+        assert_eq!(h.len(), 3);
+        assert_eq!((h[0].new.clone(), h[0].old.as_str()), (1..2, "b\n"));
+        assert_eq!((h[1].new.clone(), h[1].old.as_str()), (3..3, "d\n"));
+        assert_eq!((h[2].new.clone(), h[2].old.as_str()), (5..6, ""));
+        assert_eq!(revert_hunk(now, &h[0]), "a\nb\nc\ne\nf\ng\n");
+        assert_eq!(revert_hunk(now, &h[1]), "a\nB\nc\nd\ne\nf\ng\n");
+        assert_eq!(revert_hunk(now, &h[2]), "a\nB\nc\ne\nf\n");
+        // Reverting the last one first then the earlier, from fresh lists.
+        let step = revert_hunk(now, &h[2]);
+        let h2 = hunks(base, &step);
+        assert_eq!(h2.len(), 2);
+        assert_eq!(
+            revert_hunk(
+                &revert_hunk(&step, &h2[1]),
+                &hunks(base, &revert_hunk(&step, &h2[1]))[0]
+            ),
+            base
+        );
+    }
+
+    #[test]
+    fn the_caret_finds_its_hunk_and_a_deletion_belongs_to_the_line_after_it() {
+        let h = hunks("a\nb\nc\nd\n", "a\nB\nc\n");
+        // b changed (line 1), d removed after c (a deletion at line 3).
+        assert_eq!(hunk_at(&h, 1), Some(0));
+        assert_eq!(hunk_at(&h, 0), None);
+        assert_eq!(hunk_at(&h, 3), Some(1));
+        assert_eq!(hunk_at(&h, 2), None);
+    }
+
+    #[test]
+    fn a_file_without_a_final_newline_reverts_cleanly() {
+        let h = hunks("a\nb", "a\nB");
+        assert_eq!(h.len(), 1);
+        assert_eq!(revert_hunk("a\nB", &h[0]), "a\nb");
+        assert!(hunks("same\n", "same\n").is_empty());
     }
 
     fn span(start: usize, end: usize, capture: &'static str) -> Span {
