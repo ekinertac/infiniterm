@@ -352,6 +352,15 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "browser.openLinksIn",
+        &[
+            "Where a web link opens when you Cmd+click it in a terminal or click it in",
+            "a Page card: \"card\" for a browser card beside it, \"system\" for your",
+            "default browser. Adding Shift opens it in the other one. Without browser",
+            "cards it is always the system browser.",
+        ],
+    ),
+    (
         "join.enabled",
         &[
             "Open the socket that `ift join <host>` on another Mac reaches through ssh,",

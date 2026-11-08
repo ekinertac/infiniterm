@@ -314,6 +314,16 @@ pub enum Wrap {
     Never,
 }
 
+/// `browser.openLinksIn`: a browser card beside the clicked card, or the
+/// system's default browser. "card" is the default because Cmd+click on a
+/// terminal URL opened a card before the setting existed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OpenLinksIn {
+    Card,
+    System,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Browser {
@@ -321,6 +331,9 @@ pub struct Browser {
     pub zoom: f64,
     /// Where the omnibox sends a search; `%s` is the encoded query.
     pub search_engine: String,
+    /// Where Cmd+click on a web link goes (#662); Cmd+Shift+click goes to
+    /// the other one. `ift::link_in_card` decides.
+    pub open_links_in: OpenLinksIn,
     /// Asks Google to complete what is typed in the omnibox. OFF by
     /// default: it is the only thing in this app that talks to anything but
     /// the page you asked for.
@@ -629,6 +642,7 @@ pub fn default_config() -> Config {
         browser: Browser {
             zoom: 1.,
             search_engine: crate::omni::address::SEARCH_TEMPLATE.into(),
+            open_links_in: OpenLinksIn::Card,
             suggestions: false,
             devtools: true,
             engines: vec![],
@@ -976,6 +990,11 @@ pub fn merge_config(raw: &Value) -> Config {
                 Some(s) if s.contains("%s") => s.to_string(),
                 _ => d.browser.search_engine.clone(),
             },
+            open_links_in: one(
+                b.get("openLinksIn"),
+                d.browser.open_links_in,
+                &[("card", OpenLinksIn::Card), ("system", OpenLinksIn::System)],
+            ),
             suggestions: bool_(b.get("suggestions"), d.browser.suggestions),
             devtools: bool_(b.get("devtools"), d.browser.devtools),
             engines: b
@@ -1230,6 +1249,14 @@ mod tests {
 
         let c = merge_config(&serde_json::json!({"browser": {"suggestions": true}}));
         assert!(c.browser.suggestions);
+
+        // A web link opens a card unless told otherwise; a value that is
+        // neither name keeps the default.
+        assert_eq!(d.browser.open_links_in, OpenLinksIn::Card);
+        let c = merge_config(&serde_json::json!({"browser.openLinksIn": "system"}));
+        assert_eq!(c.browser.open_links_in, OpenLinksIn::System);
+        let c = merge_config(&serde_json::json!({"browser.openLinksIn": "safari"}));
+        assert_eq!(c.browser.open_links_in, OpenLinksIn::Card);
 
         // A malformed engine is dropped and the rest survive; a user entry
         // comes before the built-ins, so it can override one.

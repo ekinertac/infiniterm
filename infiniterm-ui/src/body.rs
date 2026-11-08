@@ -36,7 +36,15 @@ pub enum BodyAction {
     Ignored,
     /// Cmd+click on a URL or a confirmed path: open it beside this card.
     Open(infiniterm_core::ift::OpenPlan),
-    /// Cmd+Shift+click: the system's handler.
+    /// A clicked web link (#662). Where it goes is the app's to decide from
+    /// `browser.openLinksIn`, flipped when `other` (Shift was held): a
+    /// browser card beside this one, or the system browser.
+    OpenLink {
+        url: String,
+        cwd: String,
+        other: bool,
+    },
+    /// Cmd+Shift+click on a path: the system's handler.
     OpenExternal {
         url: Option<String>,
         path: Option<(String, String)>,

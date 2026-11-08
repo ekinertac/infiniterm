@@ -117,6 +117,15 @@ pub fn url_plan(url: &str, cwd: &str) -> OpenPlan {
     }
 }
 
+/// Whether a clicked web link opens as a browser card (else the system
+/// browser, #662). `other` is the Shift on the click, which picks the target
+/// the setting did not; `cards` is whether this window can show a browser
+/// card at all (CEF running, not a remote instance), and without one the
+/// system browser is the only place a link can go.
+pub fn link_in_card(setting: crate::config::OpenLinksIn, other: bool, cards: bool) -> bool {
+    cards && ((setting == crate::config::OpenLinksIn::Card) != other)
+}
+
 /// An agent's session file, as a transcript card beside the agent's card.
 pub fn transcript_plan(path: &str, cwd: &str) -> OpenPlan {
     OpenPlan::Transcript {
@@ -643,6 +652,18 @@ mod tests {
                 url: "https://example.com/a".into()
             }
         );
+    }
+
+    #[test]
+    fn shift_flips_where_a_link_opens_and_no_browser_means_the_system() {
+        use crate::config::OpenLinksIn::{Card, System};
+        assert!(link_in_card(Card, false, true));
+        assert!(!link_in_card(Card, true, true));
+        assert!(!link_in_card(System, false, true));
+        assert!(link_in_card(System, true, true));
+        for (setting, other) in [(Card, false), (Card, true), (System, false), (System, true)] {
+            assert!(!link_in_card(setting, other, false));
+        }
     }
 
     fn v(a: &[&str]) -> Vec<String> {

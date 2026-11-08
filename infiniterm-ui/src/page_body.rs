@@ -297,13 +297,21 @@ impl PageBody {
         BodyAction::None
     }
 
-    /// Where a link goes: a web address to the system browser, a document
-    /// next to this one to a Page of its own.
-    fn follow(&self, target: &str) -> BodyAction {
+    /// Where a link goes: a web address where `browser.openLinksIn` says
+    /// (`other`, the Shift on the click, flips it; #662), a document next to
+    /// this one to a Page of its own.
+    fn follow(&self, target: &str, other: bool) -> BodyAction {
         if target.starts_with("http://") || target.starts_with("https://") {
-            return BodyAction::OpenExternal {
-                url: Some(target.to_string()),
-                path: None,
+            // A host's page has no folder on this Mac for the card to stand in.
+            let cwd = std::path::Path::new(&self.path)
+                .parent()
+                .filter(|_| self.source.is_local())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            return BodyAction::OpenLink {
+                url: target.to_string(),
+                cwd,
+                other,
             };
         }
         let file = target.split('#').next().unwrap_or(target);
@@ -459,7 +467,7 @@ impl CardBody for PageBody {
         &mut self,
         local: Point,
         button: gpui::MouseButton,
-        _modifiers: &gpui::Modifiers,
+        modifiers: &gpui::Modifiers,
         _clicks: usize,
     ) -> BodyAction {
         if button != gpui::MouseButton::Left {
@@ -469,7 +477,7 @@ impl CardBody for PageBody {
             .cell_at(local)
             .and_then(|(row, col)| self.lines[row].link_at(col).map(str::to_string));
         match target {
-            Some(t) => self.follow(&t),
+            Some(t) => self.follow(&t, modifiers.shift),
             None => BodyAction::None,
         }
     }
@@ -712,18 +720,18 @@ mod tests {
         let (b, _) = host_page(vec![Ok(("x".into(), Some(1)))]);
         let mut b = b;
         b.path = "/srv/docs/index.md".into();
-        match b.follow("other.md#top") {
+        match b.follow("other.md#top", false) {
             BodyAction::OpenOnHost { path, line } => {
                 assert_eq!(path, "/srv/docs/other.md");
                 assert_eq!(line, None);
             }
             _ => panic!("a host page's link must go to the host"),
         }
-        // A web address still goes to the browser on this Mac.
-        assert!(matches!(
-            b.follow("https://infiniterm.app/"),
-            BodyAction::OpenExternal { .. }
-        ));
+        // A web address still opens on this Mac, standing in no host folder.
+        match b.follow("https://infiniterm.app/", false) {
+            BodyAction::OpenLink { cwd, .. } => assert_eq!(cwd, ""),
+            _ => panic!("web link"),
+        }
     }
 
     fn key(s: &str) -> Keystroke {
@@ -748,18 +756,20 @@ mod tests {
         }
     }
 
-    // A web link goes to the browser, a document beside this one opens as
-    // a page of its own.
+    // A web link is the app's to place (Shift carried along), a document
+    // beside this one opens as a page of its own.
     #[test]
-    fn links_open_the_web_outside_and_documents_as_pages() {
+    fn links_open_the_web_where_the_setting_says_and_documents_as_pages() {
         let (b, dir) = page("x");
-        match b.follow("https://infiniterm.app/") {
-            BodyAction::OpenExternal { url, .. } => {
-                assert_eq!(url.as_deref(), Some("https://infiniterm.app/"))
+        match b.follow("https://infiniterm.app/", true) {
+            BodyAction::OpenLink { url, cwd, other } => {
+                assert_eq!(url, "https://infiniterm.app/");
+                assert_eq!(cwd, dir.to_string_lossy());
+                assert!(other);
             }
             _ => panic!("web link"),
         }
-        match b.follow("canvas.md#keys") {
+        match b.follow("canvas.md#keys", false) {
             BodyAction::Open(infiniterm_core::ift::OpenPlan::Page { path, .. }) => {
                 assert_eq!(path, dir.join("canvas.md").to_string_lossy())
             }
