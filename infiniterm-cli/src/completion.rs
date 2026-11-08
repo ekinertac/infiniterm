@@ -100,6 +100,7 @@ _ift() {
     'commands:every command the app registers, with its key'
     'usage:the commands and gestures you used, and the ones you never did'
     'update:the app update state: ift update status'
+    'push:give a phone push id to this Mac: add, remove, list'
     'licence:register this Mac with its commercial licence key'
     'update-key:make the key that signs Windows releases'
     'update-sign:sign a release manifest'
@@ -143,6 +144,7 @@ _ift() {
     sessions) _arguments '--full[every column: id, pid, cwd, command, started]' ;;
     completion) _values 'shell' zsh ;;
     update) _values 'word' status ;;
+    push) _values 'word' add remove list ;;
     omni) _message 'a term for the omnibox' ;;
     name) _message 'a name for this card' ;;
   esac

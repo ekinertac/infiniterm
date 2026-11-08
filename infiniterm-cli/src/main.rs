@@ -34,6 +34,7 @@ mod install;
 #[cfg(unix)]
 mod join;
 mod licence_cmd;
+mod push_cmd;
 mod update_sign_cmd;
 #[cfg(unix)]
 mod proxy;
@@ -134,6 +135,11 @@ ift — drive infiniterm from a shell
                              available or failed, then version and build or
                              the reason, tab separated. app.update.check asks
                              for a check, app.update.install restarts into it
+  ift push add <id> --server <url>
+                             give a phone companion app's push id to this
+                             Mac, with its relay url (https only)
+  ift push remove <id>       forget a phone; ift push list shows the phones
+                             with the first 6 characters of each id
   ift commands               every command the app registers: id, label,
                              key; the palette's list as text (the default
                              keybindings file has only the bound ones)
@@ -184,7 +190,7 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 32] = [
+pub const SUBCOMMANDS: [&str; 33] = [
     "diff",
     "ls",
     "workspaces",
@@ -203,6 +209,7 @@ pub const SUBCOMMANDS: [&str; 32] = [
     "commands",
     "usage",
     "update",
+    "push",
     "name",
     "group",
     "install",
@@ -286,6 +293,7 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        Some("push") => push_cmd::run(&args[1..]),
         Some("sessions") => attach::sessions_cmd(args.contains(&"--full".to_string())),
         Some("attach") => match args.get(1) {
             Some(id) => attach::attach(id),

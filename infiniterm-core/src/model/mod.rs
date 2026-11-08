@@ -407,6 +407,14 @@ pub enum Effect {
         server: String,
         pushes: Vec<crate::push_notify::Push>,
     },
+    /// A push for the phone app through the relay (#649). `alert` is the card
+    /// that needs you, or `None` for a body that only refreshes the coloured
+    /// list. `cards` is always every coloured card.
+    PushRelay {
+        host: String,
+        alert: Option<crate::push_notify::RelayAlert>,
+        cards: Vec<crate::push_notify::ColouredCard>,
+    },
     Reload,
     /// Quit and come back: the ui saves, arranges for something outside the
     /// process to reopen the bundle once it is gone, and exits. The window
@@ -818,6 +826,14 @@ pub struct Model {
     /// The card states `push_tick` saw last; `None` until its first look,
     /// so what was already there at startup is not a change (#616).
     pub push_prev: Option<std::collections::BTreeMap<String, AgentState>>,
+    /// Card id to the wall-clock second its pushable state began, for the
+    /// relay's colour list (#649). Only pushable cards have an entry.
+    pub push_since: std::collections::BTreeMap<String, f64>,
+    /// When a drop-only relay push is due. A card leaving a coloured state
+    /// waits a moment so a quick flip back does not cost a push.
+    pub relay_drop_due: Option<f64>,
+    /// The Mac's name on the phone; the runtime sets it at startup.
+    pub host_label: String,
     /// Every card focused this session, oldest first, each once. Closing
     /// the focused card goes back along it; not saved, a restart has no
     /// "before".
@@ -1143,6 +1159,9 @@ impl Model {
             app_active: true,
             done_watch: None,
             push_prev: None,
+            push_since: std::collections::BTreeMap::new(),
+            relay_drop_due: None,
+            host_label: "Mac".into(),
             focus_trail: Vec::new(),
             covers: HashMap::new(),
             cover_at: HashMap::new(),

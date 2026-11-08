@@ -426,39 +426,117 @@ impl Model {
     /// look is kept even when nothing is sent, so a switch turned on later or
     /// the window coming to the back does not replay old states. A joined
     /// viewer must not call it: its states are the host's.
-    pub fn push_tick(&mut self) {
+    ///
+    /// The same pass feeds the phone relay (#649): one `Effect::PushRelay`
+    /// per alert, each with the whole coloured list. `now` is wall-clock
+    /// seconds (the caller's clock, so tests control it).
+    pub fn push_tick(&mut self, now: f64) {
+        use crate::push_notify as pn;
         let current: std::collections::BTreeMap<String, crate::agent_state::AgentState> = self
             .cards
             .iter()
             .filter(|c| c.agent != crate::agent_state::AgentState::None)
             .map(|c| (c.id.clone(), c.agent))
             .collect();
-        let changed = crate::push_notify::changes(self.push_prev.as_ref(), &current);
+        let changed = pn::changes(self.push_prev.as_ref(), &current);
+        let left = pn::dropped(self.push_prev.as_ref(), &current);
+        for (id, state) in &current {
+            let was = self.push_prev.as_ref().and_then(|p| p.get(id));
+            if pn::is_pushable(*state) && was != Some(state) {
+                self.push_since.insert(id.clone(), now);
+            }
+        }
+        // Forget cards that stopped being coloured so the map stays small.
+        self.push_since
+            .retain(|id, _| current.get(id).copied().is_some_and(pn::is_pushable));
         self.push_prev = Some(current);
         let n = &self.config.notify;
-        if !crate::push_notify::should_send(n.skip_when_focused, self.app_active) {
-            return;
-        }
-        let pushes: Vec<_> = changed
-            .into_iter()
-            .filter(|c| match c.state {
-                crate::agent_state::AgentState::Waiting => n.waiting,
-                crate::agent_state::AgentState::Failed => n.failed,
-                _ => n.done,
-            })
+        let send = pn::should_send(n.skip_when_focused, self.app_active);
+        let passing: Vec<_> = if send {
+            changed
+                .iter()
+                .filter(|c| match c.state {
+                    crate::agent_state::AgentState::Waiting => n.waiting,
+                    crate::agent_state::AgentState::Failed => n.failed,
+                    _ => n.done,
+                })
+                .cloned()
+                .collect()
+        } else {
+            vec![]
+        };
+        let ws_name = |id: &str| {
+            self.workspaces
+                .iter()
+                .find(|w| w.id == id)
+                .map(|w| w.name.clone())
+                .unwrap_or_default()
+        };
+        let pushes: Vec<_> = passing
+            .iter()
             .filter_map(|c| {
                 let card = self.cards.iter().find(|k| k.id == c.card_id)?;
-                Some(crate::push_notify::message(
-                    card.number,
-                    &card.title,
-                    c.state,
-                ))
+                Some(pn::message(card.number, &card.title, c.state))
             })
             .collect();
+        let alerts: Vec<_> = passing
+            .iter()
+            .filter_map(|c| {
+                let card = self.cards.iter().find(|k| k.id == c.card_id)?;
+                Some(pn::RelayAlert {
+                    number: card.number,
+                    card: card.title.clone(),
+                    workspace: ws_name(&card.workspace_id),
+                    state: c.state,
+                })
+            })
+            .collect();
+        let cards: Vec<_> = self
+            .cards
+            .iter()
+            .filter(|c| pn::is_pushable(c.agent))
+            .map(|c| pn::ColouredCard {
+                id: c.id.clone(),
+                number: c.number,
+                card: c.title.clone(),
+                workspace: ws_name(&c.workspace_id),
+                state: c.agent,
+                // For a card already coloured at startup this is the first tick
+                // that saw it, not the true change time.
+                since: self.push_since.get(&c.id).copied().unwrap_or(now).max(0.0) as u64,
+            })
+            .collect();
+        let host = self.host_label.clone();
+        let server = n.ntfy_server.clone();
         if !pushes.is_empty() {
-            self.effects.push(super::Effect::PushNotify {
-                server: n.ntfy_server.clone(),
-                pushes,
+            self.effects
+                .push(super::Effect::PushNotify { server, pushes });
+        }
+        if !alerts.is_empty() {
+            self.relay_drop_due = None;
+            for alert in alerts {
+                self.effects.push(super::Effect::PushRelay {
+                    host: host.clone(),
+                    alert: Some(alert),
+                    cards: cards.clone(),
+                });
+            }
+        } else if (!changed.is_empty() || left) && self.relay_drop_due.is_none() {
+            // Debounced: a card that flips away and back within a moment
+            // should not cost the phone a refresh.
+            self.relay_drop_due = Some(now + 1.5);
+        }
+        // The wall clock can step back; never hold a drop further out than
+        // the debounce.
+        if let Some(due) = self.relay_drop_due {
+            self.relay_drop_due = Some(due.min(now + 1.5));
+        }
+        if self.relay_drop_due.is_some_and(|due| due <= now) {
+            self.relay_drop_due = None;
+            self.effects.push(super::Effect::PushRelay {
+                host,
+                alert: None,
+                cards,
             });
         }
     }
@@ -1552,9 +1630,9 @@ mod agent_states_text_tests {
         let (mut m, id) = one_card();
         m.app_active = false;
         m.card_mut(&id).unwrap().agent = AgentState::Waiting;
-        m.push_tick();
+        m.push_tick(0.0);
         assert!(pushes(&mut m).is_empty());
-        m.push_tick();
+        m.push_tick(0.0);
         assert!(
             pushes(&mut m).is_empty(),
             "same state twice is not a change"
@@ -1565,15 +1643,15 @@ mod agent_states_text_tests {
     fn push_tick_sends_one_push_when_a_card_changes_to_waiting() {
         let (mut m, id) = one_card();
         m.app_active = false;
-        m.push_tick();
+        m.push_tick(0.0);
         let number = m.card_mut(&id).unwrap().number;
         m.card_mut(&id).unwrap().agent = AgentState::Waiting;
-        m.push_tick();
+        m.push_tick(0.0);
         let got = pushes(&mut m);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].message, "Waiting on you");
         assert!(got[0].title.contains(&number.to_string()));
-        m.push_tick();
+        m.push_tick(0.0);
         assert!(pushes(&mut m).is_empty());
     }
 
@@ -1581,18 +1659,208 @@ mod agent_states_text_tests {
     fn push_tick_stays_quiet_while_the_window_is_focused_and_does_not_replay() {
         let (mut m, id) = one_card();
         m.app_active = true;
-        m.push_tick();
+        m.push_tick(0.0);
         m.card_mut(&id).unwrap().agent = AgentState::Failed;
-        m.push_tick();
+        m.push_tick(0.0);
         assert!(pushes(&mut m).is_empty());
         m.app_active = false;
-        m.push_tick();
+        m.push_tick(0.0);
         assert!(pushes(&mut m).is_empty(), "the failure was already seen");
         m.config.notify.skip_when_focused = false;
         m.app_active = true;
         m.card_mut(&id).unwrap().agent = AgentState::Done;
-        m.push_tick();
+        m.push_tick(0.0);
         assert_eq!(pushes(&mut m).len(), 1);
+    }
+
+    fn relays(
+        m: &mut Model,
+    ) -> Vec<(
+        Option<crate::push_notify::RelayAlert>,
+        Vec<crate::push_notify::ColouredCard>,
+    )> {
+        std::mem::take(&mut m.effects)
+            .into_iter()
+            .filter_map(|e| match e {
+                crate::model::Effect::PushRelay { alert, cards, .. } => Some((alert, cards)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn second_card(m: &mut Model) -> String {
+        let ws = m.active_workspace.clone();
+        let id = m.add_card(
+            "/",
+            NewCard {
+                workspace_id: ws,
+                ..Default::default()
+            },
+        );
+        m.effects.clear();
+        id
+    }
+
+    #[test]
+    fn push_tick_emits_a_relay_alert_with_the_full_coloured_list() {
+        let (mut m, a) = one_card();
+        let b = second_card(&mut m);
+        m.app_active = false;
+        m.card_mut(&a).unwrap().agent = AgentState::Done;
+        m.push_tick(10.0);
+        m.card_mut(&b).unwrap().agent = AgentState::Waiting;
+        m.push_tick(20.0);
+        let got = relays(&mut m);
+        assert_eq!(got.len(), 1);
+        let (alert, cards) = &got[0];
+        let alert = alert.as_ref().expect("an alert");
+        assert_eq!(alert.state, AgentState::Waiting);
+        assert_eq!(alert.number, m.card_mut(&b).unwrap().number);
+        let ws_name = m.workspaces[0].name.clone();
+        assert!(!ws_name.is_empty());
+        assert_eq!(alert.workspace, ws_name);
+        assert_eq!(cards.len(), 2);
+        assert!(cards.iter().all(|c| c.workspace == ws_name));
+    }
+
+    #[test]
+    fn push_tick_sets_since_when_the_state_changes_and_keeps_it_after() {
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.push_tick(5.0);
+        m.card_mut(&id).unwrap().agent = AgentState::Waiting;
+        m.push_tick(100.0);
+        m.push_tick(200.0);
+        assert_eq!(m.push_since.get(&id), Some(&100.0));
+        m.effects.clear();
+        m.card_mut(&id).unwrap().agent = AgentState::Done;
+        m.push_tick(300.0);
+        let got = relays(&mut m);
+        assert_eq!(got[0].1[0].since, 300);
+        m.card_mut(&id).unwrap().agent = AgentState::Working;
+        m.push_tick(400.0);
+        assert!(m.push_since.is_empty(), "no longer coloured, forgotten");
+    }
+
+    #[test]
+    fn push_tick_drop_only_is_debounced() {
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.card_mut(&id).unwrap().agent = AgentState::Waiting;
+        m.push_tick(0.0);
+        m.card_mut(&id).unwrap().agent = AgentState::Working;
+        m.push_tick(0.0);
+        assert!(relays(&mut m).is_empty());
+        m.push_tick(1.0);
+        assert!(relays(&mut m).is_empty());
+        m.push_tick(1.6);
+        let got = relays(&mut m);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].0.is_none());
+        assert!(got[0].1.is_empty());
+        m.push_tick(3.0);
+        assert!(relays(&mut m).is_empty(), "sent once");
+    }
+
+    #[test]
+    fn push_tick_an_alert_clears_a_pending_drop() {
+        let (mut m, a) = one_card();
+        let b = second_card(&mut m);
+        m.app_active = false;
+        m.card_mut(&a).unwrap().agent = AgentState::Waiting;
+        m.push_tick(0.0);
+        m.card_mut(&a).unwrap().agent = AgentState::Working;
+        m.push_tick(0.0);
+        assert!(relays(&mut m).is_empty());
+        m.card_mut(&b).unwrap().agent = AgentState::Failed;
+        m.push_tick(1.0);
+        let got = relays(&mut m);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].0.is_some());
+        m.push_tick(2.0);
+        assert!(relays(&mut m).is_empty(), "no drop-only after the alert");
+    }
+
+    #[test]
+    fn push_tick_a_second_drop_keeps_the_first_due() {
+        let (mut m, a) = one_card();
+        let b = second_card(&mut m);
+        m.app_active = false;
+        m.card_mut(&a).unwrap().agent = AgentState::Waiting;
+        m.card_mut(&b).unwrap().agent = AgentState::Waiting;
+        m.push_tick(0.0);
+        m.card_mut(&a).unwrap().agent = AgentState::Working;
+        m.push_tick(0.0);
+        m.card_mut(&b).unwrap().agent = AgentState::Working;
+        m.push_tick(1.0);
+        assert!(relays(&mut m).is_empty());
+        m.push_tick(1.6);
+        let got = relays(&mut m);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].0.is_none());
+    }
+
+    #[test]
+    fn push_tick_focused_sends_drop_only_not_alert_and_advances_prev() {
+        let (mut m, id) = one_card();
+        m.app_active = true;
+        m.push_tick(0.0);
+        m.card_mut(&id).unwrap().agent = AgentState::Failed;
+        m.push_tick(0.0);
+        assert!(relays(&mut m).is_empty());
+        m.push_tick(2.0);
+        let got = relays(&mut m);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].0.is_none(), "focused: no alert");
+        assert_eq!(got[0].1.len(), 1, "the list still has the failed card");
+        m.app_active = false;
+        m.push_tick(3.0);
+        m.push_tick(5.0);
+        assert!(relays(&mut m).is_empty(), "the failure was already seen");
+    }
+
+    #[test]
+    fn push_tick_honours_the_three_switches_for_relay_alerts() {
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.config.notify.waiting = false;
+        m.config.notify.failed = false;
+        m.config.notify.done = false;
+        m.push_tick(0.0);
+        for s in [AgentState::Waiting, AgentState::Failed, AgentState::Done] {
+            m.card_mut(&id).unwrap().agent = s;
+            m.push_tick(0.0);
+            assert!(
+                relays(&mut m).iter().all(|(a, _)| a.is_none()),
+                "{s:?} is off"
+            );
+        }
+        m.config.notify.failed = true;
+        m.card_mut(&id).unwrap().agent = AgentState::Working;
+        m.push_tick(0.0);
+        m.card_mut(&id).unwrap().agent = AgentState::Failed;
+        m.push_tick(0.0);
+        let got = relays(&mut m);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0.as_ref().unwrap().state, AgentState::Failed);
+    }
+
+    #[test]
+    fn push_tick_done_only_after_working_for_relay() {
+        // Same gate as ntfy: a card is a change when its state differs from
+        // the last look, so done after working alerts and done twice does not.
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.card_mut(&id).unwrap().agent = AgentState::Working;
+        m.push_tick(0.0);
+        m.card_mut(&id).unwrap().agent = AgentState::Done;
+        m.push_tick(1.0);
+        let got = relays(&mut m);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0.as_ref().unwrap().state, AgentState::Done);
+        m.push_tick(2.0);
+        m.push_tick(5.0);
+        assert!(relays(&mut m).is_empty());
     }
 
     #[test]
@@ -1600,14 +1868,14 @@ mod agent_states_text_tests {
         let (mut m, id) = one_card();
         m.app_active = false;
         m.config.notify.done = false;
-        m.push_tick();
+        m.push_tick(0.0);
         m.card_mut(&id).unwrap().agent = AgentState::Done;
-        m.push_tick();
+        m.push_tick(0.0);
         assert!(pushes(&mut m).is_empty());
         m.card_mut(&id).unwrap().agent = AgentState::Working;
-        m.push_tick();
+        m.push_tick(0.0);
         m.card_mut(&id).unwrap().agent = AgentState::Failed;
-        m.push_tick();
+        m.push_tick(0.0);
         assert_eq!(pushes(&mut m).len(), 1);
     }
 

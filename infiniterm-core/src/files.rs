@@ -62,6 +62,46 @@ pub fn write_bytes_atomically(path: &Path, contents: &[u8]) -> std::io::Result<(
     std::fs::rename(&tmp, path)
 }
 
+/// `write_atomically` for a file only its owner may read (ids that let anyone
+/// push to a phone). The temp file is new and 0600 before any byte goes in,
+/// so there is no moment the contents are readable by others. The result is
+/// 0600 even when the target existed at 0644. The temp name is unique per
+/// process and per write: the app and `ift push add` write the same file, and
+/// with one shared name two writes at once could mix. Elsewhere than unix it
+/// is the plain write.
+pub fn write_private_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static WRITES: AtomicU64 = AtomicU64::new(0);
+        let target = resolve_link(path);
+        let path = target.as_path();
+        let dir = path.parent().unwrap_or(Path::new("."));
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let n = WRITES.fetch_add(1, Ordering::Relaxed);
+        let tmp = dir.join(format!(".{name}.{}-{n}.infiniterm-tmp", std::process::id()));
+        // `create_new`: never a file left behind, whatever rights it has.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(contents.as_bytes())?;
+        drop(file);
+        std::fs::rename(&tmp, path)
+    }
+    #[cfg(not(unix))]
+    {
+        write_atomically(path, contents)
+    }
+}
+
 /// Sublime's hot exit: one file per editor card holding its UNSAVED buffer,
 /// written as you type and read back in place of the file when the card is
 /// restored. A draft exists only while the buffer differs from the file:
@@ -164,6 +204,48 @@ pub fn dir_list(path: &str) -> Result<Vec<DirEntry>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_write_is_0600_even_over_a_wider_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("infiniterm-private-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secret");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_private_atomically(&path, "new\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\n");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        // No temp file left behind.
+        assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with("infiniterm-tmp")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_writes_at_once_each_land_whole() {
+        let dir =
+            std::env::temp_dir().join(format!("infiniterm-private-race-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices");
+        let texts: Vec<String> = (0..8).map(|i| format!("{i}\n").repeat(2000)).collect();
+        std::thread::scope(|s| {
+            for t in &texts {
+                let path = &path;
+                s.spawn(move || write_private_atomically(path, t).unwrap());
+            }
+        });
+        // One whole write wins; none mixed with another.
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert!(texts.contains(&got));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // Symlinks need a privilege on Windows; the rule they test is the Mac's.
     #[cfg(unix)]

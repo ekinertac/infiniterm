@@ -80,6 +80,21 @@ pub fn changes(
         .collect()
 }
 
+/// True when a card that was in a pushable state no longer is (it went back
+/// to working, was cleared or closed). The relay list changes then even
+/// though no alert is due, so the phone's colour list needs a refresh.
+pub fn dropped(
+    previous: Option<&BTreeMap<String, AgentState>>,
+    current: &BTreeMap<String, AgentState>,
+) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+    previous.iter().any(|(id, state)| {
+        is_pushable(*state) && !current.get(id).copied().is_some_and(is_pushable)
+    })
+}
+
 /// `#<number> <title>`, or `card <number>` when the title is empty; the body
 /// says the state in words.
 pub fn message(card_number: u32, card_title: &str, state: AgentState) -> Push {
@@ -128,6 +143,224 @@ pub fn parse_topic_file(text: &str) -> Result<Option<String>, String> {
     }
 }
 
+/// The file of relay destinations, one `<url> <id>` per line.
+pub const DEVICES_FILE: &str = "push-devices";
+
+/// One phone registered with a push relay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Device {
+    pub url: String,
+    pub id: String,
+}
+
+/// The same characters and length as a topic: the id ends up in a JSON body
+/// and in the log, so nothing else is let through.
+pub fn valid_device_id(id: &str) -> bool {
+    valid_topic(id)
+}
+
+/// Blank lines are skipped and each line is trimmed (CRLF included). Any other
+/// line that is not `https://... <id>` makes the whole file invalid, so a typo
+/// is reported once instead of silently dropping a phone.
+pub fn parse_devices_file(text: &str) -> Result<Vec<Device>, String> {
+    let mut devices = Vec::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let bad = || format!("{DEVICES_FILE}: each line is an https:// relay url and a push id");
+        let mut words = line.split_whitespace();
+        let (Some(url), Some(id), None) = (words.next(), words.next(), words.next()) else {
+            return Err(bad());
+        };
+        if !url.starts_with("https://") || !valid_device_id(id) {
+            return Err(bad());
+        }
+        devices.push(Device {
+            url: url.to_string(),
+            id: id.to_string(),
+        });
+    }
+    Ok(devices)
+}
+
+/// One line per device, each ending in a newline.
+pub fn devices_file_text(devices: &[Device]) -> String {
+    devices
+        .iter()
+        .map(|d| format!("{} {}\n", d.url, d.id))
+        .collect()
+}
+
+/// A device with an id already in the list replaces that line (a phone that
+/// registers again, maybe with a new relay), keeping its place.
+pub fn add_device(devices: &[Device], device: Device) -> Vec<Device> {
+    let mut out = devices.to_vec();
+    match out.iter_mut().find(|d| d.id == device.id) {
+        Some(slot) => *slot = device,
+        None => out.push(device),
+    }
+    out
+}
+
+pub fn remove_device(devices: &[Device], id: &str) -> Vec<Device> {
+    devices.iter().filter(|d| d.id != id).cloned().collect()
+}
+
+/// Drops every device the relay reported as gone.
+pub fn remove_gone(devices: &[Device], gone: &[String]) -> Vec<Device> {
+    devices
+        .iter()
+        .filter(|d| !gone.contains(&d.id))
+        .cloned()
+        .collect()
+}
+
+/// A card that is coloured (waiting, failed or done), as the relay lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColouredCard {
+    pub id: String,
+    pub number: u32,
+    pub card: String,
+    pub workspace: String,
+    pub state: AgentState,
+    pub since: u64,
+}
+
+/// The card a push is about. `None` in `relay_body` means a body that only
+/// refreshes the card list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelayAlert {
+    pub number: u32,
+    pub card: String,
+    pub workspace: String,
+    pub state: AgentState,
+}
+
+/// The state word the relay and the phone use.
+pub fn state_word(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Waiting => "waiting",
+        AgentState::Failed => "failed",
+        AgentState::Done => "done",
+        AgentState::Working => "working",
+        AgentState::None => "none",
+    }
+}
+
+/// At most `max_chars` characters. Counts characters, not bytes, so a
+/// multibyte name is never split in the middle of a character.
+pub fn cut(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
+}
+
+const RELAY_NAME_MAX: usize = 60;
+const RELAY_CARDS_MAX: usize = 20;
+
+/// The body to POST to a relay: who to push, the one alert (or null), and the
+/// newest coloured cards for the widget. The cap keeps the body small, the
+/// name cut keeps one long title from filling a notification.
+pub fn relay_body(
+    ids: &[&str],
+    host: &str,
+    alert: Option<&RelayAlert>,
+    cards: &[ColouredCard],
+) -> String {
+    let mut sorted: Vec<&ColouredCard> = cards.iter().collect();
+    sorted.sort_by_key(|c| std::cmp::Reverse(c.since));
+    let cards: Vec<_> = sorted
+        .into_iter()
+        .take(RELAY_CARDS_MAX)
+        .map(|c| {
+            json!({
+                "id": c.id,
+                "number": c.number,
+                "card": cut(&c.card, RELAY_NAME_MAX),
+                "workspace": cut(&c.workspace, RELAY_NAME_MAX),
+                "state": state_word(c.state),
+                "since": c.since,
+            })
+        })
+        .collect();
+    let alert = alert.map(|a| {
+        json!({
+            "number": a.number,
+            "card": cut(&a.card, RELAY_NAME_MAX),
+            "workspace": cut(&a.workspace, RELAY_NAME_MAX),
+            "state": state_word(a.state),
+        })
+    });
+    json!({ "ids": ids, "host": host, "alert": alert, "cards": cards }).to_string()
+}
+
+/// Ids grouped by relay url, in order of first appearance, so each relay
+/// gets one request.
+pub fn group_by_url(devices: &[Device]) -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    for d in devices {
+        match out.iter_mut().find(|(url, _)| *url == d.url) {
+            Some((_, ids)) => ids.push(d.id.clone()),
+            None => out.push((d.url.clone(), vec![d.id.clone()])),
+        }
+    }
+    out
+}
+
+/// The ids a relay's reply marks `gone`. A reply that is not the expected
+/// shape is an error, so it is never mistaken for "nobody is gone".
+pub fn gone_ids(reply: &str) -> Result<Vec<String>, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(reply).map_err(|e| format!("relay reply is not JSON: {e}"))?;
+    let results = v
+        .get("results")
+        .and_then(|r| r.as_object())
+        .ok_or("relay reply has no results object")?;
+    Ok(results
+        .iter()
+        .filter(|(_, status)| status.as_str() == Some("gone"))
+        .map(|(id, _)| id.clone())
+        .collect())
+}
+
+/// The relay accepts at most this many ids in one request.
+pub const RELAY_IDS_MAX: usize = 16;
+
+/// Which of the ids sent are gone, from the relay's HTTP answer. Only an id
+/// the reply names `gone` (APNs refused its token) is gone; anything else
+/// removes nothing. The phone does not add itself again once a Mac has its
+/// id, so a wrong drop loses that phone for good. That rules out the 404
+/// with an empty body the relay sends when it knows none of the ids: a proxy
+/// or a wrong route can answer the same, and the relay's store can miss an
+/// id registered seconds ago at another location.
+pub fn relay_gone(status: u16, body: &str) -> Result<Vec<String>, String> {
+    match status {
+        200 => gone_ids(body),
+        404 if body.trim().is_empty() => Err("relay knows none of the ids".to_string()),
+        other => Err(format!("relay answered {other}")),
+    }
+}
+
+/// The host of a relay url, for `agent.log`: no scheme, path, port or the
+/// `user:pass@` a url may carry.
+pub fn url_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    host.split(':').next().unwrap_or("")
+}
+
+/// The name the phone shows for this Mac: the computer name, else the
+/// hostname, else "Mac".
+pub fn host_label(scutil: &str, hostname: &str) -> String {
+    let (scutil, hostname) = (scutil.trim(), hostname.trim());
+    if !scutil.is_empty() {
+        scutil.to_string()
+    } else if !hostname.is_empty() {
+        hostname.to_string()
+    } else {
+        "Mac".to_string()
+    }
+}
+
 /// The body to POST to the server's root.
 pub fn json_body(topic: &str, push: &Push) -> String {
     json!({
@@ -153,6 +386,19 @@ mod tests {
 
     fn map(rows: &[(&str, AgentState)]) -> BTreeMap<String, AgentState> {
         rows.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    #[test]
+    fn dropped_is_true_only_when_a_card_leaves_a_pushable_state() {
+        let before = map(&[("a", Waiting), ("b", Working)]);
+        assert!(!dropped(None, &before));
+        assert!(dropped(Some(&before), &map(&[("b", Working)])));
+        assert!(dropped(Some(&before), &map(&[("a", Working)])));
+        assert!(!dropped(Some(&before), &map(&[("a", Done)])));
+        assert!(!dropped(
+            Some(&before),
+            &map(&[("a", Waiting), ("b", Done)])
+        ));
     }
 
     #[test]
@@ -263,5 +509,216 @@ mod tests {
         assert!(should_send(true, false));
         assert!(should_send(false, true));
         assert!(should_send(false, false));
+    }
+
+    fn dev(url: &str, id: &str) -> Device {
+        Device {
+            url: url.into(),
+            id: id.into(),
+        }
+    }
+
+    #[test]
+    fn devices_file_parses_url_and_id_per_line() {
+        assert_eq!(
+            parse_devices_file("https://r.example/ abc_1\n"),
+            Ok(vec![dev("https://r.example/", "abc_1")])
+        );
+    }
+
+    #[test]
+    fn devices_file_skips_blank_lines_and_trims_crlf() {
+        assert_eq!(
+            parse_devices_file("\r\n https://r.example/ abc \r\n"),
+            Ok(vec![dev("https://r.example/", "abc")])
+        );
+        assert_eq!(parse_devices_file(""), Ok(vec![]));
+    }
+
+    #[test]
+    fn devices_file_rejects_http_url_and_bad_id() {
+        assert!(parse_devices_file("http://x a").is_err());
+        assert!(parse_devices_file("https://x a/b").is_err());
+        assert!(parse_devices_file(&format!("https://x {}", "a".repeat(65))).is_err());
+        // One bad line makes the whole file invalid.
+        assert!(parse_devices_file("https://x a\nhttp://y b\n").is_err());
+    }
+
+    #[test]
+    fn devices_file_rejects_a_line_without_two_words() {
+        assert!(parse_devices_file("https://x\n").is_err());
+        assert!(parse_devices_file("https://x a extra\n").is_err());
+    }
+
+    #[test]
+    fn add_device_replaces_the_same_id() {
+        let list = vec![dev("https://a/", "one"), dev("https://b/", "two")];
+        assert_eq!(
+            add_device(&list, dev("https://c/", "one")),
+            [dev("https://c/", "one"), dev("https://b/", "two")]
+        );
+        assert_eq!(
+            add_device(&list, dev("https://c/", "three")),
+            [
+                dev("https://a/", "one"),
+                dev("https://b/", "two"),
+                dev("https://c/", "three")
+            ]
+        );
+    }
+
+    #[test]
+    fn remove_device_and_remove_gone() {
+        let list = vec![
+            dev("https://a/", "one"),
+            dev("https://a/", "two"),
+            dev("https://a/", "three"),
+        ];
+        assert_eq!(
+            remove_device(&list, "two"),
+            [dev("https://a/", "one"), dev("https://a/", "three")]
+        );
+        assert_eq!(remove_device(&list, "nope"), list);
+        assert_eq!(
+            remove_gone(&list, &["one".to_string(), "three".to_string()]),
+            [dev("https://a/", "two")]
+        );
+        assert_eq!(remove_gone(&list, &[]), list);
+    }
+
+    #[test]
+    fn devices_file_text_round_trips() {
+        let list = vec![dev("https://a/", "one"), dev("https://b/x", "two")];
+        let text = devices_file_text(&list);
+        assert_eq!(text, "https://a/ one\nhttps://b/x two\n");
+        assert_eq!(parse_devices_file(&text), Ok(list));
+        assert_eq!(devices_file_text(&[]), "");
+    }
+
+    fn cc(id: &str, since: u64, name: &str) -> ColouredCard {
+        ColouredCard {
+            id: id.to_string(),
+            number: 3,
+            card: name.to_string(),
+            workspace: "MyWorkspace".to_string(),
+            state: Waiting,
+            since,
+        }
+    }
+
+    #[test]
+    fn relay_body_has_ids_host_alert_and_cards() {
+        let alert = RelayAlert {
+            number: 3,
+            card: "MyProject".to_string(),
+            workspace: "MyWorkspace".to_string(),
+            state: Waiting,
+        };
+        let body = relay_body(
+            &["a", "b"],
+            "My Mac",
+            Some(&alert),
+            &[cc("c1", 1762540000, "MyProject")],
+        );
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ids"], json!(["a", "b"]));
+        assert_eq!(v["host"], "My Mac");
+        assert_eq!(v["alert"]["number"], 3);
+        assert_eq!(v["alert"]["card"], "MyProject");
+        assert_eq!(v["alert"]["workspace"], "MyWorkspace");
+        assert_eq!(v["alert"]["state"], "waiting");
+        assert_eq!(
+            v["cards"],
+            json!([{
+                "id": "c1", "number": 3, "card": "MyProject",
+                "workspace": "MyWorkspace", "state": "waiting", "since": 1762540000u64
+            }])
+        );
+    }
+
+    #[test]
+    fn relay_body_alert_null_for_drop_only() {
+        let v: serde_json::Value =
+            serde_json::from_str(&relay_body(&["a"], "Mac", None, &[])).unwrap();
+        assert!(v["alert"].is_null());
+        assert_eq!(v["cards"], json!([]));
+    }
+
+    #[test]
+    fn relay_body_caps_cards_at_20_newest_first_and_cuts_names_to_60_chars() {
+        let long = "é".repeat(70);
+        let mut cards: Vec<_> = (0..25).map(|i| cc(&format!("c{i}"), i, &long)).collect();
+        cards.reverse();
+        let v: serde_json::Value =
+            serde_json::from_str(&relay_body(&["a"], "Mac", None, &cards)).unwrap();
+        let out = v["cards"].as_array().unwrap();
+        assert_eq!(out.len(), 20);
+        assert_eq!(out[0]["since"], 24);
+        assert_eq!(out[19]["since"], 5);
+        assert_eq!(out[0]["card"].as_str().unwrap().chars().count(), 60);
+        assert_eq!(cut("abc", 60), "abc");
+    }
+
+    #[test]
+    fn group_by_url_merges_ids_on_one_relay() {
+        let list = vec![
+            dev("https://a/", "one"),
+            dev("https://b/", "two"),
+            dev("https://a/", "three"),
+        ];
+        assert_eq!(
+            group_by_url(&list),
+            [
+                (
+                    "https://a/".to_string(),
+                    vec!["one".to_string(), "three".to_string()]
+                ),
+                ("https://b/".to_string(), vec!["two".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn gone_ids_reads_results() {
+        let reply = r#"{"results":{"a":"ok","b":"gone","c":"error"}}"#;
+        assert_eq!(gone_ids(reply), Ok(vec!["b".to_string()]));
+    }
+
+    #[test]
+    fn relay_gone_by_status() {
+        let body = r#"{"results":{"a":"ok","b":"gone"}}"#;
+        assert_eq!(relay_gone(200, body), Ok(vec!["b".to_string()]));
+        assert!(relay_gone(200, "nope").is_err());
+        assert_eq!(relay_gone(429, ""), Err("relay answered 429".to_string()));
+        assert!(relay_gone(413, "").is_err());
+        // A 404 names no id, with or without a body: nothing is dropped.
+        assert!(relay_gone(404, "").is_err());
+        assert!(relay_gone(404, "\n").is_err());
+        assert!(relay_gone(404, "Not found").is_err());
+    }
+
+    #[test]
+    fn url_host_leaves_out_credentials_port_and_path() {
+        assert_eq!(url_host("https://relay.example/base"), "relay.example");
+        assert_eq!(
+            url_host("https://user:pass@relay.example:8443/x?y"),
+            "relay.example"
+        );
+        assert_eq!(url_host("https://a@b@relay.example"), "relay.example");
+        assert_eq!(url_host("https://relay.example"), "relay.example");
+    }
+
+    #[test]
+    fn host_label_falls_back() {
+        assert_eq!(host_label("  Tarik's Mac\n", "box"), "Tarik's Mac");
+        assert_eq!(host_label("\n", " box.local\n"), "box.local");
+        assert_eq!(host_label("", "  "), "Mac");
+    }
+
+    #[test]
+    fn gone_ids_rejects_non_json_and_missing_results() {
+        assert!(gone_ids("nope").is_err());
+        assert!(gone_ids("{}").is_err());
+        assert!(gone_ids(r#"{"results":[1]}"#).is_err());
     }
 }

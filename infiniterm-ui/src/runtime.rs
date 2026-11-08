@@ -60,8 +60,10 @@ impl AppView {
         // later: the backend has to exist before the first card does, and
         // which backend it is cannot be changed afterwards.
         let (term_backend, session_buffer_mib) = startup_terminal();
+        let mut model = infiniterm_core::model::Model::new();
+        model.host_label = computer_name();
         AppView {
-            model: infiniterm_core::model::Model::new(),
+            model,
             registry,
             backend: Backend::start(&socket_path(), term_backend, session_buffer_mib),
             animator: crate::Animator::new(),
@@ -614,6 +616,7 @@ impl AppView {
                 Effect::Warn(line) => eprintln!("[infiniterm/warn] {line}"),
                 Effect::AgentLog(line) => append_agent_log(&line),
                 Effect::PushNotify { server, pushes } => send_pushes(server, pushes),
+                Effect::PushRelay { host, alert, cards } => send_relay_pushes(host, alert, cards),
                 Effect::Reload => {
                     self.flush_save();
                     leave_now();
@@ -1832,6 +1835,163 @@ fn send_pushes(server: String, pushes: Vec<infiniterm_core::push_notify::Push>) 
     });
 }
 
+/// The Mac's name for the phone, read once at startup (two short commands).
+fn computer_name() -> String {
+    let run = |cmd: &str, args: &[&str]| {
+        std::process::Command::new(cmd)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    let scutil = run("scutil", &["--get", "ComputerName"]);
+    let hostname = if scutil.trim().is_empty() {
+        run("hostname", &[])
+    } else {
+        String::new()
+    };
+    infiniterm_core::push_notify::host_label(&scutil, &hostname)
+}
+
+/// The first six characters of a push id: enough to tell devices apart in a
+/// log line without writing the id, which is what addresses a phone.
+fn short_id(id: &str) -> String {
+    format!("{}…", id.chars().take(6).collect::<String>())
+}
+
+struct RelayJob {
+    host: String,
+    alert: Option<infiniterm_core::push_notify::RelayAlert>,
+    cards: Vec<infiniterm_core::push_notify::ColouredCard>,
+}
+
+/// Queues a relay push for the one sender thread. One thread, not one per
+/// effect: the card list is state, so an older list must never reach the
+/// relay after a newer one. The thread also keeps the file reads and the
+/// clean-up writes off the UI thread and one at a time.
+fn send_relay_pushes(
+    host: String,
+    alert: Option<infiniterm_core::push_notify::RelayAlert>,
+    cards: Vec<infiniterm_core::push_notify::ColouredCard>,
+) {
+    use std::sync::{mpsc, OnceLock};
+    static SENDER: OnceLock<mpsc::Sender<RelayJob>> = OnceLock::new();
+    let tx = SENDER.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<RelayJob>();
+        std::thread::spawn(move || {
+            for job in rx {
+                run_relay_job(job);
+            }
+        });
+        tx
+    });
+    let _ = tx.send(RelayJob { host, alert, cards });
+}
+
+/// Posts to the relays in the devices file, one request per url (split at
+/// the relay's id cap). Ids the relay reports gone are dropped from the
+/// file. The file is read per job, so `ift push add` needs no restart; with
+/// no file nothing leaves the machine. A failure is one line in
+/// `agent.log`, never a notice.
+fn run_relay_job(job: RelayJob) {
+    use infiniterm_core::push_notify as pn;
+    let RelayJob { host, alert, cards } = job;
+    let path = infiniterm_core::paths::config_dir().join(pn::DEVICES_FILE);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let devices = match pn::parse_devices_file(&text) {
+        Ok(devices) => devices,
+        Err(why) => {
+            append_agent_log(&format!("[push] {why}"));
+            return;
+        }
+    };
+    let mut gone: Vec<String> = Vec::new();
+    for (url, ids) in &pn::group_by_url(&devices) {
+        let endpoint = format!("{}/v1/push", url.trim_end_matches('/'));
+        for chunk in ids.chunks(pn::RELAY_IDS_MAX) {
+            let sent: Vec<&str> = chunk.iter().map(String::as_str).collect();
+            let body = pn::relay_body(&sent, &host, alert.as_ref(), &cards);
+            let result = post_json_reply(&endpoint, &body)
+                .and_then(|(status, reply)| pn::relay_gone(status, &reply));
+            match result {
+                Ok(ids) => gone.extend(ids),
+                Err(why) => {
+                    let first = sent.first().map(|s| short_id(s)).unwrap_or_default();
+                    // The host only: a url may carry `user:pass@`.
+                    let host = pn::url_host(url);
+                    append_agent_log(&format!("[push] relay {host} ({first}): {why}"));
+                }
+            }
+        }
+    }
+    if gone.is_empty() {
+        return;
+    }
+    // Read again: `ift push add` may have changed the file meanwhile. An add
+    // from another process between this read and the rename is lost, and the
+    // phone does not add itself again, so it needs `ift push add` once more.
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(current) = pn::parse_devices_file(&text) else {
+        return;
+    };
+    let kept = pn::remove_gone(&current, &gone);
+    if kept.len() == current.len() {
+        return;
+    }
+    // Private: the ids address phones.
+    match infiniterm_core::files::write_private_atomically(&path, &pn::devices_file_text(&kept)) {
+        Ok(()) => append_agent_log(&format!(
+            "[push] dropped {} device(s) the relay no longer knows",
+            current.len() - kept.len()
+        )),
+        Err(e) => append_agent_log(&format!("[push] cannot update {}: {e}", pn::DEVICES_FILE)),
+    }
+}
+
+/// Like `post_json`, but returns the HTTP status and the body, because the
+/// relay answers 404 and 429 with meaning. No `-f`: only a transport
+/// failure (timeout, DNS) is an `Err`.
+fn post_json_reply(url: &str, body: &str) -> Result<(u16, String), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("curl")
+        .args(["-sS", "--max-time", PUSH_TIMEOUT_SECS])
+        .args(["-w", "\n%{http_code}"])
+        .args([
+            "-H",
+            "Content-Type: application/json",
+            "--data-binary",
+            "@-",
+        ])
+        .args(["--url", url])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("curl: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(body.as_bytes());
+    }
+    let out = child.wait_with_output().map_err(|e| format!("curl: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(err.lines().last().unwrap_or("failed").trim().to_string());
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let (reply, code) = text.rsplit_once('\n').unwrap_or(("", &text));
+    let status = code
+        .trim()
+        .parse::<u16>()
+        .map_err(|_| "curl: no status".to_string())?;
+    Ok((status, reply.to_string()))
+}
+
 fn post_json(url: &str, body: &str) -> Result<(), String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -2167,6 +2327,19 @@ fn relaunch_after_exit() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    /// Manual: hits the live relay with a made-up id and expects the empty
+    /// 404, which `relay_gone` must not turn into "gone". Run with `--ignored`.
+    #[test]
+    #[ignore]
+    fn live_relay_unknown_id_is_not_dropped() {
+        let id = "A".repeat(43);
+        let body = infiniterm_core::push_notify::relay_body(&[&id], "Mac", None, &[]);
+        let url = "https://infiniterm-push.tarik-kavaz.workers.dev/v1/push";
+        let (status, reply) = super::post_json_reply(url, &body).unwrap();
+        eprintln!("status {status} body {reply:?}");
+        assert_eq!(status, 404);
+        assert!(infiniterm_core::push_notify::relay_gone(status, &reply).is_err());
+    }
 
     // What an update replaces on Windows: the folder somebody unpacked,
     // whatever it is called and wherever it is.

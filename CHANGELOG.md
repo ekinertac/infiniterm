@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-08
+
+- The infiniterm iPhone app can now get a push when a card is waiting, fails or finishes, even with the app closed, and its badge and widget follow the cards. The phone sets itself up over ssh with the new `ift push add`; `ift push list` shows the phones and `ift push remove <id>` removes one. It uses the same `notify.*` settings as ntfy. The pushes go through a relay that sees card and workspace names and the Mac's computer name on the way.
+
 ## 0.6.10 (build 1417), 2026-11-08
 
 ### Status bar and ift
