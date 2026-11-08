@@ -298,14 +298,71 @@ pub fn swap_script(
     aside: &str,
     env: &[(String, String)],
 ) -> String {
+    swap_script_with_viewers(pid, bundle, staged, aside, env, &[])
+}
+
+/// `swap_script` that also restarts the joined windows (#658). A viewer
+/// (`ift join`) is another process of this bundle with its own data folder and
+/// no updater, so it kept running the old build after the swap. Once the new
+/// bundle is in place, the NEW `ift` asks each viewer, by its data folder, to
+/// restart (`app.restart`: it comes back as the same viewer of the same host,
+/// #584, from the bundle at the same path, which is the new one now). Done
+/// after the swap, never before: a viewer that restarted first could reopen
+/// the old bundle. Each is started in the background so a viewer that does
+/// not answer cannot hold the local app's own relaunch.
+#[cfg(not(windows))]
+pub fn swap_script_with_viewers(
+    pid: u32,
+    bundle: &str,
+    staged: &str,
+    aside: &str,
+    env: &[(String, String)],
+    viewers: &[String],
+) -> String {
     let q = crate::drop::posix_quote;
     let (b, s, a) = (q(bundle), q(staged), q(aside));
+    let ift = q(&format!("{bundle}/Contents/MacOS/ift"));
+    let restart: String = viewers
+        .iter()
+        .map(|dir| {
+            format!(
+                "INFINITERM_DATA_DIR={} {ift} run app.restart >/dev/null 2>&1 & ",
+                q(dir)
+            )
+        })
+        .collect();
     format!(
         "while kill -0 {pid} 2>/dev/null; do sleep 0.1; done; \
          if mv {b} {a}; then mv {s} {b} || mv {a} {b}; fi; \
-         exec {open}",
+         {restart}exec {open}",
         open = open_command(bundle, env)
     )
+}
+
+/// The joined windows running now: the folders under `joins_root` whose
+/// socket answers (#658). A folder left by a window that is gone has a dead
+/// socket file, which refuses the connection, so it is not listed.
+#[cfg(unix)]
+pub fn live_viewer_dirs(joins_root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(joins_root) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<std::path::PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|dir| {
+            let sock = crate::paths::socket_path_for(Some(dir.as_os_str()));
+            std::os::unix::net::UnixStream::connect(sock).is_ok()
+        })
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+/// The status bar's update hint: the version and the build, as the right end
+/// of the bar shows them ("0.6.10 (1417)"), not the build alone (#658).
+pub fn update_hint(version: &str, build: u64) -> String {
+    format!("Restart to update {version} ({build})")
 }
 
 /// The shell command that starts the app at `bundle` again with `env`.
@@ -748,6 +805,62 @@ mod tests {
         );
         let swap = swap_script(7, "/Applications/infiniterm.app", "/a", "/b", &env);
         assert!(swap.ends_with(&format!("exec {cmd}")), "{swap}");
+    }
+
+    // #658: after the swap, the new `ift` asks each joined window to restart;
+    // before it, a viewer could reopen the old bundle.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_swap_restarts_each_joined_window_after_the_new_bundle_is_in_place() {
+        let viewers = vec![
+            "/Users/me/.infiniterm/joins/mini".to_string(),
+            "/Users/me/.infiniterm/joins/air 2".to_string(),
+        ];
+        let s =
+            swap_script_with_viewers(7, "/Applications/infiniterm.app", "/a", "/b", &[], &viewers);
+        let swap = s.find("mv /a /Applications/infiniterm.app").unwrap();
+        let first = s
+            .find("INFINITERM_DATA_DIR=/Users/me/.infiniterm/joins/mini /Applications/infiniterm.app/Contents/MacOS/ift run app.restart")
+            .unwrap();
+        let second = s
+            .find("INFINITERM_DATA_DIR='/Users/me/.infiniterm/joins/air 2'")
+            .unwrap();
+        let open = s.find("exec open /Applications/infiniterm.app").unwrap();
+        assert!(swap < first && first < second && second < open, "{s}");
+        assert!(s.contains("run app.restart >/dev/null 2>&1 & "), "{s}");
+        // No joined window: the script is exactly the old one.
+        assert_eq!(
+            swap_script_with_viewers(7, "/A.app", "/a", "/b", &[], &[]),
+            swap_script(7, "/A.app", "/a", "/b", &[])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_joined_windows_that_answer_are_listed() {
+        use std::os::unix::net::UnixListener;
+        let root = std::env::temp_dir().join(format!("ift-viewers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let live = root.join("live");
+        let dead = root.join("dead");
+        let empty = root.join("empty");
+        for d in [&live, &dead, &empty] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let _listener = UnixListener::bind(live.join("infiniterm.sock")).unwrap();
+        // A window that is gone leaves its socket file behind: it refuses.
+        drop(UnixListener::bind(dead.join("infiniterm.sock")).unwrap());
+        assert_eq!(live_viewer_dirs(&root), vec![live.clone()]);
+        assert!(live_viewer_dirs(&root.join("missing")).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_update_hint_names_the_version_and_the_build() {
+        assert_eq!(
+            update_hint("0.6.10", 1417),
+            "Restart to update 0.6.10 (1417)"
+        );
     }
 
     // Only the app's own variables are passed on, in a fixed order.
