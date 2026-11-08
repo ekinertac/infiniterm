@@ -2151,6 +2151,9 @@ mod tests {
         let mut h = Harness::new();
         let first_ws = h.m.active_workspace.clone().unwrap();
         let first_card = h.focused().id.clone();
+        // The first tick opens the workspace on screen at "fit all" (#659);
+        // the view set after it is the user's own.
+        h.m.tick(0.);
         h.m.viewport.x = 500.;
         h.run("workspace.new");
         let second_ws = h.m.active_workspace.clone().unwrap();
@@ -2168,6 +2171,112 @@ mod tests {
         // A tenth that does not exist does nothing.
         h.run("workspace.show.9");
         assert_eq!(h.m.active_workspace.as_deref(), Some(second_ws.as_str()));
+    }
+
+    // #659: when the app opens, every workspace shows all its cards (the Cmd+2
+    // state), not the view it was saved with, and a workspace you have zoomed
+    // in on stays as you left it.
+    #[test]
+    fn every_workspace_opens_fitted_once_and_then_keeps_the_view_you_give_it() {
+        use crate::grid::Rect;
+        let mut h = Harness::new();
+        let first_ws = h.m.active_workspace.clone().unwrap();
+        // Two workspaces with cards far apart, both saved at the origin view.
+        let a = h.focused().id.clone();
+        h.m.card_mut(&a).unwrap().rect = Rect {
+            x: 0.,
+            y: 0.,
+            w: 1250.,
+            h: 2000.,
+        };
+        let second_ws = h.m.add_workspace(Some("two"));
+        let far = h.m.add_card(
+            "/",
+            NewCard {
+                workspace_id: Some(second_ws.clone()),
+                rect: Some(Rect {
+                    x: 9000.,
+                    y: 7000.,
+                    w: 1250.,
+                    h: 2000.,
+                }),
+                ..Default::default()
+            },
+        );
+        let _near = h.m.add_card(
+            "/",
+            NewCard {
+                workspace_id: Some(second_ws.clone()),
+                rect: Some(Rect {
+                    x: 7000.,
+                    y: 7000.,
+                    w: 1250.,
+                    h: 2000.,
+                }),
+                ..Default::default()
+            },
+        );
+        for w in &mut h.m.workspaces {
+            w.viewport = crate::viewport::Viewport {
+                x: 0.,
+                y: 0.,
+                scale: 1.,
+            };
+        }
+        h.m.viewport = crate::viewport::Viewport {
+            x: 0.,
+            y: 0.,
+            scale: 1.,
+        };
+        h.m.mark_open_fit();
+
+        // The window has a size: the workspace on screen opens fitted at the
+        // next tick, with its first card focused when none of it is.
+        h.m.tick(0.);
+        let rects: Vec<Rect> = h.m.here().iter().map(|c| c.rect).collect();
+        let bounds = crate::viewport::bounding_rect(&rects).unwrap();
+        assert_eq!(h.m.viewport, h.m.fit_viewport(bounds));
+        assert!(!h.m.fit_pending.contains(&first_ws));
+
+        // The other workspace opens fitted the first time it is shown.
+        h.m.show_workspace(&second_ws);
+        let rects: Vec<Rect> = h.m.here().iter().map(|c| c.rect).collect();
+        let bounds = crate::viewport::bounding_rect(&rects).unwrap();
+        assert_eq!(h.m.viewport, h.m.fit_viewport(bounds));
+        assert_ne!(h.m.viewport.x, 0.);
+        // Its first card in reading order has the focus: the left one, on the
+        // same row as `far` (both at the same top).
+        assert_ne!(h.focused().id, far, "the card on the left reads first");
+
+        // The user zooms in; leaving and coming back keeps that view.
+        h.m.viewport = crate::viewport::Viewport {
+            x: -123.,
+            y: -45.,
+            scale: 0.5,
+        };
+        h.m.show_workspace(&first_ws);
+        h.m.show_workspace(&second_ws);
+        assert_eq!(
+            h.m.viewport,
+            crate::viewport::Viewport {
+                x: -123.,
+                y: -45.,
+                scale: 0.5
+            }
+        );
+    }
+
+    #[test]
+    fn a_window_with_no_size_yet_keeps_a_workspace_waiting_to_open_fitted() {
+        let mut h = Harness::new();
+        let ws = h.m.active_workspace.clone().unwrap();
+        h.m.view_size = crate::grid::Size { w: 0., h: 0. };
+        h.m.mark_open_fit();
+        h.m.tick(0.);
+        assert!(h.m.fit_pending.contains(&ws), "nothing to fit into yet");
+        h.m.view_size = crate::grid::Size { w: 1600., h: 1000. };
+        h.m.tick(1.);
+        assert!(!h.m.fit_pending.contains(&ws));
     }
 
     #[test]

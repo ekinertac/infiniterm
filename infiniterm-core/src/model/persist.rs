@@ -125,6 +125,9 @@ impl Model {
         self.loaded = true;
         self.first_run = text.is_none();
         self.dirty_layout = false;
+        // Each workspace opens at "fit all" (#659), not at the view it was
+        // saved with.
+        self.mark_open_fit();
     }
 
     /// A viewer takes the host's canvas (#423, `ift join`): the same JSON the
@@ -311,6 +314,9 @@ impl Model {
             self.viewport = host_viewport;
             self.ui_scale = host_scale;
             self.selection.focused_id = host_focus;
+            // The host's view is the host's: each workspace opens at "fit
+            // all" in this window (#659).
+            self.mark_open_fit();
         }
         // The viewer's own focus survives unless its card went.
         if let Some(id) = self.selection.focused_id.clone() {
@@ -2304,6 +2310,24 @@ mod agent_states_text_tests {
             Some("session-a"),
             "the terminal is the host's own card, not a fresh one"
         );
+    }
+
+    // #659: a joined window opens each workspace at "fit all" in ITS window,
+    // not at the view the host has; its viewport is its own.
+    #[test]
+    fn a_viewer_opens_its_workspaces_fitted_not_at_the_hosts_view() {
+        let (_host, mut viewer, _a, _b, _e) = host_and_viewer();
+        let ws = viewer.active_workspace.clone().unwrap();
+        assert!(viewer.fit_pending.contains(&ws), "waiting for the window");
+        viewer.view_size = crate::grid::Size { w: 1600., h: 1000. };
+        viewer.viewport = crate::viewport::Viewport {
+            x: 777.,
+            y: 777.,
+            scale: 3.,
+        };
+        viewer.tick(0.);
+        assert!(!viewer.fit_pending.contains(&ws));
+        assert_ne!(viewer.viewport.x, 777., "the host's view is not kept");
     }
 
     #[test]
