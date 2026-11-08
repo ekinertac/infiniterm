@@ -98,6 +98,19 @@ ift attach 7           # this terminal becomes card #7's shell
 
 A session has one client at a time. Attaching takes it from the app: the card shows a banner and ignores keys until you detach with `Ctrl \`, then the app takes it back within a second.
 
+## Raycast
+
+Tarık Kavaz made a Raycast extension that drives infiniterm through `ift`. Install it from the [Raycast store](https://www.raycast.com/tarikkavaz/infiniterm). It is not part of infiniterm, and it needs infiniterm 0.6.4 or newer. Its commands:
+
+- **Open in Infiniterm** opens the Finder selection, or the folder of the front Finder window, in a workspace you pick or a new one. A second command does the same on the workspace on screen.
+- **New Terminal Card** opens a terminal card in a folder you choose.
+- **Open File in Infiniterm** opens the selected Finder file as an editor card, and **Open Git Diff in Infiniterm** shows the git changes of the selection as a diff card.
+- **Open Infiniterm Settings File** and **Open Infiniterm Keybindings File** open `settings.json` and `keybindings.json` as editor cards.
+- **Send Text to Card** types text into a card you choose without moving the focus. **Run Saved Command in Card** keeps the commands you send often.
+- **Go to Card** picks a card from any workspace and brings it on screen.
+
+The extension runs the `ift` named in its "ift Path" preference. The default is the copy inside the app, `/Applications/infiniterm.app/Contents/MacOS/ift`. The path must be absolute, because `~` is not expanded. On an older infiniterm, some commands say they need a newer `ift`.
+
 ## Servers
 
 `ift connect me@server` opens a second window whose terminal cards run on that server. Installing `ift` there, colours, agents and troubleshooting have a page of their own: [Servers](../servers/). `ift join <host>` opens a window on another Mac's running canvas instead, described there too.
