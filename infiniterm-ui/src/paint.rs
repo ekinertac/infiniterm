@@ -732,10 +732,10 @@ impl AppView {
                 AgentState::Waiting => chrome.agent_waiting,
                 AgentState::Failed => chrome.agent_failed,
                 AgentState::Done => chrome.agent_done,
-                // A gradient reaches the card's edge: a resting card's dark
-                // hairline over it would read as padding (#544).
-                AgentState::None if gradient_on => gpui::transparent_black(),
-                AgentState::None => chrome.card_border,
+                // `card.border`, else the hairline (none over a gradient).
+                AgentState::None => {
+                    chrome.card_resting_border(&self.model.ui_theme.card, gradient_on)
+                }
             };
             // A resting card keeps the hairline; one with an agent in it gets
             // the heavier, zoom-stepped border, because at a distance the
@@ -785,12 +785,14 @@ impl AppView {
                 let locked = focused
                     && (card.kind.has_editor_body() || card.kind == CardKind::Browser)
                     && card.locked;
+                // `card.activeBorder` recolours only the white ring; "none"
+                // leaves the focused card without one.
                 let ring_color = if locked {
-                    chrome.warn
+                    Some(chrome.warn)
                 } else if multi && !focused {
-                    chrome.selection_ring
+                    Some(chrome.selection_ring)
                 } else {
-                    chrome.focus_ring
+                    chrome.card_focus_ring(&self.model.ui_theme.card)
                 };
                 let alpha = focus_ring_alpha(vp.scale) as f32
                     * if focused || multi {
@@ -805,15 +807,18 @@ impl AppView {
                     point(b.origin.x - off, b.origin.y - off),
                     size(b.size.width + off * 2., b.size.height + off * 2.),
                 );
-                window.paint_quad(
-                    outline(
-                        rb,
-                        crate::chrome::with_alpha(ring_color, alpha),
-                        BorderStyle::Solid,
-                    )
-                    .border_widths(ring)
-                    .corner_radii(radius + off),
-                );
+                // Scaled, not set: a themed ring keeps its own alpha.
+                if let Some(ring_color) = ring_color {
+                    window.paint_quad(
+                        outline(
+                            rb,
+                            crate::chrome::scaled_alpha(ring_color, alpha),
+                            BorderStyle::Solid,
+                        )
+                        .border_widths(ring)
+                        .corner_radii(radius + off),
+                    );
+                }
             }
             if infiniterm_core::card_header::inset(self.model.ui_theme.card.header_on(), card.kind)
                 > 0.

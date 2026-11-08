@@ -12,7 +12,7 @@ use crate::fonts::UiTypography;
 use gpui::{rgb, Hsla, Rgba};
 use infiniterm_core::config::Ui;
 use infiniterm_core::itermcolors::Theme;
-use infiniterm_core::ui_theme::{BarTheme, BorderSpec, ColorSpec, TabTheme};
+use infiniterm_core::ui_theme::{BarTheme, BorderSpec, CardTheme, ColorSpec, TabTheme};
 
 /// A one-device-pixel line: the thinnest gpui draws crisply. Every card
 /// body's hairline dividers and 1px outlines share this so they read as one
@@ -529,6 +529,35 @@ impl Chrome {
     }
 }
 
+impl Chrome {
+    /// A resting card's edge once `card.border` and `card.borderOpacity` have
+    /// had their say. Unset keeps the hairline, or nothing over a gradient,
+    /// where the dark line would read as padding (#544).
+    pub fn card_resting_border(&self, theme: &CardTheme, gradient_on: bool) -> Hsla {
+        let base = match &theme.border {
+            None if gradient_on => gpui::transparent_black(),
+            None => self.card_border,
+            Some(BorderSpec::None) => gpui::transparent_black(),
+            Some(BorderSpec::Color(c)) => self.theme_color(c),
+        };
+        scaled_alpha(base, theme.border_opacity.unwrap_or(1.) as f32)
+    }
+
+    /// The focused card's ring colour before the zoom's own alpha, or `None`
+    /// when `card.activeBorder` is "none".
+    pub fn card_focus_ring(&self, theme: &CardTheme) -> Option<Hsla> {
+        let base = match &theme.active_border {
+            None => self.focus_ring,
+            Some(BorderSpec::None) => return None,
+            Some(BorderSpec::Color(c)) => self.theme_color(c),
+        };
+        Some(scaled_alpha(
+            base,
+            theme.active_border_opacity.unwrap_or(1.) as f32,
+        ))
+    }
+}
+
 /// A workspace tab's fill: flat, or a top-to-bottom gradient (#544).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TabFill {
@@ -908,6 +937,41 @@ mod tab_color_tests {
         assert_eq!(s.active_border, hex("#abcdef"));
         assert_eq!(s.separator, Some(chrome.card_bg));
         assert_eq!(s.radius, Some(9.));
+    }
+
+    #[test]
+    fn no_card_border_keys_leave_the_hairline_and_the_white_ring() {
+        let chrome = Chrome::default_chrome();
+        let none = CardTheme::default();
+        assert_eq!(chrome.card_resting_border(&none, false), chrome.card_border);
+        assert_eq!(chrome.card_resting_border(&none, true).a, 0.);
+        assert_eq!(chrome.card_focus_ring(&none), Some(chrome.focus_ring));
+    }
+
+    // A border the theme names shows even over a gradient, which otherwise
+    // drops the hairline; opacity multiplies the colour's own alpha.
+    #[test]
+    fn card_border_keys_set_the_colour_and_its_opacity() {
+        let chrome = Chrome::default_chrome();
+        let theme = CardTheme {
+            border: Some(BorderSpec::Color(ColorSpec::Hex("#30264480".into()))),
+            border_opacity: Some(0.5),
+            active_border: Some(BorderSpec::Color(ColorSpec::Hex("#7c6ab0".into()))),
+            active_border_opacity: Some(0.4),
+            ..CardTheme::default()
+        };
+        let edge = chrome.card_resting_border(&theme, true);
+        assert!((edge.a - 0.25).abs() < 0.01);
+        let ring = chrome.card_focus_ring(&theme).unwrap();
+        assert!((ring.a - 0.4).abs() < 0.01);
+        assert_eq!(with_alpha(ring, 1.), hex("#7c6ab0").unwrap());
+        let off = CardTheme {
+            border: Some(BorderSpec::None),
+            active_border: Some(BorderSpec::None),
+            ..CardTheme::default()
+        };
+        assert_eq!(chrome.card_resting_border(&off, false).a, 0.);
+        assert_eq!(chrome.card_focus_ring(&off), None);
     }
 
     #[test]

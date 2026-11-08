@@ -105,6 +105,16 @@ pub struct CardTheme {
     /// The header icon's size in pixels at 100% zoom (it scales with the
     /// card); unset keeps the built-in size.
     pub header_icon_size: Option<f64>,
+    /// A resting card's edge. Unset is the built-in hairline (none over a
+    /// gradient); agent state still paints over it.
+    pub border: Option<BorderSpec>,
+    /// Multiplies the alpha of `border`, 0 to 1.
+    pub border_opacity: Option<f64>,
+    /// The focused card's ring. Unset is the built-in white; a locked card
+    /// and the other members of a selection keep their own colours.
+    pub active_border: Option<BorderSpec>,
+    /// Multiplies the alpha of `active_border`, 0 to 1.
+    pub active_border_opacity: Option<f64>,
 }
 
 impl CardTheme {
@@ -187,7 +197,7 @@ pub const LOOK_KEYS: [(&str, Kind); 21] = [
 
 /// The bar keys (#425) and the tab keys (#544), with their docs. They exist
 /// only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 22] = [
+pub const BAR_KEYS: [(&str, &[&str], &str); 26] = [
     (
         "titlebar.background",
         &[
@@ -347,6 +357,33 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 22] = [
             "size, about half the header's height.",
         ],
         "16",
+    ),
+    (
+        "card.border",
+        &[
+            "A card's edge while no agent state colours it: #rgb, #rrggbb, #rrggbbaa, \"canvas\",",
+            "\"card\", \"bar\", or \"none\". Unset keeps the dark hairline, or none over ui.cardGradient.",
+            "A working, waiting, failed or done card still wears its state's colour.",
+        ],
+        "\"#302644\"",
+    ),
+    (
+        "card.borderOpacity",
+        &["Multiplies the alpha of card.border, 0 to 1. Default 1."],
+        "1",
+    ),
+    (
+        "card.activeBorder",
+        &[
+            "The focused card's ring: a colour as card.border, or \"none\". Unset keeps the",
+            "white ring. A locked card's ring and the other cards of a selection keep theirs.",
+        ],
+        "\"#7c6ab0\"",
+    ),
+    (
+        "card.activeBorderOpacity",
+        &["Multiplies the alpha of the focused card's ring, 0 to 1. Default 1."],
+        "1",
     ),
 ];
 
@@ -615,6 +652,12 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
                 )
             }
             "card.headerButtons" => theme.card.header_buttons = header_buttons(key, v)?,
+            "card.border" => theme.card.border = Some(border(key, v)?),
+            "card.borderOpacity" => theme.card.border_opacity = Some(number(key, v, 0., 1.)?),
+            "card.activeBorder" => theme.card.active_border = Some(border(key, v)?),
+            "card.activeBorderOpacity" => {
+                theme.card.active_border_opacity = Some(number(key, v, 0., 1.)?)
+            }
             "card.headerButtonsActiveOnly" => {
                 theme.card.header_buttons_active_only = Some(
                     v.as_bool()
@@ -830,6 +873,34 @@ mod tests {
         use crate::card_header::HeaderButton::*;
         assert_eq!(c.header_buttons, vec![Close, SplitRight]);
         assert!(!parse(r#"{"card.header": false}"#).unwrap().card.header_on());
+    }
+
+    #[test]
+    fn card_border_keys_parse_and_opacity_is_clamped() {
+        let c = parse(
+            r##"{
+              "card.border": "#302644",
+              "card.borderOpacity": 0.5,
+              "card.activeBorder": "none",
+              "card.activeBorderOpacity": 3,
+            }"##,
+        )
+        .unwrap()
+        .card;
+        assert_eq!(
+            c.border,
+            Some(BorderSpec::Color(ColorSpec::Hex("#302644".into())))
+        );
+        assert_eq!(c.border_opacity, Some(0.5));
+        assert_eq!(c.active_border, Some(BorderSpec::None));
+        assert_eq!(c.active_border_opacity, Some(1.));
+        for bad in [
+            r#"{"card.border": "thick"}"#,
+            r#"{"card.activeBorder": 1}"#,
+            r#"{"card.borderOpacity": "half"}"#,
+        ] {
+            assert!(parse(bad).is_err(), "{bad} should be refused");
+        }
     }
 
     #[test]

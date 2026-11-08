@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-09
+
+- A ui theme can now colour the card border: `card.border` sets a resting card's edge (a colour or `"none"`), and `card.activeBorder` sets the focused card's ring. `card.borderOpacity` and `card.activeBorderOpacity` set how opaque each is, 0 to 1. A border you set shows over `ui.cardGradient` too, where the built-in hairline is left off. Agent state colours, a locked card's ring and the selection's blue ring are unchanged.
+
 ### 2026-11-08
 
 - When the app opens, and when you join a host, every workspace now opens at the Cmd+2 view: all its cards in view, with its first card focused unless it remembers one. Before, each workspace opened at the view it was saved with, and you pressed Cmd+2 on each. It happens once per workspace per launch; a workspace you zoom in on keeps your view when you come back to it. In a joined window the fit is the window's own, not the host's view.
