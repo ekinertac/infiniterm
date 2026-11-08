@@ -1916,12 +1916,14 @@ fn run_relay_job(job: RelayJob) {
             let sent: Vec<&str> = chunk.iter().map(String::as_str).collect();
             let body = pn::relay_body(&sent, &host, alert.as_ref(), &cards);
             let result = post_json_reply(&endpoint, &body)
-                .and_then(|(status, reply)| pn::relay_gone(status, &reply, &sent));
+                .and_then(|(status, reply)| pn::relay_gone(status, &reply));
             match result {
                 Ok(ids) => gone.extend(ids),
                 Err(why) => {
                     let first = sent.first().map(|s| short_id(s)).unwrap_or_default();
-                    append_agent_log(&format!("[push] relay {url} ({first}): {why}"));
+                    // The host only: a url may carry `user:pass@`.
+                    let host = pn::url_host(url);
+                    append_agent_log(&format!("[push] relay {host} ({first}): {why}"));
                 }
             }
         }
@@ -1930,8 +1932,8 @@ fn run_relay_job(job: RelayJob) {
         return;
     }
     // Read again: `ift push add` may have changed the file meanwhile. An add
-    // from another process between this read and the rename is lost; the
-    // phone adds itself again on its next connect.
+    // from another process between this read and the rename is lost, and the
+    // phone does not add itself again, so it needs `ift push add` once more.
     let Ok(text) = std::fs::read_to_string(&path) else {
         return;
     };
@@ -2325,18 +2327,18 @@ fn relaunch_after_exit() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    /// Manual: hits the live relay with a made-up id and expects 404, which
-    /// `relay_gone` turns into "gone". Run with `--ignored`.
+    /// Manual: hits the live relay with a made-up id and expects the empty
+    /// 404, which `relay_gone` must not turn into "gone". Run with `--ignored`.
     #[test]
     #[ignore]
-    fn live_relay_unknown_id_is_gone() {
+    fn live_relay_unknown_id_is_not_dropped() {
         let id = "A".repeat(43);
         let body = infiniterm_core::push_notify::relay_body(&[&id], "Mac", None, &[]);
         let url = "https://infiniterm-push.tarik-kavaz.workers.dev/v1/push";
         let (status, reply) = super::post_json_reply(url, &body).unwrap();
         eprintln!("status {status} body {reply:?}");
-        let gone = infiniterm_core::push_notify::relay_gone(status, &reply, &[&id]).unwrap();
-        assert_eq!(gone, vec![id]);
+        assert_eq!(status, 404);
+        assert!(infiniterm_core::push_notify::relay_gone(status, &reply).is_err());
     }
 
     // What an update replaces on Windows: the folder somebody unpacked,

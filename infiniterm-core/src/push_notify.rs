@@ -264,7 +264,7 @@ pub fn relay_body(
     cards: &[ColouredCard],
 ) -> String {
     let mut sorted: Vec<&ColouredCard> = cards.iter().collect();
-    sorted.sort_by(|a, b| b.since.cmp(&a.since));
+    sorted.sort_by_key(|c| std::cmp::Reverse(c.since));
     let cards: Vec<_> = sorted
         .into_iter()
         .take(RELAY_CARDS_MAX)
@@ -322,16 +322,30 @@ pub fn gone_ids(reply: &str) -> Result<Vec<String>, String> {
 /// The relay accepts at most this many ids in one request.
 pub const RELAY_IDS_MAX: usize = 16;
 
-/// Which of the ids sent are gone, from the relay's HTTP answer. A 404 with
-/// an empty body means the relay knows none of them, so all are gone. A 404
-/// with a body (a wrong path says "Not found") and any other status than 200
-/// is an error and removes nothing.
-pub fn relay_gone(status: u16, body: &str, sent: &[&str]) -> Result<Vec<String>, String> {
+/// Which of the ids sent are gone, from the relay's HTTP answer. Only an id
+/// the reply names `gone` (APNs refused its token) is gone; anything else
+/// removes nothing. The phone does not add itself again once a Mac has its
+/// id, so a wrong drop loses that phone for good. That rules out the 404
+/// with an empty body the relay sends when it knows none of the ids: a proxy
+/// or a wrong route can answer the same, and the relay's store can miss an
+/// id registered seconds ago at another location.
+pub fn relay_gone(status: u16, body: &str) -> Result<Vec<String>, String> {
     match status {
         200 => gone_ids(body),
-        404 if body.trim().is_empty() => Ok(sent.iter().map(|s| s.to_string()).collect()),
+        404 if body.trim().is_empty() => Err("relay knows none of the ids".to_string()),
         other => Err(format!("relay answered {other}")),
     }
+}
+
+/// The host of a relay url, for `agent.log`: no scheme, path, port or the
+/// `user:pass@` a url may carry.
+pub fn url_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    host.split(':').next().unwrap_or("")
 }
 
 /// The name the phone shows for this Mac: the computer name, else the
@@ -673,23 +687,25 @@ mod tests {
     #[test]
     fn relay_gone_by_status() {
         let body = r#"{"results":{"a":"ok","b":"gone"}}"#;
+        assert_eq!(relay_gone(200, body), Ok(vec!["b".to_string()]));
+        assert!(relay_gone(200, "nope").is_err());
+        assert_eq!(relay_gone(429, ""), Err("relay answered 429".to_string()));
+        assert!(relay_gone(413, "").is_err());
+        // A 404 names no id, with or without a body: nothing is dropped.
+        assert!(relay_gone(404, "").is_err());
+        assert!(relay_gone(404, "\n").is_err());
+        assert!(relay_gone(404, "Not found").is_err());
+    }
+
+    #[test]
+    fn url_host_leaves_out_credentials_port_and_path() {
+        assert_eq!(url_host("https://relay.example/base"), "relay.example");
         assert_eq!(
-            relay_gone(200, body, &["a", "b"]),
-            Ok(vec!["b".to_string()])
+            url_host("https://user:pass@relay.example:8443/x?y"),
+            "relay.example"
         );
-        assert_eq!(
-            relay_gone(404, "", &["a", "b"]),
-            Ok(vec!["a".to_string(), "b".to_string()])
-        );
-        assert!(relay_gone(200, "nope", &["a"]).is_err());
-        assert_eq!(
-            relay_gone(429, "", &["a"]),
-            Err("relay answered 429".to_string())
-        );
-        assert!(relay_gone(413, "", &["a"]).is_err());
-        // A wrong path also gives 404, but with a body: not "gone".
-        assert!(relay_gone(404, "Not found", &["a"]).is_err());
-        assert_eq!(relay_gone(404, "\n", &["a"]), Ok(vec!["a".to_string()]));
+        assert_eq!(url_host("https://a@b@relay.example"), "relay.example");
+        assert_eq!(url_host("https://relay.example"), "relay.example");
     }
 
     #[test]
