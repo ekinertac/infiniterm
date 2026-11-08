@@ -9,6 +9,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-08
 
 - New setting `browser.openLinksIn` picks where a clicked web link opens: `"card"` (the default) for a browser card beside it, or `"system"` for your default browser. It covers Cmd+click on a URL in a terminal and a click on a web link in a Page card, and Shift opens the link in the other one. Web links in a Page card now open a browser card by default; before, they always went to the system browser.
+- When the app opens, and when you join a host, every workspace now opens at the Cmd+2 view: all its cards in view, with its first card focused unless it remembers one. Before, each workspace opened at the view it was saved with, and you pressed Cmd+2 on each. It happens once per workspace per launch; a workspace you zoom in on keeps your view when you come back to it. In a joined window the fit is the window's own, not the host's view.
 - "Restart to update" in the status bar now names the version and the build, like `Restart to update 0.6.10 (1417)`, where it showed only the build.
 - Restarting to install an update now restarts the joined windows open on this Mac too, so they come back on the new build as the same viewers of the same hosts. Before, a joined window kept running the old build until you restarted it by hand.
 

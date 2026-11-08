@@ -62,6 +62,23 @@ fn collides(a: &Body, b: &Body, gap: f64) -> bool {
         && b.rect.y < a.rect.y + a.rect.h + c
 }
 
+/// The id of the card that reads first: the top row, left to right. What a
+/// workspace focuses when it opens with no focus of its own to go back to
+/// (#659).
+pub fn first_in_reading_order(cards: &[(String, Rect)]) -> Option<String> {
+    let bodies: Vec<Body> = cards
+        .iter()
+        .map(|(id, rect)| Body {
+            id: id.clone(),
+            rect: *rect,
+            group: None,
+        })
+        .collect();
+    reading_order(&bodies)
+        .first()
+        .map(|&i| bodies[i].id.clone())
+}
+
 /// Reading order: rows top to bottom (cards whose tops are within a grid cell
 /// share a row), left to right inside a row. Indices into `bodies`.
 fn reading_order(bodies: &[Body]) -> Vec<usize> {

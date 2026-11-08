@@ -78,6 +78,8 @@ While it is on, `Cmd Up` and `Cmd Down` pan three rows inside the card. Typing a
 
 ### How a fit frames the cards
 
+When the app opens, and when you join a host, every workspace opens at `Cmd 2`: all its cards in view, with its first card focused unless it has a card it remembers as focused. This happens once per workspace each time the app opens. A workspace you zoom in on keeps that view when you leave it and come back. In a joined window the fit is your window's own, not the host's view.
+
 Every fit (`Cmd 1`, `Cmd 2`, `Cmd 3`, the double-clicks) leaves `"ui.fitPadding"` pixels around what it frames, 48 by default; `0` lets the cards touch the window's edges. A fit never zooms past 100%, so a small card stays its own size in the middle of the window; `"ui.fitMagnify": true` lifts that, and a fit then zooms in until the card fills the window. `Cmd 1` on a card that was split frames the whole slot, both halves together; `"ui.fitSplitSlot": false` makes it fit that card alone, so it fills the window.
 
 Interface size is separate from zoom: `Cmd Shift =` and `Cmd Shift -` make the app's own chrome (labels, title bar, status bar, palette, dialogs) bigger or smaller, never terminal text.
