@@ -438,17 +438,29 @@ impl Model {
             .filter(|c| c.agent != crate::agent_state::AgentState::None)
             .map(|c| (c.id.clone(), c.agent))
             .collect();
+        // The states the phone lists (#655): the ones whose `notify.*` switch
+        // is on, so turning `notify.done` off keeps done cards off the phone's
+        // widget too, as well as off its banners. `skipWhenFocused` is about
+        // banner noise, not about what leaves the Mac, so it does not touch
+        // the list.
+        let notify = self.config.notify.clone();
+        let listed = |state: crate::agent_state::AgentState| match state {
+            crate::agent_state::AgentState::Waiting => notify.waiting,
+            crate::agent_state::AgentState::Failed => notify.failed,
+            crate::agent_state::AgentState::Done => notify.done,
+            _ => false,
+        };
         let changed = pn::changes(self.push_prev.as_ref(), &current);
-        let left = pn::dropped(self.push_prev.as_ref(), &current);
+        let left = pn::dropped(self.push_prev.as_ref(), &current, listed);
         for (id, state) in &current {
             let was = self.push_prev.as_ref().and_then(|p| p.get(id));
-            if pn::is_pushable(*state) && was != Some(state) {
+            if listed(*state) && was != Some(state) {
                 self.push_since.insert(id.clone(), now);
             }
         }
-        // Forget cards that stopped being coloured so the map stays small.
+        // Forget cards that stopped being listed so the map stays small.
         self.push_since
-            .retain(|id, _| current.get(id).copied().is_some_and(pn::is_pushable));
+            .retain(|id, _| current.get(id).copied().is_some_and(listed));
         self.push_prev = Some(current);
         let n = &self.config.notify;
         let send = pn::should_send(n.skip_when_focused, self.app_active);
@@ -494,7 +506,7 @@ impl Model {
         let cards: Vec<_> = self
             .cards
             .iter()
-            .filter(|c| pn::is_pushable(c.agent))
+            .filter(|c| listed(c.agent))
             .map(|c| pn::ColouredCard {
                 id: c.id.clone(),
                 number: c.number,
@@ -521,7 +533,8 @@ impl Model {
                     cards: cards.clone(),
                 });
             }
-        } else if (!changed.is_empty() || left) && self.relay_drop_due.is_none() {
+        } else if (changed.iter().any(|c| listed(c.state)) || left) && self.relay_drop_due.is_none()
+        {
             // Debounced: a card that flips away and back within a moment
             // should not cost the phone a refresh.
             self.relay_drop_due = Some(now + 1.5);
@@ -1721,6 +1734,73 @@ mod agent_states_text_tests {
         assert_eq!(alert.workspace, ws_name);
         assert_eq!(cards.len(), 2);
         assert!(cards.iter().all(|c| c.workspace == ws_name));
+    }
+
+    // #655: the phone's list follows `notify.*`. A state whose switch is off
+    // is neither a banner nor a row of the widget, and sends nothing at all.
+    #[test]
+    fn push_tick_a_state_switched_off_is_not_listed_and_sends_nothing() {
+        let (mut m, a) = one_card();
+        let b = second_card(&mut m);
+        m.app_active = false;
+        m.config.notify.done = false;
+        m.push_tick(0.0);
+        m.card_mut(&a).unwrap().agent = AgentState::Done;
+        m.push_tick(10.0);
+        m.push_tick(20.0);
+        assert!(
+            relays(&mut m).is_empty(),
+            "a done card with done off: nothing"
+        );
+        // A waiting card still alerts, and the list holds it but not the done one.
+        m.card_mut(&b).unwrap().agent = AgentState::Waiting;
+        m.push_tick(30.0);
+        let got = relays(&mut m);
+        assert_eq!(got.len(), 1);
+        let cards = &got[0].1;
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].id, b);
+        // The done card going back to working was never listed: no drop.
+        m.card_mut(&a).unwrap().agent = AgentState::Working;
+        m.push_tick(40.0);
+        m.push_tick(50.0);
+        assert!(relays(&mut m).is_empty());
+    }
+
+    // `skipWhenFocused` holds banners back, not the list: it is about noise,
+    // not about what leaves the Mac. The refresh still goes, as a list only.
+    #[test]
+    fn push_tick_a_focused_window_holds_the_alert_but_not_the_list() {
+        let (mut m, a) = one_card();
+        m.app_active = true;
+        m.config.notify.skip_when_focused = true;
+        m.push_tick(0.0);
+        m.card_mut(&a).unwrap().agent = AgentState::Waiting;
+        m.push_tick(10.0);
+        assert!(relays(&mut m).is_empty(), "no alert while focused");
+        m.push_tick(12.0);
+        let got = relays(&mut m);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].0.is_none(), "a list refresh, not an alert");
+        assert_eq!(got[0].1.len(), 1);
+    }
+
+    // A card going from a listed state to one whose switch is off leaves the
+    // list, so the phone does not show it stuck.
+    #[test]
+    fn push_tick_a_card_moving_to_a_switched_off_state_is_dropped_from_the_list() {
+        let (mut m, a) = one_card();
+        m.app_active = false;
+        m.config.notify.done = false;
+        m.card_mut(&a).unwrap().agent = AgentState::Waiting;
+        m.push_tick(0.0);
+        m.card_mut(&a).unwrap().agent = AgentState::Done;
+        m.push_tick(1.0);
+        m.push_tick(3.0);
+        let got = relays(&mut m);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].0.is_none());
+        assert!(got[0].1.is_empty(), "the done card is not listed");
     }
 
     #[test]

@@ -80,19 +80,21 @@ pub fn changes(
         .collect()
 }
 
-/// True when a card that was in a pushable state no longer is (it went back
-/// to working, was cleared or closed). The relay list changes then even
-/// though no alert is due, so the phone's colour list needs a refresh.
+/// True when a card that was in a listed state no longer is (it went back to
+/// working, was cleared or closed). The relay list changes then even though
+/// no alert is due, so the phone's colour list needs a refresh. `listed` is
+/// the states the phone shows: the ones whose `notify.*` switch is on (#655).
 pub fn dropped(
     previous: Option<&BTreeMap<String, AgentState>>,
     current: &BTreeMap<String, AgentState>,
+    listed: impl Fn(AgentState) -> bool,
 ) -> bool {
     let Some(previous) = previous else {
         return false;
     };
-    previous.iter().any(|(id, state)| {
-        is_pushable(*state) && !current.get(id).copied().is_some_and(is_pushable)
-    })
+    previous
+        .iter()
+        .any(|(id, state)| listed(*state) && !current.get(id).copied().is_some_and(&listed))
 }
 
 /// `#<number> <title>`, or `card <number>` when the title is empty; the body
@@ -389,16 +391,30 @@ mod tests {
     }
 
     #[test]
-    fn dropped_is_true_only_when_a_card_leaves_a_pushable_state() {
+    fn dropped_is_true_only_when_a_card_leaves_a_listed_state() {
         let before = map(&[("a", Waiting), ("b", Working)]);
-        assert!(!dropped(None, &before));
-        assert!(dropped(Some(&before), &map(&[("b", Working)])));
-        assert!(dropped(Some(&before), &map(&[("a", Working)])));
-        assert!(!dropped(Some(&before), &map(&[("a", Done)])));
+        assert!(!dropped(None, &before, is_pushable));
+        assert!(dropped(Some(&before), &map(&[("b", Working)]), is_pushable));
+        assert!(dropped(Some(&before), &map(&[("a", Working)]), is_pushable));
+        assert!(!dropped(Some(&before), &map(&[("a", Done)]), is_pushable));
         assert!(!dropped(
             Some(&before),
-            &map(&[("a", Waiting), ("b", Done)])
+            &map(&[("a", Waiting), ("b", Done)]),
+            is_pushable
         ));
+    }
+
+    // #655: the phone lists what `notify.*` lets through, so a card that goes
+    // from a listed state to an unlisted one leaves the list, and a card that
+    // was never listed leaves nothing to refresh.
+    #[test]
+    fn a_card_going_from_a_listed_state_to_an_unlisted_one_is_dropped() {
+        let not_done = |s: AgentState| matches!(s, Waiting | Failed);
+        let before = map(&[("a", Waiting)]);
+        assert!(dropped(Some(&before), &map(&[("a", Done)]), not_done));
+        let before = map(&[("a", Done)]);
+        assert!(!dropped(Some(&before), &map(&[("a", Working)]), not_done));
+        assert!(!dropped(Some(&before), &map(&[]), not_done));
     }
 
     #[test]
