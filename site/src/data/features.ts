@@ -86,6 +86,7 @@ export const featureGroups: FeatureGroup[] = [
       { text: '`ift ls`, `ift sessions` and `ift commands` print tables, or tab-separated rows into a pipe.' },
       { text: '`ift usage 30` shows which commands and gestures you used in 30 days, from a local log.' },
       { text: 'zsh completion for every verb.' },
+      { text: 'A Raycast extension by Tarık Kavaz opens Finder folders and files in infiniterm and sends text to a card.', href: 'guide/ift-and-sessions/#raycast' },
     ],
   },
   {
