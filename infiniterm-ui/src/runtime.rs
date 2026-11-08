@@ -2206,15 +2206,33 @@ impl AppView {
         } else {
             u.dir.join(format!("old-{}.app", std::process::id()))
         };
+        // The joined windows running now restart after the swap too (#658):
+        // each is another process of this bundle, with no updater of its own.
+        #[cfg(unix)]
+        let viewers: Vec<String> = infiniterm_core::update::live_viewer_dirs(
+            &home_dir().join(".infiniterm").join("joins"),
+        )
+        .iter()
+        .map(|d| d.to_string_lossy().into_owned())
+        .collect();
+        #[cfg(not(windows))]
+        let script = infiniterm_core::update::swap_script_with_viewers(
+            std::process::id(),
+            &u.bundle.to_string_lossy(),
+            &staged.app.to_string_lossy(),
+            &aside.to_string_lossy(),
+            // The new app starts as this one is (a viewer stays a viewer).
+            &infiniterm_core::update::relaunch_env(),
+            &viewers,
+        );
+        // Windows' waiter inherits the environment and needs nothing; it has
+        // no joined windows.
+        #[cfg(windows)]
         let script = infiniterm_core::update::swap_script(
             std::process::id(),
             &u.bundle.to_string_lossy(),
             &staged.app.to_string_lossy(),
             &aside.to_string_lossy(),
-            // The new app starts as this one is (a viewer stays a viewer);
-            // Windows' waiter inherits the environment and needs nothing.
-            #[cfg(not(windows))]
-            &infiniterm_core::update::relaunch_env(),
         );
         self.flush_save();
         // `spawn_waiter`, not a bare `/bin/sh`, which is what this used to

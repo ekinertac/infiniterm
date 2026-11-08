@@ -1249,7 +1249,9 @@ impl AppView {
                                     .rounded_sm()
                                     .bg(chrome.warn)
                                     .text_color(chrome.bar_bg)
-                                    .child(format!("Restart to update to {}", s.build))
+                                    .child(infiniterm_core::update::update_hint(
+                                        &s.version, s.build,
+                                    ))
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _: &MouseDownEvent, _, cx| {

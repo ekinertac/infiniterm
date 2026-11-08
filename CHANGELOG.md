@@ -6,6 +6,11 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-08
+
+- "Restart to update" in the status bar now names the version and the build, like `Restart to update 0.6.10 (1417)`, where it showed only the build.
+- Restarting to install an update now restarts the joined windows open on this Mac too, so they come back on the new build as the same viewers of the same hosts. Before, a joined window kept running the old build until you restarted it by hand.
+
 ## 0.6.11 (build 1433), 2026-11-08
 
 ### Notifications
