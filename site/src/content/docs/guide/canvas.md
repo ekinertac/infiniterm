@@ -154,6 +154,8 @@ A terminal program that uses the mouse, such as vim, tmux or htop, still gets th
 
 A label that ends in an ellipsis, in the menu and in the command palette, asks you for something more before it acts: a name, a file, an address. One without it acts at once.
 
+The palette, the shortcuts panel and the settings completion treat British and American spellings as one: typing `color` finds "colour", and `maximize` finds "maximise". `ift license` runs `ift licence`.
+
 ## Closing and protecting
 
 A card closes when its shell exits, so `exit` or Ctrl+D does what `Cmd W` does. `Cmd Shift T` reopens the last card you closed, where it was, as in a browser. `Cmd W` with more than one card selected asks "close N cards?" first, because `Cmd A` with the keyboard not in an editor selects every card of the workspace.

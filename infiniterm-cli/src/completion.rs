@@ -102,6 +102,7 @@ _ift() {
     'update:the app update state: ift update status'
     'push:give a phone push id to this Mac: add, remove, list'
     'licence:register this Mac with its commercial licence key'
+    'license:the same as licence'
     'update-key:make the key that signs Windows releases'
     'update-sign:sign a release manifest'
     'name:name the card this is run from'
@@ -156,7 +157,10 @@ _ift "$@"
 /// Where `ift install` writes `_ift`: a per-user fpath directory, made if
 /// missing. Not Homebrew's site-functions, which is Homebrew's to own.
 pub fn install_dir(home: &std::path::Path) -> std::path::PathBuf {
-    home.join(".local").join("share").join("zsh").join("site-functions")
+    home.join(".local")
+        .join("share")
+        .join("zsh")
+        .join("site-functions")
 }
 
 /// Writes the function, and says what the shell profile needs when the
@@ -211,7 +215,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         let dir = install_dir(&tmp);
         let lines = install(&tmp, Some("/usr/share/zsh/site-functions")).unwrap();
-        assert!(std::fs::read_to_string(dir.join("_ift")).unwrap().starts_with("#compdef ift"));
+        assert!(std::fs::read_to_string(dir.join("_ift"))
+            .unwrap()
+            .starts_with("#compdef ift"));
         assert_eq!(lines.len(), 2, "not on fpath: says what to add");
         let on = format!("/x:{}:/y", dir.display());
         let lines = install(&tmp, Some(&on)).unwrap();
