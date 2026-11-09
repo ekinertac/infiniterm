@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-09
 
+- Cmd+Ctrl+Space opens the emoji panel from an editor or browser card you are in, and the emoji lands at the caret. In an editor you are not in, the panel opens and a notice says to click into the text first.
 - A ui theme can set the card edges: `card.border` for a resting card and `card.activeBorder` for the focused card's ring (a colour or `none`), with `card.borderOpacity` and `card.activeBorderOpacity` to fade them. Unset keeps today's look.
 
 ### 2026-11-08
