@@ -93,6 +93,7 @@ _ift() {
     'terminal:a terminal card in each folder'
     'send:type into a card'\''s shell'
     'read:print what a card shows'
+    'browse:open a web address or a local file in a browser card'
     'focus:go to a card'
     'close:close a card'
     'run:run a registered command by id'
