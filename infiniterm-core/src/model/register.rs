@@ -4819,6 +4819,9 @@ mod tests {
         h.m.set_focus(Some(&id));
         h.m.cards[0].kind = CardKind::Editor;
         h.m.cards[0].locked = true;
+        // Off the Mac the hint goes through the platform table, which the ui
+        // builds before drawing chords; without it no chord shows there.
+        h.m.sync_platform_keys();
         assert!(h.run("editor.toggleComment").iter().any(|e| matches!(
             e,
             Effect::Editor {
