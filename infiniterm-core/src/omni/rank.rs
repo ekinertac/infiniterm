@@ -192,6 +192,7 @@ mod tests {
             cards,
             engines,
             template: crate::omni::address::SEARCH_TEMPLATE,
+            local_file: None,
         }
     }
 

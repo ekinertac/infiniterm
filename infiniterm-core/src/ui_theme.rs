@@ -105,6 +105,15 @@ pub struct CardTheme {
     /// The header icon's size in pixels at 100% zoom (it scales with the
     /// card); unset keeps the built-in size.
     pub header_icon_size: Option<f64>,
+    /// A resting card's edge (#681): a colour, or none. Unset keeps the
+    /// built-in hairline, which is none over a gradient.
+    pub border: Option<BorderSpec>,
+    /// Multiplies the alpha of `border`, 0 to 1.
+    pub border_opacity: Option<f64>,
+    /// The focused card's ring: a colour, or none. Unset keeps the built-in one.
+    pub active_border: Option<BorderSpec>,
+    /// Multiplies the alpha of the focused card's ring, 0 to 1.
+    pub active_border_opacity: Option<f64>,
 }
 
 impl CardTheme {
@@ -187,7 +196,7 @@ pub const LOOK_KEYS: [(&str, Kind); 21] = [
 
 /// The bar keys (#425) and the tab keys (#544), with their docs. They exist
 /// only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 22] = [
+pub const BAR_KEYS: [(&str, &[&str], &str); 26] = [
     (
         "titlebar.background",
         &[
@@ -302,6 +311,32 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 22] = [
             "Unset keeps the built-in size, a little larger than the tab's label.",
         ],
         "16",
+    ),
+    (
+        "card.border",
+        &[
+            "A resting card's edge: a colour, or \"none\". Agent state colours still paint over it.",
+            "Unset keeps the thin built-in line, which is not drawn while ui.cardGradient is set.",
+        ],
+        "\"#2a2f38\"",
+    ),
+    (
+        "card.borderOpacity",
+        &["Multiplies the alpha of card.border, 0 to 1. Default 1."],
+        "1",
+    ),
+    (
+        "card.activeBorder",
+        &[
+            "The focused card's ring: a colour, or \"none\". A locked card's ring and the ring",
+            "on the other cards of a selection keep their own colours. Unset keeps the built-in ring.",
+        ],
+        "\"#dbe4f0\"",
+    ),
+    (
+        "card.activeBorderOpacity",
+        &["Multiplies the alpha of the focused card's ring, 0 to 1. Default 1."],
+        "1",
     ),
     (
         "card.header",
@@ -603,6 +638,12 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
                     crate::tab_icon::ICON_SIZE_MIN,
                     crate::tab_icon::ICON_SIZE_MAX,
                 )?)
+            }
+            "card.border" => theme.card.border = Some(border(key, v)?),
+            "card.borderOpacity" => theme.card.border_opacity = Some(number(key, v, 0., 1.)?),
+            "card.activeBorder" => theme.card.active_border = Some(border(key, v)?),
+            "card.activeBorderOpacity" => {
+                theme.card.active_border_opacity = Some(number(key, v, 0., 1.)?)
             }
             "card.header" => {
                 theme.card.header =
@@ -913,6 +954,31 @@ mod tests {
         ] {
             let e = parse(bad).unwrap_err();
             assert!(e.contains(key), "{e}");
+        }
+    }
+
+    #[test]
+    fn card_border_keys_parse_clamp_and_name_the_key_when_bad() {
+        let c = parse(
+            r##"{"card.border": "#223344", "card.borderOpacity": 2,
+                "card.activeBorder": "none", "card.activeBorderOpacity": 0.5}"##,
+        )
+        .unwrap()
+        .card;
+        assert_eq!(
+            c.border,
+            Some(BorderSpec::Color(ColorSpec::Hex("#223344".into())))
+        );
+        assert_eq!(c.border_opacity, Some(1.));
+        assert_eq!(c.active_border, Some(BorderSpec::None));
+        assert_eq!(c.active_border_opacity, Some(0.5));
+        assert_eq!(parse("{}").unwrap().card.border, None);
+        for (bad, key) in [
+            (r#"{"card.border": 3}"#, "card.border"),
+            (r#"{"card.activeBorder": "red-ish"}"#, "card.activeBorder"),
+            (r#"{"card.borderOpacity": "half"}"#, "card.borderOpacity"),
+        ] {
+            assert!(parse(bad).unwrap_err().contains(key), "{bad}");
         }
     }
 

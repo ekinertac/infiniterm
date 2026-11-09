@@ -66,6 +66,16 @@ pub struct OmniCard {
     pub url: String,
 }
 
+/// A typed line that names a file or folder on this Mac (#666): the model
+/// asked the disk, so a provider (a pure function) does not have to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalFile {
+    /// The absolute path, as the row shows it.
+    pub path: String,
+    /// `file://` and the path, percent-encoded: what Enter navigates to.
+    pub url: String,
+}
+
 /// Everything a provider may read, and nothing else. Borrowed, because the
 /// model owns all of it: a provider that wants the Model has been written in
 /// the wrong crate.
@@ -78,6 +88,9 @@ pub struct OmniCtx<'a> {
     pub engines: &'a [Engine],
     /// The search template, `%s` for the query.
     pub template: &'a str,
+    /// The typed line as an existing file or folder, when it is one: tried
+    /// before a search or a domain guess (#666).
+    pub local_file: Option<&'a LocalFile>,
 }
 
 #[cfg(test)]
@@ -101,6 +114,7 @@ mod tests {
             cards: &cards,
             engines: &engines,
             template: crate::omni::address::SEARCH_TEMPLATE,
+            local_file: None,
         };
         assert_eq!(ctx.cards.len(), 1);
         assert!(ctx.scope.is_none());

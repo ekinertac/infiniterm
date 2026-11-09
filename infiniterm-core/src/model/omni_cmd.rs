@@ -137,6 +137,7 @@ impl Model {
             })
             .collect();
         let engines = self.config.engines();
+        let local = self.omni_local_file();
         let ctx = OmniCtx {
             q: &self.omni.query,
             scope: self.omni.scope.as_deref(),
@@ -144,8 +145,37 @@ impl Model {
             cards: &cards,
             engines: &engines,
             template: &self.config.browser.search_engine,
+            local_file: local.as_ref(),
         };
         rank(&ctx, &self.omni.suggestions)
+    }
+
+    /// The typed line as a file or folder that exists on this Mac (#666), or
+    /// `None`. `~` is expanded; a relative name is read from the focused
+    /// terminal's folder, and is not tried when the focus is not on one. A
+    /// path that does not exist is no address, so a search with slashes in it
+    /// still searches. Not tried while an engine keyword scopes the box.
+    /// shortcut: one `canonicalize` per call, and the response is built per
+    /// frame while the box is open; a stat is microseconds. Cache by query if
+    /// this ever shows up in a profile.
+    fn omni_local_file(&self) -> Option<crate::omni::LocalFile> {
+        if self.omni.scope.is_some() {
+            return None;
+        }
+        let base = self
+            .focused()
+            .filter(|c| c.kind == CardKind::Terminal && !c.cwd.is_empty())
+            .map(|c| c.cwd.as_str());
+        let candidate =
+            crate::omni::address::local_path_candidate(&self.omni.query, &self.home, base)?;
+        // `canonicalize` fails for a path that is not there, and resolves
+        // `.` and `..` for one that is.
+        let real = std::fs::canonicalize(&candidate).ok()?;
+        let path = real.to_string_lossy().into_owned();
+        Some(crate::omni::LocalFile {
+            url: crate::omni::address::file_url(&path),
+            path,
+        })
     }
 
     pub fn omni_suggestions(&mut self, query_id: u64, items: Vec<String>) {
