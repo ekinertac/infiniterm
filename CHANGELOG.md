@@ -6,22 +6,30 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
-### 2026-11-09
+## 0.6.12 (build 1466), 2026-11-09
 
-- A long command in a card that once ran Claude Code (a `brew upgrade`, a `git pull`) now shows its own program icon on the workspace tab and card header, not the agent icon.
-- A card now has to stay done for 20 seconds before the phone gets "is done" or lists it. Claude Code ends a turn while background subagents run, and the next turn starts a moment later, so the phone used to get a false "done" at every wait. The card colour on the Mac still turns green at once.
-- A ui theme can set the canvas colour behind the cards with `canvas.background`, a colour like `"#121119"`. Without it the canvas keeps its built-in colour. The bars' and tabs' `"canvas"` value follows it.
-- Cmd+Ctrl+Space opens the emoji panel from an editor or browser card you are in, and the emoji lands at the caret. In an editor you are not in, the panel opens and a notice says to click into the text first.
-- A ui theme can set the card edges: `card.border` for a resting card and `card.activeBorder` for the focused card's ring (a colour or `none`), with `card.borderOpacity` and `card.activeBorderOpacity` to fade them. Unset keeps today's look.
-
-### 2026-11-08
+### Cards and ift
 
 - New `ift browse <file or address>...` opens each in a browser card, beside the card you ran it in, and returns at once. `ift browse index.html` opens a local page, `ift browse http://localhost:5173` an address. A path that does not exist is refused with a message. `ift <path>` is still the way to edit a file.
-- The command palette, the shortcuts panel and the settings completion now find a word in either spelling: typing `color` finds the rows that say "colour", and `maximize` finds "Maximise". The matched letters are marked on the label as written. `ift license` runs `ift licence`; before, it opened an editor on a new file called `license`.
-- The browser card's address bar (Cmd+L) opens a file or folder that exists on this Mac as a `file://` address: `/Users/me/site/index.html`, `~/site/index.html`, or a name relative to the focused terminal card's folder. Before, a path became a Google search and `index.html` became `https://index.html`. A path with spaces works. A name that is not there behaves as before.
 - When the app opens, and when you join a host, every workspace now opens at the Cmd+2 view: all its cards in view, with its first card focused unless it remembers one. Before, each workspace opened at the view it was saved with, and you pressed Cmd+2 on each. It happens once per workspace per launch; a workspace you zoom in on keeps your view when you come back to it. In a joined window the fit is the window's own, not the host's view.
 - "Restart to update" in the status bar now names the version and the build, like `Restart to update 0.6.10 (1417)`, where it showed only the build.
 - Restarting to install an update now restarts the joined windows open on this Mac too, so they come back on the new build as the same viewers of the same hosts. Before, a joined window kept running the old build until you restarted it by hand.
+
+### Search and the address bar
+
+- The command palette, the shortcuts panel and the settings completion now find a word in either spelling: typing `color` finds the rows that say "colour", and `maximize` finds "Maximise". The matched letters are marked on the label as written. `ift license` runs `ift licence`; before, it opened an editor on a new file called `license`.
+- The browser card's address bar (Cmd+L) opens a file or folder that exists on this Mac as a `file://` address: `/Users/me/site/index.html`, `~/site/index.html`, or a name relative to the focused terminal card's folder. Before, a path became a Google search and `index.html` became `https://index.html`. A path with spaces works. A name that is not there behaves as before.
+
+### Phone and agents
+
+- A long command in a card that once ran Claude Code (a `brew upgrade`, a `git pull`) now shows its own program icon on the workspace tab and card header, not the agent icon.
+- A card now has to stay done for 20 seconds before the phone gets "is done" or lists it. Claude Code ends a turn while background subagents run, and the next turn starts a moment later, so the phone used to get a false "done" at every wait. The card colour on the Mac still turns green at once.
+
+### Looks and keys
+
+- A ui theme can set the canvas colour behind the cards with `canvas.background`, a colour like `"#121119"`. Without it the canvas keeps its built-in colour. The bars' and tabs' `"canvas"` value follows it.
+- Cmd+Ctrl+Space opens the emoji panel from an editor or browser card you are in, and the emoji lands at the caret. In an editor you are not in, the panel opens and a notice says to click into the text first.
+- A ui theme can set the card edges: `card.border` for a resting card and `card.activeBorder` for the focused card's ring (a colour or `none`), with `card.borderOpacity` and `card.activeBorderOpacity` to fade them. Unset keeps today's look.
 
 ## 0.6.11 (build 1433), 2026-11-08
 
