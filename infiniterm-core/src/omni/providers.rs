@@ -24,6 +24,17 @@ pub fn display_url(url: &str) -> String {
 
 /// The top row: what you typed, as an address if it parses as one.
 pub fn address_result(ctx: &OmniCtx) -> Vec<OmniResult> {
+    // A line that names a file or folder on this Mac is that address, tried
+    // before a search or a domain guess (#666): the row says what Enter does.
+    if let Some(file) = ctx.local_file {
+        return vec![OmniResult {
+            id: format!("file:{}", file.url),
+            kind: OmniKind::Address,
+            title: file.path.clone(),
+            subtitle: Some("Open file".into()),
+            action: OmniAction::Navigate(file.url.clone()),
+        }];
+    }
     match parse_address(ctx.q) {
         Some(Address::Navigate(url)) => vec![OmniResult {
             id: format!("address:{url}"),
@@ -112,7 +123,34 @@ mod tests {
             cards,
             engines,
             template: crate::omni::address::SEARCH_TEMPLATE,
+            local_file: None,
         }
+    }
+
+    // #666: an existing local path is the first row, as a file address.
+    #[test]
+    fn an_existing_local_path_is_the_first_row_as_a_file_address() {
+        let (h, c, e) = (vec![], vec![], default_engines());
+        let file = crate::omni::LocalFile {
+            path: "/Users/me/my site/index.html".into(),
+            url: "file:///Users/me/my%20site/index.html".into(),
+        };
+        let mut x = ctx("/Users/me/my site/index.html", &h, &c, &e);
+        x.local_file = Some(&file);
+        let r = address_result(&x);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].title, "/Users/me/my site/index.html");
+        assert_eq!(r[0].subtitle.as_deref(), Some("Open file"));
+        assert_eq!(
+            r[0].action,
+            OmniAction::Navigate("file:///Users/me/my%20site/index.html".into())
+        );
+        // No such file: what was typed behaves as before.
+        let x = ctx("index.html", &h, &c, &e);
+        assert_eq!(
+            address_result(&x)[0].action,
+            OmniAction::Navigate("https://index.html".into())
+        );
     }
 
     #[test]

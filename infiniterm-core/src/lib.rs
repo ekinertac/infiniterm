@@ -89,6 +89,7 @@ pub mod git;
 pub mod git_repo;
 pub mod host_pictures;
 pub mod menu_nav;
+pub mod spelling;
 // `ift serve` (a Linux host running `iftd`) rides on the daemon, the join hub
 // and unix sockets; none of it exists on Windows.
 #[cfg(unix)]

@@ -124,6 +124,11 @@ ift — drive infiniterm from a shell
                              workspace, focus it and fit it; needs a running
                              app, and does not bring its window to the front
                              (bare `ift` does that)
+  ift browse <file|address>...
+                             open each in a browser card, beside this card:
+                             an address as it is, a path that exists as a
+                             file:// address (relative to the shell's folder);
+                             a missing path is refused; returns at once
   ift close <card>           close a card like Cmd+W; a locked card refuses
   ift run <command-id>       run a registered command as the palette would,
                              on the card in focus (ift commands lists them)
@@ -190,7 +195,7 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 33] = [
+pub const SUBCOMMANDS: [&str; 35] = [
     "diff",
     "ls",
     "workspaces",
@@ -200,6 +205,7 @@ pub const SUBCOMMANDS: [&str; 33] = [
     "serve",
     "join",
     "terminal",
+    "browse",
     "send",
     "read",
     "focus",
@@ -214,6 +220,9 @@ pub const SUBCOMMANDS: [&str; 33] = [
     "group",
     "install",
     "licence",
+    // The American spelling runs the same code (#679); without it the word
+    // was read as a file to open.
+    "license",
     "update-key",
     "update-sign",
     "install-claude-hooks",
@@ -254,7 +263,7 @@ fn main() -> ExitCode {
         }
         Some("install-extension") => install_extension(args.get(1).map(String::as_str)),
         Some("install") => install_self(),
-        Some("licence") => licence_cmd::run(&args[1..]),
+        Some("licence" | "license") => licence_cmd::run(&args[1..]),
         Some("update-key") => update_sign_cmd::key(&args[1..]),
         Some("update-sign") => update_sign_cmd::sign(&args[1..]),
         Some(verb @ ("connect" | "join" | "serve" | "proxy" | "askpass")) => {
@@ -279,6 +288,7 @@ fn main() -> ExitCode {
         Some("ls") => send_table("ls", &LS_HEADER),
         Some("workspaces") => send_table("workspaces", &WORKSPACES_HEADER),
         Some("terminal") => terminal_cmd(&args[1..]),
+        Some("browse") => browse_cmd(&args[1..]),
         Some("send") => send("send", rest()),
         Some("read") => send("read", rest()),
         Some("focus") => send("focus", rest()),
@@ -591,6 +601,37 @@ fn terminal_cmd(args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
     send("terminal", dirs)
+}
+
+/// `ift browse <file|address>...` (#665): a browser card for each, beside the
+/// card this is run from. The app only takes addresses: a path is resolved
+/// HERE, from the shell's folder (`infiniterm_core::ift::browse_target`), and
+/// a path that does not exist is refused before anything is sent, because a
+/// missing page is almost always a typo. Returns at once, like `ift -n`.
+fn browse_cmd(args: &[String]) -> ExitCode {
+    if args.is_empty() {
+        eprintln!("ift: browse takes a file or an address");
+        return ExitCode::from(2);
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let home = infiniterm_core::paths::home_dir();
+    let mut urls: Vec<String> = Vec::new();
+    for a in args {
+        match infiniterm_core::ift::browse_target(a, &cwd, &home.to_string_lossy()) {
+            Ok(url) => urls.push(url),
+            Err(e) => {
+                eprintln!("ift: {e}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    if !socket::running()
+        && (launch() != ExitCode::SUCCESS || !socket::wait_for_socket(LAUNCH_WAIT))
+    {
+        eprintln!("ift: infiniterm did not start");
+        return ExitCode::from(1);
+    }
+    send("browse", urls)
 }
 
 /// `ift diff [path]`: the changes under a directory, or of one file.

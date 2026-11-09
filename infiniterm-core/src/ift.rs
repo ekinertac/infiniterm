@@ -166,6 +166,36 @@ pub fn diff_plan(path: &str, kind: PathKind) -> OpenPlan {
     }
 }
 
+/// What `ift browse <arg>` opens (#665): an address with a scheme as it is,
+/// else a file or folder that EXISTS, as an absolute `file://` address. `~` is
+/// expanded and a relative path is read from `cwd`, the shell's folder. A
+/// path that is not there is refused, because a missing page is almost always
+/// a typo (unlike `ift <path>`, where a new file is the point). Takes the
+/// folder and the home explicitly so a test controls both.
+pub fn browse_target(arg: &str, cwd: &std::path::Path, home: &str) -> Result<String, String> {
+    let t = arg.trim();
+    if t.is_empty() {
+        return Err("browse takes a file or an address".into());
+    }
+    if t.contains("://") || t.starts_with("about:") || t.starts_with("data:") {
+        return Ok(t.to_string());
+    }
+    let expanded = match t.strip_prefix("~/") {
+        Some(rest) => std::path::Path::new(home).join(rest),
+        None if t == "~" => std::path::PathBuf::from(home),
+        None => std::path::PathBuf::from(t),
+    };
+    let full = if expanded.is_absolute() {
+        expanded
+    } else {
+        cwd.join(expanded)
+    };
+    match std::fs::canonicalize(&full) {
+        Ok(real) => Ok(crate::omni::address::file_url(&real.to_string_lossy())),
+        Err(_) => Err(format!("no such file: {t}")),
+    }
+}
+
 /// `line` is where the editor opens, from `file:42` or a `path:42:7` link.
 pub fn open_plan(path: &str, kind: PathKind, line: Option<f64>) -> OpenPlan {
     if kind == PathKind::Directory {
@@ -391,6 +421,68 @@ pub fn resolve_workspace(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #665: `ift browse` takes an address as it is, or a path that exists.
+    #[test]
+    fn browse_takes_an_address_as_it_is_and_a_path_only_when_it_exists() {
+        let dir = std::env::temp_dir().join(format!("ift-browse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("my docs")).unwrap();
+        std::fs::write(dir.join("my docs").join("a b.html"), "<p>x</p>").unwrap();
+        std::fs::write(dir.join("index.html"), "<p>y</p>").unwrap();
+        let real = std::fs::canonicalize(&dir).unwrap();
+        let home = real.to_string_lossy().into_owned();
+        let url = |p: &str| format!("file://{}/{p}", real.display());
+
+        // A scheme goes to the browser untouched.
+        for a in [
+            "http://localhost:5173",
+            "https://example.com/a?b=1",
+            "file:///tmp/x",
+            "about:blank",
+        ] {
+            assert_eq!(browse_target(a, &real, &home).as_deref(), Ok(a));
+        }
+        // A relative path is read from the shell's folder; `~` from home;
+        // an absolute one as typed; spaces are encoded.
+        assert_eq!(
+            browse_target("index.html", &real, &home),
+            Ok(url("index.html"))
+        );
+        assert_eq!(
+            browse_target("./index.html", &real, &home),
+            Ok(url("index.html"))
+        );
+        assert!(browse_target("~/index.html", &real, "/elsewhere").is_err());
+        assert_eq!(
+            browse_target("~/index.html", &real, &home),
+            Ok(url("index.html"))
+        );
+        assert_eq!(
+            browse_target("my docs/a b.html", &real, &home),
+            Ok(url("my%20docs/a%20b.html"))
+        );
+        assert_eq!(
+            browse_target(
+                &format!("{}/index.html", real.display()),
+                std::path::Path::new("/"),
+                &home
+            ),
+            Ok(url("index.html"))
+        );
+        // `..` is resolved, a folder is allowed, a missing path is refused.
+        assert_eq!(
+            browse_target("../index.html", &real.join("my docs"), &home),
+            Ok(url("index.html"))
+        );
+        assert_eq!(browse_target("my docs", &real, &home), Ok(url("my%20docs")));
+        assert_eq!(
+            browse_target("nope.html", &real, &home),
+            Err("no such file: nope.html".to_string())
+        );
+        assert!(browse_target("  ", &real, &home).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn strings(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()

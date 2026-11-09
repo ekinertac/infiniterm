@@ -6,7 +6,39 @@ pub struct Match {
     pub score: f64,
     pub matches: Vec<usize>,
 }
+/// The match as typed, or the match with both sides in the American spelling
+/// when that scores better (#679): "color" finds "colour" and the other way
+/// round, and the highlight lands on the original text. Nothing changes when
+/// neither side holds a British stem.
+fn with_spelling(
+    direct: Option<Match>,
+    query: &str,
+    text: &str,
+    exact: fn(&str, &str) -> Option<Match>,
+) -> Option<Match> {
+    if !crate::spelling::may_differ(query, text) {
+        return direct;
+    }
+    let (folded, map) = crate::spelling::fold_map(&text.to_lowercase());
+    let Some(mut m) = exact(&crate::spelling::fold(query), &folded) else {
+        return direct;
+    };
+    m.matches = m
+        .matches
+        .iter()
+        .map(|&p| map.get(p).copied().unwrap_or(p))
+        .collect();
+    match direct {
+        Some(d) if d.score >= m.score => Some(d),
+        _ => Some(m),
+    }
+}
+
 pub fn fuzzy_match(query: &str, text: &str) -> Option<Match> {
+    with_spelling(fuzzy_exact(query, text), query, text, fuzzy_exact)
+}
+
+fn fuzzy_exact(query: &str, text: &str) -> Option<Match> {
     let q: Vec<char> = query
         .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
         .to_lowercase()
@@ -78,13 +110,17 @@ const CONTIGUOUS_TIER: f64 = 200.;
 /// shortcuts panel keep calling `fuzzy_match`: a prefix like `hmap` for
 /// `HashMap` is a fuzzy match there on purpose.
 pub fn strict_match(query: &str, text: &str) -> Option<Match> {
+    with_spelling(strict_exact(query, text), query, text, strict_exact)
+}
+
+fn strict_exact(query: &str, text: &str) -> Option<Match> {
     let q: Vec<char> = query
         .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
         .to_lowercase()
         .chars()
         .collect();
     if q.len() < STRICT_MIN_CHARS {
-        return fuzzy_match(query, text);
+        return fuzzy_exact(query, text);
     }
     let lower: Vec<u16> = text.to_lowercase().encode_utf16().collect();
     let needles: Vec<Vec<u16>> = q
@@ -201,6 +237,36 @@ mod tests {
     fn score(q: &str, t: &str) -> f64 {
         fuzzy_match(q, t).map_or(f64::NEG_INFINITY, |m| m.score)
     }
+    // #679: the palette's strict match finds the other spelling, both ways,
+    // and the highlight is on the text as written.
+    #[test]
+    fn a_query_in_one_spelling_matches_a_label_in_the_other() {
+        let label = "Window: change the title bar and Dock colour…";
+        let m = strict_match("color", label).expect("color finds colour");
+        let shown: String = m
+            .matches
+            .iter()
+            .map(|&i| label.chars().nth(i).unwrap())
+            .collect();
+        assert_eq!(
+            shown.to_lowercase(),
+            "color",
+            "highlight on the original letters"
+        );
+        assert!(strict_match("colour", "Terminal: cursor color").is_some());
+        assert!(strict_match("maximize", "Card: maximise / restore").is_some());
+        assert!(strict_match("maximised", "ui.hideLabelWhenMaximized").is_some());
+        assert!(strict_match("maximized", "ui.hideLabelWhenMaximised").is_some());
+        // A word that is not a spelling variant is still no match, and a text
+        // with no stem behaves as before.
+        assert!(strict_match("colorful", "Card: clear the state colour").is_none());
+        assert_eq!(
+            strict_match("tidy", "Canvas: tidy the cards"),
+            strict_match("tidy", "Canvas: tidy the cards")
+        );
+        assert!(strict_match("color", "Card: close").is_none());
+    }
+
     // The contiguous run wins over scattered letters, wherever it sits.
     #[test]
     fn a_contiguous_run_outranks_scattered_letters() {
