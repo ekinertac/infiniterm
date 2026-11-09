@@ -11,8 +11,9 @@
 //! app consults this before the keymap. Chords are spelled as the keymap
 //! normalises them.
 /// Undo and redo are the buffer's inside an editor; the layout's undo
-/// (`layout.undo`) is for the other cards.
-const KEPT: [&str; 11] = [
+/// (`layout.undo`) is for the other cards. Comment (Cmd+/) is a command now
+/// (#697), so the palette lists it: `lock_override` has it.
+const KEPT: [&str; 10] = [
     "cmd+shift+arrowleft",
     "cmd+shift+arrowright",
     "cmd+shift+arrowup",
@@ -21,7 +22,6 @@ const KEPT: [&str; 11] = [
     "cmd+g",
     "cmd+shift+g",
     "cmd+alt+f",
-    "cmd+/",
     "cmd+z",
     "cmd+shift+z",
 ];
@@ -59,6 +59,9 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
         // Sublime's Go to Symbol (#602). Cmd+R is the terminal's redraw and
         // the browser's reload on the canvas; in the text it is this.
         "cmd+r" => "editor.goToSymbol",
+        // Every editor's comment toggle (#697). On the canvas Cmd+/ is the
+        // shortcuts panel; in the text it is this.
+        "cmd+/" => "editor.toggleComment",
         // Not a tab command, but the one app chord a locked editor cannot
         // do without: an unmatched chord falls through to the body, which
         // has no save of its own, so Cmd+S saved nothing until the lock
@@ -104,8 +107,10 @@ mod tests {
         assert!(editor_keeps("cmd+shift+arrowleft"));
         assert!(editor_keeps("cmd+shift+arrowdown"));
         assert!(editor_keeps("cmd+f")); // find, not hints
-        assert!(editor_keeps("cmd+/")); // comment, not the shortcuts panel
         assert!(editor_keeps("cmd+z")); // the buffer's undo, not the layout's
+                                        // Comment, not the shortcuts panel: a command, so the palette has it.
+        assert!(!editor_keeps("cmd+/"));
+        assert_eq!(lock_override("cmd+/"), Some("editor.toggleComment"));
         assert_eq!(lock_override("cmd+t"), Some("editor.tab.new"));
         assert_eq!(lock_override("cmd+9"), Some("editor.tab.jump.last"));
         assert_eq!(lock_override("cmd+shift+]"), Some("editor.tab.next"));

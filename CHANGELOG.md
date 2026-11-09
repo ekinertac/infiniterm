@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-10
+
+- Toggle Comment in an editor card is now a command: the palette lists it as "Editor: Toggle Comment" with Cmd+/ beside it, and `keybindings.json` can give it another chord. It comments or uncomments the lines under every cursor at once, not only the main one, as one undo step. CSS, HTML, Svelte and Markdown lines are now wrapped whole, `/* line */` and `<!-- line -->`; before they got only the opening mark.
+
 ## 0.6.12 (build 1466), 2026-11-09
 
 ### Cards and ift

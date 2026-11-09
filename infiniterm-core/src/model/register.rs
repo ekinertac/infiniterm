@@ -111,6 +111,12 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
         && m.keymap.iter().any(|(c, id)| {
             c == chord && matches!(id.as_str(), "editor.goToFile" | "editor.findInFiles")
         });
+    // Toggle Comment is Cmd+/ in a locked editor (`editor_keys::lock_override`);
+    // a chord keybindings.json binds to it works there as well (#697).
+    let comments = kind == Some(crate::saved_layout::CardKind::Editor)
+        && m.keymap
+            .iter()
+            .any(|(c, id)| c == chord && id == "editor.toggleComment");
     // The emoji panel opens from a locked card too (#686): the picked emoji
     // goes into the text, and without this the chord was the body's and did
     // nothing. Whatever chord the keymap binds to it.
@@ -125,6 +131,7 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
         && !leaves
         && !opens_palette
         && !opens_files
+        && !comments
     {
         let id = if kind == Some(crate::saved_layout::CardKind::Diff) {
             crate::editor_keys::diff_lock_override(chord)
@@ -4790,13 +4797,62 @@ mod tests {
         );
         assert_eq!(resolve_chord(&h.m, "cmd+z").as_deref(), Some("layout.undo"));
         h.m.cards[0].locked = true;
-        assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the comment toggle");
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+/").as_deref(),
+            Some("editor.toggleComment")
+        );
         assert_eq!(resolve_chord(&h.m, "cmd+z"), None, "the buffer's undo");
         assert_eq!(resolve_chord(&h.m, "cmd+s").as_deref(), Some("card.save"));
         assert_eq!(
             resolve_chord(&h.m, "cmd+p").as_deref(),
             Some("editor.goToFile"),
             "go to file works from inside the text"
+        );
+    }
+
+    // Toggle Comment is a command (#697): the palette runs it, and a chord
+    // keybindings.json gives it reaches a locked editor.
+    #[test]
+    fn toggle_comment_is_a_command_and_a_rebound_chord_reaches_a_locked_editor() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.cards[0].locked = true;
+        assert!(h.run("editor.toggleComment").iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::ToggleComment,
+                ..
+            }
+        )));
+        // The palette shows the chord that runs it in here, Cmd+/.
+        let labels: Vec<(&str, &str)> =
+            h.r.all()
+                .iter()
+                .map(|c| (c.id.as_str(), c.label.as_str()))
+                .collect();
+        let items = h.m.palette_items(Source::Commands, &labels);
+        let item = items
+            .iter()
+            .find(|i| i.id == "editor.toggleComment")
+            .expect("listed");
+        assert!(item.hint.as_deref().is_some_and(|h| h.contains('/')));
+        h.m.cards[0].locked = false;
+        let items = h.m.palette_items(Source::Commands, &labels);
+        let item = items.iter().find(|i| i.id == "editor.toggleComment");
+        assert_eq!(
+            item.and_then(|i| i.hint.as_deref()),
+            None,
+            "Cmd+/ is the panel here"
+        );
+        h.m.cards[0].locked = true;
+        assert_eq!(resolve_chord(&h.m, "cmd+alt+/"), None);
+        h.m.keymap
+            .insert(0, ("cmd+alt+/".into(), "editor.toggleComment".into()));
+        assert_eq!(
+            resolve_chord(&h.m, "cmd+alt+/").as_deref(),
+            Some("editor.toggleComment")
         );
     }
 
@@ -4835,7 +4891,7 @@ mod tests {
         );
         assert_eq!(resolve_chord(&h.m, "cmd+w").as_deref(), Some("card.close"));
         h.m.cards[0].locked = true;
-        assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "the body's");
+        assert_eq!(resolve_chord(&h.m, "cmd+/"), None, "read-only: no comment");
         assert_eq!(resolve_chord(&h.m, "cmd+f"), None, "the body's find");
         assert_eq!(resolve_chord(&h.m, "cmd+z"), None);
         assert_eq!(resolve_chord(&h.m, "cmd+w").as_deref(), Some("card.close"));

@@ -345,6 +345,25 @@ impl Model {
             // can never be what you meant.
             Source::Commands => {
                 let mut chords: Vec<(&str, String)> = vec![];
+                // Opened from a locked editor, a chord its lock table claims
+                // is shown with the editor's command: Cmd+/ beside Toggle
+                // Comment (#697), not only the canvas's shortcuts panel.
+                let locked_editor = self
+                    .focused()
+                    .is_some_and(|c| c.locked && c.kind == crate::saved_layout::CardKind::Editor);
+                if locked_editor {
+                    for (chord, _) in &self.keymap {
+                        let Some(id) = crate::editor_keys::lock_override(chord) else {
+                            continue;
+                        };
+                        if chords.iter().any(|(i, _)| *i == id) {
+                            continue;
+                        }
+                        if let Some(shown) = self.shown_chord(chord) {
+                            chords.push((id, format_chord(&shown, self.modifier_labels())));
+                        }
+                    }
+                }
                 for (chord, id) in &self.keymap {
                     if chords.iter().any(|(i, _)| i == id) {
                         continue;

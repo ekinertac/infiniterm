@@ -1811,6 +1811,11 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("editor.format", "Editor: format document", |m| {
         m.editor_action(EditorAction::Format)
     });
+    // Cmd+/ inside a locked editor (`editor_keys::lock_override`); on the
+    // canvas Cmd+/ stays the shortcuts panel.
+    r.register("editor.toggleComment", "Editor: Toggle Comment", |m| {
+        m.editor_action(EditorAction::ToggleComment)
+    });
     for (id, label, t) in [
         (
             "editor.find.regex",

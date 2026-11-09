@@ -512,6 +512,9 @@ pub enum EditorAction {
     /// own, reachable only through the command palette, `cards_cmd.rs`'s
     /// `editor.transform.*` entries.
     Transform(TextTransform),
+    /// `editor.toggleComment` (#697): comment or uncomment the lines under
+    /// every cursor, in the language's comment style.
+    ToggleComment,
 }
 
 /// The find panel's switches: what a query means, and where it looks.

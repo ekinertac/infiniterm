@@ -615,6 +615,11 @@ impl AppView {
                     body.apply_transform(t, now);
                 }
             }
+            EditorAction::ToggleComment => {
+                if let Some(body) = self.editor_for(card_id) {
+                    body.toggle_comment(now);
+                }
+            }
             EditorAction::ToggleExplorer => {
                 // A file opened on its own has no root; its directory becomes one.
                 let root = card.root.clone().unwrap_or_else(|| card.cwd.clone());
