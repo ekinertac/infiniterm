@@ -6,8 +6,8 @@ use super::{Effect, Model};
 use crate::cli::{CliReply, CliRequest};
 use crate::ift::{
     diff_plan, format_agents, format_card_list, format_workspace_list, open_plan, parse_card_ref,
-    parse_read, parse_send, parse_terminal_args, resolve_workspace, CardRef, ListedCard, PathKind,
-    WorkspaceTarget,
+    parse_read, parse_send, parse_terminal_args, resolve_workspace, CardRef, ListedCard, OpenPlan,
+    PathKind, WorkspaceTarget,
 };
 use crate::omni::OmniAction;
 
@@ -161,6 +161,35 @@ impl Model {
                 let response = self.omni_response();
                 self.omni.query = saved;
                 ok(render_omni(&response))
+            }
+            // `ift browse <address>...` (#665): a browser card for each, in
+            // the order given, beside the card it was run from (else beside
+            // the focused one), the last one focused. The cli has already
+            // turned a path into a `file://` address and refused a missing
+            // one; a remote window refuses browser cards here, with the same
+            // notice as everywhere else.
+            "browse" => {
+                if req.args.is_empty() {
+                    return err("browse takes a file or an address");
+                }
+                let cwd = from
+                    .as_deref()
+                    .and_then(|id| self.card(id))
+                    .map(|c| c.cwd.clone())
+                    .filter(|d| !d.is_empty())
+                    .unwrap_or_else(|| self.start_dir.clone());
+                let mut ids = Vec::new();
+                for url in &req.args {
+                    let plan = OpenPlan::Browser {
+                        cwd: cwd.clone(),
+                        url: url.clone(),
+                    };
+                    match self.open_in_card(plan, from.as_deref()) {
+                        Some(id) => ids.push(id),
+                        None => return err(&self.notice.clone().unwrap_or_default()),
+                    }
+                }
+                ok(ids.join("\n"))
             }
             "open" => {
                 let path = req.args.first().map(String::as_str).unwrap_or("");
@@ -653,6 +682,56 @@ mod tests {
         assert!(r.ok);
         assert!(m.card(&a).is_none());
         assert!(!ask(&mut m, "close", &["999"]).ok);
+    }
+
+    // #665: `ift browse` makes a browser card per address, in order, beside
+    // the card it was run from, and the last one has the focus.
+    #[test]
+    fn browse_opens_a_browser_card_per_address_beside_the_card_it_came_from() {
+        use crate::saved_layout::CardKind;
+        let (mut m, a, _b) = two_cards();
+        let before = m.cards.len();
+        let mut req = CliRequest {
+            id: 7,
+            cmd: "browse".into(),
+            args: vec![
+                "http://localhost:5173".into(),
+                "file:///tmp/a%20b.html".into(),
+            ],
+            card_id: Some(a.clone()),
+        };
+        let r = m.run_ift(&req, &[]);
+        assert!(r.ok, "{}", r.text);
+        assert_eq!(m.cards.len(), before + 2);
+        let made: Vec<_> = m.cards.iter().skip(before).collect();
+        assert!(made.iter().all(|c| c.kind == CardKind::Browser));
+        assert_eq!(made[0].url.as_deref(), Some("http://localhost:5173"));
+        assert_eq!(made[1].url.as_deref(), Some("file:///tmp/a%20b.html"));
+        assert_eq!(m.focused().map(|c| c.id.clone()), Some(made[1].id.clone()));
+        // Nothing to open: a usage error.
+        req.args.clear();
+        assert!(!m.run_ift(&req, &[]).ok);
+        assert_eq!(m.cards.len(), before + 2);
+    }
+
+    // A remote window has no browser cards; the verb says so and makes none.
+    #[test]
+    fn browse_in_a_remote_window_says_so_and_makes_nothing() {
+        let (mut m, a, _b) = two_cards();
+        m.remote = crate::remote_identity::RemoteIdentity::from_vars(Some("ops@box"), None, None);
+        let before = m.cards.len();
+        let r = m.run_ift(
+            &CliRequest {
+                id: 7,
+                cmd: "browse".into(),
+                args: vec!["http://localhost:5173".into()],
+                card_id: Some(a),
+            },
+            &[],
+        );
+        assert!(!r.ok);
+        assert!(r.text.contains("remote instance"), "{}", r.text);
+        assert_eq!(m.cards.len(), before);
     }
 
     // `ift terminal`: a card per directory, and a refusal says why and makes
