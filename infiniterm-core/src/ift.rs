@@ -117,13 +117,11 @@ pub fn url_plan(url: &str, cwd: &str) -> OpenPlan {
     }
 }
 
-/// Whether a clicked web link opens as a browser card (else the system
-/// browser, #662). `other` is the Shift on the click, which picks the target
-/// the setting did not; `cards` is whether this window can show a browser
-/// card at all (CEF running, not a remote instance), and without one the
-/// system browser is the only place a link can go.
-pub fn link_in_card(setting: crate::config::OpenLinksIn, other: bool, cards: bool) -> bool {
-    cards && ((setting == crate::config::OpenLinksIn::Card) != other)
+/// Whether a Cmd+clicked URL opens as a browser card (else the system
+/// browser, #662). Cmd+click is the card and Cmd+Shift+click the system
+/// browser; `terminal.reverseLinkClick` (`reverse`) swaps the two.
+pub fn link_in_card(shift: bool, reverse: bool) -> bool {
+    shift == reverse
 }
 
 /// An agent's session file, as a transcript card beside the agent's card.
@@ -655,15 +653,13 @@ mod tests {
     }
 
     #[test]
-    fn shift_flips_where_a_link_opens_and_no_browser_means_the_system() {
-        use crate::config::OpenLinksIn::{Card, System};
-        assert!(link_in_card(Card, false, true));
-        assert!(!link_in_card(Card, true, true));
-        assert!(!link_in_card(System, false, true));
-        assert!(link_in_card(System, true, true));
-        for (setting, other) in [(Card, false), (Card, true), (System, false), (System, true)] {
-            assert!(!link_in_card(setting, other, false));
-        }
+    fn reverse_swaps_cmd_click_and_cmd_shift_click_on_a_url() {
+        // Off: Cmd+click a card, Cmd+Shift+click the system browser.
+        assert!(link_in_card(false, false));
+        assert!(!link_in_card(true, false));
+        // On: the other way round.
+        assert!(!link_in_card(false, true));
+        assert!(link_in_card(true, true));
     }
 
     fn v(a: &[&str]) -> Vec<String> {

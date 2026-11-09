@@ -1469,12 +1469,9 @@ impl AppView {
             crate::body::BodyAction::Open(plan) => {
                 self.model.open_in_card(plan, Some(id));
             }
-            crate::body::BodyAction::OpenLink { url, cwd, other } => {
-                // A remote instance refuses browser cards, and a window with
-                // no CEF cannot show one: the system browser is left.
-                let cards = self.cef_running && self.model.remote.is_none();
-                let setting = self.model.config.browser.open_links_in;
-                if infiniterm_core::ift::link_in_card(setting, other, cards) {
+            crate::body::BodyAction::OpenLink { url, cwd, shift } => {
+                let reverse = self.model.config.terminal.reverse_link_click;
+                if infiniterm_core::ift::link_in_card(shift, reverse) {
                     self.model
                         .open_in_card(infiniterm_core::ift::url_plan(&url, &cwd), Some(id));
                 } else if let Err(e) = infiniterm_core::links_fs::open_url(&url) {

@@ -117,6 +117,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["Copy a mouse selection to the clipboard as soon as it is made."],
     ),
     (
+        "terminal.reverseLinkClick",
+        &[
+            "Swap what Cmd+click and Cmd+Shift+click do on a URL. Off: Cmd+click opens",
+            "a browser card beside the terminal, Cmd+Shift+click your default browser.",
+            "On: the other way round.",
+        ],
+    ),
+    (
         "terminal.scrollMultiplier",
         &["Scroll speed: lines per wheel step, times this. 0.1 to 10."],
     ),
@@ -349,15 +357,6 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &[
             "Where the omnibox (Cmd+L) sends a search; %s is the encoded query.",
             "A template without %s is ignored: it would drop what you typed.",
-        ],
-    ),
-    (
-        "browser.openLinksIn",
-        &[
-            "Where a web link opens when you Cmd+click it in a terminal or click it in",
-            "a Page card: \"card\" for a browser card beside it, \"system\" for your",
-            "default browser. Adding Shift opens it in the other one. Without browser",
-            "cards it is always the system browser.",
         ],
     ),
     (

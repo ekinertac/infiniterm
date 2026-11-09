@@ -151,6 +151,10 @@ pub struct Terminal {
     /// A mouse selection goes to the clipboard as it is made (iTerm2's
     /// "copy to pasteboard on selection").
     pub copy_on_select: bool,
+    /// Swaps Cmd+click and Cmd+Shift+click on a URL (#662): Cmd+click goes
+    /// to the system browser and Cmd+Shift+click to a browser card. Off keeps
+    /// the card on Cmd+click.
+    pub reverse_link_click: bool,
     /// Lines per wheel step, as a multiple of the normal rate.
     pub scroll_multiplier: f64,
     /// Space between a card's edge and its text, in points at 100%.
@@ -314,16 +318,6 @@ pub enum Wrap {
     Never,
 }
 
-/// `browser.openLinksIn`: a browser card beside the clicked card, or the
-/// system's default browser. "card" is the default because Cmd+click on a
-/// terminal URL opened a card before the setting existed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum OpenLinksIn {
-    Card,
-    System,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Browser {
@@ -331,9 +325,6 @@ pub struct Browser {
     pub zoom: f64,
     /// Where the omnibox sends a search; `%s` is the encoded query.
     pub search_engine: String,
-    /// Where Cmd+click on a web link goes (#662); Cmd+Shift+click goes to
-    /// the other one. `ift::link_in_card` decides.
-    pub open_links_in: OpenLinksIn,
     /// Asks Google to complete what is typed in the omnibox. OFF by
     /// default: it is the only thing in this app that talks to anything but
     /// the page you asked for.
@@ -573,6 +564,7 @@ pub fn default_config() -> Config {
             scrollback: 10_000.,
             session_buffer: 4.,
             copy_on_select: false,
+            reverse_link_click: false,
             scroll_multiplier: 1.,
             // The inset cards have had since the first day
             // (terminal_body.rs `PAD`).
@@ -642,7 +634,6 @@ pub fn default_config() -> Config {
         browser: Browser {
             zoom: 1.,
             search_engine: crate::omni::address::SEARCH_TEMPLATE.into(),
-            open_links_in: OpenLinksIn::Card,
             suggestions: false,
             devtools: true,
             engines: vec![],
@@ -890,6 +881,10 @@ pub fn merge_config(raw: &Value) -> Config {
                 s => s,
             },
             copy_on_select: bool_(t.get("copyOnSelect"), d.terminal.copy_on_select),
+            reverse_link_click: bool_(
+                t.get("reverseLinkClick"),
+                d.terminal.reverse_link_click,
+            ),
             scroll_multiplier: num(
                 t.get("scrollMultiplier"),
                 d.terminal.scroll_multiplier,
@@ -990,11 +985,6 @@ pub fn merge_config(raw: &Value) -> Config {
                 Some(s) if s.contains("%s") => s.to_string(),
                 _ => d.browser.search_engine.clone(),
             },
-            open_links_in: one(
-                b.get("openLinksIn"),
-                d.browser.open_links_in,
-                &[("card", OpenLinksIn::Card), ("system", OpenLinksIn::System)],
-            ),
             suggestions: bool_(b.get("suggestions"), d.browser.suggestions),
             devtools: bool_(b.get("devtools"), d.browser.devtools),
             engines: b
@@ -1213,6 +1203,14 @@ mod tests {
         assert!(d.terminal.env.is_empty());
     }
 
+    // Off keeps Cmd+click on a URL opening a browser card (#662).
+    #[test]
+    fn reverse_link_click_is_off_unless_set() {
+        assert!(!default_config().terminal.reverse_link_click);
+        let c = merge_config(&serde_json::json!({"terminal.reverseLinkClick": true}));
+        assert!(c.terminal.reverse_link_click);
+    }
+
     use super::*;
 
     #[test]
@@ -1249,14 +1247,6 @@ mod tests {
 
         let c = merge_config(&serde_json::json!({"browser": {"suggestions": true}}));
         assert!(c.browser.suggestions);
-
-        // A web link opens a card unless told otherwise; a value that is
-        // neither name keeps the default.
-        assert_eq!(d.browser.open_links_in, OpenLinksIn::Card);
-        let c = merge_config(&serde_json::json!({"browser.openLinksIn": "system"}));
-        assert_eq!(c.browser.open_links_in, OpenLinksIn::System);
-        let c = merge_config(&serde_json::json!({"browser.openLinksIn": "safari"}));
-        assert_eq!(c.browser.open_links_in, OpenLinksIn::Card);
 
         // A malformed engine is dropped and the rest survive; a user entry
         // comes before the built-ins, so it can override one.

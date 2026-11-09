@@ -1526,13 +1526,13 @@ impl CardBody for TerminalBody {
                         }
                     };
                 }
-                // A web link: `browser.openLinksIn` picks the target and
-                // Shift the other one (#662), decided where the setting is.
+                // A URL: a card or the system browser, decided where
+                // `terminal.reverseLinkClick` is (#662).
                 if f.kind == LinkKind::Url {
                     return BodyAction::OpenLink {
                         url: f.target,
                         cwd: self.cwd.clone(),
-                        other: modifiers.shift,
+                        shift: modifiers.shift,
                     };
                 }
                 if modifiers.shift {
