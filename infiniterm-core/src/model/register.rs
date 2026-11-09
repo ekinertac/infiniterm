@@ -5267,6 +5267,61 @@ mod tests {
         );
     }
 
+    // #666: the address bar opens a file or folder that exists, tried before a
+    // search or a domain guess, and leaves what does not exist as it was.
+    #[test]
+    fn the_address_bar_opens_an_existing_local_path_as_a_file_address() {
+        use crate::omni::OmniAction;
+        let dir = std::env::temp_dir().join(format!("ift-omni-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("my site")).unwrap();
+        std::fs::write(dir.join("my site").join("index.html"), "<p>hi</p>").unwrap();
+        let real = std::fs::canonicalize(&dir).unwrap();
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().cwd = real.to_string_lossy().into_owned();
+        h.m.home = real.to_string_lossy().into_owned();
+        h.run("card.omnibox");
+        let top = |m: &mut Model, q: &str| {
+            m.omni_type(q);
+            m.omni_response().sections[0].results[0].clone()
+        };
+
+        // An absolute path with a space in it.
+        let abs = format!("{}/my site/index.html", real.display());
+        let r = top(&mut h.m, &abs);
+        assert_eq!(r.subtitle.as_deref(), Some("Open file"));
+        assert_eq!(
+            r.action,
+            OmniAction::Navigate(format!("file://{}/my%20site/index.html", real.display()))
+        );
+        // `~` is the home folder; a relative name reads from the focused
+        // terminal's folder.
+        assert_eq!(
+            top(&mut h.m, "~/my site/index.html").subtitle.as_deref(),
+            Some("Open file")
+        );
+        assert_eq!(
+            top(&mut h.m, "my site/index.html").subtitle.as_deref(),
+            Some("Open file")
+        );
+        // A folder is an address too; a name that is not there is not.
+        assert_eq!(
+            top(&mut h.m, "my site").subtitle.as_deref(),
+            Some("Open file")
+        );
+        assert_eq!(
+            top(&mut h.m, "index.html").action,
+            OmniAction::Navigate("https://index.html".into()),
+            "no such file in this folder: a domain guess, as before"
+        );
+        assert!(matches!(
+            top(&mut h.m, "/no/such/place now").action,
+            OmniAction::Search(_)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn tab_scopes_and_unscoping_leaves() {
         let mut h = Harness::new();

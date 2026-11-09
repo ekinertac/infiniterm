@@ -121,6 +121,10 @@ Every card has a label in its corner: the name you gave it (`Cmd Shift R`), else
 
 The label sits top right by default. `"ui.cardLabelPosition"` moves it to `"top left"`, `"bottom left"` or `"bottom right"` (the words in either order); a card in an ssh session shows its ssh badge at the other end of the same edge.
 
+### Opening a local file in the address bar
+
+`Cmd L` takes a path as well as a web address. A line that names a file or folder that exists on this Mac, such as `/Users/me/site/index.html`, `~/site/index.html` or, with a terminal card focused, `index.html`, opens as a `file://` address. The first row says "Open file" and shows the path. A name that is not there behaves as before: a search, or a web address if it looks like one. A relative name is read from the focused terminal card's folder.
+
 ### The browser card's right-click menu
 
 A right-click on a browser card's page or on its tab strip opens one menu. Back and Forward are greyed when there is nowhere to go. Reload, New Tab, Close Tab, Reopen Closed Tab, Copy Address and Open in System Browser are always there. Click on a link and the link rows come first: Open Link in New Tab, in New Card, Copy Link Address and Open Link in System Browser. Click in a text field and Cut, Copy and Paste come first. With selected text, Copy does.

@@ -59,6 +59,44 @@ pub fn parse_address(input: &str) -> Option<Address> {
     Some(Address::Search(t.to_string()))
 }
 
+/// The absolute path a typed address could name on this Mac (#666): `~`
+/// expanded, an absolute path as typed, a relative one joined to `base` (the
+/// focused terminal's folder). `None` for a web address, an `about:`/`data:`
+/// address, an empty line, or a relative name with no folder to read it
+/// from. Nothing here looks at the disk: the caller asks whether the path
+/// exists, and a path that does not is not an address.
+pub fn local_path_candidate(input: &str, home: &str, base: Option<&str>) -> Option<String> {
+    let t = input.trim();
+    if t.is_empty() || t.contains("://") || t.starts_with("about:") || t.starts_with("data:") {
+        return None;
+    }
+    if t == "~" {
+        return Some(home.to_string());
+    }
+    if let Some(rest) = t.strip_prefix("~/") {
+        return Some(format!("{}/{}", home.trim_end_matches('/'), rest));
+    }
+    if t.starts_with('/') {
+        return Some(t.to_string());
+    }
+    base.map(|b| format!("{}/{}", b.trim_end_matches('/'), t))
+}
+
+/// `file://` and the path, percent-encoded: a space is `%20`, a non-ASCII
+/// character is its UTF-8 bytes, and `/` stays a separator.
+pub fn file_url(path: &str) -> String {
+    let mut out = String::from("file://");
+    for byte in path.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(*byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
 /// Percent-encodes everything a query string must not carry raw.
 pub fn search_url(template: &str, query: &str) -> String {
     let mut encoded = String::new();
@@ -76,6 +114,56 @@ pub fn search_url(template: &str, query: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #666: what a typed line could name on this Mac, before the disk is asked.
+    #[test]
+    fn a_typed_path_becomes_an_absolute_candidate() {
+        let home = "/Users/me";
+        let base = Some("/Users/me/Code/site");
+        assert_eq!(
+            local_path_candidate("/Users/me/site/index.html", home, None).as_deref(),
+            Some("/Users/me/site/index.html")
+        );
+        assert_eq!(
+            local_path_candidate("~/site/index.html", home, None).as_deref(),
+            Some("/Users/me/site/index.html")
+        );
+        assert_eq!(
+            local_path_candidate("~", home, None).as_deref(),
+            Some("/Users/me")
+        );
+        // A relative name needs the focused terminal's folder.
+        assert_eq!(local_path_candidate("index.html", home, None), None);
+        assert_eq!(
+            local_path_candidate("index.html", home, base).as_deref(),
+            Some("/Users/me/Code/site/index.html")
+        );
+        assert_eq!(
+            local_path_candidate("my page.html", home, base).as_deref(),
+            Some("/Users/me/Code/site/my page.html")
+        );
+        // Web and special addresses are not paths.
+        for no in [
+            "https://example.com/a",
+            "file:///tmp/x",
+            "about:blank",
+            "data:x",
+            "",
+            "  ",
+        ] {
+            assert_eq!(local_path_candidate(no, home, base), None, "{no:?}");
+        }
+    }
+
+    #[test]
+    fn a_file_address_encodes_what_a_url_cannot_carry() {
+        assert_eq!(
+            file_url("/Users/me/a b/c.html"),
+            "file:///Users/me/a%20b/c.html"
+        );
+        assert_eq!(file_url("/tmp/é.html"), "file:///tmp/%C3%A9.html");
+        assert_eq!(file_url("/tmp/a#b?c"), "file:///tmp/a%23b%3Fc");
+    }
 
     #[test]
     fn a_scheme_is_kept_as_typed() {
