@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-09
+
+- A ui theme can set the card edges: `card.border` for a resting card and `card.activeBorder` for the focused card's ring (a colour or `none`), with `card.borderOpacity` and `card.activeBorderOpacity` to fade them. Unset keeps today's look.
+
 ### 2026-11-08
 
 - New `ift browse <file or address>...` opens each in a browser card, beside the card you ran it in, and returns at once. `ift browse index.html` opens a local page, `ift browse http://localhost:5173` an address. A path that does not exist is refused with a message. `ift <path>` is still the way to edit a file.
