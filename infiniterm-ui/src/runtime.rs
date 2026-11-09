@@ -281,10 +281,12 @@ impl AppView {
         self.after_look_change();
     }
 
-    /// What follows a change of the look: the chrome's typeface (the rest of
-    /// the look is read from the model each frame).
+    /// What follows a change of the look: the chrome's typeface and canvas
+    /// colour (the rest of the look is read from the model each frame).
     fn after_look_change(&mut self) {
         self.chrome.apply_ui_typography(&self.model.config.ui);
+        self.chrome
+            .apply_ui_canvas(self.model.ui_theme.canvas.as_deref());
         self.redraw = true;
     }
 
