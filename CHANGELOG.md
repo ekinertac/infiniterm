@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-10
+
+- In a browser card you can now drag across a page's text to select it, then copy it with Cmd+C. Before, a drag selected nothing.
+
 ## 0.6.12 (build 1466), 2026-11-09
 
 ### Cards and ift

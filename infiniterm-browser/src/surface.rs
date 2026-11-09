@@ -798,10 +798,15 @@ impl Surface {
 
     /// `x`, `y` in page pixels: the caller has already undone the zoom. The
     /// second argument to `send_mouse_move_event` is CEF's `mouseLeave`, not
-    /// a button flag: a move within the card is never a leave.
-    pub fn mouse_move(&self, x: f32, y: f32, mods: Mods) {
+    /// a button flag: a move within the card is never a leave. `held` is the
+    /// button still down from a press on the page (#704): Blink reads a drag
+    /// from the move's flags alone, so without it a drag across text was a
+    /// plain hover and selected nothing.
+    pub fn mouse_move(&self, x: f32, y: f32, mods: Mods, held: Option<Button>) {
         if let Some(host) = self.host() {
-            host.send_mouse_move_event(Some(&Self::mouse(x, y, mods)), 0);
+            let mut event = Self::mouse(x, y, mods);
+            event.modifiers |= held_flag(held);
+            host.send_mouse_move_event(Some(&event), 0);
         }
     }
 
@@ -954,6 +959,16 @@ pub enum Button {
     Right,
 }
 
+/// The CEF event flag that tells a move which button is held, 0 for none.
+fn held_flag(held: Option<Button>) -> u32 {
+    match held {
+        Some(Button::Left) => sys::cef_event_flags_t::EVENTFLAG_LEFT_MOUSE_BUTTON.0 as u32,
+        Some(Button::Middle) => sys::cef_event_flags_t::EVENTFLAG_MIDDLE_MOUSE_BUTTON.0 as u32,
+        Some(Button::Right) => sys::cef_event_flags_t::EVENTFLAG_RIGHT_MOUSE_BUTTON.0 as u32,
+        None => 0,
+    }
+}
+
 /// Windows virtual key codes for the keys a page handles by name.
 pub fn virtual_key(name: &str) -> i32 {
     match name {
@@ -1076,6 +1091,24 @@ fn native_key_code(name: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_move_with_a_button_held_carries_that_buttons_flag() {
+        use sys::cef_event_flags_t as F;
+        assert_eq!(held_flag(None), 0);
+        assert_eq!(
+            held_flag(Some(Button::Left)),
+            F::EVENTFLAG_LEFT_MOUSE_BUTTON.0 as u32
+        );
+        assert_eq!(
+            held_flag(Some(Button::Middle)),
+            F::EVENTFLAG_MIDDLE_MOUSE_BUTTON.0 as u32
+        );
+        assert_eq!(
+            held_flag(Some(Button::Right)),
+            F::EVENTFLAG_RIGHT_MOUSE_BUTTON.0 as u32
+        );
+    }
 
     #[test]
     fn named_keys_have_codes_and_letters_do_not() {
