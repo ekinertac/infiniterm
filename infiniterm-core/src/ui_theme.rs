@@ -138,6 +138,9 @@ pub struct UiTheme {
     /// clamping and defaults are `config::merge_config`'s, the same code
     /// settings.json used for these keys, so a value means what it always did.
     pub look: Map<String, Value>,
+    /// `canvas.background`: the canvas colour behind the cards, `#rgb` or
+    /// `#rrggbb` as written. Unset keeps the built-in one.
+    pub canvas: Option<String>,
     pub titlebar: BarTheme,
     pub statusbar: BarTheme,
     pub tab: TabTheme,
@@ -196,7 +199,15 @@ pub const LOOK_KEYS: [(&str, Kind); 21] = [
 
 /// The bar keys (#425) and the tab keys (#544), with their docs. They exist
 /// only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 26] = [
+pub const BAR_KEYS: [(&str, &[&str], &str); 27] = [
+    (
+        "canvas.background",
+        &[
+            "The canvas colour behind the cards: #rgb or #rrggbb. ui.windowOpacity still",
+            "applies to it, and ui.backgroundImage covers it. Unset keeps the built-in colour.",
+        ],
+        "\"#121119\"",
+    ),
     (
         "titlebar.background",
         &[
@@ -475,6 +486,18 @@ fn color(key: &str, v: &Value) -> Result<ColorSpec, String> {
     }
 }
 
+/// `canvas.background`: `#rgb` or `#rrggbb` only. The tokens all name the
+/// canvas or something drawn over it, and an alpha would stack with
+/// `ui.windowOpacity`, which already owns how much desktop shows through.
+fn opaque_hex(key: &str, v: &Value) -> Result<String, String> {
+    match v.as_str() {
+        Some(s) if is_hex(s) && s.len() != 9 => Ok(s.to_string()),
+        _ => Err(format!(
+            "\"{key}\" must be a colour like \"#121119\" (#rgb or #rrggbb)"
+        )),
+    }
+}
+
 fn border(key: &str, v: &Value) -> Result<BorderSpec, String> {
     if v.as_str() == Some("none") {
         return Ok(BorderSpec::None);
@@ -599,6 +622,7 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
     let mut theme = UiTheme::default();
     for (key, v) in obj {
         match key.as_str() {
+            "canvas.background" => theme.canvas = Some(opaque_hex(key, v)?),
             "titlebar.background" => theme.titlebar.background = Some(color(key, v)?),
             "titlebar.border" => theme.titlebar.border = Some(border(key, v)?),
             "statusbar.background" => theme.statusbar.background = Some(color(key, v)?),
@@ -740,6 +764,24 @@ mod tests {
                 parse(&format!(r#"{{"titlebar.background": "{v}"}}"#)).is_ok(),
                 "{v}"
             );
+        }
+    }
+
+    #[test]
+    fn the_canvas_takes_an_opaque_hex_and_nothing_else() {
+        for v in ["#abc", "#121119"] {
+            let t = parse(&format!(r#"{{"canvas.background": "{v}"}}"#)).unwrap();
+            assert_eq!(t.canvas.as_deref(), Some(v));
+        }
+        assert_eq!(parse("{}").unwrap().canvas, None);
+        for bad in [
+            r##"{"canvas.background": "#12111980"}"##,
+            r#"{"canvas.background": "canvas"}"#,
+            r#"{"canvas.background": "card"}"#,
+            r#"{"canvas.background": 5}"#,
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains("canvas.background"), "{e}");
         }
     }
 

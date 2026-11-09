@@ -44,17 +44,23 @@ pub enum Subject<'a> {
 /// reliable where the process name is not (Claude Code can show as `node`);
 /// `None` kind with a session is Claude Code, as everywhere else. A card with
 /// neither never had an agent hook: its Working is a long command
-/// (`program_state`), so it keeps its program. A done or failed card has no
-/// active agent, so it wears its program again.
+/// (`program_state`), so it keeps its program. `program_owned` is the same
+/// case in a card that once ran an agent: its identity stays on the card
+/// (saved, never cleared), but the command in flight set the state, not a
+/// hook. A done or failed card has no active agent, so it wears its program
+/// again.
 pub fn subject<'a>(
     proc: Option<&'a str>,
     state: crate::agent_state::AgentState,
     kind: Option<&'a str>,
     session: Option<&str>,
+    program_owned: bool,
 ) -> Option<Subject<'a>> {
     use crate::agent_state::AgentState;
     match state {
-        AgentState::Working | AgentState::Waiting if kind.is_some() || session.is_some() => {
+        AgentState::Working | AgentState::Waiting
+            if !program_owned && (kind.is_some() || session.is_some()) =>
+        {
             Some(Subject::Agent(kind.unwrap_or("claude")))
         }
         _ => proc.map(Subject::Program),
@@ -565,25 +571,31 @@ mod tests {
         use crate::agent_state::AgentState as S;
         for state in [S::Working, S::Waiting] {
             assert_eq!(
-                subject(Some("node"), state, None, Some("s")),
+                subject(Some("node"), state, None, Some("s"), false),
                 Some(Subject::Agent("claude")),
                 "no kind is Claude Code, whatever the process says"
             );
             assert_eq!(
-                subject(None, state, Some("codex"), None),
+                subject(None, state, Some("codex"), None, false),
                 Some(Subject::Agent("codex"))
             );
         }
         for state in [S::None, S::Done, S::Failed] {
             assert_eq!(
-                subject(Some("node"), state, Some("codex"), Some("s")),
+                subject(Some("node"), state, Some("codex"), Some("s"), false),
                 Some(Subject::Program("node"))
             );
         }
-        assert_eq!(subject(None, S::Done, None, None), None);
+        assert_eq!(subject(None, S::Done, None, None, false), None);
         // A long command is Working with no agent identity: it keeps its program.
         assert_eq!(
-            subject(Some("ruby"), S::Working, None, None),
+            subject(Some("ruby"), S::Working, None, None, false),
+            Some(Subject::Program("ruby"))
+        );
+        // The same command in a card that once ran Claude Code: the session
+        // is still on the card, but the command set the state.
+        assert_eq!(
+            subject(Some("ruby"), S::Working, None, Some("s"), true),
             Some(Subject::Program("ruby"))
         );
     }

@@ -208,6 +208,8 @@ pub const TEXTURE_BAR_ALPHA: f32 = 0.45;
 /// `ui.inactiveDim`'s default, before a settings read overwrites it: how
 /// much an unfocused card's scrim dims it. Every body with one starts here.
 pub const INACTIVE_DIM_DEFAULT: f64 = 0.45;
+/// The canvas colour with no `canvas.background` in the ui theme.
+pub const CANVAS_BG_DEFAULT: u32 = 0x14161a;
 /// A list's cursor row (a file tree, or the transcript's turn list) tints
 /// this faint when its card isn't focused, so it marks a position without
 /// competing with the focused highlight.
@@ -597,7 +599,7 @@ impl Chrome {
     pub fn default_chrome() -> Chrome {
         let c = |v: u32| -> Hsla { rgb(v).into() };
         Chrome {
-            canvas_bg: c(0x14161a),
+            canvas_bg: c(CANVAS_BG_DEFAULT),
             grid_line: c(0x1c212b),
             card_bg: c(0x0e101a),
             card_border: c(0x2a2f38),
@@ -650,6 +652,16 @@ impl Chrome {
 
     pub fn apply_ui_typography(&mut self, ui: &Ui) {
         self.typography = UiTypography::from_config(ui);
+    }
+
+    /// The ui theme's `canvas.background`, or the built-in canvas when the
+    /// theme has none, so switching away from a theme puts the default back.
+    /// Everything that reads `canvas_bg` (the window fill, the "canvas"
+    /// token of the bars and tabs) follows it.
+    pub fn apply_ui_canvas(&mut self, canvas: Option<&str>) {
+        self.canvas_bg = canvas
+            .and_then(hex)
+            .unwrap_or_else(|| rgb(CANVAS_BG_DEFAULT).into());
     }
 
     /// A theme drives BOTH the terminal and the chrome: card ground, label
