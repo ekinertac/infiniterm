@@ -98,6 +98,7 @@ A ui theme holds these keys:
 - the interface font: `ui.fontFamily`, `ui.fontSize`, `ui.fontWeight`, `ui.fontWeightBold`;
 - the bars: `titlebar.background`, `titlebar.border`, `statusbar.background` and `statusbar.border`. A background is `#rgb`, `#rrggbb`, `canvas`, `card`, `bar` or `transparent`. A border is a colour or `none`;
 - the workspace tabs: `tab.background`, `tab.activeBackground`, `tab.gradient`, `tab.opacity`, `tab.border`, `tab.activeBorder`, `tab.separator`, `tab.radius`, `tab.paddingX`, `tab.icons`, `tab.iconStyle`, `tab.iconMap`, `tab.iconSize`;
+- the card edges: `card.border`, `card.borderOpacity`, `card.activeBorder`, `card.activeBorderOpacity`;
 - the card header: `card.header`, `card.headerIcons`, `card.headerIconSize`, `card.headerButtons`, `card.headerButtonsActiveOnly`.
 
 The first launch that has this feature moves any of these keys out of your `settings.json` into `ui-themes/default.json`. Your comments stay, and a note in `settings.json` says where the keys went. After that, a look key typed into `settings.json` is ignored, with a notice. In a window opened with `ift join`, the host's settings apply but the look is your own.
@@ -116,6 +117,7 @@ Everything in this part and the next two is off until a theme sets it. A theme w
 - `tab.gradient` is two colours, top to bottom, for the chosen tab. It replaces `tab.activeBackground`. `[]` keeps the flat fill.
 - `tab.opacity`, 0.1 to 1, multiplies the alpha of every tab fill.
 - `tab.border` and `tab.activeBorder` are a one pixel outline, a colour or `none`.
+- `card.border` is a resting card's edge and `card.activeBorder` the focused card's ring, each a colour or `none`. `card.borderOpacity` and `card.activeBorderOpacity`, 0 to 1, multiply their alpha. Agent state colours still paint over the resting edge. A locked card's ring and the blue ring on the rest of a selection keep their colours. Unset keeps the built-in edge, which is not drawn while `ui.cardGradient` is set.
 - `tab.separator` is a thin line between idle tabs, a colour or `none`. No line touches the chosen tab.
 - `tab.radius` rounds the corners, 0 to 40 pixels.
 - `tab.paddingX` is the space on each side of a tab's content, 0 to 40 pixels. Unset keeps 6.
