@@ -19,11 +19,11 @@
 //! is not running, 2 bad usage; `ift licence` adds 3 (rejected) and 4 (Lemon
 //! Squeezy unreachable) for itself only.
 
-mod antigravity_hooks;
 mod attach;
 mod claude_hooks;
-mod completion;
+mod antigravity_hooks;
 mod cursor_hooks;
+mod completion;
 // Remote instances, join, serve and the proxy behind them ride on unix
 // sockets, ssh stdio and `iftd`; none of it exists on Windows. The verbs stay
 // in the table and answer with one line (`unix_only_verb`).
@@ -34,13 +34,13 @@ mod install;
 #[cfg(unix)]
 mod join;
 mod licence_cmd;
+mod push_cmd;
+mod update_sign_cmd;
 #[cfg(unix)]
 mod proxy;
-mod push_cmd;
 #[cfg(unix)]
 mod serve;
 mod socket;
-mod update_sign_cmd;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -242,15 +242,16 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("install-claude-hooks") => install_hooks(args.contains(&"--dry-run".to_string())),
         Some("install-codex-hooks") => install_codex(args.contains(&"--dry-run".to_string())),
-        Some("install-opencode-hooks") => install_opencode(args.contains(&"--dry-run".to_string())),
+        Some("install-opencode-hooks") => {
+            install_opencode(args.contains(&"--dry-run".to_string()))
+        }
         Some("install-pi-hooks") => install_pi(
-            args.iter()
-                .skip(1)
-                .find(|a| !a.starts_with("--"))
-                .map(String::as_str),
+            args.iter().skip(1).find(|a| !a.starts_with("--")).map(String::as_str),
             args.contains(&"--dry-run".to_string()),
         ),
-        Some("install-cursor-hooks") => install_cursor(args.contains(&"--dry-run".to_string())),
+        Some("install-cursor-hooks") => {
+            install_cursor(args.contains(&"--dry-run".to_string()))
+        }
         Some("install-antigravity-hooks") => {
             install_antigravity(args.contains(&"--dry-run".to_string()))
         }
@@ -443,10 +444,7 @@ fn install_self() -> ExitCode {
     if on_path {
         println!("ift: {} is already on your PATH", dir.display());
     } else {
-        println!(
-            "ift: add {} to your PATH to run ift from anywhere",
-            dir.display()
-        );
+        println!("ift: add {} to your PATH to run ift from anywhere", dir.display());
     }
     ExitCode::SUCCESS
 }
@@ -479,10 +477,7 @@ fn install_self() -> ExitCode {
         println!("ift: already installed at {}", link.display());
     } else {
         if link.exists() && std::fs::read_link(&link).is_err() {
-            eprintln!(
-                "ift: {} exists and is not a symlink; move it first",
-                link.display()
-            );
+            eprintln!("ift: {} exists and is not a symlink; move it first", link.display());
             return ExitCode::from(2);
         }
         let _ = std::fs::remove_file(&link);
@@ -500,10 +495,7 @@ fn install_self() -> ExitCode {
         .map(|p| std::env::split_paths(&p).any(|d| d == bin))
         .unwrap_or(false);
     if !on_path {
-        println!(
-            "ift: {} is not on your PATH; add it to your shell profile",
-            bin.display()
-        );
+        println!("ift: {} is not on your PATH; add it to your shell profile", bin.display());
     }
     ExitCode::SUCCESS
 }
@@ -611,10 +603,7 @@ fn diff_path(arg: &str) -> ExitCode {
         return ExitCode::from(2);
     };
     let kind = if full.is_dir() { "directory" } else { "file" };
-    send(
-        "diff",
-        vec![full.to_string_lossy().into_owned(), kind.to_string()],
-    )
+    send("diff", vec![full.to_string_lossy().into_owned(), kind.to_string()])
 }
 
 /// `file:42` and `file:42:7`, the way compilers print a location. Only when
@@ -718,10 +707,7 @@ fn send(cmd: &str, args: Vec<String>) -> ExitCode {
 /// `ift -t <path> [card]`: the path right after `-t` and the card after it.
 fn tab_args(args: &[String]) -> Option<(&str, Option<&str>)> {
     let path = args.get(1).map(String::as_str).filter(|p| !p.is_empty())?;
-    Some((
-        path,
-        args.get(2).map(String::as_str).filter(|c| !c.is_empty()),
-    ))
+    Some((path, args.get(2).map(String::as_str).filter(|c| !c.is_empty())))
 }
 
 /// `ift -t`: the file is resolved here, where the working directory is, and
@@ -792,8 +778,7 @@ fn hook_binary() -> Option<String> {
     let candidates = [
         dir.join(name),
         // crates/infiniterm-cli/target/release/ift -> crates/infiniterm-hook/...
-        dir.join("../../../infiniterm-hook/target/release")
-            .join(name),
+        dir.join("../../../infiniterm-hook/target/release").join(name),
     ];
     candidates
         .iter()
@@ -922,11 +907,7 @@ fn wire_json_hooks(
     }
 
     if dry_run {
-        println!(
-            "would update {} for: {}",
-            path.display(),
-            changed.join(", ")
-        );
+        println!("would update {} for: {}", path.display(), changed.join(", "));
         return ExitCode::SUCCESS;
     }
 
@@ -1043,11 +1024,7 @@ fn wire_hook_file(
     }
 
     if dry_run {
-        println!(
-            "would update {} for: {}",
-            path.display(),
-            changed.join(", ")
-        );
+        println!("would update {} for: {}", path.display(), changed.join(", "));
         return ExitCode::SUCCESS;
     }
 
@@ -1098,13 +1075,7 @@ fn install_opencode(dry_run: bool) -> ExitCode {
         return hook_missing();
     };
     let path = opencode_plugin_path();
-    write_adapter(
-        &path,
-        &opencode_adapter_source(&binary),
-        &binary,
-        "opencode",
-        dry_run,
-    )
+    write_adapter(&path, &opencode_adapter_source(&binary), &binary, "opencode", dry_run)
 }
 
 /// Writes an adapter file (write-then-rename), saying so; unchanged files
@@ -1253,9 +1224,7 @@ mod tests {
     #[test]
     fn the_opencode_adapter_gets_the_hook_path_and_names_its_agent() {
         let src = opencode_adapter_source("/Applications/x.app/Contents/MacOS/infiniterm-hook");
-        assert!(
-            src.contains("const HOOK = \"/Applications/x.app/Contents/MacOS/infiniterm-hook\";")
-        );
+        assert!(src.contains("const HOOK = \"/Applications/x.app/Contents/MacOS/infiniterm-hook\";"));
         assert!(!src.contains("__INFINITERM_HOOK__"));
         assert!(src.contains("[event, \"opencode\"]"));
         assert_eq!(src.matches("export ").count(), 1);
@@ -1264,9 +1233,7 @@ mod tests {
     #[test]
     fn the_pi_adapter_gets_the_hook_path_and_nothing_else_changes() {
         let src = pi_adapter_source("/Applications/x.app/Contents/MacOS/infiniterm-hook");
-        assert!(
-            src.contains("const HOOK = \"/Applications/x.app/Contents/MacOS/infiniterm-hook\";")
-        );
+        assert!(src.contains("const HOOK = \"/Applications/x.app/Contents/MacOS/infiniterm-hook\";"));
         assert!(!src.contains("__INFINITERM_HOOK__"));
         assert!(src.contains("pi.on(\"agent_settled\""));
     }
@@ -1362,12 +1329,7 @@ mod tests {
             .stdout(Stdio::null())
             .spawn()
             .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
+        child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
         child.wait().unwrap();
         let out = std::fs::read_to_string(&log).unwrap_or_default();
         let _ = std::fs::remove_dir_all(&dir);
@@ -1389,8 +1351,7 @@ mod tests {
         let out = run_adapter(ANTIGRAVITY_ADAPTER, "Stop", failed).unwrap();
         assert!(out.starts_with("StopFailure antigravity"), "{out}");
         // A Stop between steps is not the end of the turn.
-        let busy =
-            r#"{"conversationId":"c1","fullyIdle":false,"terminationReason":"NO_TOOL_CALL"}"#;
+        let busy = r#"{"conversationId":"c1","fullyIdle":false,"terminationReason":"NO_TOOL_CALL"}"#;
         assert_eq!(run_adapter(ANTIGRAVITY_ADAPTER, "Stop", busy).unwrap(), "");
         let tool = r#"{"conversationId":"c1","toolCall":{"name":"run_command"}}"#;
         let out = run_adapter(ANTIGRAVITY_ADAPTER, "PreToolUse", tool).unwrap();
@@ -1401,8 +1362,7 @@ mod tests {
     // threads forking beside each. Every one must reach the stand-in hook.
     #[test]
     fn two_hundred_adapter_runs_in_parallel_all_reach_the_hook() {
-        let prompt =
-            r#"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"k1","cwd":"/work"}"#;
+        let prompt = r#"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"k1","cwd":"/work"}"#;
         if run_adapter(CURSOR_ADAPTER, "", prompt).is_none() {
             return;
         }
@@ -1421,8 +1381,7 @@ mod tests {
 
     #[test]
     fn the_cursor_adapter_reports_a_prompt() {
-        let prompt =
-            r#"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"k1","cwd":"/work"}"#;
+        let prompt = r#"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"k1","cwd":"/work"}"#;
         let Some(out) = run_adapter(CURSOR_ADAPTER, "", prompt) else {
             return;
         };
@@ -1450,14 +1409,8 @@ mod tests {
 
     #[test]
     fn the_pi_agent_dir_prefers_an_explicit_one_then_the_env_then_the_default() {
-        assert_eq!(
-            pi_agent_dir(Some("/tmp/x")),
-            std::path::PathBuf::from("/tmp/x")
-        );
-        assert_eq!(
-            pi_agent_dir(Some("~/.agents-pig")),
-            home().join(".agents-pig")
-        );
+        assert_eq!(pi_agent_dir(Some("/tmp/x")), std::path::PathBuf::from("/tmp/x"));
+        assert_eq!(pi_agent_dir(Some("~/.agents-pig")), home().join(".agents-pig"));
         // The env var and default depend on the machine; only their shape is checked.
         let d = pi_agent_dir(None);
         assert!(d.is_absolute());
