@@ -206,6 +206,10 @@ impl AppView {
             }
             body.blink = cfg.terminal.cursor_blink;
             body.highlight_line = cfg.editor.highlight_line;
+            if body.tree_icons != cfg.editor.explorer.icons {
+                body.tree_icons = cfg.editor.explorer.icons;
+                body.mark_dirty();
+            }
             body.complete_words = cfg.editor.complete_words;
             body.format_on_save = cfg.editor.format_on_save;
             body.lsp_enabled = cfg.editor.lsp.enabled;

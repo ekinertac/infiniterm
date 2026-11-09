@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-10
+
+- New setting `editor.explorer.icons` (off by default) shows icons in the editor's file tree: a closed or open folder where the arrow was, and an icon for each file's type, the ones VS Code's Material Icon Theme uses.
+
 ## 0.6.12 (build 1466), 2026-11-09
 
 ### Cards and ift
