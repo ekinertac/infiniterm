@@ -3869,6 +3869,27 @@ mod tests {
         assert_eq!(h.focused().agent, None, "the next command clears it");
     }
 
+    // A long command in a card that once ran Claude Code: the saved session
+    // stays on the card, but the command owns the Working, so the tab keeps
+    // the program's icon. A hook during the command hands it back.
+    #[test]
+    fn a_long_command_in_a_former_agent_card_is_owned_by_the_command() {
+        use crate::agent_state::AgentState::*;
+        use crate::backend::{PaneEvent, PaneId};
+        let mut h = Harness::new();
+        let pane: PaneId = 7;
+        h.m.cards[0].pane_id = Some(pane);
+        h.m.cards[0].agent_session = Some("c0ffee".into());
+        let id = h.m.cards[0].id.clone();
+        let t0 = h.m.now_ms;
+        h.m.apply_pane_event(pane, &PaneEvent::Output(b"\x1b]133;C\x07".to_vec()));
+        h.m.tick(t0 + crate::program_state::LONG_MS);
+        assert_eq!(h.focused().agent, Working);
+        assert!(h.m.program_owns_state(&id));
+        h.m.programs.get_mut(&id).unwrap().1.hook();
+        assert!(!h.m.program_owns_state(&id), "the hooks own it now");
+    }
+
     // The keymap dispatches through the editor and browser exceptions.
     #[test]
     fn chords_dispatch_through_the_keymap_with_the_editor_and_browser_exceptions() {

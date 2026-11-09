@@ -774,6 +774,7 @@ impl AppView {
                                     cards[i].agent,
                                     cards[i].agent_kind.as_deref(),
                                     cards[i].agent_session.as_deref(),
+                                    self.model.program_owns_state(&cards[i].id),
                                 ),
                             )
                         })
