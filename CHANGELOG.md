@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-08
 
+- The browser card's address bar (Cmd+L) opens a file or folder that exists on this Mac as a `file://` address: `/Users/me/site/index.html`, `~/site/index.html`, or a name relative to the focused terminal card's folder. Before, a path became a Google search and `index.html` became `https://index.html`. A path with spaces works. A name that is not there behaves as before.
 - When the app opens, and when you join a host, every workspace now opens at the Cmd+2 view: all its cards in view, with its first card focused unless it remembers one. Before, each workspace opened at the view it was saved with, and you pressed Cmd+2 on each. It happens once per workspace per launch; a workspace you zoom in on keeps your view when you come back to it. In a joined window the fit is the window's own, not the host's view.
 - "Restart to update" in the status bar now names the version and the build, like `Restart to update 0.6.10 (1417)`, where it showed only the build.
 - Restarting to install an update now restarts the joined windows open on this Mac too, so they come back on the new build as the same viewers of the same hosts. Before, a joined window kept running the old build until you restarted it by hand.
