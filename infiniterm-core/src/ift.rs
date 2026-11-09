@@ -428,15 +428,29 @@ mod tests {
         let url = |p: &str| format!("file://{}/{p}", real.display());
 
         // A scheme goes to the browser untouched.
-        for a in ["http://localhost:5173", "https://example.com/a?b=1", "file:///tmp/x", "about:blank"] {
+        for a in [
+            "http://localhost:5173",
+            "https://example.com/a?b=1",
+            "file:///tmp/x",
+            "about:blank",
+        ] {
             assert_eq!(browse_target(a, &real, &home).as_deref(), Ok(a));
         }
         // A relative path is read from the shell's folder; `~` from home;
         // an absolute one as typed; spaces are encoded.
-        assert_eq!(browse_target("index.html", &real, &home), Ok(url("index.html")));
-        assert_eq!(browse_target("./index.html", &real, &home), Ok(url("index.html")));
+        assert_eq!(
+            browse_target("index.html", &real, &home),
+            Ok(url("index.html"))
+        );
+        assert_eq!(
+            browse_target("./index.html", &real, &home),
+            Ok(url("index.html"))
+        );
         assert!(browse_target("~/index.html", &real, "/elsewhere").is_err());
-        assert_eq!(browse_target("~/index.html", &real, &home), Ok(url("index.html")));
+        assert_eq!(
+            browse_target("~/index.html", &real, &home),
+            Ok(url("index.html"))
+        );
         assert_eq!(
             browse_target("my docs/a b.html", &real, &home),
             Ok(url("my%20docs/a%20b.html"))

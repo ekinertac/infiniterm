@@ -43,6 +43,7 @@ ift group backend      # creates the group if needed
 ift ls                 # cards: id, group, directory, state, remote, number
 ift commands           # every command: id, label, key
 ift usage 30           # which commands and gestures you used in 30 days, and which you never did
+ift browse index.html  # open a local page, or a web address, in a browser card
 ift update status      # the app's update state on one line: off, checking, current, ready, failed
 ift push list          # the phones that get pushes (also push add, push remove)
 ift omni rust          # what the address bar would show for "rust"
@@ -54,6 +55,8 @@ On a terminal these print a padded table. Into a pipe they print tab-separated r
 `ift ls --agents` lists only the cards that run an agent, one tab-separated line each: card number, agent, session id, state, directory. The session id is the one `claude --resume` takes. For a Cursor card the lost-session resume line is `cursor agent --resume <id>`, and for an Antigravity card `agy --conversation <id>`.
 
 Exit codes: 0 ok, 1 infiniterm is not running, 2 bad usage.
+
+`ift browse` opens a browser card for each argument, beside the card you ran it in (or beside the focused card), and returns at once. An address with a scheme (`http://localhost:5173`, `https://…`, `file://…`) goes to the browser as it is. A path that exists, relative to the shell's folder or starting with `~`, opens as a `file://` address, and spaces are fine. A path that is not there is refused with a message: a missing page is almost always a typo. A joined window or a remote instance has no browser cards, and says so.
 
 ## Driving another card
 

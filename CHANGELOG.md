@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-08
 
+- New `ift browse <file or address>...` opens each in a browser card, beside the card you ran it in, and returns at once. `ift browse index.html` opens a local page, `ift browse http://localhost:5173` an address. A path that does not exist is refused with a message. `ift <path>` is still the way to edit a file.
 - The command palette, the shortcuts panel and the settings completion now find a word in either spelling: typing `color` finds the rows that say "colour", and `maximize` finds "Maximise". The matched letters are marked on the label as written. `ift license` runs `ift licence`; before, it opened an editor on a new file called `license`.
 - The browser card's address bar (Cmd+L) opens a file or folder that exists on this Mac as a `file://` address: `/Users/me/site/index.html`, `~/site/index.html`, or a name relative to the focused terminal card's folder. Before, a path became a Google search and `index.html` became `https://index.html`. A path with spaces works. A name that is not there behaves as before.
 - When the app opens, and when you join a host, every workspace now opens at the Cmd+2 view: all its cards in view, with its first card focused unless it remembers one. Before, each workspace opened at the view it was saved with, and you pressed Cmd+2 on each. It happens once per workspace per launch; a workspace you zoom in on keeps your view when you come back to it. In a joined window the fit is the window's own, not the host's view.
