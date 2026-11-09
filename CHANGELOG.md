@@ -8,7 +8,6 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-09
 
-- New setting `terminal.reverseLinkClick` swaps what Cmd+click and Cmd+Shift+click do on a URL in a terminal. Off (the default) keeps Cmd+click opening a browser card and Cmd+Shift+click your default browser; on, Cmd+click goes to your default browser and Cmd+Shift+click opens a card.
 - A ui theme can set the card edges: `card.border` for a resting card and `card.activeBorder` for the focused card's ring (a colour or `none`), with `card.borderOpacity` and `card.activeBorderOpacity` to fade them. Unset keeps today's look.
 
 ### 2026-11-08
