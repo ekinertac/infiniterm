@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-09
+
+- An editor card opened on a folder shows the folder's name over the file tree without a trailing slash: `infiniterm`, not `infiniterm/`.
+
 ## 0.6.12 (build 1466), 2026-11-09
 
 ### Cards and ift
