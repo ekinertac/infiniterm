@@ -22,7 +22,10 @@ use infiniterm_core::grid::Point;
 use infiniterm_core::ui_theme::TabTheme;
 
 /// gpui's default line height (`phi`), which a workspace tab's label has:
-/// the tab's height is its line plus `TAB_PAD_Y_PX` above and below.
+/// the tab's height is its line plus `TAB_PAD_Y_PX` above and below. Spelled
+/// as gpui spells it, not as `std::f64::consts::GOLDEN_RATIO`, which needs a
+/// newer Rust than some machines building this have.
+#[allow(clippy::approx_constant)]
 const TAB_LINE_HEIGHT_RATIO: f64 = 1.618_034;
 /// A workspace tab's `py_1`, in pixels.
 const TAB_PAD_Y_PX: f64 = 4.;
@@ -424,6 +427,7 @@ mod tests {
     // line at gpui's default height plus `py_1` above and below, and the
     // strip adds its inset around it. Both grow with the interface size.
     #[test]
+    #[allow(clippy::approx_constant)] // gpui's phi, as TAB_LINE_HEIGHT_RATIO
     fn a_card_tab_is_as_tall_as_a_workspace_tab() {
         let workspace_tab = 12. * 1.618_034 + 2. * 4.;
         assert!((tab_h(12.) - workspace_tab).abs() < 1e-6);
