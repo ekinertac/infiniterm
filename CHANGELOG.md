@@ -11,7 +11,6 @@ How this file is kept: work that has shipped to `master` but not to a release go
 - When the app opens, and when you join a host, every workspace now opens at the Cmd+2 view: all its cards in view, with its first card focused unless it remembers one. Before, each workspace opened at the view it was saved with, and you pressed Cmd+2 on each. It happens once per workspace per launch; a workspace you zoom in on keeps your view when you come back to it. In a joined window the fit is the window's own, not the host's view.
 - "Restart to update" in the status bar now names the version and the build, like `Restart to update 0.6.10 (1417)`, where it showed only the build.
 - Restarting to install an update now restarts the joined windows open on this Mac too, so they come back on the new build as the same viewers of the same hosts. Before, a joined window kept running the old build until you restarted it by hand.
-- A card now has to stay done for 20 seconds before the phone gets "is done" or lists it. Claude Code ends a turn while background subagents run, and the next turn starts a moment later, so the phone used to get a false "done" at every wait. The card colour on the Mac still turns green at once.
 
 ## 0.6.11 (build 1433), 2026-11-08
 
