@@ -1049,6 +1049,7 @@ impl AppView {
                     card.agent,
                     card.agent_kind.as_deref(),
                     card.agent_session.as_deref(),
+                    self.model.program_owns_state(&card.id),
                 )
                 .unwrap_or(infiniterm_core::tab_icon::Subject::Program(&shell)),
                 tab.icon_style.unwrap_or_default(),

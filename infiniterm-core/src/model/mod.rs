@@ -1355,6 +1355,13 @@ impl Model {
         self.cards.iter_mut().find(|c| c.id == id)
     }
 
+    /// The card's state comes from the command in flight (`program_state`),
+    /// not from an agent's hooks: a long `brew upgrade` in a card that once
+    /// ran Claude Code, whose `agent_session` is never cleared.
+    pub fn program_owns_state(&self, id: &str) -> bool {
+        self.programs.get(id).is_some_and(|(_, t)| t.owns_working())
+    }
+
     pub fn focused(&self) -> Option<&Card> {
         self.selection
             .focused_id
