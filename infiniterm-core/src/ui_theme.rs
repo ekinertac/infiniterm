@@ -144,6 +144,10 @@ pub struct UiTheme {
     pub titlebar: BarTheme,
     pub statusbar: BarTheme,
     pub tab: TabTheme,
+    /// The editor and browser cards' tab strip (#693): the workspace tabs'
+    /// look keys under `cardTab.`, minus the icons (a card tab names a file
+    /// or a page, not a program).
+    pub card_tab: TabTheme,
     pub card: CardTheme,
 }
 
@@ -199,7 +203,7 @@ pub const LOOK_KEYS: [(&str, Kind); 21] = [
 
 /// The bar keys (#425) and the tab keys (#544), with their docs. They exist
 /// only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 27] = [
+pub const BAR_KEYS: [(&str, &[&str], &str); 36] = [
     (
         "canvas.background",
         &[
@@ -322,6 +326,55 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 27] = [
             "Unset keeps the built-in size, a little larger than the tab's label.",
         ],
         "16",
+    ),
+    (
+        "cardTab.background",
+        &[
+            "The tabs at the top of editor and browser cards take the workspace tab keys under",
+            "cardTab., with the same values and defaults, so the same values make both look",
+            "alike. This one is an idle card tab's fill. Unset, idle tabs have no fill.",
+        ],
+        "\"#ffffff14\"",
+    ),
+    (
+        "cardTab.activeBackground",
+        &["The chosen card tab's fill. Same values as tab.background."],
+        "\"#ffffff29\"",
+    ),
+    (
+        "cardTab.gradient",
+        &["The chosen card tab's fill as a gradient, like tab.gradient."],
+        "[\"#5a4a42\", \"#2b2320\"]",
+    ),
+    (
+        "cardTab.opacity",
+        &["Multiplies the alpha of every card tab fill, 0.1 to 1. Default 1."],
+        "1",
+    ),
+    (
+        "cardTab.border",
+        &["An idle card tab's one pixel outline: a colour, or \"none\"."],
+        "\"none\"",
+    ),
+    (
+        "cardTab.activeBorder",
+        &["The chosen card tab's outline: a colour, or \"none\"."],
+        "\"none\"",
+    ),
+    (
+        "cardTab.separator",
+        &["A thin line between two neighbouring idle card tabs: a colour, or \"none\"."],
+        "\"none\"",
+    ),
+    (
+        "cardTab.radius",
+        &["Round the corners of card tabs, in pixels, 0 to 40. Unset keeps the small default."],
+        "6",
+    ),
+    (
+        "cardTab.paddingX",
+        &["Padding on each side of a card tab's name, in pixels, 0 to 40. Unset keeps the default."],
+        "6",
     ),
     (
         "card.border",
@@ -608,6 +661,26 @@ fn check_kind(key: &str, kind: Kind, v: &Value) -> Result<(), String> {
     }
 }
 
+/// One of the look keys the workspace tabs and the card tabs share, by its
+/// name after the prefix (`background` for `tab.background` and
+/// `cardTab.background`). `Ok(false)` when `name` is none of them, so the
+/// caller tries its next arm; `key` is the whole key, for the error text.
+fn tab_look(name: Option<&str>, key: &str, v: &Value, t: &mut TabTheme) -> Result<bool, String> {
+    match name {
+        Some("background") => t.background = Some(color(key, v)?),
+        Some("activeBackground") => t.active_background = Some(color(key, v)?),
+        Some("gradient") => t.gradient = gradient(key, v)?,
+        Some("opacity") => t.opacity = Some(number(key, v, 0.1, 1.)?),
+        Some("border") => t.border = Some(border(key, v)?),
+        Some("activeBorder") => t.active_border = Some(border(key, v)?),
+        Some("separator") => t.separator = Some(border(key, v)?),
+        Some("radius") => t.radius = Some(number(key, v, 0., 40.)?),
+        Some("paddingX") => t.padding_x = Some(number(key, v, 0., 40.)?),
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
 /// Parses a ui theme's text. An empty file is the empty theme (the built-in
 /// look); anything that is not a JSON object, an unknown key or a bad value
 /// is an error.
@@ -627,15 +700,8 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
             "titlebar.border" => theme.titlebar.border = Some(border(key, v)?),
             "statusbar.background" => theme.statusbar.background = Some(color(key, v)?),
             "statusbar.border" => theme.statusbar.border = Some(border(key, v)?),
-            "tab.background" => theme.tab.background = Some(color(key, v)?),
-            "tab.activeBackground" => theme.tab.active_background = Some(color(key, v)?),
-            "tab.gradient" => theme.tab.gradient = gradient(key, v)?,
-            "tab.opacity" => theme.tab.opacity = Some(number(key, v, 0.1, 1.)?),
-            "tab.border" => theme.tab.border = Some(border(key, v)?),
-            "tab.activeBorder" => theme.tab.active_border = Some(border(key, v)?),
-            "tab.separator" => theme.tab.separator = Some(border(key, v)?),
-            "tab.radius" => theme.tab.radius = Some(number(key, v, 0., 40.)?),
-            "tab.paddingX" => theme.tab.padding_x = Some(number(key, v, 0., 40.)?),
+            k if tab_look(k.strip_prefix("tab."), key, v, &mut theme.tab)? => {}
+            k if tab_look(k.strip_prefix("cardTab."), key, v, &mut theme.card_tab)? => {}
             "tab.icons" => {
                 theme.tab.icons = Some(v.as_bool().ok_or("\"tab.icons\" must be true or false")?)
             }
@@ -1042,6 +1108,49 @@ mod tests {
             (r#"{"tab.paddingX": "wide"}"#, "tab.paddingX"),
             (r#"{"tab.separator": "thin"}"#, "tab.separator"),
             (r#"{"tab.shadow": 1}"#, "tab.shadow"),
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains(key), "{e}");
+        }
+    }
+
+    #[test]
+    fn card_tab_keys_are_the_tab_keys_under_their_own_prefix() {
+        let t = parse(
+            r##"{"cardTab.background": "#ffffff14", "cardTab.activeBackground": "canvas",
+                 "cardTab.gradient": ["#5a4a42", "#2b2320cc"], "cardTab.opacity": 0.8,
+                 "cardTab.border": "none", "cardTab.activeBorder": "#fff",
+                 "cardTab.separator": "#ffffff22", "cardTab.radius": 99,
+                 "cardTab.paddingX": 14}"##,
+        )
+        .unwrap();
+        assert_eq!(
+            t.tab,
+            TabTheme::default(),
+            "the workspace tabs keep their look"
+        );
+        let c = &t.card_tab;
+        assert_eq!(c.background, Some(ColorSpec::Hex("#ffffff14".into())));
+        assert_eq!(c.active_background, Some(ColorSpec::Canvas));
+        assert_eq!(
+            c.gradient,
+            Some(["#5a4a42".to_string(), "#2b2320cc".to_string()])
+        );
+        assert_eq!(
+            (c.opacity, c.radius, c.padding_x),
+            (Some(0.8), Some(40.), Some(14.))
+        );
+        assert_eq!(c.border, Some(BorderSpec::None));
+        assert_eq!(
+            c.active_border,
+            Some(BorderSpec::Color(ColorSpec::Hex("#fff".into())))
+        );
+        for (bad, key) in [
+            (r#"{"cardTab.background": "none"}"#, "cardTab.background"),
+            (r#"{"cardTab.paddingX": "wide"}"#, "cardTab.paddingX"),
+            // A card tab names a file or a page: the program icons stay the
+            // workspace tabs' own.
+            (r#"{"cardTab.icons": true}"#, "cardTab.icons"),
         ] {
             let e = parse(bad).unwrap_err();
             assert!(e.contains(key), "{e}");

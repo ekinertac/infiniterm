@@ -11,7 +11,7 @@
 //! save, find, go to line, the tree's three states.
 use crate::editor_body::{EditorBody, EditorEvent};
 use crate::editor_tabs::EditorTabs;
-use crate::tab_strip::StripStyle;
+use crate::tab_strip::strip_style;
 
 use crate::page_body::{PageBody, PageColors};
 use crate::transcript_body::{TranscriptBody, TranscriptColors};
@@ -68,16 +68,7 @@ impl AppView {
             &cfg.editor.cursor_color,
         );
         let rules = syntax_rules(self.chrome.theme.as_ref());
-        let style = StripStyle {
-            bg: self.chrome.bar_bg,
-            border: self.chrome.bar_border,
-            active_bg: self.chrome.row_selected,
-            text_bright: self.chrome.text_bright,
-            text_muted: self.chrome.text_muted,
-            regular: self.chrome.typography.regular.clone(),
-            bold: self.chrome.typography.bold.clone(),
-            font_px: self.chrome.typography.font_size,
-        };
+        let style = strip_style(&self.chrome, &self.model.ui_theme.card_tab);
         let ui_scale = self.model.ui_scale as f32;
         let now = crate::now_ms();
         let cards: Vec<_> = self

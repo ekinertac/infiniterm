@@ -339,6 +339,7 @@ impl EditorTabs {
             self.ui_scale,
             self.labels().len(),
             self.header_w(),
+            self.style.pad_x(),
         )
     }
 
@@ -611,18 +612,11 @@ mod tests {
             bold_weight: FontWeight::BOLD,
         };
         let style = StripStyle {
-            bg: gpui::black(),
-            border: gpui::black(),
-            active_bg: gpui::black(),
-            text_bright: gpui::white(),
-            text_muted: gpui::white(),
-            regular: gpui::font("Menlo"),
-            bold: {
-                let mut font = gpui::font("Menlo");
-                font.weight = FontWeight::BOLD;
-                font
-            },
             font_px: 14.,
+            ..crate::tab_strip::strip_style(
+                &crate::chrome::Chrome::default_chrome(),
+                &Default::default(),
+            )
         };
         EditorTabs::new("c1", &metrics, Size { w: 800., h: 600. }, style)
     }

@@ -10,7 +10,7 @@
 //! is the whole of how one becomes a surface. CEF itself is started once
 //! in `main.rs`; `cef_running` says whether it is.
 use crate::browser_body::BrowserBody;
-use crate::tab_strip::StripStyle;
+use crate::tab_strip::strip_style;
 use crate::{now_ms, AppView};
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::ift::OpenPlan;
@@ -104,17 +104,9 @@ impl AppView {
         let card_bg = self.chrome.card_bg;
         let text = self.chrome.text;
         // The same `StripStyle` the editor's strip takes, so the two look
-        // and size alike under the app's UI typography.
-        let style = StripStyle {
-            bg: self.chrome.bar_bg,
-            border: self.chrome.bar_border,
-            active_bg: self.chrome.row_selected,
-            text_bright: self.chrome.text_bright,
-            text_muted: self.chrome.text_muted,
-            regular: self.chrome.typography.regular.clone(),
-            bold: self.chrome.typography.bold.clone(),
-            font_px: self.chrome.typography.font_size,
-        };
+        // and size alike under the app's UI typography and the theme's
+        // `cardTab.*` keys.
+        let style = strip_style(&self.chrome, &self.model.ui_theme.card_tab);
         let inactive_dim = self.model.config.ui.inactive_dim;
         let ui_scale = self.model.ui_scale as f32;
         let cards: Vec<_> = self
