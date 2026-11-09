@@ -111,7 +111,15 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
         && m.keymap.iter().any(|(c, id)| {
             c == chord && matches!(id.as_str(), "editor.goToFile" | "editor.findInFiles")
         });
+    // The emoji panel opens from a locked card too (#686): the picked emoji
+    // goes into the text, and without this the chord was the body's and did
+    // nothing. Whatever chord the keymap binds to it.
+    let opens_emoji = m
+        .keymap
+        .iter()
+        .any(|(c, id)| c == chord && id == "app.emoji");
     if locked
+        && !opens_emoji
         && !is_workspace_switch(chord)
         && !is_locked_carveout(chord, kind)
         && !leaves
@@ -4790,6 +4798,24 @@ mod tests {
             Some("editor.goToFile"),
             "go to file works from inside the text"
         );
+    }
+
+    // The emoji panel opens from a locked editor and a locked browser card
+    // (#686), so the emoji can land in the text.
+    #[test]
+    fn the_emoji_chord_opens_the_panel_from_a_locked_editor_and_browser() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        for kind in [CardKind::Editor, CardKind::Browser] {
+            h.m.cards[0].kind = kind;
+            h.m.cards[0].locked = true;
+            assert_eq!(
+                resolve_chord(&h.m, "cmd+ctrl+space").as_deref(),
+                Some("app.emoji"),
+                "{kind:?}"
+            );
+        }
     }
 
     // A diff card is the editor's body in a read-only mode, so it locks the

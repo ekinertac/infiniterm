@@ -8,6 +8,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-09
 
+- A long command in a card that once ran Claude Code (a `brew upgrade`, a `git pull`) now shows its own program icon on the workspace tab and card header, not the agent icon.
+- A card now has to stay done for 20 seconds before the phone gets "is done" or lists it. Claude Code ends a turn while background subagents run, and the next turn starts a moment later, so the phone used to get a false "done" at every wait. The card colour on the Mac still turns green at once.
+- A ui theme can set the canvas colour behind the cards with `canvas.background`, a colour like `"#121119"`. Without it the canvas keeps its built-in colour. The bars' and tabs' `"canvas"` value follows it.
+- Cmd+Ctrl+Space opens the emoji panel from an editor or browser card you are in, and the emoji lands at the caret. In an editor you are not in, the panel opens and a notice says to click into the text first.
 - A ui theme can set the card edges: `card.border` for a resting card and `card.activeBorder` for the focused card's ring (a colour or `none`), with `card.borderOpacity` and `card.activeBorderOpacity` to fade them. Unset keeps today's look.
 
 ### 2026-11-08
