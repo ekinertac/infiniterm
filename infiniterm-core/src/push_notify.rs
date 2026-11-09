@@ -31,6 +31,14 @@ pub const TOPIC_FILE: &str = "ntfy-topic";
 /// ntfy's own limit on a topic name.
 pub const TOPIC_MAX: usize = 64;
 
+/// How long a card must stay done before it counts as done for the phone
+/// (#674). Claude Code fires `Stop` at the end of every turn, also the ones
+/// that end while background subagents run; the next turn starts within this
+/// time and sets the card back to working, so no false "done" goes out. It
+/// delays a real "done" by the same time. The card colour on the Mac is not
+/// held.
+pub const DONE_HOLD_SECS: f64 = 20.0;
+
 /// A card whose state changed to one that needs you.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Change {
