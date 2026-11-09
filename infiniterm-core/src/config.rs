@@ -881,10 +881,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 s => s,
             },
             copy_on_select: bool_(t.get("copyOnSelect"), d.terminal.copy_on_select),
-            reverse_link_click: bool_(
-                t.get("reverseLinkClick"),
-                d.terminal.reverse_link_click,
-            ),
+            reverse_link_click: bool_(t.get("reverseLinkClick"), d.terminal.reverse_link_click),
             scroll_multiplier: num(
                 t.get("scrollMultiplier"),
                 d.terminal.scroll_multiplier,
