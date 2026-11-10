@@ -16,6 +16,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 - In a browser card you can now drag across a page's text to select it, then copy it with Cmd+C. Before, a drag selected nothing.
 - Clicking "+" on a browser card's tab strip now opens the address bar on the new tab, as Cmd+T does. Before, it left a blank page with nowhere to type until you pressed Cmd+L.
 - The editor's file tree no longer lists `.DS_Store`, the file Finder leaves in every folder it opens. Other dotfiles are still listed.
+- A workspace can be saved under a name and opened again later. "Workspace: save as…" in the command palette keeps the workspace you are on: its cards where they are, each terminal's directory, each editor's open files, each browser's page, and its groups. "Workspace: open saved…" lists what you saved and opens the one you pick as a new workspace, each terminal a fresh shell in its directory. Saving under a name you already used asks before it replaces that one; opening the same one twice gives two workspaces.
 - New setting `editor.explorer.icons` (off by default) shows icons in the editor's file tree: a closed or open folder where the arrow was, and an icon for each file's type, the ones VS Code's Material Icon Theme uses.
 ### 2026-11-09
 
