@@ -53,7 +53,13 @@ The key stops working at once.
 - A paired key can run only a short list of infiniterm commands on the Mac. It cannot open a shell.
 - `ift phone add` edits only `~/.ssh/authorized_keys`, and adds one line with the comment `infiniterm-phone:<name>`. `ift phone remove` deletes only the line with that name.
 
-You can also add a Mac by hand: make a key in the app's Settings and add its public line to `~/.ssh/authorized_keys`.
+You can also add a Mac by hand, without a QR code:
+
+1. In the app's Settings, make an ssh key and copy its public line.
+2. On the Mac, add that line to `~/.ssh/authorized_keys`.
+3. In the app, add the host: a name, the Mac's Tailscale name, the port, the user, and the path of `ift` on the Mac. For the app bundle, the path is `/Applications/infiniterm.app/Contents/MacOS/ift`.
+
+`ift phone add` limits its key to infiniterm commands. A key you add by hand has only the limits you write in `authorized_keys`. With none, it can run a shell.
 
 ## Notifications
 
