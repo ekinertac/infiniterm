@@ -219,7 +219,7 @@ pub fn layout(blocks: &[Block], cols: usize) -> Vec<Line> {
             BlockKind::Item { list, .. } => Some(*list),
             _ => None,
         };
-        if !out.is_empty() && !(list.is_some() && list == prev_list) {
+        if !(out.is_empty() || (list.is_some() && list == prev_list)) {
             out.push(Line {
                 kind: LineKind::Blank,
                 indent: 0,

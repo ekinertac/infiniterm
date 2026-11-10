@@ -1469,6 +1469,15 @@ impl AppView {
             crate::body::BodyAction::Open(plan) => {
                 self.model.open_in_card(plan, Some(id));
             }
+            crate::body::BodyAction::OpenLink { url, cwd, shift } => {
+                let reverse = self.model.config.terminal.reverse_link_click;
+                if infiniterm_core::ift::link_in_card(shift, reverse) {
+                    self.model
+                        .open_in_card(infiniterm_core::ift::url_plan(&url, &cwd), Some(id));
+                } else if let Err(e) = infiniterm_core::links_fs::open_url(&url) {
+                    self.model.notify(format!("could not open: {e}"));
+                }
+            }
             crate::body::BodyAction::OpenOnHost { path, line } => {
                 self.send_open_request(id, path, line);
             }
@@ -1493,7 +1502,7 @@ impl AppView {
                     self.model.browser_tab_jump(id, index);
                 }
                 crate::body::TabClick::New => {
-                    self.model.browser_tab_open(id, None);
+                    self.model.tab_open_blank(id);
                 }
                 crate::body::TabClick::Close(index) => {
                     // Closes the CLICKED tab without moving the active one,

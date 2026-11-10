@@ -117,6 +117,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["Copy a mouse selection to the clipboard as soon as it is made."],
     ),
     (
+        "terminal.reverseLinkClick",
+        &[
+            "Swap what Cmd+click and Cmd+Shift+click do on a URL. Off: Cmd+click opens",
+            "a browser card beside the terminal, Cmd+Shift+click your default browser.",
+            "On: the other way round.",
+        ],
+    ),
+    (
         "terminal.scrollMultiplier",
         &["Scroll speed: lines per wheel step, times this. 0.1 to 10."],
     ),

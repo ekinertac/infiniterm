@@ -29,7 +29,7 @@ use gpui::{
 use infiniterm_core::backend::PaneId;
 use infiniterm_core::git_repo::Repo;
 use infiniterm_core::grid::{Point, Size};
-use infiniterm_core::ift::{open_plan, url_plan, PathKind};
+use infiniterm_core::ift::{open_plan, PathKind};
 use infiniterm_core::links::{find_links_in, merge_hyperlinks, Found, LinkKind};
 use infiniterm_core::links_fs::path_kinds;
 use infiniterm_term::grid::{CursorKind, Frame, Grid, SelectKind, TermEvent, SPACER};
@@ -1540,20 +1540,22 @@ impl CardBody for TerminalBody {
                         }
                     };
                 }
+                // A URL: a card or the system browser, decided where
+                // `terminal.reverseLinkClick` is (#662).
+                if f.kind == LinkKind::Url {
+                    return BodyAction::OpenLink {
+                        url: f.target,
+                        cwd: self.cwd.clone(),
+                        shift: modifiers.shift,
+                    };
+                }
                 if modifiers.shift {
-                    return match f.kind {
-                        LinkKind::Url => BodyAction::OpenExternal {
-                            url: Some(f.target),
-                            path: None,
-                        },
-                        LinkKind::Path => BodyAction::OpenExternal {
-                            url: None,
-                            path: Some((self.cwd.clone(), f.target)),
-                        },
+                    return BodyAction::OpenExternal {
+                        url: None,
+                        path: Some((self.cwd.clone(), f.target)),
                     };
                 }
                 return match (f.kind, kind) {
-                    (LinkKind::Url, _) => BodyAction::Open(url_plan(&f.target, &self.cwd)),
                     (LinkKind::Path, Some(kind)) => BodyAction::Open(open_plan(
                         &self.resolve_against(&f.target, &home),
                         kind,
