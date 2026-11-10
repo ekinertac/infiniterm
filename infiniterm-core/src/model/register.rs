@@ -3905,6 +3905,39 @@ mod tests {
         assert!(!h.m.program_owns_state(&id), "the hooks own it now");
     }
 
+    // A shell's OSC 7 sets the card's directory (the only way on Windows);
+    // a shell on another machine, over ssh, does not.
+    #[test]
+    fn a_shells_directory_report_moves_the_card_and_a_remote_one_does_not() {
+        use crate::backend::{PaneEvent, PaneId};
+        let mut h = Harness::new();
+        let pane: PaneId = 8;
+        h.m.cards[0].pane_id = Some(pane);
+        h.m.cards[0].cwd = "/start".into();
+        h.m.dirty_layout = false;
+        h.m.apply_pane_event(
+            pane,
+            &PaneEvent::Output(b"\x1b]7;file:///work/my%20app\x07".to_vec()),
+        );
+        assert_eq!(h.focused().cwd, "/work/my app");
+        assert!(h.m.dirty_layout, "the directory is saved");
+        h.m.apply_pane_event(
+            pane,
+            &PaneEvent::Output(b"\x1b]7;file://some-other-server.example/srv\x07".to_vec()),
+        );
+        assert_eq!(
+            h.focused().cwd,
+            "/work/my app",
+            "that path is not on this machine"
+        );
+        let log = h.m.take_effects();
+        assert!(
+            !log.iter()
+                .any(|e| matches!(e, Effect::AgentLog(l) if l.contains("Cwd"))),
+            "a prompt's report is not an agent log line"
+        );
+    }
+
     // The keymap dispatches through the editor and browser exceptions.
     #[test]
     fn chords_dispatch_through_the_keymap_with_the_editor_and_browser_exceptions() {

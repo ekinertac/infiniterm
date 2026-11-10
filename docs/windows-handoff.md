@@ -69,8 +69,9 @@ a piece of work, not a mystery.
    PR for what was and was not.
 6. **Update signatures are built and off**: `UPDATE_PUBLIC_KEY` is empty until
    Ekin generates a key (see #470 below).
-7. A card's directory never changes on Windows (described under "What is
-   still open"). Transcript cards work there (checked 2026-11-11).
+7. A card's directory follows a shell that writes OSC 7, such as oh-my-posh
+   (fixed 2026-11-11; a shell that writes none keeps the opening directory,
+   see "What is still open"). Transcript cards work there (checked 2026-11-11).
 8. No `ift connect`, `join`, `serve`, `proxy`, `sessions` or `attach`, and no
    parking of closed cards: they need unix sockets or `iftd`.
 
@@ -443,13 +444,18 @@ What is still open:
   agent that launched the app, which is not a Windows fault: `local_pty`
   scrubs the parent TERMINAL's identity variables and not an agent's, so
   launching the app from inside a Claude card does the same on a Mac.
-- A card's DIRECTORY never changes on Windows. A process's cwd cannot be
-  read from outside it without debug privileges, so `inspect::cwds` answers
-  nothing there and a card keeps the directory it opened in. The fix is not
-  a Windows one: `PaneEvent::CwdChanged` exists and NOTHING emits or
-  consumes it on either platform, while oh-my-posh already writes OSC 7. A
-  Mac change, so the Mac session's to make, and it would answer the
-  directory on both at once.
+- **A card's directory follows the shell now (2026-11-11).** A process's cwd
+  still cannot be read from outside it without debug privileges, so
+  `inspect::cwds` answers nothing on Windows; the card takes the shell's own
+  OSC 7 report instead (`program_state::Signal::Cwd`, applied in
+  `model/hooks_in.rs::scan_program`, for every platform). Checked on the box
+  with Ekin's PowerShell and oh-my-posh: `Set-Location C:\Windows\System32`
+  made `ift ls` say `C:\Windows\System32`, and a `Set-Location $env:TEMP`
+  after it said `~\AppData\Local\Temp`. A report whose host is another
+  machine (a shell over ssh) is ignored. A shell that writes no OSC 7
+  (plain PowerShell with no oh-my-posh, cmd) still leaves the card on the
+  directory it opened in; a PowerShell prompt function that writes OSC 7
+  would fix it and is not built.
 - A card can say `ssh` but never which host: Toolhelp gives an exe's file
   name, not a command line. `ssh_destination` is unreachable on Windows.
 - End-to-end backpressure (`HIGH_WATER`) has no Windows test, for the ConPTY
