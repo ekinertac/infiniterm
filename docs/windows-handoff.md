@@ -38,10 +38,15 @@ a piece of work, not a mystery.
    address `file:///C:/...`) and `https://example.com` render in a browser
    card. Not checked: the moat's Google sign-in, the extension, video, the
    page's right-click menu, a long session.
-2. **A Windows release has no browser cards.** `tools/dist.ps1` still builds
-   with `--no-default-features` although CEF builds now (#516). Shipping the
-   browser means putting `libcef.dll`, its data files and the helper in the
-   folder and zip. Waiting for Ekin.
+2. **FIXED 2026-11-11: a Windows release now has browser cards.**
+   `tools/dist.ps1` builds with the browser by default and copies CEF's runtime
+   (listed by name in the script, which fails if one is missing) beside the exe:
+   the zip is 202 MB against 13 MB without. `-NoBrowser` keeps the old build
+   for a machine with no CEF. Checked: the zip unpacked into a fresh folder
+   runs on a scratch data dir and shows `https://example.com` in a browser
+   card ("0.6.12 · build 1538" in the status bar). Not checked: a machine
+   with no Visual C++ runtime, the SmartScreen prompt, the updater on a
+   Windows zip, and who publishes it (Ekin).
 3. **FIXED (found already working 2026-11-11): the browser page's right-click
    menu.** Since #625 the page menu goes through the same model menu as the tab
    strip's, so it is drawn by `menu_view.rs` here. Checked on screen on a
