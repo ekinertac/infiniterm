@@ -462,10 +462,22 @@ What is still open:
   with Ekin's PowerShell and oh-my-posh: `Set-Location C:\Windows\System32`
   made `ift ls` say `C:\Windows\System32`, and a `Set-Location $env:TEMP`
   after it said `~\AppData\Local\Temp`. A report whose host is another
-  machine (a shell over ssh) is ignored. A shell that writes no OSC 7
-  (plain PowerShell with no oh-my-posh, cmd) still leaves the card on the
-  directory it opened in; a PowerShell prompt function that writes OSC 7
-  would fix it and is not built.
+  machine (a shell over ssh) is ignored. **PowerShell integration
+  (2026-11-11):** `infiniterm-core/src/shell/infiniterm.ps1` wraps the
+  prompt and PSReadLine's line reader to write OSC 133 (`D` with the status
+  before each prompt, `C` when a non-empty line is accepted) and OSC 7, so a
+  PowerShell card gets the same colours as a zsh card without oh-my-posh. It
+  loads after the profile: an interactive PowerShell starts with
+  `-NoExit -Command "if ($env:INFINITERM_PWSH_INTEGRATION) { . ... }"`
+  (`shell_cmd::PWSH_LOAD`), and the app sets that variable for a local shell
+  card (`shell_integration::pwsh_env`). Checked on the box with Ekin's
+  PowerShell 7 and oh-my-posh: `cmd /c exit 3` read `CommandEnd(Some(3))` and
+  turned the card failed, a cmdlet error failed it with status 1, a 7-second
+  `Start-Sleep` went working then done, Ctrl+C on a running command read 130
+  (not a failure, via the history entry's `Stopped` status) and the prompt
+  looked as before. Not checked: Windows PowerShell 5.1 (`powershell.exe`),
+  a profile that replaces `PSConsoleHostReadLine` itself, starship, and
+  `cmd.exe`, which has no integration.
 - A card can say `ssh` but never which host: Toolhelp gives an exe's file
   name, not a command line. `ssh_destination` is unreachable on Windows.
 - End-to-end backpressure (`HIGH_WATER`) has no Windows test, for the ConPTY
