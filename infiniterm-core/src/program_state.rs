@@ -398,14 +398,15 @@ mod tests {
 
     #[test]
     fn a_host_is_this_machine_when_empty_localhost_or_its_own_name() {
-        assert!(is_local_host("", None));
-        assert!(is_local_host("LocalHost", None));
+        // `None` alone is an `AgentState` in this module.
+        assert!(is_local_host("", Option::None));
+        assert!(is_local_host("LocalHost", Option::None));
         assert!(is_local_host("desktop-2ko6e5e", Some("DESKTOP-2KO6E5E")));
         assert!(!is_local_host(
             "server.example.com",
             Some("DESKTOP-2KO6E5E")
         ));
-        assert!(!is_local_host("server", None));
+        assert!(!is_local_host("server", Option::None));
         assert!(!is_local_host("server", Some("")));
     }
 
