@@ -67,8 +67,15 @@ a piece of work, not a mystery.
    (`docs/agent/command-key.md`, `platform_keys.rs`); the Windows half is the
    AltGr rule (`core::altgr`, `keycode::without_altgr`), the scan-code walk of
    the platform table (`every_key_the_platform_chords_use_has_a_scan_code`) and
-   the welcome card's wording. Not yet checked with real keystrokes: see the
-   PR for what was and was not.
+   the welcome card's wording. **Checked with real keystrokes on the box,
+   2026-11-11** (SendInput into the scratch window, left Ctrl, physical keys,
+   US layout): Ctrl+Shift+T made cards (1 to 2 to 3), Ctrl+Shift+W closed one,
+   Ctrl+Shift+V pasted the clipboard into the terminal's prompt, Ctrl+Shift+P
+   opened the palette with Ctrl+Shift chords, and a plain Ctrl+C interrupted a
+   running `Start-Sleep` in the shell (a control run without it printed its
+   marker). Not checked: Ctrl+Shift+C copy (needs a mouse selection), a
+   punctuation chord, the Ctrl+Alt twins, and AltGr itself (the box's layouts
+   have no AltGr; only the layout probe and the pure rule are tested).
 6. **Update signatures are built and off**: `UPDATE_PUBLIC_KEY` is empty until
    Ekin generates a key (see #470 below).
 7. A card's directory follows a shell that writes OSC 7, such as oh-my-posh
