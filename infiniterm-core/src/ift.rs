@@ -488,7 +488,9 @@ mod tests {
         );
         assert_eq!(
             browse_target(
-                &format!("{}/index.html", real.display()),
+                // Joined as a path: after the verbatim `\\?\` prefix Windows
+                // takes no `/` as a separator.
+                &real.join("index.html").to_string_lossy(),
                 std::path::Path::new("/"),
                 &home
             ),
