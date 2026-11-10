@@ -35,6 +35,8 @@ mod install;
 mod join;
 mod licence_cmd;
 mod push_cmd;
+#[cfg(unix)]
+mod phone_cmd;
 mod update_sign_cmd;
 #[cfg(unix)]
 mod proxy;
@@ -147,6 +149,12 @@ ift — drive infiniterm from a shell
                              Mac, with its relay url (https only)
   ift push remove <id>       forget a phone; ift push list shows the phones
                              with the first 6 characters of each id
+  ift phone add <name>       pair a phone: make it a key restricted to this
+                             Mac's own ssh, and print a QR code to scan with
+                             the infiniterm app. The code holds the phone's
+                             private key, so anyone who sees it can use it
+  ift phone list             the paired phones, one name per line
+  ift phone remove <name>    unpair a phone: its key stops working
   ift commands               every command the app registers: id, label,
                              key; the palette's list as text (the default
                              keybindings file has only the bound ones)
@@ -197,7 +205,7 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 35] = [
+pub const SUBCOMMANDS: [&str; 36] = [
     "diff",
     "ls",
     "workspaces",
@@ -218,6 +226,7 @@ pub const SUBCOMMANDS: [&str; 35] = [
     "usage",
     "update",
     "push",
+    "phone",
     "name",
     "group",
     "install",
@@ -292,6 +301,9 @@ fn main() -> ExitCode {
         Some("terminal") => terminal_cmd(&args[1..]),
         Some("browse") => browse_cmd(&args[1..]),
         Some("send") => send("send", rest()),
+        Some("read") if args.get(1).map(String::as_str) == Some("--stream") => {
+            phone_verb("read-stream", &[])
+        }
         Some("read") => send("read", rest()),
         Some("focus") => send("focus", rest()),
         Some("close") => send("close", rest()),
@@ -306,6 +318,16 @@ fn main() -> ExitCode {
             }
         },
         Some("push") => push_cmd::run(&args[1..]),
+        // The phone's own verbs (hidden, like proxy): sshd runs `phone-gate`
+        // for a paired key, and `read --stream` (before the plain `read`
+        // above it), `settings show` and `snippets --nul` replace shell commands.
+        Some(verb @ ("phone" | "phone-gate")) => phone_verb(verb, &args[1..]),
+        Some("settings") if args.get(1).map(String::as_str) == Some("show") => {
+            phone_verb("settings-show", &[])
+        }
+        Some("snippets") if args.get(1).map(String::as_str) == Some("--nul") => {
+            phone_verb("snippets-nul", &[])
+        }
         Some("sessions") => attach::sessions_cmd(args.contains(&"--full".to_string())),
         Some("attach") => match args.get(1) {
             Some(id) => attach::attach(id),
@@ -373,6 +395,25 @@ fn unix_only_verb(verb: &str, args: &[String]) -> ExitCode {
             None => ExitCode::from(2),
         },
     }
+}
+
+/// `ift phone ...` and the verbs the phone runs over ssh. They edit
+/// `~/.ssh/authorized_keys` and run under sshd, so they are unix only.
+#[cfg(unix)]
+fn phone_verb(verb: &str, args: &[String]) -> ExitCode {
+    match verb {
+        "phone" => phone_cmd::run(args),
+        "phone-gate" => phone_cmd::gate(),
+        "read-stream" => phone_cmd::read_stream(),
+        "settings-show" => phone_cmd::settings_show(),
+        _ => phone_cmd::snippets_nul(),
+    }
+}
+
+#[cfg(windows)]
+fn phone_verb(_verb: &str, _args: &[String]) -> ExitCode {
+    eprintln!("ift: phone pairing is not available on Windows");
+    ExitCode::from(2)
 }
 
 #[cfg(windows)]
