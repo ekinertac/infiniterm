@@ -132,6 +132,10 @@ const SEARCH_PANEL_ROWS_REPLACE: f64 = 2.6;
 const SEARCH_PANEL_ROWS_FIND: f64 = 1.6;
 /// Two spaces per tree depth level, CodeMirror's indent.
 const TREE_INDENT: &str = "  ";
+/// A tree icon's side in font sizes (`editor.explorer.icons`): about the
+/// height of a capital, and narrower than the arrow's two cells it replaces,
+/// so a gap is left before the name.
+const TREE_ICON_RATIO: f32 = 1.;
 /// The search field's label text is smaller than the buffer's, like a
 /// caption next to the value it labels.
 const SEARCH_LABEL_FONT_SCALE: f64 = 0.85;
@@ -306,6 +310,8 @@ pub struct EditorBody {
     scroll_x: f64,
     pub wrap: bool,
     pub highlight_line: bool,
+    /// `editor.explorer.icons`: file and folder icons in the tree.
+    pub tree_icons: bool,
     pub read_only: bool,
     pub colors: EditorColors,
     pub rules: Vec<SyntaxRule>,
@@ -480,6 +486,7 @@ impl EditorBody {
             scroll_x: 0.,
             wrap: false,
             highlight_line: false,
+            tree_icons: false,
             read_only: false,
             colors: EditorColors {
                 background: "#0e101a".into(),
@@ -3410,8 +3417,13 @@ impl EditorBody {
                 y += line_h;
                 continue;
             }
-            let marker = if row.entry.is_dir {
-                if tree.is_expanded(&row.entry.path) {
+            let expanded = row.entry.is_dir && tree.is_expanded(&row.entry.path);
+            // With icons the arrow's two cells hold the icon instead, so a
+            // name sits where it does without them.
+            let marker = if self.tree_icons {
+                "  "
+            } else if row.entry.is_dir {
+                if expanded {
                     "▾ "
                 } else {
                     "▸ "
@@ -3437,6 +3449,28 @@ impl EditorBody {
                 line = crate::text::shape(window, &text, font_size, &f, color);
             }
             let _ = line.paint(point(area.origin.x + pad, y), line_h, window, cx);
+            if self.tree_icons {
+                let icon = infiniterm_core::explorer_icons::icon_for(
+                    &row.entry.name,
+                    row.entry.is_dir,
+                    expanded,
+                );
+                let source = crate::explorer_icons::resource(icon);
+                // `None` while gpui renders it; it redraws when it lands.
+                if let Some(Ok(image)) = window.use_asset::<ImageAssetLoader>(&source, cx) {
+                    let indent = TREE_INDENT.repeat(row.depth);
+                    let x = crate::text::shape(window, &indent, font_size, &f, color).width;
+                    let side = font_size * TREE_ICON_RATIO;
+                    let at = point(area.origin.x + pad + x, y + (line_h - side) / 2.);
+                    let _ = window.paint_image(
+                        Bounds::new(at, size(side, side)),
+                        Corners::default(),
+                        image,
+                        0,
+                        false,
+                    );
+                }
+            }
             y += line_h;
         }
         // A hairline between the tree and the text, thicker and stronger while

@@ -271,6 +271,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "editor.explorer.icons",
+        &[
+            "Icons in the editor's file tree: a closed or open folder in place of the",
+            "arrow, and an icon for each file's type, as VS Code's Material Icon Theme",
+            "draws them. Off by default.",
+        ],
+    ),
+    (
         "editor.formatOnSave",
         &[
             "Run the file's formatter over an editor's text when you save it (Cmd+S).",
