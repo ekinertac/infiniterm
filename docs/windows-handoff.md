@@ -73,9 +73,10 @@ a piece of work, not a mystery.
    Ctrl+Shift+V pasted the clipboard into the terminal's prompt, Ctrl+Shift+P
    opened the palette with Ctrl+Shift chords, and a plain Ctrl+C interrupted a
    running `Start-Sleep` in the shell (a control run without it printed its
-   marker). Not checked: Ctrl+Shift+C copy (needs a mouse selection), a
-   punctuation chord, the Ctrl+Alt twins, and AltGr itself (the box's layouts
-   have no AltGr; only the layout probe and the pure rule are tested).
+   marker), and Ctrl+Shift+C copied a double-clicked word to the clipboard.
+   Not checked: a punctuation chord, the Ctrl+Alt twins, and AltGr itself (the
+   box's layouts have no AltGr; only the layout probe and the pure rule are
+   tested).
 6. **Update signatures are built and off**: `UPDATE_PUBLIC_KEY` is empty until
    Ekin generates a key (see #470 below).
 7. A card's directory follows a shell that writes OSC 7, such as oh-my-posh
