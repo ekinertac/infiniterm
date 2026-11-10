@@ -69,8 +69,8 @@ a piece of work, not a mystery.
    PR for what was and was not.
 6. **Update signatures are built and off**: `UPDATE_PUBLIC_KEY` is empty until
    Ekin generates a key (see #470 below).
-7. A card's directory never changes, and transcript cards have not been opened
-   on Windows (both described under "What is still open").
+7. A card's directory never changes on Windows (described under "What is
+   still open"). Transcript cards work there (checked 2026-11-11).
 8. No `ift connect`, `join`, `serve`, `proxy`, `sessions` or `attach`, and no
    parking of closed cards: they need unix sockets or `iftd`.
 
@@ -429,7 +429,15 @@ What is still open:
   new one by hand. Back it up before step 2. `ift update-key public <file>`
   prints the public half of a key file, to check it against the constant.
 
-- Transcript cards are the one card kind never opened on Windows. Ekin is
+- **Transcript cards work on Windows (checked 2026-11-11).** A small
+  Claude-format `.jsonl` announced through `infiniterm-hook UserPromptSubmit`
+  (`transcript_path` a Windows path) and `ift run card.transcript` gave a card
+  with the you and claude turns, the local times and the tool line
+  `Read: C:\proj\upload.py`. The same run checked agent colours through the
+  hook binary: `ift ls --agents` read working after `UserPromptSubmit`,
+  waiting after `PermissionRequest` and done after `Stop`. Not checked: a real
+  Claude Code session writing its own transcript. The older note, kept as
+  history: the one card kind never opened on Windows. Ekin is
   testing that (2026-09-25). The Claude card this session ran had transcript
   saving off because it inherited `CLAUDE_CODE_CHILD_SESSION` from the
   agent that launched the app, which is not a Windows fault: `local_pty`
