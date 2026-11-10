@@ -770,6 +770,7 @@ impl AppView {
                             (
                                 focused_card == Some(cards[i].id.as_str()),
                                 infiniterm_core::tab_icon::subject(
+                                    cards[i].kind,
                                     cards[i].proc.as_deref(),
                                     cards[i].agent,
                                     cards[i].agent_kind.as_deref(),

@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-10
+
+- With `tab.icons` on, a workspace whose focused card is an editor shows a file icon on its tab, and a browser card a globe, where both showed the shell's icon. The card header follows with `card.headerIcons`. A theme sets its own with the `editor` and `browser` keys of `tab.iconMap`, or `editor.svg` and `browser.svg` in the image style.
+
 ## 0.6.12 (build 1466), 2026-11-09
 
 ### Cards and ift
