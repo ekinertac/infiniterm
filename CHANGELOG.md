@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-10
 
+- Clicking "+" on a browser card's tab strip now opens the address bar on the new tab, as Cmd+T does. Before, it left a blank page with nowhere to type until you pressed Cmd+L.
 - The editor's file tree no longer lists `.DS_Store`, the file Finder leaves in every folder it opens. Other dotfiles are still listed.
 ### 2026-11-09
 
