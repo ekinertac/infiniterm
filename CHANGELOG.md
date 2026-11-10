@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-10
+
+- Clicking "+" on a browser card's tab strip now opens the address bar on the new tab, as Cmd+T does. Before, it left a blank page with nowhere to type until you pressed Cmd+L.
+
 ## 0.6.12 (build 1466), 2026-11-09
 
 ### Cards and ift
