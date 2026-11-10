@@ -489,6 +489,12 @@ impl AppView {
                         &integration,
                         std::env::var("ZDOTDIR").ok(),
                     ));
+                    // PowerShell loads its script through its own `-Command`
+                    // (`shell_cmd::PWSH_LOAD`), once this says where it is.
+                    env.extend(infiniterm_core::shell_integration::pwsh_env(
+                        &sh,
+                        &integration,
+                    ));
                 }
                 match self.backend.pty.spawn_now(
                     std::path::Path::new(&card.cwd),

@@ -43,10 +43,12 @@
 //!   MCP servers are children of `claude`, not of the shell, so the shell's
 //!   own child is `claude`.
 //! - A process's working directory is not readable from outside it without
-//!   debug privileges, so `cwds` answers nothing and a card keeps the
-//!   directory it was opened in. `PaneEvent::CwdChanged` is the seam that
-//!   would fix it for both platforms (a shell's OSC 7, which oh-my-posh
-//!   already writes); nothing emits or consumes it yet.
+//!   debug privileges, so `cwds` answers nothing here. The card's directory
+//!   comes from the shell's own OSC 7 report instead (oh-my-posh writes it
+//!   with every prompt): `program_state::Signal::Cwd`, applied in
+//!   `model/hooks_in.rs::scan_program`. A shell that does not write OSC 7
+//!   leaves the card on the directory it was opened in.
+//!   (`PaneEvent::CwdChanged` is still unused.)
 //! - Toolhelp gives the exe's FILE NAME, not the command line, so a card
 //!   says `ssh` but never which host.
 
