@@ -869,14 +869,18 @@ impl CardBody for BrowserBody {
 
     fn mouse_move(&mut self, local: Point, modifiers: &gpui::Modifiers) {
         let strip_h = strip_world_h(self.style.font_px, self.ui_scale);
-        if local.y < strip_h {
+        // A selection dragged up over the strip keeps extending, clamped to
+        // the page's top the way `mouse_up` clamps the release.
+        if local.y < strip_h && !self.left_down {
             return;
         }
+        let held = self.left_down.then_some(Button::Left);
         if let Some(surface) = self.active_surface() {
             surface.mouse_move(
                 local.x as f32,
-                (local.y - strip_h) as f32,
+                (local.y - strip_h).max(0.) as f32,
                 Self::mods(modifiers),
+                held,
             );
         }
     }
