@@ -8,7 +8,18 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-10
 
+- `ift phone add <name>` pairs the iPhone app with this Mac: it makes a key for that phone, adds it to `~/.ssh/authorized_keys` limited to the few commands the app runs, and prints a QR code the app scans. No key to copy by hand, and nothing new listens on the Mac: the phone uses the Mac's own ssh (Remote Login must be on). The code holds the phone's private key, so only show it to the phone. `ift phone list` shows the paired phones and `ift phone remove <name>` takes one out.
+
+- Restarting the app (App: restart, or to install an update) now tells the phone and other viewers joined to this Mac first, right before it quits. A viewer that knows the message can say the Mac is restarting instead of showing a lost connection.
+- `ift read <card> --ansi` prints what a card's terminal shows with its colours: every stretch of text starts with an escape sequence that carries its own colour, bold, italic and underline, so a script or a viewer can draw the screen as it looks. It reads the screen only, so it does not go with `--all`; `--lines N` works with it. Plain `ift read` is unchanged (#713).
+- With `tab.icons` on, a workspace whose focused card is an editor shows a file icon on its tab, and a browser card a globe, where both showed the shell's icon. The card header follows with `card.headerIcons`. A theme sets its own with the `editor` and `browser` keys of `tab.iconMap`, or `editor.svg` and `browser.svg` in the image style.
+- In a browser card you can now drag across a page's text to select it, then copy it with Cmd+C. Before, a drag selected nothing.
+- Clicking "+" on a browser card's tab strip now opens the address bar on the new tab, as Cmd+T does. Before, it left a blank page with nowhere to type until you pressed Cmd+L.
+- The editor's file tree no longer lists `.DS_Store`, the file Finder leaves in every folder it opens. Other dotfiles are still listed.
 - Toggle Comment in an editor card is now a command: the palette lists it as "Editor: Toggle Comment" with Cmd+/ beside it, and `keybindings.json` can give it another chord. It comments or uncomments the lines under every cursor at once, not only the main one, as one undo step. CSS, HTML, Svelte and Markdown lines are now wrapped whole, `/* line */` and `<!-- line -->`; before they got only the opening mark.
+### 2026-11-09
+
+- An editor card opened on a folder shows the folder's name over the file tree without a trailing slash: `infiniterm`, not `infiniterm/`.
 
 ## 0.6.12 (build 1466), 2026-11-09
 

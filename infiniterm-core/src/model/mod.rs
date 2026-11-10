@@ -324,12 +324,14 @@ pub enum Effect {
     /// never twice for the same one.
     AppIcon(crate::app_icon::AppIcon),
     /// `ift read`: the ui answers request `request_id` with the card's text,
-    /// since only the terminal body holds its grid (#127).
+    /// since only the terminal body holds its grid (#127). `ansi` asks for
+    /// the screen with its colours.
     ReadCard {
         request_id: u64,
         card_id: String,
         last: Option<usize>,
         scrollback: bool,
+        ansi: bool,
     },
     /// The late answer to an `ift` request (`edit`, when its cover closes).
     CliReply {
