@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-11
+
+- Fixed: the app no longer stops for about a third of a second every 2 seconds with several editor tabs open. The editor's git marks are now read in the background, and only after a commit, a branch change, a stage or an edit of the file (#717).
+
 ### 2026-11-10
 
 - Restarting the app (App: restart, or to install an update) now tells the phone and other viewers joined to this Mac first, right before it quits. A viewer that knows the message can say the Mac is restarting instead of showing a lost connection.

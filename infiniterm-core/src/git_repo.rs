@@ -9,6 +9,10 @@
 //! when there is a `commondir` file). The remote is `origin` when there is
 //! one, else the first remote on github.com. Called by `terminal_body.rs`;
 //! the pattern side is `links.rs`.
+//!
+//! Also `head_stamp` (#717): the modification times that move when a file's
+//! text at HEAD can change, so the editor's gutter (`editor_body.rs`) runs
+//! `git` only after a commit, checkout, stage or edit, not on every poll.
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,26 +83,62 @@ fn remotes(config: &str) -> Vec<String> {
     out.into_iter().map(|(_, url)| url).collect()
 }
 
+/// The git directories of the checkout whose root is `root`: the one with
+/// `HEAD` and `index` (`.git`, or where a `.git` file points), and the common
+/// one with `config`, `refs` and `packed-refs` (the same, or through
+/// `commondir` for a worktree). `None` when `root` has no `.git`.
+fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
+    let dot = root.join(".git");
+    if dot.is_dir() {
+        return Some((dot.clone(), dot));
+    }
+    let text = std::fs::read_to_string(&dot).ok()?;
+    let gitdir = root.join(text.trim().strip_prefix("gitdir:")?.trim());
+    let common = std::fs::read_to_string(gitdir.join("commondir"))
+        .ok()
+        .map(|c| gitdir.join(c.trim()))
+        .unwrap_or_else(|| gitdir.clone());
+    Some((gitdir, common))
+}
+
 /// The git directory that holds the config for `dir`: its `.git` directory, or
 /// where a `.git` file points, through `commondir` for a worktree.
 fn config_path(dir: &Path) -> Option<PathBuf> {
     for ancestor in dir.ancestors() {
-        let dot = ancestor.join(".git");
-        if dot.is_dir() {
-            return Some(dot.join("config"));
-        }
-        if dot.is_file() {
-            let text = std::fs::read_to_string(&dot).ok()?;
-            let gitdir = text.trim().strip_prefix("gitdir:")?.trim();
-            let gitdir = ancestor.join(gitdir);
-            let common = std::fs::read_to_string(gitdir.join("commondir"))
-                .ok()
-                .map(|c| gitdir.join(c.trim()))
-                .unwrap_or(gitdir);
-            return Some(common.join("config"));
+        if ancestor.join(".git").exists() {
+            return git_dirs(ancestor).map(|(_, common)| common.join("config"));
         }
     }
     None
+}
+
+/// What `git show HEAD:<file>` depends on, as modification times, for the
+/// editor's gutter (#717): a tab asks git again only when this changes, so
+/// an unchanged repo costs a few `stat`s per poll instead of a process.
+/// Covers `HEAD` (a checkout, a detached HEAD moving), the branch's ref file
+/// and `packed-refs` (a commit, a pull), `index` (a stage or a reset) and
+/// the file itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeadStamp(Vec<Option<std::time::SystemTime>>);
+
+/// The stamp of `file` in the checkout at `root`. `None` when `HEAD` cannot
+/// be read (the repo is gone or the `.git` file points nowhere): then the
+/// caller asks git, so a vanished repo is never mistaken for an unchanged one.
+pub fn head_stamp(root: &Path, file: &Path) -> Option<HeadStamp> {
+    let (gitdir, common) = git_dirs(root)?;
+    let head = std::fs::read_to_string(gitdir.join("HEAD")).ok()?;
+    let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let mut times = vec![
+        mtime(&gitdir.join("HEAD")),
+        mtime(&gitdir.join("index")),
+        mtime(&common.join("packed-refs")),
+        mtime(file),
+    ];
+    // A detached HEAD names a commit, not a ref: HEAD's own time covers it.
+    if let Some(name) = head.trim().strip_prefix("ref:") {
+        times.push(mtime(&common.join(name.trim())));
+    }
+    Some(HeadStamp(times))
 }
 
 /// The GitHub repository `dir` belongs to, if it is a checkout with a
@@ -183,6 +223,92 @@ mod tests {
         assert_eq!(github_repo(wt.to_str().unwrap()), want);
         assert_eq!(github_repo("/definitely/not/a/dir"), None);
         assert_eq!(github_repo(""), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Sets `path`'s modification time `secs` after an old fixed time, so two
+    /// bumps in the same second still differ.
+    fn bump(path: &Path, secs: u64) {
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + secs);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    }
+
+    /// A checkout at `root` on branch main, with a file `a.rs`.
+    fn fake_checkout(gitdir: &Path, common: &Path, root: &Path) {
+        std::fs::create_dir_all(common.join("refs/heads")).unwrap();
+        std::fs::create_dir_all(gitdir).unwrap();
+        std::fs::create_dir_all(root).unwrap();
+        std::fs::write(gitdir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(gitdir.join("index"), "").unwrap();
+        std::fs::write(common.join("refs/heads/main"), "abc\n").unwrap();
+        std::fs::write(common.join("refs/heads/other"), "def\n").unwrap();
+        std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
+    }
+
+    #[test]
+    fn the_head_stamp_moves_on_a_commit_a_checkout_a_stage_and_an_edit_only() {
+        let dir = std::env::temp_dir().join(format!("ift-stamp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git = dir.join(".git");
+        fake_checkout(&git, &git, &dir);
+        let file = dir.join("a.rs");
+        let stamp = || head_stamp(&dir, &file).expect("a checkout");
+        let first = stamp();
+        assert_eq!(stamp(), first, "nothing changed");
+        bump(&git.join("refs/heads/main"), 1);
+        let committed = stamp();
+        assert_ne!(committed, first, "a commit moves the branch's ref");
+        bump(&git.join("refs/heads/other"), 2);
+        assert_eq!(stamp(), committed, "another branch's ref is not ours");
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/other\n").unwrap();
+        bump(&git.join("HEAD"), 3);
+        let switched = stamp();
+        assert_ne!(switched, committed, "a checkout moves HEAD");
+        bump(&git.join("index"), 4);
+        let staged = stamp();
+        assert_ne!(staged, switched, "a stage moves the index");
+        bump(&file, 5);
+        assert_ne!(stamp(), staged, "an edit of the file");
+        // Gone: no stamp, so the caller asks git and learns there is no repo.
+        std::fs::remove_dir_all(&git).unwrap();
+        assert_eq!(head_stamp(&dir, &file), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_worktree_stamps_its_own_head_and_the_common_refs_and_detached_is_head_alone() {
+        let dir = std::env::temp_dir().join(format!("ift-stamp-wt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let common = dir.join("main/.git");
+        let gitdir = common.join("worktrees/wt");
+        let wt = dir.join("wt");
+        fake_checkout(&gitdir, &common, &wt);
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+        std::fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+        let file = wt.join("a.rs");
+        let first = head_stamp(&wt, &file).expect("a worktree");
+        bump(&common.join("refs/heads/main"), 1);
+        let committed = head_stamp(&wt, &file).unwrap();
+        assert_ne!(committed, first, "the branch ref lives in the common dir");
+        bump(&gitdir.join("index"), 2);
+        assert_ne!(head_stamp(&wt, &file).unwrap(), committed, "its own index");
+        // Detached: HEAD holds a commit id.
+        std::fs::write(gitdir.join("HEAD"), "0123abcd\n").unwrap();
+        bump(&gitdir.join("HEAD"), 3);
+        let detached = head_stamp(&wt, &file).unwrap();
+        bump(&common.join("refs/heads/main"), 4);
+        assert_eq!(
+            head_stamp(&wt, &file).unwrap(),
+            detached,
+            "no branch to follow"
+        );
+        bump(&gitdir.join("HEAD"), 5);
+        assert_ne!(head_stamp(&wt, &file).unwrap(), detached);
         std::fs::remove_dir_all(&dir).ok();
     }
 }
