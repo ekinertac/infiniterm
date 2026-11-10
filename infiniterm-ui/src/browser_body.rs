@@ -212,6 +212,7 @@ impl BrowserBody {
             self.ui_scale,
             self.tabs.len(),
             0.,
+            self.style.pad_x(),
         ) {
             Some(crate::body::TabClick::Switch(i) | crate::body::TabClick::Close(i)) => Some(i),
             _ => None,
@@ -818,6 +819,7 @@ impl CardBody for BrowserBody {
                 self.ui_scale,
                 self.tabs.len(),
                 0.,
+                self.style.pad_x(),
             ) {
                 Some(hit) if button == gpui::MouseButton::Left => {
                     // The press switches; held and moved, it drags (#682).
@@ -1008,18 +1010,11 @@ fn cursor_style_for(name: &str) -> CursorStyle {
 #[cfg(test)]
 fn test_strip_style() -> StripStyle {
     StripStyle {
-        bg: gpui::black(),
-        border: gpui::black(),
-        active_bg: gpui::black(),
-        text_bright: gpui::white(),
-        text_muted: gpui::white(),
-        regular: gpui::font("Menlo"),
-        bold: {
-            let mut font = gpui::font("Menlo");
-            font.weight = gpui::FontWeight::BOLD;
-            font
-        },
         font_px: 14.,
+        ..crate::tab_strip::strip_style(
+            &crate::chrome::Chrome::default_chrome(),
+            &Default::default(),
+        )
     }
 }
 

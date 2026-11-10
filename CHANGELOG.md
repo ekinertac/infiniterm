@@ -22,6 +22,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-09
 
 - An editor card opened on a folder shows the folder's name over the file tree without a trailing slash: `infiniterm`, not `infiniterm/`.
+- The tabs on editor and browser cards now look like the workspace tabs: the same size, padding, rounded corners and fill. A ui theme can style them with `cardTab.*` keys, the same keys as `tab.*` (`cardTab.background`, `cardTab.activeBackground`, `cardTab.gradient`, `cardTab.opacity`, `cardTab.border`, `cardTab.activeBorder`, `cardTab.separator`, `cardTab.radius`, `cardTab.paddingX`), so the same values make both alike. A folder editor's name over its file tree matches the tabs beside it.
 
 ## 0.6.12 (build 1466), 2026-11-09
 

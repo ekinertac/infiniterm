@@ -31,14 +31,16 @@ const PALETTE_ROWS: usize = 14;
 /// How much of a palette row a snippet's first line may take before the
 /// ellipsis; the name is the thing to read, the line is a reminder.
 const SNIPPET_HINT_MAX_W_PX: f32 = 360.;
-/// The workspace tabs' label size, shared by the "+" new-tab control.
-const TAB_LABEL_FONT_PX: f32 = 12.;
+/// The workspace tabs' label size, shared by the "+" new-tab control and
+/// by the editor and browser cards' tabs (`tab_strip.rs`, #693), so a card
+/// tab reads at the size of a workspace tab.
+pub(crate) const TAB_LABEL_FONT_PX: f32 = 12.;
 /// A workspace tab's program icon, as a multiple of the label size, so a
 /// glyph or a logo reads a little larger than the lower-case text beside it.
 const TAB_ICON_SCALE: f32 = 1.25;
 /// A workspace tab's padding on each side of its content, before
-/// `tab.paddingX` has its say.
-const TAB_PAD_X_PX: f32 = 6.;
+/// `tab.paddingX` has its say. A card tab's too, before `cardTab.paddingX`.
+pub(crate) const TAB_PAD_X_PX: f32 = 6.;
 /// A workspace tab's agent dots, one per agent card: a hint, not a badge.
 const TAB_DOT_PX: f32 = 6.;
 /// An idle card's dot is a lamp that is off: there, and no louder.
