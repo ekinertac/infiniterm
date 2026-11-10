@@ -53,9 +53,11 @@ a piece of work, not a mystery.
    `https://example.com` card: Back, Forward, Reload, New Tab, Close Tab,
    Reopen Closed Tab, Copy Address and Open in System Browser, with Ctrl+Shift
    chords. Not checked: the rows for a link, a selection and an editable field.
-4. **Ctrl+Esc, which `browser.leave` uses, is dead on Windows**: the Start menu
-   takes it before the app sees it. A double Escape still unlocks a locked
-   browser or editor, and Ctrl+Shift+Esc (Task Manager's) is not assigned.
+4. **DECIDED 2026-11-11 (Ekin): double Escape is the way out on Windows.**
+   Ctrl+Esc, which `browser.leave` uses by default, is dead there: the Start
+   menu takes it before the app sees it. A double Escape unlocks a locked
+   browser or editor, and that stays the Windows answer. No other chord is
+   bound to `browser.leave` on Windows (Ctrl+Shift+Esc is Task Manager's).
 5. **The command key (decided by Ekin, 2026-10-22; code in #537, the Windows
    half in the PR after it).** The "side of Ctrl" design under "The modifier
    question" below is REPLACED: Ctrl+Shift for the chords that clash with
