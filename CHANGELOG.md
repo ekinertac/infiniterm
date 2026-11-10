@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-11
+
+- A card's folder now follows the shell's own report (OSC 7, which oh-my-posh and many other prompts write with every prompt). On Windows the app cannot read another program's folder, so a card there kept the folder it opened in; now it follows `cd`. A report from a shell on another machine, over ssh, is ignored.
+
 ### 2026-11-10
 
 - `ift phone add <name>` pairs the iPhone app with this Mac: it makes a key for that phone, adds it to `~/.ssh/authorized_keys` limited to the few commands the app runs, and prints a QR code the app scans. No key to copy by hand, and nothing new listens on the Mac: the phone uses the Mac's own ssh (Remote Login must be on). The code holds the phone's private key, so only show it to the phone. `ift phone list` shows the paired phones and `ift phone remove <name>` takes one out.
