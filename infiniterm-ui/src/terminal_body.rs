@@ -453,6 +453,20 @@ impl TerminalBody {
         self.dirty = true;
     }
 
+    /// What the card shows with its colours, for `ift read --ansi`
+    /// (`Frame::ansi`). The rows are brought up to date the way a paint does
+    /// it, links included: `update_frame` takes the grid's damage, so a paint
+    /// after this one would otherwise skip the rows built here and leave
+    /// their links stale. A hidden window does not paint, and is read too.
+    pub fn ansi_text(&mut self, last: Option<usize>) -> String {
+        let mut frame = std::mem::take(&mut self.frame);
+        let rebuilt = self.grid.update_frame(&self.palette, &mut frame);
+        self.refresh_links(&frame, &rebuilt);
+        let text = frame.ansi(last);
+        self.frame = frame;
+        text
+    }
+
     /// Metrics changed (a settings edit): the grid is re-counted, which the
     /// reference's `refit` rule insists on, and the caller resizes the PTY.
     pub fn set_metrics(&mut self, metrics: &Metrics, world: Size) -> bool {
