@@ -25,6 +25,12 @@ function global:prompt {
     # A native command's own status when it failed; 1 for a cmdlet or a script that failed.
     $status = 0
     if (-not $ok) { $status = if ($code) { $code } else { 1 } }
+    # Ctrl+C is not a failure to show (the app reads 130 as "you stopped it"). PowerShell's history
+    # says so: the command it just recorded ended Stopped. Only a NEW entry counts, or an empty
+    # Enter after an interrupt would repeat it.
+    $h = Get-History -Count 1
+    if ($h -and $h.Id -ne $global:__ift_last_history -and "$($h.ExecutionStatus)" -eq 'Stopped') { $status = 130 }
+    $global:__ift_last_history = if ($h) { $h.Id } else { 0 }
     $esc = [char]27
     $bel = [char]7
     $marks = "$esc]133;D;$status$bel"
@@ -45,7 +51,8 @@ if (Get-Module -Name PSReadLine) {
     $global:__ift_original_readline = $function:PSConsoleHostReadLine
     function global:PSConsoleHostReadLine {
         $line = & $global:__ift_original_readline
-        [Console]::Write("$([char]27)]133;C$([char]7)")
+        # A bare Enter starts nothing, so it reports nothing (the zsh twin does the same).
+        if ($line -and $line.Trim()) { [Console]::Write("$([char]27)]133;C$([char]7)") }
         $line
     }
 }
