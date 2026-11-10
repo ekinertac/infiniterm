@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-10
+
+- Restarting the app (App: restart, or to install an update) now tells the phone and other viewers joined to this Mac first, right before it quits. A viewer that knows the message can say the Mac is restarting instead of showing a lost connection.
+
 ## 0.6.12 (build 1466), 2026-11-09
 
 ### Cards and ift
