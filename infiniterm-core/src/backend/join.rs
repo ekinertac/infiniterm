@@ -9,7 +9,8 @@
 //!   latest of each at once, then every later one as it changes. Each message
 //!   is a 4-byte big-endian length of the text, one kind byte (`L` layout,
 //!   `A` agent states, a JSON object of card id to state name) and the UTF-8
-//!   text. A kind a viewer does not know is skipped by it.
+//!   text. A kind a viewer does not know is skipped by it. Right before the
+//!   host quits to restart, `R` says so (`announce_restart`, #708).
 //! - `session <id>`: one terminal card's output, in the same frames the app
 //!   reads from `iftd` (`session_protocol::Frame`): the host's hello (its
 //!   columns and rows), the replay, then live output, from `Relay`. What a
@@ -35,10 +36,10 @@ use std::net::Shutdown;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::relay::Relay;
 use super::session_protocol::{Frame, FrameReader};
@@ -87,6 +88,16 @@ pub const KIND_OPEN: u8 = b'O';
 /// Host to the one viewer that asked: a sentence for a person, shown as the
 /// viewer's notice (the click found nothing on the host).
 pub const KIND_NOTICE: u8 = b'N';
+/// Host to viewer (#708), the last message before the host quits to restart:
+/// the version it restarts into (an update) or empty (a plain restart). The
+/// connection drops next; a viewer that knows this says "restarting" and
+/// reconnects quickly instead of reporting a lost connection.
+pub const KIND_RESTART: u8 = b'R';
+
+/// The longest the host waits for its viewers' writers to send the restart
+/// notice before it quits anyway. A local socket write takes far less; this
+/// only bounds a viewer whose socket is stuck.
+const RESTART_FLUSH: Duration = Duration::from_millis(500);
 
 /// A viewer's click on a path: which card, the card's directory and the text
 /// of the path (`~/x`, `src/a.rs`, `/abs`), and the line from `a.rs:42`.
@@ -241,6 +252,9 @@ pub struct JoinHub {
     /// (#555); the app opens each beside the card clicked.
     opens_tx: std::sync::mpsc::Sender<OpenOnHost>,
     opens_rx: Arc<Mutex<Option<std::sync::mpsc::Receiver<OpenOnHost>>>>,
+    /// Restart notices queued and not yet written by a viewer's writer, so
+    /// `announce_restart` knows when it may let the app quit.
+    restart_unsent: Arc<AtomicUsize>,
 }
 
 impl JoinHub {
@@ -256,6 +270,7 @@ impl JoinHub {
             updates_rx: Arc::new(Mutex::new(Some(updates_rx))),
             opens_tx,
             opens_rx: Arc::new(Mutex::new(Some(opens_rx))),
+            restart_unsent: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -315,6 +330,27 @@ impl JoinHub {
         }
         c.clients
             .retain(|tx| tx.try_send((kind, text.to_string())).is_ok());
+    }
+
+    /// The host is about to quit to restart (#708): tells every canvas viewer
+    /// (`KIND_RESTART`, `version` or empty) and returns once their writers
+    /// have sent it, or after `RESTART_FLUSH`. The caller quits right after,
+    /// so this is the only chance the notice has to leave.
+    pub fn announce_restart(&self, version: &str) {
+        {
+            let mut c = self.canvas.lock().unwrap();
+            c.clients.retain(|tx| {
+                let sent = tx.try_send((KIND_RESTART, version.to_string())).is_ok();
+                if sent {
+                    self.restart_unsent.fetch_add(1, Ordering::SeqCst);
+                }
+                sent
+            });
+        }
+        let deadline = Instant::now() + RESTART_FLUSH;
+        while self.restart_unsent.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     /// Binds `socket` (0600) and serves it on a thread of its own. The path
@@ -394,6 +430,7 @@ impl JoinHub {
         };
         let closed = Arc::new(AtomicBool::new(false));
         let writer_closed = closed.clone();
+        let restart_unsent = self.restart_unsent.clone();
         std::thread::spawn(move || {
             let send = |w: &mut UnixStream, kind: u8, text: &str| -> bool {
                 w.write_all(&encode_canvas_message(kind, text)).is_ok()
@@ -406,7 +443,13 @@ impl JoinHub {
             while !writer_closed.load(Ordering::Relaxed) {
                 match rx.recv_timeout(WRITER_POLL) {
                     Ok((kind, text)) => {
-                        if !send(&mut w, kind, &text) {
+                        let ok = send(&mut w, kind, &text);
+                        // Counted down written or not: a failed write is as
+                        // done as it will get, and the app waits on this.
+                        if kind == KIND_RESTART {
+                            restart_unsent.fetch_sub(1, Ordering::SeqCst);
+                        }
+                        if !ok {
                             break;
                         }
                     }
@@ -714,6 +757,39 @@ mod tests {
         assert_eq!(next(&mut s), (KIND_LAYOUT, "{\"v\":2}".to_string()));
         assert_eq!(next(&mut s), (KIND_REVISION, "8".to_string()));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_restart_notice_reaches_every_canvas_viewer_before_announce_returns() {
+        let (hub, _relay, _w) = hub();
+        hub.publish_layout("{\"v\":1}", 1);
+        let path = socket("restart");
+        hub.serve(&path).unwrap();
+        let (mut a, _) = connect(&path, "ift-join 2 canvas");
+        let (mut b, _) = connect(&path, "ift-join 2 canvas");
+        for s in [&mut a, &mut b] {
+            let _layout = read_canvas_message(s).unwrap().unwrap();
+            let _revision = read_canvas_message(s).unwrap().unwrap();
+        }
+        let started = Instant::now();
+        hub.announce_restart("0.6.13");
+        assert!(started.elapsed() < RESTART_FLUSH, "waited out the bound");
+        assert_eq!(hub.restart_unsent.load(Ordering::SeqCst), 0);
+        for s in [&mut a, &mut b] {
+            assert_eq!(
+                read_canvas_message(s).unwrap().unwrap(),
+                (KIND_RESTART, "0.6.13".to_string())
+            );
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn announcing_a_restart_with_no_viewers_returns_at_once() {
+        let (hub, _relay, _w) = hub();
+        let started = Instant::now();
+        hub.announce_restart("");
+        assert!(started.elapsed() < Duration::from_millis(50));
     }
 
     #[test]
