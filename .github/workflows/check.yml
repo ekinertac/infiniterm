@@ -1,0 +1,62 @@
+# The check every PR gets before a person reads it: what `make check` runs on
+# the Mac (fmt, clippy -D warnings, the tests), on a macOS runner, without the
+# browser feature. About twenty minutes of a developer's Mac per PR became a
+# job on GitHub that runs beside it. linux.yml checks the Linux build; this one
+# is the only place the macOS-only code (key input, native menus, the text
+# input system) is compiled for a PR you did not build yourself.
+#
+# What it leaves out: the browser. `infiniterm-browser` and the `browser`
+# feature of `infiniterm-ui` need a CEF download and the cef-rs checkout, which
+# is most of the setup time and none of the logic. A change to those files
+# still gets `make check` on a Mac, once, at the end (docs/agent/traps-workflow.md).
+#
+# Why `--no-default-features` and `--exclude infiniterm-browser`: the UI crate
+# draws `browser_stub.rs` without the feature, so everything else compiles.
+# Tests that need a real sshd or tmux skip themselves or use a temp socket.
+# Related: Makefile (`check`), linux.yml, docs/agent/traps-workflow.md.
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# A newer push to the same PR makes the older run pointless.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  check:
+    name: fmt, clippy, test (macOS, no browser)
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+          # The tmux tests start a real tmux on a temp socket.
+          brew install tmux
+      - uses: Swatinem/rust-cache@v2
+      # Only the three crates the Makefile formats: the CLI and hook keep
+      # their own text (Makefile, CLAUDE.md).
+      - name: fmt
+        run: cargo fmt -p infiniterm-core -p infiniterm-ui -p infiniterm-term -- --check
+      - name: clippy
+        run: >
+          cargo clippy --locked --workspace --exclude infiniterm-browser
+          --all-targets --no-default-features -- -D warnings
+      # The daemon and `ift` integration tests start the helper binaries.
+      - name: helper binaries
+        run: cargo build --locked -p infiniterm-cli -p infiniterm-session -p infiniterm-hook
+      - name: test
+        run: >
+          cargo test --locked --workspace --exclude infiniterm-browser
+          --no-default-features
