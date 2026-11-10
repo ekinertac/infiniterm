@@ -36,6 +36,14 @@ pub enum BodyAction {
     Ignored,
     /// Cmd+click on a URL or a confirmed path: open it beside this card.
     Open(infiniterm_core::ift::OpenPlan),
+    /// Cmd+click or Cmd+Shift+click on a URL in a terminal (#662). The app
+    /// decides from `shift` and `terminal.reverseLinkClick`: a browser card
+    /// beside this one, or the system browser.
+    OpenLink {
+        url: String,
+        cwd: String,
+        shift: bool,
+    },
     /// Cmd+Shift+click: the system's handler.
     OpenExternal {
         url: Option<String>,

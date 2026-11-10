@@ -117,6 +117,13 @@ pub fn url_plan(url: &str, cwd: &str) -> OpenPlan {
     }
 }
 
+/// Whether a Cmd+clicked URL opens as a browser card (else the system
+/// browser, #662). Cmd+click is the card and Cmd+Shift+click the system
+/// browser; `terminal.reverseLinkClick` (`reverse`) swaps the two.
+pub fn link_in_card(shift: bool, reverse: bool) -> bool {
+    shift == reverse
+}
+
 /// An agent's session file, as a transcript card beside the agent's card.
 pub fn transcript_plan(path: &str, cwd: &str) -> OpenPlan {
     OpenPlan::Transcript {
@@ -735,6 +742,16 @@ mod tests {
                 url: "https://example.com/a".into()
             }
         );
+    }
+
+    #[test]
+    fn reverse_swaps_cmd_click_and_cmd_shift_click_on_a_url() {
+        // Off: Cmd+click a card, Cmd+Shift+click the system browser.
+        assert!(link_in_card(false, false));
+        assert!(!link_in_card(true, false));
+        // On: the other way round.
+        assert!(!link_in_card(false, true));
+        assert!(link_in_card(true, true));
     }
 
     fn v(a: &[&str]) -> Vec<String> {
