@@ -24,11 +24,20 @@ Where it stands on 2026-10-22, on master 6d649cf (through #527):
 What a person on Windows would hit, most visible first. Each is a decision or
 a piece of work, not a mystery.
 
-1. **The CEF build dies about two seconds after start when launched by a
-   scheduled task** (#524, exit `0x80000003` in `libcef.dll`). Whether it also
-   dies when started by hand from the desktop is not known; that decides
-   whether browser cards work for Ekin today. Everything below that needs the
-   browser is unverified since the merge for this reason.
+1. **FIXED 2026-11-11: the CEF build died a few seconds after start** (#524,
+   exit `0x80000003` in `libcef.dll`). It was not the scheduled task: a
+   launch through explorer, as a double-click does it, died the same way
+   (2 to 7 s). Cause: Chromium 152's own user-agent code crashes the browser
+   process on Windows 11 build 26200. Found with the release symbols
+   (`cef-builds.spotifycdn.com`, `..._windows64_release_symbols.tar.bz2`, 892 MB,
+   `libcef.dll.pdb` 5 GB) and a WER minidump from `%LOCALAPPDATA%\CrashDumps`:
+   the crash site resolves next to `embedder_support::GetUserAgent`, and the app
+   lives past 45 s with `--user-agent=...` or `--disable-extensions` and with
+   no switch once `process.rs` sets `Settings.user_agent` to Chrome's reduced
+   Windows string. Checked on the box: a local page (`ift browse C:\...html`,
+   address `file:///C:/...`) and `https://example.com` render in a browser
+   card. Not checked: the moat's Google sign-in, the extension, video, the
+   page's right-click menu, a long session.
 2. **A Windows release has no browser cards.** `tools/dist.ps1` still builds
    with `--no-default-features` although CEF builds now (#516). Shipping the
    browser means putting `libcef.dll`, its data files and the helper in the
