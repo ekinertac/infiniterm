@@ -38,19 +38,26 @@ a piece of work, not a mystery.
    address `file:///C:/...`) and `https://example.com` render in a browser
    card. Not checked: the moat's Google sign-in, the extension, video, the
    page's right-click menu, a long session.
-2. **A Windows release has no browser cards.** `tools/dist.ps1` still builds
-   with `--no-default-features` although CEF builds now (#516). Shipping the
-   browser means putting `libcef.dll`, its data files and the helper in the
-   folder and zip. Waiting for Ekin.
+2. **FIXED 2026-11-11: a Windows release now has browser cards.**
+   `tools/dist.ps1` builds with the browser by default and copies CEF's runtime
+   (listed by name in the script, which fails if one is missing) beside the exe:
+   the zip is 202 MB against 13 MB without. `-NoBrowser` keeps the old build
+   for a machine with no CEF. Checked: the zip unpacked into a fresh folder
+   runs on a scratch data dir and shows `https://example.com` in a browser
+   card ("0.6.12 · build 1538" in the status bar). Not checked: a machine
+   with no Visual C++ runtime, the SmartScreen prompt, the updater on a
+   Windows zip, and who publishes it (Ekin).
 3. **FIXED (found already working 2026-11-11): the browser page's right-click
    menu.** Since #625 the page menu goes through the same model menu as the tab
    strip's, so it is drawn by `menu_view.rs` here. Checked on screen on a
    `https://example.com` card: Back, Forward, Reload, New Tab, Close Tab,
    Reopen Closed Tab, Copy Address and Open in System Browser, with Ctrl+Shift
    chords. Not checked: the rows for a link, a selection and an editable field.
-4. **Ctrl+Esc, which `browser.leave` uses, is dead on Windows**: the Start menu
-   takes it before the app sees it. A double Escape still unlocks a locked
-   browser or editor, and Ctrl+Shift+Esc (Task Manager's) is not assigned.
+4. **DECIDED 2026-11-11 (Ekin): double Escape is the way out on Windows.**
+   Ctrl+Esc, which `browser.leave` uses by default, is dead there: the Start
+   menu takes it before the app sees it. A double Escape unlocks a locked
+   browser or editor, and that stays the Windows answer. No other chord is
+   bound to `browser.leave` on Windows (Ctrl+Shift+Esc is Task Manager's).
 5. **The command key (decided by Ekin, 2026-10-22; code in #537, the Windows
    half in the PR after it).** The "side of Ctrl" design under "The modifier
    question" below is REPLACED: Ctrl+Shift for the chords that clash with
@@ -60,12 +67,21 @@ a piece of work, not a mystery.
    (`docs/agent/command-key.md`, `platform_keys.rs`); the Windows half is the
    AltGr rule (`core::altgr`, `keycode::without_altgr`), the scan-code walk of
    the platform table (`every_key_the_platform_chords_use_has_a_scan_code`) and
-   the welcome card's wording. Not yet checked with real keystrokes: see the
-   PR for what was and was not.
+   the welcome card's wording. **Checked with real keystrokes on the box,
+   2026-11-11** (SendInput into the scratch window, left Ctrl, physical keys,
+   US layout): Ctrl+Shift+T made cards (1 to 2 to 3), Ctrl+Shift+W closed one,
+   Ctrl+Shift+V pasted the clipboard into the terminal's prompt, Ctrl+Shift+P
+   opened the palette with Ctrl+Shift chords, and a plain Ctrl+C interrupted a
+   running `Start-Sleep` in the shell (a control run without it printed its
+   marker), and Ctrl+Shift+C copied a double-clicked word to the clipboard.
+   Not checked: a punctuation chord, the Ctrl+Alt twins, and AltGr itself (the
+   box's layouts have no AltGr; only the layout probe and the pure rule are
+   tested).
 6. **Update signatures are built and off**: `UPDATE_PUBLIC_KEY` is empty until
    Ekin generates a key (see #470 below).
-7. A card's directory never changes, and transcript cards have not been opened
-   on Windows (both described under "What is still open").
+7. A card's directory follows a shell that writes OSC 7, such as oh-my-posh
+   (fixed 2026-11-11; a shell that writes none keeps the opening directory,
+   see "What is still open"). Transcript cards work there (checked 2026-11-11).
 8. No `ift connect`, `join`, `serve`, `proxy`, `sessions` or `attach`, and no
    parking of closed cards: they need unix sockets or `iftd`.
 
@@ -424,19 +440,32 @@ What is still open:
   new one by hand. Back it up before step 2. `ift update-key public <file>`
   prints the public half of a key file, to check it against the constant.
 
-- Transcript cards are the one card kind never opened on Windows. Ekin is
+- **Transcript cards work on Windows (checked 2026-11-11).** A small
+  Claude-format `.jsonl` announced through `infiniterm-hook UserPromptSubmit`
+  (`transcript_path` a Windows path) and `ift run card.transcript` gave a card
+  with the you and claude turns, the local times and the tool line
+  `Read: C:\proj\upload.py`. The same run checked agent colours through the
+  hook binary: `ift ls --agents` read working after `UserPromptSubmit`,
+  waiting after `PermissionRequest` and done after `Stop`. Not checked: a real
+  Claude Code session writing its own transcript. The older note, kept as
+  history: the one card kind never opened on Windows. Ekin is
   testing that (2026-09-25). The Claude card this session ran had transcript
   saving off because it inherited `CLAUDE_CODE_CHILD_SESSION` from the
   agent that launched the app, which is not a Windows fault: `local_pty`
   scrubs the parent TERMINAL's identity variables and not an agent's, so
   launching the app from inside a Claude card does the same on a Mac.
-- A card's DIRECTORY never changes on Windows. A process's cwd cannot be
-  read from outside it without debug privileges, so `inspect::cwds` answers
-  nothing there and a card keeps the directory it opened in. The fix is not
-  a Windows one: `PaneEvent::CwdChanged` exists and NOTHING emits or
-  consumes it on either platform, while oh-my-posh already writes OSC 7. A
-  Mac change, so the Mac session's to make, and it would answer the
-  directory on both at once.
+- **A card's directory follows the shell now (2026-11-11).** A process's cwd
+  still cannot be read from outside it without debug privileges, so
+  `inspect::cwds` answers nothing on Windows; the card takes the shell's own
+  OSC 7 report instead (`program_state::Signal::Cwd`, applied in
+  `model/hooks_in.rs::scan_program`, for every platform). Checked on the box
+  with Ekin's PowerShell and oh-my-posh: `Set-Location C:\Windows\System32`
+  made `ift ls` say `C:\Windows\System32`, and a `Set-Location $env:TEMP`
+  after it said `~\AppData\Local\Temp`. A report whose host is another
+  machine (a shell over ssh) is ignored. A shell that writes no OSC 7
+  (plain PowerShell with no oh-my-posh, cmd) still leaves the card on the
+  directory it opened in; a PowerShell prompt function that writes OSC 7
+  would fix it and is not built.
 - A card can say `ssh` but never which host: Toolhelp gives an exe's file
   name, not a command line. `ssh_destination` is unreachable on Windows.
 - End-to-end backpressure (`HIGH_WATER`) has no Windows test, for the ConPTY
