@@ -319,12 +319,7 @@ impl EditorTabs {
         }
         let b = self.active_body_ref()?;
         let root = b.tree_root()?;
-        (!b.sidebar_top && b.sidebar_w > 0.).then(|| {
-            (
-                format!("{}/", infiniterm_core::paths::base_name(root)),
-                b.sidebar_w,
-            )
-        })
+        (!b.sidebar_top && b.sidebar_w > 0.).then(|| (folder_label(root), b.sidebar_w))
     }
 
     fn header_w(&self) -> f64 {
@@ -579,8 +574,25 @@ fn enters(k: &Keystroke) -> bool {
     k.key == "enter" && !m.platform && !m.control && !m.alt && !m.shift
 }
 
+/// The folder header's text: the folder's name, no trailing slash (the tree
+/// under it already says it is a folder, #694). The filesystem root has no
+/// name, so it keeps its `/`.
+fn folder_label(root: &str) -> String {
+    match infiniterm_core::paths::base_name(root.trim_end_matches('/')) {
+        "" => "/".to_string(),
+        name => name.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_folder_header_is_the_bare_name() {
+        assert_eq!(folder_label("/Users/me/infiniterm"), "infiniterm");
+        assert_eq!(folder_label("/Users/me/infiniterm/"), "infiniterm");
+        assert_eq!(folder_label("/"), "/");
+    }
+
     #[test]
     fn only_a_bare_enter_gets_you_into_an_editor() {
         let k = |s: &str| gpui::Keystroke::parse(s).unwrap();
