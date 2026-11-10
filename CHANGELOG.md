@@ -6,6 +6,9 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-10
+
+- The editor's file tree no longer lists `.DS_Store`, the file Finder leaves in every folder it opens. Other dotfiles are still listed.
 ### 2026-11-09
 
 - An editor card opened on a folder shows the folder's name over the file tree without a trailing slash: `infiniterm`, not `infiniterm/`.
