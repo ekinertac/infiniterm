@@ -240,6 +240,16 @@ pub fn early() -> Result<Process, Unavailable> {
         cache_path: profile.to_string_lossy().as_ref().into(),
         log_file: data.join("cef.log").to_string_lossy().as_ref().into(),
         remote_debugging_port: devtools_port().map_or(0, i32::from),
+        // Windows: Chromium 152 crashes the browser process about seven
+        // seconds after start, inside its own user-agent code
+        // (`embedder_support`), on Windows 11 build 26200 (found with the
+        // release symbols and a minidump, 2026-11-11). Giving the string
+        // ourselves skips that path; it is the string Chrome itself sends
+        // (the reduced form), so pages see nothing new.
+        #[cfg(windows)]
+        user_agent: windows_user_agent(sys::CHROME_VERSION_MAJOR)
+            .as_str()
+            .into(),
         ..Default::default()
     };
     Ok(Process {
@@ -278,9 +288,29 @@ pub fn stop() {
     shutdown();
 }
 
+/// Chrome's reduced user agent on Windows: the OS and the engine's major
+/// version are the only parts that vary, the rest is frozen (UA reduction).
+/// Compiled everywhere so the Mac tests it; only Windows sets it, see the
+/// settings above.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_user_agent(chrome_major: i32) -> String {
+    format!(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) \
+         Chrome/{chrome_major}.0.0.0 Safari/537.36"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_windows_user_agent_is_chromes_reduced_string_for_the_engine_version() {
+        assert_eq!(
+            windows_user_agent(152),
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+        );
+    }
 
     #[test]
     fn cef_app_exposes_a_stable_external_pump_handler() {
