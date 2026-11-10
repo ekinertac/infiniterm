@@ -75,6 +75,11 @@ pub fn kind_of(shell: &str) -> ShellKind {
     }
 }
 
+/// What an interactive PowerShell runs after its profile: load the marks
+/// script the app pointed `INFINITERM_PWSH_INTEGRATION` at, if it did.
+pub const PWSH_LOAD: &str =
+    "if ($env:INFINITERM_PWSH_INTEGRATION) { . $env:INFINITERM_PWSH_INTEGRATION }";
+
 /// The arguments that make `shell` run `cmd`, or start interactively when
 /// there is no command.
 ///
@@ -88,7 +93,17 @@ pub fn shell_args(shell: &str, cmd: Option<&str>) -> Vec<String> {
         (ShellKind::Posix, Some(c)) => vec!["-lc".into(), c.into()],
         // -NoLogo for the interactive case too: the copyright banner is
         // noise in a card, and PowerShell prints it on every start.
-        (ShellKind::PowerShell, None) => vec!["-NoLogo".into()],
+        // -NoExit -Command runs AFTER the user's profile and leaves the shell
+        // interactive: it loads infiniterm's marks (`shell_integration.rs`)
+        // when the app set the variable, so they wrap the prompt the profile
+        // installed. Without the variable (a decoy, a remote card) it does
+        // nothing. A fixed string, so this stays a pure function.
+        (ShellKind::PowerShell, None) => vec![
+            "-NoLogo".into(),
+            "-NoExit".into(),
+            "-Command".into(),
+            PWSH_LOAD.into(),
+        ],
         (ShellKind::PowerShell, Some(c)) => {
             vec!["-NoLogo".into(), "-Command".into(), c.into()]
         }
@@ -144,13 +159,17 @@ mod tests {
         assert_eq!(shell_args("cmd.exe", Some("ls")), vec!["/C", "ls"]);
     }
 
-    // No command means an interactive shell; only PowerShell needs a flag,
-    // to keep its banner out of the card.
+    // No command means an interactive shell; only PowerShell needs flags: to
+    // keep its banner out of the card, and to load the marks after the profile.
     #[test]
-    fn an_interactive_shell_takes_no_command_flags() {
+    fn an_interactive_shell_takes_no_command_flags_except_powershells() {
         assert!(shell_args("/bin/zsh", None).is_empty());
         assert!(shell_args("cmd.exe", None).is_empty());
-        assert_eq!(shell_args("pwsh.exe", None), vec!["-NoLogo"]);
+        assert_eq!(
+            shell_args("pwsh.exe", None),
+            vec!["-NoLogo", "-NoExit", "-Command", PWSH_LOAD]
+        );
+        assert!(PWSH_LOAD.contains("INFINITERM_PWSH_INTEGRATION"));
     }
 
     // The command is one argument, never split: a card's command has spaces,

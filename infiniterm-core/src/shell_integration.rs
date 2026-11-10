@@ -19,6 +19,9 @@ use std::path::{Path, PathBuf};
 
 const ZSHENV: &str = include_str!("shell/zshenv.zsh");
 const MARKS: &str = include_str!("shell/infiniterm.zsh");
+const PWSH_MARKS: &str = include_str!("shell/infiniterm.ps1");
+/// The file PowerShell is told to load (`pwsh_env`), beside the zsh files.
+pub const PWSH_FILE: &str = "infiniterm.ps1";
 
 /// Writes the integration into `dir` (created if missing), rewritten every
 /// launch so an update's version wins. Returns `dir`.
@@ -26,7 +29,21 @@ pub fn install(dir: &Path) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     std::fs::write(dir.join(".zshenv"), ZSHENV)?;
     std::fs::write(dir.join("infiniterm.zsh"), MARKS)?;
+    std::fs::write(dir.join(PWSH_FILE), PWSH_MARKS)?;
     Ok(dir.to_path_buf())
+}
+
+/// The variable that makes a card's PowerShell load the integration: the
+/// path of the script, which the shell's own `-Command` (`shell_cmd.rs`)
+/// dot-sources after the user's profile. Empty for any other shell.
+pub fn pwsh_env(shell: &str, dir: &Path) -> Vec<(String, String)> {
+    if crate::shell_cmd::kind_of(shell) != crate::shell_cmd::ShellKind::PowerShell {
+        return vec![];
+    }
+    vec![(
+        "INFINITERM_PWSH_INTEGRATION".to_string(),
+        dir.join(PWSH_FILE).to_string_lossy().to_string(),
+    )]
 }
 
 /// Whether `shell` (a path or a name) is zsh.
@@ -74,6 +91,25 @@ mod tests {
         let e = zsh_env("/bin/zsh", d, Some("/home/me/zd".into()));
         assert_eq!(e[0], ("ZDOTDIR".into(), "/x".into()));
         assert_eq!(e[1], ("INFINITERM_ZDOTDIR".into(), "/home/me/zd".into()));
+    }
+
+    #[test]
+    fn only_powershell_gets_the_powershell_script_and_it_is_installed() {
+        let d = Path::new("/x");
+        let e = pwsh_env(r"C:\Program Files\PowerShell\7\pwsh.exe", d);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].0, "INFINITERM_PWSH_INTEGRATION");
+        assert!(e[0].1.ends_with(PWSH_FILE), "{}", e[0].1);
+        assert!(pwsh_env("powershell.exe", d).len() == 1);
+        assert!(pwsh_env("/bin/zsh", d).is_empty());
+        assert!(pwsh_env(r"C:\Windows\System32\cmd.exe", d).is_empty());
+        let root = std::env::temp_dir().join(format!("ift-pwsh-install-{}", std::process::id()));
+        let dir = install(&root).unwrap();
+        let text = std::fs::read_to_string(dir.join(PWSH_FILE)).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        for mark in ["133;D;", "133;C", "]7;", "PSConsoleHostReadLine"] {
+            assert!(text.contains(mark), "the script writes {mark}");
+        }
     }
 
     #[test]
