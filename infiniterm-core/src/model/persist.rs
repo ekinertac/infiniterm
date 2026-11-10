@@ -125,6 +125,9 @@ impl Model {
         self.loaded = true;
         self.first_run = text.is_none();
         self.dirty_layout = false;
+        // Each workspace opens at "fit all" (#659), not at the view it was
+        // saved with.
+        self.mark_open_fit();
     }
 
     /// A viewer takes the host's canvas (#423, `ift join`): the same JSON the
@@ -311,6 +314,9 @@ impl Model {
             self.viewport = host_viewport;
             self.ui_scale = host_scale;
             self.selection.focused_id = host_focus;
+            // The host's view is the host's: each workspace opens at "fit
+            // all" in this window (#659).
+            self.mark_open_fit();
         }
         // The viewer's own focus survives unless its card went.
         if let Some(id) = self.selection.focused_id.clone() {
@@ -431,12 +437,37 @@ impl Model {
     /// per alert, each with the whole coloured list. `now` is wall-clock
     /// seconds (the caller's clock, so tests control it).
     pub fn push_tick(&mut self, now: f64) {
+        use crate::agent_state::AgentState;
         use crate::push_notify as pn;
-        let current: std::collections::BTreeMap<String, crate::agent_state::AgentState> = self
+        // A done that is new since the last look is held back for
+        // `DONE_HOLD_SECS` and counted as working meanwhile (#674): the turn
+        // that ended may be followed by another one. The first look holds
+        // nothing, or a done card at startup would push once the hold ran out.
+        self.done_since.retain(|id, _| {
+            self.cards
+                .iter()
+                .any(|c| c.id == *id && c.agent == AgentState::Done)
+        });
+        let current: std::collections::BTreeMap<String, AgentState> = self
             .cards
             .iter()
-            .filter(|c| c.agent != crate::agent_state::AgentState::None)
-            .map(|c| (c.id.clone(), c.agent))
+            .filter(|c| c.agent != AgentState::None)
+            .map(|c| {
+                let was_done = self
+                    .push_prev
+                    .as_ref()
+                    .is_none_or(|p| p.get(&c.id) == Some(&AgentState::Done));
+                if c.agent != AgentState::Done || was_done {
+                    return (c.id.clone(), c.agent);
+                }
+                let since = *self.done_since.entry(c.id.clone()).or_insert(now);
+                // A clock that steps back must not hold a done for ever.
+                let held = since <= now && now - since < pn::DONE_HOLD_SECS;
+                (
+                    c.id.clone(),
+                    if held { AgentState::Working } else { c.agent },
+                )
+            })
             .collect();
         // The states the phone lists (#655): the ones whose `notify.*` switch
         // is on, so turning `notify.done` off keeps done cards off the phone's
@@ -1683,7 +1714,45 @@ mod agent_states_text_tests {
         m.app_active = true;
         m.card_mut(&id).unwrap().agent = AgentState::Done;
         m.push_tick(0.0);
+        m.push_tick(crate::push_notify::DONE_HOLD_SECS);
         assert_eq!(pushes(&mut m).len(), 1);
+    }
+
+    #[test]
+    fn push_tick_holds_a_done_back_and_a_new_turn_cancels_it() {
+        let hold = crate::push_notify::DONE_HOLD_SECS;
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.card_mut(&id).unwrap().agent = AgentState::Working;
+        m.push_tick(0.0);
+        // Stop at the end of a turn that waits for subagents, then the next
+        // turn starts before the hold is over: no push, no listed card.
+        m.card_mut(&id).unwrap().agent = AgentState::Done;
+        m.push_tick(1.0);
+        m.push_tick(1.0 + hold / 2.0);
+        assert!(pushes(&mut m).is_empty());
+        m.card_mut(&id).unwrap().agent = AgentState::Working;
+        m.push_tick(1.0 + hold - 1.0);
+        m.card_mut(&id).unwrap().agent = AgentState::Done;
+        m.push_tick(100.0);
+        m.push_tick(100.0 + hold - 1.0);
+        assert!(pushes(&mut m).is_empty(), "the hold starts again");
+        // Stop with nothing after it: one push once the hold is over.
+        m.push_tick(100.0 + hold);
+        assert_eq!(pushes(&mut m).len(), 1);
+        m.push_tick(200.0);
+        assert!(pushes(&mut m).is_empty(), "sent once");
+    }
+
+    #[test]
+    fn push_tick_does_not_hold_a_done_seen_at_the_first_look() {
+        let (mut m, id) = one_card();
+        m.app_active = false;
+        m.card_mut(&id).unwrap().agent = AgentState::Done;
+        m.push_tick(0.0);
+        m.push_tick(crate::push_notify::DONE_HOLD_SECS * 2.0);
+        assert!(pushes(&mut m).is_empty());
+        assert!(m.done_since.is_empty());
     }
 
     fn relays(
@@ -1815,8 +1884,9 @@ mod agent_states_text_tests {
         m.effects.clear();
         m.card_mut(&id).unwrap().agent = AgentState::Done;
         m.push_tick(300.0);
+        m.push_tick(300.0 + crate::push_notify::DONE_HOLD_SECS);
         let got = relays(&mut m);
-        assert_eq!(got[0].1[0].since, 300);
+        assert_eq!(got[0].1[0].since, 320);
         m.card_mut(&id).unwrap().agent = AgentState::Working;
         m.push_tick(400.0);
         assert!(m.push_since.is_empty(), "no longer coloured, forgotten");
@@ -1935,11 +2005,13 @@ mod agent_states_text_tests {
         m.push_tick(0.0);
         m.card_mut(&id).unwrap().agent = AgentState::Done;
         m.push_tick(1.0);
+        assert!(relays(&mut m).is_empty(), "held back (#674)");
+        m.push_tick(1.0 + crate::push_notify::DONE_HOLD_SECS);
         let got = relays(&mut m);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0.as_ref().unwrap().state, AgentState::Done);
-        m.push_tick(2.0);
-        m.push_tick(5.0);
+        m.push_tick(30.0);
+        m.push_tick(35.0);
         assert!(relays(&mut m).is_empty());
     }
 
@@ -2304,6 +2376,24 @@ mod agent_states_text_tests {
             Some("session-a"),
             "the terminal is the host's own card, not a fresh one"
         );
+    }
+
+    // #659: a joined window opens each workspace at "fit all" in ITS window,
+    // not at the view the host has; its viewport is its own.
+    #[test]
+    fn a_viewer_opens_its_workspaces_fitted_not_at_the_hosts_view() {
+        let (_host, mut viewer, _a, _b, _e) = host_and_viewer();
+        let ws = viewer.active_workspace.clone().unwrap();
+        assert!(viewer.fit_pending.contains(&ws), "waiting for the window");
+        viewer.view_size = crate::grid::Size { w: 1600., h: 1000. };
+        viewer.viewport = crate::viewport::Viewport {
+            x: 777.,
+            y: 777.,
+            scale: 3.,
+        };
+        viewer.tick(0.);
+        assert!(!viewer.fit_pending.contains(&ws));
+        assert_ne!(viewer.viewport.x, 777., "the host's view is not kept");
     }
 
     #[test]

@@ -111,7 +111,15 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
         && m.keymap.iter().any(|(c, id)| {
             c == chord && matches!(id.as_str(), "editor.goToFile" | "editor.findInFiles")
         });
+    // The emoji panel opens from a locked card too (#686): the picked emoji
+    // goes into the text, and without this the chord was the body's and did
+    // nothing. Whatever chord the keymap binds to it.
+    let opens_emoji = m
+        .keymap
+        .iter()
+        .any(|(c, id)| c == chord && id == "app.emoji");
     if locked
+        && !opens_emoji
         && !is_workspace_switch(chord)
         && !is_locked_carveout(chord, kind)
         && !leaves
@@ -2151,6 +2159,9 @@ mod tests {
         let mut h = Harness::new();
         let first_ws = h.m.active_workspace.clone().unwrap();
         let first_card = h.focused().id.clone();
+        // The first tick opens the workspace on screen at "fit all" (#659);
+        // the view set after it is the user's own.
+        h.m.tick(0.);
         h.m.viewport.x = 500.;
         h.run("workspace.new");
         let second_ws = h.m.active_workspace.clone().unwrap();
@@ -2168,6 +2179,112 @@ mod tests {
         // A tenth that does not exist does nothing.
         h.run("workspace.show.9");
         assert_eq!(h.m.active_workspace.as_deref(), Some(second_ws.as_str()));
+    }
+
+    // #659: when the app opens, every workspace shows all its cards (the Cmd+2
+    // state), not the view it was saved with, and a workspace you have zoomed
+    // in on stays as you left it.
+    #[test]
+    fn every_workspace_opens_fitted_once_and_then_keeps_the_view_you_give_it() {
+        use crate::grid::Rect;
+        let mut h = Harness::new();
+        let first_ws = h.m.active_workspace.clone().unwrap();
+        // Two workspaces with cards far apart, both saved at the origin view.
+        let a = h.focused().id.clone();
+        h.m.card_mut(&a).unwrap().rect = Rect {
+            x: 0.,
+            y: 0.,
+            w: 1250.,
+            h: 2000.,
+        };
+        let second_ws = h.m.add_workspace(Some("two"));
+        let far = h.m.add_card(
+            "/",
+            NewCard {
+                workspace_id: Some(second_ws.clone()),
+                rect: Some(Rect {
+                    x: 9000.,
+                    y: 7000.,
+                    w: 1250.,
+                    h: 2000.,
+                }),
+                ..Default::default()
+            },
+        );
+        let _near = h.m.add_card(
+            "/",
+            NewCard {
+                workspace_id: Some(second_ws.clone()),
+                rect: Some(Rect {
+                    x: 7000.,
+                    y: 7000.,
+                    w: 1250.,
+                    h: 2000.,
+                }),
+                ..Default::default()
+            },
+        );
+        for w in &mut h.m.workspaces {
+            w.viewport = crate::viewport::Viewport {
+                x: 0.,
+                y: 0.,
+                scale: 1.,
+            };
+        }
+        h.m.viewport = crate::viewport::Viewport {
+            x: 0.,
+            y: 0.,
+            scale: 1.,
+        };
+        h.m.mark_open_fit();
+
+        // The window has a size: the workspace on screen opens fitted at the
+        // next tick, with its first card focused when none of it is.
+        h.m.tick(0.);
+        let rects: Vec<Rect> = h.m.here().iter().map(|c| c.rect).collect();
+        let bounds = crate::viewport::bounding_rect(&rects).unwrap();
+        assert_eq!(h.m.viewport, h.m.fit_viewport(bounds));
+        assert!(!h.m.fit_pending.contains(&first_ws));
+
+        // The other workspace opens fitted the first time it is shown.
+        h.m.show_workspace(&second_ws);
+        let rects: Vec<Rect> = h.m.here().iter().map(|c| c.rect).collect();
+        let bounds = crate::viewport::bounding_rect(&rects).unwrap();
+        assert_eq!(h.m.viewport, h.m.fit_viewport(bounds));
+        assert_ne!(h.m.viewport.x, 0.);
+        // Its first card in reading order has the focus: the left one, on the
+        // same row as `far` (both at the same top).
+        assert_ne!(h.focused().id, far, "the card on the left reads first");
+
+        // The user zooms in; leaving and coming back keeps that view.
+        h.m.viewport = crate::viewport::Viewport {
+            x: -123.,
+            y: -45.,
+            scale: 0.5,
+        };
+        h.m.show_workspace(&first_ws);
+        h.m.show_workspace(&second_ws);
+        assert_eq!(
+            h.m.viewport,
+            crate::viewport::Viewport {
+                x: -123.,
+                y: -45.,
+                scale: 0.5
+            }
+        );
+    }
+
+    #[test]
+    fn a_window_with_no_size_yet_keeps_a_workspace_waiting_to_open_fitted() {
+        let mut h = Harness::new();
+        let ws = h.m.active_workspace.clone().unwrap();
+        h.m.view_size = crate::grid::Size { w: 0., h: 0. };
+        h.m.mark_open_fit();
+        h.m.tick(0.);
+        assert!(h.m.fit_pending.contains(&ws), "nothing to fit into yet");
+        h.m.view_size = crate::grid::Size { w: 1600., h: 1000. };
+        h.m.tick(1.);
+        assert!(!h.m.fit_pending.contains(&ws));
     }
 
     #[test]
@@ -3760,6 +3877,27 @@ mod tests {
         assert_eq!(h.focused().agent, None, "the next command clears it");
     }
 
+    // A long command in a card that once ran Claude Code: the saved session
+    // stays on the card, but the command owns the Working, so the tab keeps
+    // the program's icon. A hook during the command hands it back.
+    #[test]
+    fn a_long_command_in_a_former_agent_card_is_owned_by_the_command() {
+        use crate::agent_state::AgentState::*;
+        use crate::backend::{PaneEvent, PaneId};
+        let mut h = Harness::new();
+        let pane: PaneId = 7;
+        h.m.cards[0].pane_id = Some(pane);
+        h.m.cards[0].agent_session = Some("c0ffee".into());
+        let id = h.m.cards[0].id.clone();
+        let t0 = h.m.now_ms;
+        h.m.apply_pane_event(pane, &PaneEvent::Output(b"\x1b]133;C\x07".to_vec()));
+        h.m.tick(t0 + crate::program_state::LONG_MS);
+        assert_eq!(h.focused().agent, Working);
+        assert!(h.m.program_owns_state(&id));
+        h.m.programs.get_mut(&id).unwrap().1.hook();
+        assert!(!h.m.program_owns_state(&id), "the hooks own it now");
+    }
+
     // The keymap dispatches through the editor and browser exceptions.
     #[test]
     fn chords_dispatch_through_the_keymap_with_the_editor_and_browser_exceptions() {
@@ -4662,6 +4800,24 @@ mod tests {
         );
     }
 
+    // The emoji panel opens from a locked editor and a locked browser card
+    // (#686), so the emoji can land in the text.
+    #[test]
+    fn the_emoji_chord_opens_the_panel_from_a_locked_editor_and_browser() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        for kind in [CardKind::Editor, CardKind::Browser] {
+            h.m.cards[0].kind = kind;
+            h.m.cards[0].locked = true;
+            assert_eq!(
+                resolve_chord(&h.m, "cmd+ctrl+space").as_deref(),
+                Some("app.emoji"),
+                "{kind:?}"
+            );
+        }
+    }
+
     // A diff card is the editor's body in a read-only mode, so it locks the
     // editor's way (2026-10-20): the find, comment and undo chords are the
     // body's once locked, Cmd+F finds, and with no tabs Cmd+W closes the card
@@ -5156,6 +5312,195 @@ mod tests {
             cards.results[0].action,
             crate::omni::OmniAction::FocusCard(browser.clone())
         );
+    }
+
+    // #679: the palette folds British spellings (`spelling.rs`). A new label
+    // or setting key with another British word must come with a fold entry, or
+    // "color" and "colour" stop finding each other. The scan is a heuristic:
+    // -isation/-ise/-ising/-ised words and -our words, minus a short list of
+    // ordinary English words that end the same way.
+    #[test]
+    fn labels_and_setting_keys_hold_no_unfolded_british_spelling() {
+        let mut r = crate::commands::CommandRegistry::<Model>::new(|_| {});
+        crate::model::register::register_commands(&mut r);
+        const ENGLISH: &[&str] = &[
+            "otherwise",
+            "exercise",
+            "promise",
+            "raised",
+            "revised",
+            "advise",
+            "advised",
+            "precise",
+            "premise",
+            "likewise",
+            "rise",
+            "arise",
+            "arised",
+            "wise",
+            "noise",
+            "surprise",
+            "surprised",
+            "praised",
+            "supervised",
+            "devised",
+            "comprise",
+            "comprised",
+            "compromise",
+            "disguise",
+            "franchise",
+            "expertise",
+            "your",
+            "hour",
+            "four",
+            "our",
+            "pour",
+            "tour",
+            "sour",
+            "flour",
+            "scour",
+            "devour",
+            "detour",
+            "contour",
+            "ourselves",
+            "yours",
+            "hours",
+            "tours",
+            "pours",
+            "fours",
+            "sourcing",
+            "course",
+            "source",
+            "resource",
+            "resources",
+            "discourse",
+            "bourbon",
+            "journal",
+            "journey",
+            "courier",
+            "courtesy",
+            "tourist",
+            "advertise",
+            "supervise",
+            "revise",
+            "revising",
+            "rising",
+            "arising",
+            "promising",
+            "advising",
+            "surprising",
+            "raising",
+            "exercising",
+            "praising",
+            "poised",
+            "noised",
+            "wised",
+            "paradise",
+            "cruise",
+            "bruise",
+            "chaise",
+            "treatise",
+            "demise",
+            "merchandise",
+            "enterprise",
+            "disguised",
+        ];
+        let suspicious = |word: &str| -> bool {
+            if ENGLISH.contains(&word) || word.len() < 5 {
+                return false;
+            }
+            let british_ending = [
+                "isation", "isations", "ising", "ised", "ises", "ise", "yse", "ysed",
+            ]
+            .iter()
+            .any(|e| word.ends_with(e));
+            let our_word =
+                word.ends_with("our") || word.ends_with("ours") || word.ends_with("oured");
+            (british_ending || our_word) && crate::spelling::fold(word) == word
+        };
+        // The scan itself: a word with no fold entry is caught, one that has
+        // an entry, an American one and an ordinary English one are not.
+        assert!(suspicious("prioritise") && suspicious("honour") && suspicious("synthesise"));
+        assert!(!suspicious("organisation"), "has an entry");
+        assert!(!suspicious("colour") && !suspicious("color") && !suspicious("otherwise"));
+        let mut words: Vec<(String, String)> = Vec::new();
+        for c in r.all() {
+            words.push((c.id.clone(), c.label.clone()));
+        }
+        for (key, _) in crate::settings_doc::SETTINGS_DOC {
+            words.push(((*key).to_string(), (*key).to_string()));
+        }
+        let mut found: Vec<String> = Vec::new();
+        for (id, text) in &words {
+            for w in text
+                .to_lowercase()
+                .split(|c: char| !c.is_ascii_alphabetic())
+                .filter(|w| !w.is_empty())
+            {
+                if suspicious(w) {
+                    found.push(format!("{id}: {w}"));
+                }
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "British spellings with no fold entry in spelling.rs: {found:?}"
+        );
+    }
+
+    // #666: the address bar opens a file or folder that exists, tried before a
+    // search or a domain guess, and leaves what does not exist as it was.
+    #[test]
+    fn the_address_bar_opens_an_existing_local_path_as_a_file_address() {
+        use crate::omni::OmniAction;
+        let dir = std::env::temp_dir().join(format!("ift-omni-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("my site")).unwrap();
+        std::fs::write(dir.join("my site").join("index.html"), "<p>hi</p>").unwrap();
+        let real = std::fs::canonicalize(&dir).unwrap();
+        let mut h = Harness::new();
+        let id = h.focused().id.clone();
+        h.m.card_mut(&id).unwrap().cwd = real.to_string_lossy().into_owned();
+        h.m.home = real.to_string_lossy().into_owned();
+        h.run("card.omnibox");
+        let top = |m: &mut Model, q: &str| {
+            m.omni_type(q);
+            m.omni_response().sections[0].results[0].clone()
+        };
+
+        // An absolute path with a space in it.
+        let abs = format!("{}/my site/index.html", real.display());
+        let r = top(&mut h.m, &abs);
+        assert_eq!(r.subtitle.as_deref(), Some("Open file"));
+        assert_eq!(
+            r.action,
+            OmniAction::Navigate(format!("file://{}/my%20site/index.html", real.display()))
+        );
+        // `~` is the home folder; a relative name reads from the focused
+        // terminal's folder.
+        assert_eq!(
+            top(&mut h.m, "~/my site/index.html").subtitle.as_deref(),
+            Some("Open file")
+        );
+        assert_eq!(
+            top(&mut h.m, "my site/index.html").subtitle.as_deref(),
+            Some("Open file")
+        );
+        // A folder is an address too; a name that is not there is not.
+        assert_eq!(
+            top(&mut h.m, "my site").subtitle.as_deref(),
+            Some("Open file")
+        );
+        assert_eq!(
+            top(&mut h.m, "index.html").action,
+            OmniAction::Navigate("https://index.html".into()),
+            "no such file in this folder: a domain guess, as before"
+        );
+        assert!(matches!(
+            top(&mut h.m, "/no/such/place now").action,
+            OmniAction::Search(_)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

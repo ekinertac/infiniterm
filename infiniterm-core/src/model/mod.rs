@@ -829,6 +829,9 @@ pub struct Model {
     /// Card id to the wall-clock second its pushable state began, for the
     /// relay's colour list (#649). Only pushable cards have an entry.
     pub push_since: std::collections::BTreeMap<String, f64>,
+    /// Card id to the wall-clock second `push_tick` first saw it done, while
+    /// the done is still held back (`push_notify::DONE_HOLD_SECS`, #674).
+    pub done_since: std::collections::BTreeMap<String, f64>,
     /// When a drop-only relay push is due. A card leaving a coloured state
     /// waits a moment so a quick flip back does not cost a push.
     pub relay_drop_due: Option<f64>,
@@ -884,6 +887,11 @@ pub struct Model {
     pub viewport: Viewport,
     /// The CONTENT area, not the window.
     pub view_size: Size,
+    /// The workspaces that still have to open at "fit all" (#659): every one
+    /// when a canvas is loaded or a viewer gets its first snapshot, and each
+    /// leaves the list once it has been shown fitted, so a workspace you
+    /// zoomed in on stays as you left it.
+    pub fit_pending: Vec<String>,
     /// Whether the view is FRAMING one card (`canvas.zoom.fitCard`): while
     /// it holds, moving focus re-fits the view instead of nudging.
     pub framing: bool,
@@ -1160,6 +1168,7 @@ impl Model {
             done_watch: None,
             push_prev: None,
             push_since: std::collections::BTreeMap::new(),
+            done_since: std::collections::BTreeMap::new(),
             relay_drop_due: None,
             host_label: "Mac".into(),
             focus_trail: Vec::new(),
@@ -1178,6 +1187,7 @@ impl Model {
             undoing: false,
             viewport: INITIAL_VIEWPORT,
             view_size: Size { w: 0., h: 0. },
+            fit_pending: Vec::new(),
             framing: false,
             framed_card: None,
             reading: None,
@@ -1255,6 +1265,7 @@ impl Model {
     /// Notices expire here; the staleness sweep is `sweep_stale`.
     pub fn tick(&mut self, now_ms: f64) {
         self.now_ms = now_ms;
+        self.fit_open_view();
         // A card sat in earns its place without waiting for the focus to
         // leave it: the trail is read by the switcher and by a close.
         self.promote_focus();
@@ -1346,6 +1357,13 @@ impl Model {
 
     pub fn card_mut(&mut self, id: &str) -> Option<&mut Card> {
         self.cards.iter_mut().find(|c| c.id == id)
+    }
+
+    /// The card's state comes from the command in flight (`program_state`),
+    /// not from an agent's hooks: a long `brew upgrade` in a card that once
+    /// ran Claude Code, whose `agent_session` is never cleared.
+    pub fn program_owns_state(&self, id: &str) -> bool {
+        self.programs.get(id).is_some_and(|(_, t)| t.owns_working())
     }
 
     pub fn focused(&self) -> Option<&Card> {
@@ -1864,10 +1882,13 @@ impl Model {
             leaving.viewport = vp;
             leaving.focused = leaving_focus;
         }
+        // A workspace that has not been shown since the app opened shows ALL
+        // its cards (#659), instead of the view it was saved with.
+        let fitted = self.open_fit_for(id);
         let Some(entering) = self.workspaces.iter().find(|w| w.id == id) else {
             return;
         };
-        self.viewport = entering.viewport;
+        self.viewport = fitted.unwrap_or(entering.viewport);
         let remembered = entering.focused.clone();
         self.active_workspace = Some(id.to_string());
         self.stop_framing();
@@ -1882,16 +1903,68 @@ impl Model {
                         .iter()
                         .any(|c| &c.id == f && c.workspace_id == id)
                 })
-                .or_else(|| {
-                    self.cards
-                        .iter()
-                        .find(|c| c.workspace_id == id)
-                        .map(|c| c.id.clone())
-                });
+                .or_else(|| self.first_card_in(id));
             self.set_focus(back.as_deref());
         }
         self.selection.maximized = false;
         self.dirty_layout = true;
+    }
+
+    /// The card of workspace `id` that reads first (the top row, left to
+    /// right), or `None` for an empty workspace (#659).
+    pub fn first_card_in(&self, id: &str) -> Option<String> {
+        let cards: Vec<(String, Rect)> = self
+            .cards
+            .iter()
+            .filter(|c| c.workspace_id == id)
+            .map(|c| (c.id.clone(), c.rect))
+            .collect();
+        crate::window_fit::first_in_reading_order(&cards)
+    }
+
+    /// Every workspace is to open at "fit all" once (#659): called when a
+    /// canvas is loaded and when a viewer gets its first snapshot.
+    pub fn mark_open_fit(&mut self) {
+        self.fit_pending = self.workspaces.iter().map(|w| w.id.clone()).collect();
+    }
+
+    /// The view that shows every card of workspace `id`, when it is still
+    /// waiting to open fitted and the window has a size. Takes it off the
+    /// waiting list; a workspace with no cards has nothing to fit and is
+    /// taken off too.
+    fn open_fit_for(&mut self, id: &str) -> Option<Viewport> {
+        if !self.fit_pending.iter().any(|w| w == id) {
+            return None;
+        }
+        if self.view_size.w <= 0. || self.view_size.h <= 0. {
+            return None;
+        }
+        self.fit_pending.retain(|w| w != id);
+        let rects: Vec<Rect> = self
+            .cards
+            .iter()
+            .filter(|c| c.workspace_id == id)
+            .map(|c| c.rect)
+            .collect();
+        crate::viewport::bounding_rect(&rects).map(|bounds| self.fit_viewport(bounds))
+    }
+
+    /// The workspace on screen opens fitted as soon as the window has a size
+    /// (#659), with its first card focused when no card of it has the focus.
+    fn fit_open_view(&mut self) {
+        let Some(active) = self.active_workspace.clone() else {
+            return;
+        };
+        let Some(fitted) = self.open_fit_for(&active) else {
+            return;
+        };
+        self.viewport = fitted;
+        self.selection.maximized = false;
+        let focus_here = self.focused().is_some_and(|c| c.workspace_id == active);
+        if !focus_here {
+            let first = self.first_card_in(&active);
+            self.set_focus(first.as_deref());
+        }
     }
 
     /// Ensures there is somewhere to put cards, and that every card is

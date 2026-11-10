@@ -78,6 +78,8 @@ While it is on, `Cmd Up` and `Cmd Down` pan three rows inside the card. Typing a
 
 ### How a fit frames the cards
 
+When the app opens, and when you join a host, every workspace opens at `Cmd 2`: all its cards in view, with its first card focused unless it has a card it remembers as focused. This happens once per workspace each time the app opens. A workspace you zoom in on keeps that view when you leave it and come back. In a joined window the fit is your window's own, not the host's view.
+
 Every fit (`Cmd 1`, `Cmd 2`, `Cmd 3`, the double-clicks) leaves `"ui.fitPadding"` pixels around what it frames, 48 by default; `0` lets the cards touch the window's edges. A fit never zooms past 100%, so a small card stays its own size in the middle of the window; `"ui.fitMagnify": true` lifts that, and a fit then zooms in until the card fills the window. `Cmd 1` on a card that was split frames the whole slot, both halves together; `"ui.fitSplitSlot": false` makes it fit that card alone, so it fills the window.
 
 Interface size is separate from zoom: `Cmd Shift =` and `Cmd Shift -` make the app's own chrome (labels, title bar, status bar, palette, dialogs) bigger or smaller, never terminal text.
@@ -119,6 +121,10 @@ Every card has a label in its corner: the name you gave it (`Cmd Shift R`), else
 
 The label sits top right by default. `"ui.cardLabelPosition"` moves it to `"top left"`, `"bottom left"` or `"bottom right"` (the words in either order); a card in an ssh session shows its ssh badge at the other end of the same edge.
 
+### Opening a local file in the address bar
+
+`Cmd L` takes a path as well as a web address. A line that names a file or folder that exists on this Mac, such as `/Users/me/site/index.html`, `~/site/index.html` or, with a terminal card focused, `index.html`, opens as a `file://` address. The first row says "Open file" and shows the path. A name that is not there behaves as before: a search, or a web address if it looks like one. A relative name is read from the focused terminal card's folder.
+
 ### The browser card's right-click menu
 
 A right-click on a browser card's page or on its tab strip opens one menu. Back and Forward are greyed when there is nowhere to go. Reload, New Tab, Close Tab, Reopen Closed Tab, Copy Address and Open in System Browser are always there. Click on a link and the link rows come first: Open Link in New Tab, in New Card, Copy Link Address and Open Link in System Browser. Click in a text field and Cut, Copy and Paste come first. With selected text, Copy does.
@@ -147,6 +153,8 @@ With several cards selected, a right-click on one of them keeps the selection an
 A terminal program that uses the mouse, such as vim, tmux or htop, still gets the plain right-click. Hold `Shift` to open the menu over it.
 
 A label that ends in an ellipsis, in the menu and in the command palette, asks you for something more before it acts: a name, a file, an address. One without it acts at once.
+
+The palette, the shortcuts panel and the settings completion treat British and American spellings as one: typing `color` finds "colour", and `maximize` finds "maximise". `ift license` runs `ift licence`.
 
 ## Closing and protecting
 

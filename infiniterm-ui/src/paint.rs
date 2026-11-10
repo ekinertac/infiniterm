@@ -462,6 +462,22 @@ impl AppView {
         // `ui.focusRingWidth`, else the zoom-stepped ring.
         let ring_w =
             px(focus_ring_width_px(vp.scale, self.model.config.ui.focus_ring_width) as f32);
+        // `card.border` and `card.activeBorder` (#681): `None` keeps the
+        // built-in colour, `Some(None)` draws nothing.
+        let themed = |spec: &Option<infiniterm_core::ui_theme::BorderSpec>,
+                      opacity: Option<f64>| {
+            use infiniterm_core::ui_theme::BorderSpec;
+            spec.as_ref().map(|s| match s {
+                BorderSpec::None => None,
+                BorderSpec::Color(c) => Some(crate::chrome::scaled_alpha(
+                    chrome.theme_color(c),
+                    opacity.unwrap_or(1.) as f32,
+                )),
+            })
+        };
+        let theme_card = &self.model.ui_theme.card;
+        let resting_border = themed(&theme_card.border, theme_card.border_opacity);
+        let active_ring = themed(&theme_card.active_border, theme_card.active_border_opacity);
         // Rounded cards (`ui.cardRadius`, 0 = square): every outline of a
         // card takes it, and the bodies read it from the global.
         let radius = self.card_radius(vp.scale);
@@ -734,8 +750,11 @@ impl AppView {
                 AgentState::Done => chrome.agent_done,
                 // A gradient reaches the card's edge: a resting card's dark
                 // hairline over it would read as padding (#544).
-                AgentState::None if gradient_on => gpui::transparent_black(),
-                AgentState::None => chrome.card_border,
+                AgentState::None => match resting_border {
+                    Some(themed) => themed.unwrap_or_else(gpui::transparent_black),
+                    None if gradient_on => gpui::transparent_black(),
+                    None => chrome.card_border,
+                },
             };
             // A resting card keeps the hairline; one with an agent in it gets
             // the heavier, zoom-stepped border, because at a distance the
@@ -785,12 +804,21 @@ impl AppView {
                 let locked = focused
                     && (card.kind.has_editor_body() || card.kind == CardKind::Browser)
                     && card.locked;
+                // `card.activeBorder` recolours only the plain focus ring.
+                let mut ring_none = false;
                 let ring_color = if locked {
                     chrome.warn
                 } else if multi && !focused {
                     chrome.selection_ring
                 } else {
-                    chrome.focus_ring
+                    match active_ring {
+                        Some(Some(c)) => c,
+                        Some(None) => {
+                            ring_none = true;
+                            chrome.focus_ring
+                        }
+                        None => chrome.focus_ring,
+                    }
                 };
                 let alpha = focus_ring_alpha(vp.scale) as f32
                     * if focused || multi {
@@ -805,15 +833,17 @@ impl AppView {
                     point(b.origin.x - off, b.origin.y - off),
                     size(b.size.width + off * 2., b.size.height + off * 2.),
                 );
-                window.paint_quad(
-                    outline(
-                        rb,
-                        crate::chrome::with_alpha(ring_color, alpha),
-                        BorderStyle::Solid,
-                    )
-                    .border_widths(ring)
-                    .corner_radii(radius + off),
-                );
+                if !ring_none {
+                    window.paint_quad(
+                        outline(
+                            rb,
+                            crate::chrome::with_alpha(ring_color, ring_color.a * alpha),
+                            BorderStyle::Solid,
+                        )
+                        .border_widths(ring)
+                        .corner_radii(radius + off),
+                    );
+                }
             }
             if infiniterm_core::card_header::inset(self.model.ui_theme.card.header_on(), card.kind)
                 > 0.
@@ -1019,6 +1049,7 @@ impl AppView {
                     card.agent,
                     card.agent_kind.as_deref(),
                     card.agent_session.as_deref(),
+                    self.model.program_owns_state(&card.id),
                 )
                 .unwrap_or(infiniterm_core::tab_icon::Subject::Program(&shell)),
                 tab.icon_style.unwrap_or_default(),
