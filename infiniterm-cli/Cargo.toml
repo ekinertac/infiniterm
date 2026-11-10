@@ -17,6 +17,10 @@ path = "src/main.rs"
 # eats somebody's configuration.
 serde_json = "1"
 
+# `ift phone add` prints the pairing QR code. No image or svg output: the terminal
+# is the only target, so the default features (the image crate) stay off.
+qrcode = { version = "0.14", default-features = false }
+
 # `ift attach` needs libc for real, not just to dodge a portable-pty style crate:
 # raw mode is tcgetattr/cfmakeraw/tcsetattr and the window size is an ioctl
 # (TIOCGWINSZ), and SIGWINCH needs a signal handler. Shelling out to `stty` to
