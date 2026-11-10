@@ -165,6 +165,12 @@ pub fn drafts_dir() -> PathBuf {
     app_support_dir().join("drafts")
 }
 
+/// The workspaces saved under a name (#715, `saved_workspace.rs`), one file
+/// each. Beside the save file, not in the config folder: the app writes them.
+pub fn saved_workspaces_dir() -> PathBuf {
+    app_support_dir().join("workspaces")
+}
+
 /// The reference keeps themes under Tauri's app config dir, which on macOS
 /// is Application Support, and its settings doc says so. Same place here.
 pub fn themes_dir() -> PathBuf {

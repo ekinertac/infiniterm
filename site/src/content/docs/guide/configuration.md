@@ -98,6 +98,7 @@ A ui theme holds these keys:
 - the interface font: `ui.fontFamily`, `ui.fontSize`, `ui.fontWeight`, `ui.fontWeightBold`;
 - the bars: `titlebar.background`, `titlebar.border`, `statusbar.background` and `statusbar.border`. A background is `#rgb`, `#rrggbb`, `canvas`, `card`, `bar` or `transparent`. A border is a colour or `none`;
 - the workspace tabs: `tab.background`, `tab.activeBackground`, `tab.gradient`, `tab.opacity`, `tab.border`, `tab.activeBorder`, `tab.separator`, `tab.radius`, `tab.paddingX`, `tab.icons`, `tab.iconStyle`, `tab.iconMap`, `tab.iconSize`;
+- the editor and browser card tabs: the workspace tab keys under `cardTab.`, without the icon keys;
 - the card edges: `card.border`, `card.borderOpacity`, `card.activeBorder`, `card.activeBorderOpacity`;
 - the card header: `card.header`, `card.headerIcons`, `card.headerIconSize`, `card.headerButtons`, `card.headerButtonsActiveOnly`.
 
@@ -122,6 +123,7 @@ Everything in this part and the next two is off until a theme sets it. A theme w
 - `tab.radius` rounds the corners, 0 to 40 pixels.
 - `tab.paddingX` is the space on each side of a tab's content, 0 to 40 pixels. Unset keeps 6.
 - `tab.iconSize` is the size of the tab icon in pixels, 6 to 64. Unset keeps the built-in size, which follows the tab's text.
+- The tabs at the top of editor and browser cards take the same keys under `cardTab.`: `cardTab.background`, `cardTab.activeBackground`, `cardTab.gradient`, `cardTab.opacity`, `cardTab.border`, `cardTab.activeBorder`, `cardTab.separator`, `cardTab.radius` and `cardTab.paddingX`. Values and defaults are the workspace tabs', so the same values make both look alike. A folder editor's name over its file tree is drawn like an idle card tab.
 
 `tab.icons: true` puts an icon on each tab for the program that runs in the workspace's focused card. When no card is focused, it uses the first card. A shell at its prompt shows the shell. `tab.iconStyle` is `"glyph"` (default) or `"image"`. A glyph is a Nerd Font glyph, and the app has glyphs for common shells, runtimes and coding agents. An image is a file in `ui-themes/<theme name>/icons/`, where the theme name is the file name without `.json`. The file is `<program>.svg` or `<program>.png`, or `default.svg` or `default.png` for the rest. A program with no file gets a glyph. `tab.iconMap` maps a program name to a glyph or to a file name ending in `.svg` or `.png`, for example `{"bun": "bun.svg", "default": ""}`. A file name must be a plain name, with no folder in it. The key `default` covers programs not listed.
 

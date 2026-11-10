@@ -616,8 +616,42 @@ impl Model {
     fn snapshot(&mut self, with_covers: bool) -> String {
         self.sync_workspace_viewport();
         self.dirty_layout = false;
-        let cards: Vec<SavedCard> = self
-            .cards
+        let cards = self.saved_cards(with_covers);
+        let groups = self.saved_groups();
+        let usage: &Usage = &self.usage;
+        // A cover is not saved, so the focus it holds is saved as the
+        // terminal under it.
+        let under = |f: &str| match with_covers {
+            true => None,
+            false => self.covers.get(f).map(String::as_str),
+        };
+        let focused = self
+            .selection
+            .focused_id
+            .as_deref()
+            .map(|f| under(f).unwrap_or(f));
+        let mut workspaces = self.workspaces.clone();
+        for w in &mut workspaces {
+            if let Some(base) = w.focused.as_deref().and_then(under) {
+                w.focused = Some(base.to_string());
+            }
+        }
+        layout_text(&serialise_layout(
+            &cards,
+            &groups,
+            &self.viewport,
+            focused,
+            self.ui_scale,
+            usage,
+            &workspaces,
+            self.active_workspace.as_deref(),
+        ))
+    }
+
+    /// The live cards as the file holds them, which is where runtime state
+    /// is left behind. `with_covers` as in `snapshot`.
+    fn saved_cards(&self, with_covers: bool) -> Vec<SavedCard> {
+        self.cards
             .iter()
             .filter(|c| with_covers || !self.covers.contains_key(&c.id))
             .map(|c| SavedCard {
@@ -649,43 +683,129 @@ impl Model {
                 number: c.number,
                 protected: c.protected,
             })
-            .collect();
-        let groups: Vec<SavedGroup> = self
-            .groups
+            .collect()
+    }
+
+    fn saved_groups(&self) -> Vec<SavedGroup> {
+        self.groups
             .iter()
             .map(|g| SavedGroup {
                 id: g.id.clone(),
                 name: g.name.clone(),
             })
-            .collect();
-        let usage: &Usage = &self.usage;
-        // A cover is not saved, so the focus it holds is saved as the
-        // terminal under it.
-        let under = |f: &str| match with_covers {
-            true => None,
-            false => self.covers.get(f).map(String::as_str),
+            .collect()
+    }
+
+    /// Workspace `id` as the text `workspace.saveAs` writes under `name`
+    /// (#715, `saved_workspace.rs`), or `None` when there is no such
+    /// workspace. An in-place editor is left out, as the save file leaves it
+    /// out, and the focus it holds is saved as the terminal under it.
+    pub fn workspace_snapshot_text(&mut self, id: &str, name: &str) -> Option<String> {
+        self.sync_workspace_viewport();
+        let mut workspace = self.workspaces.iter().find(|w| w.id == id)?.clone();
+        // A workspace records its focus when it is left; the one on screen
+        // has it in the selection.
+        if self.active_workspace.as_deref() == Some(id) {
+            workspace.focused = self.selection.focused_id.clone();
+        }
+        if let Some(base) = workspace.focused.as_ref().and_then(|f| self.covers.get(f)) {
+            workspace.focused = Some(base.clone());
+        }
+        Some(layout_text(&crate::saved_workspace::snapshot_value(
+            name,
+            &workspace,
+            &self.saved_cards(false),
+            &self.saved_groups(),
+        )))
+    }
+
+    /// Opens a saved workspace (#715) as a NEW workspace named `name`, from
+    /// the text of its file (`None`: there is no such file). Every card,
+    /// group and the workspace itself gets a fresh id, so the same one can be
+    /// opened twice and a card never shares an id with one already on the
+    /// canvas. A terminal is a fresh shell in its saved directory. The
+    /// workspace is shown, fitted like any workspace that opens (#659), with
+    /// the card that was focused when it was saved focused again.
+    pub fn open_saved_workspace(&mut self, name: &str, text: Option<&str>) {
+        let Some(text) = text else {
+            self.notify(format!("no saved workspace \"{name}\""));
+            return;
         };
-        let focused = self
-            .selection
-            .focused_id
-            .as_deref()
-            .map(|f| under(f).unwrap_or(f));
-        let mut workspaces = self.workspaces.clone();
-        for w in &mut workspaces {
-            if let Some(base) = w.focused.as_deref().and_then(under) {
-                w.focused = Some(base.to_string());
+        if is_newer_than_this_build(text) {
+            self.notify(format!(
+                "\"{name}\" was saved by a newer infiniterm: update to open it"
+            ));
+            return;
+        }
+        let saved = parse_layout_allowing_empty(text);
+        let Some((saved, from)) = saved.and_then(|s| {
+            let from = s.workspaces.first()?.clone();
+            Some((s, from))
+        }) else {
+            self.notify(format!("\"{name}\" could not be read"));
+            return;
+        };
+        let ws = self.add_workspace(Some(name));
+        let groups: std::collections::HashMap<String, String> = saved
+            .groups
+            .iter()
+            .map(|g| (g.id.clone(), self.add_group(&g.name)))
+            .collect();
+        // Back to front, so the stacking the cards were saved in is the
+        // stacking they are made in.
+        let mut cards: Vec<SavedCard> = saved
+            .cards
+            .into_iter()
+            .filter(|c| c.workspace_id == from.id)
+            .collect();
+        cards.sort_by(|a, b| a.z.total_cmp(&b.z));
+        // Every id first: a card may name one made after it (`split_from`).
+        let ids: std::collections::HashMap<String, String> = cards
+            .iter()
+            .map(|c| (c.id.clone(), super::new_id()))
+            .collect();
+        // A soft group has no record of its own, only the id its cards share.
+        let mut soft: std::collections::HashMap<String, String> = Default::default();
+        for c in cards {
+            let soft_group_id = c
+                .soft_group_id
+                .map(|s| soft.entry(s).or_insert_with(super::new_id).clone());
+            let id = self.add_card(
+                &c.cwd,
+                NewCard {
+                    id: ids.get(&c.id).cloned(),
+                    rect: Some(c.rect),
+                    group_id: c.group_id.and_then(|g| groups.get(&g).cloned()),
+                    workspace_id: Some(ws.clone()),
+                    soft_group_id,
+                    split_from: c.split_from.and_then(|s| ids.get(&s).cloned()),
+                    kind: c.kind,
+                    path: c.path,
+                    root: c.root,
+                    explorer: c.explorer,
+                    url: c.url,
+                    sidebar: c.sidebar,
+                    sidebar_top: c.sidebar_top,
+                    zoom: c.zoom,
+                    ..Default::default()
+                },
+            );
+            if let Some(card) = self.card_mut(&id) {
+                card.title = c.title;
+                card.protected = c.protected;
+                card.tabs = c.tabs;
+                card.active_tab = c.active_tab;
             }
         }
-        layout_text(&serialise_layout(
-            &cards,
-            &groups,
-            &self.viewport,
-            focused,
-            self.ui_scale,
-            usage,
-            &workspaces,
-            self.active_workspace.as_deref(),
-        ))
+        self.prune_empty_groups();
+        let focused = from.focused.and_then(|f| ids.get(&f).cloned());
+        if let Some(w) = self.workspaces.iter_mut().find(|w| w.id == ws) {
+            w.focused = focused;
+        }
+        self.fit_pending.push(ws.clone());
+        self.show_workspace(&ws);
+        self.notify(format!("opened \"{name}\""));
+        self.dirty_layout = true;
     }
 
     /// The ids this viewer closed since the host's last canvas: what an upload

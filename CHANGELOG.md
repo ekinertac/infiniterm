@@ -20,9 +20,13 @@ How this file is kept: work that has shipped to `master` but not to a release go
 - In a browser card you can now drag across a page's text to select it, then copy it with Cmd+C. Before, a drag selected nothing.
 - Clicking "+" on a browser card's tab strip now opens the address bar on the new tab, as Cmd+T does. Before, it left a blank page with nowhere to type until you pressed Cmd+L.
 - The editor's file tree no longer lists `.DS_Store`, the file Finder leaves in every folder it opens. Other dotfiles are still listed.
+- A workspace can be saved under a name and opened again later. "Workspace: save as…" in the command palette keeps the workspace you are on: its cards where they are, each terminal's directory, each editor's open files, each browser's page, and its groups. "Workspace: open saved…" lists what you saved and opens the one you pick as a new workspace, each terminal a fresh shell in its directory. Saving under a name you already used asks before it replaces that one; opening the same one twice gives two workspaces.
+- New setting `editor.explorer.icons` (off by default) shows icons in the editor's file tree: a closed or open folder where the arrow was, and an icon for each file's type, the ones VS Code's Material Icon Theme uses.
+- Toggle Comment in an editor card is now a command: the palette lists it as "Editor: Toggle Comment" with Cmd+/ beside it, and `keybindings.json` can give it another chord. It comments or uncomments the lines under every cursor at once, not only the main one, as one undo step. CSS, HTML, Svelte and Markdown lines are now wrapped whole, `/* line */` and `<!-- line -->`; before they got only the opening mark.
 ### 2026-11-09
 
 - An editor card opened on a folder shows the folder's name over the file tree without a trailing slash: `infiniterm`, not `infiniterm/`.
+- The tabs on editor and browser cards now look like the workspace tabs: the same size, padding, rounded corners and fill. A ui theme can style them with `cardTab.*` keys, the same keys as `tab.*` (`cardTab.background`, `cardTab.activeBackground`, `cardTab.gradient`, `cardTab.opacity`, `cardTab.border`, `cardTab.activeBorder`, `cardTab.separator`, `cardTab.radius`, `cardTab.paddingX`), so the same values make both alike. A folder editor's name over its file tree matches the tabs beside it.
 
 ## 0.6.12 (build 1466), 2026-11-09
 

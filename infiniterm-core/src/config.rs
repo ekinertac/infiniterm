@@ -280,6 +280,15 @@ pub struct Lsp {
     pub servers: std::collections::BTreeMap<String, String>,
 }
 
+/// The editor's file tree (`editor.explorer.*`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Explorer {
+    /// File and folder icons, from the Material Icon Theme
+    /// (`explorer_icons.rs`, #701). Off: the arrows and plain names.
+    pub icons: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Editor {
@@ -292,6 +301,8 @@ pub struct Editor {
     /// in a tab of its own. Off: no buffer, the pane stays empty until a
     /// file opens (`tabs_cmd.rs::browser_tab_open`).
     pub folder_scratch_tab: bool,
+    /// The file tree's look (`editor.explorer.*`).
+    pub explorer: Explorer,
     /// Run the file's formatter over the text when it is saved
     /// (`infiniterm-editor/src/format.rs`). Off by default: it rewrites the
     /// file, and it runs a program.
@@ -615,6 +626,7 @@ pub fn default_config() -> Config {
             highlight_line: true,
             complete_words: true,
             folder_scratch_tab: true,
+            explorer: Explorer::default(),
             format_on_save: false,
             formatters: Default::default(),
             lsp: Lsp::default(),
@@ -920,6 +932,9 @@ pub fn merge_config(raw: &Value) -> Config {
             highlight_line: bool_(e.get("highlightLine"), d.editor.highlight_line),
             complete_words: bool_(e.get("completeWords"), d.editor.complete_words),
             folder_scratch_tab: bool_(e.get("folderScratchTab"), d.editor.folder_scratch_tab),
+            explorer: Explorer {
+                icons: bool_(e.get("explorer.icons"), d.editor.explorer.icons),
+            },
             format_on_save: bool_(e.get("formatOnSave"), d.editor.format_on_save),
             // `editor.formatters.rust` and so on: the flat reader leaves them
             // as dotted keys under the section.
@@ -1572,6 +1587,15 @@ mod tests {
             !e.formatters.contains_key("go"),
             "a blank command is no command"
         );
+    }
+
+    // The tree's icons are off until asked for (#701), flat or nested.
+    #[test]
+    fn explorer_icons_are_off_by_default() {
+        let icons = |v| m(v).editor.explorer.icons;
+        assert!(!icons(json!({})));
+        assert!(icons(json!({"editor.explorer.icons": true})));
+        assert!(icons(json!({"editor": {"explorer": {"icons": true}}})));
     }
 
     // The language server is off until asked for (#602), with its command per

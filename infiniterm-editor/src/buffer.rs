@@ -19,6 +19,59 @@ use unicode_segmentation::UnicodeSegmentation;
 /// inserts.
 pub const INDENT: &str = "  ";
 
+/// What `toggle_comment` puts around a line: a prefix (`//`, `#`), or an
+/// opener and closer for a language that has no line comment (CSS's
+/// `/* */`, HTML's `<!-- -->`), wrapped round each line on its own, as VS
+/// Code does. The language picks it (`Language::comment_style`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommentStyle {
+    Line(&'static str),
+    Pair(&'static str, &'static str),
+}
+
+impl CommentStyle {
+    /// Whether `line` is already commented this way.
+    pub fn wraps(self, line: &str) -> bool {
+        let t = line.trim();
+        match self {
+            CommentStyle::Line(token) => t.starts_with(token),
+            CommentStyle::Pair(open, close) => {
+                t.len() >= open.len() + close.len() && t.starts_with(open) && t.ends_with(close)
+            }
+        }
+    }
+
+    /// `line` commented at char column `indent`, a space inside the marks.
+    pub fn wrap(self, line: &str, indent: usize) -> String {
+        let at = line.char_indices().nth(indent).map_or(line.len(), |(i, _)| i);
+        let (ws, rest) = line.split_at(at);
+        match self {
+            CommentStyle::Line(token) => format!("{ws}{token} {rest}"),
+            CommentStyle::Pair(open, close) => format!("{ws}{open} {rest} {close}"),
+        }
+    }
+
+    /// `line` with its comment marks taken off, and the space `wrap` put
+    /// inside each one; the inverse of `wrap`.
+    pub fn unwrap(self, line: &str) -> String {
+        let (ws, rest) = line.split_at(line.len() - line.trim_start().len());
+        let rest = match self {
+            CommentStyle::Line(token) => {
+                let body = rest.strip_prefix(token).unwrap_or(rest);
+                body.strip_prefix(' ').unwrap_or(body).to_string()
+            }
+            CommentStyle::Pair(open, close) => {
+                let body = rest.trim_end();
+                let body = body.strip_prefix(open).unwrap_or(body);
+                let body = body.strip_prefix(' ').unwrap_or(body);
+                let body = body.strip_suffix(close).unwrap_or(body);
+                body.strip_suffix(' ').unwrap_or(body).to_string()
+            }
+        };
+        format!("{ws}{rest}")
+    }
+}
+
 /// Typing continues the same undo step for this long after the last key:
 /// CodeMirror's `newGroupDelay`.
 const GROUP_MS: f64 = 500.;
@@ -1538,47 +1591,88 @@ impl Buffer {
         self.select_range(start..start + new_len);
     }
 
-    /// Cmd+/: comment every selected line with `token`, or uncomment when
-    /// they all are. The token goes at the shallowest indent of the block.
-    pub fn toggle_comment(&mut self, token: &str, now: f64) {
-        let r = self.selection().unwrap_or(self.cursor..self.cursor);
-        let first = self.line_of(r.start);
-        let last = self.line_of(r.end.saturating_sub(1).max(r.start));
+    /// `editor.toggleComment` (Cmd+/): comment every line any cursor's
+    /// selection touches, or uncomment them when they all are. One decision
+    /// for every cursor, so a mixed set is commented, as one block would be.
+    /// The comment goes at the shallowest indent of each block; a line two
+    /// selections share is toggled once.
+    pub fn toggle_comment(&mut self, style: CommentStyle, now: f64) {
+        let mut spans: Vec<(usize, usize)> = self
+            .all_cursor_states()
+            .iter()
+            .map(|c| self.line_span(c.cursor, c.anchor))
+            .collect();
+        spans.sort_unstable();
+        // Overlapping spans merge into one block, which shares one indent.
+        let mut blocks: Vec<(usize, usize)> = vec![];
+        for (first, last) in spans {
+            match blocks.last_mut() {
+                Some(b) if first <= b.1 => b.1 = b.1.max(last),
+                _ => blocks.push((first, last)),
+            }
+        }
+        let filled = |l: &str| !l.trim().is_empty();
+        let uncomment = blocks.iter().all(|&(first, last)| {
+            (first..=last)
+                .map(|n| self.line(n))
+                .filter(|l| filled(l))
+                .all(|l| style.wraps(&l))
+        });
+        let indents: Vec<(usize, usize, usize)> = blocks
+            .iter()
+            .map(|&(first, last)| {
+                let indent = (first..=last)
+                    .map(|n| self.line(n))
+                    .filter(|l| filled(l))
+                    .map(|l| l.chars().take_while(|c| c.is_whitespace()).count())
+                    .min()
+                    .unwrap_or(0);
+                (first, last, indent)
+            })
+            .collect();
+        // Toggling never adds or removes a line, so line numbers hold
+        // across the cursors and this can mark what is done.
+        let mut done = std::collections::HashSet::new();
+        self.for_each_cursor(|b| b.toggle_comment_here(style, uncomment, &indents, &mut done, now));
+    }
+
+    /// The first and last line a cursor's selection touches; a selection
+    /// that ends at a line's start leaves that line out.
+    fn line_span(&self, cursor: usize, anchor: Option<usize>) -> (usize, usize) {
+        let (lo, hi) = match anchor {
+            Some(a) => (a.min(cursor), a.max(cursor)),
+            None => (cursor, cursor),
+        };
+        (self.line_of(lo), self.line_of(hi.saturating_sub(1).max(lo)))
+    }
+
+    /// One cursor's part of `toggle_comment`.
+    fn toggle_comment_here(
+        &mut self,
+        style: CommentStyle,
+        uncomment: bool,
+        indents: &[(usize, usize, usize)],
+        done: &mut std::collections::HashSet<usize>,
+        now: f64,
+    ) {
+        let (first, last) = self.line_span(self.cursor, self.anchor);
+        let indent = indents
+            .iter()
+            .find(|(f, l, _)| (*f..=*l).contains(&first))
+            .map_or(0, |b| b.2);
         let start = self.line_start(first);
         let end = self.line_end(last);
         let old = self.slice(start..end);
-        let lines: Vec<&str> = old.split('\n').collect();
-        let lead = format!("{token} ");
-        let all_commented = lines
-            .iter()
-            .filter(|l| !l.trim().is_empty())
-            .all(|l| l.trim_start().starts_with(token));
-        let indent = lines
-            .iter()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| l.chars().take_while(|c| c.is_whitespace()).count())
-            .min()
-            .unwrap_or(0);
-        let new: Vec<String> = lines
-            .iter()
-            .map(|l| {
-                if all_commented {
-                    let (ws, rest) = l.split_at(l.len() - l.trim_start().len());
-                    let rest = rest
-                        .strip_prefix(&lead)
-                        .or_else(|| rest.strip_prefix(token))
-                        .unwrap_or(rest);
-                    format!("{ws}{rest}")
-                } else if l.trim().is_empty() {
+        let new: Vec<String> = old
+            .split('\n')
+            .zip(first..)
+            .map(|(l, n)| {
+                if !done.insert(n) || l.trim().is_empty() {
                     l.to_string()
+                } else if uncomment {
+                    style.unwrap(l)
                 } else {
-                    let (ws, rest) = l.split_at(
-                        l.char_indices()
-                            .nth(indent)
-                            .map(|(i, _)| i)
-                            .unwrap_or(l.len()),
-                    );
-                    format!("{ws}{lead}{rest}")
+                    style.wrap(l, indent)
                 }
             })
             .collect();
@@ -1591,7 +1685,9 @@ impl Buffer {
         // stays put. With a selection the block stays selected.
         let col = self.col_of(self.cursor);
         let line = self.line_of(self.cursor);
-        self.apply(start, old, new, start, false, now);
+        if new != old {
+            self.apply(start, old, new, start, false, now);
+        }
         if had_selection {
             self.select_range(start..start + new_len);
             return;
@@ -2104,23 +2200,82 @@ mod tests {
     fn toggle_comment_adds_and_removes_the_token_at_the_shallowest_indent() {
         let mut b = Buffer::new("fn a() {\n    x();\n\n    y();\n}");
         b.select_range(9..27);
-        b.toggle_comment("//", 0.);
+        b.toggle_comment(SLASHES, 0.);
         assert_eq!(b.text(), "fn a() {\n    // x();\n\n    // y();\n}");
-        b.toggle_comment("//", 1.);
+        b.toggle_comment(SLASHES, 1.);
         assert_eq!(b.text(), "fn a() {\n    x();\n\n    y();\n}");
         // Without a selection the caret moves to the next line at the same
         // column (clamped to it), and stays on the last line.
         let mut b = Buffer::new("abcdef\nxy\nz");
         b.set_cursor(4);
-        b.toggle_comment("#", 0.);
+        b.toggle_comment(HASH, 0.);
         assert_eq!(b.text(), "# abcdef\nxy\nz");
         assert_eq!(b.cursor(), 9 + 2, "line 2, column 4 clamped to its length");
-        b.toggle_comment("#", 1.);
+        b.toggle_comment(HASH, 1.);
         assert_eq!(b.text(), "# abcdef\n# xy\nz");
         assert_eq!(b.line_of(b.cursor()), 2);
-        b.toggle_comment("#", 2.);
+        b.toggle_comment(HASH, 2.);
         assert_eq!(b.text(), "# abcdef\n# xy\n# z");
         assert_eq!(b.line_of(b.cursor()), 2, "the last line: stays");
+    }
+
+    const SLASHES: CommentStyle = CommentStyle::Line("//");
+    const HASH: CommentStyle = CommentStyle::Line("#");
+
+    #[test]
+    fn toggle_comment_wraps_each_line_in_a_pair_and_takes_it_off_again() {
+        let css = CommentStyle::Pair("/*", "*/");
+        let mut b = Buffer::new("a { color: red; }\n  b { }");
+        b.select_all();
+        b.toggle_comment(css, 0.);
+        assert_eq!(b.text(), "/* a { color: red; } */\n/*   b { } */");
+        b.toggle_comment(css, 1.);
+        assert_eq!(b.text(), "a { color: red; }\n  b { }");
+        let html = CommentStyle::Pair("<!--", "-->");
+        let mut b = Buffer::new("  <p>hi</p>");
+        b.set_cursor(0);
+        b.toggle_comment(html, 0.);
+        assert_eq!(b.text(), "  <!-- <p>hi</p> -->");
+        b.set_cursor(0);
+        b.toggle_comment(html, 1.);
+        assert_eq!(b.text(), "  <p>hi</p>");
+        // An opener alone is not a commented line: it gets wrapped.
+        assert!(!css.wraps("/* open"));
+        assert!(!css.wraps("/*/"));
+    }
+
+    #[test]
+    fn toggle_comment_runs_at_every_cursor_as_one_undo_step() {
+        let mut b = Buffer::new("a\nb\nc\nd");
+        b.set_cursor(0);
+        b.add_cursor_at(4); // line 3
+        b.add_cursor_at(6); // line 4
+        b.toggle_comment(SLASHES, 0.);
+        assert_eq!(b.text(), "// a\nb\n// c\n// d");
+        b.undo();
+        assert_eq!(b.text(), "a\nb\nc\nd");
+        // One already commented: the set is commented, as one block is.
+        let mut b = Buffer::new("// a\nb");
+        b.set_cursor(0);
+        b.add_cursor_at(5);
+        b.toggle_comment(SLASHES, 0.);
+        assert_eq!(b.text(), "// // a\n// b");
+    }
+
+    #[test]
+    fn toggle_comment_toggles_a_line_two_selections_share_once() {
+        let mut b = Buffer::new("one\ntwo\nthree");
+        // "one\ntw" and "wo\nthr": both touch "two".
+        b.select_range(0..6);
+        b.extra.push(CursorState {
+            cursor: 11,
+            anchor: Some(5),
+            goal_col: None,
+        });
+        b.toggle_comment(HASH, 0.);
+        assert_eq!(b.text(), "# one\n# two\n# three");
+        b.toggle_comment(HASH, 1.);
+        assert_eq!(b.text(), "one\ntwo\nthree");
     }
 
     #[test]

@@ -28,6 +28,9 @@ pub enum Source {
     MoveTo,
     /// `group.moveToWorkspace`: the same rows, for the focused card's group.
     MoveGroupTo,
+    /// `workspace.openSaved` (#715): the workspaces saved under a name; a
+    /// pick opens it as a new workspace.
+    SavedWorkspaces,
     /// `window.color` (#157, #160): named colours previewed live, then a hex code.
     WindowColor,
     /// `uitheme.pick` (#511): the files in `ui-themes/`, previewed live like
@@ -76,6 +79,7 @@ impl Source {
             Source::Snippets => "snippets",
             Source::MoveTo => "moveTo",
             Source::MoveGroupTo => "moveGroupTo",
+            Source::SavedWorkspaces => "savedWorkspaces",
             Source::WindowColor => "windowColor",
             Source::UiThemes => "uiThemes",
             Source::MoveTab => "moveTab",
@@ -143,6 +147,7 @@ impl Source {
             Source::Snippets => "Paste a snippet…",
             Source::MoveTo => "Move to workspace…",
             Source::MoveGroupTo => "Move the group to workspace…",
+            Source::SavedWorkspaces => "Open a saved workspace…",
             Source::WindowColor => "Window colour…",
             Source::UiThemes => "Switch UI theme",
             Source::MoveTab => "Move the tab to card…",
@@ -345,6 +350,25 @@ impl Model {
             // can never be what you meant.
             Source::Commands => {
                 let mut chords: Vec<(&str, String)> = vec![];
+                // Opened from a locked editor, a chord its lock table claims
+                // is shown with the editor's command: Cmd+/ beside Toggle
+                // Comment (#697), not only the canvas's shortcuts panel.
+                let locked_editor = self
+                    .focused()
+                    .is_some_and(|c| c.locked && c.kind == crate::saved_layout::CardKind::Editor);
+                if locked_editor {
+                    for (chord, _) in &self.keymap {
+                        let Some(id) = crate::editor_keys::lock_override(chord) else {
+                            continue;
+                        };
+                        if chords.iter().any(|(i, _)| *i == id) {
+                            continue;
+                        }
+                        if let Some(shown) = self.shown_chord(chord) {
+                            chords.push((id, format_chord(&shown, self.modifier_labels())));
+                        }
+                    }
+                }
                 for (chord, id) in &self.keymap {
                     if chords.iter().any(|(i, _)| i == id) {
                         continue;
@@ -526,6 +550,17 @@ impl Model {
                 });
                 rows
             }
+            // The saved workspaces by name. Recency applies: the one you open
+            // every morning rises.
+            Source::SavedWorkspaces => self
+                .saved_workspace_names
+                .iter()
+                .map(|name| PaletteItem {
+                    id: name.clone(),
+                    label: name.clone(),
+                    hint: None,
+                })
+                .collect(),
             // Sizes as fractions of the default card, from the card's own
             // corner. A menu, in a fixed order: the splits' shapes first.
             Source::Sizes => SIZES

@@ -10,7 +10,7 @@
 //! is the whole of how one becomes a surface. CEF itself is started once
 //! in `main.rs`; `cef_running` says whether it is.
 use crate::browser_body::BrowserBody;
-use crate::tab_strip::StripStyle;
+use crate::tab_strip::strip_style;
 use crate::{now_ms, AppView};
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::ift::OpenPlan;
@@ -104,19 +104,25 @@ impl AppView {
         let card_bg = self.chrome.card_bg;
         let text = self.chrome.text;
         // The same `StripStyle` the editor's strip takes, so the two look
-        // and size alike under the app's UI typography.
-        let style = StripStyle {
-            bg: self.chrome.bar_bg,
-            border: self.chrome.bar_border,
-            active_bg: self.chrome.row_selected,
-            text_bright: self.chrome.text_bright,
-            text_muted: self.chrome.text_muted,
-            regular: self.chrome.typography.regular.clone(),
-            bold: self.chrome.typography.bold.clone(),
-            font_px: self.chrome.typography.font_size,
-        };
+        // and size alike under the app's UI typography and the theme's
+        // `cardTab.*` keys.
+        let style = strip_style(&self.chrome, &self.model.ui_theme.card_tab);
         let inactive_dim = self.model.config.ui.inactive_dim;
         let ui_scale = self.model.ui_scale as f32;
+        // A tab dropped in a strip (#682) becomes the model's move first,
+        // so the card below already carries the new order.
+        let ids: Vec<String> = self
+            .model
+            .cards
+            .iter()
+            .filter(|c| c.kind == CardKind::Browser)
+            .map(|c| c.id.clone())
+            .collect();
+        for id in ids {
+            if let Some((from, to)) = self.browser_for(&id).and_then(|b| b.tab_drop.take()) {
+                self.model.move_tab(&id, from, to);
+            }
+        }
         let cards: Vec<_> = self
             .model
             .cards
@@ -124,6 +130,11 @@ impl AppView {
             .filter(|c| c.kind == CardKind::Browser)
             .cloned()
             .collect();
+        for card in &cards {
+            if let Some(c) = self.model.card_mut(&card.id) {
+                c.tab_moves.clear();
+            }
+        }
         let mut opens: Vec<(String, String)> = vec![];
         let mut moved: Vec<(String, String)> = vec![];
         let mut titles: Vec<(String, String)> = vec![];
@@ -136,7 +147,8 @@ impl AppView {
                 h: card.rect.h,
             };
             let url = card.url.clone().unwrap_or_else(|| "about:blank".into());
-            if self.browser_for(&card.id).is_none() {
+            let fresh = self.browser_for(&card.id).is_none();
+            if fresh {
                 // A restored card arrives with every tab it was saved with,
                 // so the body is built holding all of them. `tab_diff` would
                 // rebuild it into the same shape a frame later anyway; doing
@@ -160,6 +172,15 @@ impl AppView {
             body.protected = card.protected;
             body.ui_scale = ui_scale;
             body.zoom = card.zoom;
+
+            // Reorders first (#682): a moved tab keeps its surface, and the
+            // body then matches the card, so the write-back below has
+            // nothing to put back. A fresh body was built in the new order.
+            if !fresh {
+                for &(from, to) in &card.tab_moves {
+                    body.move_tab(from, to);
+                }
+            }
 
             // Tabs: the card's list of urls against the body's list of
             // surfaces, `tab_diff` saying what that means. A single-tab card

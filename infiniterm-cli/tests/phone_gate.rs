@@ -4,6 +4,10 @@
 //! exit 2 and a reason on stderr. The word table is tested in
 //! `infiniterm_core::phone`; this holds the real process to it, including the
 //! check that the first word is the ift the key was paired with.
+//!
+//! Unix only: `ift phone-gate` answers "not available on Windows" there, and
+//! sshd's forced command is not a Windows thing.
+#![cfg(unix)]
 
 use std::process::Command;
 

@@ -11,7 +11,7 @@
 //! save, find, go to line, the tree's three states.
 use crate::editor_body::{EditorBody, EditorEvent};
 use crate::editor_tabs::EditorTabs;
-use crate::tab_strip::StripStyle;
+use crate::tab_strip::strip_style;
 
 use crate::page_body::{PageBody, PageColors};
 use crate::transcript_body::{TranscriptBody, TranscriptColors};
@@ -68,18 +68,23 @@ impl AppView {
             &cfg.editor.cursor_color,
         );
         let rules = syntax_rules(self.chrome.theme.as_ref());
-        let style = StripStyle {
-            bg: self.chrome.bar_bg,
-            border: self.chrome.bar_border,
-            active_bg: self.chrome.row_selected,
-            text_bright: self.chrome.text_bright,
-            text_muted: self.chrome.text_muted,
-            regular: self.chrome.typography.regular.clone(),
-            bold: self.chrome.typography.bold.clone(),
-            font_px: self.chrome.typography.font_size,
-        };
+        let style = strip_style(&self.chrome, &self.model.ui_theme.card_tab);
         let ui_scale = self.model.ui_scale as f32;
         let now = crate::now_ms();
+        // A tab dropped in a strip (#682) becomes the model's move first,
+        // so the card below already carries the new order.
+        let ids: Vec<String> = self
+            .model
+            .cards
+            .iter()
+            .filter(|c| c.kind == CardKind::Editor)
+            .map(|c| c.id.clone())
+            .collect();
+        for id in ids {
+            if let Some((from, to)) = self.editor_tabs_for(&id).and_then(|t| t.tab_drop.take()) {
+                self.model.move_tab(&id, from, to);
+            }
+        }
         let cards: Vec<_> = self
             .model
             .cards
@@ -87,6 +92,11 @@ impl AppView {
             .filter(|c| c.kind.has_editor_body())
             .cloned()
             .collect();
+        for card in &cards {
+            if let Some(c) = self.model.card_mut(&card.id) {
+                c.tab_moves.clear();
+            }
+        }
         let mut locks: Vec<(String, bool)> = vec![];
         let mut lines_taken: Vec<String> = vec![];
         for card in cards {
@@ -153,6 +163,11 @@ impl AppView {
                     }
                 }
             } else {
+                // Moves first, so each body is already at its handle's place
+                // and two untitled tabs keep their own text (#682).
+                for &(from, to) in &card.tab_moves {
+                    tabs.move_tab(from, to);
+                }
                 let handles: Vec<String> = if card.tabs.is_empty() {
                     vec![card.path.clone().unwrap_or_default()]
                 } else {
@@ -206,6 +221,10 @@ impl AppView {
             }
             body.blink = cfg.terminal.cursor_blink;
             body.highlight_line = cfg.editor.highlight_line;
+            if body.tree_icons != cfg.editor.explorer.icons {
+                body.tree_icons = cfg.editor.explorer.icons;
+                body.mark_dirty();
+            }
             body.complete_words = cfg.editor.complete_words;
             body.format_on_save = cfg.editor.format_on_save;
             body.lsp_enabled = cfg.editor.lsp.enabled;
@@ -613,6 +632,11 @@ impl AppView {
             EditorAction::Transform(t) => {
                 if let Some(body) = self.editor_for(card_id) {
                     body.apply_transform(t, now);
+                }
+            }
+            EditorAction::ToggleComment => {
+                if let Some(body) = self.editor_for(card_id) {
+                    body.toggle_comment(now);
                 }
             }
             EditorAction::ToggleExplorer => {

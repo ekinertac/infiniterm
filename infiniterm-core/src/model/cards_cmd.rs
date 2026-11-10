@@ -580,6 +580,31 @@ impl Model {
                     self.dirty_layout = true;
                 }
             }
+            // A name already saved asks first: Enter on the field saves under
+            // the workspace's own name, which is easy to do over a snapshot
+            // you meant to keep.
+            Pending::SaveWorkspaceAs(id) => {
+                let Some(name) = text else { return };
+                let taken = crate::saved_workspace::file_stem(&name).filter(|stem| {
+                    crate::saved_workspace::path(&crate::paths::saved_workspaces_dir(), stem)
+                        .is_some_and(|file| exists(&file.to_string_lossy()))
+                });
+                match taken {
+                    Some(stem) => {
+                        self.prompt.confirm(
+                            &format!("\"{stem}\" is already saved. Replace it?"),
+                            "Replace",
+                            Pending::ReplaceSavedWorkspace { id, name: stem },
+                        );
+                    }
+                    None => self.save_workspace_as(&id, &name),
+                }
+            }
+            Pending::ReplaceSavedWorkspace { id, name } => {
+                if text.is_some() {
+                    self.save_workspace_as(&id, &name);
+                }
+            }
             Pending::CloseWorkspace(id) => {
                 if text.is_some() {
                     self.close_workspace_confirmed(&id);
@@ -1380,6 +1405,9 @@ impl Model {
             Source::Grep => self.grep_pick(id),
             Source::MoveTo => self.move_selection_to(id),
             Source::MoveGroupTo => self.move_group_to(id),
+            Source::SavedWorkspaces => self
+                .effects
+                .push(Effect::LoadSavedWorkspace(id.to_string())),
             Source::WindowColor => self.window_color_run(id),
             Source::MoveTab | Source::MoveCardInto => {
                 let Some(from) = self.selection.focused_id.clone() else {
@@ -1810,6 +1838,11 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     });
     r.register("editor.format", "Editor: format document", |m| {
         m.editor_action(EditorAction::Format)
+    });
+    // Cmd+/ inside a locked editor (`editor_keys::lock_override`); on the
+    // canvas Cmd+/ stays the shortcuts panel.
+    r.register("editor.toggleComment", "Editor: Toggle Comment", |m| {
+        m.editor_action(EditorAction::ToggleComment)
     });
     for (id, label, t) in [
         (
