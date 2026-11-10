@@ -476,6 +476,7 @@ impl AppView {
                     card_id,
                     last,
                     scrollback,
+                    ansi,
                 } => {
                     // Answered by the poll timer after the card's pending
                     // output is parsed (`answer_reads`), not here: a window
@@ -485,6 +486,7 @@ impl AppView {
                         card_id,
                         last,
                         scrollback,
+                        ansi,
                     });
                 }
                 Effect::CliReply { id, ok, text } => {

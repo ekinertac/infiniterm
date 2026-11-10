@@ -117,9 +117,11 @@ ift — drive infiniterm from a shell
                              focus; the card is its number (#7) or its id;
                              keys: enter esc tab backspace ctrl-c ctrl-d
                              ctrl-l ctrl-z up down left right
-  ift read <card> [--lines N] [--all]
+  ift read <card> [--lines N] [--all] [--ansi]
                              print what a card's terminal shows (the last N
-                             lines of it; --all reaches into the history)
+                             lines of it; --all reaches into the history;
+                             --ansi keeps the screen's colours as escape
+                             sequences, and does not go with --all)
   ift focus <card>           go to a card as the palette does: show its
                              workspace, focus it and fit it; needs a running
                              app, and does not bring its window to the front

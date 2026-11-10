@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-10
+
+- `ift read <card> --ansi` prints what a card's terminal shows with its colours: every stretch of text starts with an escape sequence that carries its own colour, bold, italic and underline, so a script or a viewer can draw the screen as it looks. It reads the screen only, so it does not go with `--all`; `--lines N` works with it. Plain `ift read` is unchanged (#713).
+
 ## 0.6.12 (build 1466), 2026-11-09
 
 ### Cards and ift

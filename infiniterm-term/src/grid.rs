@@ -182,6 +182,76 @@ pub struct Frame {
     pub visual: bool,
 }
 
+impl Frame {
+    /// The rows as text with their colours, for `ift read --ansi`: what a
+    /// viewer that is not a terminal (the phone app's canvas) draws a card's
+    /// screen from. One line per row. Every run opens with ONE SGR sequence
+    /// that resets and then sets all of the run's own attributes, so a line
+    /// can be cut anywhere and each run still reads alone: `0`, then `1`
+    /// bold, `2` dim, `3` italic, `4` underline, `9` strikeout, the
+    /// foreground as `38;2;r;g;b` and a background the cell has of its own
+    /// as `48;2;r;g;b`. The colours are the resolved ones, so the reader
+    /// needs no palette. A line that has text ends with a reset. Blank cells
+    /// at the end of a row are dropped unless they carry a background, blank
+    /// rows at the end are dropped, and `last` keeps the final N lines, as
+    /// `Grid::text` does.
+    pub fn ansi(&self, last: Option<usize>) -> String {
+        let mut lines: Vec<String> = self.rows.iter().map(Row::ansi).collect();
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        if let Some(n) = last {
+            let from = lines.len().saturating_sub(n);
+            lines.drain(..from);
+        }
+        lines.join("\n")
+    }
+}
+
+impl Row {
+    /// One row of `Frame::ansi`.
+    fn ansi(&self) -> String {
+        use std::fmt::Write;
+        // Up to the last run that shows something: text, or a background.
+        let end = self
+            .runs
+            .iter()
+            .rposition(|r| r.bg.is_some() || !r.text.trim_end().is_empty())
+            .map_or(0, |i| i + 1);
+        let mut out = String::new();
+        for (i, run) in self.runs[..end].iter().enumerate() {
+            let text = if i + 1 == end && run.bg.is_none() {
+                run.text.trim_end()
+            } else {
+                run.text.as_str()
+            };
+            out.push_str("\x1b[0");
+            for (on, code) in [
+                (run.bold, ";1"),
+                (run.dim, ";2"),
+                (run.italic, ";3"),
+                (run.underline, ";4"),
+                (run.strikeout, ";9"),
+            ] {
+                if on {
+                    out.push_str(code);
+                }
+            }
+            let [r, g, b] = run.fg;
+            let _ = write!(out, ";38;2;{r};{g};{b}");
+            if let Some([r, g, b]) = run.bg {
+                let _ = write!(out, ";48;2;{r};{g};{b}");
+            }
+            out.push('m');
+            out.push_str(text);
+        }
+        if !out.is_empty() {
+            out.push_str("\x1b[0m");
+        }
+        out
+    }
+}
+
 /// How many cells short of the width a row may end and still count as
 /// wrapped by the program (`selection_text`): a word-wrap leaves at most
 /// the word that did not fit, and twelve covers most English words.
@@ -1053,6 +1123,33 @@ mod tests {
         h.advance(b"only");
         assert_eq!(h.text(None, true), "only");
         assert_eq!(Grid::new(20, 3, 100).text(None, true), "");
+    }
+
+    // `ift read --ansi`: every run opens with a reset and its own colours,
+    // so a reader needs neither a palette nor the runs before it. Blank
+    // cells at a row's end go, a background keeps them, blank rows at the
+    // end go, and `last` counts lines from the end.
+    #[test]
+    fn ansi_is_the_rows_with_each_runs_colours() {
+        let p = Palette::default_palette();
+        let [r, g, b] = p.foreground;
+        let plain = format!("\x1b[0;38;2;{r};{g};{b}m");
+        let mut grid = Grid::new(20, 4, 100);
+        grid.advance(b"\x1b[38;2;1;2;3mred\x1b[0m plain\r\n");
+        grid.advance(b"\x1b[3;4;38;2;4;5;6mx\x1b[0m \x1b[48;2;9;8;7m  \x1b[0m   \r\nlast");
+        let frame = grid.frame(&p);
+        // The blank after "red" is in red's run: the grid keeps a blank with
+        // the run before it when nothing about it would show.
+        assert_eq!(
+            frame.ansi(None),
+            format!(
+                "\x1b[0;38;2;1;2;3mred {plain}plain\x1b[0m\n\
+                 \x1b[0;3;4;38;2;4;5;6mx{plain} \x1b[0;38;2;{r};{g};{b};48;2;9;8;7m  \x1b[0m\n\
+                 {plain}last\x1b[0m"
+            )
+        );
+        assert_eq!(frame.ansi(Some(1)), format!("{plain}last\x1b[0m"));
+        assert_eq!(Grid::new(20, 3, 100).frame(&p).ansi(None), "");
     }
 
     // The shell's selection comes as OSC 52 "s" and is not the clipboard.

@@ -276,16 +276,30 @@ pub fn parse_send(args: &[String]) -> Result<(String, Vec<u8>), String> {
     Ok((card.clone(), bytes))
 }
 
-/// `ift read <card> [--lines N] [--all]`: the card, how many of the last
-/// lines (none: the whole screen), and whether to reach into the history.
-pub fn parse_read(args: &[String]) -> Result<(String, Option<usize>, bool), String> {
+/// What `ift read` asked for: the card, how many of the last lines (none:
+/// the whole screen), whether to reach into the history, and whether the
+/// text carries its colours as escape sequences.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReadArgs {
+    pub card: String,
+    pub last: Option<usize>,
+    pub scrollback: bool,
+    pub ansi: bool,
+}
+
+/// `ift read <card> [--lines N] [--all] [--ansi]`. `--ansi` is the screen
+/// as it is painted, and the painted rows are only the ones in view, so it
+/// does not go with `--all`.
+pub fn parse_read(args: &[String]) -> Result<ReadArgs, String> {
     let card = args.first().ok_or("read takes a card")?;
     let mut last = None;
     let mut scrollback = false;
+    let mut ansi = false;
     let mut it = args[1..].iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--all" => scrollback = true,
+            "--ansi" => ansi = true,
             "--lines" => {
                 let n = it.next().ok_or("--lines takes a number")?;
                 last = Some(n.parse().map_err(|_| format!("not a number: {n}"))?);
@@ -293,7 +307,15 @@ pub fn parse_read(args: &[String]) -> Result<(String, Option<usize>, bool), Stri
             other => return Err(format!("unknown option {other}")),
         }
     }
-    Ok((card.clone(), last, scrollback))
+    if ansi && scrollback {
+        return Err("--ansi reads the screen only: it does not go with --all".into());
+    }
+    Ok(ReadArgs {
+        card: card.clone(),
+        last,
+        scrollback,
+        ansi,
+    })
 }
 
 /// `ift ls --agents`: one line per card that has an agent, for scripts that
@@ -778,14 +800,39 @@ mod tests {
 
     #[test]
     fn read_takes_a_card_a_line_count_and_all() {
-        assert_eq!(parse_read(&v(&["3"])).unwrap(), ("3".into(), None, false));
+        let read = |card: &str, last, scrollback, ansi| ReadArgs {
+            card: card.into(),
+            last,
+            scrollback,
+            ansi,
+        };
+        assert_eq!(
+            parse_read(&v(&["3"])).unwrap(),
+            read("3", None, false, false)
+        );
         assert_eq!(
             parse_read(&v(&["3", "--lines", "20", "--all"])).unwrap(),
-            ("3".into(), Some(20), true)
+            read("3", Some(20), true, false)
         );
         assert!(parse_read(&v(&[])).is_err());
         assert!(parse_read(&v(&["3", "--lines", "x"])).is_err());
         assert!(parse_read(&v(&["3", "--what"])).is_err());
+    }
+
+    // The colours are those of the painted rows, and only the screen is
+    // painted: with the history there is nothing to take them from.
+    #[test]
+    fn read_with_colours_is_the_screen_only() {
+        assert_eq!(
+            parse_read(&v(&["3", "--ansi", "--lines", "4"])).unwrap(),
+            ReadArgs {
+                card: "3".into(),
+                last: Some(4),
+                scrollback: false,
+                ansi: true,
+            }
+        );
+        assert!(parse_read(&v(&["3", "--ansi", "--all"])).is_err());
     }
 
     #[test]
