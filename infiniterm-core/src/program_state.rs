@@ -11,6 +11,10 @@
 //! - OSC 9;4, progress a program reports itself: 1 or 3 running, 2 error,
 //!   4 paused, 0 cleared (2 is failed, 4 waiting). And OSC 9 / 777 / 99
 //!   notifications, a program asking for you (waiting).
+//! - OSC 7, the shell's directory (`Signal::Cwd`): not a state at all, but it
+//!   rides the same scan. It is how a Windows card learns its directory
+//!   (`inspect.rs` cannot read it from outside the process), and a report
+//!   from another machine (a shell over ssh) is ignored.
 //!
 //! The rules, and why:
 //! - A command must run `LONG_MS` before it shows as working, and only a
@@ -62,6 +66,54 @@ pub enum Signal {
     Notify,
     /// The alternate screen entered (true) or left.
     AltScreen(bool),
+    /// OSC 7: the shell says where it is, as `file://host/path`. `path` is
+    /// decoded and in this machine's spelling (`C:\Users\me` for a Windows
+    /// drive); `host` is what the shell said, for the caller to compare.
+    Cwd { host: String, path: String },
+}
+
+/// Whether an OSC 7 host is this machine: empty, `localhost`, or the
+/// machine's own name (`machine`, from the environment). A shell that is
+/// running over ssh reports ITS machine, and a card must not take a
+/// directory that does not exist here.
+pub fn is_local_host(host: &str, machine: Option<&str>) -> bool {
+    host.is_empty()
+        || host.eq_ignore_ascii_case("localhost")
+        || machine.is_some_and(|m| !m.is_empty() && host.eq_ignore_ascii_case(m))
+}
+
+fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// The payload of OSC 7 after its `7;`.
+fn parse_cwd_report(rest: &str) -> Option<Signal> {
+    let after = rest.strip_prefix("file://")?;
+    let (host, raw) = after.split_at(after.find('/')?);
+    let path = percent_decode(raw)?;
+    // `file:///C:/Users/me`: the slash before the drive letter belongs to the
+    // URL, and the rest is a Windows path.
+    let path = match path.as_bytes() {
+        [b'/', d, b':', ..] if d.is_ascii_alphabetic() => path[1..].replace('/', "\\"),
+        _ => path,
+    };
+    Some(Signal::Cwd {
+        host: host.to_string(),
+        path,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -160,6 +212,9 @@ fn parse_osc(p: &[u8]) -> Option<Signal> {
             )),
             _ => None,
         };
+    }
+    if let Some(rest) = s.strip_prefix("7;") {
+        return parse_cwd_report(rest);
     }
     if let Some(rest) = s.strip_prefix("9;4;") {
         return rest.split(';').next()?.parse().ok().map(Signal::Progress);
@@ -315,6 +370,43 @@ mod tests {
                 Signal::Notify,
             ]
         );
+    }
+
+    #[test]
+    fn an_osc_7_report_is_the_shells_directory_decoded_and_in_this_machines_spelling() {
+        let mut s = Scanner::default();
+        let mut got = s.feed(b"\x1b]7;file://box/home/me/my%20dir\x07");
+        // A Windows drive, ST-terminated, split across two reads.
+        got.extend(s.feed(b"\x1b]7;file:///C:/Users/PC/a%20b"));
+        got.extend(s.feed(b"\x1b\\"));
+        // Not ours: a bad escape, and a URL that is not a file.
+        got.extend(s.feed(b"\x1b]7;file:///tmp/%zz\x07\x1b]7;https://x/y\x07"));
+        assert_eq!(
+            got,
+            [
+                Signal::Cwd {
+                    host: "box".into(),
+                    path: "/home/me/my dir".into()
+                },
+                Signal::Cwd {
+                    host: String::new(),
+                    path: r"C:\Users\PC\a b".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_host_is_this_machine_when_empty_localhost_or_its_own_name() {
+        assert!(is_local_host("", None));
+        assert!(is_local_host("LocalHost", None));
+        assert!(is_local_host("desktop-2ko6e5e", Some("DESKTOP-2KO6E5E")));
+        assert!(!is_local_host(
+            "server.example.com",
+            Some("DESKTOP-2KO6E5E")
+        ));
+        assert!(!is_local_host("server", None));
+        assert!(!is_local_host("server", Some("")));
     }
 
     #[test]

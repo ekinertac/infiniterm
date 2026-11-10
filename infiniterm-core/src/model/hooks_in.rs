@@ -157,7 +157,24 @@ impl Model {
         let track = &mut entry.1;
         let agent_card = card.agent_session.is_some();
         let mut lines = vec![];
+        let machine = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .ok();
         for sig in &signals {
+            // The shell's own report of where it is (OSC 7): the only way to
+            // know on Windows, where a process's directory cannot be read from
+            // outside. Not an agent signal, and one comes with every prompt,
+            // so it stays out of the log below.
+            if let crate::program_state::Signal::Cwd { host, path } = sig {
+                if crate::program_state::is_local_host(host, machine.as_deref())
+                    && !path.is_empty()
+                    && card.cwd != *path
+                {
+                    card.cwd = path.clone();
+                    self.dirty_layout = true;
+                }
+                continue;
+            }
             let before = card.agent;
             let ran = track.since.map(|t| (now - t) / 1000.);
             card.agent = track.apply(card.agent, agent_card, sig, now);
