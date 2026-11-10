@@ -1502,7 +1502,7 @@ impl AppView {
                     self.model.browser_tab_jump(id, index);
                 }
                 crate::body::TabClick::New => {
-                    self.model.browser_tab_open(id, None);
+                    self.model.tab_open_blank(id);
                 }
                 crate::body::TabClick::Close(index) => {
                     // Closes the CLICKED tab without moving the active one,

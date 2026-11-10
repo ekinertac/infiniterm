@@ -111,7 +111,15 @@ pub fn resolve_chord(m: &Model, chord: &str) -> Option<String> {
         && m.keymap.iter().any(|(c, id)| {
             c == chord && matches!(id.as_str(), "editor.goToFile" | "editor.findInFiles")
         });
+    // The emoji panel opens from a locked card too (#686): the picked emoji
+    // goes into the text, and without this the chord was the body's and did
+    // nothing. Whatever chord the keymap binds to it.
+    let opens_emoji = m
+        .keymap
+        .iter()
+        .any(|(c, id)| c == chord && id == "app.emoji");
     if locked
+        && !opens_emoji
         && !is_workspace_switch(chord)
         && !is_locked_carveout(chord, kind)
         && !leaves
@@ -3869,6 +3877,27 @@ mod tests {
         assert_eq!(h.focused().agent, None, "the next command clears it");
     }
 
+    // A long command in a card that once ran Claude Code: the saved session
+    // stays on the card, but the command owns the Working, so the tab keeps
+    // the program's icon. A hook during the command hands it back.
+    #[test]
+    fn a_long_command_in_a_former_agent_card_is_owned_by_the_command() {
+        use crate::agent_state::AgentState::*;
+        use crate::backend::{PaneEvent, PaneId};
+        let mut h = Harness::new();
+        let pane: PaneId = 7;
+        h.m.cards[0].pane_id = Some(pane);
+        h.m.cards[0].agent_session = Some("c0ffee".into());
+        let id = h.m.cards[0].id.clone();
+        let t0 = h.m.now_ms;
+        h.m.apply_pane_event(pane, &PaneEvent::Output(b"\x1b]133;C\x07".to_vec()));
+        h.m.tick(t0 + crate::program_state::LONG_MS);
+        assert_eq!(h.focused().agent, Working);
+        assert!(h.m.program_owns_state(&id));
+        h.m.programs.get_mut(&id).unwrap().1.hook();
+        assert!(!h.m.program_owns_state(&id), "the hooks own it now");
+    }
+
     // The keymap dispatches through the editor and browser exceptions.
     #[test]
     fn chords_dispatch_through_the_keymap_with_the_editor_and_browser_exceptions() {
@@ -4771,6 +4800,24 @@ mod tests {
         );
     }
 
+    // The emoji panel opens from a locked editor and a locked browser card
+    // (#686), so the emoji can land in the text.
+    #[test]
+    fn the_emoji_chord_opens_the_panel_from_a_locked_editor_and_browser() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        for kind in [CardKind::Editor, CardKind::Browser] {
+            h.m.cards[0].kind = kind;
+            h.m.cards[0].locked = true;
+            assert_eq!(
+                resolve_chord(&h.m, "cmd+ctrl+space").as_deref(),
+                Some("app.emoji"),
+                "{kind:?}"
+            );
+        }
+    }
+
     // A diff card is the editor's body in a read-only mode, so it locks the
     // editor's way (2026-10-20): the find, comment and undo chords are the
     // body's once locked, Cmd+F finds, and with no tabs Cmd+W closes the card
@@ -5120,6 +5167,28 @@ mod tests {
         let card = h.m.card(&id).unwrap();
         assert_eq!(card.tabs.len(), 2);
         assert_eq!(card.url.as_deref(), Some("https://b.example"));
+    }
+
+    // The strip's "+" is the mouse's Cmd+T: the same bar on a browser card,
+    // aimed at the card clicked even when another one holds the focus. An
+    // editor's blank tab is a buffer, so no bar there.
+    #[test]
+    fn the_strip_plus_opens_the_address_bar_on_a_browser_only() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].url = Some("https://a.example/one".into());
+        h.m.set_focus(None);
+        h.m.tab_open_blank(&id);
+        assert!(h.m.omni.open);
+        assert_eq!(h.m.omni.query, "");
+        assert_eq!(h.m.omni.target.as_deref(), Some(id.as_str()));
+        assert_eq!(h.m.card(&id).unwrap().tabs.len(), 2);
+
+        h.m.close_omnibox();
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.tab_open_blank(&id);
+        assert!(!h.m.omni.open);
     }
 
     #[test]
