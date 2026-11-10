@@ -30,6 +30,12 @@ pub const FALLBACK_KEY: &str = "default";
 /// agent is active, when the map has nothing for that agent's own name.
 pub const AGENT_KEY: &str = "agent";
 
+/// The `tab.iconMap` entries (and the built-in ones) for an editor card and a
+/// browser card (#706): neither runs a process, so without them the tab fell
+/// back to the shell's icon.
+pub const EDITOR_KEY: &str = "editor";
+pub const BROWSER_KEY: &str = "browser";
+
 /// What an icon is chosen for: the program in front of a card, or the coding
 /// agent working in it (`subject` decides which).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,8 +54,10 @@ pub enum Subject<'a> {
 /// case in a card that once ran an agent: its identity stays on the card
 /// (saved, never cleared), but the command in flight set the state, not a
 /// hook. A done or failed card has no active agent, so it wears its program
-/// again.
+/// again. An editor or browser card is its kind (`EDITOR_KEY`,
+/// `BROWSER_KEY`), looked up like a program so a theme maps it the same way.
 pub fn subject<'a>(
+    card: crate::saved_layout::CardKind,
     proc: Option<&'a str>,
     state: crate::agent_state::AgentState,
     kind: Option<&'a str>,
@@ -57,6 +65,12 @@ pub fn subject<'a>(
     program_owned: bool,
 ) -> Option<Subject<'a>> {
     use crate::agent_state::AgentState;
+    use crate::saved_layout::CardKind;
+    match card {
+        CardKind::Editor => return Some(Subject::Program(EDITOR_KEY)),
+        CardKind::Browser => return Some(Subject::Program(BROWSER_KEY)),
+        _ => {}
+    }
     match state {
         AgentState::Working | AgentState::Waiting
             if !program_owned && (kind.is_some() || session.is_some()) =>
@@ -128,6 +142,8 @@ const BUILT_IN: &[(&str, &str)] = &[
     ("codex", "\u{f06a9}"),
     ("opencode", "\u{f06a9}"),
     ("cursor-agent", "\u{f06a9}"),
+    (EDITOR_KEY, "\u{f016}"),
+    (BROWSER_KEY, "\u{f0ac}"),
     (FALLBACK_KEY, "\u{f120}"),
 ];
 
@@ -569,34 +585,78 @@ mod tests {
     #[test]
     fn an_active_agent_is_the_subject_and_any_other_state_is_the_program() {
         use crate::agent_state::AgentState as S;
+        use crate::saved_layout::CardKind::Terminal as T;
         for state in [S::Working, S::Waiting] {
             assert_eq!(
-                subject(Some("node"), state, None, Some("s"), false),
+                subject(T, Some("node"), state, None, Some("s"), false),
                 Some(Subject::Agent("claude")),
                 "no kind is Claude Code, whatever the process says"
             );
             assert_eq!(
-                subject(None, state, Some("codex"), None, false),
+                subject(T, None, state, Some("codex"), None, false),
                 Some(Subject::Agent("codex"))
             );
         }
         for state in [S::None, S::Done, S::Failed] {
             assert_eq!(
-                subject(Some("node"), state, Some("codex"), Some("s"), false),
+                subject(T, Some("node"), state, Some("codex"), Some("s"), false),
                 Some(Subject::Program("node"))
             );
         }
-        assert_eq!(subject(None, S::Done, None, None, false), None);
+        assert_eq!(subject(T, None, S::Done, None, None, false), None);
         // A long command is Working with no agent identity: it keeps its program.
         assert_eq!(
-            subject(Some("ruby"), S::Working, None, None, false),
+            subject(T, Some("ruby"), S::Working, None, None, false),
             Some(Subject::Program("ruby"))
         );
         // The same command in a card that once ran Claude Code: the session
         // is still on the card, but the command set the state.
         assert_eq!(
-            subject(Some("ruby"), S::Working, None, Some("s"), true),
+            subject(T, Some("ruby"), S::Working, None, Some("s"), true),
             Some(Subject::Program("ruby"))
+        );
+    }
+
+    #[test]
+    fn an_editor_card_wears_a_file_and_a_browser_card_a_globe() {
+        use crate::agent_state::AgentState as S;
+        use crate::saved_layout::CardKind as K;
+        let glyph = |s: &str| Icon::Glyph(s.to_string());
+        let empty = BTreeMap::new();
+        let icon = |card| {
+            let s = subject(card, None, S::None, None, None, false).unwrap();
+            choose_subject(s, IconStyle::Glyph, &empty, &none)
+        };
+        assert_eq!(icon(K::Editor), glyph("\u{f016}"));
+        assert_eq!(icon(K::Browser), glyph("\u{f0ac}"));
+        // The kind wins over anything a terminal field might still hold.
+        assert_eq!(
+            subject(
+                K::Editor,
+                Some("zsh"),
+                S::Working,
+                Some("codex"),
+                None,
+                false
+            ),
+            Some(Subject::Program(EDITOR_KEY))
+        );
+        // A theme maps them like a program, and a logo file of the same name
+        // is used in the image style.
+        let m = map(&[("editor", "E")]);
+        assert_eq!(
+            choose_subject(Subject::Program(EDITOR_KEY), IconStyle::Glyph, &m, &none),
+            glyph("E")
+        );
+        let only = |f: &str| f == "browser.svg";
+        assert_eq!(
+            choose_subject(
+                Subject::Program(BROWSER_KEY),
+                IconStyle::Image,
+                &empty,
+                &only
+            ),
+            Icon::File("browser.svg".into())
         );
     }
 
