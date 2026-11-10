@@ -2,7 +2,7 @@
 //! with its shell running, because an inactive workspace is a card scrolled
 //! off screen, just further off. Port of `commands/workspaces.ts`.
 use super::palette_state::Source;
-use super::{Model, NewCard, Pending};
+use super::{Effect, Model, NewCard, Pending};
 use crate::workspaces::{after_closing, step_workspace};
 
 /// The `MoveTo` row that makes a workspace to move into. Not a workspace
@@ -212,6 +212,21 @@ impl Model {
         self.dirty_layout = true;
     }
 
+    /// The answered half of `workspace.saveAs` (#715): workspace `id` goes
+    /// to a file under `name`, over one already saved under it.
+    pub fn save_workspace_as(&mut self, id: &str, name: &str) {
+        let Some(stem) = crate::saved_workspace::file_stem(name) else {
+            self.notify("a saved workspace needs a name");
+            return;
+        };
+        let Some(text) = self.workspace_snapshot_text(id, &stem) else {
+            return;
+        };
+        self.notify(format!("saved workspace \"{stem}\""));
+        self.effects
+            .push(Effect::SaveWorkspaceFile { name: stem, text });
+    }
+
     fn workspace_ids(&self) -> Vec<String> {
         self.workspaces.iter().map(|w| w.id.clone()).collect()
     }
@@ -307,6 +322,25 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         };
         m.prompt
             .ask("workspace name", &ws.name, Pending::RenameWorkspace(ws.id));
+    });
+    // A workspace kept under a name (#715): its cards where they are, each
+    // terminal's directory, each editor's files, each browser's page. The
+    // field starts on the workspace's own name, so Enter saves under it, and
+    // again later saves over it.
+    r.register("workspace.saveAs", "Workspace: save as…", |m| {
+        let Some(ws) = m.active_ws().cloned() else {
+            return;
+        };
+        m.prompt.ask(
+            "save workspace as",
+            &ws.name,
+            Pending::SaveWorkspaceAs(ws.id),
+        );
+    });
+    // Always a new workspace: opening one twice gives two.
+    r.register("workspace.openSaved", "Workspace: open saved…", |m| {
+        m.effects.push(Effect::RefreshSavedWorkspaces);
+        m.open_palette(Source::SavedWorkspaces);
     });
     // The last workspace stays. Asked first, because this is the one key
     // that kills several shells at once; an empty workspace goes unasked.

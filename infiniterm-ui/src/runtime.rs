@@ -551,6 +551,29 @@ impl AppView {
                 Effect::AskHostConfig { keybindings } => self.ask_host_config(keybindings),
                 Effect::RefreshThemes => self.refresh_themes(),
                 Effect::RefreshSnippets => self.refresh_snippets(),
+                // The workspaces saved under a name (#715): the model makes
+                // and reads the text, this moves the bytes.
+                Effect::SaveWorkspaceFile { name, text } => {
+                    let dir = infiniterm_core::paths::saved_workspaces_dir();
+                    if let Err(e) = infiniterm_core::saved_workspace::write(&dir, &name, &text) {
+                        self.model
+                            .notify(format!("could not save workspace \"{name}\""));
+                        eprintln!("[infiniterm] could not save workspace {name}: {e}");
+                    }
+                }
+                Effect::RefreshSavedWorkspaces => {
+                    self.model.saved_workspace_names = infiniterm_core::saved_workspace::list(
+                        &infiniterm_core::paths::saved_workspaces_dir(),
+                    );
+                }
+                Effect::LoadSavedWorkspace(name) => {
+                    let text = infiniterm_core::saved_workspace::read(
+                        &infiniterm_core::paths::saved_workspaces_dir(),
+                        &name,
+                    );
+                    self.model.open_saved_workspace(&name, text.as_deref());
+                    self.redraw = true;
+                }
                 Effect::PasteText { card_id, text } => self.paste_text(&card_id, &text),
                 // The right-click menu's terminal acts (#278). The clipboard is
                 // read in the poll task, where there is an app context.

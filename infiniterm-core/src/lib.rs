@@ -123,6 +123,7 @@ pub mod prompt;
 pub mod quick_files;
 pub mod reading;
 pub mod saved_layout;
+pub mod saved_workspace;
 pub mod schema;
 pub mod schema_store;
 pub mod scroll_nav;

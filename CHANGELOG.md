@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-10
+
+- A workspace can be saved under a name and opened again later. "Workspace: save as…" in the command palette keeps the workspace you are on: its cards where they are, each terminal's directory, each editor's open files, each browser's page, and its groups. "Workspace: open saved…" lists what you saved and opens the one you pick as a new workspace, each terminal a fresh shell in its directory. Saving under a name you already used replaces that one; opening the same one twice gives two workspaces.
+
 ## 0.6.12 (build 1466), 2026-11-09
 
 ### Cards and ift

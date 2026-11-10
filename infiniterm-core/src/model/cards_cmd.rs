@@ -580,6 +580,11 @@ impl Model {
                     self.dirty_layout = true;
                 }
             }
+            Pending::SaveWorkspaceAs(id) => {
+                if let Some(name) = text {
+                    self.save_workspace_as(&id, &name);
+                }
+            }
             Pending::CloseWorkspace(id) => {
                 if text.is_some() {
                     self.close_workspace_confirmed(&id);
@@ -1380,6 +1385,9 @@ impl Model {
             Source::Grep => self.grep_pick(id),
             Source::MoveTo => self.move_selection_to(id),
             Source::MoveGroupTo => self.move_group_to(id),
+            Source::SavedWorkspaces => self
+                .effects
+                .push(Effect::LoadSavedWorkspace(id.to_string())),
             Source::WindowColor => self.window_color_run(id),
             Source::MoveTab | Source::MoveCardInto => {
                 let Some(from) = self.selection.focused_id.clone() else {
