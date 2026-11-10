@@ -62,10 +62,6 @@ mod native_menu;
 mod not_macos;
 #[cfg(not(target_os = "macos"))]
 use not_macos::{finder_service, fullscreen, icon_font, instance_icon, title_drag};
-// Off macOS the card menus are drawn (`menu_view.rs`); only the browser
-// page's own menu still asks for the native one.
-#[cfg(all(not(target_os = "macos"), feature = "browser"))]
-use not_macos::native_menu;
 mod omnibox;
 mod overlays;
 mod own_window;

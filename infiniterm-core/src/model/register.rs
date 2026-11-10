@@ -5169,6 +5169,28 @@ mod tests {
         assert_eq!(card.url.as_deref(), Some("https://b.example"));
     }
 
+    // The strip's "+" is the mouse's Cmd+T: the same bar on a browser card,
+    // aimed at the card clicked even when another one holds the focus. An
+    // editor's blank tab is a buffer, so no bar there.
+    #[test]
+    fn the_strip_plus_opens_the_address_bar_on_a_browser_only() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.cards[0].kind = CardKind::Browser;
+        h.m.cards[0].url = Some("https://a.example/one".into());
+        h.m.set_focus(None);
+        h.m.tab_open_blank(&id);
+        assert!(h.m.omni.open);
+        assert_eq!(h.m.omni.query, "");
+        assert_eq!(h.m.omni.target.as_deref(), Some(id.as_str()));
+        assert_eq!(h.m.card(&id).unwrap().tabs.len(), 2);
+
+        h.m.close_omnibox();
+        h.m.cards[0].kind = CardKind::Editor;
+        h.m.tab_open_blank(&id);
+        assert!(!h.m.omni.open);
+    }
+
     #[test]
     fn the_zoom_chords_zoom_a_browser_page_locked_or_not() {
         for locked in [false, true] {
@@ -5457,7 +5479,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("my site")).unwrap();
         std::fs::write(dir.join("my site").join("index.html"), "<p>hi</p>").unwrap();
-        let real = std::fs::canonicalize(&dir).unwrap();
+        // Without the verbatim `\\?\` prefix `canonicalize` gives on Windows:
+        // a folder the shell reports is `C:\...`, and a `/` joined after the
+        // prefix is not a separator there.
+        let real = std::path::PathBuf::from(
+            std::fs::canonicalize(&dir)
+                .unwrap()
+                .to_string_lossy()
+                .trim_start_matches(r"\\?\"),
+        );
         let mut h = Harness::new();
         let id = h.focused().id.clone();
         h.m.card_mut(&id).unwrap().cwd = real.to_string_lossy().into_owned();
@@ -5469,12 +5499,18 @@ mod tests {
         };
 
         // An absolute path with a space in it.
-        let abs = format!("{}/my site/index.html", real.display());
+        // Joined as a path: after the verbatim `\\?\` prefix Windows takes no
+        // `/` as a separator.
+        let abs = real
+            .join("my site")
+            .join("index.html")
+            .to_string_lossy()
+            .into_owned();
         let r = top(&mut h.m, &abs);
         assert_eq!(r.subtitle.as_deref(), Some("Open file"));
         assert_eq!(
             r.action,
-            OmniAction::Navigate(format!("file://{}/my%20site/index.html", real.display()))
+            OmniAction::Navigate(crate::omni::address::file_url(&abs))
         );
         // `~` is the home folder; a relative name reads from the focused
         // terminal's folder.

@@ -352,7 +352,7 @@ impl FileSource for LocalSource {
 
     fn list(&self, path: &str) -> Result<Vec<ListEntry>, FileError> {
         let full = expand(path)?;
-        // `dir_list` is the one rule for a folder: sorted, `.git` left out,
+        // `dir_list` is the one rule for a folder: sorted, `.git` and `.DS_Store` left out,
         // a link to a folder is a folder.
         let entries = crate::files::dir_list(&full.to_string_lossy()).map_err(|e| {
             let code = if full.is_file() {
