@@ -88,6 +88,12 @@ pub struct Card {
     /// `browser.tab.reopenClosed`. Runtime-only: closed tabs do not
     /// survive a restart.
     pub closed_tabs: Vec<String>,
+    /// Tab moves (`from`, `to`) since the ui last looked, oldest first
+    /// (`Model::move_tab`, #682). The bodies hold each tab's live state and
+    /// match it to `tabs` by handle, which cannot tell two untitled buffers
+    /// (or two tabs on one url) apart, so a reorder is handed over as the
+    /// move itself. Drained by `editors.rs` and `browsers.rs`. Runtime-only.
+    pub tab_moves: Vec<(usize, usize)>,
     /// Whether this browser card's keyboard is locked to the page (real
     /// Chrome shortcuts) rather than the app's. Mirrored from
     /// `BrowserBody`'s own focus state every frame (`browsers.rs`); never
@@ -1493,6 +1499,7 @@ impl Model {
             tabs: vec![],
             active_tab: 0,
             closed_tabs: vec![],
+            tab_moves: vec![],
             locked: false,
             command: opts.command,
             transcript_path: None,
