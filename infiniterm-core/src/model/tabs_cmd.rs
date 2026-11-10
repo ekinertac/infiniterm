@@ -99,6 +99,22 @@ impl Model {
         self.dirty_layout = true;
     }
 
+    /// A blank tab from Cmd+T or the strip's "+": the address bar opens on a
+    /// browser's, since a blank page with no way to type is a dead end. An
+    /// editor's blank tab is a buffer to type into, so it gets no bar.
+    pub fn tab_open_blank(&mut self, card_id: &str) {
+        self.browser_tab_open(card_id, None);
+        if self
+            .card(card_id)
+            .is_some_and(|c| c.kind == CardKind::Browser)
+        {
+            self.open_omnibox();
+            // The "+" is clicked on a card, not on the focus: the bar edits
+            // the card that grew the tab.
+            self.omni.target = Some(card_id.to_string());
+        }
+    }
+
     /// Opens `path` as a tab of an editor card (`ift -t`, #265). `target` is a
     /// card number or id; without one it is the focused editor card, and when
     /// none is focused the file opens in a card of its own, as `ift <file>`
@@ -437,11 +453,7 @@ fn with_focused_browser(m: &mut Model, f: impl FnOnce(&mut Model, String)) {
 
 pub fn register(r: &mut CommandRegistry<Model>) {
     r.register("browser.tab.new", "Browser: new tab…", |m| {
-        // A blank tab is no use to look at: the address bar opens on it.
-        with_focused_browser(m, |m, id| {
-            m.browser_tab_open(&id, None);
-            m.open_omnibox();
-        });
+        with_focused_browser(m, |m, id| m.tab_open_blank(&id));
     });
     r.register("browser.tab.close", "Browser: close tab", |m| {
         with_focused_browser(m, |m, id| m.browser_tab_close(&id));

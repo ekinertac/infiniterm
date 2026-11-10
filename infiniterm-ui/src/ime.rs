@@ -55,10 +55,13 @@ impl AppView {
         } else if let Some(id) = self.model.selection.focused_id.clone() {
             // An editor you are not in takes no text, and the emoji panel
             // opens from it all the same (#686): say why nothing arrived.
-            if self.model.focused().is_some_and(|c| {
-                c.kind.has_editor_body() && !c.locked
-            }) {
-                self.model.notify("Click into the text first, then pick the emoji");
+            if self
+                .model
+                .focused()
+                .is_some_and(|c| c.kind.has_editor_body() && !c.locked)
+            {
+                self.model
+                    .notify("Click into the text first, then pick the emoji");
             }
             if let Some(body) = self.live_body(&id) {
                 body.insert_text(text);

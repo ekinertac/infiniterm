@@ -608,7 +608,13 @@ impl AppView {
                 .bodies
                 .get_mut(&r.card_id)
                 .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
-                .map(|t| t.grid.text(r.last, r.scrollback));
+                .map(|t| {
+                    if r.ansi {
+                        t.ansi_text(r.last)
+                    } else {
+                        t.grid.text(r.last, r.scrollback)
+                    }
+                });
             match text {
                 Some(text) => self.backend.cli.reply(r.request_id, true, text),
                 None => self.backend.cli.reply(
@@ -776,6 +782,8 @@ pub struct ReadRequest {
     pub card_id: String,
     pub last: Option<usize>,
     pub scrollback: bool,
+    /// The screen with its colours (`TerminalBody::ansi_text`), not plain text.
+    pub ansi: bool,
 }
 
 #[cfg(test)]

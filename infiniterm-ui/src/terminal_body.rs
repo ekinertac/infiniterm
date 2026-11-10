@@ -29,7 +29,7 @@ use gpui::{
 use infiniterm_core::backend::PaneId;
 use infiniterm_core::git_repo::Repo;
 use infiniterm_core::grid::{Point, Size};
-use infiniterm_core::ift::{open_plan, url_plan, PathKind};
+use infiniterm_core::ift::{open_plan, PathKind};
 use infiniterm_core::links::{find_links_in, merge_hyperlinks, Found, LinkKind};
 use infiniterm_core::links_fs::path_kinds;
 use infiniterm_term::grid::{CursorKind, Frame, Grid, SelectKind, TermEvent, SPACER};
@@ -451,6 +451,20 @@ impl TerminalBody {
         self.palette = palette;
         self.grid.set_palette_changed();
         self.dirty = true;
+    }
+
+    /// What the card shows with its colours, for `ift read --ansi`
+    /// (`Frame::ansi`). The rows are brought up to date the way a paint does
+    /// it, links included: `update_frame` takes the grid's damage, so a paint
+    /// after this one would otherwise skip the rows built here and leave
+    /// their links stale. A hidden window does not paint, and is read too.
+    pub fn ansi_text(&mut self, last: Option<usize>) -> String {
+        let mut frame = std::mem::take(&mut self.frame);
+        let rebuilt = self.grid.update_frame(&self.palette, &mut frame);
+        self.refresh_links(&frame, &rebuilt);
+        let text = frame.ansi(last);
+        self.frame = frame;
+        text
     }
 
     /// Metrics changed (a settings edit): the grid is re-counted, which the
@@ -1526,20 +1540,22 @@ impl CardBody for TerminalBody {
                         }
                     };
                 }
+                // A URL: a card or the system browser, decided where
+                // `terminal.reverseLinkClick` is (#662).
+                if f.kind == LinkKind::Url {
+                    return BodyAction::OpenLink {
+                        url: f.target,
+                        cwd: self.cwd.clone(),
+                        shift: modifiers.shift,
+                    };
+                }
                 if modifiers.shift {
-                    return match f.kind {
-                        LinkKind::Url => BodyAction::OpenExternal {
-                            url: Some(f.target),
-                            path: None,
-                        },
-                        LinkKind::Path => BodyAction::OpenExternal {
-                            url: None,
-                            path: Some((self.cwd.clone(), f.target)),
-                        },
+                    return BodyAction::OpenExternal {
+                        url: None,
+                        path: Some((self.cwd.clone(), f.target)),
                     };
                 }
                 return match (f.kind, kind) {
-                    (LinkKind::Url, _) => BodyAction::Open(url_plan(&f.target, &self.cwd)),
                     (LinkKind::Path, Some(kind)) => BodyAction::Open(open_plan(
                         &self.resolve_against(&f.target, &home),
                         kind,
