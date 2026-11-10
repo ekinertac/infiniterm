@@ -305,20 +305,23 @@ impl Model {
                     Err(e) => err(&e),
                 }
             }
-            // `ift read <card> [--lines N] [--all]`: what the card shows, or
-            // its history too. The ui builds the text, so the reply waits.
+            // `ift read <card> [--lines N] [--all] [--ansi]`: what the card
+            // shows, or its history too, or the screen with its colours. The
+            // ui builds the text, so the reply waits.
             "read" => {
-                let (target, last, scrollback) = match parse_read(&req.args) {
+                let read = match parse_read(&req.args) {
                     Ok(p) => p,
                     Err(e) => return err(&e),
                 };
+                let target = read.card;
                 match self.resolve_card_ref(&target) {
                     Some(id) if self.terminal_pane(&target).is_ok() => {
                         self.effects.push(Effect::ReadCard {
                             request_id: req.id,
                             card_id: id,
-                            last,
-                            scrollback,
+                            last: read.last,
+                            scrollback: read.scrollback,
+                            ansi: read.ansi,
                         });
                         self.reply_deferred = true;
                         ok(String::new())
@@ -664,7 +667,19 @@ mod tests {
         assert!(std::mem::take(&mut m.reply_deferred));
         assert!(m.effects.iter().any(|e| matches!(
             e,
-            Effect::ReadCard { request_id: 7, card_id, last: Some(5), scrollback: true } if *card_id == a
+            Effect::ReadCard { request_id: 7, card_id, last: Some(5), scrollback: true, ansi: false } if *card_id == a
+        )));
+        m.effects.clear();
+        assert!(ask(&mut m, "read", &[&number.to_string(), "--ansi"]).ok);
+        assert!(std::mem::take(&mut m.reply_deferred));
+        assert!(m.effects.iter().any(|e| matches!(
+            e,
+            Effect::ReadCard {
+                last: None,
+                scrollback: false,
+                ansi: true,
+                ..
+            }
         )));
         let r = ask(&mut m, "read", &[&b]);
         assert!(!r.ok, "a card with no shell cannot be read");

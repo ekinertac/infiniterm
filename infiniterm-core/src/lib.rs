@@ -39,6 +39,7 @@ pub mod multi_select;
 
 pub mod agent_state;
 pub mod help_docs;
+pub mod phone;
 pub mod program_state;
 pub mod push_notify;
 pub mod save_as;

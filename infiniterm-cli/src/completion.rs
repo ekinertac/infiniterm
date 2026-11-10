@@ -102,6 +102,7 @@ _ift() {
     'usage:the commands and gestures you used, and the ones you never did'
     'update:the app update state: ift update status'
     'push:give a phone push id to this Mac: add, remove, list'
+    'phone:pair a phone with this Mac: add, list, remove'
     'licence:register this Mac with its commercial licence key'
     'license:the same as licence'
     'update-key:make the key that signs Windows releases'
@@ -129,7 +130,7 @@ _ift() {
     join) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_hosts' ;;
     connect) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_hosts' ;;
     send) (( CURRENT == 3 )) && _ift_cards ;;
-    read) (( CURRENT == 3 )) && _ift_cards || _arguments '--lines[the last N lines only]:lines:' '--all[include the history]' ;;
+    read) (( CURRENT == 3 )) && _ift_cards || _arguments '--lines[the last N lines only]:lines:' '--all[include the history]' '--ansi[the screen with its colours]' ;;
     focus) (( CURRENT == 3 )) && _ift_cards ;;
     close) (( CURRENT == 3 )) && _ift_cards ;;
     run) (( CURRENT == 3 )) && _ift_command_ids ;;
@@ -147,6 +148,7 @@ _ift() {
     completion) _values 'shell' zsh ;;
     update) _values 'word' status ;;
     push) _values 'word' add remove list ;;
+    phone) _values 'word' add list remove ;;
     omni) _message 'a term for the omnibox' ;;
     name) _message 'a name for this card' ;;
   esac
