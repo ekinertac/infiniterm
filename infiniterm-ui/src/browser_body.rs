@@ -24,7 +24,7 @@
 //! Without CEF (the bare binary outside a bundle) the card says so and
 //! stays a rectangle, with one placeholder tab.
 use crate::body::{BodyAction, CardBody};
-use crate::tab_strip::{paint_strip, strip_hit, strip_world_h, StripStyle};
+use crate::tab_strip::{paint_strip, strip_hit, strip_world_h, StripStyle, TabDrag};
 use gpui::{
     fill, point, px, size, App, Bounds, CursorStyle, Hsla, Keystroke, Pixels, RenderImage, Window,
 };
@@ -161,6 +161,10 @@ pub struct BrowserBody {
     /// the first Escape.
     pub last_escape_ms: Option<f64>,
     left_down: bool,
+    /// A tab held by the pointer, from the press to the release (#682).
+    tab_drag: Option<TabDrag>,
+    /// A drop since `browsers.rs` last looked: (from, to) for `Model::move_tab`.
+    pub tab_drop: Option<(usize, usize)>,
     pub inactive_dim: f64,
     /// The card's number, mirrored from `card.number` by `reconcile_browsers`
     /// so the strip can paint it: the corner label used to carry this, and
@@ -243,6 +247,8 @@ impl BrowserBody {
             page_focused: false,
             last_escape_ms: None,
             left_down: false,
+            tab_drag: None,
+            tab_drop: None,
             inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             card_number: 0,
             protected: false,
@@ -329,6 +335,21 @@ impl BrowserBody {
             other => other,
         };
         self.apply_focus();
+        self.dirty = true;
+    }
+
+    /// Puts tab `from` at `to`, as `Model::move_tab` did to `card.tabs`
+    /// (#682): each surface goes with its tab, so no page reloads, and the
+    /// remembered indices follow their tabs. Out of range is a no-op.
+    pub fn move_tab(&mut self, from: usize, to: usize) {
+        if from >= self.tabs.len() || to >= self.tabs.len() || from == to {
+            return;
+        }
+        use infiniterm_core::model::tabs_cmd::index_after_move;
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.active = index_after_move(self.active, from, to);
+        self.focused_tab = self.focused_tab.map(|f| index_after_move(f, from, to));
         self.dirty = true;
     }
 
@@ -728,6 +749,7 @@ impl CardBody for BrowserBody {
             self.ui_scale,
             &labels,
             self.active,
+            self.tab_drag.as_ref(),
             self.card_number,
             self.protected,
             None,
@@ -799,7 +821,13 @@ impl CardBody for BrowserBody {
                 0.,
                 self.style.pad_x(),
             ) {
-                Some(hit) if button == gpui::MouseButton::Left => BodyAction::BrowserTab(hit),
+                Some(hit) if button == gpui::MouseButton::Left => {
+                    // The press switches; held and moved, it drags (#682).
+                    if let crate::body::TabClick::Switch(i) = hit {
+                        self.tab_drag = Some(TabDrag::new(i, local.x));
+                    }
+                    BodyAction::BrowserTab(hit)
+                }
                 // Middle-click closes a tab, as in every browser.
                 Some(crate::body::TabClick::Switch(i)) if button == gpui::MouseButton::Middle => {
                     BodyAction::BrowserTab(crate::body::TabClick::Close(i))
@@ -840,6 +868,11 @@ impl CardBody for BrowserBody {
     }
 
     fn mouse_up(&mut self, local: Point, button: gpui::MouseButton, modifiers: &gpui::Modifiers) {
+        if let Some(drag) = self.tab_drag.take() {
+            self.tab_drop = drag.drop(self.style.font_px, self.ui_scale, self.tabs.len());
+            self.dirty |= drag.moving;
+            return;
+        }
         let b = match button {
             gpui::MouseButton::Left => Button::Left,
             gpui::MouseButton::Middle => Button::Middle,
@@ -870,6 +903,12 @@ impl CardBody for BrowserBody {
     }
 
     fn mouse_move(&mut self, local: Point, modifiers: &gpui::Modifiers) {
+        if let Some(drag) = self.tab_drag.as_mut() {
+            if drag.moved(local.x, self.style.font_px, self.ui_scale) {
+                self.dirty = true;
+            }
+            return;
+        }
         let strip_h = strip_world_h(self.style.font_px, self.ui_scale);
         // A selection dragged up over the strip keeps extending, clamped to
         // the page's top the way `mouse_up` clamps the release.
@@ -927,7 +966,7 @@ impl CardBody for BrowserBody {
     }
 
     fn captures_drag(&self) -> bool {
-        self.left_down
+        self.left_down || self.tab_drag.is_some()
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

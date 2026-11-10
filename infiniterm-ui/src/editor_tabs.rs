@@ -22,10 +22,27 @@
 //! card's own id so a draft from before tabs is still found.
 use crate::body::{BodyAction, CardBody};
 use crate::editor_body::{EditorBody, EditorEvent};
-use crate::tab_strip::{paint_strip, strip_hit, strip_world_h, StripStyle};
+use crate::tab_strip::{paint_strip, strip_hit, strip_world_h, StripStyle, TabDrag};
 use crate::terminal_body::Metrics;
 use gpui::{point, size, App, Bounds, Keystroke, Pixels, Window};
 use infiniterm_core::grid::{Point, Size};
+
+/// The draft id of the tab at `index` of card `card_id`: the first tab keeps
+/// the card's own id, a file's is its path hashed, an untitled one counts
+/// `serial` up. A restore hands them out in tab order from a zero `serial`.
+fn draft_id(card_id: &str, index: usize, handle: &str, serial: &mut u64) -> String {
+    if index == 0 {
+        return card_id.to_string();
+    }
+    if handle.is_empty() {
+        *serial += 1;
+        return format!("{card_id}~untitled{serial}");
+    }
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    handle.hash(&mut h);
+    format!("{card_id}~{:x}", h.finish())
+}
 
 pub struct EditorTabs {
     pub card_id: String,
@@ -48,6 +65,10 @@ pub struct EditorTabs {
     /// with no tabs and no strip (`new_diff`): it takes the editor's lock and
     /// key routing from here, which is the point of hosting it.
     strip: bool,
+    /// A tab held by the pointer, from the press to the release (#682).
+    tab_drag: Option<TabDrag>,
+    /// A drop since `editors.rs` last looked: (from, to) for `Model::move_tab`.
+    pub tab_drop: Option<(usize, usize)>,
     /// Bounds of the last paint, for the strip's hit test.
     world: Size,
     dirty: bool,
@@ -115,6 +136,8 @@ impl EditorTabs {
             scratch_tab: true,
             style,
             strip: true,
+            tab_drag: None,
+            tab_drop: None,
             world,
             dirty: true,
             metrics: metrics.clone(),
@@ -163,17 +186,55 @@ impl EditorTabs {
 
     /// The draft id a tab's body keeps its unsaved text under.
     fn tab_draft_id(&mut self, index: usize, handle: &str) -> String {
-        if index == 0 {
-            return self.card_id.clone();
+        draft_id(&self.card_id, index, handle, &mut self.untitled_serial)
+    }
+
+    /// Puts tab `from` at `to`, as `Model::move_tab` did to `card.tabs`
+    /// (#682): each body goes with its tab, the active one stays active.
+    /// Out of range is a no-op, as for every index from the card.
+    pub fn move_tab(&mut self, from: usize, to: usize) {
+        if from >= self.tabs.len() || to >= self.tabs.len() || from == to {
+            return;
         }
-        if handle.is_empty() {
-            self.untitled_serial += 1;
-            return format!("{}~untitled{}", self.card_id, self.untitled_serial);
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.active = infiniterm_core::model::tabs_cmd::index_after_move(self.active, from, to);
+        self.rekey_drafts();
+        self.dirty = true;
+    }
+
+    /// A restored card finds each tab's draft by its PLACE (`draft_id`), so
+    /// after a move every draft goes under the id its tab's new place will
+    /// look for: else the next start would put one file's unsaved text in
+    /// another's tab. Read and cleared first, written after, so two tabs
+    /// trading ids cannot overwrite each other.
+    fn rekey_drafts(&mut self) {
+        let mut serial = 0;
+        let want: Vec<String> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, (h, _))| draft_id(&self.card_id, i, h, &mut serial))
+            .collect();
+        self.untitled_serial = self.untitled_serial.max(serial);
+        let mut moving = vec![];
+        for ((_, body), id) in self.tabs.iter_mut().zip(want) {
+            if body.card_id == id {
+                continue;
+            }
+            let text = infiniterm_core::files::draft_read(&body.card_id)
+                .ok()
+                .flatten();
+            let _ = infiniterm_core::files::draft_delete(&body.card_id);
+            body.card_id = id.clone();
+            moving.push((id, text));
         }
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        handle.hash(&mut h);
-        format!("{}~{:x}", self.card_id, h.finish())
+        for (id, text) in moving {
+            let _ = match text {
+                Some(t) => infiniterm_core::files::draft_write(&id, &t),
+                None => infiniterm_core::files::draft_delete(&id),
+            };
+        }
     }
 
     fn body_for(
@@ -402,6 +463,7 @@ impl CardBody for EditorTabs {
                 self.ui_scale,
                 &labels,
                 self.active,
+                self.tab_drag.as_ref(),
                 self.card_number,
                 self.protected,
                 header.as_ref().map(|(n, w)| (n.as_str(), *w)),
@@ -507,6 +569,10 @@ impl CardBody for EditorTabs {
     ) -> BodyAction {
         if let Some(hit) = self.strip.then(|| self.hit(local)).flatten() {
             if button == gpui::MouseButton::Left {
+                // The press switches; held and moved, it drags (#682).
+                if let crate::body::TabClick::Switch(i) = hit {
+                    self.tab_drag = Some(TabDrag::new(i, local.x));
+                }
                 return BodyAction::BrowserTab(hit);
             }
             // Middle-click closes a tab, as in every browser.
@@ -529,6 +595,12 @@ impl CardBody for EditorTabs {
     }
 
     fn mouse_up(&mut self, local: Point, button: gpui::MouseButton, modifiers: &gpui::Modifiers) {
+        if let Some(drag) = self.tab_drag.take() {
+            let n = self.labels().len();
+            self.tab_drop = drag.drop(self.style.font_px, self.ui_scale, n);
+            self.dirty |= drag.moving;
+            return;
+        }
         let below = self.below_strip(local);
         if let Some(b) = self.active_body() {
             b.mouse_up(below, button, modifiers);
@@ -536,6 +608,12 @@ impl CardBody for EditorTabs {
     }
 
     fn mouse_move(&mut self, local: Point, modifiers: &gpui::Modifiers) {
+        if let Some(drag) = self.tab_drag.as_mut() {
+            if drag.moved(local.x, self.style.font_px, self.ui_scale) {
+                self.dirty = true;
+            }
+            return;
+        }
         let below = self.below_strip(local);
         if let Some(b) = self.active_body() {
             b.mouse_move(below, modifiers);
@@ -560,7 +638,7 @@ impl CardBody for EditorTabs {
     }
 
     fn captures_drag(&self) -> bool {
-        self.active_body_ref().is_some_and(|b| b.captures_drag())
+        self.tab_drag.is_some() || self.active_body_ref().is_some_and(|b| b.captures_drag())
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
@@ -673,6 +751,35 @@ mod tests {
         assert_eq!(t.active_body().unwrap().buffer.text(), "");
         assert_eq!(t.labels(), vec!["b.txt •", "untitled", "untitled •"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A move (#682) carries each body with its tab, which handles alone
+    // cannot do for two untitled tabs; the active tab stays the same tab,
+    // and each draft id becomes the one a restart looks for at its place.
+    #[test]
+    fn a_moved_tab_takes_its_own_text_and_its_places_draft_id() {
+        let mut t = tabs();
+        t.rebuild_tabs(
+            &["/x/a.txt".into(), String::new(), String::new()],
+            2,
+            "/tmp",
+            0.,
+            false,
+        );
+        t.active_body().unwrap().buffer.insert("x", 0.);
+        let ids = |t: &EditorTabs| -> Vec<String> {
+            t.tabs.iter().map(|(_, b)| b.card_id.clone()).collect()
+        };
+        t.move_tab(2, 0);
+        assert_eq!(t.active, 0, "still on the tab with the x");
+        assert_eq!(t.active_body().unwrap().buffer.text(), "x");
+        assert_eq!(t.labels(), vec!["untitled •", "a.txt", "untitled"]);
+        assert_eq!(ids(&t)[0], "c1", "the first place is the card's own id");
+        let mut serial = 0;
+        assert_eq!(ids(&t)[1], draft_id("c1", 1, "/x/a.txt", &mut serial));
+        assert_eq!(ids(&t)[2], "c1~untitled1");
+        t.move_tab(0, 9);
+        assert_eq!(t.active, 0, "out of range is a no-op");
     }
 
     // A file changing on disk reaches a clean buffer through the idle

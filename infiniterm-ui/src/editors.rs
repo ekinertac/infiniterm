@@ -71,6 +71,20 @@ impl AppView {
         let style = strip_style(&self.chrome, &self.model.ui_theme.card_tab);
         let ui_scale = self.model.ui_scale as f32;
         let now = crate::now_ms();
+        // A tab dropped in a strip (#682) becomes the model's move first,
+        // so the card below already carries the new order.
+        let ids: Vec<String> = self
+            .model
+            .cards
+            .iter()
+            .filter(|c| c.kind == CardKind::Editor)
+            .map(|c| c.id.clone())
+            .collect();
+        for id in ids {
+            if let Some((from, to)) = self.editor_tabs_for(&id).and_then(|t| t.tab_drop.take()) {
+                self.model.move_tab(&id, from, to);
+            }
+        }
         let cards: Vec<_> = self
             .model
             .cards
@@ -78,6 +92,11 @@ impl AppView {
             .filter(|c| c.kind.has_editor_body())
             .cloned()
             .collect();
+        for card in &cards {
+            if let Some(c) = self.model.card_mut(&card.id) {
+                c.tab_moves.clear();
+            }
+        }
         let mut locks: Vec<(String, bool)> = vec![];
         let mut lines_taken: Vec<String> = vec![];
         for card in cards {
@@ -144,6 +163,11 @@ impl AppView {
                     }
                 }
             } else {
+                // Moves first, so each body is already at its handle's place
+                // and two untitled tabs keep their own text (#682).
+                for &(from, to) in &card.tab_moves {
+                    tabs.move_tab(from, to);
+                }
                 let handles: Vec<String> = if card.tabs.is_empty() {
                     vec![card.path.clone().unwrap_or_default()]
                 } else {
