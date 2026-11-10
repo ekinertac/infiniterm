@@ -288,6 +288,18 @@ pub enum Effect {
     /// Re-read the snippets folder into `Model::snippets`, seeding it when
     /// missing; before the snippet picker opens.
     RefreshSnippets,
+    /// Write a workspace's snapshot under `name` (#715): `text` is
+    /// `Model::workspace_snapshot_text`, the folder `saved_workspace.rs`'s.
+    SaveWorkspaceFile {
+        name: String,
+        text: String,
+    },
+    /// Re-list the saved workspaces into `Model::saved_workspace_names`;
+    /// before their picker opens.
+    RefreshSavedWorkspaces,
+    /// Read the saved workspace of this name and hand its text (`None`: no
+    /// such file) to `Model::open_saved_workspace`.
+    LoadSavedWorkspace(String),
     /// Paste `text` into the card's body as Cmd+V would: bracketed when the
     /// program asked for it, inserted at the caret in an editor.
     PasteText {
@@ -650,6 +662,14 @@ pub enum Pending {
     NameGroup(Vec<String>),
     RenameGroup(String),
     RenameWorkspace(String),
+    /// `workspace.saveAs` (#715): the name to save this workspace under.
+    SaveWorkspaceAs(String),
+    /// The name typed for `SaveWorkspaceAs` is already saved: yes writes
+    /// workspace `id` over it.
+    ReplaceSavedWorkspace {
+        id: String,
+        name: String,
+    },
     CloseWorkspace(String),
     /// A single browser card with more than one tab, asked before `Cmd+W`
     /// takes them all at once; `reclaim` carries `card.close`'s own meaning
@@ -1014,6 +1034,9 @@ pub struct Model {
     /// the snippets folder's files, read by the ui when the picker opens
     /// (`Effect::RefreshSnippets`), the way `theme_names` is.
     pub snippets: Vec<crate::snippets::Snippet>,
+    /// The saved workspaces' names (#715), read by the ui when their picker
+    /// opens (`Effect::RefreshSavedWorkspaces`).
+    pub saved_workspace_names: Vec<String>,
     /// The symbols Go to Symbol lists while its palette is up.
     pub symbols: Option<SymbolsState>,
     /// The files Go to File (Cmd+P) lists, read by the ui when it opens
@@ -1244,6 +1267,7 @@ impl Model {
             look_ui: default_config().ui,
             theme_names: vec![],
             snippets: vec![],
+            saved_workspace_names: vec![],
             symbols: None,
             quick_open: None,
             grep: None,
