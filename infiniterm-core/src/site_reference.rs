@@ -186,7 +186,7 @@ fn keys_page(commands: &[(String, String)]) -> String {
         .map(|c| kbd(&c))
         .collect();
     out.push_str(&format!(
-        "Inside a locked editor the text itself also keeps {}: find, find next and previous, replace, comment, the buffer's own undo and redo, and select to the line or file boundary.\n",
+        "Inside a locked editor the text itself also keeps {}: find, find next and previous, replace, the buffer's own undo and redo, and select to the line or file boundary.\n",
         kept.join(", ")
     ));
     out

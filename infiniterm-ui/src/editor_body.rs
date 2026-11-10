@@ -41,7 +41,7 @@ use infiniterm_core::git::git_show_head;
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::model::FindToggle;
 use infiniterm_core::words::{complete_words, unique_words, Other};
-use infiniterm_editor::buffer::Buffer;
+use infiniterm_editor::buffer::{Buffer, CommentStyle};
 use infiniterm_editor::diff::{gutter_marks, hunk_at, hunks, revert_hunk, GutterMark, Hunk};
 use infiniterm_editor::explorer::{Entry, Tree, TreeAction};
 use infiniterm_editor::highlight::{Highlighting, Span};
@@ -1501,6 +1501,19 @@ impl EditorBody {
         self.replace_transform_range(f, now);
     }
 
+    /// `editor.toggleComment` (#697): the lines under every cursor, in the
+    /// language's style; a file with no language gets `//`.
+    pub fn toggle_comment(&mut self, now: f64) {
+        if self.read_only {
+            return;
+        }
+        let style = self
+            .language
+            .map_or(CommentStyle::Line("//"), Language::comment_style);
+        self.buffer.toggle_comment(style, now);
+        self.now_dirty(now);
+    }
+
     fn replace_transform_range(&mut self, f: impl FnOnce(&str) -> String, now: f64) {
         let r = self
             .buffer
@@ -2776,12 +2789,6 @@ impl EditorBody {
                             s.next()
                         }
                         self.show_match();
-                    }
-                }
-                "/" => {
-                    if !ro {
-                        let token = self.language.map_or("//", Language::comment_token);
-                        self.buffer.toggle_comment(token, now);
                     }
                 }
                 "left" => self.buffer.for_each_cursor(|b| b.move_line_start(shift)),

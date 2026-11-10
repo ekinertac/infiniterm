@@ -4,10 +4,12 @@
 //! grammar because the config files are JSONC and a JSON grammar stops at
 //! the first `//`, and a miss is plain text, which is honest where a wrong
 //! grammar is not. The badge name is what a reader calls the file (`json`,
-//! not `javascript`), and the comment token is what Cmd+/ inserts.
+//! not `javascript`), and the comment style is what `editor.toggleComment`
+//! puts round a line.
 //!
 //! Grammars are compiled in, the twenty the mapping asked for first; a
 //! file of another kind is plain text until its grammar is added here.
+use crate::buffer::CommentStyle;
 use tree_sitter_highlight::HighlightConfiguration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -140,14 +142,19 @@ impl Language {
         }
     }
 
-    /// What Cmd+/ puts in front of a line.
-    pub fn comment_token(self) -> &'static str {
+    /// What `editor.toggleComment` puts round a line. CSS and the markup
+    /// languages have no line comment, so each line gets the pair.
+    pub fn comment_style(self) -> CommentStyle {
         match self {
-            Language::Python | Language::Toml | Language::Yaml | Language::Bash => "#",
-            Language::Css => "/*",
-            Language::Sql => "--",
-            Language::Html | Language::Svelte | Language::Markdown => "<!--",
-            _ => "//",
+            Language::Python | Language::Toml | Language::Yaml | Language::Bash => {
+                CommentStyle::Line("#")
+            }
+            Language::Css => CommentStyle::Pair("/*", "*/"),
+            Language::Sql => CommentStyle::Line("--"),
+            Language::Html | Language::Svelte | Language::Markdown => {
+                CommentStyle::Pair("<!--", "-->")
+            }
+            _ => CommentStyle::Line("//"),
         }
     }
 
@@ -350,7 +357,8 @@ mod tests {
     #[test]
     fn json_borrows_javascript_but_keeps_its_name() {
         assert_eq!(Language::Json.badge(), "json");
-        assert_eq!(Language::Json.comment_token(), "//");
+        assert_eq!(Language::Json.comment_style(), CommentStyle::Line("//"));
+        assert_eq!(Language::Css.comment_style(), CommentStyle::Pair("/*", "*/"));
         assert!(Language::is_prose("README.md"));
         assert!(!Language::is_prose("main.rs"));
     }
