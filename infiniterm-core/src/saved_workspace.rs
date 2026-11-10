@@ -19,7 +19,7 @@
 use crate::palette_usage::Usage;
 use crate::saved_layout::{serialise_layout, SavedCard, SavedGroup, SavedWorkspace};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// What stands in for a character a file name cannot hold.
 const REPLACEMENT: char = '-';
@@ -107,18 +107,23 @@ pub fn list(dir: &Path) -> Vec<String> {
     names
 }
 
+/// The file the snapshot `name` lives in under `dir`, or `None` when
+/// nothing of the name is left (`file_stem`). Whether it exists is the
+/// caller's question: `workspace.saveAs` asks before writing over one.
+pub fn path(dir: &Path, name: &str) -> Option<PathBuf> {
+    Some(dir.join(format!("{}.json", file_stem(name)?)))
+}
+
 /// Writes the snapshot `name` into `dir`, over one of the same name.
 pub fn write(dir: &Path, name: &str, contents: &str) -> Result<(), String> {
-    let stem = file_stem(name).ok_or("a saved workspace needs a name")?;
+    let file = path(dir, name).ok_or("a saved workspace needs a name")?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    crate::files::write_atomically(&dir.join(format!("{stem}.json")), contents)
-        .map_err(|e| e.to_string())
+    crate::files::write_atomically(&file, contents).map_err(|e| e.to_string())
 }
 
 /// The snapshot `name` in `dir`, or `None` when there is no such file.
 pub fn read(dir: &Path, name: &str) -> Option<String> {
-    let stem = file_stem(name)?;
-    std::fs::read_to_string(dir.join(format!("{stem}.json"))).ok()
+    std::fs::read_to_string(path(dir, name)?).ok()
 }
 
 #[cfg(test)]
@@ -183,6 +188,9 @@ mod tests {
         assert_eq!(file_stem("tab\there").as_deref(), Some("tab-here"));
         assert_eq!(file_stem("   "), None);
         assert_eq!(file_stem("..."), None);
+        let dir = Path::new("/d");
+        assert_eq!(path(dir, " a/b "), Some(PathBuf::from("/d/a-b.json")));
+        assert_eq!(path(dir, ".."), None);
     }
 
     #[test]

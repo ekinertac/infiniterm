@@ -4269,7 +4269,7 @@ mod tests {
         h.m.set_focus(Some(&editor));
         h.run("workspace.saveAs");
         let (pending, text) = h.m.prompt.settle(Some(" site ")).unwrap();
-        h.m.answer(pending, text, |_| true);
+        h.m.answer(pending, text, |_| false);
         let text =
             h.m.take_effects()
                 .into_iter()
@@ -4382,6 +4382,48 @@ mod tests {
             .take_effects()
             .iter()
             .any(|e| matches!(e, Effect::SaveWorkspaceFile { .. })));
+    }
+
+    // A name already saved asks before the file is written over: no keeps
+    // the old snapshot, Replace writes the new one under the saved name.
+    #[test]
+    fn saving_over_a_saved_workspace_asks_first() {
+        let saves = |h: &mut Harness| {
+            h.m.take_effects()
+                .into_iter()
+                .filter_map(|e| match e {
+                    Effect::SaveWorkspaceFile { name, .. } => Some(name),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut h = Harness::new();
+        let saved = crate::saved_workspace::path(&crate::paths::saved_workspaces_dir(), "site")
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        for (answer, written) in [(None, vec![]), (Some(""), vec!["site".to_string()])] {
+            h.run("workspace.saveAs");
+            let (pending, text) = h.m.prompt.settle(Some("site")).unwrap();
+            h.m.answer(pending, text, |p| p == saved);
+            assert!(saves(&mut h).is_empty(), "nothing before the answer");
+            assert!(h.m.prompt.confirm, "a yes or no question");
+            let (pending, text) = h.m.prompt.settle(answer).unwrap();
+            assert_eq!(
+                pending,
+                Pending::ReplaceSavedWorkspace {
+                    id: h.m.active_workspace.clone().unwrap(),
+                    name: "site".into(),
+                }
+            );
+            h.m.answer(pending, text, |_| true);
+            assert_eq!(saves(&mut h), written);
+        }
+        // A new name is written at once.
+        h.run("workspace.saveAs");
+        let (pending, text) = h.m.prompt.settle(Some("api")).unwrap();
+        h.m.answer(pending, text, |p| p == saved);
+        assert_eq!(saves(&mut h), ["api"]);
     }
 
     // An untitled editor's first save: the field starts on the card's

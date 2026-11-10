@@ -656,6 +656,12 @@ pub enum Pending {
     RenameWorkspace(String),
     /// `workspace.saveAs` (#715): the name to save this workspace under.
     SaveWorkspaceAs(String),
+    /// The name typed for `SaveWorkspaceAs` is already saved: yes writes
+    /// workspace `id` over it.
+    ReplaceSavedWorkspace {
+        id: String,
+        name: String,
+    },
     CloseWorkspace(String),
     /// A single browser card with more than one tab, asked before `Cmd+W`
     /// takes them all at once; `reclaim` carries `card.close`'s own meaning

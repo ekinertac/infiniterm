@@ -326,7 +326,7 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     // A workspace kept under a name (#715): its cards where they are, each
     // terminal's directory, each editor's files, each browser's page. The
     // field starts on the workspace's own name, so Enter saves under it, and
-    // again later saves over it.
+    // again later saves over it, after a question (`ReplaceSavedWorkspace`).
     r.register("workspace.saveAs", "Workspace: save as…", |m| {
         let Some(ws) = m.active_ws().cloned() else {
             return;
