@@ -168,6 +168,19 @@ pub fn put_drop_in(
     Ok(file.to_string_lossy().into_owned())
 }
 
+/// `full` relative to the repository root `repo`, with `/`, or `None` when it
+/// is not inside. Shared by `LocalSource::git_head` and the editor, which
+/// remembers a repo root and asks only `git_show` after the first answer.
+pub fn rel_in_repo(full: &std::path::Path, repo: &str) -> Option<String> {
+    // As paths, not text: on Windows git's root has forward slashes and
+    // the file's path has backslashes.
+    // git names the root with symlinks resolved (/private/var for
+    // /var on a Mac), the path asked about may not have them resolved.
+    let under = |p: &std::path::Path| p.strip_prefix(repo).map(|r| r.to_path_buf()).ok();
+    let rel = under(full).or_else(|| std::fs::canonicalize(full).ok().and_then(|c| under(&c)))?;
+    Some(rel.to_string_lossy().replace('\\', "/"))
+}
+
 pub trait FileSource: Send + Sync {
     /// Stores a sent file in the host's drops folder (`~/.infiniterm/drops/
     /// <id>/<name>`) and says where (#556). Not every source has one.
@@ -208,8 +221,11 @@ pub trait FileSource: Send + Sync {
         ))
     }
 
-    /// The machine's own disk: answers at once, so a body may call inline.
-    /// False for another machine's, where a call may take seconds.
+    /// The machine's own disk: reads, writes and stats answer at once, so a
+    /// body may call them inline. Never the `git_*` calls: each starts a
+    /// `git` process, 25 to 45 ms on a busy Mac, and a poll that ran them
+    /// inline for every editor tab stopped the UI for 300 ms (#717).
+    /// False for another machine's, where any call may take seconds.
     fn is_local(&self) -> bool;
     fn home(&self) -> Result<HostPaths, FileError>;
     fn stat(&self, path: &str) -> Result<Stat, FileError>;
@@ -386,16 +402,8 @@ impl FileSource for LocalSource {
         let full = expand(path)?;
         let repo = crate::git::repo_of(&full).map_err(|e| git_error(path, e))?;
         let repo = repo.to_string_lossy().into_owned();
-        // As paths, not text: on Windows git's root has forward slashes and
-        // the file's path has backslashes.
-        // git names the root with symlinks resolved (/private/var for
-        // /var on a Mac), the path asked about may not have them resolved.
-        let under = |p: &std::path::Path| p.strip_prefix(&repo).map(|r| r.to_path_buf()).ok();
-        let rel = under(&full)
-            .or_else(|| std::fs::canonicalize(&full).ok().and_then(|c| under(&c)))
-            .ok_or_else(|| FileError::new(Code::NotFound, format!("{path}: not inside {repo}")))?
-            .to_string_lossy()
-            .replace('\\', "/");
+        let rel = rel_in_repo(&full, &repo)
+            .ok_or_else(|| FileError::new(Code::NotFound, format!("{path}: not inside {repo}")))?;
         let text = crate::git::git_show_head(&repo, &rel).map_err(|e| git_error(path, e))?;
         Ok(GitHead { repo, rel, text })
     }
