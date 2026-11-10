@@ -5479,7 +5479,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("my site")).unwrap();
         std::fs::write(dir.join("my site").join("index.html"), "<p>hi</p>").unwrap();
-        let real = std::fs::canonicalize(&dir).unwrap();
+        // Without the verbatim `\\?\` prefix `canonicalize` gives on Windows:
+        // a folder the shell reports is `C:\...`, and a `/` joined after the
+        // prefix is not a separator there.
+        let real = std::path::PathBuf::from(
+            std::fs::canonicalize(&dir)
+                .unwrap()
+                .to_string_lossy()
+                .trim_start_matches(r"\\?\"),
+        );
         let mut h = Harness::new();
         let id = h.focused().id.clone();
         h.m.card_mut(&id).unwrap().cwd = real.to_string_lossy().into_owned();
@@ -5491,12 +5499,18 @@ mod tests {
         };
 
         // An absolute path with a space in it.
-        let abs = format!("{}/my site/index.html", real.display());
+        // Joined as a path: after the verbatim `\\?\` prefix Windows takes no
+        // `/` as a separator.
+        let abs = real
+            .join("my site")
+            .join("index.html")
+            .to_string_lossy()
+            .into_owned();
         let r = top(&mut h.m, &abs);
         assert_eq!(r.subtitle.as_deref(), Some("Open file"));
         assert_eq!(
             r.action,
-            OmniAction::Navigate(format!("file://{}/my%20site/index.html", real.display()))
+            OmniAction::Navigate(crate::omni::address::file_url(&abs))
         );
         // `~` is the home folder; a relative name reads from the focused
         // terminal's folder.
