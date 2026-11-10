@@ -388,8 +388,16 @@ pub struct EditorBody {
     /// Where host pictures are cached (`host_pictures::cache_dir`; a test's
     /// own folder).
     picture_dir: std::path::PathBuf,
-    /// The host's answer to a HEAD question, with the path it was for.
-    host_git: Option<Receiver<(String, Option<String>)>>,
+    /// The answer to a HEAD question, asked on a thread for a local file as
+    /// for a host's (#717): `git` is a process, and the UI never waits for one.
+    git_ask: Option<Receiver<GitAnswer>>,
+    /// A local file's place in its repo from the last answer, and the
+    /// `head_stamp` taken before that ask: the poll asks again only when
+    /// the stamp moves.
+    git_seen: Option<GitSeen>,
+    /// Folder to repository root, shared by every editor tab of the app, so
+    /// tabs in one repo run `git rev-parse` once, not once each.
+    pub git_repos: GitRepos,
     /// A watch on the open host file, with the path it is on; `file_watch_start`
     /// is one being set up on a thread. `file_watch_unsupported`: the host's
     /// helper cannot watch, so the file is polled.
@@ -402,6 +410,42 @@ pub struct EditorBody {
     /// text of HEAD and the working tree, and its tree is the changed files
     /// (`diff.rs`). Every file-touching path below checks it.
     diff: Option<diff::DiffView>,
+}
+
+/// Folder to repository root, learned from `git_head` answers (`git_repos`).
+pub type GitRepos = Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>;
+
+/// The one map every editor tab shares; a test gives its bodies their own.
+fn shared_git_repos() -> GitRepos {
+    static REPOS: std::sync::OnceLock<GitRepos> = std::sync::OnceLock::new();
+    REPOS.get_or_init(GitRepos::default).clone()
+}
+
+/// What a HEAD question answered: the path it was for, HEAD's text (`None`
+/// outside a repo), and for a local file its repo and relative path with the
+/// stamp taken before the ask (`None` on the first ask, before the repo is
+/// known).
+struct GitAnswer {
+    path: String,
+    head: Option<String>,
+    place: Option<(String, String)>,
+    stamp: Option<infiniterm_core::git_repo::HeadStamp>,
+}
+
+/// A local tab's last answer: where its file is in which repo, and the
+/// stamp that answer was asked under.
+struct GitSeen {
+    path: String,
+    repo: String,
+    rel: String,
+    stamp: Option<infiniterm_core::git_repo::HeadStamp>,
+}
+
+/// The folder a path is in, the key of `git_repos`.
+fn folder_of(path: &str) -> String {
+    std::path::Path::new(path)
+        .parent()
+        .map_or_else(String::new, |p| p.to_string_lossy().into_owned())
 }
 
 /// What a host's `read` answered, for a load.
@@ -536,7 +580,9 @@ impl EditorBody {
             dirs: None,
             host_picture: None,
             picture_dir: infiniterm_core::host_pictures::cache_dir(),
-            host_git: None,
+            git_ask: None,
+            git_seen: None,
+            git_repos: shared_git_repos(),
             file_watch: None,
             file_watch_start: None,
             file_watch_unsupported: false,
@@ -1348,19 +1394,18 @@ impl EditorBody {
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
-        if let Some(rx) = &self.host_git {
+        if let Some(rx) = &self.git_ask {
             match rx.try_recv() {
-                Ok((path, head)) => {
-                    self.host_git = None;
+                Ok(answer) => {
+                    self.git_ask = None;
                     // Not for the file the card shows any more: asked again.
-                    if self.path.as_deref() == Some(path.as_str()) {
-                        self.set_git_head(head);
-                        self.dirty = true;
+                    if self.path.as_deref() == Some(answer.path.as_str()) {
+                        self.take_git_answer(answer);
                     } else {
                         self.refresh_git_head();
                     }
                 }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.host_git = None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.git_ask = None,
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
@@ -3268,6 +3313,13 @@ impl EditorBody {
     /// Re-reads HEAD's text for this path over git: at load and on the
     /// disk poll's cadence, never per keystroke (a shell-out). `None`
     /// outside a repo, or for a picture, where there is no text to gutter.
+    ///
+    /// Always on a thread, one question at a time; the answer is taken in
+    /// `take_host_answers` (#717: inline, four tabs stopped the UI for 300 ms
+    /// every poll). A local file whose repo is known asks only `git show`,
+    /// and nothing at all while its `head_stamp` has not moved. A file
+    /// outside any repo is asked about on every poll, as before, but off the
+    /// UI thread: a `git init` next to it is then seen.
     fn refresh_git_head(&mut self) {
         let Some(path) = self
             .path
@@ -3277,23 +3329,116 @@ impl EditorBody {
             self.set_git_head(None);
             return;
         };
-        if self.source.is_local() {
-            let head = self.source.git_head(&path).ok().map(|h| h.text);
-            self.set_git_head(head);
+        if self.git_ask.is_some() {
             return;
         }
-        // A host's git is asked on a thread, one question at a time; the
-        // answer is taken in `take_host_answers`.
-        if self.host_git.is_some() {
-            return;
-        }
-        let (tx, rx) = channel();
-        self.host_git = Some(rx);
         let source = self.source.clone();
-        std::thread::spawn(move || {
-            let head = source.git_head(&path).ok().map(|h| h.text);
-            let _ = tx.send((path, head));
+        let (tx, rx) = channel();
+        if !self.source.is_local() {
+            self.git_ask = Some(rx);
+            std::thread::spawn(move || {
+                let head = source.git_head(&path).ok().map(|h| h.text);
+                let _ = tx.send(GitAnswer {
+                    path,
+                    head,
+                    place: None,
+                    stamp: None,
+                });
+            });
+            return;
+        }
+        // Where the file is: this tab's last answer, else a repo another tab
+        // learned for the same folder.
+        let place = self
+            .git_seen
+            .as_ref()
+            .filter(|s| s.path == path)
+            .map(|s| (s.repo.clone(), s.rel.clone()))
+            .or_else(|| {
+                let repo = self.git_repos.lock().ok()?.get(&folder_of(&path))?.clone();
+                let rel =
+                    infiniterm_core::file_source::rel_in_repo(std::path::Path::new(&path), &repo)?;
+                Some((repo, rel))
+            });
+        // Taken BEFORE the ask: a commit during it moves the stamp again, so
+        // the next poll asks and never keeps an older HEAD.
+        let stamp = place.as_ref().and_then(|(repo, _)| {
+            infiniterm_core::git_repo::head_stamp(
+                std::path::Path::new(repo),
+                std::path::Path::new(&path),
+            )
         });
+        let unchanged = self
+            .git_seen
+            .as_ref()
+            .is_some_and(|s| s.path == path && stamp.is_some() && s.stamp == stamp);
+        if unchanged {
+            return;
+        }
+        self.git_ask = Some(rx);
+        std::thread::spawn(move || {
+            let answer = match place {
+                Some((repo, rel)) => match source.git_show(&repo, &rel) {
+                    Ok(text) => GitAnswer {
+                        path,
+                        head: Some(text),
+                        place: Some((repo, rel)),
+                        stamp,
+                    },
+                    // The repo is gone: no gutter, and the next ask starts over.
+                    Err(_) => GitAnswer {
+                        path,
+                        head: None,
+                        place: None,
+                        stamp: None,
+                    },
+                },
+                None => match source.git_head(&path) {
+                    Ok(h) => GitAnswer {
+                        path,
+                        head: Some(h.text),
+                        place: Some((h.repo, h.rel)),
+                        stamp: None,
+                    },
+                    Err(_) => GitAnswer {
+                        path,
+                        head: None,
+                        place: None,
+                        stamp: None,
+                    },
+                },
+            };
+            let _ = tx.send(answer);
+        });
+    }
+
+    /// An answer for the file the card shows: the gutter's HEAD, and for a
+    /// local file where it is, for the next poll and for the other tabs.
+    fn take_git_answer(&mut self, answer: GitAnswer) {
+        self.set_git_head(answer.head);
+        self.dirty = true;
+        if !self.source.is_local() {
+            return;
+        }
+        let folder = folder_of(&answer.path);
+        let Ok(mut repos) = self.git_repos.lock() else {
+            return;
+        };
+        match answer.place {
+            Some((repo, rel)) => {
+                repos.insert(folder, repo.clone());
+                self.git_seen = Some(GitSeen {
+                    path: answer.path,
+                    repo,
+                    rel,
+                    stamp: answer.stamp,
+                });
+            }
+            None => {
+                repos.remove(&folder);
+                self.git_seen = None;
+            }
+        }
     }
 
     /// Takes HEAD's text, and drops the gutter's cache when it is not the
@@ -6271,6 +6416,222 @@ while True:
         *host.head.lock().unwrap() = None;
         idle_until(&mut b, HOST_GIT_POLL_MS * 6., |b| b.git_head.is_none());
         assert!(b.gutter_for().0.iter().all(|m| *m == GutterMark::Clean));
+    }
+
+    /// A local source whose git takes 200 ms a call and counts the calls
+    /// (#717); everything else is the real disk.
+    struct SlowGit {
+        repo: String,
+        head: Mutex<String>,
+        heads: std::sync::atomic::AtomicUsize,
+        shows: std::sync::atomic::AtomicUsize,
+    }
+
+    const SLOW_GIT_MS: u64 = 200;
+
+    impl SlowGit {
+        fn runs(&self) -> (usize, usize) {
+            use std::sync::atomic::Ordering::SeqCst;
+            (self.heads.load(SeqCst), self.shows.load(SeqCst))
+        }
+    }
+
+    impl FileSource for SlowGit {
+        fn is_local(&self) -> bool {
+            true
+        }
+        fn home(&self) -> Result<HostPaths, FileError> {
+            LocalSource.home()
+        }
+        fn stat(&self, path: &str) -> Result<Stat, FileError> {
+            LocalSource.stat(path)
+        }
+        fn exists(&self, paths: &[String]) -> Result<Vec<Option<EntryKind>>, FileError> {
+            LocalSource.exists(paths)
+        }
+        fn list(&self, path: &str) -> Result<Vec<ListEntry>, FileError> {
+            LocalSource.list(path)
+        }
+        fn read(&self, path: &str) -> Result<FileData, FileError> {
+            LocalSource.read(path)
+        }
+        fn write(
+            &self,
+            path: &str,
+            bytes: &[u8],
+            at: Option<u64>,
+        ) -> Result<Option<u64>, FileError> {
+            LocalSource.write(path, bytes, at)
+        }
+        fn git_head(&self, path: &str) -> Result<infiniterm_core::file_source::GitHead, FileError> {
+            std::thread::sleep(std::time::Duration::from_millis(SLOW_GIT_MS));
+            self.heads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let rel =
+                infiniterm_core::file_source::rel_in_repo(std::path::Path::new(path), &self.repo)
+                    .expect("inside the repo");
+            Ok(infiniterm_core::file_source::GitHead {
+                repo: self.repo.clone(),
+                rel,
+                text: self.head.lock().unwrap().clone(),
+            })
+        }
+        fn git_show(&self, _: &str, _: &str) -> Result<String, FileError> {
+            std::thread::sleep(std::time::Duration::from_millis(SLOW_GIT_MS));
+            self.shows.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.head.lock().unwrap().clone())
+        }
+    }
+
+    /// A folder that looks like a checkout on main (no `git` is run: the
+    /// stand-in answers), with `a.txt` and `b.txt`.
+    fn slow_repo(name: &str) -> (std::path::PathBuf, Arc<SlowGit>) {
+        let dir = std::env::temp_dir().join(format!("ift-717-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git/refs/heads")).unwrap();
+        let dir = std::fs::canonicalize(&dir).unwrap();
+        std::fs::write(dir.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(dir.join(".git/index"), "").unwrap();
+        std::fs::write(dir.join(".git/refs/heads/main"), "abc\n").unwrap();
+        std::fs::write(dir.join(".git/refs/heads/other"), "def\n").unwrap();
+        std::fs::write(dir.join("a.txt"), "a\nb\nc\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "a\nb\nc\n").unwrap();
+        let git = Arc::new(SlowGit {
+            repo: dir.to_string_lossy().into_owned(),
+            head: Mutex::new("a\nc\n".into()),
+            heads: Default::default(),
+            shows: Default::default(),
+        });
+        (dir, git)
+    }
+
+    fn slow_body(git: &Arc<SlowGit>, repos: &GitRepos, path: &std::path::Path) -> EditorBody {
+        let mut b = body();
+        b.source = git.clone();
+        b.git_repos = repos.clone();
+        b.load(&path.to_string_lossy(), false, 0.);
+        b
+    }
+
+    /// Until the HEAD question in flight is answered.
+    fn git_settle(b: &mut EditorBody) {
+        let stop = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while b.git_ask.is_some() {
+            assert!(std::time::Instant::now() < stop, "git never answered");
+            b.take_host_answers(0.);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// The `k`th git poll, and its answer if it asked.
+    fn git_poll(b: &mut EditorBody, k: f64) {
+        b.idle(k * DISK_POLL_MS + 1.);
+        git_settle(b);
+    }
+
+    /// A modification time `secs` past a fixed one, so bumps never collide.
+    fn bump(path: &std::path::Path, secs: u64) {
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + secs);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    }
+
+    // #717: git ran inline on every poll for every tab; four tabs stopped the
+    // UI for 300 ms every two seconds. The load and the poll return at once
+    // and the HEAD arrives later.
+    #[test]
+    fn the_load_and_the_poll_never_wait_for_git() {
+        let (dir, git) = slow_repo("wait");
+        let repos = GitRepos::default();
+        let started = std::time::Instant::now();
+        let mut b = slow_body(&git, &repos, &dir.join("a.txt"));
+        let spent = started.elapsed();
+        assert!(spent.as_millis() < 100, "the load waited {spent:?}");
+        assert!(
+            b.git_head.is_none() && b.git_ask.is_some(),
+            "asked, not yet in"
+        );
+        git_settle(&mut b);
+        assert_eq!(b.git_head.as_deref(), Some("a\nc\n"));
+        let started = std::time::Instant::now();
+        b.idle(DISK_POLL_MS + 1.);
+        let spent = started.elapsed();
+        assert!(b.git_ask.is_some(), "the first poll asks (no stamp yet)");
+        assert!(spent.as_millis() < 100, "the poll waited {spent:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unchanged_repo_runs_no_git_and_a_commit_a_checkout_and_an_edit_run_it_once() {
+        let (dir, git) = slow_repo("stamp");
+        let repos = GitRepos::default();
+        let mut b = slow_body(&git, &repos, &dir.join("a.txt"));
+        git_settle(&mut b);
+        assert_eq!(git.runs(), (1, 0), "the load: where the file is, and HEAD");
+        // The first poll takes the stamp the load could not (the repo was
+        // not known yet): one `git show`, then nothing while nothing moves.
+        git_poll(&mut b, 1.);
+        assert_eq!(git.runs(), (1, 1));
+        for k in 2..5 {
+            git_poll(&mut b, k as f64);
+        }
+        assert_eq!(git.runs(), (1, 1), "an unchanged repo: no git at all");
+        let mut k = 5.;
+        let mut once = |b: &mut EditorBody, what: &str| {
+            let before = git.runs().1;
+            git_poll(b, k);
+            git_poll(b, k + 1.);
+            k += 2.;
+            assert_eq!(git.runs(), (1, before + 1), "{what}: one run");
+        };
+        bump(&dir.join(".git/refs/heads/main"), 1);
+        once(&mut b, "a commit");
+        std::fs::write(dir.join(".git/HEAD"), "ref: refs/heads/other\n").unwrap();
+        bump(&dir.join(".git/HEAD"), 2);
+        once(&mut b, "a checkout");
+        bump(&dir.join("a.txt"), 3);
+        once(&mut b, "an edit of the file");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn two_tabs_in_one_repo_learn_the_repo_once() {
+        let (dir, git) = slow_repo("share");
+        let repos = GitRepos::default();
+        let mut a = slow_body(&git, &repos, &dir.join("a.txt"));
+        git_settle(&mut a);
+        let mut b = slow_body(&git, &repos, &dir.join("b.txt"));
+        git_settle(&mut b);
+        assert_eq!(
+            git.runs(),
+            (1, 1),
+            "the second tab knew the repo: `git show` only, no `rev-parse`"
+        );
+        assert_eq!(b.git_head.as_deref(), Some("a\nc\n"));
+        // A tab of another app (its own map) does not see it.
+        let mut c = slow_body(&git, &GitRepos::default(), &dir.join("b.txt"));
+        git_settle(&mut c);
+        assert_eq!(git.runs(), (2, 1));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_gutter_from_a_thread_answer_is_the_same_as_from_head_directly() {
+        let (dir, git) = slow_repo("marks");
+        let mut b = slow_body(&git, &GitRepos::default(), &dir.join("a.txt"));
+        assert!(
+            b.gutter_for().0.iter().all(|m| *m == GutterMark::Clean),
+            "before"
+        );
+        git_settle(&mut b);
+        let want = gutter_marks("a\nc\n", "a\nb\nc\n");
+        let (marks, deleted) = b.gutter_for();
+        assert_eq!((marks.to_vec(), deleted.to_vec()), want);
+        assert_eq!(marks.iter().filter(|m| **m == GutterMark::Added).count(), 1);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
