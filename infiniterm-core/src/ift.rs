@@ -454,7 +454,9 @@ mod tests {
         std::fs::write(dir.join("index.html"), "<p>y</p>").unwrap();
         let real = std::fs::canonicalize(&dir).unwrap();
         let home = real.to_string_lossy().into_owned();
-        let url = |p: &str| format!("file://{}/{p}", real.display());
+        // Through `file_url`, which has its own tests for the encoding and the
+        // Windows form: `real` there is `\\?\C:\...`, not a Unix path.
+        let url = |p: &str| crate::omni::address::file_url(&format!("{}/{p}", real.display()));
 
         // A scheme goes to the browser untouched.
         for a in [
@@ -482,7 +484,7 @@ mod tests {
         );
         assert_eq!(
             browse_target("my docs/a b.html", &real, &home),
-            Ok(url("my%20docs/a%20b.html"))
+            Ok(url("my docs/a b.html"))
         );
         assert_eq!(
             browse_target(
@@ -497,7 +499,7 @@ mod tests {
             browse_target("../index.html", &real.join("my docs"), &home),
             Ok(url("index.html"))
         );
-        assert_eq!(browse_target("my docs", &real, &home), Ok(url("my%20docs")));
+        assert_eq!(browse_target("my docs", &real, &home), Ok(url("my docs")));
         assert_eq!(
             browse_target("nope.html", &real, &home),
             Err("no such file: nope.html".to_string())

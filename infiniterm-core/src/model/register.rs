@@ -5496,7 +5496,10 @@ mod tests {
         assert_eq!(r.subtitle.as_deref(), Some("Open file"));
         assert_eq!(
             r.action,
-            OmniAction::Navigate(format!("file://{}/my%20site/index.html", real.display()))
+            OmniAction::Navigate(crate::omni::address::file_url(&format!(
+                "{}/my site/index.html",
+                real.display()
+            )))
         );
         // `~` is the home folder; a relative name reads from the focused
         // terminal's folder.
