@@ -106,7 +106,13 @@ pub fn drop_plan(
         // The page goes to the file, as it does in a browser.
         Some(CardKind::Browser) => {
             let (path, _) = &items[0];
-            DropAction::Navigate(format!("file://{path}"))
+            // A Windows path needs its drive and slashes made an address;
+            // a Unix one keeps the plain form it always had.
+            DropAction::Navigate(if crate::omni::address::is_windows_path(path) {
+                crate::omni::address::file_url(path)
+            } else {
+                format!("file://{path}")
+            })
         }
         // An editor, a diff or a transcript is showing something already:
         // the drop opens BESIDE it rather than replacing what is on screen.
@@ -256,6 +262,15 @@ mod tests {
         assert_eq!(
             drop_plan(&items, Some(CardKind::Browser), ShellKind::Posix),
             DropAction::Navigate("file:///tmp/a.html".into())
+        );
+    }
+
+    #[test]
+    fn a_browser_gets_a_windows_file_as_a_real_file_address() {
+        let items = vec![(r"C:\Users\PC\my page.html".to_string(), PathKind::File)];
+        assert_eq!(
+            drop_plan(&items, Some(CardKind::Browser), ShellKind::Posix),
+            DropAction::Navigate("file:///C:/Users/PC/my%20page.html".into())
         );
     }
 

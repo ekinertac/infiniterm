@@ -476,6 +476,7 @@ impl AppView {
                     card_id,
                     last,
                     scrollback,
+                    ansi,
                 } => {
                     // Answered by the poll timer after the card's pending
                     // output is parsed (`answer_reads`), not here: a window
@@ -485,6 +486,7 @@ impl AppView {
                         card_id,
                         last,
                         scrollback,
+                        ansi,
                     });
                 }
                 Effect::CliReply { id, ok, text } => {
@@ -691,7 +693,10 @@ impl AppView {
                         // left to do but go, and it opens the bundle once
                         // we are gone. Cards come back to their sessions
                         // and the frame comes back from window.json.
-                        Ok(()) => leave_now(),
+                        Ok(()) => {
+                            self.announce_restart("");
+                            leave_now()
+                        }
                         // Still here, so say why rather than quitting into
                         // nothing and looking like a crash.
                         Err(e) => self.model.notify(format!("could not restart: {e}")),
@@ -1414,6 +1419,19 @@ impl AppView {
         if text != self.last_agents {
             hub.publish_agents(&text);
             self.last_agents = text;
+        }
+    }
+
+    /// The host is about to quit to restart: viewers are told first (#708),
+    /// `version` the update it restarts into or empty. There are no viewers
+    /// on Windows.
+    #[cfg(windows)]
+    fn announce_restart(&self, _version: &str) {}
+
+    #[cfg(unix)]
+    fn announce_restart(&self, version: &str) {
+        if let Some(hub) = &self.join {
+            hub.announce_restart(version);
         }
     }
 
@@ -2209,6 +2227,7 @@ impl AppView {
             }
             self.flush_save();
             if relaunch_after_exit().is_ok() {
+                self.announce_restart("");
                 std::process::exit(0);
             }
             return;
@@ -2267,7 +2286,12 @@ impl AppView {
         // also has to break away from the job, or it would be killed by the
         // exit below before it could do anything.
         match spawn_waiter(&script) {
-            Ok(()) => leave_now(),
+            // After the waiter is running, so viewers are never told of a
+            // restart that failed to start.
+            Ok(()) => {
+                self.announce_restart(&staged.version);
+                leave_now()
+            }
             Err(e) => self
                 .model
                 .notify(format!("could not start the update: {e}")),

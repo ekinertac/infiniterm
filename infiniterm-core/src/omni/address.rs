@@ -76,21 +76,46 @@ pub fn local_path_candidate(input: &str, home: &str, base: Option<&str>) -> Opti
     if let Some(rest) = t.strip_prefix("~/") {
         return Some(format!("{}/{}", home.trim_end_matches('/'), rest));
     }
-    if t.starts_with('/') {
+    if t.starts_with('/') || is_windows_path(t) {
         return Some(t.to_string());
     }
     base.map(|b| format!("{}/{}", b.trim_end_matches('/'), t))
 }
 
+/// A Windows path: a drive letter and a separator (`C:\x`, `C:/x`), or the
+/// verbatim `\\?\` form `canonicalize` returns there. Told by its text, not
+/// by the OS this runs on, so the rule is tested on every machine; no Unix
+/// absolute path starts this way.
+pub fn is_windows_path(path: &str) -> bool {
+    let b = path.as_bytes();
+    path.starts_with(r"\\?\")
+        || (b.len() >= 3
+            && b[0].is_ascii_alphabetic()
+            && b[1] == b':'
+            && matches!(b[2], b'\\' | b'/'))
+}
+
 /// `file://` and the path, percent-encoded: a space is `%20`, a non-ASCII
-/// character is its UTF-8 bytes, and `/` stays a separator.
+/// character is its UTF-8 bytes, and `/` stays a separator. A Windows path
+/// becomes `file:///C:/dir/name`: the verbatim `\\?\` prefix dropped and
+/// every `\` a `/`, because a browser reads `file://%5C%5C%3F%5CC...` as a
+/// host that does not exist.
 pub fn file_url(path: &str) -> String {
+    let windows = is_windows_path(path);
+    let path = if windows {
+        let bare = path.strip_prefix(r"\\?\").unwrap_or(path);
+        format!("/{}", bare.replace('\\', "/"))
+    } else {
+        path.to_string()
+    };
     let mut out = String::from("file://");
     for byte in path.as_bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
                 out.push(*byte as char)
             }
+            // The drive's colon: a Windows file name cannot hold another.
+            b':' if windows => out.push(':'),
             _ => out.push_str(&format!("%{byte:02X}")),
         }
     }
@@ -163,6 +188,37 @@ mod tests {
         );
         assert_eq!(file_url("/tmp/é.html"), "file:///tmp/%C3%A9.html");
         assert_eq!(file_url("/tmp/a#b?c"), "file:///tmp/a%23b%3Fc");
+    }
+
+    // The Windows form is told by its text, so this runs on the Mac too.
+    #[test]
+    fn a_windows_path_is_a_file_address_with_a_drive_and_forward_slashes() {
+        assert_eq!(
+            file_url(r"C:\Users\PC\a b\c.html"),
+            "file:///C:/Users/PC/a%20b/c.html"
+        );
+        // What `canonicalize` returns there, and a mixed join onto it.
+        assert_eq!(
+            file_url(r"\\?\C:\Users\PC\Temp\x/index.html"),
+            "file:///C:/Users/PC/Temp/x/index.html"
+        );
+        assert_eq!(file_url("D:/dir/é.html"), "file:///D:/dir/%C3%A9.html");
+        // A Unix path with a backslash or a colon in a name is not one.
+        assert!(!is_windows_path("/tmp/a:b"));
+        assert!(!is_windows_path("relative\\path"));
+        assert_eq!(file_url("/tmp/a:b"), "file:///tmp/a%3Ab");
+    }
+
+    #[test]
+    fn a_typed_windows_path_is_an_absolute_candidate() {
+        assert_eq!(
+            local_path_candidate(r"C:\site\index.html", "C:/Users/PC", Some("C:/work")).as_deref(),
+            Some(r"C:\site\index.html")
+        );
+        assert_eq!(
+            local_path_candidate("site/index.html", "C:/Users/PC", Some("C:/work")).as_deref(),
+            Some("C:/work/site/index.html")
+        );
     }
 
     #[test]

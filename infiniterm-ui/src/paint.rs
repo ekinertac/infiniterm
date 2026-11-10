@@ -1045,6 +1045,7 @@ impl AppView {
             };
             let icon = infiniterm_core::tab_icon::choose_subject(
                 infiniterm_core::tab_icon::subject(
+                    card.kind,
                     card.proc.as_deref(),
                     card.agent,
                     card.agent_kind.as_deref(),

@@ -58,6 +58,18 @@ Exit codes: 0 ok, 1 infiniterm is not running, 2 bad usage.
 
 `ift browse` opens a browser card for each argument, beside the card you ran it in (or beside the focused card), and returns at once. An address with a scheme (`http://localhost:5173`, `https://…`, `file://…`) goes to the browser as it is. A path that exists, relative to the shell's folder or starting with `~`, opens as a `file://` address, and spaces are fine. A path that is not there is refused with a message: a missing page is almost always a typo. A joined window or a remote instance has no browser cards, and says so.
 
+## Pairing the iPhone app
+
+```sh
+ift phone add iphone   # a QR code for the infiniterm iPhone app to scan
+ift phone list         # the paired phones
+ift phone remove iphone
+```
+
+The iPhone app reaches this Mac through the Mac's own ssh, over Tailscale. `ift phone add` needs Remote Login on (System Settings, General, Sharing). It makes an ed25519 key for the phone, writes the public half to `~/.ssh/authorized_keys` with the comment `infiniterm-phone:<name>`, and prints a QR code with the phone's private key, the Mac's ssh host key and its address. The app scans it once and needs nothing else. `--host <name>` changes the address in the code from the Mac's Tailscale name, and `--port <n>` the ssh port.
+
+The key is limited. It opens no shell: sshd runs `ift phone-gate` for it, which allows only the commands the app sends (joining the canvas, reading a card, the update check, the push list) and refuses all others. A phone may also open tunnels to this Mac's own localhost, for its browser card. Anyone who sees the QR code can use the key, and the terminal card keeps the printed code in its session buffer. If anyone saw it, run `ift phone remove <name>`, which deletes that one line and leaves the rest of `authorized_keys` as it was. A device name is 1 to 32 letters, digits, `-` or `_`.
+
 ## Driving another card
 
 These take a card by its number (`7` or `#7`, the one on its label, which stays the same after a reboot) or by its id.

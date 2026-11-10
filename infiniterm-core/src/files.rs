@@ -167,7 +167,8 @@ pub fn draft_prune(keep: &[String]) {
 
 /// One directory's entries for the explorer: directories first, then
 /// files, each group sorted case-insensitively. Dotfiles are listed (a
-/// terminal user opens .zshrc more than most files) but `.git` is not.
+/// terminal user opens .zshrc more than most files) but `.git` is not, nor
+/// `.DS_Store`, which Finder drops in every folder it opens and nobody edits.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirEntry {
     pub name: String,
@@ -181,7 +182,7 @@ pub fn dir_list(path: &str) -> Result<Vec<DirEntry>, String> {
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            if name == ".git" {
+            if name == ".git" || name == ".DS_Store" {
                 return None;
             }
             let file_type = e.file_type().ok()?;
@@ -352,6 +353,18 @@ mod tests {
         let names: Vec<&str> = got.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["sub", "A.txt", "b.txt"]);
         assert!(got[0].is_dir && !got[1].is_dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn skips_ds_store_but_keeps_other_dotfiles() {
+        let dir = std::env::temp_dir().join(format!("infiniterm-dsstore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".DS_Store"), "").unwrap();
+        std::fs::write(dir.join(".zshrc"), "").unwrap();
+        let got = dir_list(&dir.to_string_lossy()).unwrap();
+        let names: Vec<&str> = got.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, [".zshrc"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
