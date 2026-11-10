@@ -65,6 +65,22 @@ fn ensure_tabs(m: &mut Model, id: &str) {
     }
 }
 
+/// Where the tab at `i` ends up when the tab at `from` moves to `to` (#682):
+/// the moved one goes to `to`, the ones it passed shift one place toward
+/// `from`, the rest stay. Shared with the bodies, which move their active
+/// and focused indices by the same rule.
+pub fn index_after_move(i: usize, from: usize, to: usize) -> usize {
+    if i == from {
+        to
+    } else if from < i && i <= to {
+        i - 1
+    } else if to <= i && i < from {
+        i + 1
+    } else {
+        i
+    }
+}
+
 /// A folder editor still on its first, blank buffer and nothing else
 /// (`editor.folderScratchTab` decides whether that buffer shows as a tab).
 pub fn is_bare_folder_editor(card: &Card) -> bool {
@@ -384,6 +400,43 @@ impl Model {
         self.dirty_layout = true;
     }
 
+    /// Puts tab `from` at position `to` in the strip (#682), by a drag in the
+    /// strip or `*.tab.reorder.*`. `to` past the end is the last place. The
+    /// active tab stays the same tab. The order is `card.tabs`', so the save
+    /// file keeps it; the bodies get the move through `card.tab_moves`.
+    pub fn move_tab(&mut self, card_id: &str, from: usize, to: usize) {
+        ensure_tabs(self, card_id);
+        let Some(card) = self.card_mut(card_id) else {
+            return;
+        };
+        let Some(last) = card.tabs.len().checked_sub(1) else {
+            return;
+        };
+        let to = to.min(last);
+        if from > last || from == to {
+            return;
+        }
+        let tab = card.tabs.remove(from);
+        card.tabs.insert(to, tab);
+        card.active_tab = index_after_move(card.active_tab, from, to);
+        card.tab_moves.push((from, to));
+        sync_handle(card);
+        self.dirty_layout = true;
+    }
+
+    /// The active tab one place left (`step` -1) or right (+1); nothing at
+    /// either end, as `workspace.reorder.*` does.
+    pub fn move_active_tab(&mut self, card_id: &str, step: isize) {
+        ensure_tabs(self, card_id);
+        let Some(at) = self.card(card_id).map(|c| c.active_tab) else {
+            return;
+        };
+        let Some(to) = at.checked_add_signed(step) else {
+            return;
+        };
+        self.move_tab(card_id, at, to);
+    }
+
     /// Reopens the most recently closed tab, if there is one.
     pub fn browser_tab_reopen_closed(&mut self, card_id: &str) {
         let Some(card) = self.card_mut(card_id) else {
@@ -481,6 +534,19 @@ pub fn register(r: &mut CommandRegistry<Model>) {
     r.register("browser.tab.jump.last", "Browser: last tab", |m| {
         with_focused_browser(m, |m, id| m.browser_tab_jump_last(&id));
     });
+    // The strip's order, from the keyboard as well as by dragging a tab.
+    for (name, step) in [("left", -1_isize), ("right", 1)] {
+        r.register(
+            &format!("browser.tab.reorder.{name}"),
+            &format!("Browser: move tab {name}"),
+            move |m| with_focused_browser(m, |m, id| m.move_active_tab(&id, step)),
+        );
+        r.register(
+            &format!("editor.tab.reorder.{name}"),
+            &format!("Editor: move tab {name}"),
+            move |m| with_focused_editor(m, |m, id| m.move_active_tab(&id, step)),
+        );
+    }
     // The editor's, the same functions behind an editor-only guard, so a
     // locked editor card's Cmd+T/W/1..9 mean what a locked browser's do.
     r.register("editor.tab.new", "Editor: new tab", |m| {
@@ -1016,5 +1082,82 @@ mod tests {
         m.browser_tab_open(&id, None); // direct call still works, no notice
         with_focused_browser(&mut m, |_, _| panic!("must not run: not a browser card"));
         assert_eq!(m.notice.as_deref(), Some("not a browser card"));
+    }
+
+    // The rule a move follows (#682), for every tab of [a, b, c, d].
+    #[test]
+    fn a_move_shifts_only_the_tabs_it_passes() {
+        let after =
+            |from, to| -> Vec<usize> { (0..4).map(|i| index_after_move(i, from, to)).collect() };
+        assert_eq!(after(0, 2), vec![2, 0, 1, 3]);
+        assert_eq!(after(3, 1), vec![0, 2, 3, 1]);
+        assert_eq!(after(1, 1), vec![0, 1, 2, 3]);
+    }
+
+    // A drop or `*.tab.reorder.*` (#682): the order changes, the tab you are
+    // on stays the one you are on, and the ui is told the move itself.
+    #[test]
+    fn moving_a_tab_reorders_and_keeps_the_active_tab() {
+        let (mut m, id) = browser_card();
+        m.browser_tab_open(&id, Some("https://b.example"));
+        m.browser_tab_open(&id, Some("https://c.example"));
+        m.browser_tab_jump(&id, 1); // b.example active
+        m.dirty_layout = false;
+        m.move_tab(&id, 0, 2);
+        let card = m.card(&id).unwrap();
+        assert_eq!(
+            card.tabs,
+            vec![
+                "https://b.example",
+                "https://c.example",
+                "https://a.example"
+            ]
+        );
+        assert_eq!(card.active_tab, 0, "still on b.example");
+        assert_eq!(card.url.as_deref(), Some("https://b.example"));
+        assert_eq!(card.tab_moves, vec![(0, 2)]);
+        assert!(m.dirty_layout, "the save file keeps the order");
+        m.move_tab(&id, 0, 99);
+        let card = m.card(&id).unwrap();
+        assert_eq!(card.tabs[2], "https://b.example", "past the end is last");
+        assert_eq!(card.active_tab, 2);
+        assert_eq!(card.tab_moves, vec![(0, 2), (0, 2)]);
+    }
+
+    #[test]
+    fn a_move_to_where_it_is_or_from_nowhere_does_nothing() {
+        let (mut m, id) = browser_card();
+        m.browser_tab_open(&id, Some("https://b.example"));
+        m.dirty_layout = false;
+        m.move_tab(&id, 1, 1);
+        m.move_tab(&id, 1, 5);
+        m.move_tab(&id, 7, 0);
+        let card = m.card(&id).unwrap();
+        assert_eq!(card.tabs, vec!["https://a.example", "https://b.example"]);
+        assert!(card.tab_moves.is_empty());
+        assert!(!m.dirty_layout);
+    }
+
+    // The keyboard's way (#682): one place at a time, stopping at either end
+    // the way `workspace.reorder.*` does, and only on its own card kind.
+    #[test]
+    fn the_reorder_commands_move_the_active_tab_one_place() {
+        let mut r = CommandRegistry::new(|_| {});
+        register(&mut r);
+        let (mut m, id) = browser_card();
+        m.browser_tab_open(&id, Some("https://b.example"));
+        m.browser_tab_open(&id, Some("https://c.example"));
+        let tabs = |m: &Model| m.card(&id).unwrap().tabs.clone();
+        r.run("browser.tab.reorder.left", &mut m);
+        assert_eq!(tabs(&m)[1], "https://c.example");
+        r.run("browser.tab.reorder.left", &mut m);
+        r.run("browser.tab.reorder.left", &mut m);
+        assert_eq!(tabs(&m)[0], "https://c.example", "stops at the left end");
+        assert_eq!(m.card(&id).unwrap().active_tab, 0);
+        r.run("browser.tab.reorder.right", &mut m);
+        assert_eq!(tabs(&m)[1], "https://c.example");
+        r.run("editor.tab.reorder.right", &mut m);
+        assert_eq!(tabs(&m)[1], "https://c.example", "not an editor card");
+        assert_eq!(m.notice.as_deref(), Some("not an editor card"));
     }
 }

@@ -4225,6 +4225,214 @@ mod tests {
         assert_eq!(h.m.card(&mover).unwrap().workspace_id, new_ws);
     }
 
+    /// A workspace with a grouped terminal and editor and a browser, saved
+    /// under "site" (#715): the harness, the saved text, the ids of the
+    /// three cards.
+    fn saved_site() -> (Harness, String, [String; 3]) {
+        let mut h = Harness::new();
+        let here = h.m.active_workspace.clone().unwrap();
+        let term = h.focused().id.clone();
+        {
+            let c = h.m.card_mut(&term).unwrap();
+            c.cwd = "/Users/me/site".into();
+            c.session = Some("iftd-1".into());
+            c.agent_session = Some("agent-1".into());
+        }
+        let add = |h: &mut Harness, opts: NewCard| {
+            h.m.add_card(
+                "/Users/me/site",
+                NewCard {
+                    workspace_id: Some(here.clone()),
+                    ..opts
+                },
+            )
+        };
+        let editor = add(
+            &mut h,
+            NewCard {
+                kind: CardKind::Editor,
+                path: Some("/Users/me/site/a.rs".into()),
+                root: Some("/Users/me/site".into()),
+                ..Default::default()
+            },
+        );
+        {
+            let c = h.m.card_mut(&editor).unwrap();
+            c.tabs = vec!["/Users/me/site/a.rs".into(), "/Users/me/site/b.rs".into()];
+            c.active_tab = 1;
+        }
+        let browser = add(
+            &mut h,
+            NewCard {
+                kind: CardKind::Browser,
+                url: Some("http://localhost:3000".into()),
+                ..Default::default()
+            },
+        );
+        let group = h.m.add_group("Pair");
+        for id in [&term, &editor] {
+            h.m.card_mut(id).unwrap().group_id = Some(group.clone());
+        }
+        h.m.set_focus(Some(&editor));
+        h.run("workspace.saveAs");
+        let (pending, text) = h.m.prompt.settle(Some(" site ")).unwrap();
+        h.m.answer(pending, text, |_| false);
+        let text =
+            h.m.take_effects()
+                .into_iter()
+                .find_map(|e| match e {
+                    Effect::SaveWorkspaceFile { name, text } if name == "site" => Some(text),
+                    _ => None,
+                })
+                .expect("the file is asked for");
+        (h, text, [term, editor, browser])
+    }
+
+    #[test]
+    fn a_saved_workspace_opens_as_a_new_one_with_its_cards_where_they_were() {
+        let (mut h, text, [term, editor, browser]) = saved_site();
+        let before = h.m.cards.clone();
+        h.m.open_saved_workspace("site", Some(&text));
+        let ws = h.m.workspaces.last().unwrap().clone();
+        assert_eq!(h.m.workspaces.len(), 2);
+        assert_eq!(ws.name, "site");
+        assert_eq!(h.m.active_workspace.as_deref(), Some(ws.id.as_str()));
+        let opened: Vec<Card> = h.m.cards_on(Some(&ws.id)).into_iter().cloned().collect();
+        assert_eq!(opened.len(), 3);
+        let twin = |id: &str| {
+            let old = h.m.card(id).unwrap();
+            opened
+                .iter()
+                .find(|c| c.kind == old.kind)
+                .expect("one of each kind")
+        };
+        for id in [&term, &editor, &browser] {
+            let (old, new) = (h.m.card(id).unwrap(), twin(id));
+            assert_ne!(new.id, old.id, "a fresh id");
+            assert_eq!(new.rect, old.rect);
+            assert_eq!(new.cwd, old.cwd);
+            assert_eq!(new.path, old.path);
+            assert_eq!(new.root, old.root);
+            assert_eq!(new.url, old.url);
+            assert_eq!(new.tabs, old.tabs);
+            assert_eq!(new.active_tab, old.active_tab);
+        }
+        // A fresh shell, not the one the snapshot was taken from.
+        assert_eq!(twin(&term).session, None);
+        assert_eq!(twin(&term).agent_session, None);
+        // The group came along as a group of its own.
+        let (old_group, new_group) = (
+            h.m.card(&term).unwrap().group_id.clone().unwrap(),
+            twin(&term).group_id.clone().unwrap(),
+        );
+        assert_ne!(new_group, old_group);
+        assert_eq!(twin(&editor).group_id.as_ref(), Some(&new_group));
+        assert_eq!(twin(&browser).group_id, None);
+        assert_eq!(h.m.group(&new_group).unwrap().name, "Pair");
+        // The card that was focused when it was saved.
+        assert_eq!(h.m.selection.focused_id.as_ref(), Some(&twin(&editor).id));
+        // No two cards share a number, and the first workspace is untouched.
+        let mut numbers: Vec<u32> = h.m.cards.iter().map(|c| c.number).collect();
+        numbers.sort_unstable();
+        numbers.dedup();
+        assert_eq!(numbers.len(), 6);
+        assert_eq!(&h.m.cards[..3], &before[..]);
+    }
+
+    #[test]
+    fn a_saved_workspace_opened_twice_is_two_workspaces() {
+        let (mut h, text, _) = saved_site();
+        h.m.open_saved_workspace("site", Some(&text));
+        h.m.open_saved_workspace("site", Some(&text));
+        assert_eq!(h.m.workspaces.len(), 3);
+        assert_eq!(h.m.cards.len(), 9);
+        let mut ids: Vec<&str> = h.m.cards.iter().map(|c| c.id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), 9);
+    }
+
+    #[test]
+    fn a_saved_workspace_that_is_missing_or_unreadable_opens_nothing() {
+        let mut h = Harness::new();
+        h.m.open_saved_workspace("gone", None);
+        h.m.open_saved_workspace("bad", Some("not json"));
+        h.m.open_saved_workspace("newer", Some(r#"{"version":999,"cards":[]}"#));
+        assert_eq!(h.m.workspaces.len(), 1);
+        assert_eq!(h.m.cards.len(), 1);
+    }
+
+    #[test]
+    fn the_saved_workspaces_are_listed_and_a_pick_asks_for_its_file() {
+        let mut h = Harness::new();
+        let effects = h.run("workspace.openSaved");
+        assert!(effects.contains(&Effect::RefreshSavedWorkspaces));
+        assert_eq!(h.m.palette.source, Some(Source::SavedWorkspaces));
+        h.m.saved_workspace_names = vec!["api".into(), "site".into()];
+        let rows = h.m.palette_items(Source::SavedWorkspaces, &[]);
+        let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+        assert_eq!(labels, ["api", "site"]);
+        h.m.palette_run(Source::SavedWorkspaces, "site");
+        assert!(h
+            .m
+            .take_effects()
+            .contains(&Effect::LoadSavedWorkspace("site".into())));
+    }
+
+    #[test]
+    fn a_workspace_saved_under_no_name_is_not_saved() {
+        let mut h = Harness::new();
+        let here = h.m.active_workspace.clone().unwrap();
+        h.m.save_workspace_as(&here, " .. ");
+        assert!(!h
+            .m
+            .take_effects()
+            .iter()
+            .any(|e| matches!(e, Effect::SaveWorkspaceFile { .. })));
+    }
+
+    // A name already saved asks before the file is written over: no keeps
+    // the old snapshot, Replace writes the new one under the saved name.
+    #[test]
+    fn saving_over_a_saved_workspace_asks_first() {
+        let saves = |h: &mut Harness| {
+            h.m.take_effects()
+                .into_iter()
+                .filter_map(|e| match e {
+                    Effect::SaveWorkspaceFile { name, .. } => Some(name),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut h = Harness::new();
+        let saved = crate::saved_workspace::path(&crate::paths::saved_workspaces_dir(), "site")
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        for (answer, written) in [(None, vec![]), (Some(""), vec!["site".to_string()])] {
+            h.run("workspace.saveAs");
+            let (pending, text) = h.m.prompt.settle(Some("site")).unwrap();
+            h.m.answer(pending, text, |p| p == saved);
+            assert!(saves(&mut h).is_empty(), "nothing before the answer");
+            assert!(h.m.prompt.confirm, "a yes or no question");
+            let (pending, text) = h.m.prompt.settle(answer).unwrap();
+            assert_eq!(
+                pending,
+                Pending::ReplaceSavedWorkspace {
+                    id: h.m.active_workspace.clone().unwrap(),
+                    name: "site".into(),
+                }
+            );
+            h.m.answer(pending, text, |_| true);
+            assert_eq!(saves(&mut h), written);
+        }
+        // A new name is written at once.
+        h.run("workspace.saveAs");
+        let (pending, text) = h.m.prompt.settle(Some("api")).unwrap();
+        h.m.answer(pending, text, |p| p == saved);
+        assert_eq!(saves(&mut h), ["api"]);
+    }
+
     // An untitled editor's first save: the field starts on the card's
     // directory and untitled.txt with the stem selected; a new path saves;
     // a missing directory sends you back to the field with what you typed;

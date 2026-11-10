@@ -9,10 +9,15 @@
 //! Sized in screen pixels, then `ui_scale`, then the zoom, like every
 //! other piece of chrome.
 //!
+//! A tab dragged along the strip (#682) is `TabDrag`: the body keeps one
+//! from the press to the release, `paint_strip` draws the others making
+//! room, and the drop is handed to the model as `Model::move_tab`.
+//!
 //! Called by `editor_tabs.rs`. `body::TabClick` is the shared answer.
 use crate::body::TabClick;
 use gpui::{fill, point, px, size, App, Bounds, Font, Hsla, Pixels, Window};
 use infiniterm_core::grid::Point;
+use infiniterm_core::model::tabs_cmd::index_after_move;
 
 /// The strip is sized from `ui.fontSize`, in screen pixels times `ui_scale`.
 /// Everything else is a ratio of that, so the strip keeps its proportions
@@ -30,6 +35,72 @@ pub const TAB_STRIP_BORDER_PX: f64 = 1.;
 /// click, narrow enough that the glyph sits beside the tabs. It took a whole
 /// tab's width (9) and floated about four sizes away from them (#375).
 pub const TAB_STRIP_PLUS_WIDTH_RATIO: f64 = 2.5;
+
+/// How far a press on a tab travels, in font sizes, before it is a drag:
+/// under that it is the click that switched to the tab, and a hand that
+/// shakes a little does not reorder anything.
+pub const TAB_DRAG_SLOP_RATIO: f64 = 0.5;
+
+/// A tab held by the pointer (#682), in world units like `strip_hit`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TabDrag {
+    pub from: usize,
+    start_x: f64,
+    /// How far the pointer has gone since the press.
+    pub dx: f64,
+    /// Past the slop: the strip draws the drag and the release drops it.
+    pub moving: bool,
+}
+
+impl TabDrag {
+    pub fn new(from: usize, x: f64) -> TabDrag {
+        TabDrag {
+            from,
+            start_x: x,
+            dx: 0.,
+            moving: false,
+        }
+    }
+
+    /// The pointer at `x`; true when the strip has to be painted again.
+    pub fn moved(&mut self, x: f64, font_px: f64, ui_scale: f32) -> bool {
+        self.dx = x - self.start_x;
+        let slop = TAB_DRAG_SLOP_RATIO * font_px * ui_scale as f64;
+        if !self.moving && self.dx.abs() >= slop {
+            self.moving = true;
+        }
+        self.moving
+    }
+
+    /// Where the tab would land if dropped now.
+    pub fn to(&self, font_px: f64, ui_scale: f32, tab_count: usize) -> usize {
+        let tab_w = TAB_STRIP_TAB_WIDTH_RATIO * font_px * ui_scale as f64;
+        drop_index(self.from, self.dx, tab_w, tab_count)
+    }
+
+    /// The release: the move to make, if the tab went anywhere.
+    pub fn drop(&self, font_px: f64, ui_scale: f32, tab_count: usize) -> Option<(usize, usize)> {
+        let to = self.to(font_px, ui_scale, tab_count);
+        (self.moving && to != self.from).then_some((self.from, to))
+    }
+}
+
+/// `dx` held to the strip: the dragged tab stops at the first and last
+/// places rather than sliding off over the "+" or the folder header.
+fn clamped_dx(from: usize, dx: f64, tab_w: f64, tab_count: usize) -> f64 {
+    let last = tab_count.saturating_sub(1) as f64;
+    dx.clamp(-(from as f64) * tab_w, (last - from as f64) * tab_w)
+}
+
+/// The place whose slot holds the dragged tab's middle: it takes that
+/// place, the way a dragged workspace tab takes the one it is over.
+pub fn drop_index(from: usize, dx: f64, tab_w: f64, tab_count: usize) -> usize {
+    if tab_count == 0 || tab_w <= 0. {
+        return from;
+    }
+    let mid = (from as f64 + 0.5) * tab_w + clamped_dx(from, dx, tab_w, tab_count);
+    ((mid / tab_w).floor().max(0.) as usize).min(tab_count - 1)
+}
 
 /// The strip's colours, mirrored from the chrome each frame.
 #[derive(Clone, Debug, PartialEq)]
@@ -108,6 +179,7 @@ pub fn strip_hit(
 /// and returns its height, so the caller paints its content below.
 /// `header` is a folder editor's name and the width of its tree (world
 /// units): a box over the tree's column, with the tabs starting after it.
+/// `drag` is a tab being dragged along the strip, if one is.
 #[allow(clippy::too_many_arguments)]
 pub fn paint_strip(
     bounds: Bounds<Pixels>,
@@ -115,6 +187,7 @@ pub fn paint_strip(
     ui_scale: f32,
     labels: &[String],
     active: usize,
+    drag: Option<&TabDrag>,
     card_number: u32,
     protected: bool,
     header: Option<(&str, f64)>,
@@ -161,17 +234,45 @@ pub fn paint_strip(
                 style.border,
             ));
         }
-        for (i, label) in labels.iter().enumerate() {
+        // A drag (#682): the others sit where the drop would leave them,
+        // the held tab follows the pointer and is painted last, over them.
+        let world_tab_w = TAB_STRIP_TAB_WIDTH_RATIO * style.font_px * ui_scale as f64;
+        let drag = drag.filter(|d| d.moving && d.from < labels.len());
+        let to = drag.map(|d| drop_index(d.from, d.dx, world_tab_w, labels.len()));
+        let mut order: Vec<usize> = (0..labels.len())
+            .filter(|&i| Some(i) != drag.map(|d| d.from))
+            .collect();
+        order.extend(drag.map(|d| d.from));
+        for i in order {
+            let label = &labels[i];
+            let x = match (drag, to) {
+                (Some(d), _) if d.from == i => {
+                    let dx = clamped_dx(d.from, d.dx, world_tab_w, labels.len());
+                    tab_w * (i as f32) + px((dx * scale) as f32)
+                }
+                (Some(d), Some(to)) => tab_w * (index_after_move(i, d.from, to) as f32),
+                _ => tab_w * (i as f32),
+            };
             let tab_bounds = Bounds::new(
-                point(strip.origin.x + left + tab_w * (i as f32), strip.origin.y),
+                point(strip.origin.x + left + x, strip.origin.y),
                 size(tab_w, strip_h),
             );
+            let held = drag.is_some_and(|d| d.from == i);
             let (color, font) = if i == active {
                 window.paint_quad(fill(tab_bounds, style.active_bg));
                 (style.text_bright, &style.bold)
             } else {
+                if held {
+                    window.paint_quad(fill(tab_bounds, style.bg));
+                }
                 (style.text_muted, &style.regular)
             };
+            if held {
+                window.paint_quad(fill(
+                    Bounds::new(tab_bounds.origin, size(border, strip_h)),
+                    style.border,
+                ));
+            }
             let sep = Bounds::new(
                 point(tab_bounds.origin.x + tab_w - border, tab_bounds.origin.y),
                 size(border, strip_h),
@@ -305,6 +406,41 @@ mod tests {
             strip_hit(at(205., 10.), 10., 1., 0, 200.),
             Some(TabClick::New)
         );
+    }
+
+    // A dragged tab (#682) takes the place its middle is over, held to the
+    // strip's ends. At a 10 px font a tab is 90 wide; three tabs here.
+    #[test]
+    fn a_dragged_tab_lands_where_its_middle_is() {
+        assert_eq!(drop_index(0, 0., 90., 3), 0);
+        assert_eq!(
+            drop_index(0, 44., 90., 3),
+            0,
+            "not yet past the next tab's edge"
+        );
+        assert_eq!(drop_index(0, 46., 90., 3), 1);
+        assert_eq!(
+            drop_index(0, 500., 90., 3),
+            2,
+            "the last place, not past it"
+        );
+        assert_eq!(drop_index(2, -136., 90., 3), 0);
+        assert_eq!(drop_index(1, -500., 90., 3), 0);
+        assert_eq!(drop_index(0, 10., 90., 0), 0, "no tabs, nothing moves");
+    }
+
+    // Under the slop a press is only the click that switched tabs.
+    #[test]
+    fn a_drag_starts_past_the_slop_and_drops_only_when_it_moved() {
+        let mut d = TabDrag::new(0, 20.);
+        assert!(!d.moved(23., 10., 1.), "3 is under the 5 slop");
+        assert_eq!(d.drop(10., 1., 3), None);
+        assert!(d.moved(120., 10., 1.));
+        assert_eq!(d.drop(10., 1., 3), Some((0, 1)));
+        // Back where it started: a drag, but no move to make.
+        d.moved(22., 10., 1.);
+        assert!(d.moving);
+        assert_eq!(d.drop(10., 1., 3), None);
     }
 
     // The lock is `card.protect`'s, not this strip's own `locked`: it
