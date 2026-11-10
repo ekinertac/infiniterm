@@ -456,6 +456,24 @@ impl FileSource for LocalSource {
 mod tests {
     use super::*;
 
+    /// Makes a folder look like it was last touched on 2020-01-01, without
+    /// the Unix `touch` program (there is none on Windows). A folder is
+    /// opened with backup semantics there, or `CreateFile` refuses it.
+    fn make_old(dir: &std::path::Path) {
+        let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800);
+        #[cfg(windows)]
+        let file = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(0x0200_0000) // FILE_FLAG_BACKUP_SEMANTICS
+                .open(dir)
+        };
+        #[cfg(not(windows))]
+        let file = std::fs::File::open(dir);
+        file.unwrap().set_modified(when).unwrap();
+    }
+
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("fs-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -580,12 +598,7 @@ mod tests {
     fn a_drop_is_stored_in_its_own_folder_confined_to_the_root_and_old_ones_go() {
         let root = scratch("drops").join("drops");
         std::fs::create_dir_all(root.join("ancient")).unwrap();
-        let old = std::process::Command::new("touch")
-            .args(["-t", "202001010000"])
-            .arg(root.join("ancient"))
-            .status()
-            .unwrap();
-        assert!(old.success());
+        make_old(&root.join("ancient"));
 
         let a = put_drop_in(&root, "1-0", "shot 1.png", b"one").unwrap();
         assert_eq!(a, root.join("1-0").join("shot 1.png").to_string_lossy());

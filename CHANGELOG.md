@@ -9,6 +9,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-11
 
 - Fixed: the app no longer stops for about a third of a second every 2 seconds with several editor tabs open. The editor's git marks are now read in the background, and only after a commit, a branch change, a stage or an edit of the file (#717).
+- A PowerShell card now colours like a zsh card: a command that fails turns it red, one that runs five seconds or more shows working and ends green, and Ctrl+C is not a failure. The card's folder follows `cd` too, with or without oh-my-posh. The marks load after your profile and wrap your prompt, so it looks and behaves as before. Windows PowerShell 5.1 and `cmd` are not covered yet.
 - A card's folder now follows the shell's own report (OSC 7, which oh-my-posh and many other prompts write with every prompt). On Windows the app cannot read another program's folder, so a card there kept the folder it opened in; now it follows `cd`. A report from a shell on another machine, over ssh, is ignored.
 
 ### 2026-11-10
