@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-11
+
+- `ift phone add` now works on a Mac with Tailscale SSH on. Tailscale SSH owns port 22 on the tailnet address and ignores `authorized_keys`, so a paired phone stalled there. `ift phone add` detects it, forwards a tailnet port (2222, or the next free one) to the Mac's own ssh with `tailscale serve`, and puts that port in the QR code. It says that ssh password login is then reachable on that port from your tailnet. `ift phone remove` of the last phone closes the port. `--port <n>` skips the forward.
+
 ### 2026-11-10
 
 - `ift phone add <name>` pairs the iPhone app with this Mac: it makes a key for that phone, adds it to `~/.ssh/authorized_keys` limited to the few commands the app runs, and prints a QR code the app scans. No key to copy by hand, and nothing new listens on the Mac: the phone uses the Mac's own ssh (Remote Login must be on). The code holds the phone's private key, so only show it to the phone. `ift phone list` shows the paired phones and `ift phone remove <name>` takes one out.
