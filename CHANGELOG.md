@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-11
+
+- In a joined window, a card you move, resize, swap or regroup no longer jumps back and then moves again when the host answers. The card stays where you put it until the host's canvas has it, or for 5 seconds if the host never agrees. Cards you did not touch follow the host as before.
+
 ### 2026-11-10
 
 - `ift phone add <name>` pairs the iPhone app with this Mac: it makes a key for that phone, adds it to `~/.ssh/authorized_keys` limited to the few commands the app runs, and prints a QR code the app scans. No key to copy by hand, and nothing new listens on the Mac: the phone uses the Mac's own ssh (Remote Login must be on). The code holds the phone's private key, so only show it to the phone. `ift phone list` shows the paired phones and `ift phone remove <name>` takes one out.
