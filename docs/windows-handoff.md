@@ -42,7 +42,12 @@ a piece of work, not a mystery.
    with `--no-default-features` although CEF builds now (#516). Shipping the
    browser means putting `libcef.dll`, its data files and the helper in the
    folder and zip. Waiting for Ekin.
-3. **The browser page's right-click menu does nothing** (see below).
+3. **FIXED (found already working 2026-11-11): the browser page's right-click
+   menu.** Since #625 the page menu goes through the same model menu as the tab
+   strip's, so it is drawn by `menu_view.rs` here. Checked on screen on a
+   `https://example.com` card: Back, Forward, Reload, New Tab, Close Tab,
+   Reopen Closed Tab, Copy Address and Open in System Browser, with Ctrl+Shift
+   chords. Not checked: the rows for a link, a selection and an editable field.
 4. **Ctrl+Esc, which `browser.leave` uses, is dead on Windows**: the Start menu
    takes it before the app sees it. A double Escape still unlocks a locked
    browser or editor, and Ctrl+Shift+Esc (Task Manager's) is not assigned.
@@ -82,10 +87,8 @@ Master's new code is Mac or unix only and stays that way here, each behind a
   - **The bundled Nerd Font is registered and its icons draw** (see "Prompt
     icons" below).
   - **The app's own right-click menus work**: since #522 they are drawn by
-    gpui where there is no `NSMenu` (`menu_view.rs`). The browser page's menu
-    does not: `browsers.rs::show_page_menu` still calls the
-    `native_menu::pop_up` stub, which answers "dismissed". It needs the same
-    gpui drawing; not done.
+    gpui where there is no `NSMenu` (`menu_view.rs`), and since #625 the
+    browser page's menu goes through the same path (see "Known gaps" item 3).
   - **No taskbar badge, and none is needed**: the Dock badge marks a remote or
     joined instance, which are unix-only, and a Windows instance is single by
     design.
