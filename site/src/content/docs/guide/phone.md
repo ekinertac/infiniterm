@@ -16,13 +16,14 @@ The iPhone app shows the canvas of a Mac that runs infiniterm. Its main use is t
 - Opens a page served on the Mac's `localhost`, such as a dev server, in a browser inside the app. The page goes through the ssh connection to the Mac.
 - Has an app lock, and shows English or Turkish.
 
-The app is an ssh client. It reaches the Mac through Tailscale, to the Mac's own ssh server, and runs `ift proxy join`, the same protocol as `ift join`. There is no account, and nothing new listens on the Mac.
+The app is an ssh client. It reaches the Mac through Tailscale, to the Mac's own ssh server, and runs `ift proxy join`, the same protocol as `ift join`. There is no account. The app uses the Mac's own ssh and starts no server of its own. When Tailscale SSH is on, `ift phone add` also sets up a Tailscale port forward to the Mac's ssh, as [Pairing the iPhone app](../ift-and-sessions/#pairing-the-iphone-app) says.
 
 ## What you need
 
 1. Tailscale on the Mac and on the phone, in the same tailnet.
 2. Remote Login on in macOS: System Settings, General, Sharing, Remote Login.
 3. infiniterm running on the Mac, and the Mac awake. The phone cannot wake it.
+4. infiniterm 0.6.13 or newer on the Mac, which has `ift phone add`.
 
 ## Pair the phone with the Mac
 
@@ -49,9 +50,10 @@ The key stops working at once.
 ## What to know about the QR code
 
 - The code holds the phone's private key. Anyone who sees it can use it, until you run `ift phone remove`.
-- The code stays in that terminal card's saved output. Show it only to the phone, and close the card afterwards.
+- The code stays in that terminal card's saved output. Show it only to the phone.
 - A paired key can run only a short list of infiniterm commands on the Mac. It cannot open a shell.
-- `ift phone add` edits only `~/.ssh/authorized_keys`, and adds one line with the comment `infiniterm-phone:<name>`. `ift phone remove` deletes only the line with that name.
+
+How the key is made and limited, the options `--host` and `--port`, and what happens when Tailscale SSH is on are in [Pairing the iPhone app](../ift-and-sessions/#pairing-the-iphone-app).
 
 You can also add a Mac by hand, without a QR code:
 
