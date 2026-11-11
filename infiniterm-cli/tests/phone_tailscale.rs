@@ -8,6 +8,10 @@
 //! keep the user's authorized_keys out of it. Needs the Mac's real sshd on
 //! 127.0.0.1:22 and its host key, as `phone add` does; without them the test
 //! says so and passes (a runner with no Remote Login cannot pair a phone).
+//!
+//! Unix only: `ift phone` answers "not available on Windows" there, and the
+//! fake `tailscale` is a shell script with a mode bit.
+#![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

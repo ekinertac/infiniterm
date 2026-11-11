@@ -17,6 +17,14 @@
 if ($global:__ift_marks_loaded) { return }
 $global:__ift_marks_loaded = $true
 
+# One history file per card, so a new card does not open with every other card's past and a card
+# that ran Claude gets its `claude --resume` line back (shell_history.rs names the file and writes
+# plain lines, which is PSReadLine's own format). Set here, before the first line is read: the
+# history is loaded from the path in force when the first prompt reads.
+if ($env:INFINITERM_HISTFILE -and (Get-Command Set-PSReadLineOption -ErrorAction SilentlyContinue)) {
+    Set-PSReadLineOption -HistorySavePath $env:INFINITERM_HISTFILE
+}
+
 $global:__ift_original_prompt = $function:prompt
 
 function global:prompt {
