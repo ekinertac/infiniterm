@@ -314,6 +314,9 @@ pub enum Effect {
         repo: String,
         refname: String,
     },
+    /// "Git: init a repository here" (#754): `git init` in the folder `dir`
+    /// is (`git_branches::init`), the outcome as a notice.
+    GitInit(String),
     /// Paste `text` into the card's body as Cmd+V would: bracketed when the
     /// program asked for it, inserted at the caret in an editor.
     PasteText {

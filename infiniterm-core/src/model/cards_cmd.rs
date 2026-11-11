@@ -2335,6 +2335,17 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
             m.effects.push(Effect::ListBranches(dir));
         })
     });
+    // The terminal menu's row outside a repository (#754), and the palette's:
+    // `git init` where the card is.
+    r.register("git.init", "Git: init a repository here", |m| {
+        m.with_active_card(|m, id| {
+            let Some(card) = m.card(&id) else {
+                return;
+            };
+            let dir = card.path.clone().unwrap_or_else(|| card.cwd.clone());
+            m.effects.push(Effect::GitInit(dir));
+        })
+    });
     // The diff's twin (#373): an editor card on the folder this card is in,
     // its tree rooted there, the plan `ift <dir>` makes.
     r.register("card.open.editor", "Editor: open this card's folder", |m| {

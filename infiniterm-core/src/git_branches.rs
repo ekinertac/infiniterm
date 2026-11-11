@@ -2,9 +2,11 @@
 //! branch of a repository as a row, and the `git switch` a pick runs.
 //!
 //! Called by `infiniterm-ui/src/runtime.rs` for `Effect::ListBranches` (the
-//! rows go to `Model::open_branches`) and `Effect::SwitchBranch`. Pure apart
-//! from `list` and `switch`, which shell out to `git` the way `git.rs` does;
-//! `parse` and `switch_args` are what the tests hold.
+//! rows go to `Model::open_branches`), `Effect::SwitchBranch` and
+//! `Effect::GitInit`, and by `infiniterm-ui/src/menus.rs` for the terminal
+//! menu's Switch Branch submenu (#754). Pure apart from `list`, `switch` and
+//! `init`, which shell out to `git` the way `git.rs` does; `parse` and
+//! `switch_args` are what the tests hold.
 //!
 //! "Switch", not "checkout": `git switch` (git 2.23) is the command that only
 //! changes branches, where `checkout` also restores files. A remote branch
@@ -164,6 +166,19 @@ pub fn list(path: &Path) -> Result<(String, Vec<Branch>), String> {
     Ok((root, parse(&text)))
 }
 
+/// `git init` in `path` (a folder, or a file in one), the notice to show:
+/// git's own "Initialized empty Git repository in …" line.
+pub fn init(path: &Path) -> Result<String, String> {
+    let dir = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    };
+    git(dir, &["init"])
+        .map(|out| out.trim().to_string())
+        .map_err(|e| one_line(&e))
+}
+
 /// Switch the repository at `repo` to the branch `refname`. The error is
 /// git's own message ("Your local changes … would be overwritten").
 pub fn switch(repo: &str, refname: &str) -> Result<(), String> {
@@ -246,7 +261,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let run = |args: &[&str]| git(&dir, args).unwrap();
-        run(&["init", "-q", "-b", "main"]);
+        assert!(list(&dir).is_err(), "not a repository yet");
+        assert!(init(&dir).unwrap().contains("Initialized"));
+        run(&["symbolic-ref", "HEAD", "refs/heads/main"]);
         run(&[
             "-c",
             "user.name=t",
