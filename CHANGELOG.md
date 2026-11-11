@@ -6,6 +6,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+## 0.6.14 (build 1630), 2026-11-12
+
 ### 2026-11-12
 
 - Zooming no longer makes the app use more and more GPU memory. Every frame of a zoom used to store a new copy of each visible letter, and the copies stayed until you quit: a window open for a day held about 290 MB. Text is now drawn from a small set of sizes while you zoom and at its exact size once you stop. In a test with seven cards and eight zoom passes, GPU memory ended at about 85 MB instead of 320 MB, and zoom frames took less than half as long (7.6 ms instead of 18 at the 95th percentile).
