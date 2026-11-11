@@ -112,6 +112,65 @@ mod tests {
         }
     }
 
+    /// A real PowerShell (skipped when `pwsh` is not installed): a prompt
+    /// the user's profile would have defined is still the prompt, each
+    /// command's status goes out before it, the folder goes out as OSC 7,
+    /// and the card's history file is the one PSReadLine saves to. Run as a
+    /// `-Command` script, where a prompt is called by hand: what that cannot
+    /// show (the line reader's `C` mark, Ctrl+C reading 130) was checked on
+    /// the gpu box against a real card.
+    #[test]
+    fn a_real_powershell_marks_its_commands_and_keeps_the_users_prompt() {
+        let have = Command::new("pwsh")
+            .args(["-NoLogo", "-NoProfile", "-Command", "exit 0"])
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if !have {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("ift-pwsh-{}", std::process::id()));
+        let shim = install(&root.join("shim")).unwrap();
+        let hist = root.join("card-history");
+        let script = r#"
+function prompt { 'USERPROMPT> ' }
+. $env:INFINITERM_PWSH_INTEGRATION
+$me = (Get-Process -Id $PID).Path
+& $me -NoProfile -Command 'exit 3'
+[Console]::Out.Write('FAILED:' + (prompt) + "`n")
+Get-Date | Out-Null
+[Console]::Out.Write('OK:' + (prompt) + "`n")
+[Console]::Out.Write('HIST:' + (Get-PSReadLineOption).HistorySavePath + "`n")
+"#;
+        let out = Command::new("pwsh")
+            .args(["-NoLogo", "-NoProfile", "-Command", script])
+            .env("INFINITERM_PWSH_INTEGRATION", shim.join(PWSH_FILE))
+            .env("INFINITERM_HISTFILE", &hist)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            text.contains("FAILED:\u{1b}]133;D;3\u{7}"),
+            "a native command's status goes out first: {text:?}"
+        );
+        assert!(
+            text.contains("USERPROMPT> "),
+            "the user's prompt stays: {text:?}"
+        );
+        assert!(
+            text.contains("OK:\u{1b}]133;D;0\u{7}"),
+            "a command that worked reports 0: {text:?}"
+        );
+        assert!(
+            text.contains("\u{1b}]7;file://"),
+            "the folder goes out: {text:?}"
+        );
+        assert!(
+            text.contains(&format!("HIST:{}", hist.display())),
+            "the card's own history file: {text:?}"
+        );
+    }
+
     #[test]
     fn a_remote_instances_card_and_a_program_card_get_no_integration() {
         assert!(applies(false, false, true), "a local shell card does");

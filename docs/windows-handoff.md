@@ -475,7 +475,11 @@ What is still open:
   turned the card failed, a cmdlet error failed it with status 1, a 7-second
   `Start-Sleep` went working then done, Ctrl+C on a running command read 130
   (not a failure, via the history entry's `Stopped` status) and the prompt
-  looked as before. Not checked: Windows PowerShell 5.1 (`powershell.exe`),
+  looked as before. The same script points PSReadLine's `HistorySavePath` at
+  `INFINITERM_HISTFILE` (checked on the box: a command lands in the card's own
+  file and not in `ConsoleHost_history.txt`, and Up after an app restart brings
+  it back), and `shell_integration::tests::a_real_powershell_marks_its_commands_and_keeps_the_users_prompt`
+  runs a real `pwsh` (skips without one). Not checked: Windows PowerShell 5.1 (`powershell.exe`),
   a profile that replaces `PSConsoleHostReadLine` itself, starship, and
   `cmd.exe`, which has no integration.
 - A card can say `ssh` but never which host: Toolhelp gives an exe's file

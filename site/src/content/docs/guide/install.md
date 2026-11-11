@@ -64,11 +64,11 @@ An agent session that was already running keeps the settings it started with, so
 
 To remove them: delete the entries whose command runs `infiniterm-hook` from `~/.claude/settings.json` and `~/.codex/hooks.json`, delete `~/.pi/agent/extensions/infiniterm.ts` and `~/.config/opencode/plugins/infiniterm.js`, and remove infiniterm's entries from `~/.cursor/hooks.json` plus `~/.cursor/hooks/infiniterm-cursor-hook.sh`.
 
-Other commands need no setup: a zsh started in a card reports each command's start and exit status to the app. See [Card states](../card-states/).
+Other commands need no setup: a zsh or PowerShell started in a card reports each command's start and exit status to the app. See [Card states](../card-states/).
 
 ## Shell history per card
 
-This is for zsh. Other shells keep their usual history, see [Which shell](../terminal/#which-shell).
+This is for zsh and PowerShell. PowerShell needs no setup: a card's `pwsh` saves to the card's own file through PSReadLine. Other shells keep their usual history, see [Which shell](../terminal/#which-shell).
 
 Each card gets its own zsh history file, so a new card does not open with every other card's past, and after a reboot a card that ran Claude has `claude --resume <id>` as its last history entry. macOS sets `HISTFILE` before your `.zshrc` runs, so add one line to `.zshrc`:
 
