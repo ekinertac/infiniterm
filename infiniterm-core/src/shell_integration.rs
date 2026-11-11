@@ -33,6 +33,43 @@ pub fn install(dir: &Path) -> std::io::Result<PathBuf> {
     Ok(dir.to_path_buf())
 }
 
+/// The `PATH` a card's shell starts with so that `ift` resolves in it: the
+/// folder the app runs from, first. On Windows `ift.exe` sits beside
+/// `infiniterm.exe`, and nothing else puts that folder on a PATH (`ift
+/// install` only says so), so a card could not run it. First, not last, so
+/// the `ift` that came with this app wins over an older one on the PATH. The
+/// base is the user's own `terminal.env` PATH when they set one, else the
+/// app's; the user's PATH and the registry are never written, this is the
+/// card's environment only. `None` leaves the card's PATH as it was: the
+/// folder is already first, or the list cannot be joined (an entry that holds
+/// the separator). Called from the ui only on Windows.
+pub fn path_with_app_dir(
+    app_dir: &Path,
+    user_env: &[(String, String)],
+    process_path: Option<std::ffi::OsString>,
+) -> Option<(String, String)> {
+    let base = user_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k.eq_ignore_ascii_case("PATH"))
+        .map(|(_, v)| std::ffi::OsString::from(v))
+        .or(process_path)
+        .unwrap_or_default();
+    let rest: Vec<PathBuf> = std::env::split_paths(&base).collect();
+    let same = |p: &Path| {
+        p.to_string_lossy()
+            .eq_ignore_ascii_case(&app_dir.to_string_lossy())
+    };
+    if rest.first().is_some_and(|p| same(p)) {
+        return None;
+    }
+    let joined = std::env::join_paths(
+        std::iter::once(app_dir.to_path_buf()).chain(rest.into_iter().filter(|p| !same(p))),
+    )
+    .ok()?;
+    Some(("PATH".to_string(), joined.to_string_lossy().into_owned()))
+}
+
 /// The variable that makes a card's PowerShell load the integration: the
 /// path of the script, which the shell's own `-Command` (`shell_cmd.rs`)
 /// dot-sources after the user's profile. Empty for any other shell.
@@ -110,6 +147,47 @@ mod tests {
         for mark in ["133;D;", "133;C", "]7;", "PSConsoleHostReadLine"] {
             assert!(text.contains(mark), "the script writes {mark}");
         }
+    }
+
+    fn joined(dirs: &[&str]) -> std::ffi::OsString {
+        std::env::join_paths(dirs).unwrap()
+    }
+
+    #[test]
+    fn the_app_folder_goes_first_on_a_cards_path_without_a_second_copy() {
+        let app = Path::new("/apps/infiniterm");
+        let process = Some(joined(&["/usr/bin", "/apps/infiniterm", "/bin"]));
+        let (key, value) = path_with_app_dir(app, &[], process).unwrap();
+        assert_eq!(key, "PATH");
+        assert_eq!(
+            value,
+            joined(&["/apps/infiniterm", "/usr/bin", "/bin"]).to_string_lossy(),
+            "first, and the later copy is dropped"
+        );
+        // No PATH at all: just the folder.
+        let (_, only) = path_with_app_dir(app, &[], None).unwrap();
+        assert_eq!(only, "/apps/infiniterm");
+        // Already first (the case differs only where a file system ignores
+        // case): nothing to add.
+        assert!(path_with_app_dir(app, &[], Some(joined(&["/APPS/infiniterm", "/bin"]))).is_none());
+    }
+
+    #[test]
+    fn a_terminal_env_path_is_the_base_and_the_process_path_is_not_mixed_in() {
+        let app = Path::new("/apps/infiniterm");
+        let user = vec![
+            (
+                "Path".to_string(),
+                joined(&["/mine", "/bin"]).to_string_lossy().into_owned(),
+            ),
+            ("OTHER".to_string(), "x".to_string()),
+        ];
+        let (_, value) = path_with_app_dir(app, &user, Some(joined(&["/process"]))).unwrap();
+        assert_eq!(
+            value,
+            joined(&["/apps/infiniterm", "/mine", "/bin"]).to_string_lossy(),
+            "the user's own PATH wins as the base (any spelling of the name)"
+        );
     }
 
     /// A real PowerShell (skipped when `pwsh` is not installed): a prompt
