@@ -62,6 +62,7 @@ export default defineConfig({
             'guide/editor',
             'guide/ift-and-sessions',
             'guide/servers',
+            'guide/phone',
             'guide/configuration',
           ],
         },
