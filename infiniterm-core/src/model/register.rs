@@ -674,6 +674,7 @@ mod tests {
                             .map(|(k, _)| k.clone())
                     },
                     shown: &|c| Some(c.to_string()),
+                    git: &|| None,
                 },
             );
             fn items(rows: &[Row], out: &mut Vec<(String, String)>) {
@@ -1516,6 +1517,25 @@ mod tests {
         h.m.close_palette(true);
         h.m.open_branches("/h", vec![]);
         assert_eq!(h.m.palette.source, None, "no palette over nothing");
+    }
+
+    // The terminal menu's git row (#754): a branch row switches in the
+    // card's folder, any other command is not a branch pick, and Git Init
+    // asks the ui to init there.
+    #[test]
+    fn the_menus_branch_row_switches_and_git_init_inits() {
+        let mut h = Harness::new();
+        let id = h.m.add_card("/h/sub", NewCard::default());
+        h.m.set_focus(Some(&id));
+        assert!(!h.m.menu_branch_pick("card.close"));
+        assert!(h.m.effects.is_empty());
+        assert!(h.m.menu_branch_pick("git.switchBranch.to:refs/heads/dev"));
+        assert!(h.m.effects.contains(&Effect::SwitchBranch {
+            repo: "/h/sub".into(),
+            refname: "refs/heads/dev".into(),
+        }));
+        let effects = h.run("git.init");
+        assert!(effects.contains(&Effect::GitInit("/h/sub".into())));
     }
 
     // Cmd+Shift+F (#602): the pattern is asked, the ui is told to search, the

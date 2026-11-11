@@ -371,6 +371,7 @@ mod tests {
                 label: &|id| Some(format!("Card: {id}")),
                 chord: &|_| None,
                 shown: &|_| None,
+                git: &|| None,
             },
         );
         let canvas = built

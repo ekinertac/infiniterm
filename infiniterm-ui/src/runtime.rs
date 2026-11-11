@@ -604,6 +604,15 @@ impl AppView {
                     }
                     self.redraw = true;
                 }
+                // The terminal menu's Git Init (#754): as short a run as the
+                // switch above.
+                Effect::GitInit(dir) => {
+                    match infiniterm_core::git_branches::init(std::path::Path::new(&dir)) {
+                        Ok(line) => self.model.notify(line),
+                        Err(e) => self.model.notify(e),
+                    }
+                    self.redraw = true;
+                }
                 Effect::PasteText { card_id, text } => self.paste_text(&card_id, &text),
                 // The right-click menu's terminal acts (#278). The clipboard is
                 // read in the poll task, where there is an app context.

@@ -325,6 +325,27 @@ impl Model {
         });
     }
 
+    /// A row of the terminal menu's Switch Branch submenu (#754), whose
+    /// command is `context_menu::BRANCH_PICK` and the ref name: the ui
+    /// switches the focused card's repository to it. False for any other
+    /// command, which the caller runs as one.
+    pub fn menu_branch_pick(&mut self, command: &str) -> bool {
+        let Some(refname) = command.strip_prefix(crate::context_menu::BRANCH_PICK) else {
+            return false;
+        };
+        self.with_active_card(|m, id| {
+            let Some(card) = m.card(&id) else {
+                return;
+            };
+            let repo = card.cwd.clone();
+            m.effects.push(super::Effect::SwitchBranch {
+                repo,
+                refname: refname.into(),
+            });
+        });
+        true
+    }
+
     /// A Go to File pick: the tab that already shows the file, else a new
     /// one (what Enter on a file in the tree does).
     pub fn quick_open_pick(&mut self, rel: &str) {
