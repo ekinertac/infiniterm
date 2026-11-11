@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-11
 
+- A browser card now asks before it sends you to another app's link. A page that goes to `slack://` (Slack's magic login), `zoommtg:`, `mailto:`, `tel:`, `spotify:` and the like used to end on Chromium's "This site can't be reached" page. Now the card keeps the page it was on and asks "open slack://… in its app?"; Enter opens the app macOS has registered for it, Escape does nothing. A link nobody owns says "no app on this Mac opens … links". It asks every time, because a page can redirect to an app without a click.
 - Fixed: "App: restart" and the update restart now bring the app back while a joined window (`ift join`) is open. Before, the app quit and the restart only put the joined window in front, so you had to close it and open infiniterm by hand.
 
 ## 0.6.13 (build 1578), 2026-11-11

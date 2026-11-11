@@ -34,6 +34,27 @@ const SAVE_CLOSE_MS: f64 = 2000.;
 pub const ZOOM_STEP: f64 = 1.1;
 
 impl Model {
+    /// A browser card's page sent the card to another app's link (#668):
+    /// `slack://...`, `mailto:...`. Queued, and asked about in `tick` once no
+    /// other question is open; the same link twice in a row is one question.
+    pub fn queue_app_link(&mut self, url: String) {
+        if crate::app_link::is_app_link(&url) && self.app_links.back() != Some(&url) {
+            self.app_links.push_back(url);
+        }
+    }
+
+    /// Asks about the next queued app link when the prompt is free. Nothing
+    /// opens without the yes: a page can redirect to an app with no click.
+    pub(super) fn ask_next_app_link(&mut self) {
+        if self.app_links.is_empty() || self.prompt.is_open() {
+            return;
+        }
+        if let Some(url) = self.app_links.pop_front() {
+            let q = crate::app_link::question(&url);
+            self.prompt.confirm(&q, "Open", Pending::OpenAppLink(url));
+        }
+    }
+
     /// The active card at a size chosen from the default's fractions, from
     /// its own top-left corner, if that space is free. Cards may not
     /// overlap, so a card in the way means nothing moves and the status
@@ -608,6 +629,11 @@ impl Model {
             Pending::CloseWorkspace(id) => {
                 if text.is_some() {
                     self.close_workspace_confirmed(&id);
+                }
+            }
+            Pending::OpenAppLink(url) => {
+                if text.is_some() {
+                    self.effects.push(Effect::OpenAppLink(url));
                 }
             }
             Pending::CloseCard { id, reclaim } => {

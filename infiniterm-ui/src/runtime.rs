@@ -503,6 +503,16 @@ impl AppView {
                         eprintln!("[infiniterm] {e}");
                     }
                 }
+                // An app link the person said yes to (#668). `open` is waited
+                // for, so a scheme no app owns is said, not silent.
+                Effect::OpenAppLink(url) => {
+                    let scheme = infiniterm_core::app_link::scheme(&url).unwrap_or_default();
+                    if let Err(e) = infiniterm_core::links_fs::open_app_link(&url) {
+                        self.model
+                            .notify(format!("no app on this Mac opens {scheme} links"));
+                        eprintln!("[infiniterm] {url}: {e}");
+                    }
+                }
                 // The settings in a joined window are the host's, shown
                 // read only for now: writing one here would put a file in the
                 // viewer's own folder that nothing reads.

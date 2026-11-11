@@ -84,6 +84,39 @@ pub fn open_path(cwd: &str, path: &str) -> Result<(), String> {
     open_with_system(&full)
 }
 
+/// Hands an app link (`slack://...`, `mailto:...`, #668) to macOS, which opens
+/// the app registered for its scheme, as `open <url>` does in a shell. Waits
+/// for `open` so a scheme no app owns comes back as an error the caller can
+/// say, instead of nothing happening. Only what `app_link::is_app_link`
+/// accepts: a web address, a file or an option for `open` is refused.
+pub fn open_app_link(url: &str) -> Result<(), String> {
+    if !crate::app_link::is_app_link(url) {
+        return Err("not an app link".into());
+    }
+    #[cfg(unix)]
+    {
+        let out = std::process::Command::new("open")
+            .arg(url)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if said.is_empty() {
+            "no app opens it".to_string()
+        } else {
+            said
+        });
+    }
+    #[cfg(windows)]
+    {
+        // Explorer opens the registered handler and does not report one that
+        // is missing; the best the card can say there is that it was sent.
+        open_with_system(Path::new(url))
+    }
+}
+
 pub fn open_url(url: &str) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("not a web URL".into());

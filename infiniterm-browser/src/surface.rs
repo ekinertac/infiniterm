@@ -91,6 +91,10 @@ pub struct Shared {
     pub paints: u32,
     /// Windows the page or the extension tried to open, as urls.
     pub popups: Vec<String>,
+    /// Links to another app's scheme (`slack://...`, #668) the page sent the
+    /// browser to, by a click, a redirect or a popup. CEF is told NOT to open
+    /// them itself: the ui asks first, since a redirect needs no click.
+    pub external_links: Vec<String>,
     pub title: Option<String>,
     pub url: Option<String>,
     pub loading: bool,
@@ -260,7 +264,14 @@ wrap_life_span_handler! {
             if let Some(url) = target_url {
                 let url = url.to_string();
                 if !url.is_empty() {
-                    self.handler.shared.borrow_mut().popups.push(url);
+                    let mut shared = self.handler.shared.borrow_mut();
+                    // `window.open("slack://...")`: another app's link, not a
+                    // tab (#668).
+                    if infiniterm_core::app_link::is_app_link(&url) {
+                        shared.external_links.push(url);
+                    } else {
+                        shared.popups.push(url);
+                    }
                 }
             }
             1
@@ -454,6 +465,30 @@ wrap_request_handler! {
     }
 
     impl RequestHandler {
+        // A navigation to another app's scheme (`slack://...`, #668) is
+        // refused before it commits, so the card keeps the page it was on
+        // instead of Chromium's "site can't be reached" page; the link is
+        // queued for the ui to ask about. A redirect from a web page to such
+        // an address (Slack's magic login) comes through here too.
+        fn on_before_browse(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            request: Option<&mut Request>,
+            _user_gesture: ::std::os::raw::c_int,
+            _is_redirect: ::std::os::raw::c_int,
+        ) -> ::std::os::raw::c_int {
+            let Some(request) = request else {
+                return 0;
+            };
+            let url = CefStringUtf16::from(&request.url()).to_string();
+            if infiniterm_core::app_link::is_app_link(&url) {
+                self.handler.shared.borrow_mut().external_links.push(url);
+                return 1;
+            }
+            0
+        }
+
         // A middle-click or Cmd+click on a link reaches the browser process
         // here, not through `on_before_popup`: with no answer Chromium
         // follows the link in the tab it came from. The address is queued
@@ -472,10 +507,74 @@ wrap_request_handler! {
             if let Some(url) = target_url {
                 let url = url.to_string();
                 if !url.is_empty() {
-                    self.handler.shared.borrow_mut().popups.push(url);
+                    let mut shared = self.handler.shared.borrow_mut();
+                    // Another app's link is no tab: it would stay empty.
+                    if infiniterm_core::app_link::is_app_link(&url) {
+                        shared.external_links.push(url);
+                    } else {
+                        shared.popups.push(url);
+                    }
                 }
             }
             1
+        }
+
+        // The answer to "who opens a request": for the one thing wanted here,
+        // a navigation to a scheme CEF has no handler for.
+        fn resource_request_handler(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            _request: Option<&mut Request>,
+            _is_navigation: ::std::os::raw::c_int,
+            _is_download: ::std::os::raw::c_int,
+            _request_initiator: Option<&CefString>,
+            _disable_default_handling: Option<&mut ::std::os::raw::c_int>,
+        ) -> Option<ResourceRequestHandler> {
+            Some(ProtocolBuilder::new(self.handler.clone()))
+        }
+    }
+}
+
+wrap_resource_request_handler! {
+    struct ProtocolBuilder {
+        handler: Handler,
+    }
+
+    impl ResourceRequestHandler {
+        // MUST say continue: the trait's default is `RV_CANCEL`, which would
+        // cancel every request of every page this handler is asked about
+        // (the first build of this blanked every browser card, #668).
+        fn on_before_resource_load(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            _request: Option<&mut Request>,
+            _callback: Option<&mut Callback>,
+        ) -> ReturnValue {
+            ReturnValue::CONTINUE
+        }
+
+        // A navigation to `slack://...`, `mailto:...` and the like reaches
+        // the browser process here; with no answer the tab ends on Chromium's
+        // "might be temporarily down" page (#668). The address is queued for
+        // the ui to ask about, and CEF is told not to open it itself.
+        fn on_protocol_execution(
+            &self,
+            _browser: Option<&mut Browser>,
+            _frame: Option<&mut cef::Frame>,
+            request: Option<&mut Request>,
+            allow_os_execution: Option<&mut ::std::os::raw::c_int>,
+        ) {
+            if let Some(allow) = allow_os_execution {
+                *allow = 0;
+            }
+            if let Some(request) = request {
+                let url = CefStringUtf16::from(&request.url()).to_string();
+                if infiniterm_core::app_link::is_app_link(&url) {
+                    self.handler.shared.borrow_mut().external_links.push(url);
+                }
+            }
         }
     }
 }
@@ -735,6 +834,11 @@ impl Surface {
 
     pub fn take_popups(&self) -> Vec<String> {
         std::mem::take(&mut self.shared.borrow_mut().popups)
+    }
+
+    /// The other-app links the page asked for since the last call (#668).
+    pub fn take_external_links(&self) -> Vec<String> {
+        std::mem::take(&mut self.shared.borrow_mut().external_links)
     }
 
     /// A right-click since the last call, if one landed.

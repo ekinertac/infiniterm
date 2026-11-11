@@ -136,6 +136,9 @@ impl AppView {
             }
         }
         let mut opens: Vec<(String, String)> = vec![];
+        // Another app's links the pages asked for (#668), asked about once
+        // the loop is done with the cards.
+        let mut app_links: Vec<String> = vec![];
         let mut moved: Vec<(String, String)> = vec![];
         let mut titles: Vec<(String, String)> = vec![];
         let mut retabs: Vec<(String, Vec<String>)> = vec![];
@@ -238,6 +241,7 @@ impl AppView {
                 locks.push((card.id.clone(), locked));
             }
 
+            app_links.append(&mut body.external_links);
             for popup in std::mem::take(&mut body.popups) {
                 // The point of tabs: a popup, a target=_blank link or a
                 // Cmd+click opens a tab on the SAME card, not a new card.
@@ -278,6 +282,10 @@ impl AppView {
                 c.url = c.tabs.get(c.active_tab).cloned();
             }
             self.model.dirty_layout = true;
+            self.redraw = true;
+        }
+        for url in app_links {
+            self.model.queue_app_link(url);
             self.redraw = true;
         }
         for (id, locked) in locks {

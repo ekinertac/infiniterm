@@ -38,6 +38,7 @@ pub mod swap;
 pub mod multi_select;
 
 pub mod agent_state;
+pub mod app_link;
 pub mod help_docs;
 pub mod phone;
 pub mod program_state;
