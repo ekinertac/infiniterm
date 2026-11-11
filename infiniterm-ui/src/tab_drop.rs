@@ -13,6 +13,10 @@
 
 use gpui::{Bounds, Pixels, Point};
 
+/// Each workspace's tab with its window bounds, shared between the title bar
+/// that fills it every frame and the mouse handlers that read it.
+pub type TabBounds = std::rc::Rc<std::cell::RefCell<Vec<(String, Bounds<Pixels>)>>>;
+
 /// The workspace whose tab contains `at`, unless it is `active` (the one the
 /// drag started in).
 pub fn tab_under(

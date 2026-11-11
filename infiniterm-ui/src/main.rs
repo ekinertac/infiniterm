@@ -271,7 +271,7 @@ pub struct AppView {
     /// Each workspace tab's window bounds as the title bar last drew them
     /// (#667): what a card drag is hit-tested against. Cleared and refilled
     /// every frame the bar is built.
-    pub tab_bounds: std::rc::Rc<std::cell::RefCell<Vec<(String, gpui::Bounds<gpui::Pixels>)>>>,
+    pub tab_bounds: tab_drop::TabBounds,
     /// The workspace tab a card drag is over right now (#667): lit by the bar,
     /// and where the drop sends the cards. `None` off the tabs, and for the
     /// tab of the workspace the drag started in.
