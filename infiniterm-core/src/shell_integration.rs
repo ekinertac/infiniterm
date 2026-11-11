@@ -55,7 +55,13 @@ pub fn path_with_app_dir(
         .map(|(_, v)| std::ffi::OsString::from(v))
         .or(process_path)
         .unwrap_or_default();
-    let rest: Vec<PathBuf> = std::env::split_paths(&base).collect();
+    // An empty PATH splits into one empty entry, which joins back as a
+    // trailing `;` (on Windows an empty entry is the current directory).
+    let rest: Vec<PathBuf> = if base.is_empty() {
+        vec![]
+    } else {
+        std::env::split_paths(&base).collect()
+    };
     let same = |p: &Path| {
         p.to_string_lossy()
             .eq_ignore_ascii_case(&app_dir.to_string_lossy())
