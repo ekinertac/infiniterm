@@ -885,7 +885,9 @@ impl AppView {
         // The ghost: an outline where the dragged card would land, in the
         // focus ring's colour when the space is free and the warning colour
         // when a card is in the way, so the answer is known before the drop.
-        if let Some((id, r)) = &ghost {
+        // Over a workspace tab (#667) the drop is not on the canvas: no
+        // landing slot to show, no warning colour for taken space.
+        if let (Some((id, r)), true) = (&ghost, self.drop_tab.is_none()) {
             // The grid's slots for a card this size, faint, so where it
             // belongs is visible before the drop (slot_snap.rs).
             let slot_color = crate::chrome::with_alpha(chrome.focus_ring, GHOST_SLOT_ALPHA);

@@ -129,6 +129,36 @@ impl Model {
         self.dirty_layout = true;
     }
 
+    /// A card drag dropped on workspace `to`'s tab (#667). The drag moved
+    /// the cards under the pointer (a group or a selection) or a ghost (one
+    /// card), and a drop on a tab is not a drop on the canvas: they go back
+    /// to where the drag began, then the SAME move the palette's "Card: move
+    /// to workspace…" and "Group: move to workspace…" do takes them (the
+    /// destination's first free slot, out of their groups, you stay where you
+    /// are). `start` is each dragged card's rect at the press; `group` is a
+    /// group drag. Not on the undo trail, as the commands are not.
+    pub fn drop_on_workspace(
+        &mut self,
+        card: &str,
+        start: &[(String, crate::grid::Rect)],
+        group: bool,
+        to: &str,
+    ) {
+        for (id, rect) in start {
+            if let Some(c) = self.card_mut(id) {
+                c.rect = *rect;
+            }
+        }
+        if group {
+            // The group move reads the focused card's group.
+            self.set_focus(Some(card));
+            self.move_group_to(to);
+        } else {
+            self.move_selection_to(to);
+        }
+        self.dirty_layout = true;
+    }
+
     /// The focused card's whole group to workspace `to`, or a new one: the
     /// frame, the name and the cards in their arrangement and sizes, moved
     /// as one block (#348). The block takes the destination's first free

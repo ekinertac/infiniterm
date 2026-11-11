@@ -4233,6 +4233,99 @@ mod tests {
         );
     }
 
+    // #667: dropping a dragged card on a workspace tab is the palette's move,
+    // not a second path: the same destination rect, the same notice, the
+    // source card back where the drag began, and you stay where you are.
+    #[test]
+    fn a_card_dropped_on_a_tab_goes_where_the_palette_move_puts_it() {
+        // The palette's way, for the reference rects.
+        let mut p = Harness::new();
+        p.run("card.new.terminal");
+        let pm = p.focused().id.clone();
+        let p_there = p.m.add_workspace(Some("Acme"));
+        p.m.set_focus(Some(&pm));
+        p.m.palette_run(Source::MoveTo, &p_there);
+        let via_palette = p.m.card(&pm).unwrap().rect;
+
+        let mut h = Harness::new();
+        let here = h.m.active_workspace.clone().unwrap();
+        h.run("card.new.terminal");
+        let mover = h.focused().id.clone();
+        let start = h.m.card(&mover).unwrap().rect;
+        let there = h.m.add_workspace(Some("Acme"));
+        h.m.set_focus(Some(&mover));
+        // The drag moved the card under the pointer before the drop.
+        h.m.card_mut(&mover).unwrap().rect.x += 900.;
+        h.m.drop_on_workspace(&mover, &[(mover.clone(), start)], false, &there);
+        let moved = h.m.card(&mover).unwrap().clone();
+        assert_eq!(moved.workspace_id, there);
+        assert_eq!(
+            moved.rect, via_palette,
+            "the palette's slot, not the drag's"
+        );
+        assert_eq!(h.m.active_workspace.as_deref(), Some(here.as_str()));
+        assert!(h
+            .m
+            .notice
+            .as_deref()
+            .is_some_and(|n| n.ends_with("to Acme")));
+    }
+
+    #[test]
+    fn a_selection_dropped_on_a_tab_moves_every_selected_card_and_a_group_moves_whole() {
+        let mut h = Harness::new();
+        h.run("card.new.terminal");
+        let a = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let b = h.focused().id.clone();
+        h.run("card.new.terminal");
+        let outsider = h.focused().id.clone();
+        let (ra, rb) = (h.m.card(&a).unwrap().rect, h.m.card(&b).unwrap().rect);
+        let there = h.m.add_workspace(Some("Acme"));
+        // A selection of two: both go, the third stays.
+        h.m.focus_extended(&b, vec![a.clone()]);
+        h.m.card_mut(&a).unwrap().rect.y += 500.;
+        h.m.card_mut(&b).unwrap().rect.y += 500.;
+        h.m.drop_on_workspace(&b, &[(a.clone(), ra), (b.clone(), rb)], false, &there);
+        assert_eq!(h.m.card(&a).unwrap().workspace_id, there);
+        assert_eq!(h.m.card(&b).unwrap().workspace_id, there);
+        assert_ne!(h.m.card(&outsider).unwrap().workspace_id, there);
+
+        // A group: dropped by one card, the whole group goes.
+        let mut g = Harness::new();
+        g.run("card.new.terminal");
+        let ga = g.focused().id.clone();
+        g.run("card.new.terminal");
+        let gb = g.focused().id.clone();
+        g.m.focus_extended(&gb, vec![ga.clone()]);
+        g.run("group.new");
+        let (pending, text) = g.m.prompt.settle(Some("Pair")).unwrap();
+        g.m.answer(pending, text, |_| true);
+        let (sa, sb) = (g.m.card(&ga).unwrap().rect, g.m.card(&gb).unwrap().rect);
+        let there = g.m.add_workspace(Some("Acme"));
+        g.m.drop_on_workspace(&ga, &[(ga.clone(), sa), (gb.clone(), sb)], true, &there);
+        assert_eq!(g.m.card(&ga).unwrap().workspace_id, there);
+        assert_eq!(g.m.card(&gb).unwrap().workspace_id, there);
+    }
+
+    // A tab that is not a workspace, or the one you are on, moves nothing and
+    // leaves the card where the drag began: the caller never offers the
+    // current tab, but a stale id must not lose a card either.
+    #[test]
+    fn a_drop_on_the_current_workspace_or_an_unknown_one_leaves_the_card_in_place() {
+        let mut h = Harness::new();
+        let here = h.m.active_workspace.clone().unwrap();
+        h.run("card.new.terminal");
+        let id = h.focused().id.clone();
+        let start = h.m.card(&id).unwrap().rect;
+        h.m.card_mut(&id).unwrap().rect.x += 700.;
+        h.m.drop_on_workspace(&id, &[(id.clone(), start)], false, &here);
+        assert_eq!(h.m.card(&id).unwrap().rect, start);
+        assert_eq!(h.m.card(&id).unwrap().workspace_id, here);
+        h.m.drop_on_workspace(&id, &[(id.clone(), start)], false, "no-such-workspace");
+        assert_eq!(h.m.card(&id).unwrap().workspace_id, here);
+    }
+
     #[test]
     fn a_group_moves_to_another_workspace_with_its_arrangement() {
         let mut h = Harness::new();

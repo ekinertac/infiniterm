@@ -607,6 +607,22 @@ impl AppView {
                     p, g.start_px, self.model.viewport.scale
                 );
             }
+            // A card drag over a workspace tab is a drop target (#667); a
+            // resize never is. Lit by the title bar, and the ghost goes away
+            // while it is: this is not a canvas drop.
+            let over = if matches!(g.kind, GestureKind::Resize(_)) {
+                None
+            } else {
+                crate::tab_drop::tab_under(
+                    &self.tab_bounds.borrow(),
+                    e.position,
+                    self.model.active_workspace.as_deref(),
+                )
+            };
+            if over != self.drop_tab {
+                self.drop_tab = over;
+                self.redraw = true;
+            }
             // Screen delta / scale = world delta, snapped so the card steps
             // from grid line to grid line while you drag.
             let scale = self.model.viewport.scale;
@@ -858,6 +874,20 @@ impl AppView {
             return;
         }
         if let Some(g) = self.gesture.take() {
+            // Dropped on a workspace tab (#667): the same move the palette's
+            // "Card: move to workspace…" does, not a canvas drop.
+            if let Some(to) = self.drop_tab.take() {
+                let (group, start) = match &g.kind {
+                    GestureKind::MoveGroup(_) => (true, g.start_rects.clone()),
+                    GestureKind::MoveSelection => (false, g.start_rects.clone()),
+                    _ => (false, vec![(g.card.clone(), g.start_rect)]),
+                };
+                self.note_use("mouse.card.dropOnTab");
+                self.model.drop_on_workspace(&g.card, &start, group, &to);
+                self.perform_effects();
+                self.redraw = true;
+                return;
+            }
             // A single card's drop: to the ghost, or a swap with the card
             // under it.
             if let (GestureKind::Move, Some(ghost)) = (&g.kind, g.ghost) {
@@ -1266,6 +1296,8 @@ impl AppView {
                         c.rect = g.start_rect;
                     }
                 }
+                // A drag over a workspace tab (#667) is cancelled too.
+                self.drop_tab = None;
                 self.redraw = true;
                 return true;
             }
