@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-12
+
+- On Windows, `ift` now works inside every card with no setup: the app puts its own folder first on each card's PATH when the card starts. Your own PATH and the registry are not changed, and `ift install` still only tells you which folder to add if you want `ift` in other terminals. It works in PowerShell 7 and in Windows PowerShell 5.1.
+
 ### 2026-11-11
 
 - A tab that a page opened (a login popup, a `target=_blank` link) now closes when its page calls `window.close()`, as in Chrome, so a sign-in popup that closes itself no longer leaves an empty tab behind. A tab you opened yourself, and the card's first tab, ignore `window.close()`.
