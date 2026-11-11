@@ -43,6 +43,10 @@ The tree has no file operations (no create, rename or delete). The service does 
 
 Handshake, as the join protocol does it: the viewer sends the line `ift-files <major>`, the helper answers `ift-files <major> ok` or `ift-files <major> error <sentence>`. A host whose `ift` does not know `proxy files` answers with a shell error where the line should be, and the viewer says "update infiniterm there", as it does for join. Major 1.
 
+### Read-only mode (2026-11-11)
+
+`ift proxy files --read-only` serves the same requests but answers `write` and `put_drop`, the two ops that put bytes on the host's disk, with a `denied` error ("this file service is read-only") and runs nothing: any `D` bytes kept for such a request are dropped. `read_only_refusal` in `file_server.rs` decides; the refusal is sent from the loop, in order, with no thread. The iPhone app's key may run only this form: `phone::gate_args` allows `["proxy", "files", "--read-only"]` and not bare `proxy files`, so a paired phone can read editor, diff, page and transcript files and never write one. An `ift` older than this change ignores the word and serves read-write, so the phone must check the Mac's `ift --version` before it opens the service.
+
 ## Frames
 
 Binary, because a file is bytes:

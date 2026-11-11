@@ -41,6 +41,13 @@ fn the_paired_ift_may_run_an_allowed_verb() {
 }
 
 #[test]
+fn the_file_service_runs_for_a_phone_only_read_only() {
+    // No stdin, so the service ends at once with a clean exit.
+    let (code, _, err) = gate(Some(&format!("{} proxy files --read-only", paired())));
+    assert_eq!(code, Some(0), "{err}");
+}
+
+#[test]
 fn a_quoted_path_is_the_same_path() {
     let (code, out, _) = gate(Some(&format!("'{}' --version", paired())));
     assert_eq!(code, Some(0), "{out}");
@@ -66,6 +73,8 @@ fn every_other_command_is_refused_before_anything_runs() {
         format!("{me} read 7$(id)"),
         format!("{me} run app.quit"),
         format!("{me} phone add x"),
+        format!("{me} proxy files"),
+        format!("{me} proxy files --read-only extra"),
         format!("{me}x --version"),
         "".to_string(),
     ] {
