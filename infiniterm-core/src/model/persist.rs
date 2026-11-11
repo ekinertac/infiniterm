@@ -2544,10 +2544,7 @@ mod agent_states_text_tests {
     #[test]
     fn a_swap_or_a_group_change_in_a_viewer_is_held_like_a_move() {
         let (mut host, mut viewer, a, b, _e) = host_and_viewer();
-        let (ra, rb) = (
-            viewer.card(&a).unwrap().rect,
-            viewer.card(&b).unwrap().rect,
-        );
+        let (ra, rb) = (viewer.card(&a).unwrap().rect, viewer.card(&b).unwrap().rect);
         viewer.card_mut(&a).unwrap().rect = rb;
         viewer.card_mut(&b).unwrap().rect = ra;
         viewer.card_mut(&a).unwrap().group_id = Some("g".into());
