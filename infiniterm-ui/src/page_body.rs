@@ -352,8 +352,10 @@ impl CardBody for PageBody {
             bounds,
             self.colors.background,
         ));
-        let font_size = px((self.metrics.font_px * scale) as f32);
-        if font_size < crate::chrome::legible_font_px(window.scale_factor()) {
+        let font_size = crate::glyph_size::zoomed(self.metrics.font_px, scale, window);
+        if px((self.metrics.font_px * scale) as f32)
+            < crate::chrome::legible_font_px(window.scale_factor())
+        {
             return;
         }
         self.relayout();

@@ -376,7 +376,7 @@ impl CardBody for TranscriptBody {
             bounds,
             self.colors.background,
         ));
-        let font_size = px((self.metrics.font_px * scale) as f32);
+        let font_size = crate::glyph_size::zoomed(self.metrics.font_px, scale, window);
         if font_size < crate::chrome::legible_font_px(window.scale_factor()) {
             return;
         }

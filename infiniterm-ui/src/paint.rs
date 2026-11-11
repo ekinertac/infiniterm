@@ -240,6 +240,9 @@ impl AppView {
         if !self.viewer {
             self.reconcile_browsers();
         }
+        crate::glyph_size::set_moving(
+            self.animator.is_running() || self.pan.is_some() || self.gesture.is_some(),
+        );
         let t0 = std::time::Instant::now();
         self.feed_terminals(now, cx);
         let t1 = std::time::Instant::now();
@@ -363,6 +366,7 @@ impl AppView {
         });
         let origin = bounds.origin;
         let vp = self.model.viewport;
+        crate::glyph_size::note_scale(vp.scale);
         let view = self.model.view_size;
         let chrome = self.chrome.clone();
         // With a `ui.backgroundImage` the fill is the first layer under this
@@ -1015,7 +1019,7 @@ impl AppView {
     ) {
         let chrome = self.chrome.clone();
         let h = px((infiniterm_core::card_header::HEADER_H * scale) as f32);
-        let text_px = h * HEADER_TEXT_RATIO;
+        let text_px = crate::glyph_size::advance_placed(h * HEADER_TEXT_RATIO, window);
         let pad = px((HEADER_PAD_WORLD * scale) as f32);
         let ink = if focused {
             chrome.card_fg

@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-12
+
+- Zooming no longer makes the app use more and more GPU memory. Every frame of a zoom used to store a new copy of each visible letter, and the copies stayed until you quit: a window open for a day held about 290 MB. Text is now drawn from a small set of sizes while you zoom and at its exact size once you stop. In a test with seven cards and eight zoom passes, GPU memory ended at about 85 MB instead of 320 MB, and zoom frames took less than half as long (7.6 ms instead of 18 at the 95th percentile).
+
 ### 2026-11-11
 
 - A tab that a page opened (a login popup, a `target=_blank` link) now closes when its page calls `window.close()`, as in Chrome, so a sign-in popup that closes itself no longer leaves an empty tab behind. A tab you opened yourself, and the card's first tab, ignore `window.close()`.

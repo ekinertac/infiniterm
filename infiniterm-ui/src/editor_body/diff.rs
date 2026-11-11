@@ -657,7 +657,7 @@ impl EditorBody {
             return;
         };
         let s = |v: f64| px((v * scale) as f32);
-        let font_size = px((self.metrics.font_px * scale) as f32);
+        let font_size = crate::glyph_size::zoomed(self.metrics.font_px, scale, window);
         let line_h = px((self.line_h() * scale) as f32);
         let base = self.metrics.font();
         let gutter_fg = hex(&self.colors.gutter);

@@ -2086,7 +2086,7 @@ impl EditorBody {
         let (Some(popup), Some(caret)) = (self.completion.as_ref(), self.painted_caret) else {
             return;
         };
-        let font_size = px((self.metrics.font_px * scale) as f32);
+        let font_size = crate::glyph_size::zoomed(self.metrics.font_px, scale, window);
         let line_h = px((self.line_h() * scale) as f32);
         let cell_w = px((self.metrics.cell_w * scale) as f32);
         let base = self.metrics.font();
@@ -2187,7 +2187,7 @@ impl EditorBody {
         ));
         let line = self.status_line(self.status_cols(self.world));
         let text: String = line.iter().collect();
-        let font_size = px((self.status_font_px * scale) as f32);
+        let font_size = crate::glyph_size::zoomed(self.status_font_px, scale, window);
         let line_h = px((self.status_font_px * self.metrics.line_height * scale) as f32);
         let cell_w = s(self.status_cell_w);
         let x0 = bar.origin.x + s(PAD_X);
@@ -2393,7 +2393,7 @@ impl EditorBody {
             cx.remove_asset::<ImageAssetLoader>(&source);
         }
         let pad = px((PAD_X * scale) as f32);
-        let font_size = px((self.metrics.font_px * scale) as f32);
+        let font_size = crate::glyph_size::zoomed(self.metrics.font_px, scale, window);
         let line_h = px((self.line_h() * scale) as f32);
         let say = |text: &str, window: &mut Window, cx: &mut App| {
             let run = TextRun {
@@ -3481,7 +3481,7 @@ impl EditorBody {
     ) {
         let Some(tree) = &self.tree else { return };
         let line_h = px((self.line_h() * scale) as f32);
-        let font_size = px((self.metrics.font_px * scale) as f32);
+        let font_size = crate::glyph_size::zoomed(self.metrics.font_px, scale, window);
         let f = self.metrics.font();
         let rows = tree.rows();
         let visible = ((f32::from(area.size.height) / f32::from(line_h)).floor() as usize)
@@ -3663,7 +3663,11 @@ impl EditorBody {
     ) {
         let Some(s) = &self.search else { return };
         let line_h = px((self.line_h() * scale) as f32);
-        let font_size = px((self.metrics.font_px * SEARCH_LABEL_FONT_SCALE * scale) as f32);
+        let font_size = crate::glyph_size::zoomed(
+            self.metrics.font_px * SEARCH_LABEL_FONT_SCALE,
+            scale,
+            window,
+        );
         let f = self.metrics.font();
         let fg = hex(&self.colors.foreground);
         let dim = hex(&self.colors.gutter);
@@ -3999,7 +4003,7 @@ impl CardBody for EditorBody {
         };
         let bg = hex(&self.colors.background);
         window.paint_quad(crate::chrome::card_body_quad(cx, bounds, bg));
-        let font_size = px((self.metrics.font_px * scale) as f32);
+        let font_size = crate::glyph_size::zoomed(self.metrics.font_px, scale, window);
         let line_h = px((self.line_h() * scale) as f32);
         let cell_w = px((self.metrics.cell_w * scale) as f32);
         let legible = font_size >= crate::chrome::legible_font_px(window.scale_factor());
