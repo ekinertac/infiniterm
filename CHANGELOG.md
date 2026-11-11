@@ -12,6 +12,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 - Each PowerShell card now keeps its own history file, like a zsh card: a new card does not open with every other card's past, and a card that ran Claude gets its `claude --resume` line back after a restart. Nothing to set up; PSReadLine saves to the card's file.
 - Fixed: "App: restart" and the update restart now bring the app back while a joined window (`ift join`) is open. Before, the app quit and the restart only put the joined window in front, so you had to close it and open infiniterm by hand.
 - A workspace tab you are not on now shows the icon of the card you left it on. It used to show its first card's, so a workspace with a browser card top-left wore a globe even when you had left it on a terminal.
+- Hovering a tab on an editor or browser card shows its full name, which the tab cuts short with "…". A ui theme can add the file's path or the page's address as a second line with `cardTab.hoverDetail: true`.
 
 ## 0.6.13 (build 1578), 2026-11-11
 
