@@ -29,6 +29,9 @@ use infiniterm_core::phone;
 const ADD_USAGE: &str = "ift: phone add <name> [--host <name>] [--port <n>]";
 const USAGE: &str = "ift: phone takes add <name>, list, or remove <name>";
 const SSHD_ADDR: &str = "127.0.0.1";
+/// This Mac's own sshd: where the forward goes and what `phone add` checks.
+const SSHD_PORT: u16 = 22;
+const TAILSCALE_PATH_CMD: &str = "tailscale";
 /// The sshd host key the phone pins.
 const HOST_KEY: &str = "/etc/ssh/ssh_host_ed25519_key.pub";
 const TAILSCALE_APP: &str = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
@@ -72,16 +75,17 @@ fn own_path() -> Result<String, String> {
 fn add(args: &[String]) -> Result<(), String> {
     let mut name = None;
     let mut host = None;
-    let mut port = 22u16;
+    let mut port: Option<u16> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--host" => host = Some(it.next().ok_or(ADD_USAGE)?.clone()),
             "--port" => {
-                port = it
-                    .next()
-                    .and_then(|p| p.parse().ok())
-                    .ok_or("ift: --port takes a number")?
+                port = Some(
+                    it.next()
+                        .and_then(|p| p.parse().ok())
+                        .ok_or("ift: --port takes a number")?,
+                )
             }
             n if name.is_none() && !n.starts_with("--") => name = Some(n.to_string()),
             _ => return Err(ADD_USAGE.into()),
@@ -91,7 +95,7 @@ fn add(args: &[String]) -> Result<(), String> {
     if !phone::valid_device_name(&name) {
         return Err("a device name is 1 to 32 letters, digits, - or _".into());
     }
-    sshd_is_on(port)?;
+    sshd_is_on(SSHD_PORT)?;
     let keys = authorized_keys_path();
     check_ssh_dir(&keys)?;
     let existing = std::fs::read_to_string(&keys).unwrap_or_default();
@@ -103,6 +107,12 @@ fn add(args: &[String]) -> Result<(), String> {
         .and_then(|t| phone::host_key_blob(&t))
         .ok_or_else(|| format!("cannot read the sshd host key {HOST_KEY}"))?;
     let ift = own_path()?;
+    // Before the key is made or written: a forward that cannot be set up
+    // leaves nothing behind.
+    let (port, note) = match port {
+        Some(p) => (p, None),
+        None => ssh_port_for_phone()?,
+    };
     let (seed, public) = make_key()?;
     let line = phone::authorized_line(&ift, &public, &name)?;
     let text = phone::add_line(&existing, &line, &name)?;
@@ -124,7 +134,100 @@ fn add(args: &[String]) -> Result<(), String> {
     println!("The code holds the phone's private key: anyone who sees it can use it.");
     println!("This terminal card's session buffer keeps it too. If anyone saw it, run:");
     println!("  ift phone remove {name}");
+    if let Some(note) = note {
+        println!("\n{note}");
+    }
     Ok(())
+}
+
+// ------------------------------------------------------------ Tailscale SSH
+
+/// The Tailscale command line that answers, if there is one: on `$PATH`, or
+/// inside the Mac app.
+fn tailscale() -> Option<&'static str> {
+    [TAILSCALE_PATH_CMD, TAILSCALE_APP]
+        .into_iter()
+        .find(|c| run_text(c, &["version"]).is_some())
+}
+
+/// The ssh port the phone is told to use. 22, unless Tailscale SSH is on: it
+/// takes the tailnet address on port 22, ignores `authorized_keys` (so the
+/// phone's limited key never applies) and wants a login page the app cannot
+/// show. Then a tailnet port is forwarded to this Mac's own sshd with
+/// `tailscale serve`, the same one an earlier pairing made if there is one.
+fn ssh_port_for_phone() -> Result<(u16, Option<String>), String> {
+    let Some(ts) = tailscale() else {
+        return Ok((SSHD_PORT, None));
+    };
+    let on = run_text(ts, &["debug", "prefs"]).is_some_and(|p| phone::tailscale_ssh_on(&p));
+    if !on {
+        return Ok((SSHD_PORT, None));
+    }
+    let status = run_text(ts, &["serve", "status", "--json"]).unwrap_or_default();
+    let (port, made) = match phone::plan_forward(&status) {
+        phone::Forward::Existing(p) => (p, false),
+        phone::Forward::New(p) => {
+            let target = format!("tcp://localhost:{SSHD_PORT}");
+            let tcp = format!("--tcp={p}");
+            let out = Command::new(ts)
+                .args(["serve", "--bg", &tcp, &target])
+                .output()
+                .map_err(|e| format!("cannot run tailscale: {e}"))?;
+            if !out.status.success() {
+                return Err(format!(
+                    "Tailscale SSH is on, so the phone needs a tailnet port that reaches this Mac's ssh, and tailscale serve refused it: {}\nrun once: tailscale set --operator=$USER, or pass --port <n> to use a port you set up yourself",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            (p, true)
+        }
+    };
+    if made {
+        // The config folder may not exist yet on a fresh Mac; without the
+        // marker `phone remove` could never close the port.
+        let marker = forward_marker();
+        if let Some(dir) = marker.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(e) = std::fs::write(&marker, port.to_string()) {
+            eprintln!("ift: could not note the forward in {}: {e}", marker.display());
+        }
+    }
+    Ok((
+        port,
+        Some(format!(
+            "Tailscale SSH is on and takes port 22 on the tailnet, so the phone connects on port {port}, which forwards to this Mac's own ssh.\nThis Mac's ssh also allows password login, and from your tailnet that login is reachable on port {port} too. To close the port: tailscale serve --tcp={port} off\n(ift phone remove closes it when the last phone is removed)."
+        )),
+    ))
+}
+
+/// Where `phone add` notes a forward it made, so `phone remove` of the last
+/// phone takes only that one away.
+fn forward_marker() -> PathBuf {
+    infiniterm_core::paths::config_dir().join("phone-forward")
+}
+
+/// After the last phone is removed: the forward `phone add` made goes too.
+fn close_forward() {
+    let marker = forward_marker();
+    let Some(port) = std::fs::read_to_string(&marker)
+        .ok()
+        .and_then(|t| t.trim().parse::<u16>().ok())
+    else {
+        return;
+    };
+    if let Some(ts) = tailscale() {
+        let off = Command::new(ts)
+            .args(["serve", &format!("--tcp={port}"), "off"])
+            .output();
+        if off.is_ok_and(|o| o.status.success()) {
+            println!("closed the tailnet port {port}");
+        } else {
+            eprintln!("ift: could not close the tailnet port {port}: tailscale serve --tcp={port} off");
+            return;
+        }
+    }
+    let _ = std::fs::remove_file(marker);
 }
 
 fn list() -> Result<(), String> {
@@ -144,6 +247,9 @@ fn remove(name: &str) -> Result<(), String> {
     }
     write_private(&keys, &kept)?;
     println!("removed {name}");
+    if phone::paired_names(&kept).is_empty() {
+        close_forward();
+    }
     Ok(())
 }
 

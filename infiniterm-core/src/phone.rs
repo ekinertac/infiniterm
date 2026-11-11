@@ -392,6 +392,53 @@ fn read_flags(rest: &[&str]) -> bool {
     true
 }
 
+// ------------------------------------------------------------- Tailscale SSH
+
+/// The first tailnet port tried for the forward to this Mac's sshd.
+pub const FORWARD_FIRST_PORT: u16 = 2222;
+
+/// Tailscale SSH takes the tailnet address on port 22 and ignores
+/// `authorized_keys`, so a paired phone never reaches this Mac's sshd there.
+/// `tailscale debug prefs` says whether it is on.
+pub fn tailscale_ssh_on(prefs_json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(prefs_json)
+        .ok()
+        .and_then(|v| v["RunSSH"].as_bool())
+        == Some(true)
+}
+
+/// Which tailnet port reaches this Mac's sshd.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Forward {
+    /// A `tailscale serve` TCP forward to localhost:22 already exists.
+    Existing(u16),
+    /// None does; this free port needs one.
+    New(u16),
+}
+
+/// From `tailscale serve status --json`: the port of a TCP forward to this
+/// Mac's own sshd if there is one, else the first free port from
+/// `FORWARD_FIRST_PORT`. A port the serve config already uses (https on 443,
+/// someone else's forward) is never taken.
+pub fn plan_forward(status_json: &str) -> Forward {
+    let v: serde_json::Value = serde_json::from_str(status_json).unwrap_or_default();
+    let tcp = v["TCP"].as_object().cloned().unwrap_or_default();
+    for (port, entry) in &tcp {
+        let to_sshd = matches!(
+            entry["TCPForward"].as_str(),
+            Some("localhost:22" | "127.0.0.1:22" | "[::1]:22")
+        );
+        if let (true, Ok(p)) = (to_sshd, port.parse::<u16>()) {
+            return Forward::Existing(p);
+        }
+    }
+    let used: Vec<u16> = tcp.keys().filter_map(|k| k.parse().ok()).collect();
+    let free = (FORWARD_FIRST_PORT..=u16::MAX)
+        .find(|p| !used.contains(p))
+        .unwrap_or(FORWARD_FIRST_PORT);
+    Forward::New(free)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,5 +668,33 @@ mod tests {
             "a phone cannot pair another phone"
         );
         assert!(!ok(&[]));
+    }
+
+    #[test]
+    fn tailscale_ssh_is_read_from_the_prefs() {
+        assert!(tailscale_ssh_on(r#"{"RunSSH": true, "Hostname": ""}"#));
+        assert!(!tailscale_ssh_on(r#"{"RunSSH": false}"#));
+        assert!(!tailscale_ssh_on(r#"{"Hostname": ""}"#));
+        assert!(!tailscale_ssh_on("not json"));
+        assert!(!tailscale_ssh_on(""));
+    }
+
+    #[test]
+    fn the_forward_reuses_a_tcp_forward_to_sshd_and_never_takes_a_used_port() {
+        // No serve config at all: the first port.
+        assert_eq!(plan_forward("{}"), Forward::New(2222));
+        assert_eq!(plan_forward(""), Forward::New(2222));
+        // https on 443 only (this Mac's own state before pairing).
+        let https = r#"{"TCP": {"443": {"HTTPS": true}}, "Web": {}}"#;
+        assert_eq!(plan_forward(https), Forward::New(2222));
+        // A forward to sshd already exists: reused, on whatever port.
+        let ours = r#"{"TCP": {"2222": {"TCPForward": "localhost:22"}, "443": {"HTTPS": true}}}"#;
+        assert_eq!(plan_forward(ours), Forward::Existing(2222));
+        let other = r#"{"TCP": {"2300": {"TCPForward": "127.0.0.1:22"}}}"#;
+        assert_eq!(plan_forward(other), Forward::Existing(2300));
+        // 2222 is taken by something that is not sshd: the next one.
+        let taken =
+            r#"{"TCP": {"2222": {"TCPForward": "localhost:8080"}, "2223": {"HTTPS": true}}}"#;
+        assert_eq!(plan_forward(taken), Forward::New(2224));
     }
 }
