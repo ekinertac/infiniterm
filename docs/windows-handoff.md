@@ -84,6 +84,21 @@ a piece of work, not a mystery.
    see "What is still open"). Transcript cards work there (checked 2026-11-11).
 8. No `ift connect`, `join`, `serve`, `proxy`, `sessions` or `attach`, and no
    parking of closed cards: they need unix sockets or `iftd`.
+9. **FIXED 2026-11-12 (Ekin's call: option A): `ift` runs inside a card.**
+   `ift.exe` sits beside `infiniterm.exe` and no PATH named that folder, so a
+   card could not run it. `terminals.rs` now puts the app's folder FIRST on each
+   card's PATH when the card starts (`shell_integration::path_with_app_dir`,
+   Windows only; the base is the user's `terminal.env` PATH if they set one,
+   else the app's). The user's PATH and the registry are not written, and
+   `ift install` is unchanged (it still only prints the folder to add, for use
+   outside the app). Checked on the box in a real card, in `pwsh` 7 and in
+   Windows PowerShell 5.1: `Get-Command ift` found the app's `ift.exe`,
+   `ift --version` and `ift ls` ran, the folder was on the card's PATH once,
+   `HKCU:\Environment` Path was unchanged, and the parent session's own PATH did
+   not have the folder (so the injection is what made it work). A profile that
+   prepends its own entries (mise did, in `pwsh`) lands before ours; ours is
+   still found. Not checked: a `terminal.env` PATH set by the user, and
+   `cmd.exe` as a card shell.
 
 Master's new code is Mac or unix only and stays that way here, each behind a
 `cfg` with a one-line answer rather than a port:

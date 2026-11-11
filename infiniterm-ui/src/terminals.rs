@@ -524,6 +524,21 @@ impl AppView {
                         &integration,
                     ));
                 }
+                // Windows: `ift` sits beside the app and no PATH names that
+                // folder, so a card could not run it. The folder goes first on
+                // THIS card's PATH only; the user's PATH and the registry are
+                // not touched, and `ift install` stays as it is.
+                #[cfg(windows)]
+                if let Some(app_dir) = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+                {
+                    env.extend(infiniterm_core::shell_integration::path_with_app_dir(
+                        &app_dir,
+                        &extra_env,
+                        std::env::var_os("PATH"),
+                    ));
+                }
                 match self.backend.pty.spawn_now(
                     std::path::Path::new(&card.cwd),
                     command.as_deref(),
