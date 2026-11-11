@@ -91,6 +91,9 @@ pub struct Shared {
     pub paints: u32,
     /// Windows the page or the extension tried to open, as urls.
     pub popups: Vec<String>,
+    /// The page asked to close itself (`window.close()`, #672): CEF's
+    /// `DoClose`. The ui decides whether that tab may go.
+    pub close_requested: bool,
     /// Links to another app's scheme (`slack://...`, #668) the page sent the
     /// browser to, by a click, a redirect or a popup. CEF is told NOT to open
     /// them itself: the ui asks first, since a redirect needs no click.
@@ -242,6 +245,17 @@ wrap_life_span_handler! {
     }
 
     impl LifeSpanHandler {
+        // `window.close()` from the page (#672). The browser is not closed
+        // here: the ui reads the request and closes the TAB (which drops this
+        // surface) only when that tab was opened by the page.
+        fn do_close(&self, _browser: Option<&mut Browser>) -> ::std::os::raw::c_int {
+            if keylog() {
+                eprintln!("[browser] do_close: the page asked to close itself");
+            }
+            self.handler.shared.borrow_mut().close_requested = true;
+            1
+        }
+
         // A popup (window.open, a target=_blank link, the extension's
         // chrome.windows.create) becomes a card, never a native window:
         // the url is queued for the ui and the popup refused.
@@ -834,6 +848,11 @@ impl Surface {
 
     pub fn take_popups(&self) -> Vec<String> {
         std::mem::take(&mut self.shared.borrow_mut().popups)
+    }
+
+    /// Whether the page called `window.close()` since the last call (#672).
+    pub fn take_close_request(&self) -> bool {
+        std::mem::take(&mut self.shared.borrow_mut().close_requested)
     }
 
     /// The other-app links the page asked for since the last call (#668).

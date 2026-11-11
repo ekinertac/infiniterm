@@ -84,6 +84,10 @@ pub struct Tab {
     /// The card's page zoom as last pushed to THIS surface. Per tab
     /// because a tab opened after the zoom was set has not had it yet.
     applied_zoom: Option<f64>,
+    /// A page opened this tab (`window.open`, `target=_blank`, #672): its own
+    /// `window.close()` may close it, as in Chrome. A tab you opened yourself
+    /// ignores `window.close()`.
+    from_popup: bool,
 }
 
 impl Tab {
@@ -108,6 +112,7 @@ impl Tab {
             repaint: Repaint::default(),
             title: None,
             applied_zoom: None,
+            from_popup: false,
         }
     }
 
@@ -188,6 +193,13 @@ pub struct BrowserBody {
     /// Links to another app (`slack://...`, #668) any tab's page asked for
     /// since the last drain: `browsers.rs` queues each for its question.
     pub external_links: Vec<String>,
+    /// The addresses `browsers.rs` is about to open as tabs because a page
+    /// opened them (#672): the tab made for one of these is `from_popup`.
+    pub popup_urls: Vec<String>,
+    /// Tabs whose own page called `window.close()` and may go (#672), by
+    /// index; `browsers.rs` closes them through the model, which owns the
+    /// tab list.
+    pub page_closed: Vec<usize>,
     /// A right-click since the last drain, for `browsers.rs` to turn into
     /// the app-level menu overlay. Aggregated across tabs rather than kept
     /// per tab: a menu only ever opens from a click on the visible page.
@@ -262,6 +274,8 @@ impl BrowserBody {
             dirty: true,
             popups: vec![],
             external_links: vec![],
+            popup_urls: vec![],
+            page_closed: vec![],
             context_menu: None,
             painted_texture: None,
             cef_running,
@@ -288,8 +302,13 @@ impl BrowserBody {
     /// arrives from `card.active_tab` like everything else.
     pub fn open_tab(&mut self, url: &str) {
         let page = page_world_size(self.world, self.style.font_px, self.ui_scale);
-        self.tabs
-            .push(Tab::open(url, page, self.scale, self.cef_running));
+        let mut tab = Tab::open(url, page, self.scale, self.cef_running);
+        // Made for an address a page opened: that page may close it again.
+        if let Some(at) = self.popup_urls.iter().position(|u| u == url) {
+            self.popup_urls.remove(at);
+            tab.from_popup = true;
+        }
+        self.tabs.push(tab);
         self.dirty = true;
     }
 
@@ -407,6 +426,11 @@ impl BrowserBody {
                 continue;
             };
             let is_active = i == self.active;
+            // `window.close()` (#672): taken from every tab so the request
+            // cannot pile up, honoured only for a tab a page opened.
+            if surface.take_close_request() && tab.from_popup {
+                self.page_closed.push(i);
+            }
             if let Some(frame) = surface.take_frame() {
                 // Only the visible tab's pixels are kept: a background tab's
                 // texture would be a card-sized image nothing paints.
@@ -1063,6 +1087,30 @@ mod tab_tests {
         assert_eq!(body.active, 1);
         assert_eq!(body.active_url(), "c");
     }
+
+    // #672: only a tab a page opened may be closed by that page's own
+    // `window.close()`. The tab made for an address `browsers.rs` noted as a
+    // popup is one; a tab the person opened, or the card's first, is not.
+    // The note is used once: a second tab with the same address by hand is
+    // the person's.
+    #[test]
+    fn a_tab_made_for_a_popup_address_may_be_closed_by_its_page_and_others_not() {
+        let mut body = BrowserBody::new(
+            "card-1",
+            "https://first.example",
+            Size { w: 10., h: 10. },
+            1.,
+            false,
+            test_strip_style(),
+        );
+        body.popup_urls.push("https://login.example/popup".into());
+        body.open_tab("https://by-hand.example");
+        body.open_tab("https://login.example/popup");
+        body.open_tab("https://login.example/popup");
+        let flags: Vec<bool> = body.tabs.iter().map(|t| t.from_popup).collect();
+        assert_eq!(flags, [false, false, true, false]);
+        assert!(body.popup_urls.is_empty(), "each note is used once");
+    }
 }
 
 #[cfg(test)]
@@ -1080,6 +1128,7 @@ mod tab_label_tests {
             repaint: Repaint::default(),
             title: None,
             applied_zoom: None,
+            from_popup: false,
         };
         assert_eq!(tab_label(&tab), "https://a.example");
         tab.title = Some("Example Domain".into());
