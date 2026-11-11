@@ -839,6 +839,18 @@ pub const LAYOUT_UNDO_DEPTH: usize = lifecycle::CLOSED_RING + 100;
 /// the ceiling for a slow link, after which the host's canvas wins as before.
 pub const UNCONFIRMED_MS: f64 = 5_000.;
 
+/// What a viewer can change about where a card is and how it is grouped:
+/// the part of a card `apply_snapshot` holds back while the host has not
+/// echoed the viewer's change (#721).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Placement {
+    pub rect: Rect,
+    pub z: f64,
+    pub workspace_id: String,
+    pub group_id: Option<String>,
+    pub soft_group_id: Option<String>,
+}
+
 pub struct Model {
     pub cards: Vec<Card>,
     pub groups: Vec<Group>,
@@ -998,6 +1010,13 @@ pub struct Model {
     /// host's canvas agrees or the time is up.
     pub unconfirmed_new: Vec<(String, f64)>,
     pub unconfirmed_closed: Vec<(String, f64)>,
+    /// Where the host's last canvas put each card (#721), and the cards whose
+    /// placement the viewer changed that the host has not echoed yet, with
+    /// the placement the viewer holds and when the hold ends. A canvas older
+    /// than the viewer's upload carries the OLD placement; applying it moved
+    /// the card back, and the next canvas moved it again.
+    pub host_placed: std::collections::HashMap<String, Placement>,
+    pub unconfirmed_placed: std::collections::HashMap<String, (Placement, f64)>,
     /// The last canvases the host published, by revision (#423). A viewer's
     /// edit names the revision it was made on; the host works out WHAT the
     /// viewer changed by comparing the edit with that canvas, and applies only
@@ -1253,6 +1272,8 @@ impl Model {
             closed_by_viewer: Vec::new(),
             unconfirmed_new: Vec::new(),
             unconfirmed_closed: Vec::new(),
+            host_placed: std::collections::HashMap::new(),
+            unconfirmed_placed: std::collections::HashMap::new(),
             published: std::collections::VecDeque::new(),
             config: default_config(),
             keymap: default_keymap(),

@@ -8,7 +8,7 @@
 //! A file from a NEWER build is never written back (`read_only`). Saving is
 //! debounced by the ui (500 ms: a drag is one write, not sixty), which
 //! calls `save_text` when `dirty_layout` has been set and the window passed.
-use super::{Model, NewCard, UNCONFIRMED_MS};
+use super::{Model, NewCard, Placement, UNCONFIRMED_MS};
 
 /// How many published canvases the host remembers, for working out what a
 /// viewer's edit changed. A viewer that edits a canvas older than this many
@@ -249,17 +249,23 @@ impl Model {
                 continue;
             }
             let cover_base = c.cover_of.clone();
+            let hold = self.hold_placement(&c.id, &c, now);
             if let Some(card) = self.card_mut(&c.id) {
-                if card.rect != c.rect {
-                    host_moved.push(c.id.clone());
+                // A canvas older than the viewer's own change would put the
+                // card back and the next one move it again (#721): the
+                // viewer's placement stays until the host's canvas has it.
+                if !hold {
+                    if card.rect != c.rect {
+                        host_moved.push(c.id.clone());
+                    }
+                    card.workspace_id = c.workspace_id;
+                    card.rect = c.rect;
+                    card.z = c.z;
+                    card.group_id = c.group_id;
+                    card.soft_group_id = c.soft_group_id;
                 }
-                card.workspace_id = c.workspace_id;
-                card.rect = c.rect;
-                card.z = c.z;
                 card.title = c.title;
                 card.cwd = c.cwd;
-                card.group_id = c.group_id;
-                card.soft_group_id = c.soft_group_id;
                 card.split_from = c.split_from;
                 card.number = c.number;
                 card.protected = c.protected;
@@ -309,6 +315,9 @@ impl Model {
         // The host's own cards just added above are not waiting for anything.
         self.unconfirmed_new
             .retain(|(id, _)| !host_ids.contains(id));
+        self.host_placed.retain(|id, _| host_ids.contains(id));
+        self.unconfirmed_placed
+            .retain(|id, _| host_ids.contains(id));
         if first {
             self.active_workspace = host_active;
             self.viewport = host_viewport;
@@ -806,6 +815,55 @@ impl Model {
         self.show_workspace(&ws);
         self.notify(format!("opened \"{name}\""));
         self.dirty_layout = true;
+    }
+
+    /// Whether the host's canvas must not move card `c.id` yet (#721). Always
+    /// records where the host put it. The card is HELD when its placement
+    /// here differs from where the host's previous canvas put it (the viewer
+    /// changed it) and from this canvas (the host has not echoed it): such a
+    /// canvas is older than the viewer's upload, and applying it would show
+    /// the card going back and then moving again. The hold ends when a canvas
+    /// agrees, or `UNCONFIRMED_MS` after the viewer's last change to it (the
+    /// host may have refused). A card the viewer did not touch follows the
+    /// host, as before.
+    fn hold_placement(&mut self, id: &str, c: &SavedCard, now: f64) -> bool {
+        let theirs = Placement {
+            rect: c.rect,
+            z: c.z,
+            workspace_id: c.workspace_id.clone(),
+            group_id: c.group_id.clone(),
+            soft_group_id: c.soft_group_id.clone(),
+        };
+        let previous = self.host_placed.insert(id.to_string(), theirs.clone());
+        let Some(card) = self.card(id) else {
+            return false;
+        };
+        let mine = Placement {
+            rect: card.rect,
+            z: card.z,
+            workspace_id: card.workspace_id.clone(),
+            group_id: card.group_id.clone(),
+            soft_group_id: card.soft_group_id.clone(),
+        };
+        if mine == theirs || previous.is_none_or(|p| p == mine) {
+            self.unconfirmed_placed.remove(id);
+            return false;
+        }
+        match self.unconfirmed_placed.get(id) {
+            Some((held, until)) if *held == mine => {
+                if *until > now {
+                    return true;
+                }
+                self.unconfirmed_placed.remove(id);
+                false
+            }
+            // First seen, or changed again since: the hold starts over.
+            _ => {
+                self.unconfirmed_placed
+                    .insert(id.to_string(), (mine, now + UNCONFIRMED_MS));
+                true
+            }
+        }
     }
 
     /// The ids this viewer closed since the host's last canvas: what an upload
@@ -2420,6 +2478,83 @@ mod agent_states_text_tests {
         let mut r = crate::commands::CommandRegistry::new(|_| {});
         crate::model::register::register_commands(&mut r);
         r
+    }
+
+    // #721: a viewer's move showed twice. The host's next canvas is older than
+    // the viewer's upload and carries the old rect; applying it put the card
+    // back, and the canvas after it moved the card again.
+    #[test]
+    fn a_canvas_older_than_the_viewers_move_does_not_put_the_card_back() {
+        let (mut host, mut viewer, a, _b, _e) = host_and_viewer();
+        let moved = rect(300., 300.);
+        viewer.card_mut(&a).unwrap().rect = moved;
+        let stale = host.save_text().unwrap();
+        viewer.apply_snapshot(&stale).unwrap();
+        assert_eq!(viewer.card(&a).unwrap().rect, moved, "held, not undone");
+        round_trip(&mut host, &mut viewer);
+        assert_eq!(host.card(&a).unwrap().rect, moved);
+        assert_eq!(viewer.card(&a).unwrap().rect, moved, "and it stayed");
+        assert!(viewer.unconfirmed_placed.is_empty(), "confirmed");
+    }
+
+    #[test]
+    fn a_canvas_with_an_earlier_step_of_a_fast_move_does_not_move_the_card_back() {
+        let (mut host, mut viewer, a, _b, _e) = host_and_viewer();
+        let (first, last) = (rect(300., 300.), rect(600., 300.));
+        viewer.card_mut(&a).unwrap().rect = first;
+        let up = viewer.layout_snapshot();
+        host.apply_remote_layout(&up, viewer.layout_rev, &[])
+            .unwrap();
+        let echo = host.save_text().unwrap();
+        // The viewer moves on before the host's answer for the first step lands.
+        viewer.card_mut(&a).unwrap().rect = last;
+        viewer.apply_snapshot(&echo).unwrap();
+        assert_eq!(viewer.card(&a).unwrap().rect, last);
+        round_trip(&mut host, &mut viewer);
+        assert_eq!(host.card(&a).unwrap().rect, last);
+        assert_eq!(viewer.card(&a).unwrap().rect, last);
+    }
+
+    #[test]
+    fn a_card_the_viewer_did_not_touch_follows_the_host() {
+        let (mut host, mut viewer, a, b, _e) = host_and_viewer();
+        viewer.card_mut(&a).unwrap().rect = rect(300., 300.);
+        host.card_mut(&b).unwrap().rect = rect(50., 900.);
+        let text = host.save_text().unwrap();
+        viewer.apply_snapshot(&text).unwrap();
+        assert_eq!(viewer.card(&b).unwrap().rect, rect(50., 900.));
+        assert_eq!(viewer.card(&a).unwrap().rect, rect(300., 300.));
+    }
+
+    #[test]
+    fn the_hold_ends_when_the_host_never_confirms() {
+        let (mut host, mut viewer, a, _b, _e) = host_and_viewer();
+        let start = host.card(&a).unwrap().rect;
+        viewer.card_mut(&a).unwrap().rect = rect(300., 300.);
+        let stale = host.save_text().unwrap();
+        viewer.apply_snapshot(&stale).unwrap();
+        assert_eq!(viewer.card(&a).unwrap().rect, rect(300., 300.));
+        // The host refused (a protected card, say): after the hold its canvas wins.
+        viewer.now_ms = crate::model::UNCONFIRMED_MS + 1.;
+        viewer.apply_snapshot(&stale).unwrap();
+        assert_eq!(viewer.card(&a).unwrap().rect, start);
+        assert!(viewer.unconfirmed_placed.is_empty());
+    }
+
+    #[test]
+    fn a_swap_or_a_group_change_in_a_viewer_is_held_like_a_move() {
+        let (mut host, mut viewer, a, b, _e) = host_and_viewer();
+        let (ra, rb) = (viewer.card(&a).unwrap().rect, viewer.card(&b).unwrap().rect);
+        viewer.card_mut(&a).unwrap().rect = rb;
+        viewer.card_mut(&b).unwrap().rect = ra;
+        viewer.card_mut(&a).unwrap().group_id = Some("g".into());
+        let stale = host.save_text().unwrap();
+        viewer.apply_snapshot(&stale).unwrap();
+        assert_eq!(viewer.card(&a).unwrap().rect, rb);
+        assert_eq!(viewer.card(&b).unwrap().rect, ra);
+        assert_eq!(viewer.card(&a).unwrap().group_id.as_deref(), Some("g"));
+        round_trip(&mut host, &mut viewer);
+        assert_eq!(host.card(&a).unwrap().rect, rb);
     }
 
     #[test]
