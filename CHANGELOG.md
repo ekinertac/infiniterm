@@ -6,6 +6,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+## 0.6.13 (build 1578), 2026-11-11
+
 ### 2026-11-11
 
 - `ift phone add` now works on a Mac with Tailscale SSH on. Tailscale SSH owns port 22 on the tailnet address and ignores `authorized_keys`, so a paired phone stalled there. `ift phone add` detects it, forwards a tailnet port (2222, or the next free one) to the Mac's own ssh with `tailscale serve`, and puts that port in the QR code. It says that ssh password login is then reachable on that port from your tailnet. `ift phone remove` of the last phone closes the port. `--port <n>` skips the forward.
