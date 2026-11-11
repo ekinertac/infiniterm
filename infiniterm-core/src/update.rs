@@ -371,17 +371,17 @@ pub fn update_hint(version: &str, build: u64) -> String {
 /// the login session's environment and NOT this process's: a viewer (`ift
 /// join`, started with `open --env`) came back as a plain app that held the
 /// join folder's socket and had no connection (#583). Every variable passed
-/// here is one `--env`. With any, `-n`: without it `open` only brings an
-/// already running copy of the app to the front (the Mac's own regular app,
-/// say, beside a viewer) and starts nothing with these variables.
+/// here is one `--env`. Always `-n`: without it `open` only brings an already
+/// running copy of the bundle to the front and starts nothing. That copy can
+/// be the Mac's own regular app beside a viewer (with variables), and it can
+/// be a joined window beside the regular app: a restart with a viewer open
+/// quit the host and then only focused the viewer (#736). Both callers run
+/// this after the old process has exited, so there is no copy of its own to
+/// duplicate.
 #[cfg(not(windows))]
 pub fn open_command(bundle: &str, env: &[(String, String)]) -> String {
     let q = crate::drop::posix_quote;
-    let mut cmd = if env.is_empty() {
-        format!("open {}", q(bundle))
-    } else {
-        format!("open -n {}", q(bundle))
-    };
+    let mut cmd = format!("open -n {}", q(bundle));
     for (k, v) in env {
         cmd.push_str(&format!(" --env {}", q(&format!("{k}={v}"))));
     }
@@ -766,7 +766,7 @@ mod tests {
         let back = s
             .find("|| mv /tmp/u/old.app /Applications/infiniterm.app")
             .unwrap();
-        let open = s.find("exec open /Applications/infiniterm.app").unwrap();
+        let open = s.find("exec open -n /Applications/infiniterm.app").unwrap();
         assert!(aside < swap && swap < back && back < open);
         // A path with a space is quoted, not split.
         let spaced = swap_script(1, "/Users/me/Applications/my term.app", "/a", "/b", &[]);
@@ -798,10 +798,13 @@ mod tests {
              --env INFINITERM_JOIN=mini-m4 \
              --env 'INFINITERM_REMOTE_NAME=it'\\''s'"
         );
+        // An ordinary host has no variables and still needs `-n`: with a
+        // joined window (the same bundle) running, plain `open` only
+        // focused it and the restarted host never came back (#736).
         assert_eq!(
             open_command("/Applications/infiniterm.app", &[]),
-            "open /Applications/infiniterm.app",
-            "an ordinary app is relaunched as before"
+            "open -n /Applications/infiniterm.app",
+            "a restart starts a new copy even when another copy of the bundle runs"
         );
         let swap = swap_script(7, "/Applications/infiniterm.app", "/a", "/b", &env);
         assert!(swap.ends_with(&format!("exec {cmd}")), "{swap}");
@@ -825,7 +828,7 @@ mod tests {
         let second = s
             .find("INFINITERM_DATA_DIR='/Users/me/.infiniterm/joins/air 2'")
             .unwrap();
-        let open = s.find("exec open /Applications/infiniterm.app").unwrap();
+        let open = s.find("exec open -n /Applications/infiniterm.app").unwrap();
         assert!(swap < first && first < second && second < open, "{s}");
         assert!(s.contains("run app.restart >/dev/null 2>&1 & "), "{s}");
         // No joined window: the script is exactly the old one.
