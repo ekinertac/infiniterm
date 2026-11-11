@@ -141,6 +141,18 @@ impl Model {
         format!("{lock}#{} {}", card.number, self.label_of(card))
     }
 
+    /// A Ctrl+Tab switcher row's words (`switcher::row_text`, #746).
+    pub fn switcher_row(&self, card: &Card) -> crate::switcher::RowText {
+        crate::switcher::row_text(&crate::switcher::RowFacts {
+            kind: card.kind,
+            label: &self.numbered_label(card),
+            named: !card.title.trim().is_empty(),
+            root: card.root.as_deref(),
+            path: card.path.as_deref(),
+            page_title: card.page_title.as_deref(),
+        })
+    }
+
     pub fn label_of(&self, card: &Card) -> String {
         card_label(
             &Labelled {
