@@ -304,6 +304,16 @@ pub enum Effect {
     /// Read the saved workspace of this name and hand its text (`None`: no
     /// such file) to `Model::open_saved_workspace`.
     LoadSavedWorkspace(String),
+    /// "Git: switch branch…" (#750): list the branches of the repository
+    /// `dir` is in and hand them to `Model::open_branches`, or git's error
+    /// to `Model::notify`.
+    ListBranches(String),
+    /// A branch picked: `git switch` in `repo` to the ref `refname`
+    /// (`git_branches::switch`), the outcome as a notice.
+    SwitchBranch {
+        repo: String,
+        refname: String,
+    },
     /// Paste `text` into the card's body as Cmd+V would: bracketed when the
     /// program asked for it, inserted at the caret in an editor.
     PasteText {
@@ -606,6 +616,14 @@ pub struct QuickOpen {
     /// The folder the paths are relative to.
     pub root: String,
     pub files: Vec<String>,
+}
+
+/// What "Git: switch branch…" lists (#750) and the repository a pick switches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchesState {
+    /// The repository root, absolute.
+    pub repo: String,
+    pub rows: Vec<crate::git_branches::Branch>,
 }
 
 /// What a reviewer does with the parts of a file that changed on disk.
@@ -1077,6 +1095,8 @@ pub struct Model {
     /// The files Go to File (Cmd+P) lists, read by the ui when it opens
     /// (`EditorAction::GoToFile`) and kept while its palette is up.
     pub quick_open: Option<QuickOpen>,
+    /// The branches "Git: switch branch…" lists while its palette is up.
+    pub branches: Option<BranchesState>,
     /// The matches Find in Files (Cmd+Shift+F) lists while its palette is up.
     pub grep: Option<GrepState>,
     /// What the typed find and replace of a project-wide search say, between
@@ -1308,6 +1328,7 @@ impl Model {
             saved_workspace_names: vec![],
             symbols: None,
             quick_open: None,
+            branches: None,
             grep: None,
             files_job: None,
             theme_current: None,

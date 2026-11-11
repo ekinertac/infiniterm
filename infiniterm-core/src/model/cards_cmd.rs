@@ -1441,6 +1441,7 @@ impl Model {
             Source::Symbols => self.symbol_pick(id),
             Source::Files => self.quick_open_pick(id),
             Source::Grep => self.grep_pick(id),
+            Source::Branches => self.branch_pick(id),
             Source::MoveTo => self.move_selection_to(id),
             Source::MoveGroupTo => self.move_group_to(id),
             Source::SavedWorkspaces => self
@@ -2321,6 +2322,17 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
                 None => diff_plan(&card.cwd, PathKind::Directory),
             };
             m.open_in_card(plan, Some(&id));
+        })
+    });
+    // Switch the branch of the repository the card is in (#750): an editor's
+    // file, else the card's directory. The ui lists the branches.
+    r.register("git.switchBranch", "Git: switch branch…", |m| {
+        m.with_active_card(|m, id| {
+            let Some(card) = m.card(&id) else {
+                return;
+            };
+            let dir = card.path.clone().unwrap_or_else(|| card.cwd.clone());
+            m.effects.push(Effect::ListBranches(dir));
         })
     });
     // The diff's twin (#373): an editor card on the folder this card is in,

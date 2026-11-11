@@ -92,6 +92,7 @@ pub mod frame_rate;
 pub mod fullscreen;
 pub mod fuzzy;
 pub mod git;
+pub mod git_branches;
 pub mod git_repo;
 pub mod host_pictures;
 pub mod menu_nav;
