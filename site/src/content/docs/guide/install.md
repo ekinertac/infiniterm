@@ -37,6 +37,8 @@ The app is signed and notarized, so Gatekeeper opens it without a warning, and i
 
    This symlinks `ift` into `~/.local/bin` and writes its zsh completion. If either directory is not on your `PATH` or `fpath`, it prints the line to add.
 
+On Windows `ift` already works inside every card, with no setup: the app puts its own folder first on that card's `PATH` when the card starts. Your own `PATH` and the registry are not changed. To run `ift` in a terminal outside the app, add the app's folder to your `PATH` yourself; `ift install` prints which folder.
+
 ## Build from source
 
 The source is public. You need Rust, the CEF binary distribution and a checkout of cef-rs for its bundler; the README has the steps. Builds are yours to use, not to hand to anyone else.
