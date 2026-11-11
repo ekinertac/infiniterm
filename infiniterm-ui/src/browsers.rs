@@ -139,6 +139,8 @@ impl AppView {
         // Another app's links the pages asked for (#668), asked about once
         // the loop is done with the cards.
         let mut app_links: Vec<String> = vec![];
+        // Tabs their own page closed with `window.close()` (#672).
+        let mut closes: Vec<(String, usize)> = vec![];
         let mut moved: Vec<(String, String)> = vec![];
         let mut titles: Vec<(String, String)> = vec![];
         let mut retabs: Vec<(String, Vec<String>)> = vec![];
@@ -252,8 +254,16 @@ impl AppView {
             for popup in std::mem::take(&mut body.popups) {
                 // The point of tabs: a popup, a target=_blank link or a
                 // Cmd+click opens a tab on the SAME card, not a new card.
+                // The tab made for it is one the page may close again.
+                body.popup_urls.push(popup.clone());
                 opens.push((card.id.clone(), popup));
             }
+            // A popup whose page called `window.close()` (#672), last tab
+            // first so the indices still point at what they did.
+            let mut gone = std::mem::take(&mut body.page_closed);
+            gone.sort_unstable_by(|a, b| b.cmp(a));
+            gone.dedup();
+            closes.extend(gone.into_iter().map(|i| (card.id.clone(), i)));
             if let Some(request) = body.context_menu.take() {
                 menu = Some((
                     card.id.clone(),
@@ -293,6 +303,10 @@ impl AppView {
         }
         for url in app_links {
             self.model.queue_app_link(url);
+            self.redraw = true;
+        }
+        for (id, index) in closes {
+            self.model.browser_tab_close_at(&id, index);
             self.redraw = true;
         }
         // Not saved and drawn only while the switcher is open, so no

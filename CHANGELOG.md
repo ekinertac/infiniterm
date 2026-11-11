@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-11
 
+- A tab that a page opened (a login popup, a `target=_blank` link) now closes when its page calls `window.close()`, as in Chrome, so a sign-in popup that closes itself no longer leaves an empty tab behind. A tab you opened yourself, and the card's first tab, ignore `window.close()`.
+
 - A terminal card's right-click menu has a "Switch Branch" submenu listing the branches of the repository the card is in, the current one greyed, the remote ones after a line. Picking one switches to it as the palette's "Git: switch branch…" does. In a folder that is not in a git repository the menu shows "Git Init" instead, which makes one there.
 - Fixed: a terminal card whose shell died along with its background process no longer sits on "attached from outside (ift attach)" until a restart. Within a second it starts a fresh shell in its folder with its last screen above, as a restart would.
 - New in the command palette: "Git: switch branch…" lists the branches of the repository the focused card is in, the current one first, then remote branches that have no local branch yet. Picking one switches to it; picking a remote branch makes a local branch that tracks it. When git refuses, because uncommitted changes would be overwritten, its message shows in the status bar and nothing changes.
