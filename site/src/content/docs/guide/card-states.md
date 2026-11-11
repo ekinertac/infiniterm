@@ -43,7 +43,9 @@ A zsh started in a card reports each command's start and exit status (OSC 133 ma
 
 Programs that print OSC 9;4 progress or OSC 9, 777 or 99 notifications colour the card too, whatever the shell.
 
-Only zsh gets the marks for now, and only shells started after you installed or updated the app: a shell already running keeps the environment it started with.
+A PowerShell (`pwsh`) card does the same: the app starts it with a short script that runs after your profile and wraps whatever prompt the profile set (oh-my-posh and others), so the prompt looks and works as before. Ctrl+C is not a failure there either. Windows PowerShell 5.1 and `cmd` are not covered yet.
+
+Only zsh and PowerShell get the marks for now, and only shells started after you installed or updated the app: a shell already running keeps the environment it started with.
 
 ## Workspace tabs
 
