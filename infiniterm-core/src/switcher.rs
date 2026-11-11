@@ -13,6 +13,10 @@
 //! Pure: the model owns `focus_trail` and the current visit and calls
 //! these (model/mod.rs `land_focus`, `promote_focus`, `note_input`); the
 //! ui draws the list and commits on the Ctrl release (keycode.rs).
+//! `row_text` words a row (#746); `Model::switcher_row` gathers its facts
+//! and infiniterm-ui/src/switcher_view.rs draws it.
+
+use crate::saved_layout::CardKind;
 
 /// How long a card must keep the focus before an arrow visit counts as a
 /// visit at all. Long enough that three cards crossed on the way to a
@@ -58,6 +62,59 @@ pub fn step(len: usize, index: usize, delta: isize) -> usize {
     (index as isize + delta).rem_euclid(len as isize) as usize
 }
 
+/// What the switcher knows about a card to word its row (#746).
+pub struct RowFacts<'a> {
+    pub kind: CardKind,
+    /// `Model::numbered_label`: the number, the lock, the label.
+    pub label: &'a str,
+    /// The card has a name the user gave it, so its label is not a folder's.
+    pub named: bool,
+    /// An editor's explorer root.
+    pub root: Option<&'a str>,
+    /// An editor's active file.
+    pub path: Option<&'a str>,
+    /// A browser's active tab's page title (`Card::page_title`).
+    pub page_title: Option<&'a str>,
+}
+
+/// A switcher row's words: the label, a faint detail after it, and the
+/// card's kind for the column on the right.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowText {
+    pub label: String,
+    /// What is open inside: an editor's active file, a browser's page title.
+    pub detail: Option<String>,
+    /// `None` for a terminal: it is what a card is unless it says otherwise.
+    pub kind: Option<&'static str>,
+}
+
+/// The row's words. A folder editor's label loses its trailing `/`, the
+/// same rule as the editor's folder header (#694): the kind column already
+/// says editor, and the active file beside it says what is open. Only here:
+/// the chip, the palette and the status bar keep the slash, which there is
+/// what tells a folder editor from a file. The filesystem root keeps its
+/// `/`, having no name without it.
+pub fn row_text(f: &RowFacts) -> RowText {
+    let folder = f.kind.has_editor_body() && f.root.is_some() && !f.named;
+    let label = match f.label.strip_suffix('/') {
+        Some(bare) if folder && !bare.is_empty() && !bare.ends_with(' ') => bare.to_string(),
+        _ => f.label.to_string(),
+    };
+    let detail = match f.kind {
+        CardKind::Editor if f.root.is_some() => f.path.map(crate::paths::base_name),
+        CardKind::Browser => f.page_title.map(str::trim),
+        _ => None,
+    }
+    .filter(|d| !d.is_empty())
+    .map(str::to_string);
+    let kind = (f.kind != CardKind::Terminal).then(|| f.kind.as_str());
+    RowText {
+        label,
+        detail,
+        kind,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,5 +152,76 @@ mod tests {
         assert_eq!(step(3, 2, 1), 0);
         assert_eq!(step(3, 0, -1), 2);
         assert_eq!(step(0, 0, 1), 0);
+    }
+
+    fn facts(kind: CardKind, label: &'static str) -> RowFacts<'static> {
+        RowFacts {
+            kind,
+            label,
+            named: false,
+            root: None,
+            path: None,
+            page_title: None,
+        }
+    }
+
+    #[test]
+    fn a_folder_editor_drops_its_slash_and_shows_its_file() {
+        let row = row_text(&RowFacts {
+            root: Some("/Users/me/infiniterm"),
+            path: Some("/Users/me/infiniterm/src/main.rs"),
+            ..facts(CardKind::Editor, "#3 infiniterm/")
+        });
+        assert_eq!(row.label, "#3 infiniterm");
+        assert_eq!(row.detail.as_deref(), Some("main.rs"));
+        assert_eq!(row.kind, Some("editor"));
+        // Nothing open yet: the folder alone.
+        let row = row_text(&RowFacts {
+            root: Some("/Users/me/infiniterm"),
+            ..facts(CardKind::Editor, "#3 infiniterm/")
+        });
+        assert_eq!(row.detail, None);
+    }
+
+    #[test]
+    fn the_root_and_a_given_name_keep_their_slash() {
+        let root = RowFacts {
+            root: Some("/"),
+            ..facts(CardKind::Editor, "#3 /")
+        };
+        assert_eq!(row_text(&root).label, "#3 /");
+        let named = RowFacts {
+            named: true,
+            root: Some("/x"),
+            ..facts(CardKind::Editor, "#3 notes/")
+        };
+        assert_eq!(row_text(&named).label, "#3 notes/");
+        // A file editor's label is its file: no detail repeats it.
+        let file = RowFacts {
+            path: Some("/x/a.rs"),
+            ..facts(CardKind::Editor, "#2 a.rs")
+        };
+        assert_eq!(row_text(&file).detail, None);
+    }
+
+    #[test]
+    fn a_browser_shows_its_page_title_and_a_terminal_no_kind() {
+        let row = row_text(&RowFacts {
+            page_title: Some(" Example Domain "),
+            ..facts(CardKind::Browser, "#4 example.com")
+        });
+        assert_eq!(row.detail.as_deref(), Some("Example Domain"));
+        assert_eq!(row.kind, Some("browser"));
+        let blank = RowFacts {
+            page_title: Some(""),
+            ..facts(CardKind::Browser, "#4 example.com")
+        };
+        assert_eq!(row_text(&blank).detail, None);
+        let term = row_text(&facts(CardKind::Terminal, "#1 zsh"));
+        assert_eq!((term.kind, term.detail), (None, None));
+        assert_eq!(
+            row_text(&facts(CardKind::Diff, "#5 diff")).kind,
+            Some("diff")
+        );
     }
 }

@@ -143,6 +143,7 @@ impl AppView {
         let mut titles: Vec<(String, String)> = vec![];
         let mut retabs: Vec<(String, Vec<String>)> = vec![];
         let mut locks: Vec<(String, bool)> = vec![];
+        let mut page_titles: Vec<(String, Option<String>)> = vec![];
         let mut menu: Option<(String, Point, infiniterm_browser::ContextMenuRequest)> = None;
         for card in cards {
             let world = Size {
@@ -221,6 +222,12 @@ impl AppView {
             if let Some(title) = body.take_title() {
                 titles.push((body.active_url().to_string(), title));
             }
+            // The active tab's title onto the card for the Ctrl+Tab switcher
+            // (#746), after `take_title` so a tab switch shows the new tab's.
+            let page_title = body.active_title().map(str::to_string);
+            if card.page_title != page_title {
+                page_titles.push((card.id.clone(), page_title));
+            }
             // Where the tabs actually are now, written back onto the card:
             // a BACKGROUND tab that redirected itself moves no card url
             // through `moved`, and without this the card would send it back
@@ -287,6 +294,13 @@ impl AppView {
         for url in app_links {
             self.model.queue_app_link(url);
             self.redraw = true;
+        }
+        // Not saved and drawn only while the switcher is open, so no
+        // dirty_layout and no redraw of its own.
+        for (id, title) in page_titles {
+            if let Some(c) = self.model.card_mut(&id) {
+                c.page_title = title;
+            }
         }
         for (id, locked) in locks {
             if let Some(c) = self.model.card_mut(&id) {

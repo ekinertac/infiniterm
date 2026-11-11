@@ -145,6 +145,10 @@ pub struct Card {
     /// was about. Used for the label only while an agent is in the card,
     /// where the title is the session's name and a plain shell's is noise.
     pub osc_title: Option<String>,
+    /// A browser card's active tab's page title, mirrored from the body
+    /// every frame (`browsers.rs`) for the Ctrl+Tab switcher (#746).
+    /// Runtime-only: the page says it again once it loads.
+    pub page_title: Option<String>,
     /// The buffer differs from the file on disk. Runtime-only.
     pub dirty: bool,
     /// Where an editor puts the caret when it opens. Runtime-only, consumed once.
@@ -1568,6 +1572,7 @@ impl Model {
             session: None,
             kitty_keys: false,
             osc_title: None,
+            page_title: None,
             dirty: false,
             line: opts.line,
             language: None,

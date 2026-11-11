@@ -486,6 +486,12 @@ impl BrowserBody {
         Some(t)
     }
 
+    /// The active tab's page title as last reported (`take_title` keeps it
+    /// current), or `None` before the page has said one.
+    pub fn active_title(&self) -> Option<&str> {
+        self.tabs.get(self.active)?.title.as_deref()
+    }
+
     pub fn navigate(&mut self, url: &str) {
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
