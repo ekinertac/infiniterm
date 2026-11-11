@@ -358,6 +358,9 @@ pub enum Effect {
         text: String,
     },
     OpenUrl(String),
+    /// An app link (`slack://...`, #668) the person said yes to: macOS opens
+    /// the app registered for its scheme.
+    OpenAppLink(String),
     /// Written into settings.json through `patch_json_text`.
     SaveSetting {
         path: String,
@@ -674,6 +677,9 @@ pub enum Pending {
         name: String,
     },
     CloseWorkspace(String),
+    /// A browser card's page sent the card to another app's link (#668): yes
+    /// hands it to macOS.
+    OpenAppLink(String),
     /// A single browser card with more than one tab, asked before `Cmd+W`
     /// takes them all at once; `reclaim` carries `card.close`'s own meaning
     /// through the round trip (`card.close.leave` says no).
@@ -863,6 +869,9 @@ pub struct Model {
     /// The window is the key window; the ui sets it before each tick. A
     /// done card is only SEEN while the app is in front.
     pub app_active: bool,
+    /// App links a browser card's page asked for (#668), waiting for their
+    /// question: one prompt is open at a time, so the next waits for it.
+    pub app_links: std::collections::VecDeque<String>,
     /// The focused done card and since when it has been watched, with the
     /// app in front (`clear_seen_done`). Session-only.
     pub done_watch: Option<(String, f64)>,
@@ -1218,6 +1227,7 @@ impl Model {
             selection: Selection::default(),
             last_focused: HashMap::new(),
             app_active: true,
+            app_links: std::collections::VecDeque::new(),
             done_watch: None,
             push_prev: None,
             push_since: std::collections::BTreeMap::new(),
@@ -1321,6 +1331,7 @@ impl Model {
     /// Notices expire here; the staleness sweep is `sweep_stale`.
     pub fn tick(&mut self, now_ms: f64) {
         self.now_ms = now_ms;
+        self.ask_next_app_link();
         self.fit_open_view();
         // A card sat in earns its place without waiting for the focus to
         // leave it: the trail is read by the switcher and by a close.

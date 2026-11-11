@@ -185,6 +185,9 @@ pub struct BrowserBody {
     pub style: StripStyle,
     dirty: bool,
     pub popups: Vec<String>,
+    /// Links to another app (`slack://...`, #668) any tab's page asked for
+    /// since the last drain: `browsers.rs` queues each for its question.
+    pub external_links: Vec<String>,
     /// A right-click since the last drain, for `browsers.rs` to turn into
     /// the app-level menu overlay. Aggregated across tabs rather than kept
     /// per tab: a menu only ever opens from a click on the visible page.
@@ -258,6 +261,7 @@ impl BrowserBody {
             style,
             dirty: true,
             popups: vec![],
+            external_links: vec![],
             context_menu: None,
             painted_texture: None,
             cef_running,
@@ -427,6 +431,9 @@ impl BrowserBody {
                     }
                 }
             }
+            // An app link is the page's own doing, in any tab, and is asked
+            // about whichever tab it came from (#668).
+            self.external_links.extend(surface.take_external_links());
             if is_active {
                 self.popups.extend(surface.take_popups());
                 if let Some(request) = surface.take_context_menu() {

@@ -6416,6 +6416,56 @@ mod tests {
         h.m.answer(pending, answer, |_| true);
     }
 
+    // #668: a page that sends a browser card to `slack://...` is asked about,
+    // and the app opens only after a yes. A web link, and the same link twice
+    // in a row, are not a second question.
+    #[test]
+    fn an_app_link_is_asked_about_and_opens_only_after_a_yes() {
+        let mut h = Harness::new();
+        let url = "slack://T03NP0LMH7D/magic-login/1?id=2".to_string();
+        h.m.queue_app_link(url.clone());
+        h.m.queue_app_link(url.clone());
+        h.m.queue_app_link("https://example.com".into());
+        assert_eq!(h.m.app_links.len(), 1, "one link, not a web one, not twice");
+        h.m.tick(1.);
+        assert!(h.m.prompt.is_open());
+        assert!(h.m.prompt.label.starts_with("open slack://T03NP0LMH7D"));
+        assert!(
+            !h.m.effects
+                .iter()
+                .any(|e| matches!(e, Effect::OpenAppLink(_))),
+            "nothing opens before the answer"
+        );
+        answer_prompt(&mut h, "");
+        assert!(h.m.effects.contains(&Effect::OpenAppLink(url)));
+    }
+
+    #[test]
+    fn a_no_opens_nothing_and_a_second_link_waits_for_the_first_question() {
+        let mut h = Harness::new();
+        h.m.queue_app_link("mailto:a@b.c".into());
+        h.m.queue_app_link("tel:+905551112233".into());
+        h.m.tick(1.);
+        assert!(h.m.prompt.label.contains("mailto:a@b.c"));
+        h.m.tick(2.);
+        assert!(
+            h.m.prompt.label.contains("mailto:a@b.c"),
+            "the open question stays until it is answered"
+        );
+        let (pending, answer) = h.m.prompt.settle(None).expect("a prompt was open");
+        h.m.answer(pending, answer, |_| true);
+        assert!(!h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::OpenAppLink(_))));
+        h.m.tick(3.);
+        assert!(
+            h.m.prompt.label.contains("tel:+905551112233"),
+            "the next one is asked"
+        );
+    }
+
     #[test]
     fn custom_size_opens_a_prompt_that_starts_from_the_default_then_the_last_value() {
         let mut h = Harness::new();
