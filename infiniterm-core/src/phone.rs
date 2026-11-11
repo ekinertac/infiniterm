@@ -357,6 +357,9 @@ pub fn gate_args(words: &[String]) -> Result<Vec<String>, String> {
     let ok = match w.as_slice() {
         ["proxy", "join", "canvas"] => true,
         ["proxy", "join", "session", id] => valid_card(id),
+        // The file service, read-only: it refuses write and put_drop. The
+        // bare `proxy files` would let the phone write to the Mac.
+        ["proxy", "files", "--read-only"] => true,
         ["--version"] | ["update", "status"] | ["workspaces"] => true,
         ["run", "app.update.check"] | ["run", "app.update.install"] => true,
         ["read", "--stream"] => true,
@@ -641,6 +644,9 @@ mod tests {
         let ok = |a: &[&str]| gate_args(&s(a)).is_ok();
         assert!(ok(&["proxy", "join", "canvas"]));
         assert!(ok(&["proxy", "join", "session", "abc-123"]));
+        assert!(ok(&["proxy", "files", "--read-only"]));
+        assert!(!ok(&["proxy", "files"]), "writes would be allowed");
+        assert!(!ok(&["proxy", "files", "--read-only", "x"]));
         assert!(ok(&["read", "7", "--all"]));
         assert!(ok(&["read", "#7", "--ansi"]));
         assert!(ok(&["read", "7", "--lines", "20"]));

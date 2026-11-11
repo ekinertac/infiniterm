@@ -17,7 +17,9 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-use crate::file_proto::{parse_hello, FileError, Frame, FrameReader, Kind, Request, CHUNK, MAJOR};
+use crate::file_proto::{
+    parse_hello, Code, FileError, Frame, FrameReader, Kind, Request, CHUNK, MAJOR,
+};
 use crate::file_source::{FileSource, LocalSource};
 
 /// One reply, whole, under the output lock.
@@ -209,8 +211,23 @@ fn answer<W: Write + Send + 'static>(
     }
 }
 
+/// Why a read-only service refuses this request, or `None` when it may run.
+/// What counts as a write is `Request::writes`, decided on the parsed
+/// request, so a new request cannot slip through by name.
+fn read_only_refusal(request: &Request) -> Option<FileError> {
+    request
+        .writes()
+        .then(|| FileError::new(Code::Denied, "this file service is read-only"))
+}
+
 /// The handshake and then the request loop, until the viewer closes its end.
-pub fn serve<R: Read, W: Write + Send + 'static>(mut input: R, output: W) -> std::io::Result<()> {
+/// With `read_only` (`ift proxy files --read-only`, the only form a phone's
+/// key may run) a `write` or `put_drop` is answered `denied` and runs nothing.
+pub fn serve<R: Read, W: Write + Send + 'static>(
+    mut input: R,
+    output: W,
+    read_only: bool,
+) -> std::io::Result<()> {
     // The viewer's line, a byte at a time: nothing after it is consumed.
     let mut line = Vec::new();
     let mut b = [0u8; 1];
@@ -267,8 +284,22 @@ pub fn serve<R: Read, W: Write + Send + 'static>(mut input: R, output: W) -> std
                     partial.entry(frame.id).or_default().extend(frame.bytes);
                 }
                 Ok(Some(frame)) if frame.kind == Kind::Request => {
-                    let (out, watches) = (out.clone(), watches.clone());
                     let mut body = partial.remove(&frame.id).unwrap_or_default();
+                    // A request that does not parse goes on to `answer`,
+                    // which replies with its error.
+                    if let Some(refusal) = Request::from_json(&frame.json)
+                        .ok()
+                        .and_then(|r| read_only.then(|| read_only_refusal(&r)).flatten())
+                    {
+                        // Answered here, in order, with no thread: nothing
+                        // of the request ever reaches the disk.
+                        send(
+                            &out,
+                            &Frame::new(Kind::Error, frame.id, refusal.to_json(), vec![]),
+                        )?;
+                        continue;
+                    }
+                    let (out, watches) = (out.clone(), watches.clone());
                     body.extend(frame.bytes);
                     std::thread::spawn(move || {
                         let _ = answer(&out, &watches, frame.id, frame.json, body);
@@ -286,5 +317,97 @@ pub fn serve<R: Read, W: Write + Send + 'static>(mut input: R, output: W) -> std
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A writer the test can read back after `serve` took it.
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Sink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn read_only_refuses_write_and_put_drop_and_nothing_else() {
+        let p = || "/x".to_string();
+        for r in [
+            Request::Write {
+                path: p(),
+                expect_mtime_ms: None,
+            },
+            Request::PutDrop {
+                id: "i".into(),
+                name: "n".into(),
+            },
+        ] {
+            assert_eq!(read_only_refusal(&r).unwrap().code, Code::Denied);
+        }
+        // `Request::writes` has no `_` arm, so a new request must be
+        // classed there; this lists the reads that exist now.
+        for r in [
+            Request::Home,
+            Request::Stat { path: p() },
+            Request::Exists { paths: vec![p()] },
+            Request::List { path: p() },
+            Request::Read {
+                path: p(),
+                offset: 0,
+                len: None,
+            },
+            Request::Watch { path: p() },
+            Request::Unwatch { watch: 1 },
+            Request::GitHead { path: p() },
+            Request::GitChanges { path: p() },
+            Request::GitShow {
+                repo: p(),
+                path: p(),
+            },
+            Request::GitBlame {
+                repo: p(),
+                path: p(),
+            },
+        ] {
+            assert!(read_only_refusal(&r).is_none(), "{r:?}");
+        }
+    }
+
+    #[test]
+    fn a_read_only_server_answers_a_write_with_denied_and_writes_nothing() {
+        let dir = std::env::temp_dir().join(format!("ift-ro-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("scratch.txt");
+        let _ = std::fs::remove_file(&target);
+
+        let mut input = format!("ift-files {MAJOR}\n").into_bytes();
+        input.extend(Frame::new(Kind::Data, 7, json!({}), b"bytes".to_vec()).encode());
+        let request = json!({ "op": "write", "path": target.to_string_lossy() });
+        input.extend(Frame::new(Kind::Request, 7, request, vec![]).encode());
+
+        let sink = Sink::default();
+        serve(std::io::Cursor::new(input), sink.clone(), true).unwrap();
+
+        let got = sink.0.lock().unwrap().clone();
+        let hello = format!("ift-files {MAJOR} ok\n");
+        assert!(got.starts_with(hello.as_bytes()));
+        let mut reader = FrameReader::default();
+        reader.feed(&got[hello.len()..]);
+        let frame = reader.next().unwrap().unwrap();
+        assert_eq!(frame.kind, Kind::Error);
+        assert_eq!(frame.id, 7);
+        assert_eq!(FileError::from_json(&frame.json).code, Code::Denied);
+        assert!(reader.next().unwrap().is_none(), "one frame only");
+        assert!(!target.exists(), "a refused write leaves no file");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -488,7 +488,7 @@ mod tests {
         let (near, far) = UnixStream::pair().map_err(|e| e.to_string())?;
         let w = far.try_clone().map_err(|e| e.to_string())?;
         std::thread::spawn(move || {
-            let _ = serve(far, w);
+            let _ = serve(far, w, false);
         });
         Ok(near)
     }
