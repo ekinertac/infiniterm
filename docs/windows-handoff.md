@@ -479,7 +479,14 @@ What is still open:
   `INFINITERM_HISTFILE` (checked on the box: a command lands in the card's own
   file and not in `ConsoleHost_history.txt`, and Up after an app restart brings
   it back), and `shell_integration::tests::a_real_powershell_marks_its_commands_and_keeps_the_users_prompt`
-  runs a real `pwsh` (skips without one). Not checked: Windows PowerShell 5.1 (`powershell.exe`),
+  runs a real `pwsh` (skips without one). **Windows PowerShell 5.1 works too
+  (checked 2026-11-11)** as a card's real shell, which it is only when `pwsh` is
+  not on PATH (`shell_cmd::default_shell`; a `terminal.shell` of `powershell.exe`
+  runs as a COMMAND inside the default shell, which is not the same): failure,
+  success and Ctrl+C read right, a bare Enter reports nothing, and the history
+  file is the card's own across a restart. PSReadLine 2.0 there calls the prompt
+  once more per line, so an extra `D;0` comes before each `C`; a `D` with no
+  command started changes nothing, so the colours are unaffected. Not checked:
   a profile that replaces `PSConsoleHostReadLine` itself, starship, and
   `cmd.exe`, which has no integration.
 - A card can say `ssh` but never which host: Toolhelp gives an exe's file

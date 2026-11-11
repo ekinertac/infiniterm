@@ -674,6 +674,7 @@ mod tests {
                             .map(|(k, _)| k.clone())
                     },
                     shown: &|c| Some(c.to_string()),
+                    git: &|| None,
                 },
             );
             fn items(rows: &[Row], out: &mut Vec<(String, String)>) {
@@ -1470,6 +1471,71 @@ mod tests {
         let card = h.m.card(&id).unwrap();
         assert_eq!(card.tabs.len(), 2, "switched, not opened again");
         assert_eq!(card.path.as_deref(), Some("/h/a.rs"));
+    }
+
+    // "Git: switch branch…" (#750): an editor asks for its file's branches;
+    // the rows lead with the current one and keep the full ref as the id; a
+    // pick of another branch asks the ui to switch, the current one does not.
+    #[test]
+    fn switch_branch_lists_the_branches_and_a_pick_switches() {
+        use crate::git_branches::parse;
+        use crate::saved_layout::CardKind;
+        let mut h = Harness::new();
+        let id = h.m.add_card(
+            "/h",
+            NewCard {
+                kind: CardKind::Editor,
+                path: Some("/h/a.rs".into()),
+                ..Default::default()
+            },
+        );
+        h.m.set_focus(Some(&id));
+        let effects = h.run("git.switchBranch");
+        assert!(effects.contains(&Effect::ListBranches("/h/a.rs".into())));
+        // The ui would have asked git; stand in for it.
+        let rows = parse(" \trefs/heads/dev\n*\trefs/heads/main\n \trefs/remotes/origin/x\n");
+        h.m.open_branches("/h", rows.clone());
+        assert_eq!(h.m.palette.source, Some(Source::Branches));
+        let items = h.m.palette_items(Source::Branches, &[]);
+        assert_eq!(
+            items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(),
+            ["main", "dev", "origin/x"]
+        );
+        assert_eq!(items[0].hint.as_deref(), Some("current"));
+        h.m.palette_run(Source::Branches, "refs/heads/main");
+        assert!(!h
+            .m
+            .effects
+            .iter()
+            .any(|e| matches!(e, Effect::SwitchBranch { .. })));
+        h.m.open_branches("/h", rows);
+        h.m.palette_run(Source::Branches, "refs/remotes/origin/x");
+        assert!(h.m.effects.contains(&Effect::SwitchBranch {
+            repo: "/h".into(),
+            refname: "refs/remotes/origin/x".into(),
+        }));
+        h.m.close_palette(true);
+        h.m.open_branches("/h", vec![]);
+        assert_eq!(h.m.palette.source, None, "no palette over nothing");
+    }
+
+    // The terminal menu's git row (#754): a branch row switches in the
+    // card's folder, any other command is not a branch pick, and Git Init
+    // asks the ui to init there.
+    #[test]
+    fn the_menus_branch_row_switches_and_git_init_inits() {
+        let mut h = Harness::new();
+        let id = h.m.add_card("/h/sub", NewCard::default());
+        h.m.set_focus(Some(&id));
+        assert!(!h.m.menu_branch_pick("card.close"));
+        assert!(h.m.effects.is_empty());
+        assert!(h.m.menu_branch_pick("git.switchBranch.to:refs/heads/dev"));
+        assert!(h.m.effects.contains(&Effect::SwitchBranch {
+            repo: "/h/sub".into(),
+            refname: "refs/heads/dev".into(),
+        }));
+        let effects = h.run("git.init");
+        assert!(effects.contains(&Effect::GitInit("/h/sub".into())));
     }
 
     // Cmd+Shift+F (#602): the pattern is asked, the ui is told to search, the

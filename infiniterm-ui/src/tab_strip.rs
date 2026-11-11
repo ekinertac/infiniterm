@@ -18,6 +18,12 @@
 //! from the press to the release, `paint_strip` draws the others making
 //! room, and the drop is handed to the model as `Model::move_tab`.
 //!
+//! A tab cuts a long name with an ellipsis, so the pointer over a tab
+//! (#742) shows `paint_hover_label`: the full name, and under it the file's
+//! path or the page's address when `cardTab.hoverDetail` is true. The
+//! body keeps which tab is hovered from `strip_hit` in its `mouse_move`.
+//! Hand painted like the rest of the strip, so not gpui's element tooltip.
+//!
 //! Called by `editor_tabs.rs`. `body::TabClick` is the shared answer.
 use crate::body::TabClick;
 use crate::chrome::{Chrome, TabStyle};
@@ -139,6 +145,8 @@ pub struct StripStyle {
     pub bold: Font,
     /// The workspace tabs' label size: the strip's font, in screen pixels.
     pub font_px: f64,
+    /// `cardTab.hoverDetail`: the hover label's path or address line.
+    pub hover_detail: bool,
 }
 
 /// The strip's look for this frame: the chrome's colours and the ui
@@ -157,6 +165,34 @@ pub fn strip_style(chrome: &Chrome, theme: &TabTheme) -> StripStyle {
             .typography
             .size(crate::overlays::TAB_LABEL_FONT_PX)
             .into(),
+        hover_detail: theme.hover_detail.unwrap_or(false),
+    }
+}
+
+/// The hover label's lines (#742): the tab's full name, then `detail` (the
+/// file's path, the page's address) when `show_detail` allows it. A detail
+/// that is empty or only repeats the name (an untitled page is labelled with
+/// its address) adds no line.
+pub fn hover_lines(name: &str, detail: Option<&str>, show_detail: bool) -> Vec<String> {
+    let mut lines = vec![name.to_string()];
+    if let Some(d) = detail.filter(|d| show_detail && !d.is_empty() && *d != name) {
+        lines.push(d.to_string());
+    }
+    lines
+}
+
+/// Where the hover label's box starts, from the strip's left edge: under the
+/// tab's left edge, moved left as far as it must to stay inside a card
+/// `card_w` wide, and never past the card's left edge.
+pub fn hover_x(tab_x: f32, box_w: f32, card_w: f32) -> f32 {
+    tab_x.min(card_w - box_w).max(0.)
+}
+
+/// The tab a point is over, its `×` included: the one whose label to show.
+pub fn hovered(hit: Option<TabClick>) -> Option<usize> {
+    match hit {
+        Some(TabClick::Switch(i) | TabClick::Close(i)) => Some(i),
+        _ => None,
     }
 }
 
@@ -456,6 +492,84 @@ pub fn paint_strip(
     strip_h
 }
 
+/// Draws the hover label of tab `index` (#742) under the strip, inside the
+/// card's `bounds`: a box in the strip's colours holding `lines`, the first
+/// bright, the rest muted. `left` is the folder header's width (world
+/// units, 0 without one), as `paint_strip` takes it. Call it after the
+/// card's content so the label sits over it. Nothing while the strip's
+/// text is too small to draw, as the labels themselves.
+#[allow(clippy::too_many_arguments)]
+pub fn paint_hover_label(
+    bounds: Bounds<Pixels>,
+    scale: f64,
+    ui_scale: f32,
+    index: usize,
+    left: f64,
+    lines: &[String],
+    style: &StripStyle,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let unit = style.font_px * ui_scale as f64 * scale;
+    let px_scale = ui_scale as f64 * scale;
+    let strip_font = px(unit as f32);
+    if lines.is_empty() || strip_font < crate::chrome::legible_font_px(window.scale_factor()) {
+        return;
+    }
+    let line_h = px((unit * TAB_LINE_HEIGHT_RATIO) as f32);
+    let pad_x = px((style.pad_x() * px_scale) as f32);
+    let pad_y = px((TAB_PAD_Y_PX * px_scale) as f32);
+    // A line wider than the card is cut with an ellipsis: the box never
+    // leaves the card it belongs to.
+    let room = f32::from(bounds.size.width - pad_x * 2.);
+    let shaped: Vec<_> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let color = if i == 0 {
+                style.text_bright
+            } else {
+                style.text_muted
+            };
+            let shown = crate::text::elide(l, room, |t| {
+                f32::from(crate::text::shape(window, t, strip_font, &style.regular, color).width)
+            });
+            crate::text::shape(window, &shown, strip_font, &style.regular, color)
+        })
+        .collect();
+    let widest = shaped.iter().map(|l| l.width).fold(px(0.), |a, b| a.max(b));
+    let box_w = (widest + pad_x * 2.).min(bounds.size.width);
+    let box_h = line_h * shaped.len() as f32 + pad_y * 2.;
+    let tab_w = TAB_STRIP_TAB_WIDTH_RATIO * unit;
+    let tab_x = (left * scale + index as f64 * tab_w) as f32;
+    let x = hover_x(tab_x, f32::from(box_w), f32::from(bounds.size.width));
+    let strip_h = px((strip_world_h(style.font_px, ui_scale) * scale) as f32);
+    let gap = px((STRIP_INSET_Y_PX * px_scale) as f32);
+    let rect = Bounds::new(
+        point(bounds.origin.x + px(x), bounds.origin.y + strip_h + gap),
+        size(box_w, box_h),
+    );
+    let radius = px((style.tabs.radius.map_or(TAB_RADIUS_PX, f64::from) * px_scale) as f32);
+    let border = px((TAB_STRIP_BORDER_PX * px_scale) as f32);
+    window.paint_quad(quad(
+        rect,
+        radius,
+        style.bg,
+        border,
+        style.border,
+        BorderStyle::Solid,
+    ));
+    window.with_content_mask(Some(gpui::ContentMask { bounds: rect }), |window| {
+        for (i, line) in shaped.iter().enumerate() {
+            let row = Bounds::new(
+                point(rect.origin.x, rect.origin.y + pad_y + line_h * i as f32),
+                size(box_w, line_h),
+            );
+            crate::text::paint_in(window, cx, line, row, pad_x);
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,6 +579,45 @@ mod tests {
     /// folder header's width.
     fn hit(x: f64, y: f64, scale: f32, n: usize, left: f64) -> Option<TabClick> {
         strip_hit(Point { x, y }, 10., scale, n, left, 6.)
+    }
+
+    #[test]
+    fn a_hovered_tab_shows_its_full_name_then_its_path_or_address() {
+        let path = "~/.config/infiniterm/settings.json";
+        assert_eq!(
+            hover_lines("settings.json", Some(path), true),
+            ["settings.json", path]
+        );
+        // `cardTab.hoverDetail` false: the name alone.
+        assert_eq!(
+            hover_lines("settings.json", Some(path), false),
+            ["settings.json"]
+        );
+        // An untitled buffer has no path; an untitled page is its address.
+        assert_eq!(hover_lines("untitled", None, true), ["untitled"]);
+        let url = "https://example.com/";
+        assert_eq!(hover_lines(url, Some(url), true), [url]);
+        assert_eq!(hover_lines("Docs", Some(""), true), ["Docs"]);
+    }
+
+    #[test]
+    fn the_hover_label_stays_inside_its_card() {
+        // Room under the tab: it starts at the tab's left edge.
+        assert_eq!(hover_x(90., 200., 600.), 90.);
+        // The last tab of a narrow card: moved left to end at the card's edge.
+        assert_eq!(hover_x(450., 200., 600.), 400.);
+        // Wider than the card: from the card's left edge.
+        assert_eq!(hover_x(90., 800., 600.), 0.);
+    }
+
+    #[test]
+    fn the_pointer_over_a_tab_or_its_close_hovers_that_tab() {
+        assert_eq!(hovered(hit(10., 10., 1., 2, 0.)), Some(0));
+        assert_eq!(hovered(hit(98., 10., 1., 2, 0.)), Some(1));
+        assert_eq!(hovered(hit(160., 10., 1., 2, 0.)), Some(1));
+        // The "+", past the tabs, and below the strip hover nothing.
+        assert_eq!(hovered(hit(190., 10., 1., 2, 0.)), None);
+        assert_eq!(hovered(hit(10., 200., 1., 2, 0.)), None);
     }
 
     // Hit-test geometry in world units at a 10 px font and ui_scale 1: a

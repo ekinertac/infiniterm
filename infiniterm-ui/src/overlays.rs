@@ -764,6 +764,11 @@ impl AppView {
                 .collect();
             // The icon of the program in the workspace's focused card (the
             // first card when none is focused); an enabled icon always draws.
+            let focused_card = infiniterm_core::tab_icon::tab_focus(
+                is_active,
+                focused_card,
+                ws.focused.as_deref(),
+            );
             let icon = icons_on.then(|| {
                 let shown: Vec<(bool, Option<infiniterm_core::tab_icon::Subject>)> =
                     reading_order(&rects)

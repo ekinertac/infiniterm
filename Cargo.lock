@@ -3115,6 +3115,7 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "chrono",
+ "libc",
  "portable-pty",
  "pulldown-cmark",
  "regex",

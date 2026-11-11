@@ -586,6 +586,33 @@ impl AppView {
                     self.model.open_saved_workspace(&name, text.as_deref());
                     self.redraw = true;
                 }
+                // "Git: switch branch…" (#750). On the UI thread like Go to
+                // File's `git ls-files`: one short git run a person asked for.
+                Effect::ListBranches(dir) => {
+                    match infiniterm_core::git_branches::list(std::path::Path::new(&dir)) {
+                        Ok((repo, rows)) => self.model.open_branches(&repo, rows),
+                        Err(e) => self.model.notify(e),
+                    }
+                    self.redraw = true;
+                }
+                Effect::SwitchBranch { repo, refname } => {
+                    match infiniterm_core::git_branches::switch(&repo, &refname) {
+                        Ok(()) => self
+                            .model
+                            .notify(infiniterm_core::git_branches::switched_notice(&refname)),
+                        Err(e) => self.model.notify(e),
+                    }
+                    self.redraw = true;
+                }
+                // The terminal menu's Git Init (#754): as short a run as the
+                // switch above.
+                Effect::GitInit(dir) => {
+                    match infiniterm_core::git_branches::init(std::path::Path::new(&dir)) {
+                        Ok(line) => self.model.notify(line),
+                        Err(e) => self.model.notify(e),
+                    }
+                    self.redraw = true;
+                }
                 Effect::PasteText { card_id, text } => self.paste_text(&card_id, &text),
                 // The right-click menu's terminal acts (#278). The clipboard is
                 // read in the poll task, where there is an app context.

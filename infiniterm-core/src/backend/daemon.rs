@@ -746,6 +746,39 @@ impl DaemonBackend {
         Some(v.get("attached").and_then(|a| a.as_bool()).unwrap_or(false))
     }
 
+    /// Whether a session's daemon went without saying so (a crash, `kill
+    /// -9`), which a displaced card cannot tell from an outside attach: the
+    /// EOF looks the same and the dead daemon never clears `attached` (#752).
+    /// Gone means the shell pid in the meta is no longer running, or neither
+    /// meta nor socket is left. Judged WITHOUT connecting: a connect is an
+    /// attach, and would evict the `ift attach` client the card is waiting
+    /// on. A gone session's socket and meta are removed, as `live_sessions`
+    /// does at launch; its ring stays for `take_ring`.
+    pub fn session_gone(&self, session_id: &str) -> bool {
+        if self.viewer {
+            return false;
+        }
+        let sock = self.sessions_dir.join(format!("{session_id}.sock"));
+        let meta = sock.with_extension("meta");
+        let pid = std::fs::read_to_string(&meta)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v.get("pid")?.as_u64());
+        let gone = match pid {
+            // 0 is what iftd writes when it could not learn the pid.
+            Some(p) if p > 0 => !pid_alive(p),
+            Some(_) => false,
+            // No meta to read: gone only if the socket went with it. A
+            // socket left alone is not judged, it might still answer.
+            None => !meta.exists() && !sock.exists(),
+        };
+        if gone {
+            let _ = std::fs::remove_file(&sock);
+            let _ = std::fs::remove_file(&meta);
+        }
+        gone
+    }
+
     /// The scrollback a dead session's daemon last wrote to disk
     /// (`<id>.ring`, see `iftd`'s SNAPSHOT_INTERVAL), taken: the file is
     /// removed, so a card replays it once and a later launch does not
@@ -813,6 +846,17 @@ impl DaemonBackend {
         }
         ids
     }
+}
+
+/// Whether a process is running, by signal 0 (nothing is delivered). EPERM
+/// means it exists but is not ours, which is still running.
+fn pid_alive(pid: u64) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: kill with signal 0 only checks that the pid can be signalled.
+    let sent = unsafe { libc::kill(pid, 0) == 0 };
+    sent || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 /// Reads frames until `Hello` arrives or `HELLO_DEADLINE` passes, returning
@@ -1158,6 +1202,48 @@ mod tests {
             "the meta goes with the socket, or ift sessions keeps offering \
              an attach to a daemon that is gone"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // #752: a daemon killed outright left `attached:true` in its meta, and
+    // the displaced card waited on it forever. Judged by the shell pid, never
+    // by a connect, which would evict a real `ift attach` client.
+    #[test]
+    fn a_session_whose_shell_pid_is_dead_is_gone_and_swept() {
+        let dir = std::env::temp_dir().join(format!("dmn-g-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (backend, _rx) = DaemonBackend::new(dir.clone(), 4);
+        let meta = |pid: u64| format!(r#"{{"pid":{pid},"attached":true}}"#);
+
+        // A pid that ran and has been reaped, so nothing holds it.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead = u64::from(child.id());
+        child.wait().unwrap();
+        std::fs::write(dir.join("dead.sock"), b"").unwrap();
+        std::fs::write(dir.join("dead.meta"), meta(dead)).unwrap();
+        std::fs::write(dir.join("dead.ring"), b"last screen").unwrap();
+        assert!(backend.session_gone("dead"));
+        assert!(!dir.join("dead.sock").exists(), "socket swept");
+        assert!(!dir.join("dead.meta").exists(), "meta swept");
+        assert!(
+            dir.join("dead.ring").exists(),
+            "the ring stays for the fresh shell's replay"
+        );
+
+        // This test's own pid is running: an outside attach, wait for it.
+        std::fs::write(dir.join("live.sock"), b"").unwrap();
+        std::fs::write(dir.join("live.meta"), meta(u64::from(std::process::id()))).unwrap();
+        assert!(!backend.session_gone("live"));
+        assert!(dir.join("live.meta").exists());
+
+        // Nothing left at all is gone; a socket with no meta is not judged.
+        assert!(backend.session_gone("never"));
+        std::fs::write(dir.join("bare.sock"), b"").unwrap();
+        assert!(!backend.session_gone("bare"));
+        // iftd writes 0 when it could not learn the pid.
+        std::fs::write(dir.join("zero.meta"), meta(0)).unwrap();
+        assert!(!backend.session_gone("zero"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -393,6 +393,26 @@ pub enum Request {
 }
 
 impl Request {
+    /// Whether this request puts bytes on the host's disk. No `_` arm on
+    /// purpose: a new request must be classed here, and a read-only service
+    /// (`ift proxy files --read-only`) refuses exactly these.
+    pub fn writes(&self) -> bool {
+        match self {
+            Request::Write { .. } | Request::PutDrop { .. } => true,
+            Request::Home
+            | Request::Stat { .. }
+            | Request::Exists { .. }
+            | Request::List { .. }
+            | Request::Read { .. }
+            | Request::Watch { .. }
+            | Request::Unwatch { .. }
+            | Request::GitHead { .. }
+            | Request::GitChanges { .. }
+            | Request::GitShow { .. }
+            | Request::GitBlame { .. } => false,
+        }
+    }
+
     pub fn to_json(&self) -> Value {
         match self {
             Request::Home => json!({ "op": "home" }),

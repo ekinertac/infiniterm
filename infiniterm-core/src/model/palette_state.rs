@@ -54,6 +54,9 @@ pub enum Source {
     /// project, in file order; typing narrows them, a pick opens the file at
     /// the line.
     Grep,
+    /// `git.switchBranch` (#750): the branches of the focused card's
+    /// repository; a pick runs `git switch`.
+    Branches,
 }
 
 /// Prefixes that tell a card row and a workspace row apart from a command
@@ -88,6 +91,7 @@ impl Source {
             Source::Symbols => "symbols",
             Source::Files => "files",
             Source::Grep => "grep",
+            Source::Branches => "branches",
         }
     }
 
@@ -126,6 +130,8 @@ impl Source {
                 | Source::Grep
                 // The outline of a file is its order.
                 | Source::Symbols
+                // The current branch on top, then git's newest-commit order.
+                | Source::Branches
         )
     }
 
@@ -156,6 +162,7 @@ impl Source {
             Source::Symbols => "Go to symbol…",
             Source::Files => "Go to file…",
             Source::Grep => "Narrow the matches…",
+            Source::Branches => "Switch to branch…",
         }
     }
 }
@@ -284,6 +291,59 @@ impl Model {
         if let (Some(card), Ok(n)) = (self.card_mut(&g.card_id), line.parse::<u64>()) {
             card.line = Some(n);
         }
+    }
+
+    /// "Git: switch branch…"'s palette over the branches of `repo` (#750).
+    pub fn open_branches(&mut self, repo: &str, rows: Vec<crate::git_branches::Branch>) {
+        if rows.is_empty() {
+            self.notify("no branches yet: make a first commit");
+            return;
+        }
+        self.branches = Some(super::BranchesState {
+            repo: repo.into(),
+            rows,
+        });
+        self.open_palette(Source::Branches);
+    }
+
+    /// A branch pick (its full ref name as the id): the current branch is
+    /// left alone, any other is switched to by the ui.
+    pub fn branch_pick(&mut self, refname: &str) {
+        let Some(b) = self.branches.take() else {
+            return;
+        };
+        if b.rows.iter().any(|r| r.current && r.refname == refname) {
+            self.notify(format!(
+                "already on {}",
+                crate::git_branches::short_name(refname)
+            ));
+            return;
+        }
+        self.effects.push(super::Effect::SwitchBranch {
+            repo: b.repo,
+            refname: refname.into(),
+        });
+    }
+
+    /// A row of the terminal menu's Switch Branch submenu (#754), whose
+    /// command is `context_menu::BRANCH_PICK` and the ref name: the ui
+    /// switches the focused card's repository to it. False for any other
+    /// command, which the caller runs as one.
+    pub fn menu_branch_pick(&mut self, command: &str) -> bool {
+        let Some(refname) = command.strip_prefix(crate::context_menu::BRANCH_PICK) else {
+            return false;
+        };
+        self.with_active_card(|m, id| {
+            let Some(card) = m.card(&id) else {
+                return;
+            };
+            let repo = card.cwd.clone();
+            m.effects.push(super::Effect::SwitchBranch {
+                repo,
+                refname: refname.into(),
+            });
+        });
+        true
     }
 
     /// A Go to File pick: the tab that already shows the file, else a new
@@ -610,6 +670,26 @@ impl Model {
                     id: path.clone(),
                     label: path.clone(),
                     hint: None,
+                })
+                .collect(),
+            // The full ref name as the id, so `main` and `origin/main` never
+            // collide; the hint says which is checked out and which would be
+            // made from a remote. One word each: a hint is drawn as key caps,
+            // a cap per word.
+            Source::Branches => self
+                .branches
+                .iter()
+                .flat_map(|b| b.rows.iter())
+                .map(|r| PaletteItem {
+                    id: r.refname.clone(),
+                    label: r.name.clone(),
+                    hint: if r.current {
+                        Some("current".into())
+                    } else if r.remote {
+                        Some("remote".into())
+                    } else {
+                        None
+                    },
                 })
                 .collect(),
             // `path:line  the line`, the id carrying the two apart for the pick.

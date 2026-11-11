@@ -145,6 +145,10 @@ pub struct Card {
     /// was about. Used for the label only while an agent is in the card,
     /// where the title is the session's name and a plain shell's is noise.
     pub osc_title: Option<String>,
+    /// A browser card's active tab's page title, mirrored from the body
+    /// every frame (`browsers.rs`) for the Ctrl+Tab switcher (#746).
+    /// Runtime-only: the page says it again once it loads.
+    pub page_title: Option<String>,
     /// The buffer differs from the file on disk. Runtime-only.
     pub dirty: bool,
     /// Where an editor puts the caret when it opens. Runtime-only, consumed once.
@@ -300,6 +304,19 @@ pub enum Effect {
     /// Read the saved workspace of this name and hand its text (`None`: no
     /// such file) to `Model::open_saved_workspace`.
     LoadSavedWorkspace(String),
+    /// "Git: switch branch…" (#750): list the branches of the repository
+    /// `dir` is in and hand them to `Model::open_branches`, or git's error
+    /// to `Model::notify`.
+    ListBranches(String),
+    /// A branch picked: `git switch` in `repo` to the ref `refname`
+    /// (`git_branches::switch`), the outcome as a notice.
+    SwitchBranch {
+        repo: String,
+        refname: String,
+    },
+    /// "Git: init a repository here" (#754): `git init` in the folder `dir`
+    /// is (`git_branches::init`), the outcome as a notice.
+    GitInit(String),
     /// Paste `text` into the card's body as Cmd+V would: bracketed when the
     /// program asked for it, inserted at the caret in an editor.
     PasteText {
@@ -602,6 +619,14 @@ pub struct QuickOpen {
     /// The folder the paths are relative to.
     pub root: String,
     pub files: Vec<String>,
+}
+
+/// What "Git: switch branch…" lists (#750) and the repository a pick switches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchesState {
+    /// The repository root, absolute.
+    pub repo: String,
+    pub rows: Vec<crate::git_branches::Branch>,
 }
 
 /// What a reviewer does with the parts of a file that changed on disk.
@@ -1073,6 +1098,8 @@ pub struct Model {
     /// The files Go to File (Cmd+P) lists, read by the ui when it opens
     /// (`EditorAction::GoToFile`) and kept while its palette is up.
     pub quick_open: Option<QuickOpen>,
+    /// The branches "Git: switch branch…" lists while its palette is up.
+    pub branches: Option<BranchesState>,
     /// The matches Find in Files (Cmd+Shift+F) lists while its palette is up.
     pub grep: Option<GrepState>,
     /// What the typed find and replace of a project-wide search say, between
@@ -1304,6 +1331,7 @@ impl Model {
             saved_workspace_names: vec![],
             symbols: None,
             quick_open: None,
+            branches: None,
             grep: None,
             files_job: None,
             theme_current: None,
@@ -1568,6 +1596,7 @@ impl Model {
             session: None,
             kitty_keys: false,
             osc_title: None,
+            page_title: None,
             dirty: false,
             line: opts.line,
             language: None,

@@ -12,8 +12,23 @@
 //! A row's title is the command's own label with its domain prefix cut
 //! ("Card: rename\u{2026}" becomes "Rename\u{2026}"), unless the table gives one,
 //! so the ellipsis that marks a command asking for more (#277) carries over.
+//!
+//! One place is not a table row: `Def::Git`, the terminal's git row (#754),
+//! is read when the menu opens (`Source::git`): a Switch Branch submenu of
+//! the card's repository, or Git Init where there is none. A branch row's
+//! command is `BRANCH_PICK` and the ref name, which `Model::menu_branch_pick`
+//! takes apart; it is the one row that is not a registered command, because
+//! the branches are not known before the menu opens.
 
+use crate::git_branches::Branch;
 use crate::when::{Context, When};
+
+/// The command of a branch row in the Switch Branch submenu, before the full
+/// ref name (`git.switchBranch.to:refs/heads/main`).
+pub const BRANCH_PICK: &str = "git.switchBranch.to:";
+
+/// The command of the row a terminal outside any repository shows instead.
+const GIT_INIT: &str = "git.init";
 
 /// The place that was right-clicked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +64,8 @@ pub enum Def {
         items: &'static [Def],
     },
     Separator,
+    /// The card's git row, built when the menu opens (`git_rows`).
+    Git,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -195,6 +212,8 @@ const TERMINAL_TOP: &[Def] = &[
     titled("card.clear", "Clear Buffer"),
     titled("terminal.redraw", "Redraw"),
     titled("card.transcript", "Show Transcript"),
+    Def::Separator,
+    Def::Git,
 ];
 
 /// A card's frame or label has nothing of its own above the card section.
@@ -461,6 +480,9 @@ pub struct Source<'a> {
     /// as the platform shows it: `Model::shown_chord`, so off the Mac the
     /// terminal's Cmd+C is drawn Ctrl+Shift+C (#464).
     pub shown: &'a dyn Fn(&str) -> Option<String>,
+    /// The branches of the focused card's repository, asked only by a menu
+    /// with a `Def::Git` row; `None`: the card's folder is in no repository.
+    pub git: &'a dyn Fn() -> Option<Vec<Branch>>,
 }
 
 /// "Card: rename\u{2026}" to "Rename\u{2026}": the part after the domain, its first
@@ -502,6 +524,7 @@ fn build(defs: &[Def], src: &Source) -> Vec<Row> {
                     enabled: holds(c.enable, src.context),
                 });
             }
+            Def::Git => rows.extend(git_rows((src.git)().as_deref())),
             Def::Submenu { title, items } => {
                 let inner = tidy(build(items, src));
                 if !inner.is_empty() {
@@ -514,6 +537,43 @@ fn build(defs: &[Def], src: &Source) -> Vec<Row> {
         }
     }
     tidy(rows)
+}
+
+/// The git row (#754): Switch Branch with the local branches, the current
+/// one greyed, then the remote ones with no local branch (`git_branches::
+/// parse` already orders and filters them); Git Init outside a repository. A
+/// repository with no commit yet has no branch to switch to and no need of
+/// an init, so it gets no row.
+pub fn git_rows(branches: Option<&[Branch]>) -> Vec<Row> {
+    let Some(branches) = branches else {
+        return vec![Row::Item {
+            command: GIT_INIT.into(),
+            title: "Git Init".into(),
+            chord: None,
+            enabled: true,
+        }];
+    };
+    let item = |b: &Branch| Row::Item {
+        command: format!("{BRANCH_PICK}{}", b.refname),
+        title: if b.current {
+            format!("{} (current)", b.name)
+        } else {
+            b.name.clone()
+        },
+        chord: None,
+        enabled: !b.current,
+    };
+    let mut rows: Vec<Row> = branches.iter().filter(|b| !b.remote).map(item).collect();
+    rows.push(Row::Separator);
+    rows.extend(branches.iter().filter(|b| b.remote).map(item));
+    let rows = tidy(rows);
+    if rows.is_empty() {
+        return vec![];
+    }
+    vec![Row::Submenu {
+        title: "Switch Branch".into(),
+        rows,
+    }]
 }
 
 /// No separator first, last or twice in a row: hiding a row can leave one
@@ -545,6 +605,7 @@ pub fn command_ids(area: Area) -> Vec<&'static str> {
             match d {
                 Def::Command(c) => out.push(c.id),
                 Def::Submenu { items, .. } => walk(items, out),
+                Def::Git => out.push(GIT_INIT),
                 Def::Separator => {}
             }
         }
@@ -563,7 +624,7 @@ pub fn clauses(area: Area) -> Vec<&'static str> {
                     out.extend([c.show, c.enable].into_iter().filter(|s| !s.is_empty()));
                 }
                 Def::Submenu { items, .. } => walk(items, out),
-                Def::Separator => {}
+                Def::Separator | Def::Git => {}
             }
         }
     }
@@ -588,6 +649,7 @@ mod tests {
                 label: &|id| Some(format!("Card: {id}")),
                 chord: &|id| (id == "card.close").then(|| "cmd+w".to_string()),
                 shown: &|c| Some(c.to_string()),
+                git: &|| None,
             },
         )
     }
@@ -604,6 +666,7 @@ mod tests {
                 label: &|id| Some(format!("Card: {id}")),
                 chord: &|_| None,
                 shown: &|c| (c == "cmd+v").then(|| "ctrl+shift+v".to_string()),
+                git: &|| None,
             },
         );
         let chord_of = |id: &str| {
@@ -715,9 +778,99 @@ mod tests {
                 label: &|_| None,
                 chord: &|_| None,
                 shown: &|_| None,
+                git: &|| None,
             },
         );
         assert!(rows.is_empty(), "{rows:?}");
+    }
+
+    fn branch(refname: &str, current: bool) -> Branch {
+        Branch {
+            refname: refname.into(),
+            name: crate::git_branches::short_name(refname).into(),
+            remote: refname.starts_with("refs/remotes/"),
+            current,
+        }
+    }
+
+    // #754: a terminal in a repository gets Switch Branch, the current branch
+    // greyed and the remotes after a separator, each row's command carrying
+    // the full ref; outside a repository, Git Init; with no commit, nothing.
+    #[test]
+    fn the_terminal_menu_switches_branch_or_inits_a_repository() {
+        let ctx = ctx();
+        let branches = vec![
+            branch("refs/heads/main", true),
+            branch("refs/heads/dev", false),
+            branch("refs/remotes/origin/x", false),
+        ];
+        let built = rows(
+            Area::Terminal,
+            &Source {
+                context: &ctx,
+                label: &|id| Some(format!("Card: {id}")),
+                chord: &|_| None,
+                shown: &|_| None,
+                git: &|| Some(branches.clone()),
+            },
+        );
+        let sub = built
+            .iter()
+            .find_map(|r| match r {
+                Row::Submenu { title, rows } if title == "Switch Branch" => Some(rows.clone()),
+                _ => None,
+            })
+            .expect("a Switch Branch submenu");
+        let item = |command: &str, title: &str, enabled: bool| Row::Item {
+            command: command.into(),
+            title: title.into(),
+            chord: None,
+            enabled,
+        };
+        assert_eq!(
+            sub,
+            [
+                item(
+                    "git.switchBranch.to:refs/heads/main",
+                    "main (current)",
+                    false
+                ),
+                item("git.switchBranch.to:refs/heads/dev", "dev", true),
+                Row::Separator,
+                item(
+                    "git.switchBranch.to:refs/remotes/origin/x",
+                    "origin/x",
+                    true
+                ),
+            ]
+        );
+        assert!(!built
+            .iter()
+            .any(|r| matches!(r, Row::Item { command, .. } if command == "git.init")));
+        // Not a repository: Git Init in its place.
+        assert!(built_without_repo()
+            .iter()
+            .any(|r| matches!(r, Row::Item { command, title, .. }
+                if command == "git.init" && title == "Git Init")));
+        assert_eq!(git_rows(Some(&[])), vec![]);
+        // Only local branches: no trailing separator.
+        assert_eq!(
+            git_rows(Some(&[branch("refs/heads/main", true)])),
+            [Row::Submenu {
+                title: "Switch Branch".into(),
+                rows: vec![item(
+                    "git.switchBranch.to:refs/heads/main",
+                    "main (current)",
+                    false
+                )],
+            }]
+        );
+        // An editor's menu has no git row.
+        assert!(!command_ids(Area::Editor).contains(&"git.init"));
+    }
+
+    fn built_without_repo() -> Vec<Row> {
+        built(Area::Terminal, &ctx())
     }
 
     #[test]

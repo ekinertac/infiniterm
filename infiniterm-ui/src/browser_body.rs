@@ -24,7 +24,10 @@
 //! Without CEF (the bare binary outside a bundle) the card says so and
 //! stays a rectangle, with one placeholder tab.
 use crate::body::{BodyAction, CardBody};
-use crate::tab_strip::{paint_strip, strip_hit, strip_world_h, StripStyle, TabDrag};
+use crate::tab_strip::{
+    hover_lines, hovered, paint_hover_label, paint_strip, strip_hit, strip_world_h, StripStyle,
+    TabDrag,
+};
 use gpui::{
     fill, point, px, size, App, Bounds, CursorStyle, Hsla, Keystroke, Pixels, RenderImage, Window,
 };
@@ -168,6 +171,9 @@ pub struct BrowserBody {
     left_down: bool,
     /// A tab held by the pointer, from the press to the release (#682).
     tab_drag: Option<TabDrag>,
+    /// The tab under the pointer, whose full title and address the hover
+    /// label shows (#742).
+    hover_tab: Option<usize>,
     /// A drop since `browsers.rs` last looked: (from, to) for `Model::move_tab`.
     pub tab_drop: Option<(usize, usize)>,
     pub inactive_dim: f64,
@@ -221,16 +227,21 @@ impl BrowserBody {
     /// tabs, on the "+" and below the strip.
     pub fn tab_at(&self, local: Point) -> Option<usize> {
         // A browser card has no folder header ahead of its tabs (0 wide).
-        match strip_hit(
+        hovered(strip_hit(
             local,
             self.style.font_px,
             self.ui_scale,
             self.tabs.len(),
             0.,
             self.style.pad_x(),
-        ) {
-            Some(crate::body::TabClick::Switch(i) | crate::body::TabClick::Close(i)) => Some(i),
-            _ => None,
+        ))
+    }
+
+    /// Notes the tab under the pointer, asking for a frame when it changed.
+    fn set_hover(&mut self, tab: Option<usize>) {
+        if self.hover_tab != tab {
+            self.hover_tab = tab;
+            self.dirty = true;
         }
     }
 
@@ -263,6 +274,7 @@ impl BrowserBody {
             last_escape_ms: None,
             left_down: false,
             tab_drag: None,
+            hover_tab: None,
             tab_drop: None,
             inactive_dim: crate::chrome::INACTIVE_DIM_DEFAULT,
             card_number: 0,
@@ -496,6 +508,12 @@ impl BrowserBody {
         }
         tab.title = Some(t.clone());
         Some(t)
+    }
+
+    /// The active tab's page title as last reported (`take_title` keeps it
+    /// current), or `None` before the page has said one.
+    pub fn active_title(&self) -> Option<&str> {
+        self.tabs.get(self.active)?.title.as_deref()
     }
 
     pub fn navigate(&mut self, url: &str) {
@@ -788,6 +806,24 @@ impl CardBody for BrowserBody {
             window,
             cx,
         );
+        // Over the page, after the strip. Not while a tab is being dragged.
+        let dragging = self.tab_drag.is_some_and(|d| d.moving);
+        if let Some(tab) = self.hover_tab.filter(|_| !dragging) {
+            if let Some(t) = self.tabs.get(tab) {
+                let lines = hover_lines(tab_label(t), Some(&t.url), self.style.hover_detail);
+                paint_hover_label(
+                    bounds,
+                    scale,
+                    self.ui_scale,
+                    tab,
+                    0.,
+                    &lines,
+                    &self.style,
+                    window,
+                    cx,
+                );
+            }
+        }
     }
 
     fn resized(&mut self, world: Size) {
@@ -940,6 +976,8 @@ impl CardBody for BrowserBody {
             }
             return;
         }
+        let over = self.tab_at(local);
+        self.set_hover(over);
         let strip_h = strip_world_h(self.style.font_px, self.ui_scale);
         // A selection dragged up over the strip keeps extending, clamped to
         // the page's top the way `mouse_up` clamps the release.
@@ -958,6 +996,7 @@ impl CardBody for BrowserBody {
     }
 
     fn mouse_leave(&mut self) {
+        self.set_hover(None);
         if let Some(surface) = self.active_surface() {
             surface.mouse_leave();
         }

@@ -258,8 +258,16 @@ pub fn run(args: &[String]) -> ExitCode {
     // `ift proxy files`: the host's end of the join file service (#560). A
     // viewer starts it over ssh; it answers file requests on stdin and stdout
     // until the viewer closes them. Needs no app and no `j.sock`.
+    // `--read-only` (the only form a phone's key may run) refuses writes; an
+    // older `ift` ignores the word and serves read-write, so the phone checks
+    // the Mac's version first.
     if args.first().map(String::as_str) == Some("files") {
-        return match infiniterm_core::file_server::serve(std::io::stdin(), std::io::stdout()) {
+        let read_only = args.get(1).map(String::as_str) == Some("--read-only");
+        return match infiniterm_core::file_server::serve(
+            std::io::stdin(),
+            std::io::stdout(),
+            read_only,
+        ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("ift: {e}");

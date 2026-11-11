@@ -141,6 +141,18 @@ impl Model {
         format!("{lock}#{} {}", card.number, self.label_of(card))
     }
 
+    /// A Ctrl+Tab switcher row's words (`switcher::row_text`, #746).
+    pub fn switcher_row(&self, card: &Card) -> crate::switcher::RowText {
+        crate::switcher::row_text(&crate::switcher::RowFacts {
+            kind: card.kind,
+            label: &self.numbered_label(card),
+            named: !card.title.trim().is_empty(),
+            root: card.root.as_deref(),
+            path: card.path.as_deref(),
+            page_title: card.page_title.as_deref(),
+        })
+    }
+
     pub fn label_of(&self, card: &Card) -> String {
         card_label(
             &Labelled {
@@ -1429,6 +1441,7 @@ impl Model {
             Source::Symbols => self.symbol_pick(id),
             Source::Files => self.quick_open_pick(id),
             Source::Grep => self.grep_pick(id),
+            Source::Branches => self.branch_pick(id),
             Source::MoveTo => self.move_selection_to(id),
             Source::MoveGroupTo => self.move_group_to(id),
             Source::SavedWorkspaces => self
@@ -2309,6 +2322,28 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
                 None => diff_plan(&card.cwd, PathKind::Directory),
             };
             m.open_in_card(plan, Some(&id));
+        })
+    });
+    // Switch the branch of the repository the card is in (#750): an editor's
+    // file, else the card's directory. The ui lists the branches.
+    r.register("git.switchBranch", "Git: switch branch…", |m| {
+        m.with_active_card(|m, id| {
+            let Some(card) = m.card(&id) else {
+                return;
+            };
+            let dir = card.path.clone().unwrap_or_else(|| card.cwd.clone());
+            m.effects.push(Effect::ListBranches(dir));
+        })
+    });
+    // The terminal menu's row outside a repository (#754), and the palette's:
+    // `git init` where the card is.
+    r.register("git.init", "Git: init a repository here", |m| {
+        m.with_active_card(|m, id| {
+            let Some(card) = m.card(&id) else {
+                return;
+            };
+            let dir = card.path.clone().unwrap_or_else(|| card.cwd.clone());
+            m.effects.push(Effect::GitInit(dir));
         })
     });
     // The diff's twin (#373): an editor card on the folder this card is in,

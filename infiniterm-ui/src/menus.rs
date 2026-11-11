@@ -185,7 +185,12 @@ impl AppView {
                 self.model.show_workspace(ws);
                 self.perform_effects();
             }
-            self.run_command(&id);
+            // A Switch Branch row is a ref, not a registered command (#754).
+            if self.model.menu_branch_pick(&id) {
+                self.perform_effects();
+            } else {
+                self.run_command(&id);
+            }
             // Moving a tab is no reason to leave the one you are in.
             if let (true, Some(prev)) = (id.starts_with("workspace.reorder"), before) {
                 self.model.show_workspace(&prev);
@@ -243,6 +248,14 @@ impl AppView {
                             .and_then(|(chord, _)| model.shown_chord(chord))
                     },
                     shown: &|chord| model.shown_chord(chord),
+                    // The terminal's git row (#754): one short git run on
+                    // the UI thread, as the palette's branch list does.
+                    git: &|| {
+                        let card = model.focused()?;
+                        infiniterm_core::git_branches::list(std::path::Path::new(&card.cwd))
+                            .ok()
+                            .map(|(_, rows)| rows)
+                    },
                 },
             )
         };

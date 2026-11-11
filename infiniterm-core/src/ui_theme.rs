@@ -88,6 +88,9 @@ pub struct TabTheme {
     /// The icon's size in pixels, scaled with the interface size; unset keeps
     /// the built-in size (a little over the label's).
     pub icon_size: Option<f64>,
+    /// Card tabs only (#742): the hover label's second line, the file's
+    /// path or the page's address. Off unless set.
+    pub hover_detail: Option<bool>,
 }
 
 /// The card header's keys (#544); see `card_header.rs`. Unset is no header.
@@ -203,7 +206,7 @@ pub const LOOK_KEYS: [(&str, Kind); 21] = [
 
 /// The bar keys (#425) and the tab keys (#544), with their docs. They exist
 /// only in a ui theme.
-pub const BAR_KEYS: [(&str, &[&str], &str); 36] = [
+pub const BAR_KEYS: [(&str, &[&str], &str); 37] = [
     (
         "canvas.background",
         &[
@@ -375,6 +378,14 @@ pub const BAR_KEYS: [(&str, &[&str], &str); 36] = [
         "cardTab.paddingX",
         &["Padding on each side of a card tab's name, in pixels, 0 to 40. Unset keeps the default."],
         "6",
+    ),
+    (
+        "cardTab.hoverDetail",
+        &[
+            "Hovering a card tab shows its full name. true adds a second line under it: the",
+            "file's path or the page's address. Default false.",
+        ],
+        "true",
     ),
     (
         "card.border",
@@ -702,6 +713,12 @@ pub fn parse(text: &str) -> Result<UiTheme, String> {
             "statusbar.border" => theme.statusbar.border = Some(border(key, v)?),
             k if tab_look(k.strip_prefix("tab."), key, v, &mut theme.tab)? => {}
             k if tab_look(k.strip_prefix("cardTab."), key, v, &mut theme.card_tab)? => {}
+            "cardTab.hoverDetail" => {
+                theme.card_tab.hover_detail = Some(
+                    v.as_bool()
+                        .ok_or("\"cardTab.hoverDetail\" must be true or false")?,
+                )
+            }
             "tab.icons" => {
                 theme.tab.icons = Some(v.as_bool().ok_or("\"tab.icons\" must be true or false")?)
             }
@@ -1155,6 +1172,17 @@ mod tests {
             let e = parse(bad).unwrap_err();
             assert!(e.contains(key), "{e}");
         }
+    }
+
+    #[test]
+    fn a_card_tab_hover_detail_is_a_bool_for_card_tabs_only() {
+        let on = parse(r#"{"cardTab.hoverDetail": true}"#).unwrap();
+        assert_eq!(on.card_tab.hover_detail, Some(true));
+        assert_eq!(parse("{}").unwrap().card_tab.hover_detail, None);
+        let e = parse(r#"{"cardTab.hoverDetail": "yes"}"#).unwrap_err();
+        assert!(e.contains("cardTab.hoverDetail"), "{e}");
+        // The workspace tabs show no hover label.
+        assert!(parse(r#"{"tab.hoverDetail": true}"#).is_err());
     }
 
     #[test]

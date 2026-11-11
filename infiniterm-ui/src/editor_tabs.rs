@@ -22,7 +22,10 @@
 //! card's own id so a draft from before tabs is still found.
 use crate::body::{BodyAction, CardBody};
 use crate::editor_body::{EditorBody, EditorEvent};
-use crate::tab_strip::{paint_strip, strip_hit, strip_world_h, StripStyle, TabDrag};
+use crate::tab_strip::{
+    hover_lines, hovered, paint_hover_label, paint_strip, strip_hit, strip_world_h, StripStyle,
+    TabDrag,
+};
 use crate::terminal_body::Metrics;
 use gpui::{point, size, App, Bounds, Keystroke, Pixels, Window};
 use infiniterm_core::grid::{Point, Size};
@@ -67,6 +70,9 @@ pub struct EditorTabs {
     strip: bool,
     /// A tab held by the pointer, from the press to the release (#682).
     tab_drag: Option<TabDrag>,
+    /// The tab under the pointer, whose full name and path the hover label
+    /// shows (#742).
+    hover_tab: Option<usize>,
     /// A drop since `editors.rs` last looked: (from, to) for `Model::move_tab`.
     pub tab_drop: Option<(usize, usize)>,
     /// Bounds of the last paint, for the strip's hit test.
@@ -137,6 +143,7 @@ impl EditorTabs {
             style,
             strip: true,
             tab_drag: None,
+            hover_tab: None,
             tab_drop: None,
             world,
             dirty: true,
@@ -431,6 +438,34 @@ impl EditorTabs {
             .collect()
     }
 
+    /// The hover label's lines for tab `i` (#742): its full name, then its
+    /// path with the home folder as `~`. None while the scratch buffer is
+    /// hidden, as `labels`.
+    fn hover_text(&self, i: usize) -> Option<Vec<String>> {
+        if self.scratch_hidden() {
+            return None;
+        }
+        let (h, _) = self.tabs.get(i)?;
+        if h.is_empty() {
+            return Some(hover_lines("untitled", None, self.style.hover_detail));
+        }
+        let home = std::env::var("HOME").unwrap_or_default();
+        let path = infiniterm_core::card_label::tilde_path(h, &home);
+        Some(hover_lines(
+            infiniterm_core::paths::base_name(h),
+            Some(&path),
+            self.style.hover_detail,
+        ))
+    }
+
+    /// Notes the tab under the pointer, asking for a frame when it changed.
+    fn set_hover(&mut self, tab: Option<usize>) {
+        if self.hover_tab != tab {
+            self.hover_tab = tab;
+            self.dirty = true;
+        }
+    }
+
     fn below_strip(&self, local: Point) -> Point {
         Point {
             x: local.x,
@@ -485,6 +520,23 @@ impl CardBody for EditorTabs {
             window.with_content_mask(Some(gpui::ContentMask { bounds: below }), |window| {
                 b.paint(below, scale, focused, now, window, cx)
             });
+        }
+        // Over the text, after it. Not while a tab is being dragged.
+        let dragging = self.tab_drag.is_some_and(|d| d.moving);
+        if let Some(i) = self.hover_tab.filter(|_| self.strip && !dragging) {
+            if let Some(lines) = self.hover_text(i) {
+                paint_hover_label(
+                    bounds,
+                    scale,
+                    self.ui_scale,
+                    i,
+                    self.header_w(),
+                    &lines,
+                    &self.style,
+                    window,
+                    cx,
+                );
+            }
         }
     }
 
@@ -614,6 +666,8 @@ impl CardBody for EditorTabs {
             }
             return;
         }
+        let over = self.strip.then(|| hovered(self.hit(local))).flatten();
+        self.set_hover(over);
         let below = self.below_strip(local);
         if let Some(b) = self.active_body() {
             b.mouse_move(below, modifiers);
@@ -621,6 +675,7 @@ impl CardBody for EditorTabs {
     }
 
     fn mouse_leave(&mut self) {
+        self.set_hover(None);
         if let Some(b) = self.active_body() {
             b.mouse_leave();
         }

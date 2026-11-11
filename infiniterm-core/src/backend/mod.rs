@@ -380,6 +380,18 @@ impl Panes {
         }
     }
 
+    /// Whether a daemon session died without saying so; always false under
+    /// the other backends, which have no meta to read.
+    pub fn session_gone(&self, session_id: &str) -> bool {
+        match self {
+            #[cfg(unix)]
+            Panes::Daemon(b) => b.session_gone(session_id),
+            Panes::Local(_) => false,
+            #[cfg(unix)]
+            Panes::Tmux(_) => false,
+        }
+    }
+
     /// A dead session's scrollback from disk, daemon backend only: the
     /// local pty has no daemon to have written one and tmux keeps its own.
     pub fn take_ring(&self, session_id: &str) -> Option<(Vec<u8>, String)> {

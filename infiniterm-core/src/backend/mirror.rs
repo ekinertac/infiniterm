@@ -17,7 +17,7 @@
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 
@@ -171,12 +171,15 @@ fn size(cols: u16, rows: u16) -> Size {
 }
 
 /// The style the output is currently in, so a code is written only on a change.
+/// `link` is the OSC 8 hyperlink left open (#748): SGR codes do not touch it, so
+/// it is opened and closed on its own.
 #[derive(PartialEq)]
 struct Style {
     on: bool,
     fg: Option<Color>,
     bg: Option<Color>,
     flags: Flags,
+    link: Option<Hyperlink>,
 }
 
 impl Default for Style {
@@ -186,6 +189,7 @@ impl Default for Style {
             fg: None,
             bg: None,
             flags: Flags::empty(),
+            link: None,
         }
     }
 }
@@ -199,14 +203,34 @@ const SHOWN_FLAGS: Flags = Flags::INVERSE
     .union(Flags::ALL_UNDERLINES);
 
 impl Style {
+    /// Before a line break and at the end: a link is closed with its row, so a
+    /// viewer never carries one open into rows the program did not link. A row
+    /// the program wrapped gets no reset, so a link that wraps stays one link.
     fn reset(&mut self, out: &mut Vec<u8>) {
+        self.set_link(out, None);
         if self.on {
             out.extend_from_slice(b"\x1b[0m");
             *self = Style::default();
         }
     }
 
+    fn set_link(&mut self, out: &mut Vec<u8>, link: Option<Hyperlink>) {
+        if self.link == link {
+            return;
+        }
+        if self.link.is_some() {
+            out.extend_from_slice(b"\x1b]8;;\x1b\\");
+        }
+        if let Some(l) = &link {
+            // The id goes back too: cells of one link that a program split
+            // (a wrapped or repainted link) stay one link on the viewer.
+            out.extend_from_slice(format!("\x1b]8;id={};{}\x1b\\", l.id(), l.uri()).as_bytes());
+        }
+        self.link = link;
+    }
+
     fn set(&mut self, out: &mut Vec<u8>, cell: &Cell) {
+        self.set_link(out, cell.hyperlink());
         let flags = cell.flags & SHOWN_FLAGS;
         let fg = (cell.fg != Color::Named(NamedColor::Foreground)).then_some(cell.fg);
         let bg = (cell.bg != Color::Named(NamedColor::Background)).then_some(cell.bg);
@@ -238,12 +262,10 @@ impl Style {
             push_color(&mut codes, c, true);
         }
         out.extend_from_slice(format!("\x1b[{codes}m").as_bytes());
-        *self = Style {
-            on: true,
-            fg,
-            bg,
-            flags,
-        };
+        self.on = true;
+        self.fg = fg;
+        self.bg = bg;
+        self.flags = flags;
     }
 }
 
@@ -285,7 +307,7 @@ fn push_color(codes: &mut String, color: Color, background: bool) {
 }
 
 /// A cell that shows nothing: a space in the default colours and no attribute
-/// that paints a blank (inverse, underline, strike-through).
+/// that paints a blank (inverse, underline, strike-through), and no link.
 fn is_plain_blank(cell: &Cell) -> bool {
     cell.c == ' '
         && cell.bg == Color::Named(NamedColor::Background)
@@ -293,6 +315,7 @@ fn is_plain_blank(cell: &Cell) -> bool {
             .flags
             .intersects(Flags::INVERSE | Flags::STRIKEOUT | Flags::ALL_UNDERLINES)
         && cell.zerowidth().is_none()
+        && cell.hyperlink().is_none()
 }
 
 /// Writes one row. Returns whether the program wrapped it onto the next one,
@@ -401,6 +424,49 @@ mod tests {
         // A viewer of another width wraps the same text itself.
         let narrow = rebuilt(&mut m, 10, 8);
         assert!(text(&narrow).contains("abcdefghij\n abcdefghi\nj abcdefgh\nij"));
+    }
+
+    /// Every cell's link, history first, as (id, uri).
+    fn links(m: &Mirror) -> Vec<Vec<Option<(String, String)>>> {
+        let term = &m.term;
+        let top = -(term.history_size() as i32);
+        (top..term.screen_lines() as i32)
+            .map(|l| {
+                (0..term.columns())
+                    .map(|c| {
+                        term.grid()[Line(l)][Column(c)]
+                            .hyperlink()
+                            .map(|h| (h.id().to_string(), h.uri().to_string()))
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn hyperlinks_survive() {
+        let mut m = Mirror::new(20, 5);
+        m.advance(b"see \x1b]8;;https://example.com\x1b\\click here\x1b]8;;\x1b\\ ok\r\n");
+        m.advance(b"\x1b]8;id=a;https://a.example\x1b\\one\x1b]8;;\x1b\\");
+        m.advance(b"\x1b]8;id=b;https://b.example\x1b\\two\x1b]8;;\x1b\\ plain\r\n");
+        // A link the program wrapped onto the next row stays one link.
+        m.advance(
+            b"\x1b]8;id=w;https://w.example\x1b\\abcdefghijklmnopqrstuvwxyz\x1b]8;;\x1b\\\r\n",
+        );
+        m.advance(b"after\r\n");
+        let r = rebuilt(&mut m, 20, 5);
+        assert_eq!(links(&r), links(&m));
+        assert_eq!(dump(&r), dump(&m));
+        let all = links(&r);
+        let cell = |line: usize, col: usize| all[line][col].as_ref().map(|l| l.1.as_str());
+        assert_eq!(cell(0, 3), None, "the space before the link");
+        assert_eq!(cell(0, 4), Some("https://example.com"));
+        assert_eq!(cell(0, 14), None, "closed where the program closed it");
+        assert_eq!(cell(1, 2), Some("https://a.example"));
+        assert_eq!(cell(1, 3), Some("https://b.example"));
+        assert_eq!(cell(1, 6), None);
+        assert_eq!(cell(3, 0), Some("https://w.example"), "the wrapped part");
+        assert_eq!(cell(4, 0), None, "no link left open into the next line");
     }
 
     #[test]
