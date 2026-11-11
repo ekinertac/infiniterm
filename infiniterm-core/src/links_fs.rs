@@ -100,14 +100,15 @@ pub fn open_app_link(url: &str) -> Result<(), String> {
             .output()
             .map_err(|e| e.to_string())?;
         if out.status.success() {
-            return Ok(());
-        }
-        let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(if said.is_empty() {
-            "no app opens it".to_string()
+            Ok(())
         } else {
-            said
-        });
+            let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            Err(if said.is_empty() {
+                "no app opens it".to_string()
+            } else {
+                said
+            })
+        }
     }
     #[cfg(windows)]
     {
