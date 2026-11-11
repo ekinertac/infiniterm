@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-11
 
+- Fixed: a terminal card whose shell died along with its background process no longer sits on "attached from outside (ift attach)" until a restart. Within a second it starts a fresh shell in its folder with its last screen above, as a restart would.
 - New in the command palette: "Git: switch branch…" lists the branches of the repository the focused card is in, the current one first, then remote branches that have no local branch yet. Picking one switches to it; picking a remote branch makes a local branch that tracks it. When git refuses, because uncommitted changes would be overwritten, its message shows in the status bar and nothing changes.
 - Fixed: a joined window (`ift join`, the phone) now keeps the links in the output a card showed before it joined. Links whose text is not the address, as `ls --hyperlink` and `gh` write them, used to come back as plain text.
 - The Ctrl+Tab card switcher says more about each card. A folder editor shows the folder's name without the trailing `/` and the file open in it; a browser shows the page's title next to its host; editors, browsers, diffs, transcripts and pages name their kind on the right. A card whose agent is working, waiting, failed or done carries that colour across its row as well as its dot. With a ui theme's tab or header icons on, each row shows the program's icon too.
