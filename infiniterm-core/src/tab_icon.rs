@@ -182,10 +182,27 @@ pub fn choose_subject(
     Icon::Glyph("\u{f06a9}".to_string())
 }
 
-/// The program a workspace's tab shows: the focused card's, else the first
-/// card's in reading order (a workspace you are not in has no focus of its
-/// own to ask). `cards` is `(is_focused, foreground process)` in reading order;
-/// `None` for a workspace with no card, or whose card has no process yet.
+/// The card a workspace's tab counts as focused: the live focus for the
+/// workspace you are in, the one it remembers (`Workspace::focused`, where a
+/// switch back lands) for any other. The live focus only ever belongs to the
+/// active workspace, so asking it for another tab found nothing and the tab
+/// fell back to its first card (#740).
+pub fn tab_focus<'a>(
+    is_active: bool,
+    live: Option<&'a str>,
+    remembered: Option<&'a str>,
+) -> Option<&'a str> {
+    if is_active {
+        live
+    } else {
+        remembered
+    }
+}
+
+/// The program a workspace's tab shows: the focused card's (`tab_focus`),
+/// else the first card's in reading order. `cards` is `(is_focused,
+/// foreground process)` in reading order; `None` for a workspace with no
+/// card, or whose card has no process yet.
 pub fn representative<T: Copy>(cards: &[(bool, Option<T>)]) -> Option<T> {
     cards
         .iter()
@@ -580,6 +597,19 @@ mod tests {
         assert_eq!(representative(&unfocused), Some("fish"));
         assert_eq!(representative(&[(true, None::<&str>)]), None);
         assert_eq!(representative::<&str>(&[]), None);
+    }
+
+    #[test]
+    fn a_workspace_you_left_shows_the_card_you_left_it_on() {
+        // The live focus is a terminal in the active workspace; the other
+        // workspace was left on its editor, not its first (browser) card.
+        assert_eq!(tab_focus(true, Some("term"), Some("old")), Some("term"));
+        assert_eq!(
+            tab_focus(false, Some("term"), Some("editor")),
+            Some("editor")
+        );
+        assert_eq!(tab_focus(false, Some("term"), None), None);
+        assert_eq!(tab_focus(true, None, Some("old")), None);
     }
 
     #[test]
