@@ -113,7 +113,7 @@ Drag a tab onto another tab to put it in that place: a vertical line shows where
 
 With `"ui.workspaceIsolation": true`, `Ctrl Tab` walks only the current workspace's cards and the status bar counts only them; the palette still lists every card, so it stays the way across.
 
-"Card: move to workspace…" in the palette sends the focused card, or the selection, to another workspace or a new one. The card takes a free slot there and you stay where you are. "Group: move to workspace…" does the same for the focused card's whole group, with its frame, its name and its cards in the same arrangement and sizes. It lands in the first free block of the other workspace.
+"Card: move to workspace…" in the palette sends the focused card, or the selection, to another workspace or a new one. The card takes a free slot there and you stay where you are. "Group: move to workspace…" does the same for the focused card's whole group, with its frame, its name and its cards in the same arrangement and sizes. It lands in the first free block of the other workspace. You can also drag a card by its label or frame, a selection, or a group by its name tab, onto the other workspace's tab: the tab lights up and the drop does the same move. Escape cancels; a drop on your own workspace's tab is an ordinary drop on the canvas.
 
 ## Card labels and numbers
 

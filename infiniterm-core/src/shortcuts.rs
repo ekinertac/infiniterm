@@ -305,6 +305,11 @@ pub const GESTURES: &[(&str, &str, &str)] = &[
         "mouse.selection.drag",
     ),
     (
+        "drag a card onto a workspace tab",
+        "Move it, a selection or a group to that workspace",
+        "mouse.card.dropOnTab",
+    ),
+    (
         "double-click a frame or label",
         "Fit the card",
         "mouse.fitCard.doubleclick",

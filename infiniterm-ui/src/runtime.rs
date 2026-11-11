@@ -84,6 +84,8 @@ impl AppView {
             marquee: None,
             crowded: false,
             gesture: None,
+            tab_bounds: Default::default(),
+            drop_tab: None,
             body_drag: None,
             hover_body: None,
             hover_edge: None,

@@ -749,6 +749,8 @@ impl AppView {
             &self.model.config.terminal.shell,
             std::env::var("SHELL").ok().as_deref(),
         );
+        // Refilled by each tab's `canvas` below while it paints (#667).
+        self.tab_bounds.borrow_mut().clear();
         let mut tabs = div().flex().items_center().gap_1();
         for (index, ws) in self.model.workspaces.iter().enumerate() {
             let cards = self.model.cards_on(Some(&ws.id));
@@ -848,6 +850,12 @@ impl AppView {
                 .cursor_pointer()
                 .when(!is_active, |d| {
                     d.hover(|s| s.bg(crate::chrome::hover_fill(chosen_fill)))
+                })
+                // A card dragged over this tab (#667): lit like a hovered tab,
+                // since the pointer is not hovering it as far as gpui knows
+                // (the drag is the canvas's own gesture).
+                .when(self.drop_tab.as_deref() == Some(ws.id.as_str()), |d| {
+                    d.bg(crate::chrome::hover_fill(chosen_fill))
                 })
                 // Drag a tab onto another to take its place (#242).
                 .on_drag(
@@ -986,6 +994,17 @@ impl AppView {
                         .bg(color),
                 );
             }
+            // This tab's window bounds, for a card drag to hit-test (#667): an
+            // invisible child that fills the tab and reports where it painted.
+            let (store, tab_ws) = (self.tab_bounds.clone(), ws.id.clone());
+            tab = tab.child(
+                gpui::canvas(
+                    move |bounds, _, _| store.borrow_mut().push((tab_ws.clone(), bounds)),
+                    |_, _, _, _| (),
+                )
+                .absolute()
+                .size_full(),
+            );
             // A one pixel outline over the tab's edge. It is a child, not the
             // tab's own border, so the drop line's side borders stay put.
             let outline = if is_active {
@@ -1076,6 +1095,47 @@ impl AppView {
             .border_color(bar_style.border.unwrap_or(gpui::transparent_black()))
             .font_family(chrome.typography.family.clone())
             .font_weight(chrome.typography.regular.weight);
+        // A card drag that reaches the title bar (#667). The drag is the
+        // canvas's own gesture and its mouse listeners sit on the canvas, so
+        // a pointer over the bar (outside it) reaches nobody: these two
+        // window-level listeners hand the moves and the release over the bar
+        // to the same `mouse_move` and `mouse_up`, only while a card gesture
+        // runs. Bubble phase only, once, and only over the bar: over the
+        // canvas the canvas's own listeners already ran.
+        let entity = cx.entity();
+        let bar = bar.child(
+            gpui::canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    let (moves, ups) = (entity.clone(), entity.clone());
+                    window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
+                        if phase != gpui::DispatchPhase::Bubble || !bounds.contains(&e.position) {
+                            return;
+                        }
+                        moves.update(cx, |this, cx| {
+                            if this.gesture.is_some() {
+                                this.mouse_move(e);
+                                cx.notify();
+                            }
+                        });
+                    });
+                    window.on_mouse_event(move |e: &MouseUpEvent, phase, _, cx| {
+                        if phase != gpui::DispatchPhase::Bubble || !bounds.contains(&e.position) {
+                            return;
+                        }
+                        ups.update(cx, |this, cx| {
+                            if this.gesture.is_some() {
+                                this.mouse_up(e);
+                                this.perform_effects();
+                                cx.notify();
+                            }
+                        });
+                    });
+                },
+            )
+            .absolute()
+            .size_full(),
+        );
         // A press that reaches the bar itself (not a tab or the "+", which
         // stop it) drags the window; a double-click does the system's title
         // bar action. `title_drag.rs` says why this is by hand on the Mac.

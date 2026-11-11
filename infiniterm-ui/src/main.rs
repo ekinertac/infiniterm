@@ -71,6 +71,7 @@ mod runtime;
 mod scrollbar;
 mod switcher_view;
 mod tab_drag;
+mod tab_drop;
 mod tab_strip;
 mod terminal_body;
 mod terminals;
@@ -267,6 +268,14 @@ pub struct AppView {
     /// bars, and content frames are rationed (`AppView::far`).
     pub crowded: bool,
     pub gesture: Option<Gesture>,
+    /// Each workspace tab's window bounds as the title bar last drew them
+    /// (#667): what a card drag is hit-tested against. Cleared and refilled
+    /// every frame the bar is built.
+    pub tab_bounds: tab_drop::TabBounds,
+    /// The workspace tab a card drag is over right now (#667): lit by the bar,
+    /// and where the drop sends the cards. `None` off the tabs, and for the
+    /// tab of the workspace the drag started in.
+    pub drop_tab: Option<String>,
     /// The card whose body is following a drag (a text selection).
     pub body_drag: Option<String>,
     /// A press that moved the focus to a card: where it landed, so the
