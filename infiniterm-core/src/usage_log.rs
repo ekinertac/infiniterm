@@ -22,6 +22,10 @@ use std::path::Path;
 pub const MOUSE_GESTURES: &[(&str, &str)] = &[
     ("mouse.card.drag", "Mouse: drag a card to a new place"),
     ("mouse.group.drag", "Mouse: drag a group by its tab"),
+    (
+        "mouse.card.dropOnTab",
+        "Mouse: drop a dragged card on a workspace tab",
+    ),
     ("mouse.card.resize", "Mouse: resize a card by its edge"),
     ("mouse.canvas.pan", "Mouse: pan the canvas by dragging"),
     ("mouse.marquee", "Mouse: drag a rectangle to select cards"),

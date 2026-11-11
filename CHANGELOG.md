@@ -8,6 +8,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-12
 
+- Drag a card by its label or frame onto another workspace's tab to move it there. The tab lights up while the card is over it, and the ghost on the canvas goes away. It is the same move as "Card: move to workspace…" in the palette: the card takes a free slot in the other workspace and you stay where you are. A selection of several cards, or a group dragged by its name tab, moves together. Escape cancels, and a drop on the tab of the workspace you are in is a normal drop on the canvas.
+
 - On Windows, `ift` now works inside every card with no setup: the app puts its own folder first on each card's PATH when the card starts. Your own PATH and the registry are not changed, and `ift install` still only tells you which folder to add if you want `ift` in other terminals. It works in PowerShell 7 and in Windows PowerShell 5.1.
 
 ### 2026-11-11
