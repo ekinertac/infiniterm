@@ -812,6 +812,7 @@ impl AppView {
 
     pub fn needs_frame(&self) -> bool {
         self.redraw
+            || crate::glyph_size::zoom_settling()
             || self.animator.is_running()
             || self.pan.is_some()
             || self.gesture.is_some()

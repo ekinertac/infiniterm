@@ -756,7 +756,7 @@ impl CardBody for BrowserBody {
                 }
             }
             None => {
-                let font_size = px((self.style.font_px * scale) as f32);
+                let font_size = crate::glyph_size::zoomed(self.style.font_px, scale, window);
                 if font_size >= px(crate::chrome::LEGIBLE_FONT_PX as f32) {
                     let text = self
                         .active_tab()

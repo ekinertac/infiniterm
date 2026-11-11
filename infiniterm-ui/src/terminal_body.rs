@@ -1132,7 +1132,7 @@ impl CardBody for TerminalBody {
             bounds,
             rgb(self.palette.background),
         ));
-        let font_size = px((self.font_px * scale) as f32);
+        let font_size = crate::glyph_size::cell_placed(self.font_px, scale, window);
         let line_h = px((self.font_px * self.line_height * scale) as f32);
         let cell_w = px((self.cell_w * scale) as f32);
         let pad = px((self.pad * scale) as f32);
@@ -1143,8 +1143,11 @@ impl CardBody for TerminalBody {
         // Too small to read, or too many cells on screen this frame
         // (`crowded`, the glyph budget): skip the glyphs, keep the ground.
         // The corner label names the card instead.
-        let legible =
-            font_size >= crate::chrome::legible_font_px(window.scale_factor()) && !self.crowded;
+        // The exact size, not the snapped one: snapping must not move the
+        // line where text turns into bars.
+        let legible = px((self.font_px * scale) as f32)
+            >= crate::chrome::legible_font_px(window.scale_factor())
+            && !self.crowded;
         self.bars = !legible;
         // Where a solid block sits: the letter under it is drawn in the
         // palette's cursor text colour (#343).

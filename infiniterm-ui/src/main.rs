@@ -36,6 +36,7 @@ mod explorer_icon_svgs;
 mod explorer_icons;
 mod field;
 mod find_in_files;
+mod glyph_size;
 mod host_dirs;
 // Seven modules talk to AppKit and CoreText. Elsewhere `not_macos.rs`
 // answers under the same names (its header says what each leaves undone).
