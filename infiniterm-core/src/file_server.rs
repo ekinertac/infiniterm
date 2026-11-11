@@ -212,16 +212,12 @@ fn answer<W: Write + Send + 'static>(
 }
 
 /// Why a read-only service refuses this request, or `None` when it may run.
-/// Only the two ops that put bytes on this disk are refused (`write`, and
-/// `put_drop`, which saves a dropped file); every other op reads.
-fn read_only_refusal(request: &Value) -> Option<FileError> {
-    match request.get("op").and_then(Value::as_str) {
-        Some("write" | "put_drop") => Some(FileError::new(
-            Code::Denied,
-            "this file service is read-only",
-        )),
-        _ => None,
-    }
+/// What counts as a write is `Request::writes`, decided on the parsed
+/// request, so a new request cannot slip through by name.
+fn read_only_refusal(request: &Request) -> Option<FileError> {
+    request
+        .writes()
+        .then(|| FileError::new(Code::Denied, "this file service is read-only"))
 }
 
 /// The handshake and then the request loop, until the viewer closes its end.
@@ -289,8 +285,11 @@ pub fn serve<R: Read, W: Write + Send + 'static>(
                 }
                 Ok(Some(frame)) if frame.kind == Kind::Request => {
                     let mut body = partial.remove(&frame.id).unwrap_or_default();
-                    if let Some(refusal) =
-                        read_only.then(|| read_only_refusal(&frame.json)).flatten()
+                    // A request that does not parse goes on to `answer`,
+                    // which replies with its error.
+                    if let Some(refusal) = Request::from_json(&frame.json)
+                        .ok()
+                        .and_then(|r| read_only.then(|| read_only_refusal(&r)).flatten())
                     {
                         // Answered here, in order, with no thread: nothing
                         // of the request ever reaches the disk.
@@ -341,21 +340,45 @@ mod tests {
 
     #[test]
     fn read_only_refuses_write_and_put_drop_and_nothing_else() {
-        for op in ["write", "put_drop"] {
-            let e = read_only_refusal(&json!({ "op": op, "path": "/x" })).unwrap();
-            assert_eq!(e.code, Code::Denied);
-        }
-        for op in [
-            "read",
-            "stat",
-            "list",
-            "watch",
-            "git_head",
-            "git_changes",
-            "git_show",
-            "home",
+        let p = || "/x".to_string();
+        for r in [
+            Request::Write {
+                path: p(),
+                expect_mtime_ms: None,
+            },
+            Request::PutDrop {
+                id: "i".into(),
+                name: "n".into(),
+            },
         ] {
-            assert!(read_only_refusal(&json!({ "op": op })).is_none(), "{op}");
+            assert_eq!(read_only_refusal(&r).unwrap().code, Code::Denied);
+        }
+        // `Request::writes` has no `_` arm, so a new request must be
+        // classed there; this lists the reads that exist now.
+        for r in [
+            Request::Home,
+            Request::Stat { path: p() },
+            Request::Exists { paths: vec![p()] },
+            Request::List { path: p() },
+            Request::Read {
+                path: p(),
+                offset: 0,
+                len: None,
+            },
+            Request::Watch { path: p() },
+            Request::Unwatch { watch: 1 },
+            Request::GitHead { path: p() },
+            Request::GitChanges { path: p() },
+            Request::GitShow {
+                repo: p(),
+                path: p(),
+            },
+            Request::GitBlame {
+                repo: p(),
+                path: p(),
+            },
+        ] {
+            assert!(read_only_refusal(&r).is_none(), "{r:?}");
         }
     }
 

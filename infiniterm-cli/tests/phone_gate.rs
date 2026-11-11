@@ -48,6 +48,44 @@ fn the_file_service_runs_for_a_phone_only_read_only() {
 }
 
 #[test]
+fn the_read_only_file_service_refuses_a_write_and_creates_no_file() {
+    use infiniterm_core::file_proto::{Frame, FrameReader, Kind};
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+
+    let dir = std::env::temp_dir().join(format!("ift-gate-ro-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("scratch.txt");
+    let _ = std::fs::remove_file(&target);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ift"))
+        .args(["proxy", "files", "--read-only"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut input = b"ift-files 1\n".to_vec();
+    input.extend(Frame::new(Kind::Data, 7, serde_json::json!({}), b"bytes".to_vec()).encode());
+    let request = serde_json::json!({ "op": "write", "path": target.to_string_lossy() });
+    input.extend(Frame::new(Kind::Request, 7, request, vec![]).encode());
+    // Closing stdin ends the service after it has answered.
+    child.stdin.take().unwrap().write_all(&input).unwrap();
+    let mut out = Vec::new();
+    child.stdout.take().unwrap().read_to_end(&mut out).unwrap();
+    child.wait().unwrap();
+
+    let hello = b"ift-files 1 ok\n";
+    assert!(out.starts_with(hello), "{}", String::from_utf8_lossy(&out));
+    let mut reader = FrameReader::default();
+    reader.feed(&out[hello.len()..]);
+    let frame = reader.next().unwrap().unwrap();
+    assert_eq!((frame.kind, frame.id), (Kind::Error, 7));
+    assert_eq!(frame.json["code"], "denied");
+    assert!(!target.exists(), "a refused write leaves no file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_quoted_path_is_the_same_path() {
     let (code, out, _) = gate(Some(&format!("'{}' --version", paired())));
     assert_eq!(code, Some(0), "{out}");
