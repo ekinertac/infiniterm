@@ -350,6 +350,34 @@ impl AppView {
                 }
                 if now >= body.readopt_due {
                     body.readopt_due = now + READOPT_POLL_MS;
+                    // Not displaced at all: the daemon died, and its meta
+                    // still says attached because nothing rewrote it (#752).
+                    // The card becomes what a restart would make of it: no
+                    // pane, so the next frame's spawn below starts a fresh
+                    // shell in its directory with the saved ring above it.
+                    if card
+                        .session
+                        .as_deref()
+                        .is_some_and(|s| self.backend.pty.session_gone(s))
+                    {
+                        self.live_sessions
+                            .retain(|s| Some(s) != card.session.as_ref());
+                        // The ring replay redraws what the grid holds now.
+                        body.reset_for_replay();
+                        body.pane = None;
+                        body.displaced = false;
+                        body.mark_dirty();
+                        if let Some(c) = self.model.card_mut(&card.id) {
+                            c.pane_id = None;
+                            c.displaced = false;
+                        }
+                        self.redraw = true;
+                        self.model.log(format!(
+                            "{}'s session died; starting a fresh shell",
+                            &card.id[..8.min(card.id.len())]
+                        ));
+                        continue;
+                    }
                     let free = card
                         .session
                         .as_deref()
