@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-12
+
+- The zsh completion for `ift` now completes hosts the way `ssh` does. `ift join <Tab>` and `ift connect <Tab>` offer the Host aliases of `~/.ssh/config` and of the files it includes (OrbStack's, for one), then the known hosts without their bare IP addresses, and complete `user@host` too. `ift phone add --host` takes the same list, `ift phone remove <Tab>` the paired phones, and `ift browse` completes files. Run `ift install` once after updating to write the new completion.
+
 ## 0.6.14 (build 1630), 2026-11-12
 
 ### 2026-11-12
