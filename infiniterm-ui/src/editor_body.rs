@@ -3479,22 +3479,23 @@ impl EditorBody {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let Some(tree) = &self.tree else { return };
         let line_h = px((self.line_h() * scale) as f32);
+        // Whole rows below the top pad, so the last row is never cut.
+        let pad_y = (PAD_Y * scale) as f32;
+        let visible = (((f32::from(area.size.height) - pad_y) / f32::from(line_h)).floor()
+            as usize)
+            .saturating_sub(self.tree_head_rows())
+            .max(1);
+        // A moved cursor comes into view; a wheel scroll is kept.
+        let Some(tree) = self.tree.as_mut() else {
+            return;
+        };
+        tree.fit(visible);
+        let Some(tree) = &self.tree else { return };
+        let scroll = tree.scroll;
         let font_size = crate::glyph_size::zoomed(self.metrics.font_px, scale, window);
         let f = self.metrics.font();
         let rows = tree.rows();
-        let visible = ((f32::from(area.size.height) / f32::from(line_h)).floor() as usize)
-            .saturating_sub(self.tree_head_rows())
-            .max(1);
-        // The cursor row stays in view.
-        let scroll = if tree.cursor < tree.scroll {
-            tree.cursor
-        } else if tree.cursor >= tree.scroll + visible {
-            tree.cursor + 1 - visible
-        } else {
-            tree.scroll
-        };
         let fg = hex(&self.colors.foreground);
         let sel_bg = hex(&self.colors.selection);
         let sel_fg = hex(&self.colors.selection_text);
@@ -3648,9 +3649,6 @@ impl EditorBody {
                 },
             ),
         ));
-        if let Some(t) = self.tree.as_mut() {
-            t.scroll = scroll;
-        }
     }
 
     fn paint_panel(
@@ -4748,8 +4746,17 @@ impl CardBody for EditorBody {
         }
     }
 
-    fn wheel(&mut self, _local: Point, dx: f64, dy: f64, _modifiers: &gpui::Modifiers) {
+    fn wheel(&mut self, local: Point, dx: f64, dy: f64, _modifiers: &gpui::Modifiers) {
         let lines = self.wheel_carry.lines(dy, self.line_h());
+        // Over the tree the wheel scrolls the tree, not the text beside it.
+        let over_tree = self.across(local) < self.sidebar_w;
+        if let Some(tree) = self.tree.as_mut().filter(|_| over_tree) {
+            if lines != 0 {
+                tree.scroll_by(-lines);
+                self.dirty = true;
+            }
+            return;
+        }
         if lines != 0 {
             let max = self.buffer.line_count().saturating_sub(1);
             self.scroll_line = (self.scroll_line as i64 - lines).clamp(0, max as i64) as usize;
