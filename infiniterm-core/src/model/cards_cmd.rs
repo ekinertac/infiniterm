@@ -1883,6 +1883,17 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
     r.register("editor.toggleComment", "Editor: Toggle Comment", |m| {
         m.editor_action(EditorAction::ToggleComment)
     });
+    // Ctrl+Shift+Right / Left inside a locked editor (`editor_keys::lock_override`).
+    r.register(
+        "editor.selection.expand",
+        "Editor: expand selection to the enclosing syntax",
+        |m| m.editor_action(EditorAction::ExpandSelection),
+    );
+    r.register(
+        "editor.selection.shrink",
+        "Editor: shrink selection back",
+        |m| m.editor_action(EditorAction::ShrinkSelection),
+    );
     for (id, label, t) in [
         (
             "editor.find.regex",

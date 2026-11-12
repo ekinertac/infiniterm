@@ -3,6 +3,7 @@
 //! path) and `highlight` (tree-sitter spans). The gpui element in
 //! `infiniterm-ui/src/editor_body.rs` draws what these say.
 pub mod buffer;
+pub mod decor;
 pub mod diff;
 pub mod explorer;
 pub mod format;
@@ -14,5 +15,6 @@ pub mod lsp;
 pub mod search;
 pub mod status;
 pub mod symbols;
+pub mod syntax_select;
 pub mod transforms;
 pub mod wrap;

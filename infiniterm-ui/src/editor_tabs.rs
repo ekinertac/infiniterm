@@ -77,6 +77,9 @@ pub struct EditorTabs {
     hover_tab: Option<usize>,
     /// A drop since `editors.rs` last looked: (from, to) for `Model::move_tab`.
     pub tab_drop: Option<(usize, usize)>,
+    /// Focused and locked at the last reconcile: the card was taking keys.
+    /// `editor.autosave` "focusChange" saves when this turns false (#778).
+    pub editing: bool,
     /// Bounds of the last paint, for the strip's hit test.
     world: Size,
     dirty: bool,
@@ -87,6 +90,20 @@ pub struct EditorTabs {
 }
 
 impl EditorTabs {
+    /// `editor.autosave` "focusChange" (#778): every tab with a file and
+    /// unsaved changes is saved. Untitled buffers have nowhere to go, and a
+    /// read-only one (a diff, a generated file, a picture) nothing to write.
+    pub fn autosave(&mut self, now: f64) {
+        for (_, body) in &mut self.tabs {
+            let Some(path) = body.path.clone() else {
+                continue;
+            };
+            if body.is_dirty() && !body.read_only {
+                body.save(&path, now);
+            }
+        }
+    }
+
     /// Escape still has something to close in the active tab (a popup, the
     /// find panel, extra cursors, a selection); see `EditorBody::escape_has_work`.
     pub fn escape_has_work(&self) -> bool {
@@ -147,6 +164,7 @@ impl EditorTabs {
             tab_drag: None,
             hover_tab: None,
             tab_drop: None,
+            editing: false,
             world,
             dirty: true,
             metrics: metrics.clone(),

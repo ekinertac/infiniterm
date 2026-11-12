@@ -123,6 +123,21 @@ pub fn trim_trailing_whitespace(s: &str) -> String {
         .join("\n")
 }
 
+/// What a save does to the text before it is written (#778), each half
+/// opt-in: `editor.trimTrailingWhitespaceOnSave` trims every line,
+/// `editor.insertFinalNewlineOnSave` ends a non-empty text with a newline.
+pub fn tidy_on_save(s: &str, trim: bool, final_newline: bool) -> String {
+    let mut out = if trim {
+        trim_trailing_whitespace(s)
+    } else {
+        s.to_string()
+    };
+    if final_newline && !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// Every line that is empty or only whitespace gone.
 pub fn remove_blank_lines(s: &str) -> String {
     s.split('\n')
@@ -252,5 +267,14 @@ mod tests {
         assert_eq!(indent_tabs_to_spaces("\t\tfoo\tbar", 2), "    foo\tbar");
         assert_eq!(indent_spaces_to_tabs("    foo  bar", 2), "\t\tfoo  bar");
         assert_eq!(indent_spaces_to_tabs("   foo", 2), "\t foo");
+    }
+
+    #[test]
+    fn a_save_tidies_only_what_is_switched_on() {
+        assert_eq!(tidy_on_save("a  \nb\t", false, false), "a  \nb\t");
+        assert_eq!(tidy_on_save("a  \nb\t", true, false), "a\nb");
+        assert_eq!(tidy_on_save("a  \nb\t", true, true), "a\nb\n");
+        assert_eq!(tidy_on_save("a\n", false, true), "a\n");
+        assert_eq!(tidy_on_save("", false, true), "", "an empty file stays empty");
     }
 }
