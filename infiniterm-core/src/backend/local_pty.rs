@@ -550,6 +550,8 @@ mod tests {
             "echo \"prog=$env:TERM_PROGRAM pane=$(if ($env:WEZTERM_PANE) { $env:WEZTERM_PANE } else { 'none' })\"";
         pub const EXIT_3: &str = "exit 3";
         pub const SLEEP: &str = "Start-Sleep 30";
+        /// Long enough for a viewer to join first, short enough to end alone.
+        pub const SLEEP_SHORT: &str = "Start-Sleep 4";
         /// CR, the byte a real terminal sends for Enter and what the
         /// key encoder sends: PSReadLine acts on that one, not on LF.
         pub const TYPE_ECHO: &[u8] = b"echo written-ok\r";
@@ -565,6 +567,7 @@ mod tests {
         pub const IDENTITY: &str = "echo prog=$TERM_PROGRAM pane=${WEZTERM_PANE:-none}";
         pub const EXIT_3: &str = "exit 3";
         pub const SLEEP: &str = "sleep 30";
+        pub const SLEEP_SHORT: &str = "sleep 4";
         pub const TYPE_ECHO: &[u8] = b"echo written-ok\n";
         pub const FLOOD: &str = "yes";
         pub const TYPE_COLS: &[u8] = b"echo COLS=$(tput cols)\n";
@@ -996,7 +999,7 @@ mod tests {
         let backend = Arc::new(backend);
         backend.relay().lock().unwrap().set_enabled(true);
         let pane = backend
-            .spawn(&tmp(), Some(sh::SLEEP), vec![])
+            .spawn(&tmp(), Some(sh::SLEEP_SHORT), vec![])
             .await
             .unwrap();
         let session = backend.session_id(pane).unwrap();
@@ -1019,10 +1022,12 @@ mod tests {
             *backend.panes.lock().unwrap()[&pane].size.lock().unwrap(),
             (120, 40)
         );
-        // Killing the shell ends the viewer's stream with its exit. The pane's
-        // own exit event comes first, so a miss says which half is missing.
+        // The shell ends by itself a few seconds on (not killed: how fast
+        // Windows reaps a killed shell varies with the machine's state, and
+        // that is not what this checks), and the viewer's stream ends with its
+        // exit. The pane's own exit event comes first, so a miss says which
+        // half is missing.
         let started = std::time::Instant::now();
-        backend.kill_now(pane);
         let pane_ended = pane_exited.recv_timeout(SPAWN_DEADLINE);
         assert!(
             pane_ended.is_ok(),
