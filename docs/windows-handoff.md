@@ -131,6 +131,44 @@ the box builds fails the Windows build, and a test that writes `/tmp`, uses a
 symlink, checks a mode bit or canonicalises with `std::fs::canonicalize`
 (use `paths::canonical`) fails on Windows only.
 
+## Join on Windows (started 2026-11-12, Ekin's go)
+
+Goal of the first version: a Mac runs `ift join <windows host>` and sees and
+edits the Windows APP's canvas, with live terminal cards. The Windows app is
+the host (the hub); nothing outlives the app (no `ift serve`, no parking, no
+`iftd`), and a Windows host shows terminal cards only (editor, diff, browser
+and page cards on a Windows host come later with the file service, which
+assumes posix paths today). Plan, in order, about 12 working days:
+
+1. **Transport (done, `pipe.rs`).** A named pipe a reader and a writer can use
+   at once. The existing `transport.rs` pipe is a synchronous `File`, and
+   Windows serialises synchronous I/O on one handle, so a thread blocked
+   reading the viewer's keys would stop the thread writing terminal output
+   (fine for the hook and `ift` channel, a request and a reply; fatal for
+   join). `pipe.rs` opens every handle with `FILE_FLAG_OVERLAPPED` and waits on
+   a per-call event; `try_clone` shares one handle; `shutdown` cancels what is
+   waiting (`CancelIoEx`), the way the unix join code wakes a parked writer.
+   The listener's access list names the current user's SID only (checked by a
+   test that reads a real bound pipe's descriptor back from the kernel), the
+   first instance is `FILE_FLAG_FIRST_PIPE_INSTANCE` (a squatter makes `bind`
+   fail), remote (SMB) clients are refused, and a client opens with anonymous
+   impersonation. Name: `paths::join_socket()` is `\\.\pipe\infiniterm-join`
+   (with the data dir's hash for a scratch instance). The hook and `ift` pipe
+   in `transport.rs` still has the default access list; the same fix is cheap
+   and not done.
+2. `ift proxy join canvas` and `ift proxy join session <id>` on Windows.
+3. The join hub in the Windows app: `join.rs` on the pipe, a tap in
+   `local_pty` feeding the relay, session ids, viewer input into the pty.
+4. The Mac viewer side: ssh to a Windows host, finding `ift.exe`, quoting.
+5. Tests and hardening on the gpu box.
+
+Measured for step 2: ssh into the box (PowerShell 7 default shell) carries
+binary data intact to a native exe (3 MB of random bytes, byte-identical),
+but ONLY while the client's stdin stays open. If stdin reaches end of file
+early, Windows sshd drops the tail of the child's output (1.4 to 1.9 MB of
+3 MB, different every run, with `exe`, `& 'exe'` and `cmd /c exe` alike). The
+proxy must never rely on half-close.
+
 ## Prompt icons (Nerd Font), 2026-10-22
 
 Before this, every icon in an oh-my-posh prompt drew as a box on Windows.

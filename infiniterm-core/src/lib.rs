@@ -144,6 +144,9 @@ pub mod slide;
 pub mod slot_snap;
 pub mod snippets;
 pub mod switcher;
+// A named pipe a reader and a writer can use at once, for join on Windows.
+#[cfg(windows)]
+pub mod pipe;
 pub mod tab_icon;
 pub mod themes_files;
 pub mod transcript;
