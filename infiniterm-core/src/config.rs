@@ -319,6 +319,27 @@ pub struct Editor {
     /// The caret's colour. Empty follows the theme.
     pub cursor_color: String,
     pub wrap: Wrap,
+    // The polish set (#778). Every one is off by default: each changes how
+    // the editor looks or what a save does to the file.
+    /// The other places the word under the caret (or the selected text)
+    /// appears, washed in the visible lines.
+    pub highlight_occurrences: bool,
+    /// A hairline per indent level, the caret's block brighter.
+    pub indent_guides: bool,
+    /// The caret glides to where it moved instead of jumping.
+    pub smooth_caret: bool,
+    /// Vertical lines at these columns (`[80, 120]`); empty draws none.
+    pub rulers: Vec<u32>,
+    /// Dots for the spaces inside a selection.
+    pub whitespace_in_selection: bool,
+    /// The header lines of the function or type the top line is in stay
+    /// pinned over the text while you scroll through it.
+    pub sticky_scroll: bool,
+    /// When a file is saved without Cmd+S.
+    pub autosave: Autosave,
+    /// What a save does to the text first.
+    pub trim_trailing_whitespace_on_save: bool,
+    pub insert_final_newline_on_save: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -328,6 +349,18 @@ pub enum Wrap {
     Always,
     Never,
 }
+
+/// `editor.autosave`: never, or when the editor stops taking keys (another
+/// card focused, or the text left with Escape).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Autosave {
+    Off,
+    FocusChange,
+}
+
+/// The widest column a ruler may stand at; past this nobody reads a line.
+const RULER_MAX_COLUMN: u64 = 500;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -637,6 +670,15 @@ pub fn default_config() -> Config {
             selection_text_color: String::new(),
             cursor_color: String::new(),
             wrap: Wrap::Prose,
+            highlight_occurrences: false,
+            indent_guides: false,
+            smooth_caret: false,
+            rulers: vec![],
+            whitespace_in_selection: false,
+            sticky_scroll: false,
+            autosave: Autosave::Off,
+            trim_trailing_whitespace_on_save: false,
+            insert_final_newline_on_save: false,
         },
         join: Join { enabled: true },
         notify: Notify {
@@ -974,6 +1016,49 @@ pub fn merge_config(raw: &Value) -> Config {
                     ("always", Wrap::Always),
                     ("never", Wrap::Never),
                 ],
+            ),
+            highlight_occurrences: bool_(
+                e.get("highlightOccurrences"),
+                d.editor.highlight_occurrences,
+            ),
+            indent_guides: bool_(e.get("indentGuides"), d.editor.indent_guides),
+            smooth_caret: bool_(e.get("smoothCaret"), d.editor.smooth_caret),
+            // Whole columns from 1 up; anything else in the list is skipped.
+            rulers: e
+                .get("rulers")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    let mut cols: Vec<u32> = a
+                        .iter()
+                        .filter_map(Value::as_u64)
+                        .filter(|c| (1..=RULER_MAX_COLUMN).contains(c))
+                        .map(|c| c as u32)
+                        .collect();
+                    cols.sort_unstable();
+                    cols.dedup();
+                    cols
+                })
+                .unwrap_or_else(|| d.editor.rulers.clone()),
+            whitespace_in_selection: bool_(
+                e.get("whitespaceInSelection"),
+                d.editor.whitespace_in_selection,
+            ),
+            sticky_scroll: bool_(e.get("stickyScroll"), d.editor.sticky_scroll),
+            autosave: one(
+                e.get("autosave"),
+                d.editor.autosave,
+                &[
+                    ("off", Autosave::Off),
+                    ("focusChange", Autosave::FocusChange),
+                ],
+            ),
+            trim_trailing_whitespace_on_save: bool_(
+                e.get("trimTrailingWhitespaceOnSave"),
+                d.editor.trim_trailing_whitespace_on_save,
+            ),
+            insert_final_newline_on_save: bool_(
+                e.get("insertFinalNewlineOnSave"),
+                d.editor.insert_final_newline_on_save,
             ),
         },
         join: Join {
@@ -1592,6 +1677,37 @@ mod tests {
             !e.formatters.contains_key("go"),
             "a blank command is no command"
         );
+    }
+
+    // The polish set is opt-in, every key of it (#778); rulers keep whole
+    // columns in range, sorted, once each.
+    #[test]
+    fn the_editor_polish_settings_are_off_by_default_and_read_when_set() {
+        let d = m(json!({})).editor;
+        assert!(!d.highlight_occurrences && !d.indent_guides && !d.smooth_caret);
+        assert!(!d.whitespace_in_selection && !d.sticky_scroll);
+        assert!(!d.trim_trailing_whitespace_on_save && !d.insert_final_newline_on_save);
+        assert!(d.rulers.is_empty());
+        assert_eq!(d.autosave, Autosave::Off);
+        let e = m(json!({
+            "editor.highlightOccurrences": true,
+            "editor.indentGuides": true,
+            "editor.smoothCaret": true,
+            "editor.rulers": [120, 80, 0, 80, "x", 9999, 100.5],
+            "editor.whitespaceInSelection": true,
+            "editor.stickyScroll": true,
+            "editor.autosave": "focusChange",
+            "editor.trimTrailingWhitespaceOnSave": true,
+            "editor.insertFinalNewlineOnSave": true,
+        }))
+        .editor;
+        assert!(e.highlight_occurrences && e.indent_guides && e.smooth_caret);
+        assert!(e.whitespace_in_selection && e.sticky_scroll);
+        assert!(e.trim_trailing_whitespace_on_save && e.insert_final_newline_on_save);
+        assert_eq!(e.rulers, vec![80, 120]);
+        assert_eq!(e.autosave, Autosave::FocusChange);
+        let typo = m(json!({"editor.autosave": "onFocus"})).editor;
+        assert_eq!(typo.autosave, Autosave::Off, "a typo keeps the default");
     }
 
     // The tree's icons are off until asked for (#701), flat or nested.

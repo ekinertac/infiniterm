@@ -350,6 +350,62 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "editor.highlightOccurrences",
+        &[
+            "Wash the other places the word under the caret appears in the lines on",
+            "screen; with text selected on one line, that text instead. Off by default.",
+        ],
+    ),
+    (
+        "editor.indentGuides",
+        &[
+            "A faint vertical line for each indent level, the block the caret is in",
+            "drawn brighter. Lines indented with tabs get none. Off by default.",
+        ],
+    ),
+    (
+        "editor.smoothCaret",
+        &[
+            "The caret glides to where it moved instead of jumping there. Off by",
+            "default, and never with ui.animations off or the system's reduce motion.",
+        ],
+    ),
+    (
+        "editor.rulers",
+        &[
+            "Vertical lines at these columns, for example [80, 120], to see where a",
+            "line gets long. Empty draws none.",
+        ],
+    ),
+    (
+        "editor.whitespaceInSelection",
+        &["Dots for the spaces inside selected text. Off by default."],
+    ),
+    (
+        "editor.stickyScroll",
+        &[
+            "Pin the first line of the function, type or heading the top line is in",
+            "(up to three, outermost first) over the text while you scroll through",
+            "it. Off by default.",
+        ],
+    ),
+    (
+        "editor.autosave",
+        &[
+            "\"focusChange\" saves an editor's changed files when it stops taking keys:",
+            "another card is focused, or you leave the text with Escape. Untitled",
+            "buffers are left alone. \"off\" (the default) saves only on Cmd+S.",
+        ],
+    ),
+    (
+        "editor.trimTrailingWhitespaceOnSave",
+        &["Remove the spaces and tabs at the end of every line when saving. Off by default."],
+    ),
+    (
+        "editor.insertFinalNewlineOnSave",
+        &["End the file with a newline when saving, if it has none. Off by default."],
+    ),
+    (
         "browser",
         &["Browser cards. The page stays at its own size whatever the canvas zoom is."],
     ),

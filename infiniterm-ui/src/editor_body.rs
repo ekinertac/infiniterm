@@ -40,8 +40,10 @@ use infiniterm_core::files::{
 use infiniterm_core::git::git_show_head;
 use infiniterm_core::grid::{Point, Size};
 use infiniterm_core::model::FindToggle;
+use infiniterm_core::viewport::ease_out_cubic;
 use infiniterm_core::words::{complete_words, unique_words, Other};
 use infiniterm_editor::buffer::{Buffer, CommentStyle};
+use infiniterm_editor::decor;
 use infiniterm_editor::diff::{gutter_marks, hunk_at, hunks, revert_hunk, GutterMark, Hunk};
 use infiniterm_editor::explorer::{Entry, Tree, TreeAction};
 use infiniterm_editor::highlight::{Highlighting, Span};
@@ -196,6 +198,29 @@ const BRACKET_ALPHA: f32 = 0.5;
 /// A search match that isn't the current one is dimmed to this alpha, so
 /// the current match still reads as the one under the caret.
 const MATCH_DIM_ALPHA: f32 = 0.45;
+// The polish set (#778). Washes and hairlines in the text colour, never an
+// agent colour, faint enough to sit under the syntax colours.
+/// The word under the caret, elsewhere: a grey wash, apart from the
+/// search's yellow.
+const OCCURRENCE_ALPHA: f32 = 0.14;
+/// An indent guide, and the caret's block's guide. A guide is a short
+/// segment per line, so it needs more than a ruler's full-height line to
+/// show at all: 0.10 was invisible on a dark theme at canvas zoom.
+const GUIDE_ALPHA: f32 = 0.18;
+const GUIDE_ACTIVE_ALPHA: f32 = 0.42;
+const RULER_ALPHA: f32 = 0.12;
+/// The dot for a selected space: this share of a cell, in the selection's
+/// text colour, half strength.
+const WHITESPACE_DOT_RATIO: f32 = 0.18;
+const WHITESPACE_DOT_ALPHA: f32 = 0.55;
+/// Sticky scroll pins at most this many headers: past three the band
+/// hides more text than it explains.
+const STICKY_MAX_ROWS: usize = 3;
+/// Smooth caret: how long a glide takes (VS Code's is about 80 ms), and the
+/// rows a move may cross and still glide; a longer one (a search jump, a
+/// page) lands at once.
+const CARET_GLIDE_MS: f64 = 80.;
+const CARET_GLIDE_MAX_ROWS: f64 = 6.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
@@ -310,6 +335,33 @@ pub struct EditorBody {
     scroll_x: f64,
     pub wrap: bool,
     pub highlight_line: bool,
+    /// The polish set (#778), set by the reconcile, all off by default:
+    /// `editor.highlightOccurrences`, `indentGuides`, `smoothCaret` (already
+    /// false under reduced motion), `rulers`, `whitespaceInSelection`,
+    /// `stickyScroll`, `trimTrailingWhitespaceOnSave`, `insertFinalNewlineOnSave`.
+    pub highlight_occurrences: bool,
+    pub indent_guides: bool,
+    pub smooth_caret: bool,
+    pub rulers: Vec<u32>,
+    pub whitespace_in_selection: bool,
+    pub sticky_scroll: bool,
+    pub trim_on_save: bool,
+    pub final_newline_on_save: bool,
+    /// The file's indent width for the guides, cached like the spans: the
+    /// buffer's version and the load count it was measured at.
+    indent_unit: (u64, u64, usize),
+    /// The symbols sticky scroll pins headers from, cached the same way.
+    sticky_symbols: (u64, u64, Vec<infiniterm_editor::symbols::Symbol>),
+    /// Expand selection's steps: the selections it grew from (anchor,
+    /// cursor), newest last, and the range it last grew to. Shrink pops
+    /// only while the selection is still that range.
+    syntax_steps: Vec<(Option<usize>, usize)>,
+    syntax_grown: Option<std::ops::Range<usize>>,
+    /// Smooth caret: the primary caret's char offset at the last paint and
+    /// where it was drawn (world px from the text origin), and the glide in
+    /// flight: its start's offset from the new place, and when it began.
+    caret_drawn: Option<(usize, f64, f64)>,
+    caret_glide: Option<(f64, f64, f64)>,
     /// `editor.explorer.icons`: file and folder icons in the tree.
     pub tree_icons: bool,
     pub read_only: bool,
@@ -530,6 +582,20 @@ impl EditorBody {
             scroll_x: 0.,
             wrap: false,
             highlight_line: false,
+            highlight_occurrences: false,
+            indent_guides: false,
+            smooth_caret: false,
+            rulers: vec![],
+            whitespace_in_selection: false,
+            sticky_scroll: false,
+            trim_on_save: false,
+            final_newline_on_save: false,
+            indent_unit: (u64::MAX, 0, 0),
+            sticky_symbols: (u64::MAX, 0, vec![]),
+            syntax_steps: vec![],
+            syntax_grown: None,
+            caret_drawn: None,
+            caret_glide: None,
             tree_icons: false,
             read_only: false,
             colors: EditorColors {
@@ -722,6 +788,7 @@ impl EditorBody {
             // A save-as can change the grammar without changing the text.
             self.loads += 1;
         }
+        self.tidy_before_save(now);
         if !self.source.is_local() {
             self.start_host_save(path, now);
             return;
@@ -786,17 +853,41 @@ impl EditorBody {
         if new == text {
             return FormatOutcome::Unchanged;
         }
+        self.replace_keeping_caret(&new, now);
+        FormatOutcome::Changed
+    }
+
+    /// The whole text replaced as one undo step, the caret kept on its line
+    /// and column: what a formatter or a save's tidy hands back.
+    fn replace_keeping_caret(&mut self, new: &str, now: f64) {
         let (line, col) = (
             self.buffer.line_of(self.buffer.cursor()),
             self.buffer.col_of(self.buffer.cursor()),
         );
-        self.buffer.set_text(&new, now);
+        self.buffer.set_text(new, now);
         let line = line.min(self.buffer.line_count().saturating_sub(1));
         let room = self.buffer.line(line).chars().count();
         self.buffer
             .set_cursor(self.buffer.line_start(line) + col.min(room));
         self.now_dirty(now);
-        FormatOutcome::Changed
+    }
+
+    /// `editor.trimTrailingWhitespaceOnSave` and `insertFinalNewlineOnSave`
+    /// (#778): applied to the buffer before it is written, so the buffer and
+    /// the file agree, as one undo step. Nothing when both are off.
+    fn tidy_before_save(&mut self, now: f64) {
+        if self.read_only || !(self.trim_on_save || self.final_newline_on_save) {
+            return;
+        }
+        let text = self.buffer.text();
+        let new = infiniterm_editor::transforms::tidy_on_save(
+            &text,
+            self.trim_on_save,
+            self.final_newline_on_save,
+        );
+        if new != text {
+            self.replace_keeping_caret(&new, now);
+        }
     }
 
     /// `editor.format`: format now, and say what happened in the status bar.
@@ -902,7 +993,18 @@ impl EditorBody {
         // as one. Not for a buffer that was empty or loading.
         let before = self.buffer.text();
         self.saved = text.clone();
+        // The caret and the top line follow their code through lines added
+        // or removed above them (#778), rather than keeping a char offset
+        // that now points somewhere else.
+        let caret = self.buffer.cursor();
+        let (line, col) = (self.buffer.line_of(caret), self.buffer.col_of(caret));
+        let line = infiniterm_editor::diff::follow_line(&before, &text, line);
+        self.scroll_line = infiniterm_editor::diff::follow_line(&before, &text, self.scroll_line);
         self.buffer.set_text(&text, now);
+        let line = line.min(self.buffer.line_count().saturating_sub(1));
+        let room = self.buffer.line(line).chars().count();
+        self.buffer
+            .set_cursor(self.buffer.line_start(line) + col.min(room));
         self.dirty = true;
         if self.agent_base.is_none() && !before.is_empty() && self.diff.is_none() {
             self.agent_base = Some(before);
@@ -1544,6 +1646,46 @@ impl EditorBody {
             }
         };
         self.replace_transform_range(f, now);
+    }
+
+    /// `editor.selection.expand` (#778): the selection grows to the syntax
+    /// node around it (`syntax_select`), the one it grew from remembered for
+    /// shrink. One cursor: the others are dropped, as a search jump does.
+    pub fn expand_selection(&mut self) {
+        let Some(lang) = self.language else { return };
+        let cursor = self.buffer.cursor();
+        let anchor = self.buffer.anchor();
+        let sel = self.buffer.selection().unwrap_or(cursor..cursor);
+        if self.syntax_grown.as_ref() != Some(&sel) {
+            self.syntax_steps.clear();
+        }
+        let text = self.buffer.text();
+        let Some(grown) = infiniterm_editor::syntax_select::expand(lang, &text, sel) else {
+            return;
+        };
+        self.syntax_steps.push((anchor, cursor));
+        self.buffer.collapse_to_primary();
+        self.buffer.select_range(grown.clone());
+        self.syntax_grown = Some(grown);
+        self.dirty = true;
+    }
+
+    /// `editor.selection.shrink` (#778): back one expand, while the
+    /// selection is still what the last expand made.
+    pub fn shrink_selection(&mut self) {
+        if self.buffer.selection() != self.syntax_grown {
+            self.syntax_steps.clear();
+            return;
+        }
+        let Some((anchor, cursor)) = self.syntax_steps.pop() else {
+            return;
+        };
+        match anchor {
+            Some(a) => self.buffer.select_range(a..cursor),
+            None => self.buffer.set_cursor(cursor),
+        }
+        self.syntax_grown = self.buffer.selection();
+        self.dirty = true;
     }
 
     /// `editor.toggleComment` (#697): the lines under every cursor, in the
@@ -3294,6 +3436,76 @@ impl EditorBody {
 
     // ----- paint -----
 
+    /// What `editor.highlightOccurrences` looks for (#778): the selected
+    /// text when it is on one line, else the word under the caret, which
+    /// matches only as a whole word.
+    fn occurrence_needle(&self) -> Option<(String, bool)> {
+        if self.buffer.selection().is_some() {
+            let text = self.buffer.selected_text()?;
+            return (!text.contains('\n')).then_some((text, false));
+        }
+        let caret = self.buffer.cursor();
+        let line = self.buffer.line(self.buffer.line_of(caret));
+        let word = decor::word_at(&line, self.buffer.col_of(caret))?;
+        Some((
+            line.chars().skip(word.start).take(word.len()).collect(),
+            true,
+        ))
+    }
+
+    /// The indent width the guides step by, measured again only when the
+    /// text changes.
+    fn guide_unit(&mut self) -> usize {
+        if (self.indent_unit.0, self.indent_unit.1) != (self.buffer.version, self.loads) {
+            let n = self.buffer.line_count().min(decor::UNIT_SAMPLE_LINES);
+            let lines: Vec<String> = (0..n).map(|i| self.buffer.line(i)).collect();
+            let fallback = infiniterm_editor::buffer::INDENT.chars().count();
+            let unit = decor::indent_unit(lines.iter().map(String::as_str), fallback);
+            self.indent_unit = (self.buffer.version, self.loads, unit);
+        }
+        self.indent_unit.2
+    }
+
+    /// The header lines sticky scroll pins with `first` the top line; the
+    /// parse is redone only when the text changes.
+    fn sticky_lines(&mut self, first: usize) -> Vec<usize> {
+        let Some(lang) = self.language else {
+            return vec![];
+        };
+        if (self.sticky_symbols.0, self.sticky_symbols.1) != (self.buffer.version, self.loads) {
+            let symbols = infiniterm_editor::symbols::symbols(lang, &self.buffer.text());
+            self.sticky_symbols = (self.buffer.version, self.loads, symbols);
+        }
+        decor::sticky_headers(&self.sticky_symbols.2, first, STICKY_MAX_ROWS)
+    }
+
+    /// Smooth caret (#778): how far from its true place, in world px, the
+    /// primary caret is drawn this frame. A move starts a glide from where
+    /// the caret was last drawn (mid-glide included) that eases to nothing
+    /// over `CARET_GLIDE_MS`; a long jump lands at once. `x` and `y` are its
+    /// true place from the text's origin.
+    fn caret_glide_offset(&mut self, pos: usize, x: f64, y: f64, now: f64) -> (f64, f64) {
+        if let Some((was, wx, wy)) = self.caret_drawn {
+            if was != pos {
+                let (dx, dy) = (wx - x, wy - y);
+                let near = dy.abs() <= self.line_h() * CARET_GLIDE_MAX_ROWS;
+                self.caret_glide = near.then_some((dx, dy, now));
+            }
+        }
+        let (ox, oy) = match self.caret_glide {
+            Some((dx, dy, started)) => {
+                let left = 1. - ease_out_cubic((now - started) / CARET_GLIDE_MS);
+                if left <= 0. {
+                    self.caret_glide = None;
+                }
+                (dx * left.max(0.), dy * left.max(0.))
+            }
+            None => (0., 0.),
+        };
+        self.caret_drawn = Some((pos, x + ox, y + oy));
+        (ox, oy)
+    }
+
     fn spans_for(&mut self) -> &[Span] {
         // A diff's spans were made per side when its file was loaded
         // (`merged_spans`); parsing the woven text would colour wrongly.
@@ -4148,6 +4360,32 @@ impl CardBody for EditorBody {
                     }
                 }
             }
+            // The polish set (#778), each worked out only when it is on, and
+            // only for legible text: at overview zoom there is nothing to read.
+            let polish = legible && self.diff.is_none();
+            let occurrence =
+                (polish && self.highlight_occurrences && self.buffer.cursor_count() == 1)
+                    .then(|| self.occurrence_needle())
+                    .flatten();
+            let line_count = self.buffer.line_count();
+            let guide_unit = if polish && self.indent_guides {
+                self.guide_unit()
+            } else {
+                0
+            };
+            let active_guide = (guide_unit > 0)
+                .then(|| {
+                    decor::active_guide(cursor_line, guide_unit, line_count, |l| {
+                        (l < line_count).then(|| self.buffer.line(l))
+                    })
+                })
+                .flatten();
+            let sticky = if polish && self.sticky_scroll && first > 0 {
+                self.sticky_lines(first)
+            } else {
+                vec![]
+            };
+            let dots = polish && self.whitespace_in_selection;
             // The text, selection and carets are cut at the gutter's right edge:
             // scrolled right, a line starts left of the text area.
             let text_mask = Bounds::new(
@@ -4155,6 +4393,17 @@ impl CardBody for EditorBody {
                 size(area.size.width - s(PAD_X) - gutter_w, area.size.height),
             );
             window.with_content_mask(Some(gpui::ContentMask { bounds: text_mask }), |window| {
+                if legible {
+                    for &col in &self.rulers {
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(text_x + cell_w * col as f32, area.origin.y),
+                                size(px(crate::chrome::HAIRLINE_PX as f32), area.size.height),
+                            ),
+                            crate::chrome::with_alpha(fg, RULER_ALPHA),
+                        ));
+                    }
+                }
                 let mut span_i = 0;
                 // Runs for the line being drawn, built once per line and sliced
                 // per visual row.
@@ -4197,6 +4446,32 @@ impl CardBody for EditorBody {
                                 ACTIVE_LINE_ALPHA,
                             ),
                         ));
+                    }
+                    // Indent guides, on a line's first row only: a wrapped
+                    // row is the same line carried on.
+                    if guide_unit > 0 && vrow.a == 0 {
+                        let depth = decor::guide_depth(line_no, |l| {
+                            (l < line_count).then(|| self.buffer.line(l))
+                        });
+                        for col in decor::guide_columns(depth, guide_unit) {
+                            let active = active_guide
+                                .as_ref()
+                                .is_some_and(|(c, lines)| *c == col && lines.contains(&line_no));
+                            window.paint_quad(fill(
+                                Bounds::new(
+                                    point(text_x + cell_w * col as f32, y),
+                                    size(px(crate::chrome::HAIRLINE_PX as f32), line_h),
+                                ),
+                                crate::chrome::with_alpha(
+                                    fg,
+                                    if active {
+                                        GUIDE_ACTIVE_ALPHA
+                                    } else {
+                                        GUIDE_ALPHA
+                                    },
+                                ),
+                            ));
+                        }
                     }
                     // A folded block: a chip after the header's text says lines are
                     // hidden under it.
@@ -4241,9 +4516,43 @@ impl CardBody for EditorBody {
                             );
                         }
                     }
+                    if let Some((needle, whole_word)) = &occurrence {
+                        let n = needle.chars().count();
+                        for i in decor::occurrences(&line_text, needle, *whole_word) {
+                            range_quad(
+                                line_start + i,
+                                line_start + i + n,
+                                crate::chrome::with_alpha(fg, OCCURRENCE_ALPHA),
+                                window,
+                            );
+                        }
+                    }
                     for sel in &all_ranges {
                         if sel.end > row_start && sel.start <= row_end {
                             range_quad(sel.start, sel.end, sel_bg, window);
+                        }
+                    }
+                    // A selected space is a dot. A tab moves the columns
+                    // after it (see the caret's show-through below), so a
+                    // line with one gets none rather than misplaced ones.
+                    if dots && !all_ranges.is_empty() && !line_text.contains('\t') {
+                        let d = (cell_w * WHITESPACE_DOT_RATIO).max(px(1.));
+                        for (i, ch) in line_text.chars().enumerate().skip(vrow.a).take(row_len) {
+                            let at = line_start + i;
+                            if ch == ' ' && all_ranges.iter().any(|r| r.contains(&at)) {
+                                window.paint_quad(fill(
+                                    Bounds::new(
+                                        point(
+                                            text_x
+                                                + cell_w * (i - vrow.a) as f32
+                                                + (cell_w - d) / 2.,
+                                            y + (line_h - d) / 2.,
+                                        ),
+                                        size(d, d),
+                                    ),
+                                    crate::chrome::with_alpha(sel_fg, WHITESPACE_DOT_ALPHA),
+                                ));
+                            }
                         }
                     }
                     if let Some((a, b)) = bracket {
@@ -4433,6 +4742,7 @@ impl CardBody for EditorBody {
                 // the IME candidate window's anchor, stays the PRIMARY's alone —
                 // an input method has one caret to sit beside, not several.
                 self.painted_caret = None;
+                let mut glided = false;
                 if self.focus != Focus::Tree {
                     let primary = self.buffer.cursor();
                     for (pos, _) in self.buffer.all_selections() {
@@ -4449,8 +4759,22 @@ impl CardBody for EditorBody {
                         };
                         let vcol = col - vrows[row_i].a;
                         let y = origin.y + line_h * row_i as f32;
+                        // The block glides; the IME's cell below stays put.
+                        let (mut gx, mut gy) = (text_x + cell_w * vcol as f32, y);
+                        if pos == primary && self.smooth_caret && self.buffer.cursor_count() == 1 {
+                            glided = true;
+                            let world = |p: Pixels| f32::from(p) as f64 / scale;
+                            let (ox, oy) = self.caret_glide_offset(
+                                pos,
+                                world(gx - origin.x),
+                                world(gy - origin.y),
+                                now,
+                            );
+                            gx += px((ox * scale) as f32);
+                            gy += px((oy * scale) as f32);
+                        }
                         let rect = Bounds::new(
-                            point(text_x + cell_w * vcol as f32, y),
+                            point(gx, gy),
                             size(
                                 px((self.metrics.font_px * CURSOR_BLOCK_WIDTH_RATIO * scale)
                                     as f32)
@@ -4479,7 +4803,9 @@ impl CardBody for EditorBody {
                                 // has its columns moved by the expansion, so
                                 // it keeps the show-through.
                                 let text = self.buffer.line(line);
-                                if !text.contains('\t') {
+                                // Mid-glide the block is not over its letter.
+                                let gliding = pos == primary && self.caret_glide.is_some();
+                                if !text.contains('\t') && !gliding {
                                     if let Some(ch) = text.chars().nth(col) {
                                         if !ch.is_whitespace() {
                                             let one = SharedString::from(ch.to_string());
@@ -4521,7 +4847,49 @@ impl CardBody for EditorBody {
                         }
                     }
                 }
+                // No glide drawn (off screen, the setting off, several
+                // cursors): the next one starts fresh, not from a stale place.
+                if !glided {
+                    self.caret_drawn = None;
+                    self.caret_glide = None;
+                }
             });
+            // Sticky scroll (#778): the open symbols' header lines over the
+            // top rows, on the background, with a hairline under them.
+            if !sticky.is_empty() {
+                let band_h = origin.y - area.origin.y + line_h * sticky.len() as f32;
+                window.paint_quad(fill(
+                    Bounds::new(area.origin, size(area.size.width, band_h)),
+                    bg,
+                ));
+                for (i, &header) in sticky.iter().enumerate() {
+                    let y = origin.y + line_h * i as f32;
+                    let num = (header + 1).to_string();
+                    let l = crate::text::shape(window, &num, font_size, &base, gutter_fg);
+                    let _ = l.paint(
+                        point(origin.x + gutter_w - s(GUTTER_EXTRA_PAD_PX) - l.width, y),
+                        line_h,
+                        window,
+                        cx,
+                    );
+                    let text = self.buffer.line(header);
+                    window.with_content_mask(
+                        Some(gpui::ContentMask { bounds: text_mask }),
+                        |window| {
+                            let l = crate::text::shape(window, &text, font_size, &base, fg);
+                            let _ = l.paint(point(text_x, y), line_h, window, cx);
+                        },
+                    );
+                }
+                let hair = px(crate::chrome::HAIRLINE_PX as f32);
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(area.origin.x, area.origin.y + band_h - hair),
+                        size(area.size.width, hair),
+                    ),
+                    crate::chrome::with_alpha(gutter_fg, crate::chrome::HAIRLINE_ALPHA),
+                ));
+            }
             // Keep the shaping cache to the visible lines.
             self.shaped.retain(|(l, _), _| *l >= first && *l < last);
             if legible {
@@ -4772,6 +5140,7 @@ impl CardBody for EditorBody {
 
     fn wants_frame(&self, now: f64) -> bool {
         self.dirty
+            || self.caret_glide.is_some()
             || (self.painted_focused && self.blink && self.blink_on(now) != self.painted_phase)
     }
 
@@ -5626,6 +5995,92 @@ mod tests {
         assert_eq!(b.buffer.text(), "a\nB\nc\nd\nE\nf\n");
         assert!(b.agent_base.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A clean buffer rewritten on disk keeps the caret and the top line on
+    // the same code when lines arrive above it (#778), and the column too.
+    #[test]
+    fn a_reload_keeps_the_caret_on_its_code() {
+        let dir = std::env::temp_dir().join(format!("ift-editor-follow-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f.txt").to_string_lossy().to_string();
+        std::fs::write(&path, "a\nbb\ncc\nd\n").unwrap();
+        let mut b = body();
+        b.load(&path, false, 0.);
+        b.buffer.set_cursor(b.buffer.line_start(2) + 1); // "cc", column 1
+        b.scroll_line = 2;
+        b.apply_disk_text(&path, "new1\nnew2\na\nbb\ncc\nd\n".into(), 1.);
+        let caret = b.buffer.cursor();
+        assert_eq!((b.buffer.line_of(caret), b.buffer.col_of(caret)), (4, 1));
+        assert_eq!(b.scroll_line, 4);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Trim and final newline on save (#778): off, the text goes out as it
+    // is; on, the buffer is tidied first, as one undo step.
+    #[test]
+    fn a_save_tidies_the_text_only_when_asked() {
+        let dir = std::env::temp_dir().join(format!("ift-editor-tidy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.txt").to_string_lossy().to_string();
+        let mut b = body();
+        b.buffer = Buffer::new("a  \nb");
+        b.save(&path, 1.);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a  \nb");
+        b.trim_on_save = true;
+        b.final_newline_on_save = true;
+        b.save(&path, 2.);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\nb\n");
+        assert_eq!(b.buffer.text(), "a\nb\n");
+        b.buffer.undo();
+        assert_eq!(b.buffer.text(), "a  \nb", "the tidy is one undo");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Expand selection walks out by syntax node and shrink retraces it; a
+    // selection changed by hand in between starts over (#778).
+    #[test]
+    fn expand_and_shrink_retrace_the_same_steps() {
+        let mut b = body();
+        b.language = Some(Language::Rust);
+        let src = "fn main() {\n    let x = foo(a, b);\n}\n";
+        b.buffer = Buffer::new(src);
+        let caret = src.find("foo").unwrap() + 1;
+        b.buffer.set_cursor(caret);
+        b.expand_selection();
+        assert_eq!(b.buffer.selected_text().as_deref(), Some("foo"));
+        b.expand_selection();
+        assert_eq!(b.buffer.selected_text().as_deref(), Some("foo(a, b)"));
+        b.shrink_selection();
+        assert_eq!(b.buffer.selected_text().as_deref(), Some("foo"));
+        b.shrink_selection();
+        assert_eq!(b.buffer.selection(), None);
+        assert_eq!(b.buffer.cursor(), caret, "back to the caret it started at");
+        // Moved by hand: nothing to shrink back to.
+        b.expand_selection();
+        b.buffer.set_cursor(0);
+        b.shrink_selection();
+        assert_eq!(b.buffer.cursor(), 0);
+        // No grammar, no expand.
+        b.language = None;
+        b.expand_selection();
+        assert_eq!(b.buffer.selection(), None);
+    }
+
+    // Smooth caret (#778): a short move starts a glide from where the caret
+    // was drawn that eases to nothing; a long jump lands at once.
+    #[test]
+    fn the_caret_glides_short_moves_and_jumps_long_ones() {
+        let mut b = body();
+        assert_eq!(b.caret_glide_offset(0, 0., 0., 0.), (0., 0.));
+        let (ox, oy) = b.caret_glide_offset(1, 10., 0., 0.);
+        assert_eq!((ox, oy), (-10., 0.), "starts where it was");
+        let (ox, _) = b.caret_glide_offset(1, 10., 0., CARET_GLIDE_MS / 2.);
+        assert!(ox < 0. && ox > -10., "on its way");
+        assert_eq!(b.caret_glide_offset(1, 10., 0., CARET_GLIDE_MS), (0., 0.));
+        assert!(b.caret_glide.is_none(), "done, no more frames asked for");
+        let far = b.line_h() * (CARET_GLIDE_MAX_ROWS + 1.);
+        assert_eq!(b.caret_glide_offset(2, 10., far, 200.), (0., 0.));
     }
 
     // Language-server completion (#602), end to end through the body against

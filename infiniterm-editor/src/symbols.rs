@@ -15,12 +15,15 @@ use crate::language::Language;
 use tree_sitter::{Node, Parser};
 
 /// One symbol: what it is called, what kind of thing it is, where it starts
-/// (1-based line) and how deep it sits inside others.
+/// and ends (1-based lines, the end inclusive: sticky scroll pins a header
+/// while its body is on screen, `decor::sticky_headers`) and how deep it
+/// sits inside others.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Symbol {
     pub name: String,
     pub kind: &'static str,
     pub line: usize,
+    pub end_line: usize,
     pub depth: usize,
 }
 
@@ -148,6 +151,17 @@ fn name_of(lang: Language, node: Node, src: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.lines().next().unwrap_or(name).to_string())
 }
 
+/// The node's last line, 1-based. A node that takes its line's newline
+/// ends at column 0 of the NEXT line, which is not part of it.
+fn end_line(node: Node) -> usize {
+    let end = node.end_position();
+    if end.column == 0 && end.row > node.start_position().row {
+        end.row
+    } else {
+        end.row + 1
+    }
+}
+
 fn walk(lang: Language, node: Node, src: &str, depth: usize, out: &mut Vec<Symbol>) {
     let table = kinds(lang);
     let found = table
@@ -170,6 +184,7 @@ fn walk(lang: Language, node: Node, src: &str, depth: usize, out: &mut Vec<Symbo
                 name,
                 kind: if lang == Language::Markdown { "" } else { kind },
                 line: node.start_position().row + 1,
+                end_line: end_line(node),
                 depth: own_depth,
             });
             depth + 1
@@ -200,6 +215,17 @@ pub fn symbols(lang: Language, text: &str) -> Vec<Symbol> {
     };
     let mut out = vec![];
     walk(lang, tree.root_node(), text, 0, &mut out);
+    if lang == Language::Markdown {
+        // The node is the heading line alone; its section runs to the line
+        // before the next heading at the same level or above.
+        let last = text.lines().count().max(1);
+        for i in 0..out.len() {
+            out[i].end_line = out[i + 1..]
+                .iter()
+                .find(|s| s.depth <= out[i].depth)
+                .map_or(last, |s| s.line - 1);
+        }
+    }
     out
 }
 
@@ -306,5 +332,23 @@ mod tests {
     fn a_language_without_a_table_has_no_symbols() {
         assert!(symbols(Language::Json, "{\"a\": 1}").is_empty());
         assert!(symbols(Language::Rust, "").is_empty());
+    }
+
+    #[test]
+    fn a_symbol_ends_on_its_own_last_line() {
+        let ends = |lang, src| -> Vec<(usize, usize)> {
+            symbols(lang, src)
+                .into_iter()
+                .map(|s| (s.line, s.end_line))
+                .collect()
+        };
+        let rust = "impl S {\n    fn a() {\n        x();\n    }\n}\n";
+        assert_eq!(ends(Language::Rust, rust), vec![(1, 5), (2, 4)]);
+        // A section takes its trailing newline; the next heading is not in it.
+        let md = "# A\ntext\n## B\nmore\n# C\n";
+        assert_eq!(
+            ends(Language::Markdown, md),
+            vec![(1, 4), (3, 4), (5, 5)]
+        );
     }
 }
