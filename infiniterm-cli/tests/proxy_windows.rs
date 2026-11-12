@@ -87,6 +87,40 @@ fn the_real_proxy_carries_a_session_both_ways_byte_for_byte_and_ends_with_the_ho
     assert!(out == want, "the answer line and the host's bytes, intact");
 }
 
+/// A manual aid for the check from another machine, not a test: stands in for
+/// the host app on the DEFAULT join pipe (what an ssh session, which has no
+/// scratch data dir, reaches). It answers the handshake, sends 500000 bytes of
+/// the repeating 0..=255 pattern, then echoes whatever the viewer sends until
+/// the viewer goes. Run it, then from the viewer's machine:
+/// `(cat input; sleep 15) | ssh host 'C:\...\ift.exe proxy join canvas' > out`
+/// and compare `out` with `ift-join 2 ok\n` + the pattern + `input`.
+/// `cargo test -p infiniterm-cli --test proxy_windows host_stand_in -- --ignored`
+#[test]
+#[ignore]
+fn host_stand_in_for_a_manual_ssh_check() {
+    let mut listener = PipeListener::bind(&join_socket_for(None)).unwrap();
+    let stream = listener.accept().unwrap();
+    let mut out = stream.try_clone().unwrap();
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    eprintln!("handshake: {line:?}");
+    writeln!(out, "ift-join 2 ok").unwrap();
+    out.write_all(&payload(500_000)).unwrap();
+    let mut buf = [0u8; 16 * 1024];
+    let mut echoed = 0usize;
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                out.write_all(&buf[..n]).unwrap();
+                echoed += n;
+            }
+        }
+    }
+    eprintln!("echoed {echoed} bytes");
+}
+
 #[test]
 fn with_no_app_running_it_says_so_on_stderr_and_stdout_stays_empty() {
     let dir = scratch("none");
