@@ -340,6 +340,8 @@ impl Panes {
             Panes::Local(b) => Some((b.relay(), b.session_writer(), b.session_nudger())),
             #[cfg(unix)]
             Panes::Daemon(b) => Some((b.relay(), b.session_writer(), b.session_nudger())),
+            // Windows has only the local backend, matched above.
+            #[cfg(unix)]
             _ => None,
         }
     }

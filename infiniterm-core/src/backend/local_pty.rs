@@ -923,16 +923,21 @@ mod tests {
     fn drain(
         backend: Arc<LocalPtyBackend>,
         rx: std::sync::mpsc::Receiver<(PaneId, PaneEvent)>,
-    ) -> std::thread::JoinHandle<()> {
+    ) -> std::sync::mpsc::Receiver<std::time::Instant> {
+        let (exited_tx, exited_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             while let Ok((p, event)) = rx.recv() {
                 match event {
                     PaneEvent::Output(bytes) => answer_conpty_probe(&backend, p, &bytes),
-                    PaneEvent::Exited { .. } => break,
+                    PaneEvent::Exited { .. } => {
+                        let _ = exited_tx.send(std::time::Instant::now());
+                        break;
+                    }
                     _ => {}
                 }
             }
-        })
+        });
+        exited_rx
     }
 
     #[tokio::test]
@@ -995,7 +1000,7 @@ mod tests {
             .await
             .unwrap();
         let session = backend.session_id(pane).unwrap();
-        let _drain = drain(backend.clone(), rx);
+        let pane_exited = drain(backend.clone(), rx);
         // The app resizes the pty right after the spawn; a viewer that joins
         // then is told that size.
         backend.resize_now(pane, 120, 40);
@@ -1014,24 +1019,32 @@ mod tests {
             *backend.panes.lock().unwrap()[&pane].size.lock().unwrap(),
             (120, 40)
         );
-        // Killing the shell ends the viewer's stream with its exit.
+        // Killing the shell ends the viewer's stream with its exit. The pane's
+        // own exit event comes first, so a miss says which half is missing.
+        let started = std::time::Instant::now();
         backend.kill_now(pane);
+        let pane_ended = pane_exited.recv_timeout(SPAWN_DEADLINE);
+        assert!(
+            pane_ended.is_ok(),
+            "the pane itself never reported an exit within {:?} of the kill",
+            started.elapsed()
+        );
         let mut ended = false;
         let mut seen = Vec::new();
-        let started = std::time::Instant::now();
-        while started.elapsed() < SPAWN_DEADLINE {
-            match viewer.recv_timeout(Duration::from_millis(200)) {
+        let waited = std::time::Instant::now();
+        while waited.elapsed() < Duration::from_secs(5) {
+            match viewer.recv_timeout(Duration::from_millis(100)) {
                 Ok(Frame::Exited(_)) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     ended = true;
                     break;
                 }
-                Ok(other) => seen.push(format!("{:?}@{:?}", other, started.elapsed())),
+                Ok(other) => seen.push(format!("{other:?}").chars().take(40).collect::<String>()),
                 Err(_) => {}
             }
         }
         assert!(
             ended,
-            "the viewer was told the session ended; it saw {seen:?}"
+            "the pane exited but the viewer was not told; it saw {seen:?}"
         );
     }
 
