@@ -20,7 +20,12 @@ use std::time::{Duration, Instant};
 
 fn put_iftd_on_path() {
     let exe = std::env::current_exe().unwrap();
-    let profile = exe.parent().unwrap().parent().unwrap();
+    // The test binary's depth under target/ differs between cargo 1.99 and 1.100.
+    let profile = exe
+        .ancestors()
+        .skip(1)
+        .find(|d| d.join("iftd").is_file())
+        .unwrap_or_else(|| exe.parent().unwrap().parent().unwrap());
     assert!(
         profile.join("iftd").is_file(),
         "run `cargo build -p infiniterm-session` first"

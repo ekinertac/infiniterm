@@ -16,9 +16,16 @@ use infiniterm_core::backend::session_protocol::{Frame, FrameReader};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
+/// The nearest ancestor of the test binary that holds `iftd` (see
+/// tests/common/mod.rs: the test binary's depth under target/ changed in
+/// cargo 1.100).
 fn profile_dir() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
-    exe.parent().unwrap().parent().unwrap().to_path_buf()
+    exe.ancestors()
+        .skip(1)
+        .find(|d| d.join("iftd").is_file())
+        .unwrap_or_else(|| exe.parent().unwrap().parent().unwrap())
+        .to_path_buf()
 }
 
 /// A scratch data dir. On drop it kills any `iftd` serving a socket under it
