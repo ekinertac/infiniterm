@@ -454,6 +454,9 @@ pub struct Ui {
     pub hide_build_number: bool,
     /// No version number ("0.6.9") at the right end of the status bar.
     pub hide_version: bool,
+    /// Only local branches in "Git: switch branch…" and the terminal menu's
+    /// Switch Branch (#772): with many remotes the list is mostly noise.
+    pub hide_remote_branches: bool,
     pub group_label_size: f64,
     pub status_bar_size: f64,
     /// How far one press of `canvas.pan.*` moves the view, in screen pixels
@@ -686,6 +689,7 @@ pub fn default_config() -> Config {
             icon: crate::app_icon::AppIcon::Default,
             hide_build_number: false,
             hide_version: false,
+            hide_remote_branches: true,
             group_label_size: 15.,
             status_bar_size: 11.,
             pan_step: DEFAULT_PAN_STEP,
@@ -1109,6 +1113,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 .unwrap_or_default(),
             hide_build_number: bool_(u.get("hideBuildNumber"), d.ui.hide_build_number),
             hide_version: bool_(u.get("hideVersion"), d.ui.hide_version),
+            hide_remote_branches: bool_(u.get("hideRemoteBranches"), d.ui.hide_remote_branches),
             group_label_size: num(u.get("groupLabelSize"), d.ui.group_label_size, 6., 64.),
             status_bar_size: num(u.get("statusBarSize"), d.ui.status_bar_size, 6., 32.),
             pan_step: num(u.get("panStep"), d.ui.pan_step, MIN_PAN_STEP, MAX_PAN_STEP),
