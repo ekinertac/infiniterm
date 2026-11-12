@@ -225,7 +225,28 @@ pub fn sessions_dir() -> PathBuf {
 /// on purpose: the data dir already takes about 70 of the 103 bytes a unix
 /// socket path may have.
 pub fn join_socket() -> PathBuf {
-    app_support_dir().join("j.sock")
+    #[cfg(unix)]
+    {
+        app_support_dir().join("j.sock")
+    }
+    // A pipe has no directory, so the data dir override goes into the name,
+    // like `socket_path_for`.
+    #[cfg(windows)]
+    {
+        join_socket_for(std::env::var_os("INFINITERM_DATA_DIR").as_deref())
+    }
+}
+
+/// The join pipe's name for a data dir override (Windows).
+#[cfg(windows)]
+pub fn join_socket_for(data_dir_override: Option<&std::ffi::OsStr>) -> PathBuf {
+    match data_dir_override {
+        Some(dir) => PathBuf::from(format!(
+            r"\\.\pipe\infiniterm-join-{:016x}",
+            path_hash(&dir.to_string_lossy())
+        )),
+        None => PathBuf::from(r"\\.\pipe\infiniterm-join"),
+    }
 }
 
 /// Every command run, one line each, for `ift usage` (`usage_log.rs`).
@@ -590,6 +611,23 @@ mod tests {
             // A backslash past the prefix would make the name unusable.
             assert!(!text[r"\\.\pipe\".len()..].contains('\\'), "{text}");
         }
+    }
+
+    // The join pipe has its own name, and a scratch instance's is its own.
+    #[cfg(windows)]
+    #[test]
+    fn the_join_pipe_is_named_apart_from_the_ift_pipe_and_follows_the_data_dir() {
+        let a = std::env::temp_dir().join("infiniterm-a");
+        assert_eq!(
+            join_socket_for(None),
+            PathBuf::from(r"\\.\pipe\infiniterm-join")
+        );
+        let scratch = join_socket_for(Some(a.as_os_str()));
+        let text = scratch.to_string_lossy();
+        assert!(text.starts_with(r"\\.\pipe\infiniterm-join-"), "{text}");
+        assert!(!text[r"\\.\pipe\".len()..].contains('\\'), "{text}");
+        assert_ne!(scratch, socket_path_for(Some(a.as_os_str())));
+        assert_ne!(scratch, join_socket_for(None));
     }
 
     #[test]

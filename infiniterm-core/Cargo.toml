@@ -52,6 +52,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
     "Win32_System_Pipes",
+    # `pipe.rs`: overlapped I/O (so a read and a write can be in flight on one
+    # handle) and an owner-only security descriptor on the join pipe.
+    "Win32_System_IO",
+    "Win32_Security",
+    "Win32_Security_Authorization",
     # `inspect.rs`: the process table, for a card's label.
     "Win32_System_Diagnostics_ToolHelp",
     # `local_pty.rs`: a job object per pane, so killing a card's shell
