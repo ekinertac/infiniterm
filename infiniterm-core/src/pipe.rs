@@ -156,6 +156,12 @@ impl PipeStream {
     }
 }
 
+impl std::fmt::Debug for PipeStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PipeStream(shut down: {})", self.is_shut_down())
+    }
+}
+
 fn last_error() -> u32 {
     io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32
 }
