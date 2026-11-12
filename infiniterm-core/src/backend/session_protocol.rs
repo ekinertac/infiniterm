@@ -287,14 +287,31 @@ impl Ring {
             self.preamble
                 .extend_from_slice(&bytes[..room.min(bytes.len())]);
         }
-        self.buf.extend(bytes);
-        if self.buf.len() <= self.cap {
+        // Room is made BEFORE the bytes go in, so the deque never holds more
+        // than `cap` and never grows past it: extending first pushed a full
+        // 4 MiB ring to 4 MiB + one read, and the deque doubled to 8 MiB for
+        // the life of the session (#765: a daemon after 60 s of output went
+        // from 8.3 MB to 6.3 MB footprint, median of three).
+        // A push bigger than the whole ring keeps only its newest `cap` bytes.
+        let cut = bytes.len().saturating_sub(self.cap);
+        let bytes = &bytes[cut..];
+        let over = (self.buf.len() + bytes.len()).saturating_sub(self.cap);
+        let want = self.buf.len() + bytes.len();
+        if want > self.buf.capacity() {
+            // Grow by doubling, as the deque would, but never past `cap`.
+            let target = want.max(self.buf.capacity() * 2).min(self.cap);
+            self.buf
+                .reserve_exact(target.saturating_sub(self.buf.len()));
+        }
+        if over == 0 && cut == 0 {
+            self.buf.extend(bytes);
             return;
         }
         // The newest output is what a program just drew; the oldest is what
         // scrolled away. Drop from the front.
         self.trimmed = true;
-        self.buf.drain(..self.buf.len() - self.cap);
+        self.buf.drain(..over.min(self.buf.len()));
+        self.buf.extend(bytes);
         // Then forward to just past a line ending, so a replay never begins
         // halfway through a line somebody will read.
         let boundary = self
@@ -522,5 +539,56 @@ mod tests {
         let out = ring.replay();
         assert!(out.ends_with(b"f"), "got {:?}", out);
         assert!(out.len() <= 8 + 4 + PREAMBLE_BYTES);
+    }
+
+    /// A full ring never allocates past its cap (it used to double to 8 MiB
+    /// the first time a 4 MiB ring overflowed).
+    #[test]
+    fn a_full_ring_never_grows_past_its_cap() {
+        let cap = 4 * 1024 * 1024;
+        let mut ring = Ring::new(cap);
+        let line = b"the quick brown fox jumps over the lazy dog 0123456789\n";
+        let chunk: Vec<u8> = line.iter().copied().cycle().take(8192).collect();
+        for _ in 0..(3 * cap / chunk.len()) {
+            ring.push(&chunk);
+            assert!(ring.buf.capacity() <= cap, "{}", ring.buf.capacity());
+        }
+        assert!(ring.buf.len() <= cap);
+    }
+
+    /// The same bytes as the old extend-then-trim ring, for pushes smaller
+    /// than, around and bigger than the cap.
+    #[test]
+    fn trimming_first_keeps_exactly_what_trimming_after_kept() {
+        fn old_push(buf: &mut std::collections::VecDeque<u8>, cap: usize, bytes: &[u8]) {
+            buf.extend(bytes);
+            if buf.len() <= cap {
+                return;
+            }
+            buf.drain(..buf.len() - cap);
+            let boundary = buf
+                .iter()
+                .take(LINE_SCAN)
+                .position(|&b| b == b'\n')
+                .map(|i| i + 1);
+            if let Some(n) = boundary {
+                buf.drain(..n);
+            }
+        }
+        let text: Vec<u8> = (0..5000u32)
+            .flat_map(|i| format!("line {i} {}\n", "x".repeat((i % 37) as usize)).into_bytes())
+            .collect();
+        for cap in [16, 64, 100, 1000] {
+            for step in [1, 3, 7, 50, 99, 100, 101, 999, 2500] {
+                let mut ring = Ring::new(cap);
+                let mut old = std::collections::VecDeque::new();
+                for chunk in text.chunks(step).take(400) {
+                    ring.push(chunk);
+                    old_push(&mut old, cap, chunk);
+                    assert_eq!(ring.buf, old, "cap {cap} step {step}");
+                    assert!(ring.buf.capacity() <= cap.max(step.min(cap)), "cap {cap}");
+                }
+            }
+        }
     }
 }
