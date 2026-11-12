@@ -220,10 +220,19 @@ fn check_command_in(ift: &str, install_dirs: &[&str]) -> String {
 /// full path of the `ift` there, which the caller uses from then on; the error
 /// is a sentence for a person.
 pub fn check(host: &RemoteHost) -> Result<String, String> {
+    check_platform(host).map(|(ift, _windows)| ift)
+}
+
+/// `check`, and whether the host is Windows. `ift join` needs the second
+/// part: a Windows host has no `ift serve` to start when its app is closed.
+pub fn check_platform(host: &RemoteHost) -> Result<(String, bool), String> {
     let out = run_on(host, &check_command(&host.ift))
         .map_err(|e| format!("could not run {}: {e}", host.ssh))?;
     if out.status.success() {
-        return Ok(String::from_utf8_lossy(&out.stdout).trim().to_string());
+        return Ok((
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            false,
+        ));
     }
     let said = String::from_utf8_lossy(&out.stderr).trim().to_string();
     Err(match out.status.code() {
@@ -236,7 +245,7 @@ pub fn check(host: &RemoteHost) -> Result<String, String> {
         // own shell's "not recognized". Ask it the Windows question before
         // giving up (#540, `ift join` a Windows host).
         _ => match check_windows(host) {
-            Some(found) => return Ok(found),
+            Some(found) => return Ok((found, true)),
             None if said.contains("not recognized") => format!(
                 "{}: {said} (a Windows host needs `--ift C:/path/to/ift.exe`: its ssh PATH rarely has ift)",
                 host.target
