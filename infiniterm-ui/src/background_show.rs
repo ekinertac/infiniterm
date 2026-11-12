@@ -33,7 +33,7 @@ use gpui::{
     canvas, div, point, px, size, AnyElement, Bounds, ContentMask, Corners, Hsla, ImageAssetLoader,
     IntoElement, ParentElement, RenderImage, Resource, Styled, Window,
 };
-use infiniterm_core::background::{place, resolve, Shown, Slideshow};
+use infiniterm_core::background::{place, resolve, tiles, Shown, Slideshow};
 use infiniterm_core::config::{BackgroundFit, Ui};
 
 #[derive(Default)]
@@ -299,15 +299,22 @@ fn paint_picture(
     let Some((x, y, w, h)) = place(natural, area, fit) else {
         return;
     };
-    let rect = Bounds::new(
-        point(
-            bounds.origin.x + px(x as f32),
-            bounds.origin.y + px(y as f32),
-        ),
-        size(px(w as f32), px(h as f32)),
-    );
+    let origins = if fit == BackgroundFit::Tiled {
+        tiles((w, h), area)
+    } else {
+        vec![(x, y)]
+    };
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
-        let _ = window.paint_image(rect, Corners::default(), image.clone(), 0, false);
+        for (x, y) in origins {
+            let rect = Bounds::new(
+                point(
+                    bounds.origin.x + px(x as f32),
+                    bounds.origin.y + px(y as f32),
+                ),
+                size(px(w as f32), px(h as f32)),
+            );
+            let _ = window.paint_image(rect, Corners::default(), image.clone(), 0, false);
+        }
     });
 }
 

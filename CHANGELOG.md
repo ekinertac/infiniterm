@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-12
 
+- `ui.backgroundImageFit` has a new value, `"tiled"`: the background picture is drawn at its own size and repeated from the top-left corner until it fills the window, like a pattern.
 - After a click on a file or folder in an editor's file tree, Up and Down move through the tree. A clicked file opens and the tree keeps the keys; click into the text, or press Escape, to type in the file.
 - The file tree beside an editor now scrolls with the mouse wheel or two fingers, so the files at the bottom of a long folder can be reached without the arrow keys.
 - New editor settings, all off until you turn them on in settings.json: `editor.highlightOccurrences` washes the other places the word under the caret appears, `editor.indentGuides` draws a faint line per indent level (brighter for the block the caret is in), `editor.stickyScroll` pins the first line of the function, type or heading you are scrolling through at the top of the card, `editor.smoothCaret` makes the caret glide, `editor.rulers` draws lines at the columns you list (for example `[80, 120]`), `editor.whitespaceInSelection` shows a dot for each selected space, `editor.autosave: "focusChange"` saves an editor's changed files when you move to another card or leave the text, and `editor.trimTrailingWhitespaceOnSave` and `editor.insertFinalNewlineOnSave` tidy the file when you save.

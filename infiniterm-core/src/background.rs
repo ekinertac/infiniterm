@@ -51,13 +51,31 @@ pub fn place(
     let scale = match fit {
         BackgroundFit::Cover | BackgroundFit::TopLeft => sx.max(sy),
         BackgroundFit::Contain => sx.min(sy),
-        BackgroundFit::ActualSize => 1.,
+        BackgroundFit::ActualSize | BackgroundFit::Tiled => 1.,
     };
     let (w, h) = (nw * scale, nh * scale);
-    if matches!(fit, BackgroundFit::TopLeft | BackgroundFit::ActualSize) {
+    if matches!(
+        fit,
+        BackgroundFit::TopLeft | BackgroundFit::ActualSize | BackgroundFit::Tiled
+    ) {
         return Some((0., 0., w, h));
     }
     Some(((aw - w) / 2., (ah - h) / 2., w, h))
+}
+
+/// Where each copy of a tile of `tile` size lands in an `area` (`tiled`,
+/// #780): a grid from the corner, row by row, with the last row and column
+/// overflowing the edge for the clip to cut. Empty for an empty tile or area.
+pub fn tiles(tile: (f64, f64), area: (f64, f64)) -> Vec<(f64, f64)> {
+    let (tw, th) = tile;
+    let (aw, ah) = area;
+    if tw <= 0. || th <= 0. || aw <= 0. || ah <= 0. {
+        return Vec::new();
+    }
+    let (cols, rows) = ((aw / tw).ceil() as usize, (ah / th).ceil() as usize);
+    (0..rows)
+        .flat_map(|r| (0..cols).map(move |c| (c as f64 * tw, r as f64 * th)))
+        .collect()
 }
 
 /// How long before a switch the next picture starts loading, so a big JPEG
@@ -286,6 +304,21 @@ mod tests {
             let r = place((200., 100.), area, BackgroundFit::ActualSize).unwrap();
             assert_eq!(r, (0., 0., 200., 100.));
         }
+    }
+
+    #[test]
+    fn tiled_repeats_the_picture_at_its_size_until_the_area_is_full() {
+        let r = place((200., 100.), (500., 250.), BackgroundFit::Tiled).unwrap();
+        assert_eq!(r, (0., 0., 200., 100.), "one tile, never rescaled");
+        let t = tiles((200., 100.), (500., 250.));
+        assert_eq!(t.len(), 3 * 3, "partial tiles cover the right and bottom");
+        assert_eq!(t[0], (0., 0.));
+        assert_eq!(t[1], (200., 0.));
+        assert_eq!(t[3], (0., 100.));
+        assert_eq!(t[8], (400., 200.));
+        assert_eq!(tiles((100., 100.), (200., 100.)).len(), 2, "an exact fit");
+        assert!(tiles((0., 100.), (200., 100.)).is_empty());
+        assert!(tiles((100., 100.), (0., 100.)).is_empty());
     }
 
     #[test]
