@@ -524,6 +524,18 @@ mod tests {
         assert_eq!((&client).read(&mut b).unwrap(), 0);
     }
 
+    /// A manual aid, not a check: binds a pipe and holds it for 20 s so its
+    /// access list can be read from outside, e.g. in PowerShell
+    /// `(Get-Acl '\\.\pipe\infiniterm-acl-inspect').Sddl`.
+    /// `cargo test -p infiniterm-core pipe::tests::hold -- --ignored`
+    #[test]
+    #[ignore]
+    fn hold_a_pipe_open_to_inspect_its_access_list() {
+        let path = std::path::PathBuf::from(r"\\.\pipe\infiniterm-acl-inspect");
+        let _listener = PipeListener::bind(&path).unwrap();
+        std::thread::sleep(Duration::from_secs(20));
+    }
+
     #[test]
     fn a_second_bind_of_the_same_name_fails_and_a_missing_name_is_not_found() {
         let path = endpoint("twice");
