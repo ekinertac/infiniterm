@@ -27,8 +27,6 @@ use std::process::ExitCode;
 use infiniterm_core::paths;
 
 // Shared with the Windows proxy (`proxy_win.rs`): see `proxy_join.rs`.
-#[cfg(test)]
-use crate::proxy_join::MAX_ID_LEN;
 use crate::proxy_join::{parse_join, pump, valid_id};
 
 /// What `--spawn` asks `iftd` for.
