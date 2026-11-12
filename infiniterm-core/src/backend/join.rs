@@ -272,6 +272,12 @@ pub struct JoinHub {
 
 impl JoinHub {
     pub fn new(relay: Arc<Mutex<Relay>>, write: WriteSession) -> JoinHub {
+        // A hub exists only when a server will run, and the Windows local
+        // backend starts with its relay off (it keeps nothing for a host that
+        // nobody joins): without this a pane never got a session id, and a
+        // viewer waited at "starting on the host" for ever (found on the
+        // first real join of a Windows host, 2026-11-13).
+        relay.lock().unwrap().set_enabled(true);
         let (updates_tx, updates_rx) = std::sync::mpsc::channel();
         let (opens_tx, opens_rx) = std::sync::mpsc::channel();
         JoinHub {
@@ -637,6 +643,14 @@ mod tests {
         let write: WriteSession =
             Arc::new(move |id, bytes| sink.lock().unwrap().push((id.to_string(), bytes.to_vec())));
         (JoinHub::new(relay.clone(), write), relay, written)
+    }
+
+    #[test]
+    fn making_a_hub_turns_a_disabled_relay_on() {
+        let relay = Arc::new(Mutex::new(Relay::new()));
+        relay.lock().unwrap().set_enabled(false);
+        let _hub = JoinHub::new(relay.clone(), Arc::new(|_, _| {}));
+        assert!(relay.lock().unwrap().is_enabled());
     }
 
     #[cfg(unix)]
