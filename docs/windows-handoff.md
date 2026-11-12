@@ -156,7 +156,25 @@ assumes posix paths today). Plan, in order, about 12 working days:
    (with the data dir's hash for a scratch instance). The hook and `ift` pipe
    in `transport.rs` still has the default access list; the same fix is cheap
    and not done.
-2. `ift proxy join canvas` and `ift proxy join session <id>` on Windows.
+2. **`ift proxy join canvas | session <id>` on Windows (done,
+   `infiniterm-cli/src/proxy_win.rs`).** The host's join pipe over stdin and
+   stdout. Only `join`: `proxy session` and `proxy files` answer "not
+   available on Windows". The parsing (`valid_id`, `parse_join`) and the byte
+   copy moved to `proxy_join.rs`, which both proxies share, so the id check
+   cannot drift; the unix proxy's behaviour is unchanged (its tests moved with
+   the functions). The join protocol's major version moved to
+   `backend::JOIN_MAJOR` so the Windows proxy can say it before `join.rs`
+   compiles there. When the viewer's input ends the whole connection is shut
+   down (a pipe has no half-close). Checked: unit tests; the real `ift.exe`
+   against a pipe server in a test (every byte value both ways, ends when the
+   host does, exit 1 with one line and an empty stdout when no app runs, exit 2
+   for bad use); and the real thing from the Mac, a `host_stand_in_for_a_manual_ssh_check`
+   on the box's default join pipe and `(cat in; sleep 12) | ssh win-gpu-box
+   "& 'C:\...\ift.exe' proxy join canvas"`: the handshake answer, 500,000 host
+   bytes and 1,000,000 random viewer bytes echoed back, 1,500,014 bytes
+   identical, exit 0. Not checked: a viewer that leaves mid-stream (the
+   host's side is only a stand-in until step 3), and an ssh default shell
+   other than PowerShell 7.
 3. The join hub in the Windows app: `join.rs` on the pipe, a tap in
    `local_pty` feeding the relay, session ids, viewer input into the pty.
 4. The Mac viewer side: ssh to a Windows host, finding `ift.exe`, quoting.
