@@ -1017,17 +1017,22 @@ mod tests {
         // Killing the shell ends the viewer's stream with its exit.
         backend.kill_now(pane);
         let mut ended = false;
-        let deadline = std::time::Instant::now() + SPAWN_DEADLINE;
-        while std::time::Instant::now() < deadline {
+        let mut seen = Vec::new();
+        let started = std::time::Instant::now();
+        while started.elapsed() < SPAWN_DEADLINE {
             match viewer.recv_timeout(Duration::from_millis(200)) {
                 Ok(Frame::Exited(_)) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     ended = true;
                     break;
                 }
-                _ => {}
+                Ok(other) => seen.push(format!("{:?}@{:?}", other, started.elapsed())),
+                Err(_) => {}
             }
         }
-        assert!(ended, "the viewer was told the session ended");
+        assert!(
+            ended,
+            "the viewer was told the session ended; it saw {seen:?}"
+        );
     }
 
     #[tokio::test]
