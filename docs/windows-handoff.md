@@ -190,13 +190,31 @@ assumes posix paths today). Plan, in order, about 12 working days:
    anyway, only `live_sessions` are adopted). Checked on the box: a viewer on
    the relay sees a real PowerShell's output and its typed keys reach the shell
    and are answered; the hello follows the host's resize; the session ends with
-   the shell. **3b, the ui half (next):** the join fields and `start_join` in
-   `infiniterm-ui`, and the viewer's edits applied through `apply_remote_layout`.
+   the shell. **3b, the ui half (done):** the join fields, `start_join`, the publish
+   sites and `apply_remote_updates` in `infiniterm-ui` lost their `cfg(unix)`;
+   a hub's creation now turns the relay on (`JoinHub::new`), because the
+   Windows local backend starts with it off and nothing else did: found on the
+   first real join, where a viewer sat at "starting on the host".
    Not in the first version: a viewer's Cmd+click on a path (it is looked up on
    the host's disk and Windows host paths are not posix), the file service, and
    cards other than terminals.
-4. The Mac viewer side: ssh to a Windows host, finding `ift.exe`, quoting.
-5. Tests and hardening on the gpu box.
+4. **The Mac viewer side (done).** `remote::check` is a `sh` script, so a
+   Windows host failed it. On a failure that is not its own (11, 12, 255) the
+   viewer runs `<ift> proxy platform` (only the Windows build has it; it
+   prints `windows`) and `check_platform` returns the `ift` it was given with
+   backslashes turned to `/`, which cmd, PowerShell 5.1 and 7 all run without
+   quoting; a path with a space or quote is refused (quoting differs per
+   shell). A non-interactive ssh to Windows has no `ift` on its PATH, so a
+   Windows host needs `ift join <host> --ift C:/path/to/ift.exe`. A closed
+   Windows app says "open the app there": there is no `ift serve` on Windows.
+5. **Checked on the box, 2026-11-13.** A Mac viewer (`ift join win-gpu-box
+   --ift C:/.../ift-scratch.cmd`, a wrapper that sets the scratch app's data
+   dir, because the ssh session does not have it) joined the Windows app: both
+   cards listed with their folders, a command typed through the viewer ran in
+   the Windows PowerShell and its output came back. Killing the viewer with
+   `kill -9` left no `ift` proxy on the box. A Windows host's first card is the
+   welcome page, which a viewer cannot read ("proxy files is not available on
+   Windows"): non-terminal cards wait for the file service.
 
 Measured for step 2: ssh into the box (PowerShell 7 default shell) carries
 binary data intact to a native exe (3 MB of random bytes, byte-identical),
