@@ -1026,8 +1026,9 @@ mod tests {
         let pane_ended = pane_exited.recv_timeout(SPAWN_DEADLINE);
         assert!(
             pane_ended.is_ok(),
-            "the pane itself never reported an exit within {:?} of the kill",
-            started.elapsed()
+            "the pane itself never reported an exit within {:?} of the kill (still in the pane map: {})",
+            started.elapsed(),
+            backend.panes.lock().unwrap().contains_key(&pane)
         );
         let mut ended = false;
         let mut seen = Vec::new();
