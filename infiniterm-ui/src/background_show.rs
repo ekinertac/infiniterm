@@ -33,8 +33,12 @@ use gpui::{
     canvas, div, point, px, size, AnyElement, Bounds, ContentMask, Corners, Hsla, ImageAssetLoader,
     IntoElement, ParentElement, RenderImage, Resource, Styled, Window,
 };
-use infiniterm_core::background::{place, resolve, tiles, Shown, Slideshow};
+use image::{Frame as ImageFrame, RgbaImage};
+use infiniterm_core::background::{
+    mosaic_repeats, place, repeat_pixels, resolve, tiles, Shown, Slideshow,
+};
 use infiniterm_core::config::{BackgroundFit, Ui};
+use smallvec::SmallVec;
 
 #[derive(Default)]
 pub struct Show {
@@ -44,6 +48,11 @@ pub struct Show {
     slideshow: Slideshow,
     /// Pictures decoded now, so they can be freed and drawn.
     resident: HashMap<PathBuf, Arc<RenderImage>>,
+    /// Under `tiled`, each small resident picture repeated into one bigger
+    /// image, so a frame draws a few dozen tiles instead of thousands
+    /// (`mosaic`). Freed with the picture, and all of them when the fit
+    /// changes.
+    mosaics: HashMap<PathBuf, Arc<RenderImage>>,
     shown: Option<Shown>,
     /// A fade is running: a frame every tick.
     animating: bool,
@@ -149,7 +158,26 @@ impl Show {
         self.animating = shown.fading();
         self.wake = shown.wake;
         self.evict(&shown, window, cx);
+        self.update_mosaics(ui.background_image_fit, window);
         self.shown = Some(shown);
+    }
+
+    /// Builds the mosaic of each resident picture under `tiled`, and frees
+    /// every mosaic under any other fit.
+    fn update_mosaics(&mut self, fit: BackgroundFit, window: &mut Window) {
+        if fit != BackgroundFit::Tiled {
+            for (_, image) in self.mosaics.drain() {
+                let _ = window.drop_image(image);
+            }
+            return;
+        }
+        for (path, image) in &self.resident {
+            if !self.mosaics.contains_key(path) {
+                if let Some(m) = mosaic(image) {
+                    self.mosaics.insert(path.clone(), m);
+                }
+            }
+        }
     }
 
     /// The files the entries name, in order: the host's from their cached
@@ -238,7 +266,12 @@ impl Show {
     }
 
     fn picture(&self, index: usize, alpha: f32, fit: BackgroundFit) -> Option<impl IntoElement> {
-        let image = self.resident.get(self.paths.get(index)?)?.clone();
+        let path = self.paths.get(index)?;
+        let image = self
+            .mosaics
+            .get(path)
+            .or_else(|| self.resident.get(path))?
+            .clone();
         Some(
             div()
                 .absolute()
@@ -274,8 +307,29 @@ impl Show {
             if let Some(image) = self.resident.remove(&path) {
                 let _ = window.drop_image(image);
             }
+            if let Some(image) = self.mosaics.remove(&path) {
+                let _ = window.drop_image(image);
+            }
         }
     }
+}
+
+/// `image` repeated into a picture at least `MOSAIC_MIN_PX` on each side, or
+/// `None` when it is that big already. gpui keeps pixels as BGRA, and a copy
+/// keeps them in the same order.
+fn mosaic(image: &RenderImage) -> Option<Arc<RenderImage>> {
+    let natural = image.size(0);
+    let (w, h) = (natural.width.0 as u32, natural.height.0 as u32);
+    let (cols, rows) = mosaic_repeats(w, h);
+    if (cols, rows) == (1, 1) {
+        return None;
+    }
+    let pixels = repeat_pixels(image.as_bytes(0)?, w, h, cols, rows);
+    let frame = RgbaImage::from_raw(w * cols, h * rows, pixels)?;
+    Some(Arc::new(RenderImage::new(SmallVec::from_elem(
+        ImageFrame::new(frame),
+        1,
+    ))))
 }
 
 /// One picture, placed in `bounds` and clipped to it.
