@@ -39,13 +39,17 @@ pub mod join;
 #[cfg(unix)]
 pub mod join_client;
 pub mod local_pty;
-#[cfg(unix)]
+// The pure halves of join compile on Windows too (no socket and no libc in
+// them): the screen mirror, the relay's rings and queues, and the wire frames.
+// A Windows host (docs/windows-handoff.md, "Join on Windows") builds on them;
+// the unix socket half (`join`, `remote`, the clients) stays unix-only.
+#[cfg(any(unix, windows))]
 pub mod mirror;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub mod relay;
 #[cfg(unix)]
 pub mod remote;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub mod session_protocol;
 #[cfg(unix)]
 pub mod ssh_login;
