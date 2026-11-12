@@ -323,7 +323,11 @@ impl Panes {
     /// What the join server (#423) needs from this backend: the relay and a
     /// way to write a viewer's keys to a session. Only the daemon backend has
     /// them; under local and tmux a card has no session a viewer could join.
-    #[cfg(unix)]
+    ///
+    /// On Windows the local backend is the one source (there is no `iftd`):
+    /// its panes are the host's own shells, so a Windows host lives only as
+    /// long as the app does.
+    #[cfg(any(unix, windows))]
     pub fn join_parts(
         &self,
     ) -> Option<(
@@ -332,6 +336,9 @@ impl Panes {
         join::NudgeSession,
     )> {
         match self {
+            #[cfg(windows)]
+            Panes::Local(b) => Some((b.relay(), b.session_writer(), b.session_nudger())),
+            #[cfg(unix)]
             Panes::Daemon(b) => Some((b.relay(), b.session_writer(), b.session_nudger())),
             _ => None,
         }
@@ -342,6 +349,12 @@ impl Panes {
     /// there is nothing to come back to.
     pub fn session_id(&self, pane: PaneId) -> Option<String> {
         match self {
+            // Windows only: the id a join viewer attaches by, while a join
+            // server runs. Elsewhere a local shell has nothing to come back
+            // to, and the Mac's fallback never starts one (`join_parts`).
+            #[cfg(windows)]
+            Panes::Local(b) => b.session_id(pane),
+            #[cfg(not(windows))]
             Panes::Local(_) => None,
             #[cfg(unix)]
             Panes::Tmux(b) => b.window_id(pane),
