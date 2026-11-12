@@ -1737,13 +1737,17 @@ impl EditorBody {
     /// must not do.
     /// Enter on a file in the tree: always a tab (Ekin's rule), never a
     /// swap of this buffer, so nothing unsaved is ever in the way.
-    fn open_from_tree(&mut self, path: String, _now: f64) -> BodyAction {
+    /// `keep_tree`: a click keeps the keys in the tree (the arrows walk on
+    /// from the row); Enter and the menu hand them to the opened file.
+    fn open_from_tree(&mut self, path: String, _now: f64, keep_tree: bool) -> BodyAction {
         // A diff has one body and no tabs: the file's diff replaces the one on show.
         if self.diff.is_some() {
             return self.diff_open(&path);
         }
-        self.tree_focused = false;
-        self.focus = Focus::Buffer;
+        if !keep_tree {
+            self.tree_focused = false;
+            self.focus = Focus::Buffer;
+        }
         self.events.push(EditorEvent::OpenTab(path));
         BodyAction::None
     }
@@ -1825,13 +1829,9 @@ impl EditorBody {
             || self.search.is_some()
             || self.buffer.cursor_count() > 1
             || self.buffer.selection().is_some()
-    }
-
-    /// Whether a point in the text area (below any strip) is on the tree
-    /// rather than the text, for the lock: clicking the tree must not lock.
-    pub fn is_on_tree(&self, local: Point) -> bool {
-        // The divider's grab zone counts: grabbing it must not lock the card.
-        self.tree.is_some() && self.across(local) < self.sidebar_w + DIVIDER_GRAB
+            // The tree has the keys: Escape hands them back to the text
+            // first, and the next one leaves (#776).
+            || (self.tree.is_some() && self.focus == Focus::Tree)
     }
 
     /// The coordinate across the divider: x for a tree beside the text, y for
@@ -1914,7 +1914,7 @@ impl EditorBody {
                 self.dirty = true;
             }
         } else {
-            self.open_from_tree(entry.path, crate::now_ms());
+            self.open_from_tree(entry.path, crate::now_ms(), false);
         }
     }
 
@@ -3215,7 +3215,7 @@ impl EditorBody {
                 self.focus = Focus::Buffer;
                 BodyAction::None
             }
-            TreeAction::Open(path) => self.open_from_tree(path, now),
+            TreeAction::Open(path) => self.open_from_tree(path, now, false),
             TreeAction::Landed(path) => {
                 self.preview_from_tree(path, now);
                 BodyAction::None
@@ -4613,8 +4613,10 @@ impl CardBody for EditorBody {
                     .as_mut()
                     .unwrap()
                     .toggle(index, &mut |d| dirs.list(d));
+                // A clicked file opens and the tree keeps the keys, so the
+                // arrows walk on from it (#776).
                 return match action {
-                    TreeAction::Open(path) => self.open_from_tree(path, crate::now_ms()),
+                    TreeAction::Open(path) => self.open_from_tree(path, crate::now_ms(), true),
                     _ => BodyAction::None,
                 };
             }
@@ -5057,11 +5059,6 @@ mod tests {
         let at = |x: f64| Point { x, y: 50. };
         assert!(b.on_divider(at(200.)) && b.on_divider(at(203.)) && b.on_divider(at(197.)));
         assert!(!b.on_divider(at(100.)) && !b.on_divider(at(300.)));
-        assert!(
-            b.is_on_tree(at(203.)),
-            "the grab zone does not lock the card"
-        );
-        assert!(!b.is_on_tree(at(300.)));
         // hover
         b.mouse_move(at(201.), &mods);
         assert_eq!(b.divider_cursor(), Some(gpui::CursorStyle::ResizeLeftRight));

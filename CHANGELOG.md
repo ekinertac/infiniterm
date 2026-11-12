@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-12
 
+- After a click on a file or folder in an editor's file tree, Up and Down move through the tree. A clicked file opens and the tree keeps the keys; click into the text, or press Escape, to type in the file.
 - The file tree beside an editor now scrolls with the mouse wheel or two fingers, so the files at the bottom of a long folder can be reached without the arrow keys.
 - "Git: switch branch…" in the palette and Switch Branch in the terminal menu now list only local branches. Set `ui.hideRemoteBranches` to `false` in settings.json to list the remote branches again.
 - Each terminal's background process (the one that keeps your shell alive across restarts) uses about 2 MB less memory once the terminal has printed more than 4 MB. Terminals started before the update keep the old process until they are closed.
