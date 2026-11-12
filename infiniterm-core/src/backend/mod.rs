@@ -39,6 +39,10 @@ pub mod join;
 #[cfg(unix)]
 pub mod join_client;
 pub mod local_pty;
+/// The join protocol's major version (`ift-join <major> <topic>`): the host's
+/// `join::MAJOR` and what `ift proxy join` says on every platform.
+pub const JOIN_MAJOR: u32 = 2;
+
 // The pure halves of join compile on Windows too (no socket and no libc in
 // them): the screen mirror, the relay's rings and queues, and the wire frames.
 // A Windows host (docs/windows-handoff.md, "Join on Windows") builds on them;
