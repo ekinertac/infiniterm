@@ -232,8 +232,43 @@ pub fn check(host: &RemoteHost) -> Result<String, String> {
             "{}: ssh could not log in without a prompt: {said}",
             host.target
         ),
-        _ => format!("{}: {said}", host.target),
+        // The script is `sh`: a Windows host has none and fails here with its
+        // own shell's "not recognized". Ask it the Windows question before
+        // giving up (#540, `ift join` a Windows host).
+        _ => match check_windows(host) {
+            Some(found) => return Ok(found),
+            None if said.contains("not recognized") => format!(
+                "{}: {said} (a Windows host needs `--ift C:/path/to/ift.exe`: its ssh PATH rarely has ift)",
+                host.target
+            ),
+            None => format!("{}: {said}", host.target),
+        },
     })
+}
+
+/// `ift` for a Windows host as its shell (cmd, PowerShell 5.1 or 7, whichever
+/// sshd runs) takes it with no quoting: a drive path written with `/`, which
+/// every one of them runs, or a bare name. A backslash or a space would need
+/// quoting that differs per shell, so a path with either is refused up front
+/// rather than guessed at. `None` for a path that is neither.
+pub fn windows_ift(ift: &str) -> Option<String> {
+    let path = ift.replace('\\', "/");
+    let plain = |c: char| c.is_ascii_alphanumeric() || "-_./:@%+=,".contains(c);
+    (!path.is_empty() && path.chars().all(plain)).then_some(path)
+}
+
+/// The command that tells a Windows host from a broken unix one: only the
+/// Windows build of `ift` has `proxy platform`, and it prints `windows`.
+pub fn platform_command(ift: &str) -> String {
+    format!("{ift} proxy platform")
+}
+
+/// Is the host Windows with a working `ift`? Returns the `ift` to use there.
+fn check_windows(host: &RemoteHost) -> Option<String> {
+    let ift = windows_ift(&host.ift)?;
+    let out = run_on(host, &platform_command(&ift)).ok()?;
+    (out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "windows")
+        .then_some(ift)
 }
 
 /// What `--spawn` asks the server's `iftd` for.
@@ -989,5 +1024,62 @@ mod tests {
         assert_eq!(args[n - 3], "2222");
         assert_eq!(args[n - 2], "root@100.1.1.1");
         assert_eq!(args[n - 1], "ift proxy session id1");
+    }
+
+    #[test]
+    fn a_windows_path_is_written_so_every_shell_runs_it() {
+        assert_eq!(windows_ift("ift").as_deref(), Some("ift"));
+        assert_eq!(
+            windows_ift(r"C:\Users\PC\ift.exe").as_deref(),
+            Some("C:/Users/PC/ift.exe")
+        );
+        assert_eq!(
+            windows_ift("C:/Users/PC/ift.exe").as_deref(),
+            Some("C:/Users/PC/ift.exe")
+        );
+        // A space or a quote needs quoting that differs per shell.
+        assert_eq!(windows_ift(r"C:\Program Files\ift.exe"), None);
+        assert_eq!(windows_ift("C:/a'b/ift.exe"), None);
+        assert_eq!(windows_ift(""), None);
+        assert_eq!(
+            platform_command("C:/Users/PC/ift.exe"),
+            "C:/Users/PC/ift.exe proxy platform"
+        );
+    }
+
+    /// An ssh stand-in for a Windows host: `sh` does not exist there, and
+    /// only the Windows `ift` knows `proxy platform`. It reads the remote
+    /// command as its last argument, like the real ssh gets it.
+    fn windows_ssh(name: &str, ift_ok: bool) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch(name);
+        let f = dir.join("ssh");
+        let platform = if ift_ok {
+            "echo windows; exit 0"
+        } else {
+            "echo \"ift : The term 'ift' is not recognized\" >&2; exit 1"
+        };
+        let script = format!(
+            "#!/bin/sh\nfor last; do :; done\ncase \"$last\" in\n  'sh -c'*) echo \"sh : The term 'sh' is not recognized\" >&2; exit 1;;\n  *'proxy platform') {platform};;\nesac\nexit 9\n"
+        );
+        std::fs::write(&f, script).unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        f.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn the_check_accepts_a_windows_host_and_returns_its_ift() {
+        let mut host = RemoteHost::new("pc@box");
+        host.ssh = windows_ssh("win-ok", true);
+        host.ift = r"C:\Users\PC\ift.exe".into();
+        assert_eq!(check(&host).as_deref(), Ok("C:/Users/PC/ift.exe"));
+    }
+
+    #[test]
+    fn the_check_tells_a_windows_host_without_ift_what_to_pass() {
+        let mut host = RemoteHost::new("pc@box");
+        host.ssh = windows_ssh("win-no-ift", false);
+        let why = check(&host).unwrap_err();
+        assert!(why.contains("--ift C:/path/to/ift.exe"), "{why}");
     }
 }

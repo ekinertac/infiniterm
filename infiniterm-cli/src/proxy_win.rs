@@ -34,6 +34,12 @@ use crate::proxy_join::{parse_join, pump};
 pub fn run(args: &[String]) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("join") => run_join(&args[1..]),
+        // How a viewer tells a Windows host from a unix one whose check
+        // failed (`remote::check`): no unix build answers this.
+        Some("platform") => {
+            println!("windows");
+            ExitCode::SUCCESS
+        }
         other => {
             eprintln!(
                 "ift: proxy {} is not available on Windows (only `proxy join`)",

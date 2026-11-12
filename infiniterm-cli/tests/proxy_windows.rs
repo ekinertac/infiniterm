@@ -134,6 +134,14 @@ fn with_no_app_running_it_says_so_on_stderr_and_stdout_stays_empty() {
 }
 
 #[test]
+fn proxy_platform_says_windows_so_a_viewer_can_tell_the_host() {
+    let dir = scratch("platform");
+    let out = ift(&dir, &["proxy", "platform"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "windows");
+}
+
+#[test]
 fn bad_use_and_a_verb_that_needs_iftd_are_refused_with_a_reason() {
     let dir = scratch("bad");
     for (args, needle) in [
