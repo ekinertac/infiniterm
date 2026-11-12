@@ -17,7 +17,7 @@ use crate::page_body::{PageBody, PageColors};
 use crate::transcript_body::{TranscriptBody, TranscriptColors};
 use crate::AppView;
 use gpui::Window;
-use infiniterm_core::config::Wrap;
+use infiniterm_core::config::{Autosave, Wrap};
 use infiniterm_core::editor_theme::{editor_colors, syntax_rules, Chrome as EditorChrome};
 use infiniterm_core::grid::Size;
 use infiniterm_core::model::EditorAction;
@@ -55,6 +55,9 @@ impl AppView {
         self.reconcile_whats_new(window);
         let metrics = self.metrics(window);
         let cfg = self.model.config.clone();
+        // `editor.smoothCaret` yields to ui.animations and reduce motion.
+        let smooth_ok = self.animator.animations_on;
+        let focused_id = self.model.selection.focused_id.clone();
         let chrome = EditorChrome {
             card_bg: format!("#{:06x}", rgb_u32(self.chrome.card_bg)),
             text: format!("#{:06x}", rgb_u32(self.chrome.text)),
@@ -181,6 +184,13 @@ impl AppView {
             if card.locked != locked {
                 locks.push((card.id.clone(), locked));
             }
+            // `editor.autosave` (#778): the card stopped taking keys, by
+            // another card's focus or by leaving the text.
+            let editing = locked && focused_id.as_deref() == Some(card.id.as_str());
+            if tabs.editing && !editing && cfg.editor.autosave == Autosave::FocusChange {
+                tabs.autosave(now);
+            }
+            tabs.editing = editing;
             let Some(body) = self.editor_for(&card.id) else {
                 continue;
             };
@@ -221,6 +231,38 @@ impl AppView {
             }
             body.blink = cfg.terminal.cursor_blink;
             body.highlight_line = cfg.editor.highlight_line;
+            // The polish set (#778): a change repaints, since each one is
+            // only paint or only what a save does.
+            let e = &cfg.editor;
+            let polish = (
+                e.highlight_occurrences,
+                e.indent_guides,
+                e.smooth_caret && smooth_ok,
+                e.whitespace_in_selection,
+                e.sticky_scroll,
+            );
+            if polish
+                != (
+                    body.highlight_occurrences,
+                    body.indent_guides,
+                    body.smooth_caret,
+                    body.whitespace_in_selection,
+                    body.sticky_scroll,
+                )
+                || body.rulers != e.rulers
+            {
+                (
+                    body.highlight_occurrences,
+                    body.indent_guides,
+                    body.smooth_caret,
+                    body.whitespace_in_selection,
+                    body.sticky_scroll,
+                ) = polish;
+                body.rulers.clone_from(&e.rulers);
+                body.mark_dirty();
+            }
+            body.trim_on_save = e.trim_trailing_whitespace_on_save;
+            body.final_newline_on_save = e.insert_final_newline_on_save;
             if body.tree_icons != cfg.editor.explorer.icons {
                 body.tree_icons = cfg.editor.explorer.icons;
                 body.mark_dirty();
@@ -637,6 +679,16 @@ impl AppView {
             EditorAction::ToggleComment => {
                 if let Some(body) = self.editor_for(card_id) {
                     body.toggle_comment(now);
+                }
+            }
+            EditorAction::ExpandSelection => {
+                if let Some(body) = self.editor_for(card_id) {
+                    body.expand_selection();
+                }
+            }
+            EditorAction::ShrinkSelection => {
+                if let Some(body) = self.editor_for(card_id) {
+                    body.shrink_selection();
                 }
             }
             EditorAction::ToggleExplorer => {

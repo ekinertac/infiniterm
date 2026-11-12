@@ -45,6 +45,9 @@ pub struct Tree {
     pub cursor: usize,
     /// First visible row, for scrolling the panel.
     pub scroll: usize,
+    /// The cursor the view last followed (`fit`): the view is pulled to the
+    /// cursor only when it moved, so a wheel scroll can leave it off screen.
+    followed: usize,
 }
 
 impl Tree {
@@ -179,6 +182,32 @@ impl Tree {
         }
     }
 
+    /// A wheel over the panel: moves the view by `lines` rows (down when
+    /// positive) and leaves the cursor where it is. `fit` clamps the bottom.
+    pub fn scroll_by(&mut self, lines: i64) {
+        let last = self.rows().len().saturating_sub(1);
+        self.scroll = (self.scroll as i64 + lines).clamp(0, last as i64) as usize;
+    }
+
+    /// Settles the view for a panel of `visible` rows before it is drawn: a
+    /// cursor that moved since the last call is brought into view, and the
+    /// view never runs past the last row (a collapse or a smaller list pulls
+    /// it back up).
+    pub fn fit(&mut self, visible: usize) {
+        let visible = visible.max(1);
+        if self.cursor != self.followed {
+            if self.cursor < self.scroll {
+                self.scroll = self.cursor;
+            } else if self.cursor >= self.scroll + visible {
+                self.scroll = self.cursor + 1 - visible;
+            }
+            self.followed = self.cursor;
+        }
+        self.scroll = self
+            .scroll
+            .min(self.rows().len().saturating_sub(visible));
+    }
+
     pub fn is_expanded(&self, path: &str) -> bool {
         self.expanded.get(path).copied().unwrap_or(false)
     }
@@ -258,6 +287,44 @@ mod tests {
                 _ => vec![],
             }
         }
+    }
+
+    // A long folder: the wheel reaches the bottom rows without moving the
+    // cursor, the view does not snap back to it, and a key brings it back.
+    #[test]
+    fn the_wheel_scrolls_the_view_and_a_moved_cursor_pulls_it_back() {
+        let mut list = |dir: &str| -> Vec<Entry> {
+            (0..50)
+                .map(|i| Entry {
+                    name: format!("f{i:02}"),
+                    path: format!("{dir}/f{i:02}"),
+                    is_dir: false,
+                })
+                .collect()
+        };
+        let mut t = Tree::new("/r");
+        t.ensure_root(&mut list);
+        t.scroll_by(30);
+        t.fit(10);
+        assert_eq!((t.scroll, t.cursor), (30, 0));
+        // Past the end: the view stops with the last row at the bottom.
+        t.scroll_by(100);
+        t.fit(10);
+        assert_eq!(t.scroll, 40);
+        t.scroll_by(-100);
+        t.fit(10);
+        assert_eq!(t.scroll, 0);
+        t.scroll_by(30);
+        t.fit(10);
+        t.key("down", &mut list);
+        t.fit(10);
+        assert_eq!((t.scroll, t.cursor), (1, 1));
+        // A list shorter than the panel never scrolls.
+        let mut t = Tree::new("/r");
+        t.ensure_root(&mut list);
+        t.scroll_by(5);
+        t.fit(60);
+        assert_eq!(t.scroll, 0);
     }
 
     #[test]

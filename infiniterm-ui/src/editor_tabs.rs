@@ -12,11 +12,13 @@
 //! come, so closing one tab never reloads the others and two untitled
 //! tabs keep their own text.
 //!
-//! Focus lock: a click into the text, or a bare Enter on a focused card,
-//! locks (`locked`); `editors.rs` mirrors it onto `card.locked`, which is
-//! what `handle_chord` reads to route Cmd+T/W/1..9 to the tab commands.
-//! Double-Escape unlocks (`input.rs`, the browser's rule). The tree, the
-//! strip and the find bar do not lock: locking is for typing.
+//! Focus lock: a click into the text or the tree, or a bare Enter on a
+//! focused card, locks (`locked`); `editors.rs` mirrors it onto
+//! `card.locked`, which is what `handle_chord` reads to route Cmd+T/W/1..9
+//! to the tab commands. Double-Escape unlocks (`input.rs`, the browser's
+//! rule). The strip, the tree's divider and the find bar do not lock. The
+//! tree locks so its arrows work after a click (#776); with the tree
+//! focused only its keys are taken, so nothing typed reaches the file.
 //!
 //! Drafts are keyed per tab (`tab_draft_id`): the first tab keeps the
 //! card's own id so a draft from before tabs is still found.
@@ -75,6 +77,9 @@ pub struct EditorTabs {
     hover_tab: Option<usize>,
     /// A drop since `editors.rs` last looked: (from, to) for `Model::move_tab`.
     pub tab_drop: Option<(usize, usize)>,
+    /// Focused and locked at the last reconcile: the card was taking keys.
+    /// `editor.autosave` "focusChange" saves when this turns false (#778).
+    pub editing: bool,
     /// Bounds of the last paint, for the strip's hit test.
     world: Size,
     dirty: bool,
@@ -85,6 +90,20 @@ pub struct EditorTabs {
 }
 
 impl EditorTabs {
+    /// `editor.autosave` "focusChange" (#778): every tab with a file and
+    /// unsaved changes is saved. Untitled buffers have nowhere to go, and a
+    /// read-only one (a diff, a generated file, a picture) nothing to write.
+    pub fn autosave(&mut self, now: f64) {
+        for (_, body) in &mut self.tabs {
+            let Some(path) = body.path.clone() else {
+                continue;
+            };
+            if body.is_dirty() && !body.read_only {
+                body.save(&path, now);
+            }
+        }
+    }
+
     /// Escape still has something to close in the active tab (a popup, the
     /// find panel, extra cursors, a selection); see `EditorBody::escape_has_work`.
     pub fn escape_has_work(&self) -> bool {
@@ -145,6 +164,7 @@ impl EditorTabs {
             tab_drag: None,
             hover_tab: None,
             tab_drop: None,
+            editing: false,
             world,
             dirty: true,
             metrics: metrics.clone(),
@@ -634,9 +654,10 @@ impl CardBody for EditorTabs {
             return BodyAction::None;
         }
         let below = self.below_strip(local);
-        // A click into the text locks; the tree and the find bar do not.
-        let on_tree = self.active_body_ref().is_some_and(|b| b.is_on_tree(below));
-        if !on_tree && button == gpui::MouseButton::Left && !self.scratch_hidden() {
+        // A click into the text or the tree locks, so the arrows reach the
+        // tree after a click in it (#776); grabbing the divider does not.
+        let on_divider = self.active_body_ref().is_some_and(|b| b.on_divider(below));
+        if !on_divider && button == gpui::MouseButton::Left && !self.scratch_hidden() {
             self.locked = true;
             self.dirty = true;
         }
@@ -909,6 +930,67 @@ mod tests {
         assert!(!body.tree_focused);
         assert_eq!(body.buffer.text(), "bbb\n");
         assert!(t.locked);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A click on a file in the tree of a card that is not locked locks it,
+    // opens the file and leaves the keys in the tree, so Up and Down walk on
+    // from that row (#776). Escape then has work: back to the text first.
+    #[test]
+    fn a_click_in_the_tree_locks_and_the_tree_keeps_the_keys() {
+        let dir = std::env::temp_dir().join(format!("ift-click-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.txt").to_string_lossy().to_string();
+        let b = dir.join("b.txt").to_string_lossy().to_string();
+        std::fs::write(&a, "aaa\n").unwrap();
+        std::fs::write(&b, "bbb\n").unwrap();
+        let mut t = tabs();
+        t.rebuild_tabs(
+            std::slice::from_ref(&a),
+            0,
+            &dir.to_string_lossy(),
+            0.,
+            false,
+        );
+        let body = t.active_body().unwrap();
+        body.show_tree(&dir.to_string_lossy());
+        // The width a paint would set.
+        body.sidebar_w = 200.;
+        assert!(!t.locked);
+        let row = t
+            .active_body_ref()
+            .unwrap()
+            .tree
+            .as_ref()
+            .unwrap()
+            .rows()
+            .iter()
+            .position(|r| r.entry.path == b)
+            .unwrap();
+        let at = (0..1000)
+            .map(|y| Point {
+                x: 20.,
+                y: y as f64,
+            })
+            .find(|p| t.tree_row_at(*p) == Some(row))
+            .unwrap();
+        t.mouse_down(at, gpui::MouseButton::Left, &gpui::Modifiers::default(), 1);
+        assert!(t.locked, "a click in the tree locks");
+        assert!(t
+            .take_events()
+            .iter()
+            .any(|e| matches!(e, EditorEvent::OpenTab(p) if *p == b)));
+        t.rebuild_tabs(
+            &[a.clone(), b.clone()],
+            1,
+            &dir.to_string_lossy(),
+            0.,
+            false,
+        );
+        let body = t.active_body_ref().unwrap();
+        assert!(body.tree_focused, "the tree keeps the keys");
+        assert_eq!(body.buffer.text(), "bbb\n");
+        assert!(t.escape_has_work(), "Escape goes back to the text first");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

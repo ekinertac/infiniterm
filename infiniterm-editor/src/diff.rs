@@ -298,6 +298,29 @@ pub fn hunks(baseline: &str, current: &str) -> Vec<Hunk> {
         .collect()
 }
 
+/// Where 0-based `line` of `before` is in `after` (#778): a file rewritten on
+/// disk under a clean buffer keeps the caret and the scroll on the same
+/// code, not on the same line number, when lines were added or removed
+/// above it. A line inside a changed stretch goes to the same place in the
+/// stretch that replaced it, clamped to its last line.
+pub fn follow_line(before: &str, after: &str, line: usize) -> usize {
+    let diff = TextDiff::from_lines(before, after);
+    for op in diff.ops() {
+        let (old, new) = (op.old_range(), op.new_range());
+        if old.contains(&line) {
+            let into = line - old.start;
+            return match op.tag() {
+                similar::DiffTag::Equal => new.start + into,
+                _ => new.start + into.min(new.len().saturating_sub(1)),
+            };
+        }
+    }
+    // Past the end of `before` (the empty last line after a final newline).
+    let old_len = before.split_inclusive('\n').count();
+    let new_len = after.split_inclusive('\n').count();
+    (line + new_len).saturating_sub(old_len)
+}
+
 /// The hunk the caret's 0-based `line` is in: one that covers it, or a pure
 /// deletion made right before it.
 pub fn hunk_at(hunks: &[Hunk], line: usize) -> Option<usize> {
@@ -596,5 +619,20 @@ mod tests {
             got,
             vec![span(first_line_len + 1, first_line_len + 5, "keyword")]
         );
+    }
+
+    #[test]
+    fn a_line_follows_its_code_through_a_change_above_it() {
+        let before = "a\nb\nc\nd\n";
+        // Two lines added at the top: "c" moved from 2 to 4.
+        assert_eq!(follow_line(before, "x\ny\na\nb\nc\nd\n", 2), 4);
+        // One removed above it.
+        assert_eq!(follow_line(before, "b\nc\nd\n", 2), 1);
+        // The line itself rewritten into two: the stretch's start.
+        assert_eq!(follow_line(before, "a\nb\nC1\nC2\nd\n", 2), 2);
+        // Deleted outright: the line after where it was.
+        assert_eq!(follow_line(before, "a\nb\nd\n", 2), 2);
+        // The empty line after the final newline stays last.
+        assert_eq!(follow_line(before, "x\na\nb\nc\nd\n", 4), 5);
     }
 }

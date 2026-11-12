@@ -350,6 +350,62 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "editor.highlightOccurrences",
+        &[
+            "Wash the other places the word under the caret appears in the lines on",
+            "screen; with text selected on one line, that text instead. Off by default.",
+        ],
+    ),
+    (
+        "editor.indentGuides",
+        &[
+            "A faint vertical line for each indent level, the block the caret is in",
+            "drawn brighter. Lines indented with tabs get none. Off by default.",
+        ],
+    ),
+    (
+        "editor.smoothCaret",
+        &[
+            "The caret glides to where it moved instead of jumping there. Off by",
+            "default, and never with ui.animations off or the system's reduce motion.",
+        ],
+    ),
+    (
+        "editor.rulers",
+        &[
+            "Vertical lines at these columns, for example [80, 120], to see where a",
+            "line gets long. Empty draws none.",
+        ],
+    ),
+    (
+        "editor.whitespaceInSelection",
+        &["Dots for the spaces inside selected text. Off by default."],
+    ),
+    (
+        "editor.stickyScroll",
+        &[
+            "Pin the first line of the function, type or heading the top line is in",
+            "(up to three, outermost first) over the text while you scroll through",
+            "it. Off by default.",
+        ],
+    ),
+    (
+        "editor.autosave",
+        &[
+            "\"focusChange\" saves an editor's changed files when it stops taking keys:",
+            "another card is focused, or you leave the text with Escape. Untitled",
+            "buffers are left alone. \"off\" (the default) saves only on Cmd+S.",
+        ],
+    ),
+    (
+        "editor.trimTrailingWhitespaceOnSave",
+        &["Remove the spaces and tabs at the end of every line when saving. Off by default."],
+    ),
+    (
+        "editor.insertFinalNewlineOnSave",
+        &["End the file with a newline when saving, if it has none. Off by default."],
+    ),
+    (
         "browser",
         &["Browser cards. The page stays at its own size whatever the canvas zoom is."],
     ),
@@ -521,7 +577,8 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "\"cover\" fills the window and crops the edges; \"contain\" shows the whole picture;",
             "\"top-left\" fills like cover but pins the picture's top-left corner to the window's,",
             "so only the right and bottom are cropped; \"actual-size\" draws it at its own size from",
-            "the top-left corner and never rescales it when the window is resized.",
+            "the top-left corner and never rescales it when the window is resized; \"tiled\"",
+            "repeats it at its own size from the top-left corner until the window is full.",
         ],
     ),
     (
@@ -674,6 +731,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "ui.hideVersion",
         &["No version number (like 0.6.9) at the right end of the status bar."],
+    ),
+    (
+        "ui.hideRemoteBranches",
+        &[
+            "Only local branches in \"Git: switch branch…\" and the terminal menu's",
+            "Switch Branch. false lists the remote branches with no local one too.",
+        ],
     ),
     (
         "ui.cardLabelSize",

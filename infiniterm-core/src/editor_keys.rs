@@ -62,6 +62,11 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
         // Every editor's comment toggle (#697). On the canvas Cmd+/ is the
         // shortcuts panel; in the text it is this.
         "cmd+/" => "editor.toggleComment",
+        // Expand and shrink the selection by syntax node (#778). Alt+Up and
+        // Down already move lines and Ctrl+Shift+Up and Down grow a column
+        // of cursors, so the free sideways pair of that family.
+        "ctrl+shift+arrowright" => "editor.selection.expand",
+        "ctrl+shift+arrowleft" => "editor.selection.shrink",
         // Not a tab command, but the one app chord a locked editor cannot
         // do without: an unmatched chord falls through to the body, which
         // has no save of its own, so Cmd+S saved nothing until the lock
@@ -116,6 +121,16 @@ mod tests {
         assert_eq!(lock_override("cmd+shift+]"), Some("editor.tab.next"));
         assert_eq!(lock_override("cmd+s"), Some("card.save")); // saves while locked
         assert_eq!(lock_override("ctrl+g"), Some("editor.goToLine"));
+        assert_eq!(
+            lock_override("ctrl+shift+arrowright"),
+            Some("editor.selection.expand")
+        );
+        assert_eq!(
+            lock_override("ctrl+shift+arrowleft"),
+            Some("editor.selection.shrink")
+        );
+        // A column of cursors stays the body's.
+        assert_eq!(lock_override("ctrl+shift+arrowdown"), None);
         assert_eq!(lock_override("cmd+k"), None);
     }
 

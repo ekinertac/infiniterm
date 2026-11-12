@@ -252,9 +252,12 @@ impl AppView {
                     // the UI thread, as the palette's branch list does.
                     git: &|| {
                         let card = model.focused()?;
-                        infiniterm_core::git_branches::list(std::path::Path::new(&card.cwd))
-                            .ok()
-                            .map(|(_, rows)| rows)
+                        infiniterm_core::git_branches::list(
+                            std::path::Path::new(&card.cwd),
+                            !model.config.ui.hide_remote_branches,
+                        )
+                        .ok()
+                        .map(|(_, rows)| rows)
                     },
                 },
             )
