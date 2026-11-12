@@ -676,6 +676,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         &["No version number (like 0.6.9) at the right end of the status bar."],
     ),
     (
+        "ui.hideRemoteBranches",
+        &[
+            "Only local branches in \"Git: switch branch…\" and the terminal menu's",
+            "Switch Branch. false lists the remote branches with no local one too.",
+        ],
+    ),
+    (
         "ui.cardLabelSize",
         &[
             "Screen pixels, before the Cmd+Shift+= multiplier, at 60% zoom and closer;",

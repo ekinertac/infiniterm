@@ -2873,6 +2873,14 @@ mod tests {
         assert!(!h.m.config.ui.hide_build_number, "the two are independent");
     }
 
+    #[test]
+    fn hide_remote_branches_is_a_setting_on_by_default() {
+        let mut h = Harness::new();
+        assert!(h.m.config.ui.hide_remote_branches);
+        h.m.apply_settings_text(r#"{"ui.hideRemoteBranches": false}"#);
+        assert!(!h.m.config.ui.hide_remote_branches);
+    }
+
     // The file is checked before it is applied, and a file with an error is not
     // accepted: the settings in force stay and the notice says what is wrong.
     #[test]

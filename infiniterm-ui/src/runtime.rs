@@ -589,7 +589,10 @@ impl AppView {
                 // "Git: switch branch…" (#750). On the UI thread like Go to
                 // File's `git ls-files`: one short git run a person asked for.
                 Effect::ListBranches(dir) => {
-                    match infiniterm_core::git_branches::list(std::path::Path::new(&dir)) {
+                    match infiniterm_core::git_branches::list(
+                        std::path::Path::new(&dir),
+                        !self.model.config.ui.hide_remote_branches,
+                    ) {
                         Ok((repo, rows)) => self.model.open_branches(&repo, rows),
                         Err(e) => self.model.notify(e),
                     }

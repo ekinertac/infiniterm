@@ -142,8 +142,9 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 /// The repository root `path` (a folder, or a file in one) is in and its
-/// branches, or git's error (not a repository, no git).
-pub fn list(path: &Path) -> Result<(String, Vec<Branch>), String> {
+/// branches, or git's error (not a repository, no git). `remotes` false
+/// (`ui.hideRemoteBranches`, #772) asks git for the local branches only.
+pub fn list(path: &Path, remotes: bool) -> Result<(String, Vec<Branch>), String> {
     let dir = if path.is_dir() {
         path
     } else {
@@ -153,16 +154,16 @@ pub fn list(path: &Path) -> Result<(String, Vec<Branch>), String> {
         .map_err(|e| one_line(&e))?
         .trim()
         .to_string();
-    let text = git(
-        Path::new(&root),
-        &[
-            "for-each-ref",
-            "--sort=-committerdate",
-            FORMAT,
-            "refs/heads",
-            "refs/remotes",
-        ],
-    )?;
+    let mut args = vec![
+        "for-each-ref",
+        "--sort=-committerdate",
+        FORMAT,
+        "refs/heads",
+    ];
+    if remotes {
+        args.push("refs/remotes");
+    }
+    let text = git(Path::new(&root), &args)?;
     Ok((root, parse(&text)))
 }
 
@@ -261,7 +262,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let run = |args: &[&str]| git(&dir, args).unwrap();
-        assert!(list(&dir).is_err(), "not a repository yet");
+        assert!(list(&dir, true).is_err(), "not a repository yet");
         assert!(init(&dir).unwrap().contains("Initialized"));
         run(&["symbolic-ref", "HEAD", "refs/heads/main"]);
         run(&[
@@ -276,7 +277,12 @@ mod tests {
             "one",
         ]);
         run(&["branch", "other"]);
-        let (root, rows) = list(&dir).unwrap();
+        // A remote branch with no local one: listed only when asked (#772).
+        run(&["update-ref", "refs/remotes/origin/far", "HEAD"]);
+        let (_, local) = list(&dir, false).unwrap();
+        assert!(local.iter().all(|b| !b.remote));
+        let (root, rows) = list(&dir, true).unwrap();
+        assert!(rows.iter().any(|b| b.remote && b.name == "origin/far"));
         assert_eq!(rows[0].name, "main");
         assert!(rows[0].current);
         assert!(rows.iter().any(|b| b.name == "other"));
