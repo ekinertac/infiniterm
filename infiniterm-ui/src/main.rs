@@ -322,14 +322,13 @@ pub struct AppView {
     /// timer, which has the app, shows it (#64). The card it opens beside.
     /// And the editor card the file becomes a tab of, for "open a file in card…".
     pub pick_request: Option<(Option<String>, Option<String>)>,
-    /// The socket viewers join through (`ift join`, #423); `None` when the
-    /// backend is not the daemon or the socket could not be bound.
-    #[cfg(unix)]
+    /// The socket (on Windows, the pipe) viewers join through (`ift join`,
+    /// #423); `None` when the backend has no sessions to serve (tmux, or the
+    /// local backend off Windows) or the endpoint could not be bound.
     pub join: Option<infiniterm_core::backend::join::JoinHub>,
     /// The agent states last sent to viewers, so a change is sent once.
     pub last_agents: String,
     /// The edits viewers send up (host side, #423): applied in the poll.
-    #[cfg(unix)]
     pub join_updates:
         Option<std::sync::mpsc::Receiver<infiniterm_core::backend::join::RemoteUpdate>>,
     /// A viewer's clicks on paths, already found on this disk (host side,

@@ -95,10 +95,8 @@ impl AppView {
             shortcuts_field: Default::default(),
             shortcuts_index: 0,
             pick_request: None,
-            #[cfg(unix)]
             join: None,
             last_agents: String::new(),
-            #[cfg(unix)]
             join_updates: None,
             #[cfg(unix)]
             host_files: None,
@@ -929,7 +927,6 @@ impl AppView {
             match change.file {
                 ConfigFile::Settings => {
                     self.apply_settings_text(&change.contents);
-                    #[cfg(unix)]
                     if let Some(hub) = &self.join {
                         hub.publish_config(
                             infiniterm_core::backend::join::KIND_SETTINGS,
@@ -947,7 +944,6 @@ impl AppView {
                 }
                 _ => {
                     self.model.apply_keymap_text(&change.contents);
-                    #[cfg(unix)]
                     if let Some(hub) = &self.join {
                         hub.publish_config(
                             infiniterm_core::backend::join::KIND_KEYBINDINGS,
@@ -1090,7 +1086,6 @@ impl AppView {
             // The same text, to every viewer that joined, with the revision
             // it is. The viewer keeps its own viewport and focus; nothing is
             // stripped here.
-            #[cfg(unix)]
             if let Some(hub) = &self.join {
                 // Remembered by revision, so a viewer's edit can be compared
                 // with the canvas it started from and merged field by field.
@@ -1282,12 +1277,6 @@ impl AppView {
     /// canvas in place. An edit made on an old canvas is dropped and the host
     /// republishes its own, which is how that viewer finds out. True when the
     /// canvas changed, so the next frame starts any shell it now needs.
-    #[cfg(windows)]
-    pub fn apply_remote_updates(&mut self) -> bool {
-        false
-    }
-
-    #[cfg(unix)]
     pub fn apply_remote_updates(&mut self) -> bool {
         use infiniterm_core::model::persist::RemoteApply;
         let Some(rx) = &self.join_updates else {
@@ -1446,11 +1435,6 @@ impl AppView {
     }
 
     /// The host sends viewers the agent states when they change (#423).
-    /// There are no viewers on Windows.
-    #[cfg(windows)]
-    pub fn publish_agents(&mut self) {}
-
-    #[cfg(unix)]
     pub fn publish_agents(&mut self) {
         let Some(hub) = &self.join else {
             return;
@@ -1463,12 +1447,7 @@ impl AppView {
     }
 
     /// The host is about to quit to restart: viewers are told first (#708),
-    /// `version` the update it restarts into or empty. There are no viewers
-    /// on Windows.
-    #[cfg(windows)]
-    fn announce_restart(&self, _version: &str) {}
-
-    #[cfg(unix)]
+    /// `version` the update it restarts into or empty.
     fn announce_restart(&self, version: &str) {
         if let Some(hub) = &self.join {
             hub.announce_restart(version);
@@ -1504,11 +1483,9 @@ fn startup_terminal() -> (infiniterm_core::config::TerminalBackend, usize) {
 
 /// Opens the socket `ift join` viewers reach through ssh, and gives them the
 /// canvas as it is now (#423). A failure is said and costs nothing else: the
-/// app runs without joining. Unix only: the hub rides on a unix socket.
-#[cfg(windows)]
-fn start_join(_app: &mut AppView) {}
-
-#[cfg(unix)]
+/// app runs without joining. The hub rides on a unix socket, and on Windows on
+/// the join pipe (`pipe.rs`); only a backend with sessions a viewer could
+/// join answers `join_parts`: the daemon, and the local backend on Windows.
 fn start_join(app: &mut AppView) {
     // A viewer is a window onto the host's canvas, never a host: it would
     // relay sessions that are not its own (found in the #423 drive, which
@@ -1541,7 +1518,16 @@ fn start_join(app: &mut AppView) {
     match hub.serve(&infiniterm_core::paths::join_socket()) {
         Ok(()) => {
             app.join_updates = hub.take_updates();
-            app.join_opens = hub.take_opens();
+            #[cfg(unix)]
+            {
+                app.join_opens = hub.take_opens();
+            }
+            // A viewer's Cmd+click on a path is looked up on THIS disk, and a
+            // Windows host's paths are not the posix ones the viewer sends:
+            // not served yet. The receiver is dropped so the hub does not
+            // queue clicks nobody will read.
+            #[cfg(windows)]
+            drop(hub.take_opens());
             app.join = Some(hub);
         }
         Err(e) => eprintln!("[infiniterm/warn] ift join is off: {e}"),
