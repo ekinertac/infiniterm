@@ -26,8 +26,8 @@ use std::process::ExitCode;
 
 use infiniterm_core::paths;
 
-/// A session id is the socket's file name stem: letters, digits, `-` and `_`.
-const MAX_ID_LEN: usize = 64;
+// Shared with the Windows proxy (`proxy_win.rs`): see `proxy_join.rs`.
+use crate::proxy_join::{parse_join, pump, valid_id};
 
 /// What `--spawn` asks `iftd` for.
 #[derive(Debug, PartialEq, Eq, Default)]
@@ -42,14 +42,6 @@ pub struct SpawnArgs {
 pub struct Parsed {
     pub id: String,
     pub spawn: Option<SpawnArgs>,
-}
-
-pub fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= MAX_ID_LEN
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// `session <id> [--spawn] [--cwd D] [--cmd C] [--env K=V]... [--buffer N]`.
@@ -86,23 +78,6 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         id: id.clone(),
         spawn: spawn.then_some(s),
     })
-}
-
-/// Copies `from` to `to` until `from` ends, then closes `to`'s write side so
-/// the other end sees the end too.
-fn pump(mut from: impl Read, mut to: impl Write, then: impl FnOnce()) {
-    let mut buf = [0u8; 16 * 1024];
-    loop {
-        match from.read(&mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                if to.write_all(&buf[..n]).and_then(|_| to.flush()).is_err() {
-                    break;
-                }
-            }
-        }
-    }
-    then();
 }
 
 /// Both directions between `socket` and a reader/writer pair, returning when
@@ -219,16 +194,6 @@ fn run_join(args: &[String]) -> ExitCode {
     }
 }
 
-/// The topic the host's handshake line names: `canvas` or `session <id>`.
-fn parse_join(args: &[String]) -> Result<String, String> {
-    match args {
-        [t] if t == "canvas" => Ok("canvas".into()),
-        [t, id] if t == "session" && valid_id(id) => Ok(format!("session {id}")),
-        [t, id] if t == "session" => Err(format!("{id:?} is not a session id")),
-        _ => Err("usage: ift proxy join canvas | session <id>".into()),
-    }
-}
-
 /// Connects to the host's join socket, says what is wanted, and splices.
 fn join_over(
     socket: &Path,
@@ -329,17 +294,6 @@ mod tests {
     }
 
     #[test]
-    fn an_id_is_a_short_plain_word() {
-        assert!(valid_id("ccc081c9a2c44d6a"));
-        assert!(valid_id("a-b_C9"));
-        assert!(!valid_id(""));
-        assert!(!valid_id("../x"));
-        assert!(!valid_id("a/b"));
-        assert!(!valid_id("a b"));
-        assert!(!valid_id(&"a".repeat(MAX_ID_LEN + 1)));
-    }
-
-    #[test]
     fn session_alone_attaches_and_spawn_carries_its_options() {
         assert_eq!(
             parse(&a(&["session", "abc"])).unwrap(),
@@ -362,16 +316,6 @@ mod tests {
                 buffer: Some("8".into()),
             })
         );
-    }
-
-    #[test]
-    fn join_names_the_canvas_or_one_session() {
-        assert_eq!(parse_join(&a(&["canvas"])).unwrap(), "canvas");
-        assert_eq!(parse_join(&a(&["session", "abc-1"])).unwrap(), "session abc-1");
-        assert!(parse_join(&a(&[])).is_err());
-        assert!(parse_join(&a(&["session"])).is_err());
-        assert!(parse_join(&a(&["session", "../x"])).is_err());
-        assert!(parse_join(&a(&["canvas", "extra"])).is_err());
     }
 
     #[test]

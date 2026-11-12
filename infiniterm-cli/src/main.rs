@@ -40,6 +40,11 @@ mod phone_cmd;
 mod update_sign_cmd;
 #[cfg(unix)]
 mod proxy;
+// What the unix and the Windows proxy share, and the Windows half: only
+// `proxy join` exists there.
+mod proxy_join;
+#[cfg(windows)]
+mod proxy_win;
 #[cfg(unix)]
 mod serve;
 mod socket;
@@ -417,7 +422,13 @@ fn phone_verb(_verb: &str, _args: &[String]) -> ExitCode {
 }
 
 #[cfg(windows)]
-fn unix_only_verb(verb: &str, _args: &[String]) -> ExitCode {
+fn unix_only_verb(verb: &str, args: &[String]) -> ExitCode {
+    // `proxy join` is how a Mac viewer reaches a Windows host (the host's
+    // join pipe over ssh stdio); the rest of `proxy` and every other verb
+    // still need unix sockets or iftd.
+    if verb == "proxy" {
+        return proxy_win::run(args);
+    }
     eprintln!("ift: {verb} is not available on Windows (it needs unix sockets or iftd)");
     ExitCode::from(2)
 }

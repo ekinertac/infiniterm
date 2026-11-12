@@ -44,11 +44,12 @@ use std::time::{Duration, Instant};
 use super::relay::Relay;
 use super::session_protocol::{Frame, FrameReader};
 
-/// The version this host speaks. A higher one asked for is refused. 2: a
-/// viewer can send its edits up (`KIND_UPDATE`); a host that speaks 1 refuses
-/// a viewer that asks for 2 with a sentence, so a viewer never believes it is
-/// in control of a host that would ignore it.
-pub const MAJOR: u32 = 2;
+/// The version this host speaks (defined in `backend/mod.rs`, where the
+/// Windows proxy can reach it without this unix-only module). A higher one
+/// asked for is refused. 2: a viewer can send its edits up (`KIND_UPDATE`); a
+/// host that speaks 1 refuses a viewer that asks for 2 with a sentence, so a
+/// viewer never believes it is in control of a host that would ignore it.
+pub const MAJOR: u32 = super::JOIN_MAJOR;
 
 /// The longest handshake line accepted: a topic is a word and a session id.
 const MAX_LINE: u64 = 256;
