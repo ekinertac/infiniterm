@@ -577,7 +577,8 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
             "\"cover\" fills the window and crops the edges; \"contain\" shows the whole picture;",
             "\"top-left\" fills like cover but pins the picture's top-left corner to the window's,",
             "so only the right and bottom are cropped; \"actual-size\" draws it at its own size from",
-            "the top-left corner and never rescales it when the window is resized.",
+            "the top-left corner and never rescales it when the window is resized; \"tiled\"",
+            "repeats it at its own size from the top-left corner until the window is full.",
         ],
     ),
     (

@@ -51,13 +51,64 @@ pub fn place(
     let scale = match fit {
         BackgroundFit::Cover | BackgroundFit::TopLeft => sx.max(sy),
         BackgroundFit::Contain => sx.min(sy),
-        BackgroundFit::ActualSize => 1.,
+        BackgroundFit::ActualSize | BackgroundFit::Tiled => 1.,
     };
     let (w, h) = (nw * scale, nh * scale);
-    if matches!(fit, BackgroundFit::TopLeft | BackgroundFit::ActualSize) {
+    if matches!(
+        fit,
+        BackgroundFit::TopLeft | BackgroundFit::ActualSize | BackgroundFit::Tiled
+    ) {
         return Some((0., 0., w, h));
     }
     Some(((aw - w) / 2., (ah - h) / 2., w, h))
+}
+
+/// Where each copy of a tile of `tile` size lands in an `area` (`tiled`,
+/// #780): a grid from the corner, row by row, with the last row and column
+/// overflowing the edge for the clip to cut. Empty for an empty tile or area.
+pub fn tiles(tile: (f64, f64), area: (f64, f64)) -> Vec<(f64, f64)> {
+    let (tw, th) = tile;
+    let (aw, ah) = area;
+    if tw <= 0. || th <= 0. || aw <= 0. || ah <= 0. {
+        return Vec::new();
+    }
+    let (cols, rows) = ((aw / tw).ceil() as usize, (ah / th).ceil() as usize);
+    (0..rows)
+        .flat_map(|r| (0..cols).map(move |c| (c as f64 * tw, r as f64 * th)))
+        .collect()
+}
+
+/// The side, in the picture's own pixels, a small `tiled` picture is grown to
+/// before it is drawn (#780). Every tile is a draw call each frame: a 20 px
+/// pattern on a 4K window is about 20,000 of them and doubled the app's idle
+/// CPU, while one mosaic of 512 px makes it a few dozen at 1 MB of memory.
+pub const MOSAIC_MIN_PX: u32 = 512;
+
+/// How many copies of a `w` by `h` picture, across and down, make a mosaic
+/// at least `MOSAIC_MIN_PX` on each side; `(1, 1)` when it is big enough.
+pub fn mosaic_repeats(w: u32, h: u32) -> (u32, u32) {
+    if w == 0 || h == 0 {
+        return (1, 1);
+    }
+    (MOSAIC_MIN_PX.div_ceil(w), MOSAIC_MIN_PX.div_ceil(h))
+}
+
+/// `src`, a `w` by `h` picture of 4-byte pixels row by row, repeated `cols`
+/// times across and `rows` times down. Empty when `src` is not that size.
+pub fn repeat_pixels(src: &[u8], w: u32, h: u32, cols: u32, rows: u32) -> Vec<u8> {
+    let stride = w as usize * 4;
+    if stride == 0 || src.len() != stride * h as usize {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(src.len() * cols as usize * rows as usize);
+    for _ in 0..rows {
+        for line in src.chunks_exact(stride) {
+            for _ in 0..cols {
+                out.extend_from_slice(line);
+            }
+        }
+    }
+    out
 }
 
 /// How long before a switch the next picture starts loading, so a big JPEG
@@ -286,6 +337,43 @@ mod tests {
             let r = place((200., 100.), area, BackgroundFit::ActualSize).unwrap();
             assert_eq!(r, (0., 0., 200., 100.));
         }
+    }
+
+    #[test]
+    fn tiled_repeats_the_picture_at_its_size_until_the_area_is_full() {
+        let r = place((200., 100.), (500., 250.), BackgroundFit::Tiled).unwrap();
+        assert_eq!(r, (0., 0., 200., 100.), "one tile, never rescaled");
+        let t = tiles((200., 100.), (500., 250.));
+        assert_eq!(t.len(), 3 * 3, "partial tiles cover the right and bottom");
+        assert_eq!(t[0], (0., 0.));
+        assert_eq!(t[1], (200., 0.));
+        assert_eq!(t[3], (0., 100.));
+        assert_eq!(t[8], (400., 200.));
+        assert_eq!(tiles((100., 100.), (200., 100.)).len(), 2, "an exact fit");
+        assert!(tiles((0., 100.), (200., 100.)).is_empty());
+        assert!(tiles((100., 100.), (0., 100.)).is_empty());
+    }
+
+    #[test]
+    fn a_small_tile_grows_to_the_mosaic_side_and_a_big_one_stays() {
+        assert_eq!(mosaic_repeats(20, 20), (26, 26), "520 px, past 512");
+        assert_eq!(mosaic_repeats(512, 600), (1, 1));
+        assert_eq!(mosaic_repeats(600, 10), (1, 52), "each side on its own");
+        assert_eq!(mosaic_repeats(0, 10), (1, 1));
+    }
+
+    #[test]
+    fn repeat_pixels_lays_the_picture_out_across_and_down() {
+        // A 2x1 picture: pixel a then pixel b.
+        let (a, b) = ([1u8; 4], [2u8; 4]);
+        let src = [a, b].concat();
+        let out = repeat_pixels(&src, 2, 1, 2, 2);
+        let row = [a, b, a, b].concat();
+        assert_eq!(out, [row.clone(), row].concat());
+        // A 1x2 picture keeps its rows in order on each repeat.
+        let out = repeat_pixels(&[a, b].concat(), 1, 2, 1, 2);
+        assert_eq!(out, [a, b, a, b].concat());
+        assert!(repeat_pixels(&src, 3, 1, 2, 2).is_empty(), "wrong size");
     }
 
     #[test]

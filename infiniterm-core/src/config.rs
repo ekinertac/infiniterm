@@ -167,7 +167,8 @@ pub struct Terminal {
 /// #97): `cover` fills it and crops, `contain` shows all of it, `top-left`
 /// fills like cover but pins the picture's corner to the window's, so the crop
 /// falls on the right and bottom, `actual-size` draws it at its own size from
-/// the corner, so resizing the window never rescales it.
+/// the corner, so resizing the window never rescales it, `tiled` repeats it at
+/// its own size from the corner until the window is full (#780).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackgroundFit {
@@ -177,6 +178,7 @@ pub enum BackgroundFit {
     TopLeft,
     #[serde(rename = "actual-size")]
     ActualSize,
+    Tiled,
 }
 
 /// A card label's corner (`ui.cardLabelPosition`). Written "top right";
@@ -1135,6 +1137,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 Some(s) if s.eq_ignore_ascii_case("contain") => BackgroundFit::Contain,
                 Some(s) if s.eq_ignore_ascii_case("top-left") => BackgroundFit::TopLeft,
                 Some(s) if s.eq_ignore_ascii_case("actual-size") => BackgroundFit::ActualSize,
+                Some(s) if s.eq_ignore_ascii_case("tiled") => BackgroundFit::Tiled,
                 _ => BackgroundFit::Cover,
             },
             workspace_isolation: bool_(u.get("workspaceIsolation"), d.ui.workspace_isolation),
@@ -1816,6 +1819,12 @@ mod tests {
                 .ui
                 .background_image_fit,
             BackgroundFit::ActualSize
+        );
+        assert_eq!(
+            m(json!({"ui.backgroundImageFit": "Tiled"}))
+                .ui
+                .background_image_fit,
+            BackgroundFit::Tiled
         );
         assert_eq!(
             m(json!({"ui.backgroundImageFit": "stretch"}))
