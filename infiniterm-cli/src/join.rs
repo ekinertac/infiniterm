@@ -172,8 +172,10 @@ pub fn run(args: &[String]) -> ExitCode {
             }
         }
     }
-    match remote::check(&host) {
-        Ok(found) => {
+    let windows_host;
+    match remote::check_platform(&host) {
+        Ok((found, windows)) => {
+            windows_host = windows;
             if !found.is_empty() && found != host.ift {
                 host.ift = found.clone();
                 p.ift = Some(found);
@@ -191,6 +193,15 @@ pub fn run(args: &[String]) -> ExitCode {
         // still join, through `ift serve` (#438). `--check` only says so.
         if !remote::is_no_host_running(&why) {
             eprintln!("ift: {}", why.message());
+            return ExitCode::from(1);
+        }
+        // A Windows host cannot run `ift serve` (no iftd there yet), so the
+        // app has to be open: say that instead of failing on a verb it lacks.
+        if windows_host {
+            eprintln!(
+                "ift: no infiniterm is running on {}; open the app there, a Windows host cannot start a canvas host on its own yet",
+                p.host
+            );
             return ExitCode::from(1);
         }
         if p.check_only {
