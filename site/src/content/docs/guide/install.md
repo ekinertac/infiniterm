@@ -35,7 +35,7 @@ The app is signed and notarized, so Gatekeeper opens it without a warning, and i
    /Applications/infiniterm.app/Contents/MacOS/ift install
    ```
 
-   This symlinks `ift` into `~/.local/bin` and writes its zsh completion. If either directory is not on your `PATH` or `fpath`, it prints the line to add.
+   This symlinks `ift` into `~/.local/bin` and writes its zsh completion. If either directory is not on your `PATH` or `fpath`, it prints the line to add. The completion knows the commands, the cards and sessions of the running app, and hosts: `ift join <Tab>` and `ift connect <Tab>` offer the Host names of `~/.ssh/config` (and the files it includes) and your known hosts, with `user@` too. Run `ift install` again after an update to refresh it.
 
 On Windows `ift` already works inside every card, with no setup: the app puts its own folder first on that card's `PATH` when the card starts. Your own `PATH` and the registry are not changed. To run `ift` in a terminal outside the app, add the app's folder to your `PATH` yourself; `ift install` prints which folder.
 

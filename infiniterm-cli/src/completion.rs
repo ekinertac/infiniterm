@@ -9,6 +9,10 @@
 //! the card numbers from `ift sessions`, which prints tab-separated rows
 //! into a pipe for exactly this; for `group`, the groups `ift ls` shows;
 //! directories for `diff`, `install-pi-hooks` and `install-extension`.
+//! For `join`, `connect` and `phone add --host`, a host: the ssh aliases of
+//! `~/.ssh/config` and of the files it Includes, the known hosts, with an
+//! optional `user@` (`_ift_hosts`; zsh's `_hosts` alone reads /etc/hosts and
+//! showed none of them). `phone remove` takes the paired phones.
 //! Related: main.rs (USAGE,
 //! the dispatch), attach.rs (the columns the pipe form prints).
 
@@ -79,6 +83,84 @@ _ift_workspaces() {
   _describe -t workspaces 'workspace' names
 }
 
+_ift_ssh_hosts() {
+  # The Host aliases of ~/.ssh/config and of the files it Includes (a
+  # relative path is under ~/.ssh, as ssh reads it), one per line, no wildcard
+  # patterns. zsh's own `_hosts` reads only /etc/hosts, which is why `ift join
+  # <Tab>` showed none of them.
+  setopt local_options extended_glob null_glob
+  local -a todo seen out
+  local f line key rest pat
+  local depth=0
+  todo=(~/.ssh/config)
+  while (( $#todo && depth++ < 50 )); do
+    f=${todo[1]}
+    todo=(${todo[2,-1]})
+    (( ${seen[(Ie)$f]} )) && continue
+    seen+=($f)
+    [[ -r $f ]] || continue
+    for line in ${(f)"$(<$f)"}; do
+      line=${line##[[:space:]]#}
+      key=${${(s: :)line}[1]:l}
+      rest=${line#* }
+      case $key in
+        host)
+          for pat in ${=rest}; do
+            [[ $pat == *[\*\?\!]* ]] || out+=($pat)
+          done ;;
+        include)
+          for pat in ${=rest}; do
+            pat=${pat/#\~/$HOME}
+            [[ $pat == /* ]] || pat=$HOME/.ssh/$pat
+            todo+=(${~pat}(N))
+          done ;;
+      esac
+    done
+  done
+  print -rl -- ${(u)out}
+}
+
+_ift_known_hosts() {
+  # The plain host names in ~/.ssh/known_hosts, one per line. No hashed
+  # entries, no patterns, and no bare IP addresses: a server reached by name
+  # is in the file under its name and under its address, and the addresses
+  # would bury the names.
+  setopt local_options extended_glob null_glob
+  local line pat
+  local -a out
+  [[ -r ~/.ssh/known_hosts ]] || return 0
+  for line in ${(f)"$(<~/.ssh/known_hosts)"}; do
+    [[ -z $line || $line == \|* || $line == \#* || $line == \@* ]] && continue
+    for pat in ${(s:,:)${line%% *}}; do
+      pat=${pat#\[}
+      pat=${pat%%\]*}
+      [[ $pat == *[\*\?\!]* || $pat == [0-9.]## || $pat == *:* ]] && continue
+      out+=($pat)
+    done
+  done
+  print -rl -- ${(u)out}
+}
+
+_ift_hosts() {
+  # A host for join and connect: an ssh alias or known host, with an optional
+  # `user@`, then whatever zsh's `_hosts` has.
+  local -a aliases known
+  aliases=(${(f)"$(_ift_ssh_hosts)"})
+  known=(${(f)"$(_ift_known_hosts)"})
+  compset -P '*@'
+  _alternative \
+    "ssh-hosts:ssh host:compadd -a aliases" \
+    "known-hosts:known host:compadd -a known" \
+    "hosts:host:_hosts"
+}
+
+_ift_phones() {
+  # `ift phone list` prints one paired phone per line.
+  local -a names
+  names=(${(f)"$(ift phone list 2>/dev/null)"})
+  _describe -t phones 'paired phone' names
+}
+
 _ift() {
   local -a cmds
   cmds=(
@@ -127,8 +209,9 @@ _ift() {
   case $words[2] in
     serve) _arguments '--detach[run in the background]' '--stop[end the running one]' ;;
     attach) (( CURRENT == 3 )) && _ift_sessions ;;
-    join) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_hosts' ;;
-    connect) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_hosts' ;;
+    join) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_ift_hosts' ;;
+    connect) _arguments '--name[a name for its window]:name:' '--color[its colour, six hex digits]:colour:' '--check[only test the host]' '1:host:_ift_hosts' ;;
+    browse) _arguments '*:file or address:_files' ;;
     send) (( CURRENT == 3 )) && _ift_cards ;;
     read) (( CURRENT == 3 )) && _ift_cards || _arguments '--lines[the last N lines only]:lines:' '--all[include the history]' '--ansi[the screen with its colours]' ;;
     focus) (( CURRENT == 3 )) && _ift_cards ;;
@@ -148,7 +231,15 @@ _ift() {
     completion) _values 'shell' zsh ;;
     update) _values 'word' status ;;
     push) _values 'word' add remove list ;;
-    phone) _values 'word' add list remove ;;
+    phone)
+      if (( CURRENT == 3 )); then
+        _values 'word' add list remove
+      else
+        case $words[3] in
+          remove) (( CURRENT == 4 )) && _ift_phones ;;
+          add) _arguments '--host[the address in the QR code]:host:_ift_hosts' '--port[the ssh port in the QR code]:port:' '1:name:' ;;
+        esac
+      fi ;;
     omni) _message 'a term for the omnibox' ;;
     name) _message 'a name for this card' ;;
   esac
@@ -221,5 +312,124 @@ mod tests {
         let lines = install(&tmp, Some(&on)).unwrap();
         assert_eq!(lines.len(), 1, "on fpath: nothing to add");
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    fn zsh_here() -> bool {
+        std::process::Command::new("zsh")
+            .arg("--version")
+            .output()
+            .is_ok()
+    }
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("ift-zsh-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// `zsh -n`: the whole completion parses. Skipped where there is no zsh.
+    #[test]
+    fn the_function_is_valid_zsh() {
+        if !zsh_here() {
+            eprintln!("no zsh here: skipped");
+            return;
+        }
+        let d = scratch("syntax");
+        let file = d.join("_ift");
+        std::fs::write(&file, ZSH).unwrap();
+        let out = std::process::Command::new("zsh")
+            .arg("-n")
+            .arg(&file)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// join and connect complete hosts the ssh way, not from /etc/hosts only.
+    #[test]
+    fn join_and_connect_take_the_ssh_hosts() {
+        for verb in ["join) _arguments", "connect) _arguments"] {
+            let line = ZSH.lines().find(|l| l.contains(verb)).unwrap();
+            assert!(line.contains("'1:host:_ift_hosts'"), "{line}");
+        }
+    }
+
+    /// Runs `_ift_ssh_hosts` in a real zsh against a made-up home.
+    #[test]
+    fn hosts_come_from_ssh_config_what_it_includes_and_known_hosts() {
+        if !zsh_here() {
+            eprintln!("no zsh here: skipped");
+            return;
+        }
+        let home = scratch("hosts");
+        let ssh = home.join(".ssh");
+        std::fs::create_dir_all(ssh.join("extra")).unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            "Host mini air\n  HostName 100.1.1.1\nHOST upper-host\n\
+             Host *.internal ci-? !not-this\n\
+             Include extra/*.conf\n\
+             Include ~/more.conf\n\
+             Include ~/.ssh/config\n\
+             Include /no/such/file\n",
+        )
+        .unwrap();
+        std::fs::write(ssh.join("extra").join("a.conf"), "Host from-include\n").unwrap();
+        std::fs::write(home.join("more.conf"), "Host from-tilde\n").unwrap();
+        std::fs::write(
+            ssh.join("known_hosts"),
+            "|1|hashed== ssh-rsa AAAA\n\
+             known.example,192.168.1.9 ssh-ed25519 AAAA\n\
+             [bracket.example]:2222 ssh-ed25519 AAAA\n\
+             # a comment\n\
+             @cert-authority *.corp ssh-rsa AAAA\n\
+             mini ssh-ed25519 AAAA\n",
+        )
+        .unwrap();
+        let functions: String = ZSH
+            .lines()
+            .filter(|l| *l != "_ift \"$@\"")
+            .collect::<Vec<_>>()
+            .join("\n");
+        let run = |call: &str| -> Vec<String> {
+            let script = home.join("run.zsh");
+            std::fs::write(&script, format!("{functions}\n{call}\n")).unwrap();
+            let out = std::process::Command::new("zsh")
+                .arg("-f")
+                .arg(&script)
+                .env("HOME", &home)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let mut got: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::to_string)
+                .collect();
+            got.sort();
+            got
+        };
+        let mut aliases = vec!["mini", "air", "upper-host", "from-include", "from-tilde"];
+        aliases.sort_unstable();
+        assert_eq!(
+            run("_ift_ssh_hosts"),
+            aliases,
+            "wildcards and negations are left out, includes are followed once"
+        );
+        // Known hosts: names only. The hashed entry, the comment, the CA line
+        // and the bare IP address are left out, a bracketed host loses its port.
+        let mut known = vec!["known.example", "bracket.example", "mini"];
+        known.sort_unstable();
+        assert_eq!(run("_ift_known_hosts"), known);
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
