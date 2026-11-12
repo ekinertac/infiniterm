@@ -34,7 +34,8 @@ pub mod daemon;
 pub mod file_client;
 #[cfg(unix)]
 pub mod host_drop;
-#[cfg(unix)]
+// The host's join server, on a unix socket or (Windows) the join pipe.
+#[cfg(any(unix, windows))]
 pub mod join;
 #[cfg(unix)]
 pub mod join_client;
