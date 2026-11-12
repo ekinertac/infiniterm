@@ -33,7 +33,9 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -43,6 +45,16 @@ use std::time::{Duration, Instant};
 
 use super::relay::Relay;
 use super::session_protocol::{Frame, FrameReader};
+#[cfg(windows)]
+use crate::pipe::{PipeListener, PipeStream};
+
+/// One viewer's connection: a unix socket, or on Windows a named pipe
+/// (`pipe.rs`), which has the same four things this file needs from one:
+/// `Read`, `Write`, `try_clone` and `shutdown`.
+#[cfg(unix)]
+type Conn = UnixStream;
+#[cfg(windows)]
+type Conn = PipeStream;
 
 /// The version this host speaks (defined in `backend/mod.rs`, where the
 /// Windows proxy can reach it without this unix-only module). A higher one
@@ -354,9 +366,33 @@ impl JoinHub {
         }
     }
 
+    /// Binds the join pipe (`pipe.rs`: owner-only, first instance, so a
+    /// process that took the name first makes this fail) and serves it on a
+    /// thread of its own.
+    #[cfg(windows)]
+    pub fn serve(&self, pipe: &Path) -> anyhow::Result<()> {
+        let listener = PipeListener::bind(pipe)?;
+        let hub = self.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(stream) => {
+                        let hub = hub.clone();
+                        std::thread::spawn(move || hub.handle(stream));
+                    }
+                    // One refused client must not end the server, and a
+                    // listener that fails every time must not spin.
+                    Err(_) => std::thread::sleep(Duration::from_millis(100)),
+                }
+            }
+        });
+        Ok(())
+    }
+
     /// Binds `socket` (0600) and serves it on a thread of its own. The path
     /// is checked first, so a data dir too long for a unix socket is said so
     /// rather than failing at bind.
+    #[cfg(unix)]
     pub fn serve(&self, socket: &Path) -> anyhow::Result<()> {
         super::daemon::check_socket_path(socket)?;
         // A stale file from a host that did not exit cleanly; the app's own
@@ -374,7 +410,7 @@ impl JoinHub {
         Ok(())
     }
 
-    fn handle(&self, stream: UnixStream) {
+    fn handle(&self, stream: Conn) {
         let Ok(read_half) = stream.try_clone() else {
             return;
         };
@@ -399,7 +435,7 @@ impl JoinHub {
         }
     }
 
-    fn serve_canvas(&self, mut out: UnixStream, mut input: impl Read) {
+    fn serve_canvas(&self, mut out: Conn, mut input: impl Read) {
         // Registered and the latest taken under one lock, so a snapshot saved
         // meanwhile is neither missed nor sent twice. `notice_tx` is this
         // viewer's own queue, kept to answer a click that found nothing to
@@ -433,7 +469,7 @@ impl JoinHub {
         let writer_closed = closed.clone();
         let restart_unsent = self.restart_unsent.clone();
         std::thread::spawn(move || {
-            let send = |w: &mut UnixStream, kind: u8, text: &str| -> bool {
+            let send = |w: &mut Conn, kind: u8, text: &str| -> bool {
                 w.write_all(&encode_canvas_message(kind, text)).is_ok()
             };
             for (kind, text) in latest {
@@ -492,7 +528,7 @@ impl JoinHub {
         let _ = out.shutdown(Shutdown::Both);
     }
 
-    fn serve_session(&self, id: &str, mut out: UnixStream, mut input: impl Read) {
+    fn serve_session(&self, id: &str, mut out: Conn, mut input: impl Read) {
         let rx = self.relay.lock().unwrap().subscribe(id);
         let Some(rx) = rx else {
             let _ = writeln!(out, "ift-join {MAJOR} error no session {id} on this host");
@@ -603,13 +639,39 @@ mod tests {
         (JoinHub::new(relay.clone(), write), relay, written)
     }
 
+    #[cfg(unix)]
     fn socket(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("ij-{}-{name}.sock", std::process::id()))
     }
 
-    fn connect(path: &Path, hello: &str) -> (UnixStream, String) {
-        let mut s = UnixStream::connect(path).unwrap();
+    #[cfg(windows)]
+    fn socket(name: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(format!(r"\\.\pipe\ij-{}-{name}", std::process::id()))
+    }
+
+    /// A viewer's connection, with a way to stop a test that hangs: a unix
+    /// socket has a read timeout; a pipe has none, so a timer shuts the
+    /// connection down after a while (a blocked read then ends).
+    #[cfg(unix)]
+    fn open(path: &Path) -> Conn {
+        let s = UnixStream::connect(path).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        s
+    }
+
+    #[cfg(windows)]
+    fn open(path: &Path) -> Conn {
+        let s = crate::pipe::connect(path).unwrap();
+        let guard = s.try_clone().unwrap();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(10));
+            let _ = guard.shutdown(Shutdown::Both);
+        });
+        s
+    }
+
+    fn connect(path: &Path, hello: &str) -> (Conn, String) {
+        let mut s = open(path);
         writeln!(s, "{hello}").unwrap();
         let mut line = Vec::new();
         let mut b = [0u8; 1];
@@ -619,7 +681,7 @@ mod tests {
         (s, String::from_utf8(line).unwrap())
     }
 
-    fn next_frame(s: &mut UnixStream, r: &mut FrameReader) -> Frame {
+    fn next_frame(s: &mut Conn, r: &mut FrameReader) -> Frame {
         loop {
             if let Some(f) = r.next().unwrap() {
                 return f;
@@ -751,7 +813,7 @@ mod tests {
         hub.serve(&path).unwrap();
         let (mut s, answer) = connect(&path, "ift-join 2 canvas");
         assert_eq!(answer, "ift-join 2 ok");
-        let next = |s: &mut UnixStream| read_canvas_message(s).unwrap().unwrap();
+        let next = |s: &mut Conn| read_canvas_message(s).unwrap().unwrap();
         assert_eq!(next(&mut s), (KIND_LAYOUT, "{\"v\":1}".to_string()));
         assert_eq!(next(&mut s), (KIND_REVISION, "7".to_string()));
         hub.publish_layout("{\"v\":2}", 8);
@@ -994,6 +1056,9 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
+    // On Windows the same promise is made by the pipe's access list, which
+    // `pipe.rs` reads back from the kernel in its own tests.
+    #[cfg(unix)]
     #[test]
     fn the_socket_is_owner_only() {
         let (hub, _relay, _w) = hub();
@@ -1004,6 +1069,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_path_over_the_unix_socket_limit_is_refused_before_binding() {
         let (hub, _relay, _w) = hub();

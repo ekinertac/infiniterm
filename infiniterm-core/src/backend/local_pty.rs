@@ -23,6 +23,9 @@
 //! app. Which shell that is, and how to hand it one command, is
 //! `shell_cmd.rs` for the same reason.
 
+use super::join::{NudgeSession, WriteSession};
+use super::relay::Relay;
+use super::session_protocol::Frame;
 use super::{PaneEvent, PaneId, SessionBackend};
 use crate::shell_cmd::{default_shell, shell_args};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
@@ -109,6 +112,10 @@ struct Pane {
     // Optional because portable_pty does not promise one on every platform.
     pid: Option<u32>,
     credit: Arc<Credit>,
+    /// The id a join viewer names this pane by (see `session_name`), and the
+    /// size it was last given, for the repaint jog (`session_nudger`).
+    session: String,
+    size: Arc<Mutex<(u16, u16)>>,
     /// Holds this pane's whole process tree; see `Job`. Dropping the pane
     /// kills the tree even if nothing asked, which is what a crash needs.
     #[cfg(windows)]
@@ -119,6 +126,19 @@ pub struct LocalPtyBackend {
     panes: Arc<Mutex<HashMap<PaneId, Pane>>>,
     tx: Sender<(PaneId, PaneEvent)>,
     next_id: AtomicU32,
+    /// What `ift join` viewers are served from (#423, and on Windows the only
+    /// source: there is no `iftd`). Off until the app starts a join server
+    /// (`relay().set_enabled(true)`), so a backend nobody joins keeps nothing.
+    relay: Arc<Mutex<Relay>>,
+    /// Differs on every start of the app, so a session id a viewer kept from
+    /// an earlier run of the host names nothing now instead of the wrong card.
+    run: u32,
+}
+
+/// The id of a pane for a join viewer: this run's tag and the pane number,
+/// plain hex, which is what `proxy join` and the hub accept as an id.
+fn session_name(run: u32, pane: PaneId) -> String {
+    format!("{run:08x}{pane:08x}")
 }
 
 impl LocalPtyBackend {
@@ -146,12 +166,85 @@ impl LocalPtyBackend {
 
     pub fn new() -> (Self, Receiver<(PaneId, PaneEvent)>) {
         let (tx, rx) = channel();
+        let mut relay = Relay::new();
+        relay.set_enabled(false);
+        // Nanoseconds since the epoch folded with the pid: only has to differ
+        // between two runs, not be unguessable (ssh is the authentication).
+        let run = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u32)
+            ^ std::process::id().rotate_left(16);
         let backend = Self {
             panes: Arc::new(Mutex::new(HashMap::new())),
             tx,
             next_id: AtomicU32::new(1),
+            relay: Arc::new(Mutex::new(relay)),
+            run,
         };
         (backend, rx)
+    }
+
+    /// The viewers' relay, shared with the join server.
+    pub fn relay(&self) -> Arc<Mutex<Relay>> {
+        self.relay.clone()
+    }
+
+    /// The id a join viewer names this pane by, while a join server runs.
+    /// `None` otherwise, so a backend nobody joins saves nothing new in the
+    /// layout (a saved id a restart cannot adopt is ignored anyway: only a
+    /// session in `live_sessions` is adopted).
+    pub fn session_id(&self, pane: PaneId) -> Option<String> {
+        if !self.relay.lock().unwrap().is_enabled() {
+            return None;
+        }
+        self.panes
+            .lock()
+            .unwrap()
+            .get(&pane)
+            .map(|p| p.session.clone())
+    }
+
+    /// Writes a viewer's keys to the pane with this session id.
+    pub fn session_writer(&self) -> WriteSession {
+        let panes = self.panes.clone();
+        Arc::new(move |session: &str, bytes: &[u8]| {
+            let writer = panes
+                .lock()
+                .unwrap()
+                .values()
+                .find(|p| p.session == session)
+                .map(|p| p.writer.clone());
+            if let Some(writer) = writer {
+                let mut w = writer.lock().unwrap();
+                let _ = w.write_all(bytes);
+                let _ = w.flush();
+            }
+        })
+    }
+
+    /// Asks the program in a session to repaint: one column narrower and back,
+    /// so it redraws at its real size. A viewer that joined replays a snapshot
+    /// that holds the program's old cursor moves, and a program that draws
+    /// relative to them garbles until it repaints (the daemon backend does the
+    /// same with its own resize frames).
+    pub fn session_nudger(&self) -> NudgeSession {
+        let panes = self.panes.clone();
+        Arc::new(move |session: &str| {
+            let panes = panes.lock().unwrap();
+            let Some(p) = panes.values().find(|p| p.session == session) else {
+                return;
+            };
+            let (cols, rows) = *p.size.lock().unwrap();
+            let bumped = if cols > 1 { cols - 1 } else { cols + 1 };
+            for c in [bumped, cols] {
+                let _ = p.master.resize(PtySize {
+                    rows,
+                    cols: c,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
+            }
+        })
     }
 }
 
@@ -241,6 +334,23 @@ impl LocalPtyBackend {
         let writer = pair.master.take_writer()?;
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let credit = Arc::new(Credit::default());
+        let session = session_name(self.run, id);
+        // The pty starts at 24x80; the app resizes it right after (`resize_now`
+        // tells the relay), so a viewer's hello is never that size for long.
+        let size = Arc::new(Mutex::new((80u16, 24u16)));
+        {
+            let mut relay = self.relay.lock().unwrap();
+            if relay.is_enabled() {
+                relay.open(
+                    &session,
+                    Frame::Hello {
+                        pid: pid.unwrap_or(0),
+                        cols: 80,
+                        rows: 24,
+                    },
+                );
+            }
+        }
 
         self.panes.lock().unwrap().insert(
             id,
@@ -250,6 +360,8 @@ impl LocalPtyBackend {
                 killer,
                 pid,
                 credit: credit.clone(),
+                session: session.clone(),
+                size,
                 #[cfg(windows)]
                 job: pid.and_then(Job::holding),
             },
@@ -258,6 +370,8 @@ impl LocalPtyBackend {
         // Reader thread: blocking reads, tagged sends, and a wait for credit
         // between them — see the module header.
         let tx = self.tx.clone();
+        let relay = self.relay.clone();
+        let reader_session = session.clone();
         std::thread::spawn(move || {
             let mut buf = vec![0u8; 8192];
             loop {
@@ -275,6 +389,9 @@ impl LocalPtyBackend {
                     Err(_) => break,
                     Ok(n) => {
                         credit.sent(n);
+                        // Viewers get the same bytes the host parses; the
+                        // relay keeps nothing while no join server runs.
+                        relay.lock().unwrap().publish(&reader_session, &buf[..n]);
                         if tx.send((id, PaneEvent::Output(buf[..n].to_vec()))).is_err() {
                             break;
                         }
@@ -286,12 +403,15 @@ impl LocalPtyBackend {
         // Exit watcher, separate thread so a long-lived shell never blocks reads.
         let tx_exit = self.tx.clone();
         let panes = self.panes.clone();
+        let relay = self.relay.clone();
         std::thread::spawn(move || {
             let code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
             if let Some(p) = panes.lock().unwrap().remove(&id) {
                 // Frees a reader parked on credit; nothing will ack a dead pane.
                 p.credit.close();
             }
+            // Viewers of this session are told it ended and dropped.
+            relay.lock().unwrap().exited(&session, code);
             let _ = tx_exit.send((id, PaneEvent::Exited { code }));
         });
 
@@ -325,6 +445,9 @@ impl LocalPtyBackend {
                 pixel_width: 0,
                 pixel_height: 0,
             });
+            *p.size.lock().unwrap() = (cols, rows);
+            // Viewers joined now and later get the host's size.
+            self.relay.lock().unwrap().resize(&p.session, cols, rows);
         }
     }
 
@@ -427,6 +550,8 @@ mod tests {
             "echo \"prog=$env:TERM_PROGRAM pane=$(if ($env:WEZTERM_PANE) { $env:WEZTERM_PANE } else { 'none' })\"";
         pub const EXIT_3: &str = "exit 3";
         pub const SLEEP: &str = "Start-Sleep 30";
+        /// Long enough for a viewer to join first, short enough to end alone.
+        pub const SLEEP_SHORT: &str = "Start-Sleep 4";
         /// CR, the byte a real terminal sends for Enter and what the
         /// key encoder sends: PSReadLine acts on that one, not on LF.
         pub const TYPE_ECHO: &[u8] = b"echo written-ok\r";
@@ -442,6 +567,7 @@ mod tests {
         pub const IDENTITY: &str = "echo prog=$TERM_PROGRAM pane=${WEZTERM_PANE:-none}";
         pub const EXIT_3: &str = "exit 3";
         pub const SLEEP: &str = "sleep 30";
+        pub const SLEEP_SHORT: &str = "sleep 4";
         pub const TYPE_ECHO: &[u8] = b"echo written-ok\n";
         pub const FLOOD: &str = "yes";
         pub const TYPE_COLS: &[u8] = b"echo COLS=$(tput cols)\n";
@@ -793,5 +919,155 @@ mod tests {
             }
         }
         panic!("did not see tagged output from both panes: {acc:?}");
+    }
+
+    /// Keeps a backend's events flowing (and answers ConPTY's cursor probe)
+    /// while a test watches the viewers' side.
+    fn drain(
+        backend: Arc<LocalPtyBackend>,
+        rx: std::sync::mpsc::Receiver<(PaneId, PaneEvent)>,
+    ) -> std::sync::mpsc::Receiver<std::time::Instant> {
+        let (exited_tx, exited_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok((p, event)) = rx.recv() {
+                match event {
+                    PaneEvent::Output(bytes) => answer_conpty_probe(&backend, p, &bytes),
+                    PaneEvent::Exited { .. } => {
+                        let _ = exited_tx.send(std::time::Instant::now());
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+        exited_rx
+    }
+
+    #[tokio::test]
+    async fn a_joined_viewer_sees_the_panes_output_and_its_keys_reach_the_shell() {
+        let (backend, rx) = LocalPtyBackend::new();
+        let backend = Arc::new(backend);
+        backend.relay().lock().unwrap().set_enabled(true);
+        let pane = backend.spawn(&tmp(), None, vec![]).await.unwrap();
+        let session = backend.session_id(pane).expect("an id while a join runs");
+        let relay = backend.relay();
+        let viewer = relay
+            .lock()
+            .unwrap()
+            .subscribe(&session)
+            .expect("a session");
+        let _drain = drain(backend.clone(), rx);
+        let write = backend.session_writer();
+        // The viewer types; the shell's echo and answer come back to it.
+        let needle = "viewer-typed-ok";
+        let mut seen = Vec::new();
+        let deadline = std::time::Instant::now() + SPAWN_DEADLINE;
+        let mut typed = std::time::Instant::now() - Duration::from_secs(5);
+        let mut hello = None;
+        while std::time::Instant::now() < deadline {
+            if typed.elapsed() > Duration::from_secs(1) {
+                let mut line = b"echo ".to_vec();
+                line.extend_from_slice(needle.as_bytes());
+                line.extend_from_slice(if cfg!(windows) { b"\r" } else { b"\n" });
+                write(&session, &line);
+                typed = std::time::Instant::now();
+            }
+            match viewer.recv_timeout(Duration::from_millis(200)) {
+                Ok(Frame::Hello { cols, rows, .. }) => hello = Some((cols, rows)),
+                Ok(Frame::Data(bytes)) | Ok(Frame::Replay(bytes)) => {
+                    seen.extend_from_slice(&bytes);
+                    if String::from_utf8_lossy(&seen).contains(needle) {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            String::from_utf8_lossy(&seen).contains(needle),
+            "the shell answered the viewer's keys: {:?}",
+            String::from_utf8_lossy(&seen)
+        );
+        assert_eq!(hello, Some((80, 24)), "the first frame is the host's size");
+        backend.kill_now(pane);
+    }
+
+    #[tokio::test]
+    async fn the_hello_follows_the_hosts_size_the_nudge_jogs_it_and_the_session_ends_with_the_shell(
+    ) {
+        let (backend, rx) = LocalPtyBackend::new();
+        let backend = Arc::new(backend);
+        backend.relay().lock().unwrap().set_enabled(true);
+        let pane = backend
+            .spawn(&tmp(), Some(sh::SLEEP_SHORT), vec![])
+            .await
+            .unwrap();
+        let session = backend.session_id(pane).unwrap();
+        let pane_exited = drain(backend.clone(), rx);
+        // The app resizes the pty right after the spawn; a viewer that joins
+        // then is told that size.
+        backend.resize_now(pane, 120, 40);
+        let viewer = backend.relay().lock().unwrap().subscribe(&session).unwrap();
+        assert_eq!(
+            viewer.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Frame::Hello {
+                pid: backend.panes.lock().unwrap()[&pane].pid.unwrap_or(0),
+                cols: 120,
+                rows: 40
+            }
+        );
+        // The nudge is two resizes and leaves the size where it was.
+        (backend.session_nudger())(&session);
+        assert_eq!(
+            *backend.panes.lock().unwrap()[&pane].size.lock().unwrap(),
+            (120, 40)
+        );
+        // The shell ends by itself a few seconds on (not killed: how fast
+        // Windows reaps a killed shell varies with the machine's state, and
+        // that is not what this checks), and the viewer's stream ends with its
+        // exit. The pane's own exit event comes first, so a miss says which
+        // half is missing.
+        let started = std::time::Instant::now();
+        let pane_ended = pane_exited.recv_timeout(SPAWN_DEADLINE);
+        assert!(
+            pane_ended.is_ok(),
+            "the pane itself never reported an exit within {:?} of the kill (still in the pane map: {})",
+            started.elapsed(),
+            backend.panes.lock().unwrap().contains_key(&pane)
+        );
+        let mut ended = false;
+        let mut seen = Vec::new();
+        let waited = std::time::Instant::now();
+        while waited.elapsed() < Duration::from_secs(5) {
+            match viewer.recv_timeout(Duration::from_millis(100)) {
+                Ok(Frame::Exited(_)) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    ended = true;
+                    break;
+                }
+                Ok(other) => seen.push(format!("{other:?}").chars().take(40).collect::<String>()),
+                Err(_) => {}
+            }
+        }
+        assert!(
+            ended,
+            "the pane exited but the viewer was not told; it saw {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn with_no_join_server_a_pane_has_no_session_id_and_the_relay_keeps_nothing() {
+        let (backend, rx) = LocalPtyBackend::new();
+        let pane = backend
+            .spawn(&tmp(), Some(sh::ECHO_A), vec![])
+            .await
+            .unwrap();
+        assert_eq!(backend.session_id(pane), None, "nothing new in the layout");
+        assert!(wait_for_output(&backend, &rx, pane, "hello-infiniterm"));
+        assert!(backend
+            .relay()
+            .lock()
+            .unwrap()
+            .subscribe("anything")
+            .is_none());
     }
 }

@@ -71,6 +71,11 @@ impl Relay {
         self.enabled = on;
     }
 
+    /// Whether the tap is keeping anything (a join server is running).
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
     /// Starts relaying a session. `hello` is the host's pid and size for it,
     /// the first thing a viewer reads: its grid must be the host's columns
     /// and rows, since the shell wraps to those.

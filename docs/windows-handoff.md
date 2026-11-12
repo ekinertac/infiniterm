@@ -175,8 +175,26 @@ assumes posix paths today). Plan, in order, about 12 working days:
    identical, exit 0. Not checked: a viewer that leaves mid-stream (the
    host's side is only a stand-in until step 3), and an ssh default shell
    other than PowerShell 7.
-3. The join hub in the Windows app: `join.rs` on the pipe, a tap in
-   `local_pty` feeding the relay, session ids, viewer input into the pty.
+3. The join hub in the Windows app. **3a, the core half (done):**
+   `backend/join.rs` compiles on Windows and serves on the join pipe through a
+   `Conn` alias (a unix socket there, `PipeStream` here; the unix path is
+   unchanged), and its 15 hub tests run on both, over the pipe on Windows.
+   `local_pty.rs` feeds the relay: it opens a relay session per pane, publishes
+   every chunk the reader reads, tells it the host's size on every resize and
+   that the shell exited, and offers the hub a writer (a viewer's keys into the
+   pty) and a repaint nudge (one column narrower and back). Pane ids for
+   viewers are `<run tag><pane>` in hex, new on every start of the app, and
+   `Panes::session_id` gives one only while a join server runs (the relay is
+   off by default, so a Mac fallback or a backend nobody joins keeps nothing and
+   saves no new `session` in the layout; a saved id is ignored on restart
+   anyway, only `live_sessions` are adopted). Checked on the box: a viewer on
+   the relay sees a real PowerShell's output and its typed keys reach the shell
+   and are answered; the hello follows the host's resize; the session ends with
+   the shell. **3b, the ui half (next):** the join fields and `start_join` in
+   `infiniterm-ui`, and the viewer's edits applied through `apply_remote_layout`.
+   Not in the first version: a viewer's Cmd+click on a path (it is looked up on
+   the host's disk and Windows host paths are not posix), the file service, and
+   cards other than terminals.
 4. The Mac viewer side: ssh to a Windows host, finding `ift.exe`, quoting.
 5. Tests and hardening on the gpu box.
 
