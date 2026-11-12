@@ -524,16 +524,59 @@ mod tests {
         assert_eq!((&client).read(&mut b).unwrap(), 0);
     }
 
-    /// A manual aid, not a check: binds a pipe and holds it for 20 s so its
-    /// access list can be read from outside, e.g. in PowerShell
-    /// `(Get-Acl '\\.\pipe\infiniterm-acl-inspect').Sddl`.
-    /// `cargo test -p infiniterm-core pipe::tests::hold -- --ignored`
+    /// The access list of a REAL bound pipe, read back from the kernel object:
+    /// one entry, for the current user, and no one else (no Everyone, no
+    /// Administrators group, no SYSTEM).
     #[test]
-    #[ignore]
-    fn hold_a_pipe_open_to_inspect_its_access_list() {
-        let path = std::path::PathBuf::from(r"\\.\pipe\infiniterm-acl-inspect");
-        let _listener = PipeListener::bind(&path).unwrap();
-        std::thread::sleep(Duration::from_secs(20));
+    fn a_bound_pipe_lets_in_the_current_user_and_nobody_else() {
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SE_KERNEL_OBJECT,
+        };
+        use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+        let listener = PipeListener::bind(&endpoint("acl")).unwrap();
+        let handle = raw(listener.pending.as_ref().unwrap());
+        let sddl = unsafe {
+            let mut sd = std::ptr::null_mut();
+            let rc = GetSecurityInfo(
+                handle,
+                SE_KERNEL_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut sd,
+            );
+            assert_eq!(rc, 0, "GetSecurityInfo");
+            let mut text: *mut u16 = std::ptr::null_mut();
+            assert_ne!(
+                ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                    sd,
+                    SDDL_REVISION_1,
+                    DACL_SECURITY_INFORMATION,
+                    &mut text,
+                    std::ptr::null_mut(),
+                ),
+                0
+            );
+            let mut len = 0;
+            while *text.add(len) != 0 {
+                len += 1;
+            }
+            let s = String::from_utf16_lossy(std::slice::from_raw_parts(text, len));
+            LocalFree(text.cast());
+            LocalFree(sd);
+            s
+        };
+        let me = current_user_sid().unwrap();
+        assert_eq!(sddl.matches("(A;").count(), 1, "one allow entry: {sddl}");
+        assert!(!sddl.contains("(D;"), "no deny entries: {sddl}");
+        assert!(sddl.contains(&me), "the entry is for this user: {sddl}");
+        assert!(sddl.starts_with("D:P"), "protected, not inherited: {sddl}");
+        // The well-known broad groups are not in it.
+        for broad in [";WD)", ";BA)", ";SY)", ";AU)", ";BU)"] {
+            assert!(!sddl.contains(broad), "{broad} is not allowed: {sddl}");
+        }
     }
 
     #[test]
