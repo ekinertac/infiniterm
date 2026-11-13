@@ -6,6 +6,12 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+## 0.6.15 (build 1679), 2026-11-13
+
+### 2026-11-13
+
+- A Mac can now join a window on a Windows PC: `ift join <host> --ift C:/path/ift.exe` shows the Windows app's terminal cards, settings and keybindings, and what you type runs in the PC's PowerShell. Other card kinds, `ift serve` and shells that outlive the Windows app are not part of this first version.
+
 ### 2026-11-12
 
 - `ui.backgroundImageFit` has a new value, `"tiled"`: the background picture is drawn at its own size and repeated from the top-left corner until it fills the window, like a pattern.
