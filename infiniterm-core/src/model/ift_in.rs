@@ -731,7 +731,10 @@ mod tests {
         assert_eq!(m.card(&a).unwrap().agent, AgentState::None);
         assert_eq!(m.card(&b).unwrap().agent, AgentState::Done);
         assert_eq!(m.selection.focused_id, focused);
-        assert!(ask(&mut m, "clear-state", &[&a]).ok, "already clear is fine");
+        assert!(
+            ask(&mut m, "clear-state", &[&a]).ok,
+            "already clear is fine"
+        );
         assert!(!ask(&mut m, "clear-state", &["999"]).ok);
         assert!(!ask(&mut m, "clear-state", &[]).ok);
     }
