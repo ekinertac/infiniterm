@@ -60,17 +60,16 @@ fn ensure_iftd_on_path() {
     );
 }
 
-/// Test binaries live in `target/<profile>/deps/<name>-<hash>`; `iftd`
-/// (built by infiniterm-session) lands one directory up, in
-/// `target/<profile>/`, alongside `ift` and `infiniterm-hook`.
+/// Test binaries live in `target/<profile>/deps/<name>-<hash>` (cargo 1.99) or
+/// `target/<profile>/build/<crate>/<hash>/out/` (1.100); `iftd` (built by
+/// infiniterm-session) is in `target/<profile>/`, alongside `ift` and
+/// `infiniterm-hook`, so take the nearest ancestor that holds it.
 fn find_iftd_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let deps_dir = exe.parent()?;
-    let profile_dir = deps_dir.parent()?;
-    profile_dir
-        .join("iftd")
-        .is_file()
-        .then(|| profile_dir.to_path_buf())
+    exe.ancestors()
+        .skip(1)
+        .find(|d| d.join("iftd").is_file())
+        .map(|d| d.to_path_buf())
 }
 
 /// A directory under the OS temp dir that removes itself on drop, killing

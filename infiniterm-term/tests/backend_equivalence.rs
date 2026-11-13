@@ -74,12 +74,10 @@ fn ensure_iftd_on_path() {
         let Ok(exe) = std::env::current_exe() else {
             return;
         };
-        let Some(profile_dir) = exe.parent().and_then(|d| d.parent()) else {
+        // The test binary's depth under target/ differs between cargo 1.99 and 1.100.
+        let Some(profile_dir) = exe.ancestors().skip(1).find(|d| d.join("iftd").is_file()) else {
             return;
         };
-        if !profile_dir.join("iftd").is_file() {
-            return;
-        }
         let existing = std::env::var_os("PATH").unwrap_or_default();
         let mut paths: Vec<PathBuf> = std::env::split_paths(&existing).collect();
         paths.insert(0, profile_dir.to_path_buf());

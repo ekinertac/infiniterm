@@ -7,9 +7,17 @@
 
 use std::path::{Path, PathBuf};
 
+/// The nearest ancestor of the test binary that holds `iftd`. Cargo 1.99 put
+/// test binaries in `target/<profile>/deps/`; 1.100 puts them in
+/// `target/<profile>/build/<crate>/<hash>/out/`, so a fixed two steps up no
+/// longer reaches the helper binaries (CI went red on master on 2026-11-12).
 pub fn profile_dir() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
-    exe.parent().unwrap().parent().unwrap().to_path_buf()
+    exe.ancestors()
+        .skip(1)
+        .find(|d| d.join("iftd").is_file())
+        .unwrap_or_else(|| exe.parent().unwrap().parent().unwrap())
+        .to_path_buf()
 }
 
 /// A scratch dir that kills any `iftd` under it on drop (see tests/proxy.rs).
