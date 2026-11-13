@@ -369,6 +369,8 @@ pub fn gate_args(words: &[String]) -> Result<Vec<String>, String> {
             crate::push_notify::valid_device_id(id) && url.starts_with("https://")
         }
         ["read", card, rest @ ..] => valid_card(card) && read_flags(rest),
+        // Only a colour on this Mac: it runs nothing and reads nothing.
+        ["clear-state", card] => valid_card(card),
         _ => false,
     };
     if ok {
@@ -663,6 +665,9 @@ mod tests {
         assert!(!ok(&["run"]));
         assert!(!ok(&["send", "7", "rm -rf ~"]));
         assert!(!ok(&["close", "7"]));
+        assert!(ok(&["clear-state", "#7"]));
+        assert!(!ok(&["clear-state", "7;ls"]));
+        assert!(!ok(&["clear-state", "7", "8"]));
         assert!(!ok(&["terminal", "/"]));
         assert!(!ok(&["read", "7", "--evil"]));
         assert!(!ok(&["read", "7", "--lines", "x"]));

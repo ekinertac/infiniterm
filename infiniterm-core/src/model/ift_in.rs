@@ -358,6 +358,27 @@ impl Model {
                 self.go_to_card(&id);
                 ok(String::new())
             }
+            // `ift clear-state <card>`: the palette's `card.clearState` for
+            // one named card, without focusing it, so the phone can clear a
+            // done card's colour without moving the view on this Mac.
+            "clear-state" => {
+                let Some(target) = req.args.first() else {
+                    return err("clear-state takes a card");
+                };
+                let Some(id) = self.resolve_card_ref(target) else {
+                    return err(&format!("no card {target}"));
+                };
+                if let Some(c) = self.card_mut(&id) {
+                    if c.agent != crate::agent_state::AgentState::None {
+                        c.agent = crate::agent_state::AgentState::None;
+                        self.effects.push(Effect::AgentLog(format!(
+                            "{}  cleared by ift -> none",
+                            &id[..8.min(id.len())]
+                        )));
+                    }
+                }
+                ok(String::new())
+            }
             // `ift terminal <dir>...`: a terminal card in each directory, on
             // the workspace on screen, the last one focused (the Finder
             // service's path, from a script). Absolute paths only: the cli
@@ -697,6 +718,25 @@ mod tests {
         assert!(r.ok);
         assert!(m.card(&a).is_none());
         assert!(!ask(&mut m, "close", &["999"]).ok);
+    }
+
+    #[test]
+    fn clear_state_clears_the_named_card_and_leaves_focus_alone() {
+        use crate::agent_state::AgentState;
+        let (mut m, a, b) = two_cards();
+        m.card_mut(&a).unwrap().agent = AgentState::Done;
+        m.card_mut(&b).unwrap().agent = AgentState::Done;
+        let focused = m.selection.focused_id.clone();
+        assert!(ask(&mut m, "clear-state", &[&a]).ok);
+        assert_eq!(m.card(&a).unwrap().agent, AgentState::None);
+        assert_eq!(m.card(&b).unwrap().agent, AgentState::Done);
+        assert_eq!(m.selection.focused_id, focused);
+        assert!(
+            ask(&mut m, "clear-state", &[&a]).ok,
+            "already clear is fine"
+        );
+        assert!(!ask(&mut m, "clear-state", &["999"]).ok);
+        assert!(!ask(&mut m, "clear-state", &[]).ok);
     }
 
     // #665: `ift browse` makes a browser card per address, in order, beside
