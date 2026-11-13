@@ -590,6 +590,13 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "ui.switcherStateColors",
+        &[
+            "Ctrl+Tab rows take the colour of their agent's state (working, waiting, failed,",
+            "done) as a faint fill. Off, only the dot beside each row shows the state.",
+        ],
+    ),
+    (
         "ui.windowColor",
         &[
             "A colour for the title bar and the Dock icon: a name (red, orange, amber, yellow,",
