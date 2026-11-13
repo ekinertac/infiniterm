@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-13
+
+- `ift clear-state <card>` clears a card's state colour without going to the card, and the iPhone app can now clear a done card from its long-press menu.
+
 ## 0.6.15 (build 1679), 2026-11-13
 
 ### 2026-11-13

@@ -178,6 +178,7 @@ _ift() {
     'browse:open a web address or a local file in a browser card'
     'focus:go to a card'
     'close:close a card'
+    'clear-state:clear a card'\''s state colour'
     'run:run a registered command by id'
     'omni:what the omnibox would show for a term'
     'commands:every command the app registers, with its key'
@@ -215,7 +216,7 @@ _ift() {
     send) (( CURRENT == 3 )) && _ift_cards ;;
     read) (( CURRENT == 3 )) && _ift_cards || _arguments '--lines[the last N lines only]:lines:' '--all[include the history]' '--ansi[the screen with its colours]' ;;
     focus) (( CURRENT == 3 )) && _ift_cards ;;
-    close) (( CURRENT == 3 )) && _ift_cards ;;
+    close|clear-state) (( CURRENT == 3 )) && _ift_cards ;;
     run) (( CURRENT == 3 )) && _ift_command_ids ;;
     diff) _files -/ ;;
     terminal) _arguments '--workspace[open on this workspace, or make one]:workspace:_ift_workspaces' '--name[a name for the new workspace]:name:' '*:folder:_files -/' ;;

@@ -139,6 +139,8 @@ ift — drive infiniterm from a shell
                              file:// address (relative to the shell's folder);
                              a missing path is refused; returns at once
   ift close <card>           close a card like Cmd+W; a locked card refuses
+  ift clear-state <card>     clear a card's state colour (done, waiting,
+                             failed) without focusing it
   ift run <command-id>       run a registered command as the palette would,
                              on the card in focus (ift commands lists them)
   ift usage [days]           the commands and mouse gestures you used in the
@@ -210,7 +212,7 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 36] = [
+pub const SUBCOMMANDS: [&str; 37] = [
     "diff",
     "ls",
     "workspaces",
@@ -225,6 +227,7 @@ pub const SUBCOMMANDS: [&str; 36] = [
     "read",
     "focus",
     "close",
+    "clear-state",
     "run",
     "omni",
     "commands",
@@ -312,6 +315,7 @@ fn main() -> ExitCode {
         Some("read") => send("read", rest()),
         Some("focus") => send("focus", rest()),
         Some("close") => send("close", rest()),
+        Some("clear-state") => send("clear-state", rest()),
         Some("run") => send("run", rest()),
         Some("commands") => send_table("commands", &["id", "label", "key"]),
         Some("usage") => send("usage", rest()),
