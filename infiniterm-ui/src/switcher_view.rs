@@ -34,6 +34,7 @@ impl AppView {
             return div();
         };
         let active_ws = self.model.active_workspace.clone();
+        let tint_rows = self.model.config.ui.switcher_state_colors;
         let start = s
             .index
             .saturating_sub(SWITCHER_ROWS - 1)
@@ -141,8 +142,10 @@ impl AppView {
                 .when(selected, |d| d.bg(chrome.row_selected))
                 // The agent's state carries the row (#746), not only a dot:
                 // the selection's own fill wins on the chosen row, the dot
-                // still says the state there.
-                .when_some(state.filter(|_| !selected), |d, c| {
+                // still says the state there. Only with
+                // `ui.switcherStateColors`: off by default, Ekin asked for it
+                // opt-in.
+                .when_some(state.filter(|_| !selected && tint_rows), |d, c| {
                     d.bg(c.opacity(SWITCHER_TINT_ALPHA))
                 })
                 .child(

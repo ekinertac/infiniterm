@@ -13,6 +13,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-13
 
 - `ift clear-state <card>` clears a card's state colour without going to the card, and the iPhone app can now clear a done card from its long-press menu.
+- Ctrl+Tab rows no longer take their agent state's colour unless you turn on `ui.switcherStateColors`; the dot beside each row still shows the state.
 
 ## 0.6.15 (build 1679), 2026-11-13
 

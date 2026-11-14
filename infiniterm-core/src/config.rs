@@ -436,6 +436,9 @@ pub struct Ui {
     /// Ctrl+Tab and the status bar's card count look at the current
     /// workspace only (#101).
     pub workspace_isolation: bool,
+    /// Ctrl+Tab rows carry their agent state's colour, not only the dot
+    /// (#746); off unless asked for.
+    pub switcher_state_colors: bool,
     /// A colour for the title bar and the Dock icon: a name from the picker or
     /// a hex code, empty for none (#160). A remote instance wears its host's.
     pub window_color: String,
@@ -712,6 +715,7 @@ pub fn default_config() -> Config {
             background_image_interval: 300.,
             background_image_fade: 2.,
             workspace_isolation: false,
+            switcher_state_colors: false,
             window_color: String::new(),
             card_opacity: 1.,
             card_gradient: Vec::new(),
@@ -1141,6 +1145,7 @@ pub fn merge_config(raw: &Value) -> Config {
                 _ => BackgroundFit::Cover,
             },
             workspace_isolation: bool_(u.get("workspaceIsolation"), d.ui.workspace_isolation),
+            switcher_state_colors: bool_(u.get("switcherStateColors"), d.ui.switcher_state_colors),
             window_color: u
                 .get("windowColor")
                 .and_then(Value::as_str)
@@ -1866,6 +1871,16 @@ mod tests {
             m(json!({"ui.workspaceIsolation": true}))
                 .ui
                 .workspace_isolation
+        );
+    }
+
+    #[test]
+    fn switcher_state_colors_are_off_unless_asked_for() {
+        assert!(!m(json!({})).ui.switcher_state_colors);
+        assert!(
+            m(json!({"ui.switcherStateColors": true}))
+                .ui
+                .switcher_state_colors
         );
     }
 
