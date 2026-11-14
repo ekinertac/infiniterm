@@ -56,6 +56,24 @@ impl Model {
         } else {
             return;
         };
+        let moved = self.place_cards_on(&ids, &to);
+        if moved.is_empty() {
+            return;
+        }
+        // The focus stays here: the card you were on before, else none.
+        self.focus_back_on(&here);
+        self.notify_moved(&moved, &to);
+    }
+
+    /// The placement half of a move to workspace `to`: each of `ids` keeps
+    /// its size and takes `to`'s first free block slot, in reading order,
+    /// leaving its groups; an in-place editor among them carries the
+    /// terminal it covers. `to` remembers the first as its focus. Answers
+    /// with the cards placed (covers, not the terminals under them). Shared
+    /// by the palette's move and `ift move` (#792), which differ only in
+    /// what happens to this Mac's focus.
+    pub(super) fn place_cards_on(&mut self, ids: &[String], to: &str) -> Vec<String> {
+        let to = to.to_string();
         let rects: Vec<crate::grid::Rect> = ids
             .iter()
             .filter_map(|id| self.card(id).map(|c| c.rect))
@@ -98,13 +116,19 @@ impl Model {
             moved.push(id);
         }
         if moved.is_empty() {
-            return;
+            return moved;
         }
         self.prune_empty_groups();
         if let Some(w) = self.workspaces.iter_mut().find(|w| w.id == to) {
             w.focused = moved.first().cloned();
         }
-        // The focus stays here: the card you were on before, else none.
+        self.dirty_layout = true;
+        moved
+    }
+
+    /// The focus after cards left workspace `here`: the card you were on
+    /// before that is still there, else none.
+    pub(super) fn focus_back_on(&mut self, here: &str) {
         let back = self
             .focus_trail
             .iter()
@@ -112,13 +136,17 @@ impl Model {
             .find(|t| self.card(t).is_some_and(|c| c.workspace_id == here))
             .cloned();
         self.set_focus(back.as_deref());
+    }
+
+    /// "moved #7 to site", or "moved 3 cards to site".
+    pub(super) fn notify_moved(&mut self, moved: &[String], to: &str) {
         let name = self
             .workspaces
             .iter()
             .find(|w| w.id == to)
             .map(|w| w.name.clone())
             .unwrap_or_default();
-        let what = match moved.as_slice() {
+        let what = match moved {
             [one] => self
                 .card(one)
                 .map(|c| format!("#{}", c.number))
@@ -126,7 +154,6 @@ impl Model {
             many => format!("{} cards", many.len()),
         };
         self.notify(format!("moved {what} to {name}"));
-        self.dirty_layout = true;
     }
 
     /// A card drag dropped on workspace `to`'s tab (#667). The drag moved

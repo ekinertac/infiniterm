@@ -371,6 +371,10 @@ pub fn gate_args(words: &[String]) -> Result<Vec<String>, String> {
         ["read", card, rest @ ..] => valid_card(card) && read_flags(rest),
         // Only a colour on this Mac: it runs nothing and reads nothing.
         ["clear-state", card] => valid_card(card),
+        // A card's place and its lock (#792): they change the canvas, run
+        // nothing and read nothing. A workspace is named by id here.
+        ["move", card, ws] => valid_card(card) && valid_card(ws),
+        ["card", "protect", card, "on" | "off"] => valid_card(card),
         // Saved workspaces (#790). `save` is the phone's one write on this
         // Mac, and it lands only in the saved-workspaces folder: the name
         // goes through `file_stem`, which keeps it there.
@@ -676,6 +680,13 @@ mod tests {
         assert!(ok(&["clear-state", "#7"]));
         assert!(!ok(&["clear-state", "7;ls"]));
         assert!(!ok(&["clear-state", "7", "8"]));
+        assert!(ok(&["move", "#7", "3f2a-b9"]));
+        assert!(!ok(&["move", "7", "my site"]));
+        assert!(!ok(&["move", "7"]));
+        assert!(ok(&["card", "protect", "7", "on"]));
+        assert!(ok(&["card", "protect", "7", "off"]));
+        assert!(!ok(&["card", "protect", "7"]));
+        assert!(!ok(&["card", "mask", "7", "on"]));
         assert!(ok(&["workspace", "saved"]));
         assert!(ok(&["workspace", "saved", "--nul"]));
         assert!(ok(&["workspace", "save", "3f2a-b9", "my site"]));
