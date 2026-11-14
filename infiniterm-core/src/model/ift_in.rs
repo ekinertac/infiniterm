@@ -42,6 +42,69 @@ impl Model {
             .ok_or_else(|| "that card has no running shell".into())
     }
 
+    /// `ift workspace save <workspace> <name> [--replace]` and `ift workspace
+    /// open <name>` (#790) against the saved workspaces in `dir`. Save names
+    /// any workspace, not only the one on screen, and writes the file here,
+    /// not through `Effect::SaveWorkspaceFile`, so the reply says whether it
+    /// was written. A name already saved is refused without `--replace`,
+    /// where the palette asks. Both answer with one line: the name the file
+    /// got (`file_stem`), or the new workspace's id.
+    fn ift_workspace(&mut self, args: &[String], dir: &std::path::Path) -> CliReply {
+        let ok = |text: String| CliReply { ok: true, text };
+        let err = |text: String| CliReply { ok: false, text };
+        let replace = args.iter().any(|a| a == "--replace");
+        let words: Vec<&str> = args
+            .iter()
+            .map(String::as_str)
+            .filter(|a| *a != "--replace")
+            .collect();
+        if let Some(flag) = words.iter().find(|a| a.starts_with("--")) {
+            return err(format!("unknown option {flag}"));
+        }
+        match words.as_slice() {
+            ["save", workspace, name] => {
+                let listed: Vec<(&str, &str)> = self
+                    .workspaces
+                    .iter()
+                    .map(|w| (w.id.as_str(), w.name.as_str()))
+                    .collect();
+                let id = match resolve_workspace(&listed, workspace) {
+                    Ok(WorkspaceTarget::Existing(id)) => id,
+                    Ok(WorkspaceTarget::New) => return err(format!("no workspace {workspace}")),
+                    Err(e) => return err(e),
+                };
+                let Some(stem) = crate::saved_workspace::file_stem(name) else {
+                    return err("a saved workspace needs a name".into());
+                };
+                if !replace && crate::saved_workspace::path(dir, &stem).is_some_and(|p| p.exists())
+                {
+                    return err(format!(
+                        "\"{stem}\" is already saved: add --replace to write over it"
+                    ));
+                }
+                let Some(text) = self.workspace_snapshot_text(&id, &stem) else {
+                    return err(format!("no workspace {workspace}"));
+                };
+                if let Err(e) = crate::saved_workspace::write(dir, &stem, &text) {
+                    return err(format!("could not save workspace \"{stem}\": {e}"));
+                }
+                self.notify(format!("saved workspace \"{stem}\""));
+                ok(stem)
+            }
+            ["open", name] => {
+                let text = crate::saved_workspace::read(dir, name);
+                match self.try_open_saved_workspace(name, text.as_deref()) {
+                    Ok(id) => ok(id),
+                    Err(e) => err(e),
+                }
+            }
+            _ => err(
+                "workspace takes: saved [--nul], save <workspace> <name> [--replace], open <name>"
+                    .into(),
+            ),
+        }
+    }
+
     /// `commands` is the registry as `(id, label)`, since the model does
     /// not hold the registry: `ift commands` lists it and `dev-run` checks it.
     pub fn run_ift(&mut self, req: &CliRequest, commands: &[(&str, &str)]) -> CliReply {
@@ -379,6 +442,10 @@ impl Model {
                 }
                 ok(String::new())
             }
+            // `ift workspace save|open` (#790, for the iPhone app): the
+            // palette's `workspace.saveAs` and `workspace.openSaved`. `saved`
+            // lists the folder in the cli and never reaches here.
+            "workspace" => self.ift_workspace(&req.args, &crate::paths::saved_workspaces_dir()),
             // `ift terminal <dir>...`: a terminal card in each directory, on
             // the workspace on screen, the last one focused (the Finder
             // service's path, from a script). Absolute paths only: the cli
@@ -737,6 +804,59 @@ mod tests {
         );
         assert!(!ask(&mut m, "clear-state", &["999"]).ok);
         assert!(!ask(&mut m, "clear-state", &[]).ok);
+    }
+
+    // #790: `ift workspace save` writes the named workspace (not the one on
+    // screen), refuses a used name without --replace, and `open` makes a new
+    // workspace from it and answers with its id.
+    #[test]
+    fn workspace_save_and_open_go_through_the_palettes_paths() {
+        let dir = std::env::temp_dir().join(format!("ift-ws-save-{}", uuid::Uuid::new_v4()));
+        let (mut m, _a, _b) = two_cards();
+        let first = m.active_workspace.clone().unwrap();
+        let other = m.add_workspace(Some("other"));
+        m.show_workspace(&other);
+        let words = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        let saved = m.ift_workspace(&words(&["save", &first, " my/site "]), &dir);
+        assert!(saved.ok, "{}", saved.text);
+        assert_eq!(saved.text, "my-site");
+        assert_eq!(crate::saved_workspace::list(&dir), ["my-site"]);
+        assert_eq!(m.active_workspace.as_deref(), Some(other.as_str()));
+
+        let taken = m.ift_workspace(&words(&["save", &first, "my-site"]), &dir);
+        assert!(!taken.ok);
+        assert_eq!(
+            taken.text,
+            "\"my-site\" is already saved: add --replace to write over it"
+        );
+        assert!(
+            m.ift_workspace(&words(&["save", &other, "my-site", "--replace"]), &dir)
+                .ok
+        );
+        assert!(
+            m.ift_workspace(&words(&["save", &first, "my-site", "--replace"]), &dir)
+                .ok
+        );
+
+        let before = m.workspaces.len();
+        let opened = m.ift_workspace(&words(&["open", "my-site"]), &dir);
+        assert!(opened.ok, "{}", opened.text);
+        assert_eq!(m.workspaces.len(), before + 1);
+        assert_eq!(m.active_workspace.as_deref(), Some(opened.text.as_str()));
+        assert_eq!(m.cards_on(Some(&opened.text)).len(), 2);
+
+        for bad in [
+            &["open", "nope"][..],
+            &["save", "no-such-ws", "x"],
+            &["save", &first, "  "],
+            &["save", &first, "x", "--force"],
+            &["save", &first],
+            &["delete", "x"],
+        ] {
+            assert!(!m.ift_workspace(&words(bad), &dir).ok, "{bad:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // #665: `ift browse` makes a browser card per address, in order, beside

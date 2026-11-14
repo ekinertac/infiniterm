@@ -141,6 +141,15 @@ ift — drive infiniterm from a shell
   ift close <card>           close a card like Cmd+W; a locked card refuses
   ift clear-state <card>     clear a card's state colour (done, waiting,
                              failed) without focusing it
+  ift workspace saved [--nul]
+                             the saved workspaces' names, one per line (each
+                             ended by a NUL byte with --nul); needs no app
+  ift workspace save <workspace> <name> [--replace]
+                             save a workspace (an id or an exact name) under
+                             a name; a name already saved needs --replace;
+                             prints the name the file got
+  ift workspace open <name>  open a saved workspace as a new workspace and
+                             print its id
   ift run <command-id>       run a registered command as the palette would,
                              on the card in focus (ift commands lists them)
   ift usage [days]           the commands and mouse gestures you used in the
@@ -212,10 +221,11 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 37] = [
+pub const SUBCOMMANDS: [&str; 38] = [
     "diff",
     "ls",
     "workspaces",
+    "workspace",
     "sessions",
     "attach",
     "connect",
@@ -306,6 +316,7 @@ fn main() -> ExitCode {
         Some("ls") if args.iter().any(|a| a == "--agents") => send("ls", rest()),
         Some("ls") => send_table("ls", &LS_HEADER),
         Some("workspaces") => send_table("workspaces", &WORKSPACES_HEADER),
+        Some("workspace") => workspace_cmd(&args[1..]),
         Some("terminal") => terminal_cmd(&args[1..]),
         Some("browse") => browse_cmd(&args[1..]),
         Some("send") => send("send", rest()),
@@ -800,6 +811,41 @@ fn send(cmd: &str, args: Vec<String>) -> ExitCode {
     }
 }
 
+/// `ift workspace ...` (#790). `saved` lists the folder here, so it answers
+/// with the app closed; `save` and `open` change the canvas, so the app runs
+/// them (`ift_in.rs`).
+fn workspace_cmd(args: &[String]) -> ExitCode {
+    match args.first().map(String::as_str) {
+        Some("saved") => match args.get(1).map(String::as_str) {
+            None | Some("--nul") if args.len() <= 2 => {
+                let names = infiniterm_core::saved_workspace::list(
+                    &infiniterm_core::paths::saved_workspaces_dir(),
+                );
+                print!("{}", saved_names(&names, args.len() == 2));
+                ExitCode::SUCCESS
+            }
+            _ => {
+                eprintln!("ift: workspace saved takes only --nul");
+                ExitCode::from(2)
+            }
+        },
+        Some("save" | "open") => send("workspace", args.to_vec()),
+        _ => {
+            eprintln!(
+                "ift: workspace takes: saved [--nul], save <workspace> <name> [--replace], open <name>"
+            );
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// Each name ended by a newline, or by a NUL byte for a reader that splits
+/// on it (the phone, as with `snippets --nul`).
+fn saved_names(names: &[String], nul: bool) -> String {
+    let end = if nul { '\0' } else { '\n' };
+    names.iter().map(|n| format!("{n}{end}")).collect()
+}
+
 /// `ift -t <path> [card]`: the path right after `-t` and the card after it.
 fn tab_args(args: &[String]) -> Option<(&str, Option<&str>)> {
     let path = args.get(1).map(String::as_str).filter(|p| !p.is_empty())?;
@@ -1292,6 +1338,16 @@ fn install_extension(source: Option<&str>) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #790: every name is ended, so an empty list prints nothing and the
+    // last name is split like the rest.
+    #[test]
+    fn saved_names_are_ended_by_a_newline_or_a_nul() {
+        let names = ["api".to_string(), "my site".to_string()];
+        assert_eq!(saved_names(&names, false), "api\nmy site\n");
+        assert_eq!(saved_names(&names, true), "api\0my site\0");
+        assert_eq!(saved_names(&[], true), "");
+    }
 
     // `ift -t <file> [card]`: the file right after `-t`, then the card.
     #[test]
