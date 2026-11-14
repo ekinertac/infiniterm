@@ -141,7 +141,14 @@ ift — drive infiniterm from a shell
   ift close <card>           close a card like Cmd+W; a locked card refuses
   ift clear-state <card>     clear a card's state colour (done, waiting,
                              failed) without focusing it
-  ift run <command-id>       run a registered command as the palette would,
+  ift move <card> <workspace>
+                             move a card to another workspace (an id or an
+                             exact name) into its first free slot, as the
+                             palette's move does; the view stays
+  ift card protect <card> on|off
+                             lock a card against closing, or unlock it,
+                             without focusing it
+  ift run <command-id>      run a registered command as the palette would,
                              on the card in focus (ift commands lists them)
   ift usage [days]           the commands and mouse gestures you used in the
                              last 30 days (or [days]), then the ones you
@@ -212,7 +219,7 @@ only, 3 key or email rejected, 4 Lemon Squeezy unreachable.
 
 /// Every subcommand `main` dispatches, for the completion's test: the two
 /// lists must agree, and this one is the source.
-pub const SUBCOMMANDS: [&str; 37] = [
+pub const SUBCOMMANDS: [&str; 39] = [
     "diff",
     "ls",
     "workspaces",
@@ -228,6 +235,8 @@ pub const SUBCOMMANDS: [&str; 37] = [
     "focus",
     "close",
     "clear-state",
+    "move",
+    "card",
     "run",
     "omni",
     "commands",
@@ -316,6 +325,8 @@ fn main() -> ExitCode {
         Some("focus") => send("focus", rest()),
         Some("close") => send("close", rest()),
         Some("clear-state") => send("clear-state", rest()),
+        Some("move") => send("move", rest()),
+        Some("card") => send("card", rest()),
         Some("run") => send("run", rest()),
         Some("commands") => send_table("commands", &["id", "label", "key"]),
         Some("usage") => send("usage", rest()),

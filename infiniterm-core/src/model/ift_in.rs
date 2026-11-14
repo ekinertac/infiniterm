@@ -42,6 +42,58 @@ impl Model {
             .ok_or_else(|| "that card has no running shell".into())
     }
 
+    /// `ift move` (#792): card `card` (number or id) to workspace `workspace`
+    /// (id or exact name) through `place_cards_on`, the palette's placement.
+    /// A terminal under an in-place editor moves with it, whichever of the
+    /// two is named. The view and the focus stay unless the focused card is
+    /// the one leaving the workspace on screen: then the focus goes back as
+    /// it does after the palette's move. A workspace off screen forgets a
+    /// remembered focus on the card, so showing it later does not focus a
+    /// card that is no longer there.
+    fn ift_move(&mut self, card: &str, workspace: &str) -> Result<(), String> {
+        let id = self
+            .resolve_card_ref(card)
+            .ok_or_else(|| format!("no card {card}"))?;
+        let listed: Vec<(&str, &str)> = self
+            .workspaces
+            .iter()
+            .map(|w| (w.id.as_str(), w.name.as_str()))
+            .collect();
+        let to = match resolve_workspace(&listed, workspace)? {
+            WorkspaceTarget::Existing(to) => to,
+            WorkspaceTarget::New => return Err(format!("no workspace {workspace}")),
+        };
+        let mover = self.covered_by(&id).map(String::from).unwrap_or(id);
+        let here = self
+            .card(&mover)
+            .map(|c| c.workspace_id.clone())
+            .unwrap_or_default();
+        if here == to {
+            return Err(format!("card {card} is already on that workspace"));
+        }
+        let leaving: Vec<String> = std::iter::once(mover.clone())
+            .chain(self.covers.get(&mover).cloned())
+            .collect();
+        let moved = self.place_cards_on(std::slice::from_ref(&mover), &to);
+        if moved.is_empty() {
+            return Err(format!("card {card} could not be moved"));
+        }
+        self.selection.extra.retain(|e| !leaving.contains(e));
+        let focused = self.selection.focused_id.clone();
+        if self.active_workspace.as_deref() == Some(here.as_str())
+            && focused.is_some_and(|f| leaving.contains(&f))
+        {
+            self.focus_back_on(&here);
+        }
+        if let Some(w) = self.workspaces.iter_mut().find(|w| w.id == here) {
+            if w.focused.as_ref().is_some_and(|f| leaving.contains(f)) {
+                w.focused = None;
+            }
+        }
+        self.notify_moved(&moved, &to);
+        Ok(())
+    }
+
     /// `commands` is the registry as `(id, label)`, since the model does
     /// not hold the registry: `ift commands` lists it and `dev-run` checks it.
     pub fn run_ift(&mut self, req: &CliRequest, commands: &[(&str, &str)]) -> CliReply {
@@ -377,6 +429,37 @@ impl Model {
                         )));
                     }
                 }
+                ok(String::new())
+            }
+            // `ift move <card> <workspace>` (#792, for the iPhone app): the
+            // palette's `card.moveToWorkspace` placement for one named card,
+            // with this Mac's view left where it is.
+            "move" => {
+                let [card, workspace] = req.args.as_slice() else {
+                    return err("move takes a card and a workspace");
+                };
+                match self.ift_move(card, workspace) {
+                    Ok(()) => ok(String::new()),
+                    Err(e) => err(&e),
+                }
+            }
+            // `ift card protect <card> on|off` (#792): the palette's
+            // `card.protect` for one named card, without focusing it. On or
+            // off is always said, so a caller never toggles a state it has
+            // not seen.
+            "card" => {
+                let (target, on) = match req.args.as_slice() {
+                    [verb, card, state] if verb == "protect" && state == "on" => (card, true),
+                    [verb, card, state] if verb == "protect" && state == "off" => (card, false),
+                    _ => return err("card takes: protect <card> on|off"),
+                };
+                let Some(id) = self.resolve_card_ref(target) else {
+                    return err(&format!("no card {target}"));
+                };
+                if let Some(c) = self.card_mut(&id) {
+                    c.protected = on;
+                }
+                self.dirty_layout = true;
                 ok(String::new())
             }
             // `ift terminal <dir>...`: a terminal card in each directory, on
@@ -737,6 +820,69 @@ mod tests {
         );
         assert!(!ask(&mut m, "clear-state", &["999"]).ok);
         assert!(!ask(&mut m, "clear-state", &[]).ok);
+    }
+
+    // #792: `ift move` places the card as the palette's move does (first
+    // free slot from the corner, size kept, out of its group), the view stays
+    // on the workspace on screen, and the focus moves only when the focused
+    // card is the one that left.
+    #[test]
+    fn move_places_the_card_on_the_other_workspace_and_leaves_the_view() {
+        let (mut m, a, b) = two_cards();
+        let here = m.active_workspace.clone().unwrap();
+        let there = m.add_workspace(Some("there"));
+        m.set_focus(Some(&a));
+        m.card_mut(&b).unwrap().group_id = Some("g".into());
+        let size = (m.card(&b).unwrap().rect.w, m.card(&b).unwrap().rect.h);
+
+        assert!(ask(&mut m, "move", &[&b, &there]).ok);
+        let moved = m.card(&b).unwrap();
+        assert_eq!(moved.workspace_id, there);
+        assert_eq!(moved.group_id, None);
+        assert_eq!((moved.rect.w, moved.rect.h), size);
+        assert_eq!(
+            (moved.rect.x, moved.rect.y),
+            (crate::grid::HALF_CELL, crate::grid::HALF_CELL)
+        );
+        assert_eq!(m.active_workspace.as_deref(), Some(here.as_str()));
+        assert_eq!(m.selection.focused_id.as_deref(), Some(a.as_str()));
+
+        // By name too; the focused card leaving takes the focus off it.
+        assert!(ask(&mut m, "move", &[&a, "there"]).ok);
+        assert_eq!(m.card(&a).unwrap().workspace_id, there);
+        assert_ne!(m.selection.focused_id.as_deref(), Some(a.as_str()));
+        assert_eq!(m.active_workspace.as_deref(), Some(here.as_str()));
+        // The second card takes the next free slot, not the first one's.
+        assert_ne!(m.card(&a).unwrap().rect, m.card(&b).unwrap().rect);
+
+        let refused = ask(&mut m, "move", &[&a, &there]);
+        assert!(!refused.ok);
+        assert!(refused.text.contains("already on that workspace"));
+        assert!(!ask(&mut m, "move", &["999", &there]).ok);
+        assert!(!ask(&mut m, "move", &[&a, "nowhere"]).ok);
+        assert!(!ask(&mut m, "move", &[&a, "new"]).ok);
+        assert!(!ask(&mut m, "move", &[&a]).ok);
+    }
+
+    // #792: protect is said, never toggled, and the focus stays.
+    #[test]
+    fn card_protect_sets_the_named_card_on_or_off() {
+        let (mut m, a, b) = two_cards();
+        m.set_focus(Some(&b));
+        assert!(ask(&mut m, "card", &["protect", &a, "on"]).ok);
+        assert!(m.card(&a).unwrap().protected);
+        assert!(
+            ask(&mut m, "card", &["protect", &a, "on"]).ok,
+            "on twice stays on"
+        );
+        assert!(m.card(&a).unwrap().protected);
+        assert!(ask(&mut m, "card", &["protect", &a, "off"]).ok);
+        assert!(!m.card(&a).unwrap().protected);
+        assert_eq!(m.selection.focused_id.as_deref(), Some(b.as_str()));
+        assert!(!ask(&mut m, "card", &["protect", &a]).ok, "no toggle");
+        assert!(!ask(&mut m, "card", &["protect", &a, "yes"]).ok);
+        assert!(!ask(&mut m, "card", &["protect", "999", "on"]).ok);
+        assert!(!ask(&mut m, "card", &["mask", &a, "on"]).ok);
     }
 
     // #665: `ift browse` makes a browser card per address, in order, beside

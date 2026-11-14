@@ -179,6 +179,8 @@ _ift() {
     'focus:go to a card'
     'close:close a card'
     'clear-state:clear a card'\''s state colour'
+    'move:move a card to another workspace'
+    'card:lock a card: card protect <card> on|off'
     'run:run a registered command by id'
     'omni:what the omnibox would show for a term'
     'commands:every command the app registers, with its key'
@@ -217,6 +219,17 @@ _ift() {
     read) (( CURRENT == 3 )) && _ift_cards || _arguments '--lines[the last N lines only]:lines:' '--all[include the history]' '--ansi[the screen with its colours]' ;;
     focus) (( CURRENT == 3 )) && _ift_cards ;;
     close|clear-state) (( CURRENT == 3 )) && _ift_cards ;;
+    move)
+      case $CURRENT in
+        3) _ift_cards ;;
+        4) _ift_workspaces ;;
+      esac ;;
+    card)
+      case $CURRENT in
+        3) _values 'card verb' protect ;;
+        4) _ift_cards ;;
+        5) _values 'state' on off ;;
+      esac ;;
     run) (( CURRENT == 3 )) && _ift_command_ids ;;
     diff) _files -/ ;;
     terminal) _arguments '--workspace[open on this workspace, or make one]:workspace:_ift_workspaces' '--name[a name for the new workspace]:name:' '*:folder:_files -/' ;;
