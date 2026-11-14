@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use super::join::{
     encode_canvas_message, encode_open, encode_update, read_canvas_message, OpenRequest,
-    RemoteUpdate, KIND_AGENTS, KIND_KEYBINDINGS, KIND_LAYOUT, KIND_NOTICE, KIND_OPEN,
-    KIND_REVISION, KIND_SETTINGS, KIND_UPDATE,
+    RemoteUpdate, KIND_AGENTS, KIND_HOST_ANSWERS, KIND_KEYBINDINGS, KIND_LAYOUT, KIND_NOTICE,
+    KIND_OPEN, KIND_REVISION, KIND_SETTINGS, KIND_UPDATE,
 };
 use super::remote::{connect_join_canvas, JoinFailure, RemoteHost};
 
@@ -36,6 +36,9 @@ pub enum CanvasEvent {
     Settings(String),
     /// The text of the host's `keybindings.json` (#433).
     Keybindings(String),
+    /// The host is the app: its terminal cards answer programs' queries, so
+    /// this window's must not (#787). Sent first, after `Connected`.
+    HostAnswers,
     /// The canvas connection is up (again): the host is reachable, so a card
     /// that lost its own connection tries now (#442).
     Connected,
@@ -77,6 +80,7 @@ pub fn pump_canvas(stream: &mut impl Read, tx: &Sender<CanvasEvent>) -> Ended {
             // The host's answer to a click on a path that is not there: a
             // sentence, shown as any status is.
             Ok(Some((KIND_NOTICE, text))) => CanvasEvent::Status(text),
+            Ok(Some((KIND_HOST_ANSWERS, _))) => CanvasEvent::HostAnswers,
             Ok(Some(_)) => continue,
             Ok(None) | Err(_) => return Ended::Stream,
         };
@@ -321,6 +325,51 @@ mod tests {
         assert_eq!(pump_canvas(&mut bytes.as_slice(), &tx), Ended::Stream);
         assert_eq!(rx.try_recv().unwrap(), CanvasEvent::Layout("now".into()));
         assert!(rx.try_recv().is_err(), "nothing else was sent");
+    }
+
+    /// The first canvas event a viewer gets from `hub`, joined over a socket.
+    fn first_event(hub: &JoinHub, tag: &str) -> CanvasEvent {
+        let path = std::env::temp_dir().join(format!("ij-ha-{tag}-{}.sock", std::process::id()));
+        hub.serve(&path).unwrap();
+        let mut s = UnixStream::connect(&path).unwrap();
+        writeln!(s, "ift-join 2 canvas").unwrap();
+        let mut b = [0u8; 1];
+        while std::io::Read::read(&mut s, &mut b).unwrap() == 1 && b[0] != b'\n' {}
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = pump_canvas(&mut s, &tx);
+        });
+        let event = rx.recv().unwrap();
+        let _ = std::fs::remove_file(&path);
+        event
+    }
+
+    #[test]
+    fn an_app_host_tells_a_viewer_first_that_it_answers_programs_queries() {
+        let app = hub().with_host_answers();
+        app.publish_layout("{\"cards\":[]}", 1);
+        assert_eq!(first_event(&app, "app"), CanvasEvent::HostAnswers);
+    }
+
+    #[test]
+    fn a_host_with_no_app_says_nothing_so_the_viewer_keeps_answering() {
+        let serve = hub();
+        serve.publish_layout("{\"cards\":[]}", 1);
+        assert_eq!(
+            first_event(&serve, "serve"),
+            CanvasEvent::Layout("{\"cards\":[]}".into())
+        );
+    }
+
+    #[test]
+    fn the_pump_turns_the_host_answers_kind_into_an_event() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.push(KIND_HOST_ANSWERS);
+        bytes.push(b'1');
+        let (tx, rx) = channel();
+        assert_eq!(pump_canvas(&mut bytes.as_slice(), &tx), Ended::Stream);
+        assert_eq!(rx.try_recv().unwrap(), CanvasEvent::HostAnswers);
     }
 
     #[test]

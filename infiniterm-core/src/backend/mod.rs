@@ -261,10 +261,20 @@ impl Panes {
         match self {
             Panes::Local(_) => true,
             #[cfg(unix)]
-            Panes::Daemon(_) => true,
+            Panes::Daemon(b) => b.we_are_the_terminal(),
             #[cfg(unix)]
             Panes::Tmux(_) => false,
         }
+    }
+
+    /// A viewer's host said its app answers programs' queries (#787); no
+    /// other backend has a host.
+    pub fn set_host_answers(&self, on: bool) {
+        #[cfg(unix)]
+        if let Panes::Daemon(b) = self {
+            b.set_host_answers(on);
+        }
+        let _ = on;
     }
 
     /// The host's columns and rows for a viewer's pane (#423); `None` for any

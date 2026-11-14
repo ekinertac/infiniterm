@@ -106,6 +106,13 @@ pub const KIND_NOTICE: u8 = b'N';
 /// connection drops next; a viewer that knows this says "restarting" and
 /// reconnects quickly instead of reporting a lost connection.
 pub const KIND_RESTART: u8 = b'R';
+/// Host to viewer, first on a connection, sent only by the app (#787): the
+/// host's own terminal cards answer a program's queries (colours, cursor
+/// position), so the viewer's emulator must not answer a second time; the
+/// second answer reaches the program as keystrokes (`bat` into `less`). A
+/// host with no app (`ift serve`) has no emulator and does not send it, so
+/// the viewer answers, as it did before. An older viewer skips the kind.
+pub const KIND_HOST_ANSWERS: u8 = b'Q';
 
 /// The longest the host waits for its viewers' writers to send the restart
 /// notice before it quits anyway. A local socket write takes far less; this
@@ -214,6 +221,8 @@ struct Canvas {
     latest_agents: Option<String>,
     latest_settings: Option<String>,
     latest_keybindings: Option<String>,
+    /// The app host sets it (`with_host_answers`); see `KIND_HOST_ANSWERS`.
+    host_answers: bool,
     clients: Vec<SyncSender<(u8, String)>>,
 }
 
@@ -304,6 +313,13 @@ impl JoinHub {
     /// relative to them garbles until it repaints (#423, Claude Code cards).
     pub fn with_nudge(mut self, nudge: NudgeSession) -> JoinHub {
         self.nudge = Some(nudge);
+        self
+    }
+
+    /// This host is the app, whose terminal cards answer programs' queries:
+    /// every viewer is told so first (`KIND_HOST_ANSWERS`).
+    pub fn with_host_answers(self) -> JoinHub {
+        self.canvas.lock().unwrap().host_answers = true;
         self
     }
 
@@ -453,6 +469,7 @@ impl JoinHub {
             // The settings first, so the first layout is drawn in the host's
             // font and theme.
             let latest: Vec<(u8, String)> = [
+                (KIND_HOST_ANSWERS, c.host_answers.then(|| "1".to_string())),
                 (KIND_SETTINGS, c.latest_settings.clone()),
                 (KIND_KEYBINDINGS, c.latest_keybindings.clone()),
                 (KIND_LAYOUT, c.latest_layout.clone()),
