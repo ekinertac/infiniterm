@@ -1417,9 +1417,13 @@ impl AppView {
                 }
                 CanvasEvent::Agents(text) => self.model.apply_agent_states(&text),
                 CanvasEvent::Connected => {
+                    // Forgotten until this host says it again: a rejoin may
+                    // reach a host with no app (#787).
+                    self.backend.pty.set_host_answers(false);
                     self.viewer_poke = true;
                     self.redraw = true;
                 }
+                CanvasEvent::HostAnswers => self.backend.pty.set_host_answers(true),
                 CanvasEvent::Settings(text) => {
                     self.apply_host_settings_text(&text);
                     self.redraw = true;
@@ -1501,7 +1505,10 @@ fn start_join(app: &mut AppView) {
         relay.lock().unwrap().set_enabled(false);
         return;
     }
-    let hub = infiniterm_core::backend::join::JoinHub::new(relay, write).with_nudge(nudge);
+    let hub = infiniterm_core::backend::join::JoinHub::new(relay, write)
+        .with_nudge(nudge)
+        // This app's terminal cards answer programs' queries (#787).
+        .with_host_answers();
     // The host's files as they are now, for a viewer that joins before the
     // first change (#433).
     for (file, kind) in [

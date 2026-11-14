@@ -38,7 +38,7 @@ use std::net::Shutdown;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -161,6 +161,9 @@ pub struct DaemonBackend {
     /// resizes or ends one of them. Every way a session could die or change
     /// is a no-op here: kill, resize, spawn, the orphan sweep, the parked end.
     viewer: bool,
+    /// A viewer's host is the app, which answers programs' queries itself
+    /// (`KIND_HOST_ANSWERS`, #787); false until the host says so.
+    host_answers: AtomicBool,
     /// Connections a viewer's reconnect threads finished and the app has not
     /// taken yet (`take_reconnected`): the connecting waits on ssh, so it
     /// happens on a thread, and the cheap `register` on the app's.
@@ -189,9 +192,21 @@ impl DaemonBackend {
             remote: None,
             relay: Arc::new(Mutex::new(Relay::new())),
             viewer: false,
+            host_answers: AtomicBool::new(false),
             reconnected: Arc::new(Mutex::new(Vec::new())),
         };
         (backend, rx)
+    }
+
+    /// The host said whether its app answers programs' queries (#787).
+    pub fn set_host_answers(&self, on: bool) {
+        self.host_answers.store(on, Ordering::Relaxed);
+    }
+
+    /// Whether this backend's emulator is the one a program's queries get
+    /// answered by: not a viewer's when the host's app already answers.
+    pub fn we_are_the_terminal(&self) -> bool {
+        !(self.viewer && self.host_answers.load(Ordering::Relaxed))
     }
 
     /// Joins a viewer card's session again (#442) on a thread of its own: an
@@ -1504,6 +1519,34 @@ mod viewer_tests {
         let (mut backend, _rx) = DaemonBackend::new(dir.clone(), 1);
         backend.viewer = true;
         assert!(!orphan_sweep_reaches(&backend, &dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_viewer_stops_answering_queries_only_once_the_host_says_its_app_does() {
+        let dir = temp_sessions("viewer-answers");
+        let (mut backend, _rx) = DaemonBackend::new(dir.clone(), 1);
+        backend.viewer = true;
+        assert!(
+            backend.we_are_the_terminal(),
+            "a host with no app: we answer"
+        );
+        backend.set_host_answers(true);
+        assert!(!backend.we_are_the_terminal(), "the host's app answers");
+        backend.set_host_answers(false);
+        assert!(
+            backend.we_are_the_terminal(),
+            "a reconnect to a host with no app"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_ordinary_backend_always_answers_whatever_it_was_told() {
+        let dir = temp_sessions("plain-answers");
+        let (backend, _rx) = DaemonBackend::new(dir.clone(), 1);
+        backend.set_host_answers(true);
+        assert!(backend.we_are_the_terminal());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

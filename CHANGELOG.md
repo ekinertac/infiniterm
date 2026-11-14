@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-14
+
+- Fixed: in a joined window (`ift join`), a program that asks the terminal for its colours before it opens a pager, as `bat` does, no longer ends with a screen that clears and a lone `:`. The joined window used to answer that question a second time, and `less` took the answer as keys. Both the host and the joined window need this update; an older host keeps the old behaviour.
+
 ### 2026-11-13
 
 - `ift clear-state <card>` clears a card's state colour without going to the card, and the iPhone app can now clear a done card from its long-press menu.
