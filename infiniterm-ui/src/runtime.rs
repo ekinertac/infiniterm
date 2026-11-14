@@ -76,6 +76,7 @@ impl AppView {
             build: None,
             reveal_on_release: None,
             label_hits: Vec::new(),
+            on_screen: Default::default(),
             show_character_palette: false,
             pan: None,
             scroll_nav: Default::default(),
@@ -771,6 +772,27 @@ impl AppView {
         }
     }
 
+    /// A body that the last frame drew (or that paints in its own window)
+    /// has something new to show. A body off screen is never painted, so
+    /// its dirty flag never clears: counting it kept the window drawing 120
+    /// frames a second for as long as any hidden card had printed anything
+    /// (38% CPU on a copy of Ekin's canvas with nothing on screen moving).
+    /// It is drawn when it comes into view, by the zoom, pan, drag or switch
+    /// that brings it there.
+    fn shown_bodies_want_frame(&self, now: f64) -> bool {
+        let shown = |id: &String| self.on_screen.contains(id) || self.extracted.contains_key(id);
+        crate::body::shown_wants_frame(
+            self.bodies
+                .iter()
+                .map(|(id, b)| (shown(id), b.wants_frame(now)))
+                .chain(
+                    self.decoys
+                        .iter()
+                        .map(|(id, d)| (shown(id), crate::body::CardBody::wants_frame(d, now))),
+                ),
+        )
+    }
+
     /// Whether anything is moving or arriving: an animation, a gesture, output
     /// waiting to be parsed, a body with unpainted output. When nothing is,
     /// no frame is requested and the window idles; the poll task wakes it.
@@ -787,12 +809,7 @@ impl AppView {
             "scheduler"
         } else if !self.glides.is_empty() {
             "glides"
-        } else if self.bodies.values().any(|b| b.wants_frame(now))
-            || self
-                .decoys
-                .values()
-                .any(|d| crate::body::CardBody::wants_frame(d, now))
-        {
+        } else if self.shown_bodies_want_frame(now) {
             "body"
         } else if self.model.whats_new_wants_frame(now) {
             "whats-new"
@@ -824,12 +841,7 @@ impl AppView {
                 // Content frames (output, blink) are gated when far: at
                 // most one every FAR_REFRESH_MS. The output waits in the
                 // scheduler meanwhile, under its usual backpressure.
-                let content = self.scheduler.pending()
-                    || self.bodies.values().any(|b| b.wants_frame(now))
-                    || self
-                        .decoys
-                        .values()
-                        .any(|d| crate::body::CardBody::wants_frame(d, now));
+                let content = self.scheduler.pending() || self.shown_bodies_want_frame(now);
                 let due = !self.far() || now - self.last_paint_ms >= crate::chrome::FAR_REFRESH_MS;
                 (content && due)
                     || self.model.notice_expired(now)

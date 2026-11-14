@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-15
+
+- Fixed: a card you could not see (in another workspace, or off screen) that printed anything made the app redraw 120 times a second until you looked at it. On a canvas of 31 terminals this used about 38% of a CPU core with nothing on screen moving; it is now about 6%.
+
 ### 2026-11-14
 
 - `ift move <card> <workspace>` moves a card to another workspace without leaving the one on screen, and `ift card protect <card> on|off` locks or unlocks a card without going to it. The iPhone app can do both.
