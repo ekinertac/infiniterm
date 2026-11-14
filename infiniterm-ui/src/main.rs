@@ -287,6 +287,10 @@ pub struct AppView {
     /// (drag to move, double-click to fit), not a body target: a
     /// double-click that reached the terminal selected a word instead.
     pub label_hits: Vec<(String, Rect)>,
+    /// The cards the last frame drew in this window. Only these (and the
+    /// cards in their own window) may ask for a frame: see
+    /// `body::shown_wants_frame`.
+    pub on_screen: std::collections::HashSet<String>,
     /// The card body the pointer is currently over, so a body that cares
     /// about hover (the browser) gets told when the pointer leaves it.
     pub hover_body: Option<String>,

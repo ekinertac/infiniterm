@@ -165,3 +165,30 @@ impl CardBody for Blank {
         self
     }
 }
+
+/// Whether any body that is SHOWN wants a frame, from `(shown, wants)` per
+/// body. A hidden body's wish is ignored: nothing would paint it, so its
+/// dirty flag would never clear and the window would draw forever.
+pub fn shown_wants_frame(bodies: impl IntoIterator<Item = (bool, bool)>) -> bool {
+    bodies.into_iter().any(|(shown, wants)| shown && wants)
+}
+
+#[cfg(test)]
+mod shown_tests {
+    use super::shown_wants_frame;
+
+    #[test]
+    fn a_hidden_dirty_body_asks_for_no_frame() {
+        assert!(!shown_wants_frame([(false, true), (false, true)]));
+    }
+
+    #[test]
+    fn a_shown_dirty_body_still_asks() {
+        assert!(shown_wants_frame([(false, true), (true, true)]));
+    }
+
+    #[test]
+    fn a_shown_clean_body_asks_for_nothing() {
+        assert!(!shown_wants_frame([(true, false), (false, false)]));
+    }
+}
