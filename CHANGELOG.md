@@ -9,6 +9,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 ### 2026-11-14
 
 - `ift move <card> <workspace>` moves a card to another workspace without leaving the one on screen, and `ift card protect <card> on|off` locks or unlocks a card without going to it. The iPhone app can do both.
+- `ift workspace saved`, `ift workspace save <workspace> <name>` and `ift workspace open <name>` list, save and open saved workspaces from a script, and let the iPhone app do the same.
 - Fixed: in a joined window (`ift join`), a program that asks the terminal for its colours before it opens a pager, as `bat` does, no longer ends with a screen that clears and a lone `:`. The joined window used to answer that question a second time, and `less` took the answer as keys. Both the host and the joined window need this update; an older host keeps the old behaviour.
 
 ### 2026-11-13

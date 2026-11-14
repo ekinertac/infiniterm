@@ -375,6 +375,14 @@ pub fn gate_args(words: &[String]) -> Result<Vec<String>, String> {
         // nothing and read nothing. A workspace is named by id here.
         ["move", card, ws] => valid_card(card) && valid_card(ws),
         ["card", "protect", card, "on" | "off"] => valid_card(card),
+        // Saved workspaces (#790). `save` is the phone's one write on this
+        // Mac, and it lands only in the saved-workspaces folder: the name
+        // goes through `file_stem`, which keeps it there.
+        ["workspace", "saved"] | ["workspace", "saved", "--nul"] => true,
+        ["workspace", "save", ws, name] | ["workspace", "save", ws, name, "--replace"] => {
+            valid_card(ws) && crate::saved_workspace::file_stem(name).is_some()
+        }
+        ["workspace", "open", name] => crate::saved_workspace::file_stem(name).is_some(),
         _ => false,
     };
     if ok {
@@ -679,6 +687,22 @@ mod tests {
         assert!(ok(&["card", "protect", "7", "off"]));
         assert!(!ok(&["card", "protect", "7"]));
         assert!(!ok(&["card", "mask", "7", "on"]));
+        assert!(ok(&["workspace", "saved"]));
+        assert!(ok(&["workspace", "saved", "--nul"]));
+        assert!(ok(&["workspace", "save", "3f2a-b9", "my site"]));
+        assert!(ok(&[
+            "workspace",
+            "save",
+            "3f2a-b9",
+            "my site",
+            "--replace"
+        ]));
+        assert!(ok(&["workspace", "open", "my site"]));
+        assert!(!ok(&["workspace", "save", "3f2a;b9", "x"]));
+        assert!(!ok(&["workspace", "save", "w", ".."]));
+        assert!(!ok(&["workspace", "save", "w", "x", "--force"]));
+        assert!(!ok(&["workspace", "open", "  "]));
+        assert!(!ok(&["workspace", "delete", "x"]));
         assert!(!ok(&["terminal", "/"]));
         assert!(!ok(&["read", "7", "--evil"]));
         assert!(!ok(&["read", "7", "--lines", "x"]));

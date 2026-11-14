@@ -736,23 +736,32 @@ impl Model {
     /// workspace is shown, fitted like any workspace that opens (#659), with
     /// the card that was focused when it was saved focused again.
     pub fn open_saved_workspace(&mut self, name: &str, text: Option<&str>) {
+        if let Err(why) = self.try_open_saved_workspace(name, text) {
+            self.notify(why);
+        }
+    }
+
+    /// `open_saved_workspace`, answering with the new workspace's id or why
+    /// nothing opened, for `ift workspace open` (#790) to print.
+    pub(super) fn try_open_saved_workspace(
+        &mut self,
+        name: &str,
+        text: Option<&str>,
+    ) -> Result<String, String> {
         let Some(text) = text else {
-            self.notify(format!("no saved workspace \"{name}\""));
-            return;
+            return Err(format!("no saved workspace \"{name}\""));
         };
         if is_newer_than_this_build(text) {
-            self.notify(format!(
+            return Err(format!(
                 "\"{name}\" was saved by a newer infiniterm: update to open it"
             ));
-            return;
         }
         let saved = parse_layout_allowing_empty(text);
         let Some((saved, from)) = saved.and_then(|s| {
             let from = s.workspaces.first()?.clone();
             Some((s, from))
         }) else {
-            self.notify(format!("\"{name}\" could not be read"));
-            return;
+            return Err(format!("\"{name}\" could not be read"));
         };
         let ws = self.add_workspace(Some(name));
         let groups: std::collections::HashMap<String, String> = saved
@@ -815,6 +824,7 @@ impl Model {
         self.show_workspace(&ws);
         self.notify(format!("opened \"{name}\""));
         self.dirty_layout = true;
+        Ok(ws)
     }
 
     /// Whether the host's canvas must not move card `c.id` yet (#721). Always
