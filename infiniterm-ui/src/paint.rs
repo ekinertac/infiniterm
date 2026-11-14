@@ -399,8 +399,10 @@ impl AppView {
         let maximized = self.model.selection.maximized && self.model.selection.focused_id.is_some();
         if maximized {
             let Some(card) = self.model.focused().cloned() else {
+                self.on_screen.clear();
                 return;
             };
+            self.on_screen = std::iter::once(card.id.clone()).collect();
             let focused = true;
             let body = if card.masked {
                 self.decoys
@@ -619,6 +621,7 @@ impl AppView {
                 })
             })
             .collect();
+        self.on_screen = on_screen.iter().map(|(id, _)| id.clone()).collect();
         let cells: usize = on_screen
             .iter()
             .filter_map(|(id, part)| {
