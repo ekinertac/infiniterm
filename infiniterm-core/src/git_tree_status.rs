@@ -180,12 +180,33 @@ impl TreeStatus {
 }
 
 /// Runs git for the repository `dir` is in. Blocks: call it on a thread.
+/// The root is spelled as the tree spells it: `--show-toplevel` resolves
+/// symlinks (`/tmp` is `/private/tmp` on macOS) and would match no row, so
+/// it is `dir` minus `--show-prefix` (its path inside the repo).
+/// `--no-optional-locks`: a status every poll must never take
+/// `.git/index.lock` from a `git commit` running in a terminal card.
 pub fn status(dir: &Path) -> Result<TreeStatus, String> {
-    let root = crate::git::git(dir, &["rev-parse", "--show-toplevel"])?;
-    let root = root.trim();
+    let prefix = crate::git::git(dir, &["rev-parse", "--show-prefix"])?;
+    let prefix = prefix.trim().trim_end_matches('/');
+    let dir_s = dir.to_string_lossy();
+    let dir_s = dir_s.trim_end_matches('/');
+    let root = if prefix.is_empty() {
+        dir_s
+    } else {
+        dir_s
+            .strip_suffix(prefix)
+            .map(|r| r.trim_end_matches('/'))
+            .ok_or_else(|| format!("{dir_s} does not end in {prefix}"))?
+    };
     let out = crate::git::git(
         Path::new(root),
-        &["status", "--porcelain=v1", "-z", "--ignored"],
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--ignored",
+        ],
     )?;
     Ok(parse(root, &out))
 }
@@ -328,13 +349,23 @@ mod tests {
         std::fs::write(dir.join(".gitignore"), "out/\n").unwrap();
         std::fs::write(dir.join("out/a"), "x").unwrap();
         std::fs::write(dir.join("new.txt"), "x").unwrap();
+        // The tree's own spelling of the paths: on macOS the temp folder is
+        // under /var, a symlink to /private/var, which is what git prints.
+        let root = dir.to_string_lossy().to_string();
         let s = status(&dir).unwrap();
-        let root = s.root.clone();
         assert_eq!(
             s.mark_for(&format!("{root}/new.txt"), false),
             Some(File(Untracked))
         );
         assert_eq!(s.mark_for(&format!("{root}/out/a"), false), Some(Ignored));
+        // A tree on a subfolder, by the same spelling.
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub/b.rs"), "x").unwrap();
+        let s = status(&dir.join("sub")).unwrap();
+        assert_eq!(
+            s.mark_for(&format!("{root}/sub/b.rs"), false),
+            Some(File(Untracked))
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

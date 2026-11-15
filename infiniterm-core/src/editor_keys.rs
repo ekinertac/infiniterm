@@ -79,6 +79,16 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
     })
 }
 
+/// A chord with Alt and no Cmd or Ctrl that a locked editor claims (Alt+Z,
+/// #798). `input.rs` sends only Cmd and Ctrl chords to the keymap, so every
+/// other Alt key keeps typing its character or moving lines in the body.
+pub fn is_alt_override(chord: &str) -> bool {
+    chord.starts_with("alt+")
+        && !chord.contains("cmd+")
+        && !chord.contains("ctrl+")
+        && lock_override(chord).is_some()
+}
+
 /// What a LOCKED diff card claims. It has the editor's body and so the
 /// editor's lock, but one file and no tabs: the tab chords mean nothing, so
 /// Cmd+W closes the card (there is nothing unsaved to lose) and Cmd+S says
@@ -125,6 +135,12 @@ mod tests {
         assert_eq!(lock_override("cmd+s"), Some("card.save")); // saves while locked
         assert_eq!(lock_override("ctrl+g"), Some("editor.goToLine"));
         assert_eq!(lock_override("alt+z"), Some("editor.toggleWrap"));
+        // The key path sends only Cmd and Ctrl chords to the keymap; an
+        // Alt-only chord a locked editor claims must be let through too.
+        assert!(is_alt_override("alt+z"));
+        assert!(!is_alt_override("alt+x"), "Option+X still types");
+        assert!(!is_alt_override("cmd+/"), "not Alt-only");
+        assert!(!is_alt_override("alt+arrowup"), "the body's line move");
         assert_eq!(
             lock_override("ctrl+shift+arrowright"),
             Some("editor.selection.expand")

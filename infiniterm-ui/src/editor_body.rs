@@ -3911,7 +3911,9 @@ impl EditorBody {
                     // An ignored row's icon fades with its name. gpui 0.2's
                     // `paint_image` takes no opacity (its element opacity is
                     // crate-private), so the tree's ground is laid over it.
-                    if style.alpha < 1. {
+                    // Not on a highlighted row (cursor, menu): the ground
+                    // there is the wash, and a plain square would show.
+                    if style.alpha < 1. && !is_cursor && self.menu_row != Some(i) {
                         window.paint_quad(fill(
                             icon_b,
                             crate::chrome::with_alpha(tree_bg, 1. - style.alpha),
