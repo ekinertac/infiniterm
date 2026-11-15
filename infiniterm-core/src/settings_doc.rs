@@ -279,6 +279,14 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "editor.explorer.git",
+        &[
+            "Git status in the editor's file tree: a letter for each changed file (M, A,",
+            "U, R, ! for a conflict), changed names tinted, a dot on folders holding",
+            "changes, and ignored files dimmed. Off by default.",
+        ],
+    ),
+    (
         "editor.formatOnSave",
         &[
             "Run the file's formatter over an editor's text when you save it (Cmd+S).",

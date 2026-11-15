@@ -289,6 +289,10 @@ pub struct Explorer {
     /// File and folder icons, from the Material Icon Theme
     /// (`explorer_icons.rs`, #701). Off: the arrows and plain names.
     pub icons: bool,
+    /// Git status beside each name: a letter, a tinted name, a dot on a
+    /// folder holding changes, ignored entries dimmed (`git_tree_status.rs`,
+    /// #798). Off: no `git` runs for the tree.
+    pub git: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -986,6 +990,7 @@ pub fn merge_config(raw: &Value) -> Config {
             folder_scratch_tab: bool_(e.get("folderScratchTab"), d.editor.folder_scratch_tab),
             explorer: Explorer {
                 icons: bool_(e.get("explorer.icons"), d.editor.explorer.icons),
+                git: bool_(e.get("explorer.git"), d.editor.explorer.git),
             },
             format_on_save: bool_(e.get("formatOnSave"), d.editor.format_on_save),
             // `editor.formatters.rust` and so on: the flat reader leaves them
@@ -1725,6 +1730,15 @@ mod tests {
         assert!(!icons(json!({})));
         assert!(icons(json!({"editor.explorer.icons": true})));
         assert!(icons(json!({"editor": {"explorer": {"icons": true}}})));
+    }
+
+    // Git status in the tree is opt-in too (#798), flat or nested.
+    #[test]
+    fn explorer_git_is_off_by_default() {
+        let git = |v| m(v).editor.explorer.git;
+        assert!(!git(json!({})));
+        assert!(git(json!({"editor.explorer.git": true})));
+        assert!(git(json!({"editor": {"explorer": {"git": true}}})));
     }
 
     // The language server is off until asked for (#602), with its command per
