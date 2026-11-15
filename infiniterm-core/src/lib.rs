@@ -94,6 +94,7 @@ pub mod fuzzy;
 pub mod git;
 pub mod git_branches;
 pub mod git_repo;
+pub mod git_tree_status;
 pub mod host_pictures;
 pub mod menu_nav;
 pub mod spelling;
