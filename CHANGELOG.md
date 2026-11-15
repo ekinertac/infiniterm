@@ -8,6 +8,9 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-15
 
+- The editor's file tree can show git status: a letter beside each changed file (M, A, U, R, ! for a conflict), changed names in colour, a dot on folders with changes inside, and ignored files faded. Turn it on with `editor.explorer.git`.
+- The editor can have its own font: `editor.fontFamily`, `editor.fontSize`, `editor.fontWeight` and `editor.fontWeightBold`. Any you leave out follow the terminal's.
+- Alt+Z (Editor: Toggle Word Wrap) wraps or unwraps long lines in the current editor tab.
 - A saved workspace can be deleted: "Workspace: delete saved…" in the palette lists them and asks before deleting the one you pick, and `ift workspace delete <name>` does the same from a script or the iPhone app.
 - Fixed: a card you could not see (in another workspace, or off screen) that printed anything made the app redraw 120 times a second until you looked at it. On a canvas of 31 terminals this used about 38% of a CPU core with nothing on screen moving; it is now about 6%.
 
