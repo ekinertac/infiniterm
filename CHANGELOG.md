@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-16
+
+- Fixed: `ift join` and `ift connect` to a Linux machine installed with `install.sh` said "iftd is not installed on the server".
+
 ### 2026-11-15
 
 - The editor's file tree can show git status: a letter beside each changed file (M, A, U, R, ! for a conflict), changed names in colour, a dot on folders with changes inside, and ignored files faded. Turn it on with `editor.explorer.git`.
