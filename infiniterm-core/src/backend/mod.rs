@@ -62,6 +62,8 @@ pub mod ssh_login;
 pub mod tmux;
 #[cfg(unix)]
 pub mod tmux_protocol;
+/// Who holds a session's pty size when a viewer declared its own (#806).
+pub mod viewer_size;
 
 pub type PaneId = u32;
 

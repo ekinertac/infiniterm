@@ -419,6 +419,11 @@ pub fn gate_args(words: &[String]) -> Result<Vec<String>, String> {
     let ok = match w.as_slice() {
         ["proxy", "join", "canvas"] => true,
         ["proxy", "join", "session", id] => valid_card(id),
+        // The phone's own screen size (#806): it sizes the pty while the
+        // phone is the last to type, and the card's rect stays.
+        ["proxy", "join", "session", id, "--size", size] => {
+            valid_card(id) && crate::backend::viewer_size::parse_size(size).is_some()
+        }
         // The file service, read-only: it refuses write and put_drop. The
         // bare `proxy files` would let the phone write to the Mac.
         ["proxy", "files", "--read-only"] => true,
@@ -826,6 +831,16 @@ mod tests {
         assert!(!ok(&["read", "7", "--lines", "x"]));
         assert!(!ok(&["read", "7;ls"]));
         assert!(!ok(&["proxy", "join", "session"]));
+        assert!(ok(&[
+            "proxy", "join", "session", "abc-123", "--size", "40x30"
+        ]));
+        assert!(!ok(&[
+            "proxy", "join", "session", "abc", "--size", "40x30;ls"
+        ]));
+        assert!(!ok(&["proxy", "join", "session", "abc", "--size"]));
+        assert!(!ok(&[
+            "proxy", "join", "session", "abc", "--spawn", "40x30"
+        ]));
         assert!(!ok(&["push", "add", "short", "--server", "http://x"]));
         assert!(
             !ok(&["phone", "add", "x"]),
