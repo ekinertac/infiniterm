@@ -26,14 +26,38 @@ impl AppView {
     /// The cell metrics the config asks for, measured on the font at scale 1.
     pub fn metrics(&self, window: &Window) -> Metrics {
         let t = &self.model.config.terminal;
-        let family = family_of(&t.font_family);
-        let weight = weight_of(&t.font_weight);
-        let bold_weight = weight_of(&t.font_weight_bold);
+        let spec = infiniterm_core::config::FontSpec {
+            family: t.font_family.clone(),
+            size: t.font_size,
+            weight: t.font_weight.clone(),
+            weight_bold: t.font_weight_bold.clone(),
+        };
+        Self::metrics_for(&spec, t.line_height, window)
+    }
+
+    /// The editor's metrics (#798): its own font keys, each falling back to
+    /// the terminal's (`config::editor_font`). The line height stays the
+    /// terminal's; there is no `editor.lineHeight`.
+    pub fn editor_metrics(&self, window: &Window) -> Metrics {
+        let c = &self.model.config;
+        let spec = infiniterm_core::config::editor_font(&c.editor, &c.terminal);
+        Self::metrics_for(&spec, c.terminal.line_height, window)
+    }
+
+    /// Cell metrics for a font, measured on it at scale 1.
+    fn metrics_for(
+        t: &infiniterm_core::config::FontSpec,
+        line_height: f64,
+        window: &Window,
+    ) -> Metrics {
+        let family = family_of(&t.family);
+        let weight = weight_of(&t.weight);
+        let bold_weight = weight_of(&t.weight_bold);
         let mut f = font(family.clone());
         f.weight = weight;
         let probe = window.text_system().shape_line(
             "M".into(),
-            px(t.font_size as f32),
+            px(t.size as f32),
             &[TextRun {
                 len: 1,
                 font: f,
@@ -51,8 +75,8 @@ impl AppView {
         // the cell to whole pixels, so -2 came out as -0.16 px).
         Metrics {
             family,
-            font_px: t.font_size,
-            line_height: t.line_height,
+            font_px: t.size,
+            line_height,
             cell_w: f32::from(probe.width) as f64,
             weight,
             bold_weight,

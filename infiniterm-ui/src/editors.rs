@@ -53,7 +53,8 @@ impl AppView {
         self.reconcile_transcripts(window);
         self.reconcile_pages(window);
         self.reconcile_whats_new(window);
-        let metrics = self.metrics(window);
+        // Editor and diff cards draw in the editor's font (#798).
+        let metrics = self.editor_metrics(window);
         let cfg = self.model.config.clone();
         // `editor.smoothCaret` yields to ui.animations and reduce motion.
         let smooth_ok = self.animator.animations_on;

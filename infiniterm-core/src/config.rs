@@ -309,6 +309,12 @@ pub struct Editor {
     pub folder_scratch_tab: bool,
     /// The file tree's look (`editor.explorer.*`).
     pub explorer: Explorer,
+    /// The editor's own font (#798). Empty, or `None` for the size, means
+    /// unset: `editor_font` then takes the terminal's value for that key.
+    pub font_family: String,
+    pub font_size: Option<f64>,
+    pub font_weight: String,
+    pub font_weight_bold: String,
     /// Run the file's formatter over the text when it is saved
     /// (`infiniterm-editor/src/format.rs`). Off by default: it rewrites the
     /// file, and it runs a program.
@@ -672,6 +678,10 @@ pub fn default_config() -> Config {
             complete_words: true,
             folder_scratch_tab: true,
             explorer: Explorer::default(),
+            font_family: String::new(),
+            font_size: None,
+            font_weight: String::new(),
+            font_weight_bold: String::new(),
             format_on_save: false,
             formatters: Default::default(),
             lsp: Lsp::default(),
@@ -819,6 +829,32 @@ fn env_pairs(value: Option<&Value>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The font an editor card draws in: each key the editor's when set, else
+/// the terminal's, so the editor matches the terminal until told otherwise.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontSpec {
+    pub family: String,
+    pub size: f64,
+    pub weight: String,
+    pub weight_bold: String,
+}
+
+pub fn editor_font(e: &Editor, t: &Terminal) -> FontSpec {
+    let or = |own: &str, theirs: &str| {
+        if own.trim().is_empty() {
+            theirs.to_string()
+        } else {
+            own.to_string()
+        }
+    };
+    FontSpec {
+        family: or(&e.font_family, &t.font_family),
+        size: e.font_size.unwrap_or(t.font_size),
+        weight: or(&e.font_weight, &t.font_weight),
+        weight_bold: or(&e.font_weight_bold, &t.font_weight_bold),
+    }
 }
 
 fn bool_(value: Option<&Value>, fallback: bool) -> bool {
@@ -992,6 +1028,14 @@ pub fn merge_config(raw: &Value) -> Config {
                 icons: bool_(e.get("explorer.icons"), d.editor.explorer.icons),
                 git: bool_(e.get("explorer.git"), d.editor.explorer.git),
             },
+            // Blank means unset; `editor_font` fills each from the terminal.
+            font_family: str_(e.get("fontFamily"), ""),
+            font_size: e
+                .get("fontSize")
+                .filter(|v| v.is_number())
+                .map(|v| num(Some(v), d.terminal.font_size, 6., 96.)),
+            font_weight: str_(e.get("fontWeight"), ""),
+            font_weight_bold: str_(e.get("fontWeightBold"), ""),
             format_on_save: bool_(e.get("formatOnSave"), d.editor.format_on_save),
             // `editor.formatters.rust` and so on: the flat reader leaves them
             // as dotted keys under the section.
@@ -1730,6 +1774,54 @@ mod tests {
         assert!(!icons(json!({})));
         assert!(icons(json!({"editor.explorer.icons": true})));
         assert!(icons(json!({"editor": {"explorer": {"icons": true}}})));
+    }
+
+    // The editor's font keys each fall back to the terminal's (#798): an
+    // unset or blank key leaves the editor as it was.
+    #[test]
+    fn editor_font_falls_back_per_key() {
+        let font = |v| {
+            let c = m(v);
+            editor_font(&c.editor, &c.terminal)
+        };
+        let t = m(json!({})).terminal;
+        let all_terminal = FontSpec {
+            family: t.font_family.clone(),
+            size: t.font_size,
+            weight: t.font_weight.clone(),
+            weight_bold: t.font_weight_bold.clone(),
+        };
+        assert_eq!(font(json!({})), all_terminal);
+        assert_eq!(
+            font(json!({"editor.fontSize": 16})),
+            FontSpec {
+                size: 16.,
+                ..all_terminal.clone()
+            }
+        );
+        assert_eq!(font(json!({"editor.fontFamily": "  "})), all_terminal);
+        assert_eq!(font(json!({"editor.fontSize": "big"})), all_terminal);
+        assert_eq!(
+            font(json!({
+                "editor.fontFamily": "Menlo",
+                "editor.fontSize": 12,
+                "editor.fontWeight": "300",
+                "editor.fontWeightBold": "600",
+            })),
+            FontSpec {
+                family: "Menlo".into(),
+                size: 12.,
+                weight: "300".into(),
+                weight_bold: "600".into(),
+            }
+        );
+        assert_eq!(
+            font(json!({"editor": {"fontFamily": "X"}})).family,
+            "X",
+            "nested"
+        );
+        // A terminal font set alone still reaches the editor.
+        assert_eq!(font(json!({"terminal.fontSize": 18})).size, 18.);
     }
 
     // Git status in the tree is opt-in too (#798), flat or nested.

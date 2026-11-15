@@ -287,6 +287,25 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "editor.fontFamily",
+        &["The editor's font family. Unset uses the terminal's (terminal.fontFamily)."],
+    ),
+    (
+        "editor.fontSize",
+        &["The editor's font size. Unset uses the terminal's (terminal.fontSize)."],
+    ),
+    (
+        "editor.fontWeight",
+        &["The editor's font weight. Unset uses the terminal's (terminal.fontWeight)."],
+    ),
+    (
+        "editor.fontWeightBold",
+        &[
+            "The editor's bold weight. Unset uses the terminal's",
+            "(terminal.fontWeightBold).",
+        ],
+    ),
+    (
         "editor.formatOnSave",
         &[
             "Run the file's formatter over an editor's text when you save it (Cmd+S).",
