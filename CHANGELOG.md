@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-16
+
+- On the Mac, the app no longer runs `ps` and `lsof` every 750 ms to find what each card is running and in which folder. It reads the same information directly, which saves about a tenth of a CPU core for as long as the app is open. The card labels, directories and the ssh host show as before.
+
 ### 2026-11-15
 
 - The editor's file tree can show git status: a letter beside each changed file (M, A, U, R, ! for a conflict), changed names in colour, a dot on folders with changes inside, and ignored files faded. Turn it on with `editor.explorer.git`.
