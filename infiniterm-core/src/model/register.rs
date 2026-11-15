@@ -4579,6 +4579,40 @@ mod tests {
             .contains(&Effect::LoadSavedWorkspace("site".into())));
     }
 
+    // The same rows; a pick asks, no keeps the file, Delete removes it.
+    #[test]
+    fn deleting_a_saved_workspace_asks_first() {
+        let deletes = |h: &mut Harness| {
+            h.m.take_effects()
+                .into_iter()
+                .filter(|e| matches!(e, Effect::DeleteSavedWorkspaceFile(_)))
+                .collect::<Vec<_>>()
+        };
+        let mut h = Harness::new();
+        h.m.saved_workspace_names = vec!["api".into(), "site".into()];
+        for (answer, deleted) in [
+            (None, vec![]),
+            (
+                Some(""),
+                vec![Effect::DeleteSavedWorkspaceFile("site".into())],
+            ),
+        ] {
+            let effects = h.run("workspace.deleteSaved");
+            assert!(effects.contains(&Effect::RefreshSavedWorkspaces));
+            assert_eq!(h.m.palette.source, Some(Source::DeleteSavedWorkspace));
+            let rows = h.m.palette_items(Source::DeleteSavedWorkspace, &[]);
+            let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+            assert_eq!(labels, ["api", "site"]);
+            h.m.palette_run(Source::DeleteSavedWorkspace, "site");
+            assert!(deletes(&mut h).is_empty(), "nothing before the answer");
+            assert!(h.m.prompt.confirm, "a yes or no question");
+            let (pending, text) = h.m.prompt.settle(answer).unwrap();
+            assert_eq!(pending, Pending::DeleteSavedWorkspace("site".into()));
+            h.m.answer(pending, text, |_| false);
+            assert_eq!(deletes(&mut h), deleted);
+        }
+    }
+
     #[test]
     fn a_workspace_saved_under_no_name_is_not_saved() {
         let mut h = Harness::new();

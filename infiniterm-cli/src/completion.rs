@@ -167,7 +167,7 @@ _ift() {
     'diff:changes against git HEAD, as a card'
     'ls:cards as a table'
     'workspaces:workspaces as a table'
-    'workspace:saved workspaces: saved, save, open'
+    'workspace:saved workspaces: saved, save, open, delete'
     'sessions:session daemons still running, app or no app'
     'attach:connect a session'\''s shell to this terminal'
     'connect:open a second infiniterm for a host'
@@ -236,9 +236,9 @@ _ift() {
     terminal) _arguments '--workspace[open on this workspace, or make one]:workspace:_ift_workspaces' '--name[a name for the new workspace]:name:' '*:folder:_files -/' ;;
     workspace)
       case $CURRENT in
-        3) _values 'workspace verb' saved save open ;;
+        3) _values 'workspace verb' saved save open delete ;;
         4) [[ $words[3] == save ]] && _ift_workspaces
-           [[ $words[3] == open ]] && _values 'saved workspace' ${(f)"$(ift workspace saved 2>/dev/null)"} ;;
+           [[ $words[3] == (open|delete) ]] && _values 'saved workspace' ${(f)"$(ift workspace saved 2>/dev/null)"} ;;
       esac ;;
     group) _ift_groups ;;
     install-pi-hooks) _arguments '--dry-run[show the edit, write nothing]' '1:agent dir:_files -/' ;;

@@ -383,6 +383,9 @@ pub fn gate_args(words: &[String]) -> Result<Vec<String>, String> {
             valid_card(ws) && crate::saved_workspace::file_stem(name).is_some()
         }
         ["workspace", "open", name] => crate::saved_workspace::file_stem(name).is_some(),
+        // Only a file in the same folder goes (#796), through the same
+        // `file_stem`.
+        ["workspace", "delete", name] => crate::saved_workspace::file_stem(name).is_some(),
         _ => false,
     };
     if ok {
@@ -702,7 +705,9 @@ mod tests {
         assert!(!ok(&["workspace", "save", "w", ".."]));
         assert!(!ok(&["workspace", "save", "w", "x", "--force"]));
         assert!(!ok(&["workspace", "open", "  "]));
-        assert!(!ok(&["workspace", "delete", "x"]));
+        assert!(ok(&["workspace", "delete", "my site"]));
+        assert!(!ok(&["workspace", "delete", " .. "]));
+        assert!(!ok(&["workspace", "delete", "x", "--force"]));
         assert!(!ok(&["terminal", "/"]));
         assert!(!ok(&["read", "7", "--evil"]));
         assert!(!ok(&["read", "7", "--lines", "x"]));

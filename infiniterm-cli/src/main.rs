@@ -157,6 +157,9 @@ ift — drive infiniterm from a shell
                              prints the name the file got
   ift workspace open <name>  open a saved workspace as a new workspace and
                              print its id
+  ift workspace delete <name>
+                             delete a saved workspace and print the name its
+                             file had; needs no app
   ift run <command-id>       run a registered command as the palette would,
                              on the card in focus (ift commands lists them)
   ift usage [days]           the commands and mouse gestures you used in the
@@ -822,9 +825,9 @@ fn send(cmd: &str, args: Vec<String>) -> ExitCode {
     }
 }
 
-/// `ift workspace ...` (#790). `saved` lists the folder here, so it answers
-/// with the app closed; `save` and `open` change the canvas, so the app runs
-/// them (`ift_in.rs`).
+/// `ift workspace ...` (#790). `saved` and `delete` (#796) work on the folder
+/// here, so they answer with the app closed; `save` and `open` change the
+/// canvas, so the app runs them (`ift_in.rs`).
 fn workspace_cmd(args: &[String]) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("saved") => match args.get(1).map(String::as_str) {
@@ -841,9 +844,30 @@ fn workspace_cmd(args: &[String]) -> ExitCode {
             }
         },
         Some("save" | "open") => send("workspace", args.to_vec()),
+        // A file in the folder and nothing on the canvas, so like `saved` it
+        // needs no app; an open picker re-reads the folder when it opens.
+        Some("delete") => match args {
+            [_, name] => match infiniterm_core::saved_workspace::remove(
+                &infiniterm_core::paths::saved_workspaces_dir(),
+                name,
+            ) {
+                Ok(stem) => {
+                    println!("{stem}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("ift: {e}");
+                    ExitCode::from(2)
+                }
+            },
+            _ => {
+                eprintln!("ift: workspace delete takes a name");
+                ExitCode::from(2)
+            }
+        },
         _ => {
             eprintln!(
-                "ift: workspace takes: saved [--nul], save <workspace> <name> [--replace], open <name>"
+                "ift: workspace takes: saved [--nul], save <workspace> <name> [--replace], open <name>, delete <name>"
             );
             ExitCode::from(2)
         }

@@ -638,6 +638,11 @@ impl Model {
                     self.save_workspace_as(&id, &name);
                 }
             }
+            Pending::DeleteSavedWorkspace(name) => {
+                if text.is_some() {
+                    self.effects.push(Effect::DeleteSavedWorkspaceFile(name));
+                }
+            }
             Pending::CloseWorkspace(id) => {
                 if text.is_some() {
                     self.close_workspace_confirmed(&id);
@@ -1447,6 +1452,14 @@ impl Model {
             Source::SavedWorkspaces => self
                 .effects
                 .push(Effect::LoadSavedWorkspace(id.to_string())),
+            // Asked first: the file is the only copy.
+            Source::DeleteSavedWorkspace => {
+                self.prompt.confirm(
+                    &format!("Delete the saved workspace \"{id}\"?"),
+                    "Delete",
+                    Pending::DeleteSavedWorkspace(id.to_string()),
+                );
+            }
             Source::WindowColor => self.window_color_run(id),
             Source::MoveTab | Source::MoveCardInto => {
                 let Some(from) = self.selection.focused_id.clone() else {
