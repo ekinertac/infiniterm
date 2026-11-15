@@ -587,6 +587,17 @@ impl AppView {
                     self.model.open_saved_workspace(&name, text.as_deref());
                     self.redraw = true;
                 }
+                Effect::DeleteSavedWorkspaceFile(name) => {
+                    let dir = infiniterm_core::paths::saved_workspaces_dir();
+                    match infiniterm_core::saved_workspace::remove(&dir, &name) {
+                        Ok(stem) => self
+                            .model
+                            .notify(format!("deleted saved workspace \"{stem}\"")),
+                        Err(e) => self.model.notify(e),
+                    }
+                    self.model.saved_workspace_names = infiniterm_core::saved_workspace::list(&dir);
+                    self.redraw = true;
+                }
                 // "Git: switch branch…" (#750). On the UI thread like Go to
                 // File's `git ls-files`: one short git run a person asked for.
                 Effect::ListBranches(dir) => {

@@ -31,6 +31,9 @@ pub enum Source {
     /// `workspace.openSaved` (#715): the workspaces saved under a name; a
     /// pick opens it as a new workspace.
     SavedWorkspaces,
+    /// `workspace.deleteSaved` (#796): the same rows; a pick asks, then
+    /// deletes that file.
+    DeleteSavedWorkspace,
     /// `window.color` (#157, #160): named colours previewed live, then a hex code.
     WindowColor,
     /// `uitheme.pick` (#511): the files in `ui-themes/`, previewed live like
@@ -83,6 +86,7 @@ impl Source {
             Source::MoveTo => "moveTo",
             Source::MoveGroupTo => "moveGroupTo",
             Source::SavedWorkspaces => "savedWorkspaces",
+            Source::DeleteSavedWorkspace => "deleteSavedWorkspace",
             Source::WindowColor => "windowColor",
             Source::UiThemes => "uiThemes",
             Source::MoveTab => "moveTab",
@@ -154,6 +158,7 @@ impl Source {
             Source::MoveTo => "Move to workspace…",
             Source::MoveGroupTo => "Move the group to workspace…",
             Source::SavedWorkspaces => "Open a saved workspace…",
+            Source::DeleteSavedWorkspace => "Delete a saved workspace…",
             Source::WindowColor => "Window colour…",
             Source::UiThemes => "Switch UI theme",
             Source::MoveTab => "Move the tab to card…",
@@ -612,7 +617,7 @@ impl Model {
             }
             // The saved workspaces by name. Recency applies: the one you open
             // every morning rises.
-            Source::SavedWorkspaces => self
+            Source::SavedWorkspaces | Source::DeleteSavedWorkspace => self
                 .saved_workspace_names
                 .iter()
                 .map(|name| PaletteItem {

@@ -304,6 +304,9 @@ pub enum Effect {
     /// Read the saved workspace of this name and hand its text (`None`: no
     /// such file) to `Model::open_saved_workspace`.
     LoadSavedWorkspace(String),
+    /// Delete the saved workspace of this name (#796), asked first
+    /// (`Pending::DeleteSavedWorkspace`).
+    DeleteSavedWorkspaceFile(String),
     /// "Git: switch branch…" (#750): list the branches of the repository
     /// `dir` is in and hand them to `Model::open_branches`, or git's error
     /// to `Model::notify`.
@@ -705,6 +708,9 @@ pub enum Pending {
         id: String,
         name: String,
     },
+    /// `workspace.deleteSaved` (#796): yes deletes the saved workspace of
+    /// this name.
+    DeleteSavedWorkspace(String),
     CloseWorkspace(String),
     /// A browser card's page sent the card to another app's link (#668): yes
     /// hands it to macOS.

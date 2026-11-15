@@ -399,6 +399,11 @@ pub fn register(r: &mut crate::commands::CommandRegistry<Model>) {
         m.effects.push(Effect::RefreshSavedWorkspaces);
         m.open_palette(Source::SavedWorkspaces);
     });
+    // The same list; a pick asks before the file goes (#796).
+    r.register("workspace.deleteSaved", "Workspace: delete saved…", |m| {
+        m.effects.push(Effect::RefreshSavedWorkspaces);
+        m.open_palette(Source::DeleteSavedWorkspace);
+    });
     // The last workspace stays. Asked first, because this is the one key
     // that kills several shells at once; an empty workspace goes unasked.
     r.register("workspace.close", "Workspace: close", |m| {

@@ -12,8 +12,9 @@
 //!
 //! `Model::workspace_snapshot_text` and `Model::open_saved_workspace`
 //! (`model/persist.rs`) are the two halves; the ui (`runtime.rs`) moves
-//! the bytes with `write`, `read` and `list` below, on the effects
-//! `SaveWorkspaceFile`, `LoadSavedWorkspace` and `RefreshSavedWorkspaces`.
+//! the bytes with `write`, `read`, `list` and `remove` below, on the effects
+//! `SaveWorkspaceFile`, `LoadSavedWorkspace`, `RefreshSavedWorkspaces` and
+//! `DeleteSavedWorkspaceFile`.
 //! The folder is `paths::saved_workspaces_dir`; the functions take it as an
 //! argument so a test never touches the real one.
 use crate::palette_usage::Usage;
@@ -124,6 +125,21 @@ pub fn write(dir: &Path, name: &str, contents: &str) -> Result<(), String> {
 /// The snapshot `name` in `dir`, or `None` when there is no such file.
 pub fn read(dir: &Path, name: &str) -> Option<String> {
     std::fs::read_to_string(path(dir, name)?).ok()
+}
+
+/// Deletes the snapshot `name` from `dir` (#796) and returns the name its
+/// file had (`file_stem`). A name with no file is an error, so a caller can
+/// say nothing was deleted.
+pub fn remove(dir: &Path, name: &str) -> Result<String, String> {
+    let stem = file_stem(name).ok_or("a saved workspace needs a name")?;
+    let file = dir.join(format!("{stem}.json"));
+    match std::fs::remove_file(&file) {
+        Ok(()) => Ok(stem),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(format!("no saved workspace \"{stem}\""))
+        }
+        Err(e) => Err(format!("could not delete saved workspace \"{stem}\": {e}")),
+    }
 }
 
 #[cfg(test)]
@@ -250,6 +266,21 @@ mod tests {
         assert_eq!(list(&dir), ["Api", "site"]);
         assert_eq!(read(&dir, "site").as_deref(), Some("two"));
         assert!(write(&dir, "  ", "x").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removed_by_name_and_only_once() {
+        let dir = std::env::temp_dir().join(format!("ift-saved-ws-{}", uuid::Uuid::new_v4()));
+        write(&dir, "a/b", "x").unwrap();
+        write(&dir, "keep", "y").unwrap();
+        assert_eq!(remove(&dir, "a/b").as_deref(), Ok("a-b"));
+        assert_eq!(list(&dir), ["keep"]);
+        assert_eq!(
+            remove(&dir, "a/b"),
+            Err("no saved workspace \"a-b\"".to_string())
+        );
+        assert!(remove(&dir, " ").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
