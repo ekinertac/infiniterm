@@ -279,6 +279,33 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "editor.explorer.git",
+        &[
+            "Git status in the editor's file tree: a letter for each changed file (M, A,",
+            "U, R, ! for a conflict), changed names tinted, a dot on folders holding",
+            "changes, and ignored files dimmed. Off by default.",
+        ],
+    ),
+    (
+        "editor.fontFamily",
+        &["The editor's font family. Unset uses the terminal's (terminal.fontFamily)."],
+    ),
+    (
+        "editor.fontSize",
+        &["The editor's font size. Unset uses the terminal's (terminal.fontSize)."],
+    ),
+    (
+        "editor.fontWeight",
+        &["The editor's font weight. Unset uses the terminal's (terminal.fontWeight)."],
+    ),
+    (
+        "editor.fontWeightBold",
+        &[
+            "The editor's bold weight. Unset uses the terminal's",
+            "(terminal.fontWeightBold).",
+        ],
+    ),
+    (
         "editor.formatOnSave",
         &[
             "Run the file's formatter over an editor's text when you save it (Cmd+S).",

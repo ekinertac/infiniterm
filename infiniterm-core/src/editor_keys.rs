@@ -62,6 +62,9 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
         // Every editor's comment toggle (#697). On the canvas Cmd+/ is the
         // shortcuts panel; in the text it is this.
         "cmd+/" => "editor.toggleComment",
+        // VS Code's word wrap toggle (#798). It takes Option+Z's `Ω` in a
+        // locked editor, as VS Code does; on the canvas Alt+Z stays free.
+        "alt+z" => "editor.toggleWrap",
         // Expand and shrink the selection by syntax node (#778). Alt+Up and
         // Down already move lines and Ctrl+Shift+Up and Down grow a column
         // of cursors, so the free sideways pair of that family.
@@ -74,6 +77,16 @@ pub fn lock_override(chord: &str) -> Option<&'static str> {
         "cmd+s" => "card.save",
         _ => return None,
     })
+}
+
+/// A chord with Alt and no Cmd or Ctrl that a locked editor claims (Alt+Z,
+/// #798). `input.rs` sends only Cmd and Ctrl chords to the keymap, so every
+/// other Alt key keeps typing its character or moving lines in the body.
+pub fn is_alt_override(chord: &str) -> bool {
+    chord.starts_with("alt+")
+        && !chord.contains("cmd+")
+        && !chord.contains("ctrl+")
+        && lock_override(chord).is_some()
 }
 
 /// What a LOCKED diff card claims. It has the editor's body and so the
@@ -121,6 +134,13 @@ mod tests {
         assert_eq!(lock_override("cmd+shift+]"), Some("editor.tab.next"));
         assert_eq!(lock_override("cmd+s"), Some("card.save")); // saves while locked
         assert_eq!(lock_override("ctrl+g"), Some("editor.goToLine"));
+        assert_eq!(lock_override("alt+z"), Some("editor.toggleWrap"));
+        // The key path sends only Cmd and Ctrl chords to the keymap; an
+        // Alt-only chord a locked editor claims must be let through too.
+        assert!(is_alt_override("alt+z"));
+        assert!(!is_alt_override("alt+x"), "Option+X still types");
+        assert!(!is_alt_override("cmd+/"), "not Alt-only");
+        assert!(!is_alt_override("alt+arrowup"), "the body's line move");
         assert_eq!(
             lock_override("ctrl+shift+arrowright"),
             Some("editor.selection.expand")

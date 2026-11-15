@@ -108,9 +108,10 @@ const GUTTER_SEPARATOR_OFFSET_PX: f64 = 8.;
 /// extra gutter width.
 const GUTTER_MARK_W_PX: f64 = 3.;
 const GUTTER_MARK_INSET_PX: f64 = 2.;
-const GUTTER_MARK_ADDED: &str = "#4caf50";
-const GUTTER_MARK_MODIFIED: &str = "#e3b341";
-const GUTTER_MARK_DELETED: &str = "#f85149";
+/// Shared with the tree's git status (`tree_git.rs`), one colour each.
+const GUTTER_MARK_ADDED: &str = crate::tree_git::MARK_ADDED;
+const GUTTER_MARK_MODIFIED: &str = crate::tree_git::MARK_MODIFIED;
+const GUTTER_MARK_DELETED: &str = crate::tree_git::MARK_DELETED;
 /// The deleted-lines marker's height: a notch, not a full row.
 const GUTTER_MARK_DELETED_H_PX: f64 = 3.;
 /// The completion popup shows this many rows and scrolls past them.
@@ -138,6 +139,9 @@ const TREE_INDENT: &str = "  ";
 /// height of a capital, and narrower than the arrow's two cells it replaces,
 /// so a gap is left before the name.
 const TREE_ICON_RATIO: f32 = 1.;
+/// Space between the git status letter's cell (`editor.explorer.git`) and
+/// the indent, so a letter never touches an arrow or an icon.
+const TREE_GIT_GAP_PX: f64 = 4.;
 /// The search field's label text is smaller than the buffer's, like a
 /// caption next to the value it labels.
 const SEARCH_LABEL_FONT_SCALE: f64 = 0.85;
@@ -334,6 +338,8 @@ pub struct EditorBody {
     scroll_line: usize,
     scroll_x: f64,
     pub wrap: bool,
+    /// Alt+Z's choice for this tab (#798), over `editor.wrap`; not saved.
+    pub wrap_override: Option<bool>,
     pub highlight_line: bool,
     /// The polish set (#778), set by the reconcile, all off by default:
     /// `editor.highlightOccurrences`, `indentGuides`, `smoothCaret` (already
@@ -364,6 +370,12 @@ pub struct EditorBody {
     caret_glide: Option<(f64, f64, f64)>,
     /// `editor.explorer.icons`: file and folder icons in the tree.
     pub tree_icons: bool,
+    /// `editor.explorer.git`: git status in the tree (#798). The store is
+    /// shared by every tab (`tree_git.rs`); `tree_git_status` is the answer
+    /// this tab last took from it, so painting takes no lock.
+    pub tree_git: bool,
+    pub tree_git_store: crate::tree_git::TreeGitStore,
+    tree_git_status: Option<Arc<infiniterm_core::git_tree_status::TreeStatus>>,
     pub read_only: bool,
     pub colors: EditorColors,
     pub rules: Vec<SyntaxRule>,
@@ -581,6 +593,7 @@ impl EditorBody {
             scroll_line: 0,
             scroll_x: 0.,
             wrap: false,
+            wrap_override: None,
             highlight_line: false,
             highlight_occurrences: false,
             indent_guides: false,
@@ -597,6 +610,9 @@ impl EditorBody {
             caret_drawn: None,
             caret_glide: None,
             tree_icons: false,
+            tree_git: false,
+            tree_git_store: crate::tree_git::shared(),
+            tree_git_status: None,
             read_only: false,
             colors: EditorColors {
                 background: "#0e101a".into(),
@@ -932,7 +948,36 @@ impl EditorBody {
                 if tree.refresh(&mut list_dir) {
                     self.dirty = true;
                 }
+                // Its git status, on a thread (#717); a tab on the same tree
+                // that asked this poll already makes this a no-op.
+                if self.tree_git {
+                    let root = tree.root.clone();
+                    crate::tree_git::ask(
+                        &self.tree_git_store,
+                        &tree.root,
+                        now,
+                        DISK_POLL_MS,
+                        move || {
+                            infiniterm_core::git_tree_status::status(std::path::Path::new(&root))
+                                .ok()
+                        },
+                    );
+                }
             }
+        }
+        // A landed answer (this tab's ask or another's) redraws the tree.
+        let status = match (&self.tree, self.tree_git && self.source.is_local()) {
+            (Some(tree), true) => crate::tree_git::get(&self.tree_git_store, &tree.root),
+            _ => None,
+        };
+        let same = match (&status, &self.tree_git_status) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.tree_git_status = status;
+            self.dirty = true;
         }
         // The gutter's own poll: HEAD moves on a commit, checkout or
         // stash elsewhere, not on every keystroke, so it is not worth a
@@ -1857,6 +1902,20 @@ impl EditorBody {
     }
 
     /// The tree is on because the card says so (`ift <dir>`, a restore).
+    /// Alt+Z (#798): flips this tab's wrap and remembers it over the
+    /// setting. A diff card keeps its own layout. Unwrapped, the horizontal
+    /// scroll starts at the left edge again.
+    pub fn toggle_wrap(&mut self) {
+        if self.diff.is_some() {
+            return;
+        }
+        let wrap = !self.wrap;
+        self.wrap_override = Some(wrap);
+        self.wrap = wrap;
+        self.scroll_x = 0.;
+        self.dirty = true;
+    }
+
     pub fn show_tree(&mut self, root: &str) {
         if self.tree.is_none() {
             let mut t = Tree::new(root);
@@ -3714,6 +3773,16 @@ impl EditorBody {
         let current = self.path.clone();
         let pad = px((PAD_X * scale) as f32);
         let mut y = area.origin.y + px((PAD_Y * scale) as f32);
+        // Git status (#798): one letter cell on the left of every row while
+        // the setting is on, so names do not move as files change status.
+        let git = self.tree_git_status.clone();
+        let git_col = if self.tree_git && self.source.is_local() && self.diff.is_none() {
+            crate::text::shape(window, "M", font_size, &f, fg).width
+                + px((TREE_GIT_GAP_PX * scale) as f32)
+        } else {
+            px(0.)
+        };
+        let tree_bg = hex(&self.colors.background);
         // The changed-files list opens with its totals, in the gutter's
         // colour, cut at the pane's edge rather than run into the diff.
         if let Some(head) = self.diff_list_heading() {
@@ -3776,6 +3845,23 @@ impl EditorBody {
                 continue;
             }
             let expanded = row.entry.is_dir && tree.is_expanded(&row.entry.path);
+            let style = crate::tree_git::row_style(
+                git.as_ref()
+                    .and_then(|g| g.mark_for(&row.entry.path, row.entry.is_dir)),
+            );
+            // A changed name takes its status colour, over the open file's
+            // colour too; the focused cursor row keeps the selection's text
+            // colour so it stays legible on the selection.
+            if let Some(tint) = style.tint {
+                if !(is_cursor && self.tree_focused && focused) {
+                    color = hex(tint);
+                }
+            }
+            color.a *= style.alpha;
+            if style.letter != " " {
+                let l = crate::text::shape(window, style.letter, font_size, &f, color);
+                let _ = l.paint(point(area.origin.x + pad, y), line_h, window, cx);
+            }
             // With icons the arrow's two cells hold the icon instead, so a
             // name sits where it does without them.
             let marker = if self.tree_icons {
@@ -3799,14 +3885,14 @@ impl EditorBody {
             // A name wider than the tree is cut with an ellipsis, not drawn
             // over the buffer beside it. The row's highlight already stopped
             // at the tree's edge; the text kept going.
-            let room = area.size.width - pad * 2.;
+            let room = area.size.width - pad * 2. - git_col;
             if line.width > room {
                 text = crate::text::elide(&text, f32::from(room), |t| {
                     f32::from(crate::text::shape(window, t, font_size, &f, color).width)
                 });
                 line = crate::text::shape(window, &text, font_size, &f, color);
             }
-            let _ = line.paint(point(area.origin.x + pad, y), line_h, window, cx);
+            let _ = line.paint(point(area.origin.x + pad + git_col, y), line_h, window, cx);
             if self.tree_icons {
                 let icon = infiniterm_core::explorer_icons::icon_for(
                     &row.entry.name,
@@ -3819,14 +3905,20 @@ impl EditorBody {
                     let indent = TREE_INDENT.repeat(row.depth);
                     let x = crate::text::shape(window, &indent, font_size, &f, color).width;
                     let side = font_size * TREE_ICON_RATIO;
-                    let at = point(area.origin.x + pad + x, y + (line_h - side) / 2.);
-                    let _ = window.paint_image(
-                        Bounds::new(at, size(side, side)),
-                        Corners::default(),
-                        image,
-                        0,
-                        false,
-                    );
+                    let at = point(area.origin.x + pad + git_col + x, y + (line_h - side) / 2.);
+                    let icon_b = Bounds::new(at, size(side, side));
+                    let _ = window.paint_image(icon_b, Corners::default(), image, 0, false);
+                    // An ignored row's icon fades with its name. gpui 0.2's
+                    // `paint_image` takes no opacity (its element opacity is
+                    // crate-private), so the tree's ground is laid over it.
+                    // Not on a highlighted row (cursor, menu): the ground
+                    // there is the wash, and a plain square would show.
+                    if style.alpha < 1. && !is_cursor && self.menu_row != Some(i) {
+                        window.paint_quad(fill(
+                            icon_b,
+                            crate::chrome::with_alpha(tree_bg, 1. - style.alpha),
+                        ));
+                    }
                 }
             }
             y += line_h;
@@ -5994,6 +6086,49 @@ mod tests {
         b.change_revert_all(6.);
         assert_eq!(b.buffer.text(), "a\nB\nc\nd\nE\nf\n");
         assert!(b.agent_base.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn git_init(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ift-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = std::process::Command::new("git")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .args(["init", "-q"])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        std::fs::write(dir.join("new.txt"), "x").unwrap();
+        dir
+    }
+
+    // The tree's git status (#798): asked on the disk poll, off the UI
+    // thread, and picked up by a later idle; off, nothing is asked.
+    #[test]
+    fn the_tree_asks_git_on_the_poll_only_when_on() {
+        let dir = git_init("tree-git");
+        let root = dir.to_string_lossy().to_string();
+        let mut b = body();
+        b.tree_git_store = crate::tree_git::TreeGitStore::default();
+        b.show_tree(&root);
+        b.idle(DISK_POLL_MS + 1.);
+        assert!(crate::tree_git::get(&b.tree_git_store, &root).is_none());
+        assert!(b.tree_git_status.is_none(), "off: no git");
+
+        b.tree_git = true;
+        b.idle(2. * DISK_POLL_MS + 2.);
+        let stop = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while b.tree_git_status.is_none() {
+            assert!(std::time::Instant::now() < stop, "git never answered");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            b.idle(2. * DISK_POLL_MS + 3.);
+        }
+        let status = b.tree_git_status.clone().unwrap();
+        let new = format!("{}/new.txt", status.root);
+        assert!(status.mark_for(&new, false).is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

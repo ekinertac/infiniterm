@@ -1388,7 +1388,12 @@ impl AppView {
             }
             return true;
         }
-        if (m.platform || m.control) && handle_chord(&mut self.model, &self.registry, &chord) {
+        // Alt+Z is the one Alt-only chord with a command (#798); every other
+        // Alt key is the body's (a character, a line move).
+        let alt_claimed = m.alt && infiniterm_core::editor_keys::is_alt_override(&chord);
+        if (m.platform || m.control || alt_claimed)
+            && handle_chord(&mut self.model, &self.registry, &chord)
+        {
             if self.keycast_on {
                 self.note_chord(&chord, &cast.unwrap_or_default(), now_ms());
             }

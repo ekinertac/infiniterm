@@ -558,6 +558,9 @@ pub enum EditorAction {
     /// `editor.toggleComment` (#697): comment or uncomment the lines under
     /// every cursor, in the language's comment style.
     ToggleComment,
+    /// `editor.toggleWrap` (#798): wrap or unwrap the focused tab's long
+    /// lines, over `editor.wrap`, for this session.
+    ToggleWrap,
     /// `editor.selection.expand` / `.shrink` (#778): the selection grows to
     /// the enclosing syntax node, and steps back the way it grew.
     ExpandSelection,

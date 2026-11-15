@@ -5224,6 +5224,33 @@ mod tests {
         assert_eq!(resolve_chord(&h.m, "cmd+shift+alt+ctrl+9"), None);
     }
 
+    // Word wrap per tab (#798): a palette command, and Alt+Z inside a
+    // locked editor as in VS Code; on the canvas Alt+Z is not claimed.
+    #[test]
+    fn toggle_wrap_is_a_command_and_alt_z_in_a_locked_editor() {
+        let mut h = Harness::new();
+        let id = h.m.cards[0].id.clone();
+        h.m.set_focus(Some(&id));
+        h.m.cards[0].kind = CardKind::Editor;
+        assert!(h.run("editor.toggleWrap").iter().any(|e| matches!(
+            e,
+            Effect::Editor {
+                action: EditorAction::ToggleWrap,
+                ..
+            }
+        )));
+        h.m.cards[0].locked = true;
+        assert_eq!(
+            resolve_chord(&h.m, "alt+z").as_deref(),
+            Some("editor.toggleWrap")
+        );
+        h.m.cards[0].locked = false;
+        assert_ne!(
+            resolve_chord(&h.m, "alt+z").as_deref(),
+            Some("editor.toggleWrap")
+        );
+    }
+
     // An arrowed-to editor is a card: the canvas's chords are the canvas's
     // until you are in it. Locked, the same chords are the editor's.
     #[test]

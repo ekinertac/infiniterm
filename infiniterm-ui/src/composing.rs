@@ -40,7 +40,19 @@ impl AppView {
         else {
             return;
         };
-        let metrics = self.metrics(window);
+        // An editor card composes in the editor's font (#798).
+        let in_editor = self
+            .model
+            .selection
+            .focused_id
+            .as_ref()
+            .and_then(|id| self.model.card(id))
+            .is_some_and(|c| c.kind == infiniterm_core::saved_layout::CardKind::Editor);
+        let metrics = if in_editor {
+            self.editor_metrics(window)
+        } else {
+            self.metrics(window)
+        };
         // The cell's height is font size times line height at the zoom;
         // undo the line height for the size the glyphs were drawn at.
         let font_px = f32::from(caret.size.height) / metrics.line_height as f32;

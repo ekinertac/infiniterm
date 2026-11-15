@@ -32,7 +32,7 @@ pub struct Changes {
     pub files: Vec<ChangedFile>,
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
