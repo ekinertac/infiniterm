@@ -16,7 +16,11 @@
 //!   columns and rows), the replay, then live output, from `Relay`. What a
 //!   viewer sends back: `Data` goes to the session as keys; `Resize`, `Kill`
 //!   and anything else is ignored, so a viewer never resizes, starts or ends a
-//!   host session.
+//!   host session. The one exception (#806): a viewer that named its size in
+//!   the hello (`session <id> <cols>x<rows>`) has its `Resize` frames read as
+//!   its new size, and the app sizes the pty to it while that viewer is the
+//!   last to have typed (`viewer_size.rs`). The size is the app's to apply;
+//!   this server only reports it (`take_sizes`).
 //!
 //! A connection opens with one text line from the viewer,
 //! `ift-join <major> <topic>`, and the server answers `ift-join <major> ok` or
@@ -38,13 +42,14 @@ use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{sync_channel, RecvTimeoutError, SyncSender};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{sync_channel, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::relay::Relay;
 use super::session_protocol::{Frame, FrameReader};
+use super::viewer_size::{clamp_size, parse_size, SizeChange, SizeEvent};
 #[cfg(windows)]
 use crate::pipe::{PipeListener, PipeStream};
 
@@ -63,8 +68,13 @@ type Conn = PipeStream;
 /// viewer never believes it is in control of a host that would ignore it.
 pub const MAJOR: u32 = super::JOIN_MAJOR;
 
-/// The longest handshake line accepted: a topic is a word and a session id.
+/// The longest handshake line accepted: a topic is a word, a session id and
+/// a size.
 const MAX_LINE: u64 = 256;
+
+/// A sized viewer's keys are reported to the app at most this often: the app
+/// needs to know who typed last, not every key.
+const TYPED_EVERY: Duration = Duration::from_millis(250);
 
 /// How often a connection's writer checks that its reader is still there.
 /// A connection closes only when every copy of its socket is closed, and the
@@ -277,6 +287,12 @@ pub struct JoinHub {
     /// Restart notices queued and not yet written by a viewer's writer, so
     /// `announce_restart` knows when it may let the app quit.
     restart_unsent: Arc<AtomicUsize>,
+    /// What sized viewers do (#806), for the app that took it
+    /// (`take_sizes`). Until then a declared size is ignored, as on a host
+    /// that cannot apply it (`ift serve`), and nothing queues.
+    sizes: Arc<Mutex<Option<Sender<SizeEvent>>>>,
+    /// The number the next sized viewer is known by.
+    next_viewer: Arc<AtomicU64>,
 }
 
 impl JoinHub {
@@ -299,7 +315,17 @@ impl JoinHub {
             opens_tx,
             opens_rx: Arc::new(Mutex::new(Some(opens_rx))),
             restart_unsent: Arc::new(AtomicUsize::new(0)),
+            sizes: Arc::new(Mutex::new(None)),
+            next_viewer: Arc::new(AtomicU64::new(1)),
         }
+    }
+
+    /// What viewers that declared a size do (#806), for the app to size the
+    /// pty by. A second call replaces the first receiver.
+    pub fn take_sizes(&self) -> std::sync::mpsc::Receiver<SizeEvent> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        *self.sizes.lock().unwrap() = Some(tx);
+        rx
     }
 
     /// The clicks viewers sent on paths (#555), resolved here, for the app to
@@ -453,7 +479,7 @@ impl JoinHub {
                 let _ = writeln!(out, "ift-join {MAJOR} error {why}");
             }
             Ok(Topic::Canvas) => self.serve_canvas(out, reader),
-            Ok(Topic::Session(id)) => self.serve_session(&id, out, reader),
+            Ok(Topic::Session(id, size)) => self.serve_session(&id, size, out, reader),
         }
     }
 
@@ -551,7 +577,13 @@ impl JoinHub {
         let _ = out.shutdown(Shutdown::Both);
     }
 
-    fn serve_session(&self, id: &str, mut out: Conn, mut input: impl Read) {
+    fn serve_session(
+        &self,
+        id: &str,
+        size: Option<(u16, u16)>,
+        mut out: Conn,
+        mut input: impl Read,
+    ) {
         let rx = self.relay.lock().unwrap().subscribe(id);
         let Some(rx) = rx else {
             let _ = writeln!(out, "ift-join {MAJOR} error no session {id} on this host");
@@ -560,6 +592,26 @@ impl JoinHub {
         if writeln!(out, "ift-join {MAJOR} ok").is_err() {
             return;
         }
+        // A sized viewer (#806), when the app takes sizes: reported by a
+        // number of its own, so the app knows whose size it is and whose
+        // connection ended.
+        let sized = match (size, self.sizes.lock().unwrap().clone()) {
+            (Some(_), Some(tx)) => Some((tx, self.next_viewer.fetch_add(1, Ordering::Relaxed))),
+            _ => None,
+        };
+        let report = |change: SizeChange| {
+            if let Some((tx, viewer)) = &sized {
+                let _ = tx.send(SizeEvent {
+                    session: id.to_string(),
+                    viewer: *viewer,
+                    change,
+                });
+            }
+        };
+        if let Some((cols, rows)) = size {
+            report(SizeChange::Declared { cols, rows });
+        }
+        let mut typed_at: Option<Instant> = None;
         // After the replay is queued, so the redraw follows it.
         if let Some(nudge) = &self.nudge {
             nudge(id);
@@ -594,7 +646,19 @@ impl JoinHub {
             }
             loop {
                 match frames.next() {
-                    Ok(Some(Frame::Data(bytes))) => (self.write)(id, &bytes),
+                    Ok(Some(Frame::Data(bytes))) => {
+                        if typed_at.is_none_or(|at| at.elapsed() >= TYPED_EVERY) {
+                            typed_at = Some(Instant::now());
+                            report(SizeChange::Typed);
+                        }
+                        (self.write)(id, &bytes)
+                    }
+                    // Only a sized viewer's size counts, and only as its own
+                    // screen: the app decides when the pty follows it.
+                    Ok(Some(Frame::Resize { cols, rows })) if sized.is_some() => {
+                        let (cols, rows) = clamp_size(cols, rows);
+                        report(SizeChange::Declared { cols, rows });
+                    }
                     // A viewer does not resize, start or end a host session.
                     Ok(Some(_)) => {}
                     Ok(None) => break,
@@ -602,6 +666,7 @@ impl JoinHub {
                 }
             }
         }
+        report(SizeChange::Left);
         closed.store(true, Ordering::Relaxed);
         let _ = out.shutdown(Shutdown::Both);
     }
@@ -610,10 +675,11 @@ impl JoinHub {
 #[derive(Debug, PartialEq)]
 enum Topic {
     Canvas,
-    Session(String),
+    /// The id, and the size a viewer declared for itself (#806).
+    Session(String, Option<(u16, u16)>),
 }
 
-/// `ift-join <major> canvas` or `ift-join <major> session <id>`.
+/// `ift-join <major> canvas` or `ift-join <major> session <id> [<cols>x<rows>]`.
 fn parse_hello(line: &str) -> Result<Topic, String> {
     let mut words = line.split_whitespace();
     if words.next() != Some("ift-join") {
@@ -628,9 +694,15 @@ fn parse_hello(line: &str) -> Result<Topic, String> {
             "this host speaks ift-join {MAJOR} and you asked for {major}; update infiniterm on the host"
         ));
     }
-    match (words.next(), words.next(), words.next()) {
-        (Some("canvas"), None, None) => Ok(Topic::Canvas),
-        (Some("session"), Some(id), None) if valid_id(id) => Ok(Topic::Session(id.to_string())),
+    match (words.next(), words.next(), words.next(), words.next()) {
+        (Some("canvas"), None, None, None) => Ok(Topic::Canvas),
+        (Some("session"), Some(id), None, None) if valid_id(id) => {
+            Ok(Topic::Session(id.to_string(), None))
+        }
+        (Some("session"), Some(id), Some(size), None) if valid_id(id) => match parse_size(size) {
+            Some(size) => Ok(Topic::Session(id.to_string(), Some(size))),
+            None => Err("the size is <columns>x<rows>".into()),
+        },
         _ => Err("the topic is canvas, or session and an id".into()),
     }
 }
@@ -1114,11 +1186,84 @@ mod tests {
         assert_eq!(parse_hello("ift-join 1 canvas"), Ok(Topic::Canvas));
         assert_eq!(
             parse_hello("ift-join 1 session a-b_9"),
-            Ok(Topic::Session("a-b_9".into()))
+            Ok(Topic::Session("a-b_9".into(), None))
+        );
+        assert_eq!(
+            parse_hello("ift-join 2 session a-b_9 40x30"),
+            Ok(Topic::Session("a-b_9".into(), Some((40, 30))))
         );
         assert!(parse_hello("hello").is_err());
         assert!(parse_hello("ift-join 1 session ../etc").is_err());
         assert!(parse_hello("ift-join 1 session a b").is_err());
+        assert!(parse_hello("ift-join 2 session a 40x30 x").is_err());
+        assert!(parse_hello("ift-join 2 canvas 40x30").is_err());
         assert!(parse_hello("ift-join x canvas").is_err());
+    }
+
+    fn next_size(rx: &std::sync::mpsc::Receiver<SizeEvent>) -> SizeChange {
+        rx.recv_timeout(Duration::from_secs(3))
+            .expect("a size event")
+            .change
+    }
+
+    #[test]
+    fn a_sized_viewer_reports_its_size_its_keys_and_its_leaving() {
+        let (hub, relay, written) = hub();
+        relay.lock().unwrap().open(
+            "abc",
+            Frame::Hello {
+                pid: 7,
+                cols: 90,
+                rows: 30,
+            },
+        );
+        let sizes = hub.take_sizes();
+        let path = socket("sized");
+        hub.serve(&path).unwrap();
+        let (mut s, answer) = connect(&path, "ift-join 2 session abc 40x30");
+        assert_eq!(answer, "ift-join 2 ok");
+        let first = sizes.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(first.session, "abc");
+        assert_eq!(first.change, SizeChange::Declared { cols: 40, rows: 30 });
+
+        // A turned phone: the new size, clamped; then keys, which still go
+        // through, and one report for a burst of them.
+        s.write_all(&Frame::Resize { cols: 90, rows: 1 }.encode())
+            .unwrap();
+        assert_eq!(
+            next_size(&sizes),
+            SizeChange::Declared { cols: 90, rows: 5 }
+        );
+        s.write_all(&Frame::Data(b"a".to_vec()).encode()).unwrap();
+        s.write_all(&Frame::Data(b"b".to_vec()).encode()).unwrap();
+        assert_eq!(next_size(&sizes), SizeChange::Typed);
+        drop(s);
+        assert_eq!(next_size(&sizes), SizeChange::Left);
+        assert_eq!(written.lock().unwrap().len(), 2);
+        assert!(sizes.try_recv().is_err(), "one Typed for the burst");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_unsized_viewer_reports_nothing_and_its_resize_is_ignored() {
+        let (hub, relay, _written) = hub();
+        relay.lock().unwrap().open(
+            "abc",
+            Frame::Hello {
+                pid: 7,
+                cols: 90,
+                rows: 30,
+            },
+        );
+        let sizes = hub.take_sizes();
+        let path = socket("unsized");
+        hub.serve(&path).unwrap();
+        let (mut s, _) = connect(&path, "ift-join 2 session abc");
+        s.write_all(&Frame::Resize { cols: 10, rows: 5 }.encode())
+            .unwrap();
+        s.write_all(&Frame::Data(b"a".to_vec()).encode()).unwrap();
+        drop(s);
+        assert!(sizes.recv_timeout(Duration::from_millis(300)).is_err());
+        let _ = std::fs::remove_file(&path);
     }
 }

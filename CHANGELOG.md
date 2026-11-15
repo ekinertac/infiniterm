@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-16
+
+- A phone that opens a terminal card can size the shell to its own screen while you type on it, without changing the card on your canvas: the card shows the smaller grid inside its frame until you type in it on the Mac or the phone leaves. Needs an iPhone app update that uses it.
+
 ### 2026-11-15
 
 - The editor's file tree can show git status: a letter beside each changed file (M, A, U, R, ! for a conflict), changed names in colour, a dot on folders with changes inside, and ignored files faded. Turn it on with `editor.explorer.git`.

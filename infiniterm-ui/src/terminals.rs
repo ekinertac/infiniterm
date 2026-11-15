@@ -11,8 +11,10 @@ use crate::terminal_body::LostLink;
 use crate::terminal_body::{Metrics, TerminalBody, READOPT_POLL_MS};
 use crate::AppView;
 use gpui::{font, px, TextRun, Window};
+use infiniterm_core::backend::viewer_size::SizeClaims;
 use infiniterm_core::backend::Panes;
 use infiniterm_core::grid::Size;
+use infiniterm_core::model::Card;
 use infiniterm_core::saved_layout::CardKind;
 
 /// The terminal family for a CSS-style list, against the fonts this machine
@@ -235,6 +237,107 @@ impl AppView {
         rejoined
     }
 
+    /// The size a terminal card's grid is fitted to.
+    fn grid_world(&self, card: &Card) -> Size {
+        // A card in its own window fills that window (#356 spike), and
+        // wears no header there.
+        if let Some(size) = self.extracted_size.get(&card.id).copied() {
+            return size;
+        }
+        let maximized = self
+            .model
+            .selection
+            .maximized
+            .then_some(self.model.selection.focused_id.as_deref())
+            .flatten();
+        let fit = fit_size(&card.id, card.rect, maximized, self.model.view_size);
+        // The header (`card.header`) takes its height from the grid.
+        let header_on = self.model.ui_theme.card.header_on();
+        let inset = infiniterm_core::card_header::inset(header_on, card.kind);
+        Size {
+            w: fit.w,
+            h: (fit.h - inset).max(0.),
+        }
+    }
+
+    /// What sized viewers did since the last poll (#806), and every host
+    /// card's grid and pty fitted to whoever holds its size. From the poll,
+    /// not the frame: a window behind others draws no frames, and a phone's
+    /// keys must still resize the pty. True when a grid changed.
+    pub fn apply_viewer_sizes(&mut self) -> bool {
+        if let Some(rx) = &self.join_sizes {
+            let now = crate::now_ms() as u64;
+            for e in rx.try_iter().collect::<Vec<_>>() {
+                let claims = self.viewer_sizes.entry(e.session.clone()).or_default();
+                claims.apply(e.viewer, e.change, now);
+                if claims.is_empty() {
+                    self.viewer_sizes.remove(&e.session);
+                }
+            }
+        }
+        self.fit_viewer_sizes()
+    }
+
+    /// Someone typed into these cards in this window: the host takes their
+    /// size back from a viewer that holds it (#806), the hold permitting.
+    fn claim_sizes_for(&mut self, typed: &[String]) {
+        if self.viewer_sizes.is_empty() || typed.is_empty() {
+            return;
+        }
+        let now = crate::now_ms() as u64;
+        for id in typed {
+            let session = self.model.card(id).and_then(|c| c.session.clone());
+            if let Some(claims) = session.and_then(|s| self.viewer_sizes.get_mut(&s)) {
+                claims.local_input(now);
+            }
+        }
+        self.fit_viewer_sizes();
+    }
+
+    /// Each host card's grid at its holder's size: a sized viewer's, drawn
+    /// inside the card's unchanged rect, or the card's own. The pty follows
+    /// the grid. A viewer window draws the host's grid by its own rule
+    /// (`viewer_pane_size`) and is never sized here.
+    fn fit_viewer_sizes(&mut self) -> bool {
+        if self.viewer {
+            return false;
+        }
+        let cards: Vec<(String, String, Size)> = self
+            .model
+            .cards
+            .iter()
+            .filter(|c| c.kind == CardKind::Terminal)
+            .filter_map(|c| Some((c.id.clone(), c.session.clone()?, self.grid_world(c))))
+            .collect();
+        let mut changed = false;
+        for (id, session, world) in cards {
+            let want = self
+                .viewer_sizes
+                .get(&session)
+                .and_then(SizeClaims::size)
+                .map(|(cols, rows)| (cols as usize, rows as usize));
+            let Some(body) = self
+                .bodies
+                .get_mut(&id)
+                .and_then(|b| b.as_any_mut().downcast_mut::<TerminalBody>())
+            else {
+                continue;
+            };
+            if body.fixed_cells == want {
+                continue;
+            }
+            body.fixed_cells = want;
+            body.mark_dirty();
+            if body.refit_to(world) {
+                if let Some(pane) = body.pane {
+                    self.backend.pty.resize_now(pane, body.cols(), body.rows());
+                }
+            }
+            changed = true;
+        }
+        changed
+    }
+
     pub fn reconcile_terminals(&mut self, window: &Window) {
         // Before the cards are read below, so a card rejoined here is seen as
         // live by this frame.
@@ -266,33 +369,8 @@ impl AppView {
             .filter(|c| c.kind == CardKind::Terminal)
             .cloned()
             .collect();
-        let maximized = self
-            .model
-            .selection
-            .maximized
-            .then(|| self.model.selection.focused_id.clone())
-            .flatten();
-        let header_on = self.model.ui_theme.card.header_on();
         for card in cards {
-            // A card in its own window fills that window (#356 spike), and
-            // wears no header there.
-            let world = match self.extracted_size.get(&card.id).copied() {
-                Some(size) => size,
-                None => {
-                    let fit = fit_size(
-                        &card.id,
-                        card.rect,
-                        maximized.as_deref(),
-                        self.model.view_size,
-                    );
-                    // The header (`card.header`) takes its height from the grid.
-                    let inset = infiniterm_core::card_header::inset(header_on, card.kind);
-                    Size {
-                        w: fit.w,
-                        h: (fit.h - inset).max(0.),
-                    }
-                }
-            };
+            let world = self.grid_world(&card);
             let is_terminal = self
                 .bodies
                 .get_mut(&card.id)
@@ -742,10 +820,14 @@ impl AppView {
         // there and false only under tmux. Inverting this line reproduces
         // tmux bug 9 exactly, so it is not spelled as `!is_tmux()` any more.
         let mut per_pane: Vec<PaneWrites> = vec![];
-        for body in self.bodies.values_mut() {
+        let mut typed: Vec<String> = vec![];
+        for (id, body) in self.bodies.iter_mut() {
             if let Some(t) = body.as_any_mut().downcast_mut::<TerminalBody>() {
                 let replies = std::mem::take(&mut t.replies);
                 if let Some(pane) = t.pane {
+                    if !t.outgoing.is_empty() {
+                        typed.push(id.clone());
+                    }
                     per_pane.push((pane, std::mem::take(&mut t.outgoing), replies));
                 }
             }
@@ -757,6 +839,9 @@ impl AppView {
                 per_pane.push((pane, std::mem::take(&mut t.outgoing), replies));
             }
         }
+        // Before the keys go, so the program reads them at the size they
+        // were typed for. Replies are not typing.
+        self.claim_sizes_for(&typed);
         let writes = writes_for(&self.backend.pty, per_pane);
         for (pane, bytes) in writes {
             self.backend.pty.write_now(pane, &bytes);
@@ -767,15 +852,20 @@ impl AppView {
     /// keystroke reaches the shell in this event, not the next frame.
     pub fn flush_writes(&mut self) {
         let mut writes: Vec<(u32, Vec<u8>)> = vec![];
-        for body in self.bodies.values_mut() {
+        let mut typed: Vec<String> = vec![];
+        for (id, body) in self.bodies.iter_mut() {
             if let Some(t) = body.as_any_mut().downcast_mut::<TerminalBody>() {
                 if let Some(pane) = t.pane {
+                    if !t.outgoing.is_empty() {
+                        typed.push(id.clone());
+                    }
                     for bytes in std::mem::take(&mut t.outgoing) {
                         writes.push((pane, bytes));
                     }
                 }
             }
         }
+        self.claim_sizes_for(&typed);
         for (pane, bytes) in writes {
             self.backend.pty.write_now(pane, &bytes);
         }
