@@ -108,9 +108,10 @@ const GUTTER_SEPARATOR_OFFSET_PX: f64 = 8.;
 /// extra gutter width.
 const GUTTER_MARK_W_PX: f64 = 3.;
 const GUTTER_MARK_INSET_PX: f64 = 2.;
-const GUTTER_MARK_ADDED: &str = "#4caf50";
-const GUTTER_MARK_MODIFIED: &str = "#e3b341";
-const GUTTER_MARK_DELETED: &str = "#f85149";
+/// Shared with the tree's git status (`tree_git.rs`), one colour each.
+const GUTTER_MARK_ADDED: &str = crate::tree_git::MARK_ADDED;
+const GUTTER_MARK_MODIFIED: &str = crate::tree_git::MARK_MODIFIED;
+const GUTTER_MARK_DELETED: &str = crate::tree_git::MARK_DELETED;
 /// The deleted-lines marker's height: a notch, not a full row.
 const GUTTER_MARK_DELETED_H_PX: f64 = 3.;
 /// The completion popup shows this many rows and scrolls past them.
@@ -138,6 +139,9 @@ const TREE_INDENT: &str = "  ";
 /// height of a capital, and narrower than the arrow's two cells it replaces,
 /// so a gap is left before the name.
 const TREE_ICON_RATIO: f32 = 1.;
+/// Space between the git status letter's cell (`editor.explorer.git`) and
+/// the indent, so a letter never touches an arrow or an icon.
+const TREE_GIT_GAP_PX: f64 = 4.;
 /// The search field's label text is smaller than the buffer's, like a
 /// caption next to the value it labels.
 const SEARCH_LABEL_FONT_SCALE: f64 = 0.85;
@@ -3752,6 +3756,16 @@ impl EditorBody {
         let current = self.path.clone();
         let pad = px((PAD_X * scale) as f32);
         let mut y = area.origin.y + px((PAD_Y * scale) as f32);
+        // Git status (#798): one letter cell on the left of every row while
+        // the setting is on, so names do not move as files change status.
+        let git = self.tree_git_status.clone();
+        let git_col = if self.tree_git && self.source.is_local() && self.diff.is_none() {
+            crate::text::shape(window, "M", font_size, &f, fg).width
+                + px((TREE_GIT_GAP_PX * scale) as f32)
+        } else {
+            px(0.)
+        };
+        let tree_bg = hex(&self.colors.background);
         // The changed-files list opens with its totals, in the gutter's
         // colour, cut at the pane's edge rather than run into the diff.
         if let Some(head) = self.diff_list_heading() {
@@ -3814,6 +3828,23 @@ impl EditorBody {
                 continue;
             }
             let expanded = row.entry.is_dir && tree.is_expanded(&row.entry.path);
+            let style = crate::tree_git::row_style(
+                git.as_ref()
+                    .and_then(|g| g.mark_for(&row.entry.path, row.entry.is_dir)),
+            );
+            // A changed name takes its status colour, over the open file's
+            // colour too; the focused cursor row keeps the selection's text
+            // colour so it stays legible on the selection.
+            if let Some(tint) = style.tint {
+                if !(is_cursor && self.tree_focused && focused) {
+                    color = hex(tint);
+                }
+            }
+            color.a *= style.alpha;
+            if style.letter != " " {
+                let l = crate::text::shape(window, style.letter, font_size, &f, color);
+                let _ = l.paint(point(area.origin.x + pad, y), line_h, window, cx);
+            }
             // With icons the arrow's two cells hold the icon instead, so a
             // name sits where it does without them.
             let marker = if self.tree_icons {
@@ -3837,14 +3868,14 @@ impl EditorBody {
             // A name wider than the tree is cut with an ellipsis, not drawn
             // over the buffer beside it. The row's highlight already stopped
             // at the tree's edge; the text kept going.
-            let room = area.size.width - pad * 2.;
+            let room = area.size.width - pad * 2. - git_col;
             if line.width > room {
                 text = crate::text::elide(&text, f32::from(room), |t| {
                     f32::from(crate::text::shape(window, t, font_size, &f, color).width)
                 });
                 line = crate::text::shape(window, &text, font_size, &f, color);
             }
-            let _ = line.paint(point(area.origin.x + pad, y), line_h, window, cx);
+            let _ = line.paint(point(area.origin.x + pad + git_col, y), line_h, window, cx);
             if self.tree_icons {
                 let icon = infiniterm_core::explorer_icons::icon_for(
                     &row.entry.name,
@@ -3857,14 +3888,18 @@ impl EditorBody {
                     let indent = TREE_INDENT.repeat(row.depth);
                     let x = crate::text::shape(window, &indent, font_size, &f, color).width;
                     let side = font_size * TREE_ICON_RATIO;
-                    let at = point(area.origin.x + pad + x, y + (line_h - side) / 2.);
-                    let _ = window.paint_image(
-                        Bounds::new(at, size(side, side)),
-                        Corners::default(),
-                        image,
-                        0,
-                        false,
-                    );
+                    let at = point(area.origin.x + pad + git_col + x, y + (line_h - side) / 2.);
+                    let icon_b = Bounds::new(at, size(side, side));
+                    let _ = window.paint_image(icon_b, Corners::default(), image, 0, false);
+                    // An ignored row's icon fades with its name. gpui 0.2's
+                    // `paint_image` takes no opacity (its element opacity is
+                    // crate-private), so the tree's ground is laid over it.
+                    if style.alpha < 1. {
+                        window.paint_quad(fill(
+                            icon_b,
+                            crate::chrome::with_alpha(tree_bg, 1. - style.alpha),
+                        ));
+                    }
                 }
             }
             y += line_h;

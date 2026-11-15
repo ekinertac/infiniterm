@@ -9,7 +9,7 @@
 //! answer carries its root (`TreeStatus::root`) and `mark_for` handles a
 //! tree in a subfolder. Several tabs on one tree therefore share one
 //! `git status` per poll. The parsing is `git_tree_status.rs` in core.
-use infiniterm_core::git_tree_status::TreeStatus;
+use infiniterm_core::git_tree_status::{RowMark, TreeStatus};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -75,16 +75,121 @@ pub fn get(store: &TreeGitStore, tree_root: &str) -> Option<Arc<TreeStatus>> {
     store.lock().ok()?.by_dir.get(tree_root)?.status.clone()
 }
 
+/// The git gutter's colours (`editor_body.rs`), here so the tree and the
+/// gutter say "added" and "changed" in one colour each. Not agent hues.
+pub(crate) const MARK_ADDED: &str = "#4caf50";
+pub(crate) const MARK_MODIFIED: &str = "#e3b341";
+pub(crate) const MARK_DELETED: &str = "#f85149";
+/// How strongly an ignored row is drawn: present, but clearly not part of
+/// the work. Tuned on screen against both themes.
+pub const IGNORED_ALPHA: f32 = 0.45;
+
+/// How one tree row looks: the letter in the status column, the colour of
+/// the letter and the name (`None` keeps the row's own), and its opacity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RowStyle {
+    pub letter: &'static str,
+    pub tint: Option<&'static str>,
+    pub alpha: f32,
+}
+
+/// VS Code's letters. A conflict is red, the gutter's deleted colour: the
+/// chrome's `warn` is the same yellow as a modified file. A folder shows a
+/// dot in the colour of the strongest change below it.
+pub fn row_style(mark: Option<RowMark>) -> RowStyle {
+    use infiniterm_core::git_tree_status::TreeMark::*;
+    let colour = |m| match m {
+        Modified => Some(MARK_MODIFIED),
+        Added | Untracked | Renamed => Some(MARK_ADDED),
+        Conflict => Some(MARK_DELETED),
+        Ignored => None,
+    };
+    let plain = RowStyle {
+        letter: " ",
+        tint: None,
+        alpha: 1.,
+    };
+    match mark {
+        None => plain,
+        Some(RowMark::Ignored) => RowStyle {
+            alpha: IGNORED_ALPHA,
+            ..plain
+        },
+        Some(RowMark::Folder(m)) => RowStyle {
+            letter: "•",
+            tint: colour(m),
+            alpha: 1.,
+        },
+        Some(RowMark::File(m)) => RowStyle {
+            letter: match m {
+                Modified => "M",
+                Added => "A",
+                Untracked => "U",
+                Renamed => "R",
+                Conflict => "!",
+                Ignored => " ",
+            },
+            tint: colour(m),
+            alpha: 1.,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use infiniterm_core::git_tree_status::TreeMark;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn row_styles() {
+        let s = |m| {
+            let r = row_style(m);
+            (r.letter, r.tint, r.alpha)
+        };
+        assert_eq!(s(None), (" ", None, 1.));
+        assert_eq!(
+            s(Some(RowMark::File(TreeMark::Modified))),
+            ("M", Some("#e3b341"), 1.)
+        );
+        assert_eq!(
+            s(Some(RowMark::File(TreeMark::Added))),
+            ("A", Some("#4caf50"), 1.)
+        );
+        assert_eq!(
+            s(Some(RowMark::File(TreeMark::Untracked))),
+            ("U", Some("#4caf50"), 1.)
+        );
+        assert_eq!(
+            s(Some(RowMark::File(TreeMark::Renamed))),
+            ("R", Some("#4caf50"), 1.)
+        );
+        assert_eq!(
+            s(Some(RowMark::File(TreeMark::Conflict))),
+            ("!", Some("#f85149"), 1.)
+        );
+        assert_eq!(
+            s(Some(RowMark::Folder(TreeMark::Conflict))),
+            ("•", Some("#f85149"), 1.)
+        );
+        assert_eq!(
+            s(Some(RowMark::Folder(TreeMark::Modified))),
+            ("•", Some("#e3b341"), 1.)
+        );
+        assert_eq!(s(Some(RowMark::Ignored)), (" ", None, IGNORED_ALPHA));
+    }
 
     const EVERY: f64 = 2000.;
 
     fn settle(store: &TreeGitStore, root: &str) {
         let stop = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while store.lock().unwrap().by_dir.get(root).is_some_and(|s| s.in_flight) {
+        while store
+            .lock()
+            .unwrap()
+            .by_dir
+            .get(root)
+            .is_some_and(|s| s.in_flight)
+        {
             assert!(std::time::Instant::now() < stop, "never answered");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -111,8 +216,14 @@ mod tests {
         assert!(!ask(&store, "/r", 0., EVERY, counted(&runs)), "in flight");
         settle(&store, "/r");
         assert!(get(&store, "/r").is_some());
-        assert!(!ask(&store, "/r", EVERY - 1., EVERY, counted(&runs)), "too soon");
-        assert!(ask(&store, "/other", EVERY - 1., EVERY, counted(&runs)), "its own tree");
+        assert!(
+            !ask(&store, "/r", EVERY - 1., EVERY, counted(&runs)),
+            "too soon"
+        );
+        assert!(
+            ask(&store, "/other", EVERY - 1., EVERY, counted(&runs)),
+            "its own tree"
+        );
         assert!(ask(&store, "/r", EVERY, EVERY, counted(&runs)));
         settle(&store, "/r");
         settle(&store, "/other");
