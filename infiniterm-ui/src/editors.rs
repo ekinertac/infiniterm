@@ -282,11 +282,7 @@ impl AppView {
                 body.formatters.clone_from(&cfg.editor.formatters);
             }
             let path = body.path.clone().unwrap_or_default();
-            body.wrap = match cfg.editor.wrap {
-                Wrap::Always => true,
-                Wrap::Never => false,
-                Wrap::Prose => Language::is_prose(&path),
-            };
+            body.wrap = wrap_for(cfg.editor.wrap, &path, body.wrap_override);
             body.read_only = is_diff
                 || is_generated(&path)
                 || Language::is_image(&path)
@@ -686,6 +682,11 @@ impl AppView {
                     body.toggle_comment(now);
                 }
             }
+            EditorAction::ToggleWrap => {
+                if let Some(body) = self.editor_for(card_id) {
+                    body.toggle_wrap();
+                }
+            }
             EditorAction::ExpandSelection => {
                 if let Some(body) = self.editor_for(card_id) {
                     body.expand_selection();
@@ -777,4 +778,33 @@ fn rgb_u32(c: gpui::Hsla) -> u32 {
     ((rgba.r * 255.).round() as u32) << 16
         | ((rgba.g * 255.).round() as u32) << 8
         | (rgba.b * 255.).round() as u32
+}
+
+/// Whether a tab wraps: its Alt+Z override when it has one (#798), else
+/// `editor.wrap` for its file. Run on every settings pass, so a reload
+/// never undoes the override.
+pub fn wrap_for(setting: Wrap, path: &str, over: Option<bool>) -> bool {
+    over.unwrap_or_else(|| match setting {
+        Wrap::Always => true,
+        Wrap::Never => false,
+        Wrap::Prose => Language::is_prose(path),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Alt+Z's per-tab override wins over editor.wrap on every settings
+    // pass (#798), so a reload does not undo it; no override is the setting.
+    #[test]
+    fn wrap_override_wins_over_the_setting() {
+        assert!(wrap_for(Wrap::Always, "a.rs", None));
+        assert!(!wrap_for(Wrap::Never, "a.md", None));
+        assert!(wrap_for(Wrap::Prose, "a.md", None));
+        assert!(!wrap_for(Wrap::Prose, "a.rs", None));
+        assert!(wrap_for(Wrap::Never, "a.rs", Some(true)));
+        assert!(!wrap_for(Wrap::Always, "a.rs", Some(false)));
+        assert!(!wrap_for(Wrap::Prose, "a.md", Some(false)));
+    }
 }

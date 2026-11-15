@@ -338,6 +338,8 @@ pub struct EditorBody {
     scroll_line: usize,
     scroll_x: f64,
     pub wrap: bool,
+    /// Alt+Z's choice for this tab (#798), over `editor.wrap`; not saved.
+    pub wrap_override: Option<bool>,
     pub highlight_line: bool,
     /// The polish set (#778), set by the reconcile, all off by default:
     /// `editor.highlightOccurrences`, `indentGuides`, `smoothCaret` (already
@@ -591,6 +593,7 @@ impl EditorBody {
             scroll_line: 0,
             scroll_x: 0.,
             wrap: false,
+            wrap_override: None,
             highlight_line: false,
             highlight_occurrences: false,
             indent_guides: false,
@@ -1899,6 +1902,20 @@ impl EditorBody {
     }
 
     /// The tree is on because the card says so (`ift <dir>`, a restore).
+    /// Alt+Z (#798): flips this tab's wrap and remembers it over the
+    /// setting. A diff card keeps its own layout. Unwrapped, the horizontal
+    /// scroll starts at the left edge again.
+    pub fn toggle_wrap(&mut self) {
+        if self.diff.is_some() {
+            return;
+        }
+        let wrap = !self.wrap;
+        self.wrap_override = Some(wrap);
+        self.wrap = wrap;
+        self.scroll_x = 0.;
+        self.dirty = true;
+    }
+
     pub fn show_tree(&mut self, root: &str) {
         if self.tree.is_none() {
             let mut t = Tree::new(root);
