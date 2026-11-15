@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-16
+
+- The Linux installer names any system library the app needs and the machine lacks (stock Ubuntu desktop has no `libxkbcommon-x11-0`), with the `sudo apt install` line that adds it. Before, the app just did not open.
+
 ### 2026-11-15
 
 - The editor's file tree can show git status: a letter beside each changed file (M, A, U, R, ! for a conflict), changed names in colour, a dot on folders with changes inside, and ignored files faded. Turn it on with `editor.explorer.git`.

@@ -10,6 +10,7 @@
 # built; the release build is the CI job's). Checks: the versioned folder and
 # `current`; the `infiniterm` and `ift` links through `current`; the desktop
 # entry; that a second and a third install keep the two newest versions;
+# that a library the system lacks is named with its apt line (#800);
 # that the Claude hook command goes through `current`
 # (`paths::stable_install_path`); and that the installed app starts, finds
 # its themes beside itself and runs a shell in a card. Never touches the
@@ -58,6 +59,17 @@ INFINITERM_TARBALL="$scratch/v99.0.2.tar.gz" sh site/public/install.sh --no-hook
 check "current moved to the newest" '[ "$(readlink "$root/current")" = 99.0.2 ]'
 check "the two newest stay" '[ -d "$root/99.0.1" ] && [ -d "$root/99.0.2" ]'
 check "the oldest is gone" '[ ! -e "$root/$version" ]'
+
+# 2b. A library the system lacks is named with its apt line (#800), and the
+# install still goes through. A stand-in ldd reports libxkbcommon-x11 missing.
+mkdir -p "$scratch/fakebin"
+printf '#!/bin/sh\nprintf "\\tlibxkbcommon-x11.so.0 => not found\\n"\n' > "$scratch/fakebin/ldd"
+chmod +x "$scratch/fakebin/ldd"
+PATH="$scratch/fakebin:$PATH" INFINITERM_TARBALL="$scratch/v99.0.2.tar.gz" \
+    sh site/public/install.sh --no-hooks </dev/null >"$scratch/out-missing" 2>&1
+check "a missing library is named" 'grep -q "will not start until this system has: libxkbcommon-x11.so.0" "$scratch/out-missing"'
+check "with the apt line that adds it" 'grep -q "sudo apt install libxkbcommon-x11-0" "$scratch/out-missing"'
+check "nothing is named when nothing is missing" '! grep -q "will not start" "$scratch/out"'
 
 # 3. The hook command survives the next update.
 "$HOME/.local/bin/ift" install-claude-hooks >/dev/null 2>&1

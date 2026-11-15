@@ -30,7 +30,9 @@
 # Running it again IS the update: the new version goes in beside the old,
 # `current` moves, and only the two newest versions are kept (a running
 # iftd keeps working after its file is removed; the next app adopts it).
-# INFINITERM_TARBALL and INFINITERM_LINUX_ROOT exist for
+# Shared libraries the binaries need and the system lacks (`ldd`) are named
+# at the end with the apt line that adds them (#800); the install itself
+# goes ahead. INFINITERM_TARBALL and INFINITERM_LINUX_ROOT exist for
 # tools/drive/linux/install-test.sh.
 set -eu
 
@@ -121,6 +123,25 @@ EOF
     done
     say "Installed infiniterm $version in $root/$version"
     IFT="$root/current/ift"
+    # Stock Ubuntu desktop has no libxkbcommon-x11-0, and without it the app
+    # exits at start with a loader error nobody sees when it is opened from
+    # the menu (#800). A warning, not a failure: ift, iftd and the hooks run
+    # without it, and the fix is one command.
+    if command -v ldd >/dev/null; then
+        missing=$(for b in infiniterm iftd ift infiniterm-hook; do ldd "$root/$version/$b" 2>/dev/null || true; done \
+            | sed -n 's/^[[:space:]]*\([^[:space:]]*\) => not found.*/\1/p' | sort -u | tr '\n' ' ')
+        missing=${missing% }
+    fi
+}
+
+# The Debian and Ubuntu package that holds a library the Linux build links,
+# for the ones a desktop install can lack.
+lib_package() {
+    case "$1" in
+        libxkbcommon-x11.so.0) echo libxkbcommon-x11-0 ;;
+        libxkbcommon.so.0) echo libxkbcommon0 ;;
+        libxcb.so.1) echo libxcb1 ;;
+    esac
 }
 
 install_mac() {
@@ -159,6 +180,7 @@ fi
 IFT="$APP/Contents/MacOS/ift"
 }
 
+missing=""
 case "$(uname -s)" in
     Darwin) install_mac ;;
     Linux) install_linux ;;
@@ -201,6 +223,18 @@ for h in $(printf '%s' "$hooks" | tr ',' ' '); do
 done
 
 say ""
+if [ -n "$missing" ]; then
+    say "infiniterm will not start until this system has: $missing"
+    pkgs=""
+    for l in $missing; do
+        p=$(lib_package "$l")
+        if [ -n "$p" ]; then pkgs="$pkgs $p"; fi
+    done
+    if [ -n "$pkgs" ] && command -v apt-get >/dev/null; then
+        say "Install them with: sudo apt install$pkgs"
+    fi
+    say ""
+fi
 if [ "$(uname -s)" = Linux ]; then
     say "Done. Start it from your applications menu, or with: infiniterm   (once ~/.local/bin is on your PATH)"
     say "To update, run this installer again."
