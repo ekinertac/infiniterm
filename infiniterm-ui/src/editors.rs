@@ -267,6 +267,10 @@ impl AppView {
                 body.tree_icons = cfg.editor.explorer.icons;
                 body.mark_dirty();
             }
+            if body.tree_git != cfg.editor.explorer.git {
+                body.tree_git = cfg.editor.explorer.git;
+                body.mark_dirty();
+            }
             body.complete_words = cfg.editor.complete_words;
             body.format_on_save = cfg.editor.format_on_save;
             body.lsp_enabled = cfg.editor.lsp.enabled;

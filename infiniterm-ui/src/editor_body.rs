@@ -364,6 +364,12 @@ pub struct EditorBody {
     caret_glide: Option<(f64, f64, f64)>,
     /// `editor.explorer.icons`: file and folder icons in the tree.
     pub tree_icons: bool,
+    /// `editor.explorer.git`: git status in the tree (#798). The store is
+    /// shared by every tab (`tree_git.rs`); `tree_git_status` is the answer
+    /// this tab last took from it, so painting takes no lock.
+    pub tree_git: bool,
+    pub tree_git_store: crate::tree_git::TreeGitStore,
+    tree_git_status: Option<Arc<infiniterm_core::git_tree_status::TreeStatus>>,
     pub read_only: bool,
     pub colors: EditorColors,
     pub rules: Vec<SyntaxRule>,
@@ -597,6 +603,9 @@ impl EditorBody {
             caret_drawn: None,
             caret_glide: None,
             tree_icons: false,
+            tree_git: false,
+            tree_git_store: crate::tree_git::shared(),
+            tree_git_status: None,
             read_only: false,
             colors: EditorColors {
                 background: "#0e101a".into(),
@@ -932,7 +941,36 @@ impl EditorBody {
                 if tree.refresh(&mut list_dir) {
                     self.dirty = true;
                 }
+                // Its git status, on a thread (#717); a tab on the same tree
+                // that asked this poll already makes this a no-op.
+                if self.tree_git {
+                    let root = tree.root.clone();
+                    crate::tree_git::ask(
+                        &self.tree_git_store,
+                        &tree.root,
+                        now,
+                        DISK_POLL_MS,
+                        move || {
+                            infiniterm_core::git_tree_status::status(std::path::Path::new(&root))
+                                .ok()
+                        },
+                    );
+                }
             }
+        }
+        // A landed answer (this tab's ask or another's) redraws the tree.
+        let status = match (&self.tree, self.tree_git && self.source.is_local()) {
+            (Some(tree), true) => crate::tree_git::get(&self.tree_git_store, &tree.root),
+            _ => None,
+        };
+        let same = match (&status, &self.tree_git_status) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.tree_git_status = status;
+            self.dirty = true;
         }
         // The gutter's own poll: HEAD moves on a commit, checkout or
         // stash elsewhere, not on every keystroke, so it is not worth a
@@ -5994,6 +6032,49 @@ mod tests {
         b.change_revert_all(6.);
         assert_eq!(b.buffer.text(), "a\nB\nc\nd\nE\nf\n");
         assert!(b.agent_base.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn git_init(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ift-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = std::process::Command::new("git")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .args(["init", "-q"])
+            .current_dir(&dir)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        std::fs::write(dir.join("new.txt"), "x").unwrap();
+        dir
+    }
+
+    // The tree's git status (#798): asked on the disk poll, off the UI
+    // thread, and picked up by a later idle; off, nothing is asked.
+    #[test]
+    fn the_tree_asks_git_on_the_poll_only_when_on() {
+        let dir = git_init("tree-git");
+        let root = dir.to_string_lossy().to_string();
+        let mut b = body();
+        b.tree_git_store = crate::tree_git::TreeGitStore::default();
+        b.show_tree(&root);
+        b.idle(DISK_POLL_MS + 1.);
+        assert!(crate::tree_git::get(&b.tree_git_store, &root).is_none());
+        assert!(b.tree_git_status.is_none(), "off: no git");
+
+        b.tree_git = true;
+        b.idle(2. * DISK_POLL_MS + 2.);
+        let stop = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while b.tree_git_status.is_none() {
+            assert!(std::time::Instant::now() < stop, "git never answered");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            b.idle(2. * DISK_POLL_MS + 3.);
+        }
+        let status = b.tree_git_status.clone().unwrap();
+        let new = format!("{}/new.txt", status.root);
+        assert!(status.mark_for(&new, false).is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
