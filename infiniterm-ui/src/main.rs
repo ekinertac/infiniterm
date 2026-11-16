@@ -127,6 +127,25 @@ fn statusbar_base_h(font_size: f32) -> f32 {
     STATUSBAR_H.max(font_size * 2.)
 }
 
+/// The window's app id: the Wayland `xdg_toplevel` app_id and the X11
+/// `WM_CLASS`. GNOME pairs a window with its desktop entry by this name, so
+/// it must equal the file install.sh writes (`infiniterm.desktop`, with
+/// `StartupWMClass=infiniterm`); without it the dock showed "Unknown" (#802).
+/// macOS ignores it.
+pub const APP_ID: &str = "infiniterm";
+
+#[cfg(test)]
+mod app_id_tests {
+    use super::APP_ID;
+
+    #[test]
+    fn the_app_id_matches_the_desktop_entry_install_sh_writes() {
+        let script = include_str!("../../site/public/install.sh");
+        assert!(script.contains(&format!("$apps/{APP_ID}.desktop")));
+        assert!(script.contains(&format!("StartupWMClass={APP_ID}\n")));
+    }
+}
+
 #[cfg(all(test, feature = "browser"))]
 mod cef_start_tests {
     use super::starts_cef;
@@ -755,6 +774,7 @@ fn main() {
         let mut options = WindowOptions {
             window_bounds: Some(window_bounds),
             titlebar: Some(titlebar),
+            app_id: Some(APP_ID.into()),
             ..Default::default()
         };
         // Linux: the app's own bar as the window's only bar where a
