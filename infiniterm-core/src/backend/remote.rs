@@ -185,10 +185,15 @@ pub const INSTALL_DIRS: [&str; 3] = [
 ];
 
 /// The script `check` runs on the server: `ift` is there (on the PATH or in
-/// `INSTALL_DIRS`, for a bare name), `iftd` is beside it or on the PATH, and
-/// `ift sessions` works (so its data directory does). It prints the full path
-/// of the `ift` it found. Each failure says what is missing on stderr and uses
-/// its own exit status.
+/// `INSTALL_DIRS`, for a bare name), `iftd` is beside it, beside the file it
+/// links to, or on the PATH, and `ift sessions` works (so its data directory
+/// does). It prints the full path of the `ift` it found. Each failure says what
+/// is missing on stderr and uses its own exit status.
+///
+/// The link case is the Linux `install.sh` layout (#800): `~/.local/bin/ift`
+/// links to `~/.local/share/infiniterm/current/ift` and only that folder holds
+/// `iftd`. `readlink -f` is missing on macOS before 12.3, so a failed resolve
+/// falls back to the path as found.
 pub fn check_command(ift: &str) -> String {
     check_command_in(ift, &INSTALL_DIRS)
 }
@@ -205,7 +210,9 @@ fn check_command_in(ift: &str, install_dirs: &[&str]) -> String {
             "for d in {dirs}; do [ -x \"$d/$ift\" ] && p=\"$d/$ift\" && break; done;; esac; fi; ",
             "[ -n \"$p\" ] || {{ echo 'ift is not installed on the server' >&2; exit 11; }}; ",
             "d=$(dirname \"$p\"); ",
-            "[ -x \"$d/iftd\" ] || command -v iftd >/dev/null || ",
+            "r=$(readlink -f \"$p\" 2>/dev/null) || r=\"$p\"; ",
+            "[ -x \"$d/iftd\" ] || [ -x \"$(dirname \"$r\")/iftd\" ] || ",
+            "command -v iftd >/dev/null || ",
             "{{ echo 'iftd is not installed on the server' >&2; exit 12; }}; ",
             "\"$p\" sessions >/dev/null && printf '%s\\n' \"$p\""
         ),
@@ -989,6 +996,45 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).trim(),
             bin.join("ift").to_str().unwrap()
         );
+    }
+
+    // #800: install.sh on Linux links ~/.local/bin/ift into a versioned
+    // folder and leaves iftd only there; the check follows the link.
+    #[test]
+    fn the_check_finds_iftd_beside_the_file_ift_links_to() {
+        let home = scratch("linked");
+        let real = home.join(".local/share/infiniterm/0.6.15");
+        stub(&real, "ift");
+        stub(&real, "iftd");
+        let current = home.join(".local/share/infiniterm/current");
+        std::os::unix::fs::symlink("0.6.15", &current).unwrap();
+        let bin = home.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(current.join("ift"), bin.join("ift")).unwrap();
+        let out = run_check(&home, "ift");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // The path as found, so it keeps working after `current` moves.
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            bin.join("ift").to_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn the_check_still_says_iftd_is_missing_when_no_folder_has_it() {
+        let home = scratch("noiftd");
+        let real = home.join(".local/share/infiniterm/0.6.15");
+        stub(&real, "ift");
+        let bin = home.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(real.join("ift"), bin.join("ift")).unwrap();
+        let out = run_check(&home, "ift");
+        assert_eq!(out.status.code(), Some(12));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("iftd is not installed"));
     }
 
     #[test]
