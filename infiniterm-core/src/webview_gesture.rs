@@ -29,6 +29,7 @@ pub enum Kind {
     OtherDown,
     OtherDragged,
     OtherUp,
+    RightDown,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -46,6 +47,9 @@ pub enum Target {
     /// A pinch: gpui has no magnify handler, so the app turns it into the
     /// same zoom a Ctrl+wheel makes.
     Canvas,
+    /// A right-click on a page: WebKit's own menu is not shown, the app's
+    /// slim menu is (the page is asked what is under the point).
+    Menu,
 }
 
 /// One page as the monitor sees it.
@@ -109,6 +113,10 @@ pub fn route(
         // over a card in front a plain wheel is that card's.
         Kind::Scroll if mods.cmd || mods.ctrl || page.is_none() => Target::Gpui,
         Kind::OtherDown => Target::Gpui,
+        // Over an uncovered page the app's menu; over a card in front, that
+        // card's own right-click (gpui).
+        Kind::RightDown if page.is_some() => Target::Menu,
+        Kind::RightDown => Target::Gpui,
         // The first click on an unfocused card only focuses it (the scrim):
         // gpui's own mouse path does that, so the click goes there.
         Kind::LeftDown if mods.cmd || page.is_none_or(|pg| !pg.focused) => Target::Gpui,
@@ -273,6 +281,26 @@ mod tests {
         );
         assert_eq!(
             route(Kind::Magnify, NONE, (500., 500.), &one(true), false),
+            Target::Page
+        );
+    }
+
+    #[test]
+    fn a_right_click_on_a_page_is_the_apps_menu_and_on_a_cover_the_covers() {
+        assert_eq!(
+            route(Kind::RightDown, NONE, (10., 10.), &one(true), false),
+            Target::Menu
+        );
+        assert_eq!(
+            route(Kind::RightDown, NONE, (10., 10.), &one(false), false),
+            Target::Menu
+        );
+        assert_eq!(
+            route(Kind::RightDown, NONE, (60., 60.), &one(true), false),
+            Target::Gpui
+        );
+        assert_eq!(
+            route(Kind::RightDown, NONE, (500., 500.), &one(true), false),
             Target::Page
         );
     }

@@ -40,6 +40,18 @@ struct Entry {
     key: u64,
     route: PageRoute,
     locked: bool,
+    /// The page zoom (CSS pixels are window pixels over this) and the canvas
+    /// zoom (world pixels are window pixels over this), for a right-click's
+    /// coordinates.
+    zoom: f64,
+    scale: f64,
+}
+
+/// A right-click on a page: the page's key, the point in CSS pixels (for the
+/// script that asks what is there) and in world pixels (where the menu goes).
+pub struct MenuAt {
+    pub css: (f64, f64),
+    pub world: (f64, f64),
 }
 
 thread_local! {
@@ -52,6 +64,8 @@ thread_local! {
     static CLICKS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
     /// Pinches over a page: (window point, magnification).
     static PINCHES: RefCell<Vec<((f64, f64), f64)>> = const { RefCell::new(Vec::new()) };
+    /// Right-clicks over pages, by page key.
+    static MENUS: RefCell<Vec<(u64, MenuAt)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// A new key for a page; the registry above is keyed by it.
@@ -67,8 +81,25 @@ pub fn begin_frame() {
     PAGES.with(|p| p.borrow_mut().clear());
 }
 
-pub fn register(key: u64, route: PageRoute, locked: bool) {
-    PAGES.with(|p| p.borrow_mut().push(Entry { key, route, locked }));
+pub fn register(key: u64, route: PageRoute, locked: bool, zoom: f64, scale: f64) {
+    PAGES.with(|p| {
+        p.borrow_mut().push(Entry {
+            key,
+            route,
+            locked,
+            zoom,
+            scale,
+        })
+    });
+}
+
+/// A right-click on this page since last asked.
+pub fn take_menu(key: u64) -> Option<MenuAt> {
+    MENUS.with(|m| {
+        let mut m = m.borrow_mut();
+        let at = m.iter().position(|(k, _)| *k == key)?;
+        Some(m.remove(at).1)
+    })
 }
 
 /// gpui's own view, the superview of every web view.
@@ -95,7 +126,9 @@ pub fn take_pinches() -> Vec<((f64, f64), f64)> {
 
 /// Anything waiting for the app to look at it: a frame is needed.
 pub fn has_pending() -> bool {
-    CLICKS.with(|c| !c.borrow().is_empty()) || PINCHES.with(|p| !p.borrow().is_empty())
+    CLICKS.with(|c| !c.borrow().is_empty())
+        || PINCHES.with(|p| !p.borrow().is_empty())
+        || MENUS.with(|m| !m.borrow().is_empty())
 }
 
 pub fn install() {
@@ -115,7 +148,8 @@ pub fn install() {
         | (1 << 6)
         | (1 << 25)
         | (1 << 26)
-        | (1 << 27);
+        | (1 << 27)
+        | (1 << 3);
     unsafe {
         let _: *mut AnyObject = msg_send![class!(NSEvent), addLocalMonitorForEventsMatchingMask: mask, handler: &*block];
     }
@@ -174,6 +208,7 @@ unsafe fn route_event(ev: *mut AnyObject) -> *mut AnyObject {
         2 => (Kind::LeftUp, objc2::sel!(mouseUp:)),
         6 => (Kind::LeftDragged, objc2::sel!(mouseDragged:)),
         25 => (Kind::OtherDown, objc2::sel!(otherMouseDown:)),
+        3 => (Kind::RightDown, objc2::sel!(rightMouseDown:)),
         26 => (Kind::OtherUp, objc2::sel!(otherMouseUp:)),
         27 => (Kind::OtherDragged, objc2::sel!(otherMouseDragged:)),
         _ => return ev,
@@ -219,6 +254,32 @@ unsafe fn route_event(ev: *mut AnyObject) -> *mut AnyObject {
         Target::Canvas => {
             let d: f64 = msg_send![ev, magnification];
             PINCHES.with(|pc| pc.borrow_mut().push((p, d)));
+            std::ptr::null_mut()
+        }
+        Target::Menu => {
+            // The page's own menu is swallowed; the app's is built from what
+            // a script finds under the point (`WebSurface::take_context_menu`).
+            PAGES.with(|pg| {
+                let pages = pg.borrow();
+                let routes_only: Vec<PageRoute> = pages.iter().map(|e| e.route.clone()).collect();
+                if let Some(at) = gesture::page_at(&routes_only, p) {
+                    if let Some(e) = pages.iter().find(|e| &e.route == at) {
+                        let local = (p.0 - e.route.rect[0], p.1 - e.route.rect[1]);
+                        if infiniterm_browser::surface::keylog() {
+                            eprintln!("[webview] right-click on page {} at {local:?}", e.key);
+                        }
+                        MENUS.with(|m| {
+                            m.borrow_mut().push((
+                                e.key,
+                                MenuAt {
+                                    css: (local.0 / e.zoom, local.1 / e.zoom),
+                                    world: (local.0 / e.scale, local.1 / e.scale),
+                                },
+                            ))
+                        });
+                    }
+                }
+            });
             std::ptr::null_mut()
         }
     }

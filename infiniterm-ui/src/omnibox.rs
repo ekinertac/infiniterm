@@ -357,6 +357,10 @@ pub const FIND_BAR_WIDTH_PX: f32 = 320.;
 /// Clear of the title bar, on the right, where every browser puts it.
 pub const FIND_BAR_TOP_PX: f32 = 12.;
 pub const FIND_BAR_RIGHT_PX: f32 = 16.;
+/// The bar's height, generous (it is a flex row with `py_1`): used to cut it
+/// out of a native page (`paint.rs`), where too tall only hides a little more
+/// of the page and too short would leave the bar half under the page.
+pub const FIND_BAR_HEIGHT_PX: f32 = 48.;
 /// The narrowest the bar gets inside a small card.
 const FIND_BAR_MIN_WIDTH_PX: f32 = 160.;
 
@@ -412,31 +416,11 @@ impl AppView {
         taken
     }
 
-    /// No backdrop and no dimming: the whole point is reading the page while
-    /// this is open, which is also why it does not join `overlay_open`.
-    pub fn render_find_bar(&self, cx: &mut Context<Self>) -> gpui::Div {
+    /// Where the find bar is, in window pixels: (left, top, width). Inside
+    /// the card being searched, since that is what the search reads; the
+    /// window's corner only when the card is gone.
+    pub fn find_bar_geometry(&self) -> (f32, f32, f32) {
         let ui = self.model.ui_scale as f32;
-        let chrome = &self.chrome;
-        if !self.model.find.open {
-            return div();
-        }
-        let query = self.model.find.query.clone();
-        let (matches, active) = (self.model.find.matches, self.model.find.active);
-        // Nothing to say before a query; "0/0" against an empty box reads
-        // as a failure rather than as a prompt.
-        let count = if query.is_empty() {
-            String::new()
-        } else if matches == 0 {
-            "no matches".to_string()
-        } else if active == 0 {
-            // Chromium reports the active match as 0 until it has selected
-            // one, which is every new search; "0/2" reads like a failure.
-            format!("{matches} match{}", if matches == 1 { "" } else { "es" })
-        } else {
-            format!("{active}/{matches}")
-        };
-        // Inside the card being searched, since that is what the search reads;
-        // the window's corner only when the card is gone.
         let m = &self.model;
         let bar_w = FIND_BAR_WIDTH_PX * ui;
         let at = m
@@ -470,11 +454,37 @@ impl AppView {
                     chip,
                 )
             });
-        let (left, top, width) = at.unwrap_or((
+        at.unwrap_or((
             (m.view_size.w as f32 - bar_w - FIND_BAR_RIGHT_PX * ui).max(0.),
             FIND_BAR_TOP_PX * ui,
             bar_w,
-        ));
+        ))
+    }
+
+    /// No backdrop and no dimming: the whole point is reading the page while
+    /// this is open, which is also why it does not join `overlay_open`.
+    pub fn render_find_bar(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let ui = self.model.ui_scale as f32;
+        let chrome = &self.chrome;
+        if !self.model.find.open {
+            return div();
+        }
+        let query = self.model.find.query.clone();
+        let (matches, active) = (self.model.find.matches, self.model.find.active);
+        // Nothing to say before a query; "0/0" against an empty box reads
+        // as a failure rather than as a prompt.
+        let count = if query.is_empty() {
+            String::new()
+        } else if matches == 0 {
+            "no matches".to_string()
+        } else if active == 0 {
+            // Chromium reports the active match as 0 until it has selected
+            // one, which is every new search; "0/2" reads like a failure.
+            format!("{matches} match{}", if matches == 1 { "" } else { "es" })
+        } else {
+            format!("{active}/{matches}")
+        };
+        let (left, top, width) = self.find_bar_geometry();
         div()
             .absolute()
             .top(px(top))

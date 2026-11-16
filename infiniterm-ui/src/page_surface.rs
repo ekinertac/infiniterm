@@ -28,6 +28,9 @@ pub enum Engine {
     /// (`webview_policy::store_identifier`).
     Webview {
         store: [u8; 16],
+        /// `browser.devtools`: make the page inspectable from Safari's
+        /// Develop menu.
+        devtools: bool,
     },
 }
 
@@ -39,6 +42,8 @@ pub struct Placement {
     pub rect: [f64; 4],
     /// The page zoom to give WebKit (canvas zoom times the page's own).
     pub zoom: f64,
+    /// The canvas zoom alone, to turn a window point into a world one.
+    pub canvas_scale: f64,
     /// The layout size in world units, which a snapshot is tagged with.
     pub world: (i32, i32),
     /// Live or a picture, decided by `webview_policy::page_view`.
@@ -113,6 +118,11 @@ pub trait PageSurface {
     /// Whether this page is a native view the card has to place each frame.
     fn is_native(&self) -> bool {
         false
+    }
+    /// Files the page downloaded since last asked, as a line each for the
+    /// card to show ("saved report.pdf in Downloads").
+    fn take_downloads(&self) -> Vec<String> {
+        vec![]
     }
     /// A click reached the page of a card that had the focus but not the
     /// lock (so the card locks, as a click that reaches a CEF page does).

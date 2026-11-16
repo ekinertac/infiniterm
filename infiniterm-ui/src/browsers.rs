@@ -96,7 +96,7 @@ fn diff_removed_index(old: &[String], new: &[String]) -> Option<usize> {
 /// system web view exists. Its data store is named after THIS instance's
 /// data dir (`INFINITERM_DATA_DIR` for a scratch one), never the global
 /// default store, so a scratch instance cannot touch the real sign-ins.
-fn browser_engine(setting: infiniterm_core::config::BrowserEngine) -> Engine {
+fn browser_engine(setting: infiniterm_core::config::BrowserEngine, devtools: bool) -> Engine {
     use infiniterm_core::config::BrowserEngine;
     if setting == BrowserEngine::Webview && setting.effective() == BrowserEngine::Cef {
         eprintln!("[infiniterm] browser.engine \"webview\" is for macOS only: using cef");
@@ -107,6 +107,7 @@ fn browser_engine(setting: infiniterm_core::config::BrowserEngine) -> Engine {
             let dir = infiniterm_core::paths::app_support_dir();
             Engine::Webview {
                 store: infiniterm_core::webview_policy::store_identifier(&dir.to_string_lossy()),
+                devtools,
             }
         }
     }
@@ -150,7 +151,10 @@ impl AppView {
         let style = strip_style(&self.chrome, &self.model.ui_theme.card_tab);
         let inactive_dim = self.model.config.ui.inactive_dim;
         let ui_scale = self.model.ui_scale as f32;
-        let engine = browser_engine(self.model.config.browser.engine);
+        let engine = browser_engine(
+            self.model.config.browser.engine,
+            self.model.config.browser.devtools,
+        );
         // A tab dropped in a strip (#682) becomes the model's move first,
         // so the card below already carries the new order.
         let ids: Vec<String> = self
@@ -181,6 +185,8 @@ impl AppView {
         // Another app's links the pages asked for (#668), asked about once
         // the loop is done with the cards.
         let mut app_links: Vec<String> = vec![];
+        // Files a webview page saved (`WebSurface` downloads), to say so.
+        let mut downloads: Vec<String> = vec![];
         // Tabs their own page closed with `window.close()` (#672).
         let mut closes: Vec<(String, usize)> = vec![];
         let mut moved: Vec<(String, String)> = vec![];
@@ -301,6 +307,7 @@ impl AppView {
             }
 
             app_links.append(&mut body.external_links);
+            downloads.append(&mut body.downloads);
             for popup in std::mem::take(&mut body.popups) {
                 // The point of tabs: a popup, a target=_blank link or a
                 // Cmd+click opens a tab on the SAME card, not a new card.
@@ -339,6 +346,10 @@ impl AppView {
                 editable: request.editable,
                 has_selection: request.has_selection,
             });
+            // A webview page's right-click was swallowed before gpui saw it,
+            // so no input event follows to ask for a frame (a CEF page's
+            // click reaches gpui first): the menu has to ask for its own.
+            self.redraw = true;
         }
         for (id, urls) in retabs {
             if let Some(c) = self.model.card_mut(&id) {
@@ -353,6 +364,10 @@ impl AppView {
         }
         for url in app_links {
             self.model.queue_app_link(url);
+            self.redraw = true;
+        }
+        for line in downloads {
+            self.model.notify(&line);
             self.redraw = true;
         }
         for (id, index) in closes {
@@ -450,6 +465,18 @@ impl AppView {
     /// `infiniterm_core::devtools`). The target id is the one the surface
     /// read after its last load.
     fn open_devtools(&mut self, card_id: &str) {
+        // A webview page has no debugging port: its inspector is Safari's.
+        let native = self
+            .bodies
+            .get_mut(card_id)
+            .and_then(|b| b.as_any_mut().downcast_mut::<BrowserBody>())
+            .and_then(|body| body.active_surface())
+            .is_some_and(|s| s.is_native());
+        if native {
+            self.model
+                .notify(infiniterm_core::webview_policy::NATIVE_DEVTOOLS_NOTE);
+            return;
+        }
         let Some(port) = infiniterm_browser::process::devtools_port() else {
             self.model
                 .notify("DevTools has no port: it is off, or none was free; restart the app");
