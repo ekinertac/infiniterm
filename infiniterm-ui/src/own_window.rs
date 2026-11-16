@@ -60,6 +60,8 @@ impl CardWindow {
                 appears_transparent: false,
                 traffic_light_position: None,
             }),
+            // The same app as the main window, so the dock groups them.
+            app_id: Some(crate::APP_ID.into()),
             ..Default::default()
         };
         cx.open_window(options, move |window, cx| {
