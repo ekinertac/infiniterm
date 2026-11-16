@@ -665,6 +665,8 @@ pub struct Surface {
     pub shared: Rc<RefCell<Shared>>,
     /// Keeps the target id observer registered for as long as the surface.
     _target_id_observer: Option<Registration>,
+    /// Keeps CEF's pump at its 4 ms cadence while this browser lives.
+    _open: crate::process::OpenBrowser,
 }
 
 impl Surface {
@@ -719,6 +721,7 @@ impl Surface {
             browser,
             shared,
             _target_id_observer: target_id_observer,
+            _open: crate::process::OpenBrowser::new(),
         })
     }
 
