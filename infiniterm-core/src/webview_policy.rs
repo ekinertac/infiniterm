@@ -207,6 +207,29 @@ pub fn store_identifier(data_dir: &str) -> [u8; 16] {
     out
 }
 
+/// The Safari that ships with a macOS major version: 11 is Safari 14 up to
+/// 15 is Safari 18, and from macOS 26 the two share a number.
+pub fn safari_major(macos_major: i64) -> i64 {
+    if macos_major >= 26 {
+        macos_major
+    } else {
+        macos_major + 3
+    }
+}
+
+/// The user agent a webview page sends: WKWebView's own (frozen `10_15_7`,
+/// AppleWebKit/605.1.15) plus the `Version/N Safari/605.1.15` tail Safari
+/// adds. Without the tail WebKit's default says "an app's web view", which
+/// some sites (video and music players, sign-in flows) serve a reduced page
+/// to; with it a page sees Safari, which is what this engine is. Google's
+/// sign-in page served normally with either (#761 spike and this engine).
+pub fn safari_user_agent(macos_major: i64) -> String {
+    format!(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{}.0 Safari/605.1.15",
+        safari_major(macos_major)
+    )
+}
+
 /// What the engine logs when it cannot use a store of its own (macOS older
 /// than 14): one shared non-persistent store, so nothing is written to the
 /// global default store and nothing survives a restart.
@@ -222,6 +245,23 @@ mod tests {
         assert_eq!(page_zoom(None, 1.), 1.);
         assert_eq!(page_zoom(Some(1.5), 2.), 3.);
         assert_eq!(page_zoom(Some(0.5), 0.5), 0.25);
+    }
+
+    #[test]
+    fn the_safari_version_follows_the_macos_version() {
+        assert_eq!(safari_major(11), 14);
+        assert_eq!(safari_major(14), 17);
+        assert_eq!(safari_major(15), 18);
+        assert_eq!(safari_major(26), 26);
+        assert_eq!(safari_major(27), 27);
+    }
+
+    #[test]
+    fn the_user_agent_is_webkits_own_plus_safaris_tail() {
+        let ua = safari_user_agent(15);
+        assert!(ua
+            .starts_with("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15"));
+        assert!(ua.ends_with("Version/18.0 Safari/605.1.15"), "{ua}");
     }
 
     #[test]
