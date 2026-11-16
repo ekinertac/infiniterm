@@ -91,6 +91,7 @@ impl AppView {
             hover_body: None,
             hover_edge: None,
             context_menu: None,
+            download_readout: None,
             prompt_field: Default::default(),
             query_field: Default::default(),
             shortcuts_field: Default::default(),
