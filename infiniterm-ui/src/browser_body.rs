@@ -98,8 +98,8 @@ pub struct Tab {
 impl Tab {
     fn open(url: &str, world: Size, scale: f32, cef_running: bool, engine: Engine) -> Tab {
         let (surface, unavailable): (Option<Box<dyn PageSurface>>, Option<String>) =
-            if let Engine::Webview { store } = engine {
-                Self::open_webview(url, world, store)
+            if let Engine::Webview { store, devtools } = engine {
+                Self::open_webview(url, world, store, devtools)
             } else if cef_running {
                 match Surface::open(url, world.w.round() as i32, world.h.round() as i32, scale) {
                     Some(s) => (Some(Box::new(s)), None),
@@ -138,11 +138,13 @@ impl Tab {
         url: &str,
         world: Size,
         store: [u8; 16],
+        devtools: bool,
     ) -> (Option<Box<dyn PageSurface>>, Option<String>) {
         let surface = crate::webview::WebSurface::open(
             url,
             store,
             (world.w.round() as i32, world.h.round() as i32),
+            devtools,
         );
         (Some(Box::new(surface)), None)
     }
@@ -152,6 +154,7 @@ impl Tab {
         _url: &str,
         _world: Size,
         _store: [u8; 16],
+        _devtools: bool,
     ) -> (Option<Box<dyn PageSurface>>, Option<String>) {
         (
             None,
@@ -233,6 +236,9 @@ pub struct BrowserBody {
     /// Links to another app (`slack://...`, #668) any tab's page asked for
     /// since the last drain: `browsers.rs` queues each for its question.
     pub external_links: Vec<String>,
+    /// Lines about files a page downloaded since `browsers.rs` last looked
+    /// (the webview engine saves them to Downloads), for it to show.
+    pub downloads: Vec<String>,
     /// The addresses `browsers.rs` is about to open as tabs because a page
     /// opened them (#672): the tab made for one of these is `from_popup`.
     pub popup_urls: Vec<String>,
@@ -340,6 +346,7 @@ impl BrowserBody {
             dirty: true,
             popups: vec![],
             external_links: vec![],
+            downloads: vec![],
             popup_urls: vec![],
             page_closed: vec![],
             context_menu: None,
@@ -533,6 +540,7 @@ impl BrowserBody {
             // An app link is the page's own doing, in any tab, and is asked
             // about whichever tab it came from (#668).
             self.external_links.extend(surface.take_external_links());
+            self.downloads.extend(surface.take_downloads());
             if is_active {
                 self.popups.extend(surface.take_popups());
                 if let Some(request) = surface.take_context_menu() {
@@ -774,6 +782,7 @@ impl CardBody for BrowserBody {
                 &Placement {
                     rect: page_rect,
                     zoom: page_zoom,
+                    canvas_scale: scale,
                     world: (page_w, page_h),
                     snapshot: view_state == policy::PageView::Snapshot,
                     covers: self.covers.clone(),

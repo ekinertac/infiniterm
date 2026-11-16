@@ -37,7 +37,7 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 use wry::{
     dpi::{LogicalPosition, LogicalSize},
@@ -60,11 +60,26 @@ struct Shared {
     dirty: bool,
     /// The newest frame clock `place` saw, so a handler can stamp events.
     clock: f64,
+    /// Links to another app the page tried to open (#668), not yet taken.
+    external_links: Vec<String>,
+    /// The page called `window.close()` (#672).
+    close_requested: bool,
+    /// What a finished download says, not yet taken, and the name the one in
+    /// flight was given.
+    downloads: Vec<String>,
+    download_name: Option<String>,
+    /// Find in page: the count of matches, which one is current.
+    find_count: i32,
+    find_active: i32,
+    /// What a right-click found under the point, and where (world pixels).
+    menu: Option<(policy::ContextInfo, (f64, f64))>,
 }
 
 struct State {
     url: String,
     store: [u8; 16],
+    /// `browser.devtools`: the page is inspectable from Safari.
+    devtools: bool,
     view: Option<WebView>,
     dimmer: Option<Retained<AnyObject>>,
     placed: bool,
@@ -75,9 +90,18 @@ struct State {
     snapshot_world: (i32, i32),
 }
 
+/// A script's answer. WebKit calls the script callback on the main thread,
+/// but wry asks it to be `Send`, so it cannot hold the `Rc` state: it leaves
+/// the raw answer here and `drain_inbox` applies it on the next frame.
+enum Inbox {
+    FindCount(String),
+    Menu(String, (f64, f64)),
+}
+
 struct Core {
     /// The key `webview_input` knows this page by.
     key: u64,
+    inbox: Arc<Mutex<Vec<Inbox>>>,
     shared: Rc<RefCell<Shared>>,
     state: RefCell<State>,
 }
@@ -138,13 +162,15 @@ fn macos_major() -> i64 {
 }
 
 impl WebSurface {
-    pub fn open(url: &str, store: [u8; 16], world: (i32, i32)) -> WebSurface {
+    pub fn open(url: &str, store: [u8; 16], world: (i32, i32), devtools: bool) -> WebSurface {
         let core = Rc::new(Core {
             key: crate::webview_input::next_key(),
+            inbox: Arc::new(Mutex::new(Vec::new())),
             shared: Rc::new(RefCell::new(Shared::default())),
             state: RefCell::new(State {
                 url: url.to_string(),
                 store,
+                devtools,
                 view: None,
                 dimmer: None,
                 placed: false,
@@ -158,19 +184,52 @@ impl WebSurface {
         WebSurface { core }
     }
 
+    /// Applies the script answers that arrived since last frame.
+    fn drain_inbox(&self) {
+        let items = std::mem::take(&mut *self.core.inbox.lock().unwrap());
+        if items.is_empty() {
+            return;
+        }
+        if infiniterm_browser::surface::keylog() {
+            for item in &items {
+                match item {
+                    Inbox::FindCount(raw) => eprintln!("[webview] find count answer {raw:?}"),
+                    Inbox::Menu(raw, _) => eprintln!("[webview] context answer {raw:?}"),
+                }
+            }
+        }
+        let mut s = self.core.shared.borrow_mut();
+        for item in items {
+            match item {
+                Inbox::FindCount(raw) => {
+                    s.find_count = policy::parse_count(&raw);
+                    s.find_active = if s.find_count > 0 { 1 } else { 0 };
+                }
+                Inbox::Menu(raw, world) => {
+                    s.menu = policy::parse_context(&raw).map(|info| (info, world));
+                }
+            }
+        }
+        s.dirty = true;
+    }
+
     fn with_view<R>(&self, f: impl FnOnce(&WebView) -> R) -> Option<R> {
         self.core.state.borrow().view.as_ref().map(f)
     }
 
     fn build(&self, window: &Window, p: &Placement) {
-        let (url, store) = {
+        let (url, store, devtools) = {
             let s = self.core.state.borrow();
-            (s.url.clone(), s.store)
+            (s.url.clone(), s.store, s.devtools)
         };
         let sh = self.core.shared.clone();
         let sh_title = sh.clone();
         let sh_load = sh.clone();
         let sh_popup = sh.clone();
+        let sh_nav = sh.clone();
+        let sh_ipc = sh.clone();
+        let sh_dl = sh.clone();
+        let sh_done = sh.clone();
         let mut b = WebViewBuilder::new()
             .with_bounds(Rect {
                 position: LogicalPosition::new(p.rect[0], p.rect[1]).into(),
@@ -194,12 +253,76 @@ impl WebSurface {
             // web view itself opens nothing.
             .with_new_window_req_handler(move |u, _features| {
                 let mut s = sh_popup.borrow_mut();
-                s.popups.push(u);
+                // `window.open("slack://...")` is no tab (#668).
+                if infiniterm_core::app_link::is_app_link(&u) {
+                    s.external_links.push(u);
+                } else {
+                    s.popups.push(u);
+                }
                 s.dirty = true;
                 NewWindowResponse::Deny
+            })
+            // A navigation to another app's scheme (`slack:`, `mailto:`),
+            // from a click or a redirect, never commits: the page stays and
+            // the card asks (#668).
+            .with_navigation_handler(move |u| {
+                if infiniterm_core::app_link::is_app_link(&u) {
+                    let mut s = sh_nav.borrow_mut();
+                    s.external_links.push(u);
+                    s.dirty = true;
+                    false
+                } else {
+                    true
+                }
+            })
+            // `window.close()`: WebKit gives wry no callback, so the page's
+            // own function posts a message (#672).
+            .with_initialization_script(policy::CLOSE_SCRIPT)
+            .with_ipc_handler(move |req| {
+                if req.body() == policy::CLOSE_MESSAGE {
+                    let mut s = sh_ipc.borrow_mut();
+                    s.close_requested = true;
+                    s.dirty = true;
+                }
+            })
+            // Downloads go to the folder WebKit proposed (Downloads), under
+            // its name, never over a file that is there; the card says so.
+            .with_download_started_handler(move |_url, dest| {
+                let name = dest
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("download")
+                    .to_string();
+                // `INFINITERM_DOWNLOAD_DIR` moves downloads for a scratch
+                // instance (a test must not write into the real Downloads
+                // folder, and macOS asks about that folder).
+                let dir = std::env::var_os("INFINITERM_DOWNLOAD_DIR")
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| dest.parent().map(std::path::Path::to_path_buf))
+                    .unwrap_or_default();
+                *dest = policy::download_destination(&dir, &name, |p| p.exists());
+                sh_dl.borrow_mut().download_name = dest
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_string);
+                true
+            })
+            .with_download_completed_handler(move |_url, _path, ok| {
+                let mut s = sh_done.borrow_mut();
+                let name = s.download_name.take().unwrap_or_else(|| "a file".into());
+                s.downloads.push(if ok {
+                    format!("saved {name} in Downloads")
+                } else {
+                    format!("could not save {name}")
+                });
+                s.dirty = true;
             });
         // Safari's user agent, so a site that reads the tail sees Safari.
         b = b.with_user_agent(policy::safari_user_agent(macos_major()));
+        if devtools {
+            // Inspectable from Safari's Develop menu (`NATIVE_DEVTOOLS_NOTE`).
+            b = b.with_devtools(true);
+        }
         if macos_14_or_later() {
             b = b.with_data_store_identifier(store);
         } else {
@@ -375,10 +498,65 @@ impl PageSurface for WebSurface {
     }
     // Step 3 of the plan (page features): find, the right-click menu, app
     // links and downloads. Until then these do nothing.
-    fn find(&self, _text: &str, _forward: bool, _next: bool) {}
-    fn stop_find(&self) {}
+    // Find in page: WebKit selects and scrolls to the match
+    // (`findString:withConfiguration:completionHandler:`), but says only
+    // whether there was one, so the count the bar shows comes from a script
+    // and the current match is stepped here (`policy::step_find`).
+    fn find(&self, text: &str, forward: bool, next: bool) {
+        let sh = self.core.shared.clone();
+        let sh_found = self.core.shared.clone();
+        let _ = self.with_view(|wv| {
+            let block = RcBlock::new(move |res: *mut AnyObject| unsafe {
+                // SAFETY: WebKit passes a live WKFindResult (or nil, handled)
+                // on the main thread; `matchFound` is a BOOL property.
+                let found: Bool = if res.is_null() {
+                    Bool::NO
+                } else {
+                    msg_send![res, matchFound]
+                };
+                let mut s = sh_found.borrow_mut();
+                if !found.as_bool() {
+                    s.find_count = 0;
+                    s.find_active = 0;
+                }
+                s.dirty = true;
+            });
+            let needle = NSString::from_str(text);
+            let view = wv.webview();
+            // SAFETY: a WKFindConfiguration made with `new`, owned by the
+            // call; the block lives until WebKit has run it (RcBlock copies
+            // it to the heap).
+            unsafe {
+                let cfg: *mut AnyObject = msg_send![class!(WKFindConfiguration), new];
+                let _: () = msg_send![cfg, setWraps: Bool::YES];
+                let _: () = msg_send![cfg, setBackwards: Bool::new(!forward)];
+                let _: () = msg_send![&*view, findString: &*needle, withConfiguration: cfg, completionHandler: &*block];
+            }
+            // The count: the first search counts; stepping only moves.
+            if !next {
+                let inbox = self.core.inbox.clone();
+                let _ = wv.evaluate_script_with_callback(&policy::find_count_js(text), move |raw| {
+                    inbox.lock().unwrap().push(Inbox::FindCount(raw));
+                });
+            } else {
+                let mut s = sh.borrow_mut();
+                s.find_active = policy::step_find(s.find_active, s.find_count, forward);
+            }
+        });
+    }
+    fn stop_find(&self) {
+        let _ = self.with_view(|wv| {
+            let _ = wv
+                .evaluate_script("window.getSelection && window.getSelection().removeAllRanges();");
+        });
+        let mut s = self.core.shared.borrow_mut();
+        s.find_count = 0;
+        s.find_active = 0;
+    }
     fn find_result(&self) -> (i32, i32) {
-        (0, 0)
+        self.drain_inbox();
+        let s = self.core.shared.borrow();
+        (s.find_count, s.find_active)
     }
     fn device_scale(&self) -> f32 {
         1.
@@ -390,13 +568,40 @@ impl PageSurface for WebSurface {
         std::mem::take(&mut self.core.shared.borrow_mut().popups)
     }
     fn take_close_request(&self) -> bool {
-        false
+        std::mem::take(&mut self.core.shared.borrow_mut().close_requested)
     }
     fn take_external_links(&self) -> Vec<String> {
-        vec![]
+        std::mem::take(&mut self.core.shared.borrow_mut().external_links)
     }
+    fn take_downloads(&self) -> Vec<String> {
+        std::mem::take(&mut self.core.shared.borrow_mut().downloads)
+    }
+    // A right-click, in two steps: the monitor swallowed it and left the
+    // point (`webview_input::take_menu`); a script asks the page what is
+    // there; its answer comes back on a later frame and becomes the request.
     fn take_context_menu(&self) -> Option<ContextMenuRequest> {
-        None
+        self.drain_inbox();
+        if let Some(at) = crate::webview_input::take_menu(self.core.key) {
+            let inbox = self.core.inbox.clone();
+            let world = at.world;
+            let _ = self.with_view(|wv| {
+                let _ = wv.evaluate_script_with_callback(
+                    &policy::context_js(at.css.0, at.css.1),
+                    move |raw| inbox.lock().unwrap().push(Inbox::Menu(raw, world)),
+                );
+            });
+        }
+        let (info, (x, y)) = self.core.shared.borrow_mut().menu.take()?;
+        Some(ContextMenuRequest {
+            x: x.round() as i32,
+            y: y.round() as i32,
+            link_url: info.link,
+            editable: info.editable,
+            has_selection: info.selection,
+            can_go_back: self.can_go_back(),
+            can_go_forward: self.can_go_forward(),
+            page_url: self.url().unwrap_or_default(),
+        })
     }
     fn title(&self) -> Option<String> {
         self.core.shared.borrow().title.clone()
@@ -457,12 +662,15 @@ impl PageSurface for WebSurface {
     fn set_zoom(&self, _factor: f64) {}
 
     fn has_new_frame(&self) -> bool {
-        self.core.shared.borrow().dirty || crate::webview_input::has_pending()
+        self.core.shared.borrow().dirty
+            || !self.core.inbox.lock().unwrap().is_empty()
+            || crate::webview_input::has_pending()
     }
     fn take_page_click(&self) -> bool {
         crate::webview_input::take_click(self.core.key)
     }
     fn take_frame(&self) -> Option<Arc<Frame>> {
+        self.drain_inbox();
         let png = {
             let mut s = self.core.shared.borrow_mut();
             s.dirty = false;
@@ -561,6 +769,8 @@ impl PageSurface for WebSurface {
                     focused: p.focused,
                 },
                 p.locked,
+                p.zoom,
+                p.canvas_scale,
             );
         }
         let (live, pending, last, loaded) = {

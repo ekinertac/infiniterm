@@ -714,6 +714,20 @@ impl AppView {
         .into_iter()
         .filter(|r| r[2] > 0.5 && r[3] > 0.5)
         .collect();
+        // The find bar is drawn over the page it searches (and does not join
+        // `overlay_open`, so the page stays readable): it is a cover too.
+        let find_rect: Option<[f64; 4]> = self.model.find.open.then(|| {
+            let (l, t, w) = self.find_bar_geometry();
+            let h = crate::omnibox::FIND_BAR_HEIGHT_PX * self.model.ui_scale as f32;
+            // `find_bar_geometry` is in canvas pixels (the bar is placed
+            // inside the canvas area), the covers are in window pixels.
+            [
+                l as f64 + window_rect[0],
+                t as f64 + window_rect[1],
+                w as f64,
+                h as f64,
+            ]
+        });
         // The drag ghost is drawn over every card after the loop, so it
         // covers pages too.
         let ghost_rect: Option<[f64; 4]> =
@@ -776,6 +790,7 @@ impl AppView {
                     };
                     covers.extend(ghost_rect);
                     covers.extend(canvas_bands.iter().cloned());
+                    covers.extend(find_rect);
                     body.set_covers(covers);
                     // A ringed card's gradient reaches out to its ring
                     // (`chrome::CardRingGap`), so the clip grows with it.
