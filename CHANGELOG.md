@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-17
 
+- With `browser.engine` set to `"webview"`, pages see Safari's user agent (WebKit's own string plus `Version/N Safari/605.1.15`), and a card keeps its sign-ins, cookies and local storage across restarts in a store that belongs to that data folder, apart from Chromium's and from any other instance's. Sign in once again on each site after switching engines.
 - With `browser.engine` set to `"webview"`, the canvas gestures work over a page: Cmd+scroll zooms, Cmd+drag and middle-drag pan, a pinch zooms, and a plain scroll still scrolls the page. The first click on an unfocused card only focuses it, a card or the palette drawn over a page covers it properly, and Cmd chords (Cmd+T, Cmd+W, Cmd+Shift+P) work while the page has the keyboard. Typing, dead keys and input methods stay in the page.
 - New setting `browser.engine`: `"webview"` makes browser cards use the Mac's own WebKit instead of Chromium (macOS only, a work in progress; `"cef"` stays the default). A card keeps the engine it was opened with. The webview engine follows the canvas zoom, shows a still picture of the page when you zoom far out, drag a card or open the palette, and keeps its sign-ins apart from Chromium's, so you sign in again once on each site. This first step has no find in page, right-click menu, downloads or DevTools yet, and a click on the page does not focus the card.
 

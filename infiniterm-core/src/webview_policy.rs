@@ -259,8 +259,9 @@ mod tests {
     #[test]
     fn the_user_agent_is_webkits_own_plus_safaris_tail() {
         let ua = safari_user_agent(15);
-        assert!(ua
-            .starts_with("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15"));
+        assert!(
+            ua.starts_with("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15")
+        );
         assert!(ua.ends_with("Version/18.0 Safari/605.1.15"), "{ua}");
     }
 
