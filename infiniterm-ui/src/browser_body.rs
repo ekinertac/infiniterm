@@ -24,6 +24,7 @@
 //! Without CEF (the bare binary outside a bundle) the card says so and
 //! stays a rectangle, with one placeholder tab.
 use crate::body::{BodyAction, CardBody};
+use crate::page_surface::{Engine, PageSurface, Placement};
 use crate::tab_strip::{
     hover_lines, hovered, paint_hover_label, paint_strip, strip_hit, strip_world_h, StripStyle,
     TabDrag,
@@ -34,6 +35,7 @@ use gpui::{
 use image::{Frame as ImageFrame, RgbaImage};
 use infiniterm_browser::{Button, Mods, Surface};
 use infiniterm_core::grid::{Point, Size};
+use infiniterm_core::webview_policy as policy;
 use smallvec::SmallVec;
 use std::sync::Arc;
 
@@ -71,7 +73,7 @@ struct Repaint {
 /// tabs existed, once per open page.
 pub struct Tab {
     pub url: String,
-    pub surface: Option<Surface>,
+    pub surface: Option<Box<dyn PageSurface>>,
     /// Why there is no surface, for the card to say.
     pub unavailable: Option<String>,
     texture: Option<Arc<RenderImage>>,
@@ -94,18 +96,21 @@ pub struct Tab {
 }
 
 impl Tab {
-    fn open(url: &str, world: Size, scale: f32, cef_running: bool) -> Tab {
-        let (surface, unavailable) = if cef_running {
-            match Surface::open(url, world.w.round() as i32, world.h.round() as i32, scale) {
-                Some(s) => (Some(s), None),
-                None => (None, Some("could not create the browser".to_string())),
-            }
-        } else {
-            (
-                None,
-                Some("browser cards need the app bundle (CEF is not loaded)".to_string()),
-            )
-        };
+    fn open(url: &str, world: Size, scale: f32, cef_running: bool, engine: Engine) -> Tab {
+        let (surface, unavailable): (Option<Box<dyn PageSurface>>, Option<String>) =
+            if let Engine::Webview { store } = engine {
+                Self::open_webview(url, world, store)
+            } else if cef_running {
+                match Surface::open(url, world.w.round() as i32, world.h.round() as i32, scale) {
+                    Some(s) => (Some(Box::new(s)), None),
+                    None => (None, Some("could not create the browser".to_string())),
+                }
+            } else {
+                (
+                    None,
+                    Some("browser cards need the app bundle (CEF is not loaded)".to_string()),
+                )
+            };
         Tab {
             url: url.to_string(),
             surface,
@@ -123,6 +128,35 @@ impl Tab {
         if let Some(s) = self.surface.take() {
             s.close();
         }
+    }
+
+    /// A tab on the system web view. Only macOS has one; `browser.engine`
+    /// falls back to `cef` elsewhere before a body is ever made, so the
+    /// other arm is a guard, not a feature.
+    #[cfg(target_os = "macos")]
+    fn open_webview(
+        url: &str,
+        world: Size,
+        store: [u8; 16],
+    ) -> (Option<Box<dyn PageSurface>>, Option<String>) {
+        let surface = crate::webview::WebSurface::open(
+            url,
+            store,
+            (world.w.round() as i32, world.h.round() as i32),
+        );
+        (Some(Box::new(surface)), None)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn open_webview(
+        _url: &str,
+        _world: Size,
+        _store: [u8; 16],
+    ) -> (Option<Box<dyn PageSurface>>, Option<String>) {
+        (
+            None,
+            Some("the webview engine is for macOS only".to_string()),
+        )
     }
 }
 
@@ -220,6 +254,14 @@ pub struct BrowserBody {
     /// Remembered so a tab opened later is built the same way the first
     /// one was.
     cef_running: bool,
+    /// Which engine this card's tabs open with, fixed when the card is made
+    /// (`browser.engine`): a card keeps its engine until it is reopened.
+    engine: Engine,
+    /// Window-pixel rects of the cards painted over this one this frame, and
+    /// whether a card is being dragged, set by `paint.rs` before `paint`
+    /// (`CardBody::set_covers`). Only a native page cares.
+    covers: Vec<[f64; 4]>,
+    dragging: bool,
 }
 
 impl BrowserBody {
@@ -253,6 +295,18 @@ impl BrowserBody {
         cef_running: bool,
         style: StripStyle,
     ) -> BrowserBody {
+        Self::with_engine(card_id, url, world, scale, cef_running, style, Engine::Cef)
+    }
+
+    pub fn with_engine(
+        card_id: &str,
+        url: &str,
+        world: Size,
+        scale: f32,
+        cef_running: bool,
+        style: StripStyle,
+        engine: Engine,
+    ) -> BrowserBody {
         BrowserBody {
             card_id: card_id.to_string(),
             // ui_scale defaults to 1. below, same as every other mirrored
@@ -262,6 +316,7 @@ impl BrowserBody {
                 page_world_size(world, style.font_px, 1.),
                 scale,
                 cef_running,
+                engine,
             )],
             active: 0,
             locked: false,
@@ -291,6 +346,9 @@ impl BrowserBody {
             context_menu: None,
             painted_texture: None,
             cef_running,
+            engine,
+            covers: vec![],
+            dragging: false,
         }
     }
 
@@ -299,8 +357,8 @@ impl BrowserBody {
     }
 
     /// The surface every key, click and command goes to: the visible tab's.
-    pub fn active_surface(&self) -> Option<&Surface> {
-        self.active_tab().and_then(|t| t.surface.as_ref())
+    pub fn active_surface(&self) -> Option<&dyn PageSurface> {
+        self.active_tab().and_then(|t| t.surface.as_deref())
     }
 
     /// The active tab's url, for `browsers.rs` to compare against
@@ -314,7 +372,7 @@ impl BrowserBody {
     /// arrives from `card.active_tab` like everything else.
     pub fn open_tab(&mut self, url: &str) {
         let page = page_world_size(self.world, self.style.font_px, self.ui_scale);
-        let mut tab = Tab::open(url, page, self.scale, self.cef_running);
+        let mut tab = Tab::open(url, page, self.scale, self.cef_running, self.engine);
         // Made for an address a page opened: that page may close it again.
         if let Some(at) = self.popup_urls.iter().position(|u| u == url) {
             self.popup_urls.remove(at);
@@ -336,10 +394,10 @@ impl BrowserBody {
         self.tabs.clear();
         self.focused_tab = None;
         let page = page_world_size(self.world, self.style.font_px, self.ui_scale);
-        let (scale, cef) = (self.scale, self.cef_running);
+        let (scale, cef, engine) = (self.scale, self.cef_running, self.engine);
         self.tabs = urls
             .iter()
-            .map(|u| Tab::open(u, page, scale, cef))
+            .map(|u| Tab::open(u, page, scale, cef, engine))
             .collect();
         self.active = 0;
         self.apply_focus();
@@ -682,6 +740,43 @@ impl CardBody for BrowserBody {
                 (bounds.size.height - strip_h).max(px(1.)),
             ),
         );
+        // A native page (the system web view) is placed over the page area,
+        // not painted: its rect, its page zoom, whether it shows live or as
+        // the snapshot that arrives below as this tab's texture, and its
+        // wash. A tab that is not the visible one is hidden.
+        let page_zoom = policy::page_zoom(self.zoom, scale);
+        let view_state = policy::page_view(&policy::PageState {
+            zoom: page_zoom,
+            covered: !self.covers.is_empty(),
+            dragging: self.dragging,
+        });
+        let wash: gpui::Rgba = self.card_bg.into();
+        for (i, tab) in self.tabs.iter().enumerate() {
+            let Some(s) = tab.surface.as_deref().filter(|s| s.is_native()) else {
+                continue;
+            };
+            if i != self.active {
+                s.hide();
+                continue;
+            }
+            s.place(
+                window,
+                &Placement {
+                    rect: [
+                        f32::from(page_bounds.origin.x) as f64,
+                        f32::from(page_bounds.origin.y) as f64,
+                        f32::from(page_bounds.size.width) as f64,
+                        f32::from(page_bounds.size.height) as f64,
+                    ],
+                    zoom: page_zoom,
+                    world: (page_w, page_h),
+                    snapshot: view_state == policy::PageView::Snapshot,
+                    dim: policy::dim_alpha(focused, self.inactive_dim),
+                    dim_rgb: [wash.r, wash.g, wash.b],
+                    now_ms: now,
+                },
+            );
+        }
         let radius = crate::chrome::card_radius(cx);
         window.paint_quad(fill(bounds, self.card_bg).corner_radii(radius));
         let texture_css = self.active_tab().map(|t| t.texture_css).unwrap_or((0, 0));
@@ -831,7 +926,7 @@ impl CardBody for BrowserBody {
         let page = page_world_size(world, self.style.font_px, self.ui_scale);
         for tab in &self.tabs {
             if let Some(s) = &tab.surface {
-                let device = s.shared.borrow().scale;
+                let device = s.device_scale();
                 s.resize(page.w.round() as i32, page.h.round() as i32, device);
             }
         }
@@ -1018,14 +1113,24 @@ impl CardBody for BrowserBody {
         }
     }
 
-    fn wants_frame(&self, _now: f64) -> bool {
+    fn set_covers(&mut self, covers: Vec<[f64; 4]>, dragging: bool) {
+        if self.covers != covers || self.dragging != dragging {
+            self.covers = covers;
+            self.dragging = dragging;
+            self.dirty = true;
+        }
+    }
+
+    fn wants_frame(&self, now: f64) -> bool {
         // Any tab's new frame asks for one: a background tab's pixels are
         // dropped, but `sync` is what drops them, and it runs per frame.
+        // A native page also asks when its snapshot is due.
         self.dirty
-            || self
-                .tabs
-                .iter()
-                .any(|t| t.surface.as_ref().is_some_and(|s| s.has_new_frame()))
+            || self.tabs.iter().any(|t| {
+                t.surface
+                    .as_ref()
+                    .is_some_and(|s| s.has_new_frame() || s.wants_frame(now))
+            })
             // The visible page is of an older size and a repaint request is
             // still to come: keep painting so `paint` can time it (#479).
             || self.tabs.get(self.active).is_some_and(|t| {
