@@ -15,6 +15,7 @@
 // Related: cmd.rs (the command language), ../../docs/agent/webview-spike.md.
 
 mod cmd;
+mod gesture;
 
 #[cfg(target_os = "macos")]
 mod mac;

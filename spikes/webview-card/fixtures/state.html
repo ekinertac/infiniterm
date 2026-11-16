@@ -19,6 +19,12 @@ input { font-size: 18px; width: 90%; }
  | <a id="dl" href="/file.bin" download>download</a>
  | <a id="app" href="slack://open">app link</a></p>
 <pre id="out">loading</pre>
+<!-- Follow-up (gestures): a tall block so the page can scroll, and a key log. -->
+<div style="height:3000px;background:linear-gradient(#fff,#cde)">tall block: scroll me</div>
+<script>
+window.__keys = [];
+addEventListener('keydown', e => window.__keys.push(e.key + (e.metaKey ? '+meta' : '') + (e.shiftKey ? '+shift' : '')));
+</script>
 <script>
 const q = new URLSearchParams(location.search);
 const idb = () => new Promise((res, rej) => {

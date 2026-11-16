@@ -36,6 +36,12 @@ pub enum Cmd {
     Focus(String),
     Url { id: String, url: String },
     Devtools(String),
+    /// `inactivedim on|off`: dim every card but the selected one (0.8).
+    InactiveDim(bool),
+    /// `pinch <magnification>`: the same code path a trackpad pinch takes.
+    Pinch(f32),
+    /// `select <id>`: make a card the focused one, as a click on it does.
+    Select(String),
     /// `find <id> <text>`: WKWebView's own find in page.
     Find { id: String, text: String },
     Windows,
@@ -148,6 +154,18 @@ pub fn parse(line: &str) -> Result<Cmd, String> {
             need(1)?;
             Ok(Cmd::Devtools(words[0].into()))
         }
+        "inactivedim" => {
+            need(1)?;
+            Ok(Cmd::InactiveDim(words[0] == "on"))
+        }
+        "pinch" => {
+            need(1)?;
+            Ok(Cmd::Pinch(f(words[0])?))
+        }
+        "select" => {
+            need(1)?;
+            Ok(Cmd::Select(words[0].into()))
+        }
         "find" => {
             need(2)?;
             Ok(Cmd::Find { id: words[0].into(), text: rest.splitn(2, ' ').nth(1).unwrap_or("").into() })
@@ -186,6 +204,13 @@ mod tests {
             parse("eval a document.title + ' x'").unwrap(),
             Cmd::Eval { id: "a".into(), js: "document.title + ' x'".into() }
         );
+    }
+
+    #[test]
+    fn gesture_commands_parse() {
+        assert_eq!(parse("inactivedim on").unwrap(), Cmd::InactiveDim(true));
+        assert_eq!(parse("pinch 0.2").unwrap(), Cmd::Pinch(0.2));
+        assert_eq!(parse("select a").unwrap(), Cmd::Select("a".into()));
     }
 
     #[test]
