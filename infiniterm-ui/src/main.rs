@@ -20,6 +20,8 @@ mod browser_body;
 mod page_surface;
 #[cfg(all(feature = "browser", target_os = "macos"))]
 mod webview;
+#[cfg(all(feature = "browser", target_os = "macos"))]
+mod webview_input;
 // Without the feature, `browser_stub.rs` IS the browsers module: same names,
 // no CEF. Every call site stays as it is, and the difference between the two
 // builds lives in that one file. See its header.

@@ -120,6 +120,26 @@ impl AppView {
     }
 
     pub fn reconcile_browsers(&mut self) {
+        // A pinch over a web page (`webview_input`): gpui has no pinch event,
+        // so it is made into the Ctrl+wheel zoom a pinch over the canvas
+        // arrives as.
+        #[cfg(target_os = "macos")]
+        for ((x, y), magnification) in crate::webview_input::take_pinches() {
+            let dy = infiniterm_core::webview_gesture::pinch_to_wheel_dy(
+                magnification,
+                self.model.config.canvas.zoom_sensitivity,
+            );
+            self.wheel(&gpui::ScrollWheelEvent {
+                position: gpui::point(gpui::px(x as f32), gpui::px(y as f32)),
+                delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(dy as f32))),
+                modifiers: gpui::Modifiers {
+                    control: true,
+                    ..Default::default()
+                },
+                touch_phase: gpui::TouchPhase::Moved,
+            });
+            self.redraw = true;
+        }
         let cef = self.cef_running;
         let scale = self.scale_factor;
         let card_bg = self.chrome.card_bg;

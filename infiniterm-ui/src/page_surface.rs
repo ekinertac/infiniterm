@@ -43,6 +43,13 @@ pub struct Placement {
     pub world: (i32, i32),
     /// Live or a picture, decided by `webview_policy::page_view`.
     pub snapshot: bool,
+    /// Rects gpui draws over the page (cards in front, an overlay, the drag
+    /// ghost): the mask holes AND the click routing are both made from this
+    /// one list.
+    pub covers: Vec<[f64; 4]>,
+    /// The card has the focus, and the keyboard is locked to the page.
+    pub focused: bool,
+    pub locked: bool,
     /// Alpha of the wash over the page, `webview_policy::dim_alpha`.
     pub dim: f64,
     /// The wash's colour (the card background).
@@ -105,6 +112,11 @@ pub trait PageSurface {
 
     /// Whether this page is a native view the card has to place each frame.
     fn is_native(&self) -> bool {
+        false
+    }
+    /// A click reached the page of a card that had the focus but not the
+    /// lock (so the card locks, as a click that reaches a CEF page does).
+    fn take_page_click(&self) -> bool {
         false
     }
     /// Put the native view where the card is this frame.
