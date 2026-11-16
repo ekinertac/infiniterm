@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-16
 
+- The Linux installer names any system library the app needs and the machine lacks (stock Ubuntu desktop has no `libxkbcommon-x11-0`), with the `sudo apt install` line that adds it. Before, the app just did not open.
 - Fixed: on Linux under GNOME, the dock showed the running app as "Unknown" with a blank icon instead of infiniterm.
 - Fixed: `ift join` and `ift connect` to a Linux machine installed with `install.sh` said "iftd is not installed on the server".
 - The app uses less CPU when nothing is happening and no browser card is open. It used to wake up 250 times a second to service the built-in browser engine even when there was no browser card; it now does so only when the engine asks, about 30 times a second. Browser cards work as before.
