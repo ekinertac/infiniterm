@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-17
 
+- Fixed: on macOS 27.2 the window could not be dragged by its title bar. Dragging the empty part of the bar moves it again; dragging a workspace tab still reorders tabs and never moves the window.
 - With `browser.engine` set to `"webview"`, pages see Safari's user agent (WebKit's own string plus `Version/N Safari/605.1.15`), and a card keeps its sign-ins, cookies and local storage across restarts in a store that belongs to that data folder, apart from Chromium's and from any other instance's. Sign in once again on each site after switching engines.
 - With `browser.engine` set to `"webview"`, the page features of a browser card work: find in page (with the count and Enter to step), the right-click menu (links, copy, tabs), a link to another app asks before it opens (`slack:`, `mailto:`), a page's `window.open` opens a tab and its `window.close()` closes it, and a download is saved in Downloads under its own name (never over a file) with a note in the status bar. DevTools on a webview page says to use Safari's Develop menu.
 - With `browser.engine` set to `"webview"`, the canvas gestures work over a page: Cmd+scroll zooms, Cmd+drag and middle-drag pan, a pinch zooms, and a plain scroll still scrolls the page. The first click on an unfocused card only focuses it, a card or the palette drawn over a page covers it properly, and Cmd chords (Cmd+T, Cmd+W, Cmd+Shift+P) work while the page has the keyboard. Typing, dead keys and input methods stay in the page.

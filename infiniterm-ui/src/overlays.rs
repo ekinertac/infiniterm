@@ -751,6 +751,9 @@ impl AppView {
         );
         // Refilled by each tab's `canvas` below while it paints (#667).
         self.tab_bounds.borrow_mut().clear();
+        // The "+" control's window bounds, filled while it paints.
+        let plus_bounds: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>> =
+            Default::default();
         let mut tabs = div().flex().items_center().gap_1();
         for (index, ws) in self.model.workspaces.iter().enumerate() {
             let cards = self.model.cards_on(Some(&ws.id));
@@ -1056,7 +1059,15 @@ impl AppView {
                         cx.notify();
                     }),
                 )
-                .child("+"),
+                .child("+")
+                // Where it painted, so the bar does not drag from it
+                // (`title_drag::hover`).
+                .child({
+                    let plus = plus_bounds.clone();
+                    gpui::canvas(move |bounds, _, _| plus.set(Some(bounds)), |_, _, _, _| ())
+                        .absolute()
+                        .size_full()
+                }),
         );
         // A remote instance wears its host's colour: the bar leans toward it and
         // a chip on the right names the host, so it is never taken for the
@@ -1103,10 +1114,27 @@ impl AppView {
         // runs. Bubble phase only, once, and only over the bar: over the
         // canvas the canvas's own listeners already ran.
         let entity = cx.entity();
+        #[cfg(target_os = "macos")]
+        let tab_bounds = self.tab_bounds.clone();
         let bar = bar.child(
             gpui::canvas(
                 |_, _, _| (),
                 move |bounds, _, window, _| {
+                    // Every move with no button held, anywhere in the window:
+                    // the window is movable only while the pointer is on the
+                    // bare bar, so AppKit drags it from there and never from
+                    // a tab or the "+" (`title_drag.rs`).
+                    #[cfg(target_os = "macos")]
+                    window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, _| {
+                        if phase != gpui::DispatchPhase::Capture || e.pressed_button.is_some() {
+                            return;
+                        }
+                        let tabs = tab_bounds.borrow();
+                        let controls = tabs.iter().map(|(_, b)| *b).chain(plus_bounds.get());
+                        crate::title_drag::hover(crate::title_drag::on_bare_bar(
+                            bounds, controls, e.position,
+                        ));
+                    });
                     let (moves, ups) = (entity.clone(), entity.clone());
                     window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
                         if phase != gpui::DispatchPhase::Bubble || !bounds.contains(&e.position) {
@@ -1136,15 +1164,13 @@ impl AppView {
             .absolute()
             .size_full(),
         );
-        // A press that reaches the bar itself (not a tab or the "+", which
-        // stop it) drags the window; a double-click does the system's title
-        // bar action. `title_drag.rs` says why this is by hand on the Mac.
+        // A double-click that reaches the bar itself (not a tab or the "+",
+        // which stop it) does the system's title bar action. The drag is
+        // AppKit's own, while the pointer is on the bare bar (`title_drag.rs`).
         #[cfg(target_os = "macos")]
         let bar = bar.on_mouse_down(MouseButton::Left, |e: &MouseDownEvent, window, _| {
             if e.click_count >= 2 {
                 window.titlebar_double_click();
-            } else {
-                crate::title_drag::begin();
             }
         });
         // Linux moves and maximises through the window manager, the move
