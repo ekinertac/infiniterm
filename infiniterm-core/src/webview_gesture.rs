@@ -150,6 +150,16 @@ pub fn key_route(cmd: bool, page_focused: bool) -> KeyAction {
     }
 }
 
+/// The macOS key code of Escape.
+pub const KEY_ESCAPE: u16 = 53;
+
+/// Whether a key-down is a bare Escape, the one a double-Escape counts (#820):
+/// a Cmd+Escape is `browser.leave` and goes to gpui as a chord, and an
+/// Escape with Shift, Ctrl or Alt is the page's own.
+pub fn is_bare_escape(key_code: u16, shift: bool, ctrl: bool, alt: bool, cmd: bool) -> bool {
+    key_code == KEY_ESCAPE && !(shift || ctrl || alt || cmd)
+}
+
 /// The ctrl+wheel delta that gives the zoom a pinch of `magnification`
 /// should give: `input.rs::wheel` zooms by `exp(dy * 0.002 * sensitivity)`.
 pub fn pinch_to_wheel_dy(magnification: f64, sensitivity: f64) -> f64 {
@@ -336,6 +346,16 @@ mod tests {
         assert_eq!(key_route(true, true), KeyAction::TryGpui);
         assert_eq!(key_route(true, false), KeyAction::Pass);
         assert_eq!(key_route(false, true), KeyAction::Pass);
+    }
+
+    #[test]
+    fn only_a_bare_escape_counts_for_the_double() {
+        assert!(is_bare_escape(KEY_ESCAPE, false, false, false, false));
+        assert!(!is_bare_escape(KEY_ESCAPE, false, false, false, true));
+        assert!(!is_bare_escape(KEY_ESCAPE, true, false, false, false));
+        assert!(!is_bare_escape(KEY_ESCAPE, false, true, false, false));
+        assert!(!is_bare_escape(KEY_ESCAPE, false, false, true, false));
+        assert!(!is_bare_escape(0, false, false, false, false));
     }
 
     #[test]
