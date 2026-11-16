@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<!-- Test page for the webview spike (#761): sets a persistent cookie, a
+     session cookie, localStorage and IndexedDB, and reads them back through
+     window.readState(). Served from localhost by tools run in the spike's
+     notes; a file:// origin would not keep cookies. Also has a text input for
+     key tests, a popup link and a download link. -->
+<html>
+<head><meta charset="utf-8"><title>state-page</title>
+<style>
+body { font: 16px -apple-system, sans-serif; margin: 12px; background: #fff; color: #111; }
+h1 { font-size: 22px; } code { font: 14px Menlo, monospace; }
+input { font-size: 18px; width: 90%; }
+</style></head>
+<body>
+<h1>Sharp text test 0123456789</h1>
+<p>The quick brown fox jumps over the lazy dog. 12 px: <span style="font-size:12px">The quick brown fox jumps over the lazy dog.</span></p>
+<input id="t" placeholder="type here" autofocus>
+<p><a id="pop" href="#" onclick="window.open('/state.html?popup=1','_blank','width=400,height=300');return false">window.open popup</a>
+ | <a id="dl" href="/file.bin" download>download</a>
+ | <a id="app" href="slack://open">app link</a></p>
+<pre id="out">loading</pre>
+<script>
+const q = new URLSearchParams(location.search);
+const idb = () => new Promise((res, rej) => {
+  const r = indexedDB.open('spike', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('kv');
+  r.onsuccess = () => res(r.result);
+  r.onerror = () => rej(r.error);
+});
+async function readState() {
+  const db = await idb();
+  const idbval = await new Promise(res => {
+    const g = db.transaction('kv').objectStore('kv').get('k');
+    g.onsuccess = () => res(g.result === undefined ? null : g.result);
+  });
+  return JSON.stringify({
+    cookie: document.cookie,
+    ls: localStorage.getItem('ls'),
+    idb: idbval,
+  });
+}
+async function writeState(tag) {
+  document.cookie = 'persist=' + tag + '; max-age=31536000; path=/';
+  document.cookie = 'session=' + tag + '; path=/';
+  localStorage.setItem('ls', tag);
+  const db = await idb();
+  await new Promise(res => {
+    const tx = db.transaction('kv', 'readwrite');
+    tx.objectStore('kv').put(tag, 'k');
+    tx.oncomplete = res;
+  });
+}
+window.readState = readState;
+window.writeState = writeState;
+if (q.has('write')) writeState(q.get('write'));
+readState().then(s => document.getElementById('out').textContent = s);
+if (q.has('popup')) setTimeout(() => window.close(), 1500);
+</script>
+</body></html>

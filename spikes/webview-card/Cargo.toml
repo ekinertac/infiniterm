@@ -1,0 +1,30 @@
+# Spike (#761): can a browser card be an OS webview (WKWebView through wry)
+# inside the gpui window instead of CEF? Excluded from the workspace so
+# `make check` never builds it. The product browser path is untouched; the
+# measurements and the verdicts are in docs/agent/webview-spike.md.
+# Its Cargo.lock started as a copy of the app's, so gpui and its tree are the
+# very versions the app ships.
+[package]
+name = "webview-card"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Its own workspace root: a worktree sits inside the main checkout, whose
+# workspace would otherwise claim this crate.
+[workspace]
+
+[dependencies]
+gpui = "0.2.2"
+wry = { version = "0.57", features = ["devtools"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+smallvec = "1"
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+block2 = "0.6"
+
+[profile.dev.package."*"]
+opt-level = 3
