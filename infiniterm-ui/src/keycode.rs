@@ -57,6 +57,24 @@ const SHIFT_FLAG: u64 = 1 << 17;
 #[cfg(target_os = "macos")]
 pub fn install() {
     let block = block::ConcreteBlock::new(|event: *mut Object| -> *mut Object {
+        record_event(event);
+        event
+    });
+    // The monitor holds the block for the life of the process.
+    let block = Box::leak(Box::new(block.copy()));
+    let _: *mut Object = unsafe {
+        msg_send![class!(NSEvent), addLocalMonitorForEventsMatchingMask: KEY_DOWN_MASK handler: &**block]
+    };
+}
+
+/// Keeps this key-down's physical code, shift and dead-key state for the
+/// chord reader. The monitor above calls it for every key-down; the webview
+/// card's own monitor (`webview_input.rs`) calls it too before it hands a Cmd
+/// chord to gpui, because two monitors run in no promised order and the
+/// chord would otherwise be read with the PREVIOUS key's code.
+#[cfg(target_os = "macos")]
+pub fn record_event(event: *mut Object) {
+    {
         let code: u16 = unsafe { msg_send![event, keyCode] };
         let flags: u64 = unsafe { msg_send![event, modifierFlags] };
         // `characters` is nil for a modifier-only event, empty for a dead
@@ -73,13 +91,7 @@ pub fn install() {
         LAST.store(code as i32, Ordering::Relaxed);
         LAST_SHIFT.store(flags & SHIFT_FLAG != 0, Ordering::Relaxed);
         LAST_DEAD.store(dead, Ordering::Relaxed);
-        event
-    });
-    // The monitor holds the block for the life of the process.
-    let block = Box::leak(Box::new(block.copy()));
-    let _: *mut Object = unsafe {
-        msg_send![class!(NSEvent), addLocalMonitorForEventsMatchingMask: KEY_DOWN_MASK handler: &**block]
-    };
+    }
 }
 
 /// The DOM code of the most recent key-down, when it is one the keymap

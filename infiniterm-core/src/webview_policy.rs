@@ -37,11 +37,11 @@ pub fn page_zoom(card_zoom: Option<f64>, canvas_scale: f64) -> f64 {
 pub struct PageState {
     /// The page zoom from `page_zoom`.
     pub zoom: f64,
-    /// Something drawn by gpui is over part of the page: a card in front, an
-    /// open overlay.
-    pub covered: bool,
-    /// A card is being moved (the ghost is on screen).
-    pub dragging: bool,
+    /// One cover hides the whole page (an open overlay, a card bigger than
+    /// it): nothing of the live page would show, so the picture stands in.
+    /// Partial covers are not this: they are holes in the live page
+    /// (`holes_of`), which keeps it playing and scrolling.
+    pub fully_covered: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,11 +52,12 @@ pub enum PageView {
     Snapshot,
 }
 
-/// A native view floats above everything gpui draws, so whenever gpui must
-/// draw over the page (a cover, a drag) or the page cannot be shown at this
-/// zoom, a picture stands in for it.
+/// A native view floats above everything gpui draws. A card over part of the
+/// page, an open menu's rect or the drag ghost are cut out of the live view
+/// as holes (`holes_of`); only a page that cannot be shown at this zoom, or
+/// that one cover hides entirely, is swapped for its picture.
 pub fn page_view(s: &PageState) -> PageView {
-    if s.zoom < FAR_ZOOM || s.covered || s.dragging {
+    if s.zoom < FAR_ZOOM || s.fully_covered {
         PageView::Snapshot
     } else {
         PageView::Live
@@ -125,6 +126,57 @@ pub fn covers_of(order: &[Rect], index: usize) -> Vec<Rect> {
         .collect()
 }
 
+/// Whether one rect contains another.
+pub fn contains(outer: &Rect, inner: &Rect) -> bool {
+    outer[0] <= inner[0]
+        && outer[1] <= inner[1]
+        && outer[0] + outer[2] >= inner[0] + inner[2]
+        && outer[1] + outer[3] >= inner[1] + inner[3]
+}
+
+/// Whether one of the covers hides the whole page.
+pub fn fully_covered(page: &Rect, covers: &[Rect]) -> bool {
+    covers.iter().any(|c| contains(c, page))
+}
+
+/// The parts of `page` the covers hide, as rects that do not overlap: the
+/// holes of the layer mask. Two covers that meet (a card and the drag ghost)
+/// must not become two overlapping holes: an even-odd mask fills an overlap
+/// again, so the page showed through where two covers met (found in the #761
+/// spike). Coordinate compression: cut the plane along every edge, keep the
+/// cells inside any cover.
+pub fn holes_of(page: &Rect, covers: &[Rect]) -> Vec<Rect> {
+    let clipped: Vec<Rect> = covers
+        .iter()
+        .filter_map(|c| {
+            let x0 = c[0].max(page[0]);
+            let y0 = c[1].max(page[1]);
+            let x1 = (c[0] + c[2]).min(page[0] + page[2]);
+            let y1 = (c[1] + c[3]).min(page[1] + page[3]);
+            (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
+        })
+        .collect();
+    let mut xs: Vec<f64> = clipped.iter().flat_map(|h| [h[0], h[0] + h[2]]).collect();
+    let mut ys: Vec<f64> = clipped.iter().flat_map(|h| [h[1], h[1] + h[3]]).collect();
+    xs.sort_by(f64::total_cmp);
+    ys.sort_by(f64::total_cmp);
+    xs.dedup();
+    ys.dedup();
+    let mut out = Vec::new();
+    for xw in xs.windows(2) {
+        for yw in ys.windows(2) {
+            let mid = (xw[0] + (xw[1] - xw[0]) / 2., yw[0] + (yw[1] - yw[0]) / 2.);
+            let hit = clipped.iter().any(|h| {
+                mid.0 >= h[0] && mid.0 < h[0] + h[2] && mid.1 >= h[1] && mid.1 < h[1] + h[3]
+            });
+            if hit {
+                out.push([xw[0], yw[0], xw[1] - xw[0], yw[1] - yw[0]]);
+            }
+        }
+    }
+    out
+}
+
 /// The 16 bytes that name a WKWebsiteDataStore (`dataStoreForIdentifier`,
 /// macOS 14+) for one data dir. WebKit keeps the store under
 /// `~/Library/WebKit/<bundle id>/WebsiteDataStore/<uuid>/` whatever we do,
@@ -178,25 +230,55 @@ mod tests {
         assert_eq!(page_zoom(Some(3.), 4.), PAGE_ZOOM_MAX);
     }
 
-    fn state(zoom: f64, covered: bool, dragging: bool) -> PageState {
+    fn state(zoom: f64, fully_covered: bool) -> PageState {
         PageState {
             zoom,
-            covered,
-            dragging,
+            fully_covered,
         }
     }
 
     #[test]
-    fn a_page_is_live_at_and_above_half_zoom_with_nothing_over_it() {
-        assert_eq!(page_view(&state(1., false, false)), PageView::Live);
-        assert_eq!(page_view(&state(FAR_ZOOM, false, false)), PageView::Live);
+    fn a_page_is_live_at_and_above_half_zoom_with_nothing_hiding_it() {
+        assert_eq!(page_view(&state(1., false)), PageView::Live);
+        assert_eq!(page_view(&state(FAR_ZOOM, false)), PageView::Live);
     }
 
     #[test]
-    fn far_zoom_a_cover_and_a_drag_each_give_the_snapshot() {
-        assert_eq!(page_view(&state(0.49, false, false)), PageView::Snapshot);
-        assert_eq!(page_view(&state(1., true, false)), PageView::Snapshot);
-        assert_eq!(page_view(&state(1., false, true)), PageView::Snapshot);
+    fn far_zoom_and_a_total_cover_give_the_snapshot() {
+        assert_eq!(page_view(&state(0.49, false)), PageView::Snapshot);
+        assert_eq!(page_view(&state(1., true)), PageView::Snapshot);
+    }
+
+    #[test]
+    fn one_cover_that_contains_the_page_hides_it_and_a_partial_one_does_not() {
+        let page: Rect = [10., 10., 100., 100.];
+        assert!(fully_covered(&page, &[[0., 0., 500., 500.]]));
+        assert!(fully_covered(&page, &[[10., 10., 100., 100.]]));
+        assert!(!fully_covered(&page, &[[50., 50., 100., 100.]]));
+        // Two covers that together hide it are holes, not a total cover.
+        assert!(!fully_covered(&page, &[[0., 0., 60., 200.], [60., 0., 60., 200.]]));
+    }
+
+    #[test]
+    fn holes_are_the_covers_cut_to_the_page_and_never_overlap() {
+        let page: Rect = [0., 0., 100., 100.];
+        // A card and the drag ghost that overlap each other.
+        let holes = holes_of(&page, &[[50., 50., 100., 100.], [70., 70., 100., 100.]]);
+        let area: f64 = holes.iter().map(|h| h[2] * h[3]).sum();
+        // 50x50 plus 30x30 minus their 30x30 overlap inside the page: 2500.
+        assert_eq!(area, 2500.);
+        for (i, a) in holes.iter().enumerate() {
+            for b in &holes[i + 1..] {
+                assert!(!overlap(a, b), "{a:?} overlaps {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_cover_off_the_page_makes_no_hole() {
+        let page: Rect = [0., 0., 100., 100.];
+        assert!(holes_of(&page, &[[200., 200., 10., 10.], [100., 0., 5., 5.]]).is_empty());
+        assert!(holes_of(&page, &[]).is_empty());
     }
 
     #[test]

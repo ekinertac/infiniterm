@@ -688,7 +688,46 @@ impl AppView {
             f32::from(visible.size.width) as f64,
             f32::from(visible.size.height) as f64,
         ];
-        let any_moving = !moving.is_empty();
+        // gpui clips a card to the canvas area, a native page is not: the
+        // window's tab bar and status bar would be drawn over by a page that
+        // is partly off the canvas. Everything of the window outside the
+        // canvas area is a cover too, so the page is cut at the canvas edge
+        // and a click there is the chrome's.
+        let win = window.viewport_size();
+        let (win_w, win_h) = (f32::from(win.width) as f64, f32::from(win.height) as f64);
+        let canvas_bands: Vec<[f64; 4]> = [
+            [0., 0., win_w, window_rect[1]],
+            [
+                0.,
+                window_rect[1] + window_rect[3],
+                win_w,
+                win_h - (window_rect[1] + window_rect[3]),
+            ],
+            [0., window_rect[1], window_rect[0], window_rect[3]],
+            [
+                window_rect[0] + window_rect[2],
+                window_rect[1],
+                win_w - (window_rect[0] + window_rect[2]),
+                window_rect[3],
+            ],
+        ]
+        .into_iter()
+        .filter(|r| r[2] > 0.5 && r[3] > 0.5)
+        .collect();
+        // The drag ghost is drawn over every card after the loop, so it
+        // covers pages too.
+        let ghost_rect: Option<[f64; 4]> = ghost
+            .as_ref()
+            .filter(|_| self.drop_tab.is_none())
+            .map(|(_, r)| {
+                let b = at(*r);
+                [
+                    f32::from(b.origin.x) as f64,
+                    f32::from(b.origin.y) as f64,
+                    f32::from(b.size.width) as f64,
+                    f32::from(b.size.height) as f64,
+                ]
+            });
         #[cfg(feature = "browser")]
         crate::page_surface::begin_frame();
         for card in &cards {
@@ -725,7 +764,7 @@ impl AppView {
                 };
                 let has_body = body.is_some();
                 if let Some(body) = body {
-                    let covers = if over_everything {
+                    let mut covers = if over_everything {
                         vec![window_rect]
                     } else {
                         paint_order
@@ -734,7 +773,9 @@ impl AppView {
                             .map(|i| infiniterm_core::webview_policy::covers_of(&paint_rects, i))
                             .unwrap_or_default()
                     };
-                    body.set_covers(covers, any_moving);
+                    covers.extend(ghost_rect);
+                    covers.extend(canvas_bands.iter().cloned());
+                    body.set_covers(covers);
                     // A ringed card's gradient reaches out to its ring
                     // (`chrome::CardRingGap`), so the clip grows with it.
                     let gap = if focused || selected {

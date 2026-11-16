@@ -33,7 +33,7 @@ use objc2::{
     rc::Retained,
     runtime::{AnyObject, Bool},
 };
-use objc2_foundation::NSRect;
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
@@ -76,6 +76,8 @@ struct State {
 }
 
 struct Core {
+    /// The key `webview_input` knows this page by.
+    key: u64,
     shared: Rc<RefCell<Shared>>,
     state: RefCell<State>,
 }
@@ -90,6 +92,7 @@ thread_local! {
 }
 
 pub fn begin_frame() {
+    crate::webview_input::begin_frame();
     LIVE.with(|l| {
         l.borrow_mut().retain(|w| w.upgrade().is_some());
         for c in l.borrow().iter().filter_map(Weak::upgrade) {
@@ -134,6 +137,7 @@ fn macos_14_or_later() -> bool {
 impl WebSurface {
     pub fn open(url: &str, store: [u8; 16], world: (i32, i32)) -> WebSurface {
         let core = Rc::new(Core {
+            key: crate::webview_input::next_key(),
             shared: Rc::new(RefCell::new(Shared::default())),
             state: RefCell::new(State {
                 url: url.to_string(),
@@ -200,7 +204,17 @@ impl WebSurface {
             b = b.with_incognito(true);
         }
         match b.build_as_child(window) {
-            Ok(wv) => self.core.state.borrow_mut().view = Some(wv),
+            Ok(wv) => {
+                // The input monitor and gpui's own view (the superview of
+                // every web view), which it forwards the canvas's events to.
+                unsafe {
+                    let view = wv.webview();
+                    let gpui_view: *mut AnyObject = msg_send![&*view, superview];
+                    crate::webview_input::set_gpui_view(gpui_view);
+                }
+                crate::webview_input::install();
+                self.core.state.borrow_mut().view = Some(wv);
+            }
             Err(e) => eprintln!("[infiniterm] webview: could not create the page: {e}"),
         }
     }
@@ -258,6 +272,56 @@ pub fn png_to_frame(png: &[u8], css: (i32, i32)) -> Option<Frame> {
         css_width: css.0,
         css_height: css.1,
     })
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPathCreateMutable() -> *mut std::ffi::c_void;
+    fn CGPathAddRect(p: *mut std::ffi::c_void, t: *const std::ffi::c_void, r: NSRect);
+    fn CGPathRelease(p: *mut std::ffi::c_void);
+}
+
+/// A CAShapeLayer mask on a view's layer: the whole view minus the holes
+/// (even-odd, so the holes must not overlap: `holes_of` guarantees it). No
+/// holes removes the mask. A mask changes what is DRAWN only; hit testing is
+/// `webview_input`'s job.
+unsafe fn apply_mask(view: &AnyObject, rect: [f64; 4], holes: &[[f64; 4]]) {
+    let layer: *mut AnyObject = msg_send![view, layer];
+    if layer.is_null() {
+        return;
+    }
+    if holes.is_empty() {
+        let _: () = msg_send![layer, setMask: std::ptr::null::<AnyObject>()];
+        return;
+    }
+    let flipped: Bool = msg_send![view, isFlipped];
+    let (w, h) = (rect[2], rect[3]);
+    let path = CGPathCreateMutable();
+    CGPathAddRect(
+        path,
+        std::ptr::null(),
+        NSRect::new(NSPoint::new(0., 0.), NSSize::new(w, h)),
+    );
+    for ho in holes {
+        let x = ho[0] - rect[0];
+        let mut y = ho[1] - rect[1];
+        // AppKit layers are bottom-left unless the view is flipped.
+        if !flipped.as_bool() {
+            y = h - y - ho[3];
+        }
+        CGPathAddRect(
+            path,
+            std::ptr::null(),
+            NSRect::new(NSPoint::new(x, y), NSSize::new(ho[2], ho[3])),
+        );
+    }
+    let mask: *mut AnyObject = msg_send![class!(CAShapeLayer), layer];
+    let _: () = msg_send![mask, setFrame: NSRect::new(NSPoint::new(0., 0.), NSSize::new(w, h))];
+    let rule = NSString::from_str("even-odd");
+    let _: () = msg_send![mask, setFillRule: &*rule];
+    let _: () = msg_send![mask, setPath: path];
+    let _: () = msg_send![layer, setMask: mask];
+    CGPathRelease(path);
 }
 
 unsafe fn rgba_color(rgb: [f32; 3], alpha: f64) -> *mut AnyObject {
@@ -388,7 +452,10 @@ impl PageSurface for WebSurface {
     fn set_zoom(&self, _factor: f64) {}
 
     fn has_new_frame(&self) -> bool {
-        self.core.shared.borrow().dirty
+        self.core.shared.borrow().dirty || crate::webview_input::has_pending()
+    }
+    fn take_page_click(&self) -> bool {
+        crate::webview_input::take_click(self.core.key)
     }
     fn take_frame(&self) -> Option<Arc<Frame>> {
         let png = {
@@ -465,7 +532,31 @@ impl PageSurface for WebSurface {
                     }
                 }
             }
+            // The holes: what gpui draws over the page is cut out of the
+            // live view (and its wash), so the card in front, the drag ghost
+            // or a panel shows through. The same cover list the click
+            // routing uses (`webview_input`), so eye and hand agree.
+            let holes = policy::holes_of(&p.rect, &p.covers);
+            unsafe {
+                apply_mask(&view, p.rect, &holes);
+                if let Some(d) = &s.dimmer {
+                    apply_mask(d, p.rect, &holes);
+                }
+            }
             s.last = Some(p.clone());
+        }
+        // Registered every frame (the table is cleared at its start): a page
+        // shown as a snapshot takes no input.
+        if !p.snapshot {
+            crate::webview_input::register(
+                self.core.key,
+                infiniterm_core::webview_gesture::PageRoute {
+                    rect: p.rect,
+                    covers: p.covers.clone(),
+                    focused: p.focused,
+                },
+                p.locked,
+            );
         }
         let (live, pending, last, loaded) = {
             let s = self.core.state.borrow();

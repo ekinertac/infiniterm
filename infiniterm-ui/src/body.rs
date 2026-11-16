@@ -75,10 +75,11 @@ pub trait CardBody {
     );
     /// The card's rect in world units changed (a drag, a resize, a restore).
     fn resized(&mut self, _world: Size) {}
-    /// Before `paint`: the window-pixel rects of the cards painted over this
-    /// one, and whether a card is being dragged. A native page (the webview
-    /// browser card) cannot be drawn under them, so it needs to know.
-    fn set_covers(&mut self, _covers: Vec<[f64; 4]>, _dragging: bool) {}
+    /// Before `paint`: the window-pixel rects of what is painted over this
+    /// card (cards in front, an open overlay, the drag ghost). A native page
+    /// (the webview browser card) cannot be drawn under them, so it cuts them
+    /// out of itself and sends them no clicks.
+    fn set_covers(&mut self, _covers: Vec<[f64; 4]>) {}
     /// A key the app did not claim (no Cmd chord bound to it). May ask for
     /// something, the way a click may (a file opened beside from the tree).
     /// Text that arrived without a key: the emoji panel, a finished dead-key

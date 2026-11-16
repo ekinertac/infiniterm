@@ -257,11 +257,10 @@ pub struct BrowserBody {
     /// Which engine this card's tabs open with, fixed when the card is made
     /// (`browser.engine`): a card keeps its engine until it is reopened.
     engine: Engine,
-    /// Window-pixel rects of the cards painted over this one this frame, and
-    /// whether a card is being dragged, set by `paint.rs` before `paint`
+    /// Window-pixel rects painted over this card this frame (cards in front,
+    /// an overlay, the drag ghost), set by `paint.rs` before `paint`
     /// (`CardBody::set_covers`). Only a native page cares.
     covers: Vec<[f64; 4]>,
-    dragging: bool,
 }
 
 impl BrowserBody {
@@ -348,7 +347,6 @@ impl BrowserBody {
             cef_running,
             engine,
             covers: vec![],
-            dragging: false,
         }
     }
 
@@ -498,6 +496,13 @@ impl BrowserBody {
             let is_active = i == self.active;
             // `window.close()` (#672): taken from every tab so the request
             // cannot pile up, honoured only for a tab a page opened.
+            // A click reached a native page whose card had the focus but not
+            // the lock: the card locks, as a click that reaches a CEF page
+            // does (`mouse_down`).
+            if surface.take_page_click() && is_active && !self.page_focused {
+                self.page_focused = true;
+                self.dirty = true;
+            }
             if surface.take_close_request() && tab.from_popup {
                 self.page_closed.push(i);
             }
@@ -745,10 +750,15 @@ impl CardBody for BrowserBody {
         // the snapshot that arrives below as this tab's texture, and its
         // wash. A tab that is not the visible one is hidden.
         let page_zoom = policy::page_zoom(self.zoom, scale);
+        let page_rect = [
+            f32::from(page_bounds.origin.x) as f64,
+            f32::from(page_bounds.origin.y) as f64,
+            f32::from(page_bounds.size.width) as f64,
+            f32::from(page_bounds.size.height) as f64,
+        ];
         let view_state = policy::page_view(&policy::PageState {
             zoom: page_zoom,
-            covered: !self.covers.is_empty(),
-            dragging: self.dragging,
+            fully_covered: policy::fully_covered(&page_rect, &self.covers),
         });
         let wash: gpui::Rgba = self.card_bg.into();
         for (i, tab) in self.tabs.iter().enumerate() {
@@ -762,15 +772,13 @@ impl CardBody for BrowserBody {
             s.place(
                 window,
                 &Placement {
-                    rect: [
-                        f32::from(page_bounds.origin.x) as f64,
-                        f32::from(page_bounds.origin.y) as f64,
-                        f32::from(page_bounds.size.width) as f64,
-                        f32::from(page_bounds.size.height) as f64,
-                    ],
+                    rect: page_rect,
                     zoom: page_zoom,
                     world: (page_w, page_h),
                     snapshot: view_state == policy::PageView::Snapshot,
+                    covers: self.covers.clone(),
+                    focused,
+                    locked: self.page_focused,
                     dim: policy::dim_alpha(focused, self.inactive_dim),
                     dim_rgb: [wash.r, wash.g, wash.b],
                     now_ms: now,
@@ -1113,10 +1121,9 @@ impl CardBody for BrowserBody {
         }
     }
 
-    fn set_covers(&mut self, covers: Vec<[f64; 4]>, dragging: bool) {
-        if self.covers != covers || self.dragging != dragging {
+    fn set_covers(&mut self, covers: Vec<[f64; 4]>) {
+        if self.covers != covers {
             self.covers = covers;
-            self.dragging = dragging;
             self.dirty = true;
         }
     }
