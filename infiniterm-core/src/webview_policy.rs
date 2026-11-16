@@ -213,9 +213,235 @@ pub fn store_identifier(data_dir: &str) -> [u8; 16] {
 pub const NO_CUSTOM_STORE_NOTE: &str =
     "webview engine: macOS before 14 has no per-instance data store; pages use one shared store that is not kept";
 
+/// What the DevTools command says on the webview engine: WebKit's inspector
+/// cannot be docked into a card (attached, it takes over the whole window, as
+/// the spike found), so the page is made inspectable and Safari's Develop
+/// menu is the way in.
+pub const NATIVE_DEVTOOLS_NOTE: &str = "DevTools for a webview page: open Safari, then Develop > this Mac > the page (turn on Develop in Safari's Advanced settings once)";
+
+/// The message the page's `window.close()` posts to the host, and the script
+/// that makes it do so: WKWebView has no close callback wry exposes, and a
+/// tab a page opened must close when the page asks (#672).
+pub const CLOSE_MESSAGE: &str = "infiniterm:close";
+pub const CLOSE_SCRIPT: &str =
+    "window.close = function () { window.ipc.postMessage('infiniterm:close'); };";
+
+/// Where a download goes: the folder WebKit proposed, under the name it
+/// proposed with any path stripped, and never over a file that is there
+/// (`name (1).ext`, `name (2).ext`...). `taken` says whether a path exists.
+pub fn download_destination(
+    dir: &std::path::Path,
+    suggested: &str,
+    taken: impl Fn(&std::path::Path) -> bool,
+) -> std::path::PathBuf {
+    let name = suggested
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|n| !n.trim().is_empty() && *n != "." && *n != "..")
+        .unwrap_or("download");
+    let first = dir.join(name);
+    if !taken(&first) {
+        return first;
+    }
+    let path = std::path::Path::new(name);
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
+    let ext = path.extension().and_then(|e| e.to_str());
+    (1..)
+        .map(|n| match ext {
+            Some(e) => dir.join(format!("{stem} ({n}).{e}")),
+            None => dir.join(format!("{stem} ({n})")),
+        })
+        .find(|p| !taken(p))
+        .expect("an unbounded range has a free name")
+}
+
+/// JS that counts the occurrences of `text` in the page, case-insensitively,
+/// as a number: WebKit's find says only whether there was a match, and the
+/// find bar shows "n of m". The text goes in as a JSON string, so a quote or
+/// a backslash in it cannot end the script.
+pub fn find_count_js(text: &str) -> String {
+    let lit = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        "(function(){{var t={lit}.toLowerCase();if(!t)return 0;var h=((document.body&&document.body.innerText)||'').toLowerCase();var n=0,i=0;while((i=h.indexOf(t,i))!==-1){{n++;i+=t.length;}}return n;}})()"
+    )
+}
+
+/// The count `find_count_js` returned, however the engine wrapped it.
+pub fn parse_count(raw: &str) -> i32 {
+    raw.trim().trim_matches('"').parse().unwrap_or(0).max(0)
+}
+
+/// The next current match after a find step, wrapping: `matches` is the
+/// count, `active` the 1-based current one (0 for none).
+pub fn step_find(active: i32, matches: i32, forward: bool) -> i32 {
+    if matches <= 0 {
+        return 0;
+    }
+    if forward {
+        if active >= matches {
+            1
+        } else {
+            active + 1
+        }
+    } else if active <= 1 {
+        matches
+    } else {
+        active - 1
+    }
+}
+
+/// What a right-click landed on, for the slim menu.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ContextInfo {
+    pub link: Option<String>,
+    pub editable: bool,
+    pub selection: bool,
+}
+
+/// JS for the element at a CSS pixel point: the link above it, whether it is
+/// editable, whether text is selected. Returns a JSON string.
+pub fn context_js(x: f64, y: f64) -> String {
+    format!(
+        "(function(){{var e=document.elementFromPoint({x:.1},{y:.1});var a=e&&e.closest?e.closest('a[href]'):null;var ed=!!(e&&(e.isContentEditable||(e.closest&&e.closest('input,textarea,[contenteditable=\"true\"]'))));var s=window.getSelection?String(window.getSelection()):'';return JSON.stringify({{link:a?a.href:null,editable:ed,selection:s.length>0}});}})()"
+    )
+}
+
+/// The answer to `context_js`. The engine hands a script's string result
+/// back JSON-encoded, so the text may be wrapped once more in quotes.
+pub fn parse_context(raw: &str) -> Option<ContextInfo> {
+    let mut value: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    // Wrapped as many times as the engine encoded it (seen twice on macOS:
+    // the script's own JSON string, quoted again by wry's result encoder).
+    for _ in 0..4 {
+        match value {
+            serde_json::Value::String(inner) => value = serde_json::from_str(&inner).ok()?,
+            _ => break,
+        }
+    }
+    Some(ContextInfo {
+        link: value
+            .get("link")
+            .and_then(|l| l.as_str())
+            .filter(|l| !l.is_empty())
+            .map(str::to_string),
+        editable: value
+            .get("editable")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        selection: value
+            .get("selection")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_download_keeps_the_proposed_name_when_the_path_is_free() {
+        let d = std::path::Path::new("/dl");
+        assert_eq!(
+            download_destination(d, "report.pdf", |_| false),
+            std::path::PathBuf::from("/dl/report.pdf")
+        );
+    }
+
+    #[test]
+    fn a_download_never_goes_over_a_file_that_is_there() {
+        let d = std::path::Path::new("/dl");
+        let taken = |p: &std::path::Path| {
+            p == std::path::Path::new("/dl/a.txt") || p == std::path::Path::new("/dl/a (1).txt")
+        };
+        assert_eq!(
+            download_destination(d, "a.txt", taken),
+            std::path::PathBuf::from("/dl/a (2).txt")
+        );
+        let taken_no_ext = |p: &std::path::Path| p == std::path::Path::new("/dl/data");
+        assert_eq!(
+            download_destination(d, "data", taken_no_ext),
+            std::path::PathBuf::from("/dl/data (1)")
+        );
+    }
+
+    #[test]
+    fn a_proposed_name_cannot_leave_the_folder() {
+        let d = std::path::Path::new("/dl");
+        for bad in ["../../etc/passwd", "a/b/c.txt", "..", "", "  "] {
+            let p = download_destination(d, bad, |_| false);
+            assert_eq!(p.parent(), Some(d), "{bad:?} gave {p:?}");
+        }
+        assert_eq!(
+            download_destination(d, "../../etc/passwd", |_| false),
+            std::path::PathBuf::from("/dl/passwd")
+        );
+        assert_eq!(
+            download_destination(d, "", |_| false),
+            std::path::PathBuf::from("/dl/download")
+        );
+    }
+
+    #[test]
+    fn the_find_script_carries_the_text_as_one_json_string() {
+        let js = find_count_js("say \"hi\"\\n");
+        assert!(js.contains(r#""say \"hi\"\\n""#), "{js}");
+        // A closing quote in the text does not end the string early: it is
+        // escaped inside the one JSON literal.
+        let hostile = find_count_js("\"); alert(1); (\"");
+        assert!(
+            hostile.contains(r#"var t="\"); alert(1); (\""."#),
+            "{hostile}"
+        );
+    }
+
+    #[test]
+    fn a_count_is_read_from_a_number_or_a_quoted_one() {
+        assert_eq!(parse_count("3"), 3);
+        assert_eq!(parse_count("\"12\""), 12);
+        assert_eq!(parse_count("null"), 0);
+        assert_eq!(parse_count("-4"), 0);
+    }
+
+    #[test]
+    fn find_steps_wrap_both_ways() {
+        assert_eq!(step_find(0, 0, true), 0);
+        assert_eq!(step_find(1, 3, true), 2);
+        assert_eq!(step_find(3, 3, true), 1);
+        assert_eq!(step_find(1, 3, false), 3);
+        assert_eq!(step_find(2, 3, false), 1);
+    }
+
+    #[test]
+    fn a_context_answer_is_read_plain_or_wrapped() {
+        let plain = r#"{"link":"https://a.test/x","editable":false,"selection":true}"#;
+        let want = ContextInfo {
+            link: Some("https://a.test/x".into()),
+            editable: false,
+            selection: true,
+        };
+        assert_eq!(parse_context(plain), Some(want.clone()));
+        let wrapped = serde_json::to_string(plain).unwrap();
+        assert_eq!(parse_context(&wrapped), Some(want.clone()));
+        // Quoted twice, as the engine really answered.
+        let twice = serde_json::to_string(&wrapped).unwrap();
+        assert_eq!(parse_context(&twice), Some(want));
+        assert_eq!(
+            parse_context(r#"{"link":null,"editable":true,"selection":false}"#),
+            Some(ContextInfo {
+                link: None,
+                editable: true,
+                selection: false
+            })
+        );
+        assert_eq!(parse_context("garbage"), None);
+    }
+
+    #[test]
+    fn the_context_script_asks_for_the_point_it_is_given() {
+        let js = context_js(12.34, 56.78);
+        assert!(js.contains("elementFromPoint(12.3,56.8)"), "{js}");
+    }
 
     #[test]
     fn the_page_zoom_is_the_canvas_zoom_times_the_pages_own() {
