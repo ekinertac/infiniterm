@@ -58,7 +58,7 @@ What does not work:
 
 A native view floats above everything gpui draws. Three tools work.
 
-(a) Snapshot: `takeSnapshotWithConfiguration:` gives an NSImage in about 1 s on a small page (29 KB PNG); it is decoded to a gpui `RenderImage` and drawn with `img()` under or instead of the webview, and the webview is hidden. Works. Shot: `q3-snap-translucent.png` (a translucent card over the snapshot looks right).
+(a) Snapshot: `takeSnapshotWithConfiguration:` gives an NSImage within 1.5 s on a small page (29 KB PNG; the time was not measured); it is decoded to a gpui `RenderImage` and drawn with `img()` under or instead of the webview, and the webview is hidden. Works. Shot: `q3-snap-translucent.png` (a translucent card over the snapshot looks right).
 
 (b) Layer mask: a `CAShapeLayer` mask on the webview's layer, even-odd path, the whole rect minus the rects of the cards in front. The covering gpui card shows through the hole. Works, including with several holes (code supports a list). Shot: `q3-hole.png`. Compromises: under a TRANSLUCENT card the hole shows gpui's placeholder, not the page (`q3-hole-translucent.png`), unless a snapshot is drawn under the hole too. And a mask does NOT change hit testing: `hitTest:` still returned the webview inside a hole, so a click on the covering card would reach the page.
 
@@ -66,7 +66,7 @@ The fix that worked: a plain `NSView` above the webview over each hole. It takes
 
 (c) Dim: `setAlphaValue:` on the webview changed nothing (page pixel stayed 255). A translucent colour `NSView` over the webview works (pixel 255 to 190 for alpha 0.8) and it is also the click catcher for an unfocused card, which matches "the first click on an unfocused card only focuses it" (`q3-dim-overlay.png`).
 
-Ghost during a drag: hide the webview and show the snapshot (mode `snap`); the gpui ghost then draws over it.
+Ghost during a drag: the intended approach is to hide the webview and show the snapshot (mode `snap`, which I tested for a covering card), so the gpui ghost draws over it. A real drag and ghost were NOT tested.
 
 Visible compromises, in order of how much they matter:
 1. A snapshot is a still picture: a covered or dragged card does not animate or play video while covered.
@@ -109,7 +109,7 @@ Scratch instances, 6 `top` samples, descendants counted. RSS counts shared pages
 | CEF, 1 browser card | 8 | 730 MB | 3.4% |
 | CEF, 5 browser cards | 12 | 1207 MB | 3.0% |
 | spike, 0 webviews | 1 | 54 MB | 1.1% |
-| spike, 1 webview | 4 | about 165 MB | 4.1% |
+| spike, 1 webview | 4 | about 165 MB (hand-corrected: three other apps' WebKit processes were removed from the sum) | 4.1% (upper bound: the run counted those three processes, idle) |
 | spike, 5 webviews | 8 | 255 MB | 5.2% |
 
 Per extra card: CEF about +120 MB, WKWebView +25 MB (one WebContent process each; GPU and Networking processes are shared). The spike pages are trivial (a form and one script), so a real page costs more on both sides. The spike has no terminals, so the base of 54 MB is not the app's. The comparison that holds is the DELTA: 0 browser cards costs CEF about 420 MB of helpers, WKWebView 0.
