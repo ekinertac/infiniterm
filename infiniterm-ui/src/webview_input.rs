@@ -28,9 +28,7 @@
 //! chord is forwarded, because the monitor that keeps it may run after this
 //! one) and the spike's `gesture.rs` in PR #812.
 //! Constraint: main thread only; every table is thread-local for that reason.
-use infiniterm_core::webview_gesture::{
-    self as gesture, KeyAction, Kind, Mods, PageRoute, Target,
-};
+use infiniterm_core::webview_gesture::{self as gesture, KeyAction, Kind, Mods, PageRoute, Target};
 use objc2::{
     class, msg_send,
     runtime::{AnyObject, Bool},
@@ -185,7 +183,8 @@ unsafe fn route_event(ev: *mut AnyObject) -> *mut AnyObject {
     // Window pixels, top-left origin, as gpui paints.
     let p = (loc.x, bounds.size.height - loc.y);
     let owns = GPUI_DRAG.with(Cell::get);
-    let routes: Vec<PageRoute> = PAGES.with(|pg| pg.borrow().iter().map(|e| e.route.clone()).collect());
+    let routes: Vec<PageRoute> =
+        PAGES.with(|pg| pg.borrow().iter().map(|e| e.route.clone()).collect());
     let target = gesture::route(kind, mods, p, &routes, owns);
     if gesture::starts_gpui_drag(kind, target) {
         GPUI_DRAG.with(|d| d.set(true));
@@ -200,7 +199,8 @@ unsafe fn route_event(ev: *mut AnyObject) -> *mut AnyObject {
             if kind == Kind::LeftDown {
                 PAGES.with(|pg| {
                     let pages = pg.borrow();
-                    let routes_only: Vec<PageRoute> = pages.iter().map(|e| e.route.clone()).collect();
+                    let routes_only: Vec<PageRoute> =
+                        pages.iter().map(|e| e.route.clone()).collect();
                     if let Some(at) = gesture::page_at(&routes_only, p) {
                         if let Some(e) = pages.iter().find(|e| &e.route == at) {
                             if !e.locked {

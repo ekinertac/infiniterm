@@ -256,7 +256,10 @@ mod tests {
         assert!(fully_covered(&page, &[[10., 10., 100., 100.]]));
         assert!(!fully_covered(&page, &[[50., 50., 100., 100.]]));
         // Two covers that together hide it are holes, not a total cover.
-        assert!(!fully_covered(&page, &[[0., 0., 60., 200.], [60., 0., 60., 200.]]));
+        assert!(!fully_covered(
+            &page,
+            &[[0., 0., 60., 200.], [60., 0., 60., 200.]]
+        ));
     }
 
     #[test]

@@ -716,18 +716,19 @@ impl AppView {
         .collect();
         // The drag ghost is drawn over every card after the loop, so it
         // covers pages too.
-        let ghost_rect: Option<[f64; 4]> = ghost
-            .as_ref()
-            .filter(|_| self.drop_tab.is_none())
-            .map(|(_, r)| {
-                let b = at(*r);
-                [
-                    f32::from(b.origin.x) as f64,
-                    f32::from(b.origin.y) as f64,
-                    f32::from(b.size.width) as f64,
-                    f32::from(b.size.height) as f64,
-                ]
-            });
+        let ghost_rect: Option<[f64; 4]> =
+            ghost
+                .as_ref()
+                .filter(|_| self.drop_tab.is_none())
+                .map(|(_, r)| {
+                    let b = at(*r);
+                    [
+                        f32::from(b.origin.x) as f64,
+                        f32::from(b.origin.y) as f64,
+                        f32::from(b.size.width) as f64,
+                        f32::from(b.size.height) as f64,
+                    ]
+                });
         #[cfg(feature = "browser")]
         crate::page_surface::begin_frame();
         for card in &cards {

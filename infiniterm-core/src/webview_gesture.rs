@@ -68,7 +68,7 @@ pub fn inside(r: &[f64; 4], p: (f64, f64)) -> bool {
 /// page the pointer is really over. `None` over a cover, so a card drawn in
 /// front of a page owns the pointer there. Pages are in paint order; the
 /// last one that qualifies is the one on top.
-pub fn page_at<'a>(pages: &'a [PageRoute], p: (f64, f64)) -> Option<&'a PageRoute> {
+pub fn page_at(pages: &[PageRoute], p: (f64, f64)) -> Option<&PageRoute> {
     pages
         .iter()
         .rev()
@@ -154,64 +154,135 @@ mod tests {
     use super::*;
 
     fn page(rect: [f64; 4], covers: Vec<[f64; 4]>, focused: bool) -> PageRoute {
-        PageRoute { rect, covers, focused }
+        PageRoute {
+            rect,
+            covers,
+            focused,
+        }
     }
-    const NONE: Mods = Mods { cmd: false, ctrl: false };
-    const CMD: Mods = Mods { cmd: true, ctrl: false };
-    const CTRL: Mods = Mods { cmd: false, ctrl: true };
+    const NONE: Mods = Mods {
+        cmd: false,
+        ctrl: false,
+    };
+    const CMD: Mods = Mods {
+        cmd: true,
+        ctrl: false,
+    };
+    const CTRL: Mods = Mods {
+        cmd: false,
+        ctrl: true,
+    };
 
     fn one(focused: bool) -> Vec<PageRoute> {
-        vec![page([0., 0., 100., 100.], vec![[50., 50., 100., 100.]], focused)]
+        vec![page(
+            [0., 0., 100., 100.],
+            vec![[50., 50., 100., 100.]],
+            focused,
+        )]
     }
 
     #[test]
     fn a_plain_wheel_over_the_page_scrolls_the_page() {
-        assert_eq!(route(Kind::Scroll, NONE, (10., 10.), &one(true), false), Target::Page);
-        assert_eq!(route(Kind::Scroll, NONE, (10., 10.), &one(false), false), Target::Page);
+        assert_eq!(
+            route(Kind::Scroll, NONE, (10., 10.), &one(true), false),
+            Target::Page
+        );
+        assert_eq!(
+            route(Kind::Scroll, NONE, (10., 10.), &one(false), false),
+            Target::Page
+        );
     }
 
     #[test]
     fn a_cmd_or_ctrl_wheel_is_the_canvas() {
-        assert_eq!(route(Kind::Scroll, CMD, (10., 10.), &one(true), false), Target::Gpui);
-        assert_eq!(route(Kind::Scroll, CTRL, (10., 10.), &one(true), false), Target::Gpui);
+        assert_eq!(
+            route(Kind::Scroll, CMD, (10., 10.), &one(true), false),
+            Target::Gpui
+        );
+        assert_eq!(
+            route(Kind::Scroll, CTRL, (10., 10.), &one(true), false),
+            Target::Gpui
+        );
     }
 
     #[test]
     fn a_covered_spot_belongs_to_the_card_in_front() {
-        assert_eq!(route(Kind::LeftDown, NONE, (60., 60.), &one(true), false), Target::Gpui);
-        assert_eq!(route(Kind::Scroll, NONE, (60., 60.), &one(true), false), Target::Gpui);
-        assert_eq!(route(Kind::LeftDown, NONE, (10., 10.), &one(true), false), Target::Page);
+        assert_eq!(
+            route(Kind::LeftDown, NONE, (60., 60.), &one(true), false),
+            Target::Gpui
+        );
+        assert_eq!(
+            route(Kind::Scroll, NONE, (60., 60.), &one(true), false),
+            Target::Gpui
+        );
+        assert_eq!(
+            route(Kind::LeftDown, NONE, (10., 10.), &one(true), false),
+            Target::Page
+        );
     }
 
     #[test]
     fn the_first_click_on_an_unfocused_card_goes_to_gpui_to_focus_it() {
-        assert_eq!(route(Kind::LeftDown, NONE, (10., 10.), &one(false), false), Target::Gpui);
-        assert_eq!(route(Kind::LeftDown, NONE, (10., 10.), &one(true), false), Target::Page);
+        assert_eq!(
+            route(Kind::LeftDown, NONE, (10., 10.), &one(false), false),
+            Target::Gpui
+        );
+        assert_eq!(
+            route(Kind::LeftDown, NONE, (10., 10.), &one(true), false),
+            Target::Page
+        );
     }
 
     #[test]
     fn middle_button_and_cmd_click_belong_to_the_canvas() {
-        assert_eq!(route(Kind::OtherDown, NONE, (10., 10.), &one(true), false), Target::Gpui);
-        assert_eq!(route(Kind::LeftDown, CMD, (10., 10.), &one(true), false), Target::Gpui);
+        assert_eq!(
+            route(Kind::OtherDown, NONE, (10., 10.), &one(true), false),
+            Target::Gpui
+        );
+        assert_eq!(
+            route(Kind::LeftDown, CMD, (10., 10.), &one(true), false),
+            Target::Gpui
+        );
     }
 
     #[test]
     fn a_gpui_drag_stays_gpuis_even_off_every_page() {
-        assert_eq!(route(Kind::LeftDragged, NONE, (500., 500.), &one(true), true), Target::Gpui);
-        assert_eq!(route(Kind::LeftUp, NONE, (10., 10.), &one(true), true), Target::Gpui);
-        assert_eq!(route(Kind::OtherUp, NONE, (10., 10.), &one(true), true), Target::Gpui);
-        assert_eq!(route(Kind::LeftDragged, NONE, (10., 10.), &one(true), false), Target::Page);
+        assert_eq!(
+            route(Kind::LeftDragged, NONE, (500., 500.), &one(true), true),
+            Target::Gpui
+        );
+        assert_eq!(
+            route(Kind::LeftUp, NONE, (10., 10.), &one(true), true),
+            Target::Gpui
+        );
+        assert_eq!(
+            route(Kind::OtherUp, NONE, (10., 10.), &one(true), true),
+            Target::Gpui
+        );
+        assert_eq!(
+            route(Kind::LeftDragged, NONE, (10., 10.), &one(true), false),
+            Target::Page
+        );
     }
 
     #[test]
     fn events_off_every_page_are_left_alone() {
-        assert_eq!(route(Kind::Scroll, CMD, (500., 500.), &one(true), false), Target::Page);
-        assert_eq!(route(Kind::Magnify, NONE, (500., 500.), &one(true), false), Target::Page);
+        assert_eq!(
+            route(Kind::Scroll, CMD, (500., 500.), &one(true), false),
+            Target::Page
+        );
+        assert_eq!(
+            route(Kind::Magnify, NONE, (500., 500.), &one(true), false),
+            Target::Page
+        );
     }
 
     #[test]
     fn a_pinch_over_a_page_is_the_canvas() {
-        assert_eq!(route(Kind::Magnify, NONE, (10., 10.), &one(true), false), Target::Canvas);
+        assert_eq!(
+            route(Kind::Magnify, NONE, (10., 10.), &one(true), false),
+            Target::Canvas
+        );
     }
 
     #[test]
@@ -226,7 +297,10 @@ mod tests {
         assert_eq!(p.rect[0], 50.);
         assert_eq!(page_at(&pages, (10., 10.)).unwrap().rect[0], 0.);
         // The unfocused one on top takes the click as a focusing click.
-        assert_eq!(route(Kind::LeftDown, NONE, (60., 10.), &pages, false), Target::Gpui);
+        assert_eq!(
+            route(Kind::LeftDown, NONE, (60., 10.), &pages, false),
+            Target::Gpui
+        );
     }
 
     #[test]
