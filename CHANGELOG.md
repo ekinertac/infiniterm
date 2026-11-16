@@ -8,6 +8,7 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ### 2026-11-17
 
+- Fixed: with `browser.engine` set to `"webview"`, Cmd+click, Cmd+Shift+click and middle-click on a link open it in a new tab of the card, as they do with Chromium (before, the page navigated in place). A drag with Cmd or the middle button still pans the canvas.
 - Fixed: with `browser.engine` set to `"webview"`, pressing Escape twice quickly now gives the keyboard back from a focused browser card, as it does with Chromium (400 ms between the presses). One Escape still reaches the page. Cmd+Escape leaves the card too.
 - With `browser.engine` set to `"webview"`, pages see Safari's user agent (WebKit's own string plus `Version/N Safari/605.1.15`), and a card keeps its sign-ins, cookies and local storage across restarts in a store that belongs to that data folder, apart from Chromium's and from any other instance's. Sign in once again on each site after switching engines.
 - With `browser.engine` set to `"webview"`, the page features of a browser card work: find in page (with the count and Enter to step), the right-click menu (links, copy, tabs), a link to another app asks before it opens (`slack:`, `mailto:`), a page's `window.open` opens a tab and its `window.close()` closes it, and a download is saved in Downloads under its own name (never over a file) with a note in the status bar. DevTools on a webview page says to use Safari's Develop menu.
