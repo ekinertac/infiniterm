@@ -666,6 +666,9 @@ impl PageSurface for WebSurface {
             || !self.core.inbox.lock().unwrap().is_empty()
             || crate::webview_input::has_pending()
     }
+    fn take_escapes(&self) -> Vec<f64> {
+        crate::webview_input::take_escapes(self.core.key)
+    }
     fn take_page_click(&self) -> bool {
         crate::webview_input::take_click(self.core.key)
     }

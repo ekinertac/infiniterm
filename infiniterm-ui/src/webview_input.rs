@@ -64,6 +64,8 @@ thread_local! {
     static CLICKS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
     /// Pinches over a page: (window point, magnification).
     static PINCHES: RefCell<Vec<((f64, f64), f64)>> = const { RefCell::new(Vec::new()) };
+    /// Bare Escapes pressed in a locked page, by page key (#820).
+    static ESCAPES: RefCell<Vec<(u64, f64)>> = const { RefCell::new(Vec::new()) };
     /// Right-clicks over pages, by page key.
     static MENUS: RefCell<Vec<(u64, MenuAt)>> = const { RefCell::new(Vec::new()) };
 }
@@ -125,8 +127,25 @@ pub fn take_pinches() -> Vec<((f64, f64), f64)> {
 }
 
 /// Anything waiting for the app to look at it: a frame is needed.
+/// The times (ms) of the bare Escapes this page got since last asked, oldest
+/// first. Stamped when pressed, not when read, so the 400 ms double-Escape
+/// window is measured between the presses even if a frame is late.
+pub fn take_escapes(key: u64) -> Vec<f64> {
+    ESCAPES.with(|e| {
+        let mut e = e.borrow_mut();
+        let mine: Vec<f64> = e
+            .iter()
+            .filter(|(k, _)| *k == key)
+            .map(|(_, t)| *t)
+            .collect();
+        e.retain(|(k, _)| *k != key);
+        mine
+    })
+}
+
 pub fn has_pending() -> bool {
-    CLICKS.with(|c| !c.borrow().is_empty())
+    ESCAPES.with(|e| !e.borrow().is_empty())
+        || CLICKS.with(|c| !c.borrow().is_empty())
         || PINCHES.with(|p| !p.borrow().is_empty())
         || MENUS.with(|m| !m.borrow().is_empty())
 }
@@ -185,6 +204,18 @@ unsafe fn route_event(ev: *mut AnyObject) -> *mut AnyObject {
         // A key. Which view is first responder says whether the page types.
         let fr: *mut AnyObject = msg_send![w, firstResponder];
         let page_focused = class_name(fr).contains("WryWebView");
+        // A bare Escape in a locked page still reaches the page (it closes a
+        // dialog there), and is also counted for the card's double-Escape
+        // (#820): the key never reaches gpui, so the card cannot count it.
+        let code: u16 = msg_send![ev, keyCode];
+        let flag = |bit: usize| flags & (1 << bit) != 0;
+        if page_focused && gesture::is_bare_escape(code, flag(17), flag(18), flag(19), flag(20)) {
+            PAGES.with(|pg| {
+                if let Some(e) = pg.borrow().iter().find(|e| e.route.focused && e.locked) {
+                    ESCAPES.with(|x| x.borrow_mut().push((e.key, crate::now_ms())));
+                }
+            });
+        }
         return match gesture::key_route(mods.cmd, page_focused) {
             KeyAction::Pass => ev,
             KeyAction::TryGpui => {

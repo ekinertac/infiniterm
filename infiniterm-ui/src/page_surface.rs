@@ -124,6 +124,11 @@ pub trait PageSurface {
     fn take_downloads(&self) -> Vec<String> {
         vec![]
     }
+    /// Times (ms) of bare Escapes the page got while its card was locked, for
+    /// the card's double-Escape (the native page takes the key before gpui).
+    fn take_escapes(&self) -> Vec<f64> {
+        vec![]
+    }
     /// A click reached the page of a card that had the focus but not the
     /// lock (so the card locks, as a click that reaches a CEF page does).
     fn take_page_click(&self) -> bool {

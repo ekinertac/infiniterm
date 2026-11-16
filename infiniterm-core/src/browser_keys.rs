@@ -80,9 +80,27 @@ pub fn is_double_escape(prev: Option<f64>, now: f64) -> bool {
     prev.is_some_and(|p| now - p <= DOUBLE_ESCAPE_MS)
 }
 
+/// One more Escape pressed while a browser card is locked: whether it
+/// completes a double (the card then unlocks) and the timestamp to keep. A
+/// completed double starts over, so a third press is a first.
+pub fn escape_step(last: Option<f64>, now: f64) -> (bool, Option<f64>) {
+    let double = is_double_escape(last, now);
+    (double, if double { None } else { Some(now) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_escape_step_keeps_the_first_press_and_resets_after_a_double() {
+        assert_eq!(escape_step(None, 1000.), (false, Some(1000.)));
+        assert_eq!(escape_step(Some(1000.), 1300.), (true, None));
+        // Too slow: the second press is a new first.
+        assert_eq!(escape_step(Some(1000.), 1500.), (false, Some(1500.)));
+        // A third press right after a double is a first again.
+        assert_eq!(escape_step(None, 1400.), (false, Some(1400.)));
+    }
 
     #[test]
     fn the_zoom_chords_zoom_the_page_inside_a_browser_card_and_nothing_else_changes() {
