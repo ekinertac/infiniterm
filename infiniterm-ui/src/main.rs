@@ -616,11 +616,15 @@ fn main() {
         };
         #[cfg(feature = "browser")]
         if cef_running {
-            // CEF's message pump, as the spikes ran it: one turn every 4 ms.
+            // CEF's message pump: one turn every 4 ms while a browser is
+            // open, as the spikes ran it; with none, when CEF asked for one
+            // (at most every 33 ms). The 4 ms turn with no browser was the
+            // largest part of the idle floor: CEF's own work plus waking the
+            // run loop 250 times a second (`next_pump`).
             cx.spawn(async move |cx: &mut gpui::AsyncApp| loop {
                 infiniterm_browser::process::pump();
                 cx.background_executor()
-                    .timer(std::time::Duration::from_millis(4))
+                    .timer(infiniterm_browser::process::next_pump())
                     .await;
             })
             .detach();
