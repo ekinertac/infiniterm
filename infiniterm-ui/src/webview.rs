@@ -152,10 +152,13 @@ fn hide_native(s: &mut State) {
 /// macOS 14 introduced `dataStoreForIdentifier`; before it there is no way
 /// to name a store, and the global default store must not be touched.
 fn macos_14_or_later() -> bool {
+    macos_major() >= 14
+}
+
+fn macos_major() -> i64 {
     objc2_foundation::NSProcessInfo::processInfo()
         .operatingSystemVersion()
-        .majorVersion
-        >= 14
+        .majorVersion as i64
 }
 
 impl WebSurface {
@@ -314,6 +317,8 @@ impl WebSurface {
                 });
                 s.dirty = true;
             });
+        // Safari's user agent, so a site that reads the tail sees Safari.
+        b = b.with_user_agent(policy::safari_user_agent(macos_major()));
         if devtools {
             // Inspectable from Safari's Develop menu (`NATIVE_DEVTOOLS_NOTE`).
             b = b.with_devtools(true);
