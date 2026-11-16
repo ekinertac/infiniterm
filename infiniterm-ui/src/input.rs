@@ -1186,8 +1186,8 @@ impl AppView {
                 if self.model.card(&id).is_some_and(|c| c.locked) {
                     let now = now_ms();
                     let step = |last: &mut Option<f64>| {
-                        let was = infiniterm_core::browser_keys::is_double_escape(*last, now);
-                        *last = if was { None } else { Some(now) };
+                        let (was, next) = infiniterm_core::browser_keys::escape_step(*last, now);
+                        *last = next;
                         was
                     };
                     // A browser needs two Escapes (a page uses a single one

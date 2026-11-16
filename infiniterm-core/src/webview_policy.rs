@@ -321,12 +321,67 @@ pub struct ContextInfo {
     pub selection: bool,
 }
 
+/// Two helpers the page scripts share: the element at a point, looking into
+/// shadow roots (a plain `elementFromPoint` stops at a web component's
+/// host), and the link above an element, walking out of shadow roots through
+/// their hosts (`closest` stops at the root).
+const POINT_HELPERS_JS: &str = "function deep(x,y){var e=document.elementFromPoint(x,y);while(e&&e.shadowRoot){var i=e.shadowRoot.elementFromPoint(x,y);if(!i||i===e)break;e=i;}return e;}function up(e){while(e){if(e.matches&&e.matches('a[href]'))return e;e=e.parentElement||(e.getRootNode&&e.getRootNode().host)||null;}return null;}";
+
 /// JS for the element at a CSS pixel point: the link above it, whether it is
 /// editable, whether text is selected. Returns a JSON string.
 pub fn context_js(x: f64, y: f64) -> String {
     format!(
-        "(function(){{var e=document.elementFromPoint({x:.1},{y:.1});var a=e&&e.closest?e.closest('a[href]'):null;var ed=!!(e&&(e.isContentEditable||(e.closest&&e.closest('input,textarea,[contenteditable=\"true\"]'))));var s=window.getSelection?String(window.getSelection()):'';return JSON.stringify({{link:a?a.href:null,editable:ed,selection:s.length>0}});}})()"
+        "(function(){{{POINT_HELPERS_JS}var e=deep({x:.1},{y:.1});var a=up(e);var ed=!!(e&&(e.isContentEditable||(e.closest&&e.closest('input,textarea,[contenteditable=\"true\"]'))));var s=window.getSelection?String(window.getSelection()):'';return JSON.stringify({{link:a?a.href:null,editable:ed,selection:s.length>0}});}})()"
     )
+}
+
+/// JS for the address of the link at a CSS pixel point, or "" when there is
+/// none: what a Cmd+click or a middle-click opens in a new tab (#821). The
+/// system web view reports the modifier flags only on a navigation, which wry
+/// does not pass on; the app already tells a click from a drag (the press of
+/// a Cmd or middle click is the canvas's until it is released unmoved), so it
+/// asks the page for the link instead.
+pub fn link_js(x: f64, y: f64) -> String {
+    format!("(function(){{{POINT_HELPERS_JS}var a=up(deep({x:.1},{y:.1}));return a?a.href:'';}})()")
+}
+
+/// The address `link_js` found, however many times the engine quoted it.
+pub fn parse_link(raw: &str) -> Option<String> {
+    let mut value: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    for _ in 0..4 {
+        match value {
+            serde_json::Value::String(inner) => match serde_json::from_str(&inner) {
+                Ok(next) => value = next,
+                // Not JSON any more: the string is the answer.
+                Err(_) => return Some(inner).filter(|s| !s.is_empty()),
+            },
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// What a Cmd+click, Cmd+Shift+click or middle-click on a link does, as the
+/// Chromium card does it (every non-current-tab disposition opens a tab): the
+/// link, unless it is another app's, which goes to the app-link question.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkOpen {
+    Tab(String),
+    App(String),
+}
+
+pub fn classify_link(href: &str) -> LinkOpen {
+    if crate::app_link::is_app_link(href) {
+        LinkOpen::App(href.to_string())
+    } else {
+        LinkOpen::Tab(href.to_string())
+    }
+}
+
+/// Whether a click asks for a new tab: Cmd (with or without Shift) or the
+/// middle button.
+pub fn opens_in_new_tab(command: bool, middle: bool) -> bool {
+    command || middle
 }
 
 /// The answer to `context_js`. The engine hands a script's string result
@@ -463,7 +518,52 @@ mod tests {
     #[test]
     fn the_context_script_asks_for_the_point_it_is_given() {
         let js = context_js(12.34, 56.78);
-        assert!(js.contains("elementFromPoint(12.3,56.8)"), "{js}");
+        assert!(js.contains("deep(12.3,56.8)"), "{js}");
+    }
+
+    #[test]
+    fn the_link_script_looks_into_shadow_roots_at_the_given_point() {
+        let js = link_js(1.26, 2.0);
+        assert!(js.contains("up(deep(1.3,2.0))"), "{js}");
+        assert!(js.contains("shadowRoot"), "{js}");
+        assert!(js.contains("getRootNode().host"), "{js}");
+    }
+
+    #[test]
+    fn a_link_answer_is_read_plain_or_quoted_and_empty_is_no_link() {
+        assert_eq!(
+            parse_link("\"https://a.test/x\""),
+            Some("https://a.test/x".into())
+        );
+        // Quoted a second time, as the engine does with a string result.
+        let twice = serde_json::to_string("\"https://a.test/x\"").unwrap();
+        assert_eq!(parse_link(&twice), Some("https://a.test/x".into()));
+        assert_eq!(parse_link("\"\""), None);
+        assert_eq!(parse_link("null"), None);
+        assert_eq!(parse_link("garbage"), None);
+    }
+
+    #[test]
+    fn a_link_opens_as_a_tab_unless_it_is_another_apps() {
+        assert_eq!(
+            classify_link("https://a.test/x"),
+            LinkOpen::Tab("https://a.test/x".into())
+        );
+        assert_eq!(
+            classify_link("slack://open"),
+            LinkOpen::App("slack://open".into())
+        );
+        assert_eq!(
+            classify_link("mailto:a@b.c"),
+            LinkOpen::App("mailto:a@b.c".into())
+        );
+    }
+
+    #[test]
+    fn cmd_and_middle_click_ask_for_a_new_tab_a_plain_click_does_not() {
+        assert!(opens_in_new_tab(true, false));
+        assert!(opens_in_new_tab(false, true));
+        assert!(!opens_in_new_tab(false, false));
     }
 
     #[test]

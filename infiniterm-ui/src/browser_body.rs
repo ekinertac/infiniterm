@@ -495,6 +495,7 @@ impl BrowserBody {
     /// needs to hear about (history, `card.url`).
     pub fn sync(&mut self) -> Option<String> {
         let mut active_moved = None;
+        let mut leave = false;
         let zoom = self.zoom;
         for (i, tab) in self.tabs.iter_mut().enumerate() {
             let Some(surface) = &tab.surface else {
@@ -509,6 +510,18 @@ impl BrowserBody {
             if surface.take_page_click() && is_active && !self.page_focused {
                 self.page_focused = true;
                 self.dirty = true;
+            }
+            // Double-Escape for a native page (#820): its Escapes never reach
+            // gpui, so the monitor stamped them. The same counting and the
+            // same 400 ms as the CEF card (`input.rs`); the first Escape has
+            // already reached the page.
+            for at in surface.take_escapes() {
+                if is_active && self.page_focused {
+                    let (double, next) =
+                        infiniterm_core::browser_keys::escape_step(self.last_escape_ms, at);
+                    self.last_escape_ms = next;
+                    leave |= double;
+                }
             }
             if surface.take_close_request() && tab.from_popup {
                 self.page_closed.push(i);
@@ -565,6 +578,12 @@ impl BrowserBody {
                     }
                 }
             }
+        }
+        if leave {
+            // Unlocked: `browsers.rs` mirrors `page_focused` onto
+            // `card.locked`, and the keyboard goes back to gpui.
+            self.set_focus(false);
+            self.dirty = true;
         }
         active_moved
     }
