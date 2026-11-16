@@ -31,7 +31,10 @@ helper_name = "infiniterm-helper"
 # unchanged; `--no-default-features` draws `browser_stub.rs` instead.
 [features]
 default = ["browser"]
-browser = ["dep:infiniterm-browser", "dep:cef"]
+# The system web view engine (`browser.engine` = `webview`, #761, macOS only)
+# rides on the same feature: its optional dependencies are under the macOS
+# target below, so on other systems naming them here changes nothing.
+browser = ["dep:infiniterm-browser", "dep:cef", "dep:wry", "dep:objc2", "dep:objc2-foundation", "dep:block2"]
 
 [dependencies]
 infiniterm-core = { path = "../infiniterm-core" }
@@ -56,6 +59,12 @@ block = "0.1"
 core-graphics = "0.24"
 core-text = "21"
 foreign-types = "0.5"
+# The webview engine (`webview.rs`): wry makes the WKWebView, objc2 and block2
+# make the few AppKit calls wry does not wrap (snapshot, back, forward, wash).
+wry = { version = "0.57", optional = true }
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", optional = true }
+block2 = { version = "0.6", optional = true }
 
 # `keycode.rs`: the thread-local keyboard hook that gives the chord its
 # PHYSICAL key. gpui's Windows keystroke names the key through the current

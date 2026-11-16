@@ -496,6 +496,16 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "browser.engine",
+        &[
+            "What draws a browser card: \"cef\" (Chromium, the default) or \"webview\"",
+            "(the Mac's own WebKit, macOS only, a work in progress). A card keeps the",
+            "engine it was opened with: close it and open it again after a change.",
+            "The webview engine keeps its sign-ins and cookies apart from CEF's, so",
+            "you sign in again once. Anywhere but macOS \"webview\" means \"cef\".",
+        ],
+    ),
+    (
         "browser.engines",
         &[
             "Extra sites Tab can scope a search to, added to the nine built in",

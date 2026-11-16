@@ -10,6 +10,7 @@
 //! is the whole of how one becomes a surface. CEF itself is started once
 //! in `main.rs`; `cef_running` says whether it is.
 use crate::browser_body::BrowserBody;
+use crate::page_surface::Engine;
 use crate::tab_strip::strip_style;
 use crate::{now_ms, AppView};
 use infiniterm_core::grid::{Point, Size};
@@ -91,6 +92,26 @@ fn diff_removed_index(old: &[String], new: &[String]) -> Option<usize> {
     )
 }
 
+/// The engine a card made now opens with: `browser.engine`, where the
+/// system web view exists. Its data store is named after THIS instance's
+/// data dir (`INFINITERM_DATA_DIR` for a scratch one), never the global
+/// default store, so a scratch instance cannot touch the real sign-ins.
+fn browser_engine(setting: infiniterm_core::config::BrowserEngine) -> Engine {
+    use infiniterm_core::config::BrowserEngine;
+    if setting == BrowserEngine::Webview && setting.effective() == BrowserEngine::Cef {
+        eprintln!("[infiniterm] browser.engine \"webview\" is for macOS only: using cef");
+    }
+    match setting.effective() {
+        BrowserEngine::Cef => Engine::Cef,
+        BrowserEngine::Webview => {
+            let dir = infiniterm_core::paths::app_support_dir();
+            Engine::Webview {
+                store: infiniterm_core::webview_policy::store_identifier(&dir.to_string_lossy()),
+            }
+        }
+    }
+}
+
 impl AppView {
     pub fn browser_for(&mut self, id: &str) -> Option<&mut BrowserBody> {
         self.bodies
@@ -109,6 +130,7 @@ impl AppView {
         let style = strip_style(&self.chrome, &self.model.ui_theme.card_tab);
         let inactive_dim = self.model.config.ui.inactive_dim;
         let ui_scale = self.model.ui_scale as f32;
+        let engine = browser_engine(self.model.config.browser.engine);
         // A tab dropped in a strip (#682) becomes the model's move first,
         // so the card below already carries the new order.
         let ids: Vec<String> = self
@@ -161,7 +183,15 @@ impl AppView {
                 // it here is a CEF browser opened and closed for nothing on
                 // every restored card, saved.
                 let first = card.tabs.first().unwrap_or(&url);
-                let mut body = BrowserBody::new(&card.id, first, world, scale, cef, style.clone());
+                let mut body = BrowserBody::with_engine(
+                    &card.id,
+                    first,
+                    world,
+                    scale,
+                    cef,
+                    style.clone(),
+                    engine,
+                );
                 for later in card.tabs.iter().skip(1) {
                     body.open_tab(later);
                 }

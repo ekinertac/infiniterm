@@ -659,6 +659,38 @@ impl AppView {
                 b.set_crowded(crowded);
             }
         }
+        // What is drawn over each card, for a native page (the webview
+        // browser card) that cannot be drawn under it: the later cards that
+        // meet it, everything while an overlay is open, and whether a card
+        // is being dragged (`webview_policy`).
+        let paint_order: Vec<(String, [f64; 4])> = cards
+            .iter()
+            .filter_map(|c| {
+                let b = at(self.drawn_rect(&c.id, c.rect, now));
+                visible.intersects(&b).then(|| {
+                    (
+                        c.id.clone(),
+                        [
+                            f32::from(b.origin.x) as f64,
+                            f32::from(b.origin.y) as f64,
+                            f32::from(b.size.width) as f64,
+                            f32::from(b.size.height) as f64,
+                        ],
+                    )
+                })
+            })
+            .collect();
+        let paint_rects: Vec<[f64; 4]> = paint_order.iter().map(|(_, r)| *r).collect();
+        let over_everything = self.model.overlay_open() || self.context_menu.is_some();
+        let window_rect = [
+            f32::from(visible.origin.x) as f64,
+            f32::from(visible.origin.y) as f64,
+            f32::from(visible.size.width) as f64,
+            f32::from(visible.size.height) as f64,
+        ];
+        let any_moving = !moving.is_empty();
+        #[cfg(feature = "browser")]
+        crate::page_surface::begin_frame();
         for card in &cards {
             let rect = self.drawn_rect(&card.id, card.rect, now);
             let b = at(rect);
@@ -693,6 +725,16 @@ impl AppView {
                 };
                 let has_body = body.is_some();
                 if let Some(body) = body {
+                    let covers = if over_everything {
+                        vec![window_rect]
+                    } else {
+                        paint_order
+                            .iter()
+                            .position(|(id, _)| id == &card.id)
+                            .map(|i| infiniterm_core::webview_policy::covers_of(&paint_rects, i))
+                            .unwrap_or_default()
+                    };
+                    body.set_covers(covers, any_moving);
                     // A ringed card's gradient reaches out to its ring
                     // (`chrome::CardRingGap`), so the clip grows with it.
                     let gap = if focused || selected {
@@ -884,6 +926,9 @@ impl AppView {
                 crate::text::paint_in(window, cx, &line, hb, line.width / 2.);
             }
         }
+        // A native page no card placed this frame goes away with its card.
+        #[cfg(feature = "browser")]
+        crate::page_surface::end_frame();
 
         // The ghost: an outline where the dragged card would land, in the
         // focus ring's colour when the space is free and the warning colour

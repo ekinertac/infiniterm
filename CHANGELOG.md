@@ -6,6 +6,10 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+### 2026-11-17
+
+- New setting `browser.engine`: `"webview"` makes browser cards use the Mac's own WebKit instead of Chromium (macOS only, a work in progress; `"cef"` stays the default). A card keeps the engine it was opened with. The webview engine follows the canvas zoom, shows a still picture of the page when you zoom far out, drag a card or open the palette, and keeps its sign-ins apart from Chromium's, so you sign in again once on each site. This first step has no find in page, right-click menu, downloads or DevTools yet, and a click on the page does not focus the card.
+
 ## 0.6.16 (build 1718), 2026-11-16
 
 ### 2026-11-16
