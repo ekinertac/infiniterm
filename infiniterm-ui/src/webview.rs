@@ -26,7 +26,7 @@
 use crate::page_surface::{PageSurface, Placement};
 use block2::RcBlock;
 use gpui::Window;
-use infiniterm_browser::{ContextMenuRequest, Frame};
+use infiniterm_browser::{Button, ContextMenuRequest, Frame, Mods};
 use infiniterm_core::webview_policy as policy;
 use objc2::{
     class, msg_send,
@@ -88,6 +88,9 @@ struct State {
     last_snapshot_ms: Option<f64>,
     /// The layout size the newest snapshot was taken at.
     snapshot_world: (i32, i32),
+    /// The page's own zoom (`card.zoom`), to turn a click's world pixels into
+    /// the CSS pixels the page's scripts use.
+    own_zoom: f64,
 }
 
 /// A script's answer. WebKit calls the script callback on the main thread,
@@ -96,6 +99,8 @@ struct State {
 enum Inbox {
     FindCount(String),
     Menu(String, (f64, f64)),
+    /// The link under a Cmd or middle click (#821).
+    Link(String),
 }
 
 struct Core {
@@ -178,6 +183,7 @@ impl WebSurface {
                 world,
                 last_snapshot_ms: None,
                 snapshot_world: world,
+                own_zoom: 1.,
             }),
         });
         LIVE.with(|l| l.borrow_mut().push(Rc::downgrade(&core)));
@@ -195,6 +201,7 @@ impl WebSurface {
                 match item {
                     Inbox::FindCount(raw) => eprintln!("[webview] find count answer {raw:?}"),
                     Inbox::Menu(raw, _) => eprintln!("[webview] context answer {raw:?}"),
+                    Inbox::Link(raw) => eprintln!("[webview] link answer {raw:?}"),
                 }
             }
         }
@@ -208,6 +215,14 @@ impl WebSurface {
                 Inbox::Menu(raw, world) => {
                     s.menu = policy::parse_context(&raw).map(|info| (info, world));
                 }
+                Inbox::Link(raw) => match policy::parse_link(&raw)
+                    .as_deref()
+                    .map(policy::classify_link)
+                {
+                    Some(policy::LinkOpen::Tab(url)) => s.popups.push(url),
+                    Some(policy::LinkOpen::App(url)) => s.external_links.push(url),
+                    None => {}
+                },
             }
         }
         s.dirty = true;
@@ -658,8 +673,32 @@ impl PageSurface for WebSurface {
         .unwrap_or(false)
     }
     // The page's own zoom reaches WebKit inside `Placement::zoom` (times the
-    // canvas zoom), because WebKit has one page zoom, not two.
-    fn set_zoom(&self, _factor: f64) {}
+    // canvas zoom), because WebKit has one page zoom, not two; it is kept
+    // here only to place a click on the page (`mouse_button`).
+    fn set_zoom(&self, factor: f64) {
+        self.core.state.borrow_mut().own_zoom = factor.max(0.1);
+    }
+
+    // A Cmd+click, Cmd+Shift+click or middle-click on a link opens a tab, as
+    // in the Chromium card (#821). The press of such a click is the canvas's
+    // (a Cmd or middle drag pans); `input.rs` delivers it here only when it
+    // was released without moving, so this is the click. WebKit says a
+    // navigation was a Cmd click only through its delegate, which wry owns
+    // and does not forward, so the page is asked for the link at the point.
+    // (x, y) are page pixels, the zoom of the canvas undone.
+    fn mouse_button(&self, x: f32, y: f32, mods: Mods, b: Button, up: bool, _clicks: usize) {
+        if up || !policy::opens_in_new_tab(mods.command, b == Button::Middle) {
+            return;
+        }
+        let zoom = self.core.state.borrow().own_zoom;
+        let js = policy::link_js(x as f64 / zoom, y as f64 / zoom);
+        let inbox = self.core.inbox.clone();
+        let _ = self.with_view(|wv| {
+            let _ = wv.evaluate_script_with_callback(&js, move |raw| {
+                inbox.lock().unwrap().push(Inbox::Link(raw))
+            });
+        });
+    }
 
     fn has_new_frame(&self) -> bool {
         self.core.shared.borrow().dirty
