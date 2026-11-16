@@ -45,10 +45,12 @@ fn a_host_without_ift_says_so() {
 #[test]
 fn a_host_with_ift_but_no_iftd_says_so() {
     let work = Scratch::new("c-cli3");
-    // An `ift` alone in a folder, and a PATH that has no iftd on it.
+    // An `ift` alone in a folder, and a PATH that has no iftd on it. A copy,
+    // not a link: the check follows a link (#800) and the build folder it
+    // would reach holds an iftd.
     let bin = work.0.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_ift"), bin.join("ift")).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_ift"), bin.join("ift")).unwrap();
     let ssh = work.0.join("ssh");
     std::fs::write(
         &ssh,

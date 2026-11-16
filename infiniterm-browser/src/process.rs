@@ -2,8 +2,9 @@
 //! it loads the framework from the bundle and lets a helper invocation
 //! (renderer, GPU, utility) run and exit. `Process::start` initialises
 //! the browser process inside gpui's run closure, after
-//! `app_protocol::install`; the ui then calls `pump` from a 4 ms task and
-//! `stop` on quit.
+//! `app_protocol::install`; the ui then calls `pump` from its pump task
+//! (every 4 ms while a browser is open, otherwise when CEF asked for work,
+//! see `next_pump`) and `stop` on quit.
 //!
 //! The profile (cache path) lives in the app's data directory, so a test
 //! run on `INFINITERM_DATA_DIR` gets its own; the two Anthropic native
@@ -35,7 +36,68 @@
 use cef::{args::Args, *};
 use infiniterm_core::extensions::{chrome_extension_dir, copy_dir, installed_extensions};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+/// The pump's cadence while a browser is open: what the spikes ran and what
+/// pages were tuned against. Unchanged by the idle schedule below.
+pub const OPEN_PUMP: Duration = Duration::from_millis(4);
+/// The longest the pump sleeps with no browser open, even if CEF asked for
+/// nothing: the safety turn CEF's own external-pump sample uses (1000/30 ms).
+pub const IDLE_PUMP_MAX: Duration = Duration::from_millis(33);
+
+/// When CEF last asked for a turn, in microseconds since `epoch()`;
+/// `u64::MAX` when it has asked for nothing since the last turn. Written
+/// from any CEF thread by `on_schedule_message_pump_work`.
+static PUMP_DUE_US: AtomicU64 = AtomicU64::new(u64::MAX);
+/// Browsers alive (`Surface::open` to its drop). While any is, the pump
+/// keeps its 4 ms cadence; with none, it follows CEF's own schedule, which
+/// turns 250 wake-ups a second into about 30 on a canvas of terminals.
+static OPEN_BROWSERS: AtomicUsize = AtomicUsize::new(0);
+
+fn epoch() -> Instant {
+    static E: OnceLock<Instant> = OnceLock::new();
+    *E.get_or_init(Instant::now)
+}
+
+fn now_us() -> u64 {
+    epoch().elapsed().as_micros() as u64
+}
+
+/// Counts one open browser for as long as it lives.
+pub(crate) struct OpenBrowser;
+
+impl OpenBrowser {
+    pub(crate) fn new() -> OpenBrowser {
+        OPEN_BROWSERS.fetch_add(1, Ordering::Relaxed);
+        OpenBrowser
+    }
+}
+
+impl Drop for OpenBrowser {
+    fn drop(&mut self) {
+        OPEN_BROWSERS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// How long the pump task should sleep before its next turn.
+pub fn next_pump() -> Duration {
+    let open = OPEN_BROWSERS.load(Ordering::Relaxed) > 0;
+    let due = PUMP_DUE_US.load(Ordering::Relaxed);
+    pump_wait(open, due, now_us())
+}
+
+/// `next_pump`'s rule, pure: 4 ms with a browser open; otherwise until CEF's
+/// due time, never longer than the safety turn, never zero (a timer of zero
+/// would spin).
+pub fn pump_wait(open: bool, due_us: u64, now_us: u64) -> Duration {
+    if open {
+        return OPEN_PUMP;
+    }
+    let until = Duration::from_micros(due_us.saturating_sub(now_us));
+    until.clamp(Duration::from_millis(1), IDLE_PUMP_MAX)
+}
 
 /// The loopback port CEF's debugging protocol listens on, chosen once in
 /// `early` when `browser.devtools` is on. The DevTools command reads it to
@@ -121,10 +183,16 @@ pub fn seed(data: &Path) -> Vec<PathBuf> {
 }
 
 // A non-null handler selects CEF's external pump instead of the native UI pump.
-// GPUI's existing 4 ms task supplies the message-loop work.
+// CEF says when it wants a turn; gpui's pump task reads it (`next_pump`).
 wrap_browser_process_handler! {
     struct ExternalPumpBuilder;
-    impl BrowserProcessHandler {}
+    impl BrowserProcessHandler {
+        // Any thread. Keeps the EARLIEST time asked for since the last turn.
+        fn on_schedule_message_pump_work(&self, delay_ms: i64) {
+            let due = now_us().saturating_add(delay_ms.max(0) as u64 * 1000);
+            PUMP_DUE_US.fetch_min(due, Ordering::Relaxed);
+        }
+    }
 }
 
 wrap_app! {
@@ -273,8 +341,11 @@ impl Process {
     }
 }
 
-/// One turn of CEF's message loop; the ui calls it every 4 ms.
+/// One turn of CEF's message loop; the ui calls it when `next_pump` says.
+/// The due time is cleared first: work CEF schedules during the turn sets
+/// a new one.
 pub fn pump() {
+    PUMP_DUE_US.store(u64::MAX, Ordering::Relaxed);
     do_message_loop_work();
 }
 
@@ -303,6 +374,29 @@ fn windows_user_agent(chrome_major: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_open_browser_keeps_the_four_millisecond_pump() {
+        assert_eq!(pump_wait(true, u64::MAX, 0), OPEN_PUMP);
+        assert_eq!(pump_wait(true, 0, 1_000_000), OPEN_PUMP);
+    }
+
+    #[test]
+    fn with_no_browser_the_pump_waits_until_cef_asked() {
+        // Asked for 10 ms from now.
+        assert_eq!(pump_wait(false, 1_010_000, 1_000_000), Duration::from_millis(10));
+    }
+
+    #[test]
+    fn with_nothing_asked_the_pump_still_turns_at_the_safety_interval() {
+        assert_eq!(pump_wait(false, u64::MAX, 5), IDLE_PUMP_MAX);
+        assert_eq!(pump_wait(false, 10_000_000, 0), IDLE_PUMP_MAX);
+    }
+
+    #[test]
+    fn work_already_due_waits_one_millisecond_not_zero() {
+        assert_eq!(pump_wait(false, 0, 1_000_000), Duration::from_millis(1));
+    }
 
     #[test]
     fn the_windows_user_agent_is_chromes_reduced_string_for_the_engine_version() {

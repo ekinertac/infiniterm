@@ -56,7 +56,13 @@ use crate::backend::PaneId;
 use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 
-/// One `ps` plus one `lsof` measures ~60ms, so this is about 8% of one core.
+/// macOS reads the table in process; see that file's header.
+#[cfg(target_os = "macos")]
+mod libproc;
+
+/// One `ps` plus one `lsof` measures ~60ms, so this is about 8% of one core
+/// where they still run (Linux, and macOS if libproc fails); macOS reads the
+/// same answers in process (`inspect/libproc.rs`).
 ///
 /// Paid rather than backed off when idle: `cd` is a shell BUILTIN and spawns
 /// nothing, so there is no cheap signal that a directory changed — an adaptive
@@ -306,8 +312,24 @@ fn cwds(_pids: &[u32]) -> HashMap<u32, String> {
     HashMap::new()
 }
 
-#[cfg(unix)]
+/// libproc first; lsof only when libproc read no directory at all.
+#[cfg(target_os = "macos")]
 fn cwds(pids: &[u32]) -> HashMap<u32, String> {
+    let dirs = libproc::cwds(pids);
+    if dirs.is_empty() {
+        lsof_cwds(pids)
+    } else {
+        dirs
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn cwds(pids: &[u32]) -> HashMap<u32, String> {
+    lsof_cwds(pids)
+}
+
+#[cfg(unix)]
+fn lsof_cwds(pids: &[u32]) -> HashMap<u32, String> {
     if pids.is_empty() {
         return HashMap::new();
     }
@@ -333,7 +355,7 @@ fn cwds(pids: &[u32]) -> HashMap<u32, String> {
 /// mean "the shallowest child of the shell", which is the Windows answer to
 /// the same question. See the header.
 #[cfg(windows)]
-fn snapshot() -> Vec<Proc> {
+fn snapshot(_shells: &[u32]) -> Vec<Proc> {
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
@@ -374,8 +396,19 @@ fn snapshot() -> Vec<Proc> {
     out
 }
 
+/// libproc first; ps only when libproc gave nothing.
+#[cfg(target_os = "macos")]
+fn snapshot(shells: &[u32]) -> Vec<Proc> {
+    libproc::snapshot(shells).unwrap_or_else(ps_snapshot)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn snapshot(_shells: &[u32]) -> Vec<Proc> {
+    ps_snapshot()
+}
+
 #[cfg(unix)]
-fn snapshot() -> Vec<Proc> {
+fn ps_snapshot() -> Vec<Proc> {
     std::process::Command::new("ps")
         .args(["-axo", "pid=,ppid=,pgid=,stat=,%cpu=,args="])
         .output()
@@ -401,7 +434,7 @@ pub fn pane_status_poll(
             let reports = if shells.is_empty() {
                 Vec::new()
             } else {
-                let procs = snapshot();
+                let procs = snapshot(&shells.iter().map(|(_, pid)| *pid).collect::<Vec<_>>());
                 let mut reports = pane_statuses(&shells, &procs);
                 let dirs = cwds(&reports.iter().map(|(_, pid)| *pid).collect::<Vec<_>>());
                 for (report, pid) in reports.iter_mut() {
@@ -429,7 +462,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_windows_snapshot_finds_this_process_and_its_parent() {
-        let procs = super::snapshot();
+        let procs = super::snapshot(&[]);
         assert!(
             procs.len() > 5,
             "a process table has more than {} in it",
@@ -747,5 +780,104 @@ mod tests {
         assert_eq!(out[0].1, 200);
         assert_eq!(out[1].0.pane, 9);
         assert_eq!(out[1].1, 300);
+    }
+
+    /// Run by hand on a Mac with real cards open (`cargo test -p
+    /// infiniterm-core old_and_new -- --ignored --nocapture`): the shells
+    /// under every running iftd, read both ways, must give the same labels,
+    /// remotes and directories; also prints what each way costs.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn old_and_new_agree_on_the_real_cards_and_what_they_cost() {
+        let table = super::ps_snapshot();
+        let iftd: Vec<u32> = table
+            .iter()
+            .filter(|p| proc_name(&p.args) == "iftd")
+            .map(|p| p.pid)
+            .collect();
+        let shells: Vec<(PaneId, u32)> = table
+            .iter()
+            .filter(|p| iftd.contains(&p.ppid))
+            .enumerate()
+            .map(|(i, p)| (i as PaneId, p.pid))
+            .collect();
+        assert!(!shells.is_empty(), "needs running cards");
+        let pids: Vec<u32> = shells.iter().map(|(_, p)| *p).collect();
+
+        let old = pane_statuses(&shells, &super::ps_snapshot());
+        let new = pane_statuses(&shells, &super::libproc::snapshot(&pids).unwrap());
+        let old_dirs = super::lsof_cwds(&old.iter().map(|(_, p)| *p).collect::<Vec<_>>());
+        let new_dirs = super::libproc::cwds(&new.iter().map(|(_, p)| *p).collect::<Vec<_>>());
+        let mut busy_differs = 0;
+        for ((o, op), (n, np)) in old.iter().zip(new.iter()) {
+            assert_eq!(o.proc, n.proc, "label of pane {}", o.pane);
+            assert_eq!(o.remote, n.remote, "remote of pane {}", o.pane);
+            assert_eq!(op, np, "reported pid of pane {}", o.pane);
+            assert_eq!(
+                old_dirs.get(op),
+                new_dirs.get(np),
+                "directory of pane {}",
+                o.pane
+            );
+            busy_differs += usize::from(o.busy != n.busy);
+        }
+        // %cpu per process under the shells, both ways, largest first.
+        let ps_now = super::ps_snapshot();
+        let lp_now = super::libproc::snapshot(&pids).unwrap();
+        let under = super::libproc::descendants(&lp_now, &pids);
+        let mut rows: Vec<(f32, f32, String)> = lp_now
+            .iter()
+            .filter(|p| under.contains(&p.pid))
+            .filter_map(|n| {
+                let o = ps_now.iter().find(|o| o.pid == n.pid)?;
+                Some((o.cpu, n.cpu, proc_name(&n.args)))
+            })
+            .collect();
+        rows.sort_by(|a, b| b.0.max(b.1).total_cmp(&a.0.max(a.1)));
+        for (o, n, name) in rows.iter().take(8) {
+            println!("  %cpu ps {o:5.1}  libproc {n:5.1}  {name}");
+        }
+        println!(
+            "{} shells, {} labelled, busy differs on {} (a decaying average read at two moments)",
+            shells.len(),
+            old.iter().filter(|(s, _)| s.proc.is_some()).count(),
+            busy_differs
+        );
+
+        fn cpu_s(who: i32) -> f64 {
+            let mut u: libc::rusage = unsafe { std::mem::zeroed() };
+            unsafe { libc::getrusage(who, &mut u) };
+            let t = |v: libc::timeval| v.tv_sec as f64 + v.tv_usec as f64 / 1e6;
+            t(u.ru_utime) + t(u.ru_stime)
+        }
+        const RUNS: u32 = 20;
+        let measure = |f: &dyn Fn()| {
+            let (s0, c0, w0) = (
+                cpu_s(libc::RUSAGE_SELF),
+                cpu_s(libc::RUSAGE_CHILDREN),
+                std::time::Instant::now(),
+            );
+            for _ in 0..RUNS {
+                f();
+            }
+            let (s1, c1) = (cpu_s(libc::RUSAGE_SELF), cpu_s(libc::RUSAGE_CHILDREN));
+            (
+                (s1 - s0) * 1000. / RUNS as f64,
+                (c1 - c0) * 1000. / RUNS as f64,
+                w0.elapsed().as_secs_f64() * 1000. / RUNS as f64,
+            )
+        };
+        let report_pids: Vec<u32> = old.iter().map(|(_, p)| *p).collect();
+        let (os, oc, ow) = measure(&|| {
+            let _ = super::ps_snapshot();
+            let _ = super::lsof_cwds(&report_pids);
+        });
+        let (ns, nc, nw) = measure(&|| {
+            let _ = super::libproc::snapshot(&pids);
+            let _ = super::libproc::cwds(&report_pids);
+        });
+        println!("per poll, ps+lsof: {os:.1} ms own CPU + {oc:.1} ms child CPU, {ow:.1} ms wall");
+        println!("per poll, libproc: {ns:.1} ms own CPU + {nc:.1} ms child CPU, {nw:.1} ms wall");
     }
 }
