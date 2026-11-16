@@ -6,6 +6,8 @@ How this file is kept: work that has shipped to `master` but not to a release go
 
 ## Unreleased
 
+## 0.6.16 (build 1718), 2026-11-16
+
 ### 2026-11-16
 
 - The Linux installer names any system library the app needs and the machine lacks (stock Ubuntu desktop has no `libxkbcommon-x11-0`), with the `sudo apt install` line that adds it. Before, the app just did not open.
