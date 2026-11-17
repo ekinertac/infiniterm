@@ -73,7 +73,7 @@ export const featureGroups: FeatureGroup[] = [
       { text: 'JSON files with a `$schema` complete their keys and values; setting names complete in `settings.json`.', href: 'guide/editor/#json-with-a-schema' },
       { text: 'Words from the file and the other tabs complete as you type, from two letters.', href: 'guide/editor/#words-from-your-files' },
       { text: '`ift diff` opens your changes against HEAD in a read-only editor: syntax colours, folded unchanged lines, find, copy and a blame gutter on `Cmd B`.', href: 'guide/editor/#the-diff-card' },
-      { text: 'Browser cards are Chromium with tabs and the Claude in Chrome extension, beside the agent that drives them.' },
+      { text: 'Browser cards use the Mac\'s own web view (WebKit) with tabs, find in page and downloads, beside the agent that works on the page.', href: 'guide/canvas/#kinds-of-card' },
       { text: 'An address bar (`Cmd L`) that takes a URL or a search, with your history.' },
       { text: 'Page cards show Markdown read-only; the "Start here" card is one.' },
     ],

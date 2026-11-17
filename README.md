@@ -39,7 +39,7 @@ Nothing flashes, nothing steals focus, nothing sends a notification. You switch 
 - Servers: `ift connect user@host` opens a second window whose terminal cards run on that server over ssh. The shells keep running when you close the window and come back when you connect again. Each host has its own canvas, settings and colour (a tinted title bar and a badge on its Dock icon). Terminal cards only so far; `--install` puts the server half on a Linux host.
 - Joining: `ift join user@host` opens a window on the canvas another Mac already has, over ssh, with full control: you see its cards, agent colours and live terminals, and what you do happens there. It works when the host's app is closed (`ift serve` holds the canvas) and on a Linux server, and ssh asks its own fingerprint and password questions once.
 
-Native Rust: gpui draws the canvas, `alacritty_terminal` parses the shells, Chromium (CEF) runs the browser cards. No Electron, no account, no telemetry; the one request the app makes on its own is the update check. Early, and in active development.
+Native Rust: gpui draws the canvas, `alacritty_terminal` parses the shells, and the system's own web view (WebKit) runs the browser cards. No Electron, no account, no telemetry; the one request the app makes on its own is the update check. Early, and in active development.
 
 ## Known issues
 
@@ -54,14 +54,13 @@ Big items only, in rough order. No dates.
 - **Light mode:** the chrome follows a light theme. Today a light theme gives light cards on a dark chrome.
 - **More agents:** Cursor (`ift install-cursor-hooks`) and Antigravity CLI (`ift install-antigravity-hooks`) are in.
 - **Remote files:** editor and diff cards on a server's files, so `ift file` and `EDITOR=ift` work in a remote window.
-- **Windows:** a build exists on a branch and has never been run. It uses ConPTY, so no daemon yet and shells do not outlive the window.
-- **Windows servers** for `ift connect`, once there is a session daemon there.
+- **Windows and Linux:** both build from the same source, with known gaps. Windows runs on one Windows machine, and a Mac can join a Windows host (terminal cards only). The Linux app has only been run on a server with no screen. Neither has a browser card yet, a signed build or updates. Windows servers for `ift connect` wait for a session daemon there.
 - **Editor palette:** go to file and pick a syntax from inside an editor card.
-- **A phone app.** Nothing designed yet.
+- **A phone app:** an iPhone app is in development, not in the App Store yet. See [the guide](https://infiniterm.app/guide/phone/).
 
 ## Building from source
 
-Needs Rust, the CEF binary distribution under `~/.local/share/cef` and a checkout of [cef-rs](https://github.com/tauri-apps/cef-rs) at `~/Code/cef-rs` for its bundler.
+Needs Rust.
 
 ```sh
 make run          # build, bundle, launch on a scratch data dir
@@ -70,7 +69,7 @@ make check        # fmt, clippy, tests
 make release      # optimised bundle in target/bundle/infiniterm.app
 ```
 
-The app runs only from the bundle: the Chromium framework is loaded from beside the executable. See `CONTRIBUTING.md` before a pull request, and `CLAUDE.md` for how the code is laid out and why.
+See `CONTRIBUTING.md` before a pull request, and `CLAUDE.md` for how the code is laid out and why.
 
 ## License
 
