@@ -240,9 +240,10 @@ pub enum TerminalBackend {
     Daemon,
 }
 
-/// Which engine draws a browser card (`browser.engine`, #761). `Cef` is the
-/// default and the only one on Linux and Windows; `Webview` is the system's
-/// own web view (WKWebView) and exists on macOS only.
+/// Which engine draws a browser card (`browser.engine`, #761, #826).
+/// `Webview` is the default: the system's own web view (WKWebView), which
+/// exists on macOS only. `Cef` is Chromium, still the only engine on Linux
+/// and Windows, and on the Mac only when the setting says `cef`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BrowserEngine {
@@ -259,6 +260,14 @@ impl BrowserEngine {
         } else {
             self
         }
+    }
+
+    /// Whether the app starts CEF at launch (a framework load, helper
+    /// processes and a message pump: about 300 MB and a wake-up every few
+    /// milliseconds). Only for the engine that needs it, so a Mac on the
+    /// default runs no CEF at all.
+    pub fn starts_cef(self) -> bool {
+        self.effective() == BrowserEngine::Cef
     }
 }
 
@@ -412,9 +421,10 @@ pub struct Browser {
     /// the port later). ON by default (Ekin, 2026-10-09): easier to use, and
     /// the port takes connections only from our own frontend's origin.
     pub devtools: bool,
-    /// The engine browser cards use: `cef` (default) or `webview` (macOS
-    /// only). Read when a browser card is created, so a card already open
-    /// keeps its engine until it is closed and reopened.
+    /// The engine browser cards use: `webview` (default, macOS only) or
+    /// `cef`. Read when a browser card is created, so a card already open
+    /// keeps its engine until it is closed and reopened. CEF itself starts
+    /// at launch only when this says `cef` (the app reads it before gpui).
     pub engine: BrowserEngine,
     /// EXTRA tab-to-search sites, added to the nine built in. Empty in the
     /// defaults file, so nobody has to scroll past a list they did not
@@ -738,7 +748,7 @@ pub fn default_config() -> Config {
             search_engine: crate::omni::address::SEARCH_TEMPLATE.into(),
             suggestions: false,
             devtools: true,
-            engine: BrowserEngine::Cef,
+            engine: BrowserEngine::Webview,
             engines: vec![],
         },
         ui: Ui {
@@ -1468,8 +1478,8 @@ mod tests {
     }
 
     #[test]
-    fn the_browser_engine_defaults_to_cef_and_names_two_things() {
-        assert_eq!(default_config().browser.engine, BrowserEngine::Cef);
+    fn the_browser_engine_defaults_to_webview_and_names_two_things() {
+        assert_eq!(default_config().browser.engine, BrowserEngine::Webview);
         assert_eq!(
             m(json!({"browser.engine": "webview"})).browser.engine,
             BrowserEngine::Webview
@@ -1494,6 +1504,20 @@ mod tests {
             BrowserEngine::Cef
         };
         assert_eq!(BrowserEngine::Webview.effective(), want);
+    }
+
+    #[test]
+    fn cef_starts_only_for_the_cef_engine_on_the_mac() {
+        assert!(BrowserEngine::Cef.starts_cef());
+        // The default engine: no CEF on the Mac, CEF where it is the only one.
+        assert_eq!(
+            default_config().browser.engine.starts_cef(),
+            !cfg!(target_os = "macos")
+        );
+        assert!(m(json!({"browser.engine": "cef"}))
+            .browser
+            .engine
+            .starts_cef());
     }
 
     #[test]

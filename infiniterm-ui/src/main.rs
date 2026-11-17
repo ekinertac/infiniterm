@@ -560,13 +560,21 @@ fn main() {
     // CEF first: a helper invocation runs and exits here; the browser
     // process loads the framework from the bundle and goes on. Outside a
     // bundle there is no framework and the app runs without browser cards.
+    // On the Mac this is skipped unless `browser.engine` is `cef` (#826):
+    // the helpers are their own executable there, and the webview engine
+    // needs no CEF at all. Elsewhere the helpers are this exe, so it always
+    // runs (`startup_wants_cef`).
     #[cfg(feature = "browser")]
-    let mut cef = match infiniterm_browser::process::early() {
-        Ok(p) => Some(p),
-        Err(infiniterm_browser::process::Unavailable::Helper(code)) => std::process::exit(code),
-        Err(infiniterm_browser::process::Unavailable::NoFramework) => {
-            eprintln!("[infiniterm] CEF framework not beside the executable: no browser cards");
-            None
+    let mut cef = if !runtime::startup_wants_cef() {
+        None
+    } else {
+        match infiniterm_browser::process::early() {
+            Ok(p) => Some(p),
+            Err(infiniterm_browser::process::Unavailable::Helper(code)) => std::process::exit(code),
+            Err(infiniterm_browser::process::Unavailable::NoFramework) => {
+                eprintln!("[infiniterm] CEF framework not beside the executable: no browser cards");
+                None
+            }
         }
     };
     // An `ift serve` of this data dir (a canvas host kept while the app was

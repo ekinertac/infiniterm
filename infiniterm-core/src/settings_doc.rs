@@ -498,11 +498,12 @@ pub const SETTINGS_DOC: &[(&str, &[&str])] = &[
     (
         "browser.engine",
         &[
-            "What draws a browser card: \"cef\" (Chromium, the default) or \"webview\"",
-            "(the Mac's own WebKit, macOS only, a work in progress). A card keeps the",
-            "engine it was opened with: close it and open it again after a change.",
-            "The webview engine keeps its sign-ins and cookies apart from CEF's, so",
-            "you sign in again once. Anywhere but macOS \"webview\" means \"cef\".",
+            "What draws a browser card: \"webview\" (the Mac's own WebKit, the default)",
+            "or \"cef\" (Chromium, which makes the app start it and use about 300 MB",
+            "more). Read at launch: restart after changing it. A card keeps the",
+            "engine it was opened with. The two keep their sign-ins and cookies",
+            "apart, so you sign in again once. Anywhere but macOS \"webview\" means",
+            "\"cef\", because Chromium is the only engine there.",
         ],
     ),
     (
