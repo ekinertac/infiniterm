@@ -108,7 +108,12 @@ impl Tab {
             } else {
                 (
                     None,
-                    Some("browser cards need the app bundle (CEF is not loaded)".to_string()),
+                    // Either no bundle, or `browser.engine` was changed to
+                    // `cef` while the app ran: CEF starts only at launch.
+                    Some(
+                        "CEF is not loaded: it needs the app bundle, and browser.engine \"cef\" needs a restart"
+                            .to_string(),
+                    ),
                 )
             };
         Tab {

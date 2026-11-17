@@ -98,9 +98,8 @@ fn diff_removed_index(old: &[String], new: &[String]) -> Option<usize> {
 /// default store, so a scratch instance cannot touch the real sign-ins.
 fn browser_engine(setting: infiniterm_core::config::BrowserEngine, devtools: bool) -> Engine {
     use infiniterm_core::config::BrowserEngine;
-    if setting == BrowserEngine::Webview && setting.effective() == BrowserEngine::Cef {
-        eprintln!("[infiniterm] browser.engine \"webview\" is for macOS only: using cef");
-    }
+    // No log line for "webview" off macOS: it is the default, so it would
+    // fire on every machine that never set the key.
     match setting.effective() {
         BrowserEngine::Cef => Engine::Cef,
         BrowserEngine::Webview => {
