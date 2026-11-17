@@ -48,7 +48,12 @@ bundle: build
 release:
 	$(MAKE) bundle PROFILE=release
 
+# The old bundle is removed first: `ditto` only adds, so files the new build
+# no longer has (the CEF framework and its helper apps until #832) stayed in
+# /Applications and broke the code signature's seal. The running app keeps
+# its binary, which is already mapped.
 install: release
+	rm -rf /Applications/infiniterm.app
 	ditto $(APP) /Applications/infiniterm.app
 
 # The build that leaves this Mac: notarized, stapled DMG + update zip +
