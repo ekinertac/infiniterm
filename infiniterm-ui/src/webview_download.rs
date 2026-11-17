@@ -32,6 +32,18 @@ use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// The wry version whose delegate class and method name `install` matches on.
+/// A test (below) compares it with the version in Cargo.lock, so a bump of
+/// wry fails the build until someone has opened wry's
+/// `src/wkwebview/class/wry_download_delegate.rs`, checked that
+/// `WryDownloadDelegate` still has
+/// `download:decideDestinationUsingResponse:suggestedFilename:completionHandler:`
+/// and still calls its started handler from it, and then changed this
+/// constant. A log line on a miss (`install`) is not enough for a bump nobody
+/// is watching.
+#[cfg(test)]
+const WRY_VERSION_MATCHED: &str = "0.57.2";
+
 /// How often a download in progress asks for a frame, ms: the readout only
 /// needs to move a few times a second, and a frame every 16 ms for a long
 /// download would be the cost of an animation.
@@ -191,4 +203,38 @@ pub fn wants_frame(now_ms: f64) -> bool {
             false
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The version of the `wry` package in Cargo.lock.
+    fn locked_wry_version() -> Option<String> {
+        let lock = include_str!("../../Cargo.lock");
+        let at = lock.find("name = \"wry\"\n")?;
+        let rest = &lock[at..];
+        let line = rest.lines().nth(1)?;
+        Some(
+            line.strip_prefix("version = \"")?
+                .strip_suffix('"')?
+                .to_string(),
+        )
+    }
+
+    #[test]
+    fn the_swizzle_was_checked_against_the_wry_that_is_locked() {
+        assert_eq!(
+            locked_wry_version().as_deref(),
+            Some(WRY_VERSION_MATCHED),
+            "wry changed in Cargo.lock: read the note on WRY_VERSION_MATCHED in webview_download.rs, \
+             check wry's WryDownloadDelegate still has the method `install` replaces, then update it"
+        );
+    }
+
+    #[test]
+    fn the_lock_file_reader_finds_a_version() {
+        // The guard above must not pass by reading nothing.
+        assert!(locked_wry_version().is_some_and(|v| v.contains('.')));
+    }
 }
