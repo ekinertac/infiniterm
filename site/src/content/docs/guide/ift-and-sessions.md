@@ -95,6 +95,26 @@ ift run canvas.tidy               # run any command from `ift commands`
 
 Together they let a script watch one card and answer in it. [tools/restart-claude.sh](https://github.com/ekinertac/infiniterm/blob/master/tools/restart-claude.sh) is one: it finds every Claude card with `ift ls --agents`, sends `/exit`, reads the resume command Claude prints, and types `claude --resume` back into the same card. It is an example, not a feature: it clears a prompt line you had not sent, and it does not keep a `CLAUDE_CONFIG_DIR` other than the default.
 
+`ift read 7 --ansi` prints the screen with its colours: each stretch of text starts with an escape sequence that carries its own colour, bold, italic and underline, so a script or a viewer can draw the screen as it looks. It reads the screen only, so it does not go with `--all`.
+
+## Workspaces and cards from a script
+
+These work without moving the view, and the iPhone app uses them too.
+
+```sh
+ift move 7 Notes                  # card 7 goes to the workspace named Notes; you stay where you are
+ift card protect 7 on             # lock card 7 (off unlocks it), as Cmd Shift L does
+ift clear-state 7                 # clear card 7's state colour, as "Card: clear the state colour" does
+ift workspace saved               # the saved workspaces
+ift workspace save Notes plan-a   # save the workspace Notes under the name plan-a
+ift workspace open plan-a         # open a saved workspace as a new workspace
+ift workspace delete plan-a       # delete a saved workspace
+```
+
+Saved workspaces are the ones "Workspace: save as…" makes in the palette, see [Groups and workspaces](../canvas/#groups-and-workspaces).
+
+The zsh completion for `ift`, which `ift install` writes, completes hosts the way `ssh` does. `ift join <Tab>` and `ift connect <Tab>` offer the Host aliases of `~/.ssh/config` and of the files it includes, then the known hosts without their bare IP addresses, and they complete `user@host` too. `ift phone remove <Tab>` offers the paired phones, and `ift browse` completes files. Run `ift install` once after an update to write the new completion.
+
 ## Sessions that outlive the window
 
 Each terminal card's shell runs under its own small daemon, `iftd`, which holds the pty. Quitting the app leaves your shells running; reopening it replays what they printed into the same emulator, byte for byte, so a Claude Code session comes back as it was. This is the default backend (`terminal.backend: "daemon"`).

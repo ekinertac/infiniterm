@@ -41,6 +41,34 @@ These work in a locked editor. Each is also in the command palette.
 - Enter after `{`, `(` or `[` starts the next line one level deeper. Typing a closing bracket on a line that holds only indent takes one level off.
 - Arrow keys, Backspace and Delete move over what a person sees as one character, so a flag or a family emoji is one step.
 
+- `Ctrl Shift Right` selects the word under the caret, then the expression, the statement, the block and the function around it, one press at a time. `Ctrl Shift Left` steps back. They are "Editor: expand selection…" and "Editor: shrink selection back" in the palette.
+- `Alt Z` ("Editor: Toggle Word Wrap") wraps or unwraps long lines in the current tab.
+- When an agent or another program adds or removes lines above the caret in a file with no unsaved changes, the caret and the view stay on the same code, not on the same line number.
+
+## The file tree
+
+`Cmd K` shows and hides the tree. After a click on a file or a folder in it, `Up` and `Down` move through the tree: a clicked file opens and the tree keeps the keys. Click into the text, or press `Escape`, to type in the file. The tree scrolls with the mouse wheel or two fingers.
+
+Two settings, both off until you turn them on in `settings.json`:
+
+- `editor.explorer.git` shows git status in the tree: a letter beside each changed file (`M`, `A`, `U`, `R`, and `!` for a conflict), changed names in colour, a dot on a folder with changes inside, and ignored files faded.
+- `editor.explorer.icons` shows a closed or open folder where the arrow was, and an icon for each file's type, the ones VS Code's Material Icon Theme uses.
+
+## Editor settings
+
+The editor has its own font. `editor.fontFamily`, `editor.fontSize`, `editor.fontWeight` and `editor.fontWeightBold` set it, and any you leave out follow the terminal's.
+
+These are off until you turn them on in `settings.json`:
+
+- `editor.highlightOccurrences` washes the other places the word under the caret appears.
+- `editor.indentGuides` draws a faint line per indent level, brighter for the block the caret is in.
+- `editor.stickyScroll` pins the first line of the function, type or heading you are scrolling through at the top of the card.
+- `editor.smoothCaret` makes the caret glide.
+- `editor.rulers` draws lines at the columns you list, for example `[80, 120]`.
+- `editor.whitespaceInSelection` shows a dot for each selected space.
+- `editor.autosave: "focusChange"` saves an editor's changed files when you move to another card or leave the text.
+- `editor.trimTrailingWhitespaceOnSave` and `editor.insertFinalNewlineOnSave` tidy the file when you save.
+
 ## Formatting and language servers
 
 Both are off by default, because one rewrites your file and the other starts a program.

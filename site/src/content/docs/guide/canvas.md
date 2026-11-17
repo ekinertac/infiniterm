@@ -87,7 +87,7 @@ Interface size is separate from zoom: `Cmd Shift =` and `Cmd Shift -` make the a
 ## Moving between cards
 
 - `Cmd Alt` + arrow, or `Cmd Alt J K L`, moves focus to the neighbour.
-- `Ctrl Tab` is Cmd+Tab for cards: hold Ctrl, press Tab to step through the cards you worked in, most recent first, release to go there. Cards you only crossed with the arrows are left out unless you stayed.
+- `Ctrl Tab` is Cmd+Tab for cards: hold Ctrl, press Tab to step through the cards you worked in, most recent first, release to go there. Cards you only crossed with the arrows are left out unless you stayed. Each row names the card: a folder editor shows the folder and the file open in it, a browser shows the page's title and host, and editors, browsers, diffs, transcripts and pages name their kind on the right. A dot beside the row shows the agent state. `"ui.switcherStateColors": true` also colours the whole row with it.
 - `Cmd J` puts a letter on every card; press one to go there and frame it. (`Cmd F` finds text inside the card you are on.)
 - The palette lists every card by name.
 
@@ -114,6 +114,8 @@ Drag a tab onto another tab to put it in that place: a vertical line shows where
 With `"ui.workspaceIsolation": true`, `Ctrl Tab` walks only the current workspace's cards and the status bar counts only them; the palette still lists every card, so it stays the way across.
 
 "Card: move to workspace…" in the palette sends the focused card, or the selection, to another workspace or a new one. The card takes a free slot there and you stay where you are. "Group: move to workspace…" does the same for the focused card's whole group, with its frame, its name and its cards in the same arrangement and sizes. It lands in the first free block of the other workspace. You can also drag a card by its label or frame, a selection, or a group by its name tab, onto the other workspace's tab: the tab lights up and the drop does the same move. Escape cancels; a drop on your own workspace's tab is an ordinary drop on the canvas.
+
+A workspace can be saved under a name and opened again later. "Workspace: save as…" in the palette keeps the workspace you are on: its cards where they are, each terminal's folder, each editor's open files, each browser's page, and its groups. "Workspace: open saved…" lists what you saved and opens the one you pick as a new workspace, with a fresh shell in each terminal's folder. Saving under a name you already used asks before it replaces that one, and opening the same one twice gives two workspaces. "Workspace: delete saved…" lists them and asks before it deletes the one you pick. A script can do the same: see `ift workspace` in [ift and sessions](../ift-and-sessions/#workspaces-and-cards-from-a-script).
 
 ## Card labels and numbers
 
