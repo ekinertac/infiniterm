@@ -21,6 +21,8 @@ mod page_surface;
 #[cfg(all(feature = "browser", target_os = "macos"))]
 mod webview;
 #[cfg(all(feature = "browser", target_os = "macos"))]
+mod webview_download;
+#[cfg(all(feature = "browser", target_os = "macos"))]
 mod webview_input;
 // Without the feature, `browser_stub.rs` IS the browsers module: same names,
 // no CEF. Every call site stays as it is, and the difference between the two
@@ -329,6 +331,9 @@ pub struct AppView {
     /// menu (`menus.rs::open_page_menu`). The position is fixed when the page
     /// reports it (content-area screen pixels).
     pub context_menu: Option<crate::browsers::CardContextMenu>,
+    /// The status bar's one readout for every download in progress ("2
+    /// downloads, 41%"), set by `reconcile_browsers`, `None` when none is.
+    pub download_readout: Option<String>,
     /// Off macOS: where a press on the bare title bar landed, kept until the
     /// pointer travels far enough to start a window move or the button comes
     /// up (`not_macos.rs::title_drag`).

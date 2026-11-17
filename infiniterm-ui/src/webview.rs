@@ -302,7 +302,10 @@ impl WebSurface {
             })
             // Downloads go to the folder WebKit proposed (Downloads), under
             // its name, never over a file that is there; the card says so.
-            .with_download_started_handler(move |_url, dest| {
+            .with_download_started_handler(move |url, dest| {
+                // Claim the download wry's delegate is deciding about, for
+                // the status bar's progress (`webview_download`).
+                crate::webview_download::on_started(&url);
                 let name = dest
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -322,7 +325,8 @@ impl WebSurface {
                     .map(str::to_string);
                 true
             })
-            .with_download_completed_handler(move |_url, _path, ok| {
+            .with_download_completed_handler(move |url, _path, ok| {
+                crate::webview_download::on_finished(&url);
                 let mut s = sh_done.borrow_mut();
                 let name = s.download_name.take().unwrap_or_else(|| "a file".into());
                 s.downloads.push(if ok {
@@ -356,6 +360,7 @@ impl WebSurface {
                     crate::webview_input::set_gpui_view(gpui_view);
                 }
                 crate::webview_input::install();
+                crate::webview_download::install();
                 self.core.state.borrow_mut().view = Some(wv);
             }
             Err(e) => eprintln!("[infiniterm] webview: could not create the page: {e}"),
@@ -731,7 +736,7 @@ impl PageSurface for WebSurface {
             s.last_snapshot_ms,
             sh.loaded_at,
             now_ms,
-        )
+        ) || crate::webview_download::wants_frame(now_ms)
     }
 
     fn is_native(&self) -> bool {

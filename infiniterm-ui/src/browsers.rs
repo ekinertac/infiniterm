@@ -121,6 +121,16 @@ impl AppView {
     }
 
     pub fn reconcile_browsers(&mut self) {
+        // One readout for every download in progress (#819).
+        #[cfg(target_os = "macos")]
+        {
+            let readout =
+                infiniterm_core::download_status::readout(&crate::webview_download::snapshot());
+            if readout != self.download_readout {
+                self.download_readout = readout;
+                self.redraw = true;
+            }
+        }
         // A pinch over a web page (`webview_input`): gpui has no pinch event,
         // so it is made into the Ctrl+wheel zoom a pinch over the canvas
         // arrives as.
