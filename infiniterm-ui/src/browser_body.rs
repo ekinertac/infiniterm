@@ -120,6 +120,10 @@ pub struct BrowserBody {
     /// tab: a background tab must already be at the card's zoom when it
     /// becomes the visible one.
     pub zoom: Option<f64>,
+    /// The page zoom of the last frame and when it last changed, for the
+    /// picture shown while the canvas zooms (`webview_policy::zoom_settling`).
+    last_page_zoom: Option<f64>,
+    zoom_changed_at: Option<f64>,
     world: Size,
     painted_focused: bool,
     /// The page has keyboard focus: a click reached it since the card
@@ -233,6 +237,8 @@ impl BrowserBody {
             locked: false,
             focused_tab: None,
             zoom: None,
+            last_page_zoom: None,
+            zoom_changed_at: None,
             world,
             painted_focused: false,
             page_focused: false,
@@ -631,9 +637,19 @@ impl CardBody for BrowserBody {
             f32::from(page_bounds.size.width) as f64,
             f32::from(page_bounds.size.height) as f64,
         ];
+        // While the canvas zooms the page is its picture (#839), back live
+        // once the zoom has been still for `ZOOM_SETTLE_MS`.
+        self.zoom_changed_at =
+            policy::zoom_changed_at(self.last_page_zoom, page_zoom, self.zoom_changed_at, now);
+        self.last_page_zoom = Some(page_zoom);
+        let zooming = policy::zoom_settling(self.zoom_changed_at, now);
+        if !zooming {
+            self.zoom_changed_at = None;
+        }
         let view_state = policy::page_view(&policy::PageState {
             zoom: page_zoom,
             fully_covered: policy::fully_covered(&page_rect, &self.covers),
+            zooming,
         });
         let wash: gpui::Rgba = self.card_bg.into();
         for (i, tab) in self.tabs.iter().enumerate() {
@@ -972,8 +988,10 @@ impl CardBody for BrowserBody {
     fn wants_frame(&self, now: f64) -> bool {
         // Any tab's new frame asks for one: a background tab's pixels are
         // dropped, but `sync` is what drops them, and it runs per frame.
-        // A native page also asks when its snapshot is due.
+        // A native page also asks when its snapshot is due, and a zoom
+        // until the frame after it settles, which shows the page live again.
         self.dirty
+            || self.zoom_changed_at.is_some()
             || self.tabs.iter().any(|t| {
                 t.surface
                     .as_ref()
