@@ -115,13 +115,38 @@ pub fn sha256_of(path: &Path) -> std::io::Result<String> {
 
 /// The script the host runs with the package on its stdin. It prints the
 /// folder it used on its last line.
+///
+/// For a user other than root it also puts `~/.local/bin` on the PATH of a
+/// login shell: the Mac connects by the full path, but `ift phone add` and
+/// the hook installers are typed on the host, where a bare `ift` was "command
+/// not found". Stock Ubuntu's `~/.profile` adds the folder only if it existed
+/// at login, and bash skips `~/.profile` when `~/.bash_profile` exists. One
+/// marked line goes to `~/.profile`, and to `~/.bash_profile` and
+/// `~/.zprofile` when they exist, unless the file already names
+/// `.local/bin`, so a second install adds nothing. Each file it changed is
+/// said as `path-added <file>` before the folder.
 pub fn install_script() -> String {
     concat!(
         "if [ \"$(id -u)\" = 0 ]; then d=/usr/local/bin; else d=\"$HOME/.local/bin\"; fi; ",
         "mkdir -p \"$d\" && tar xzf - -C \"$d\" --no-same-owner && ",
-        "chmod +x \"$d/ift\" \"$d/iftd\" \"$d/infiniterm-hook\" && echo \"$d\""
+        "chmod +x \"$d/ift\" \"$d/iftd\" \"$d/infiniterm-hook\" && ",
+        "{ [ \"$d\" = /usr/local/bin ] || ",
+        "for f in \"$HOME/.profile\" \"$HOME/.bash_profile\" \"$HOME/.zprofile\"; do ",
+        "[ \"$f\" = \"$HOME/.profile\" ] || [ -f \"$f\" ] || continue; ",
+        "grep -qs '[.]local/bin' \"$f\" && continue; ",
+        "printf '\\n# infiniterm: ift and iftd (ift connect --install)\\nexport PATH=\"$HOME/.local/bin:$PATH\"\\n' >> \"$f\" ",
+        "&& echo \"path-added $f\"; ",
+        "done; true; } && echo \"$d\""
     )
     .to_string()
+}
+
+/// The files the install script added the PATH line to (`path-added <file>`).
+pub fn path_files_added(out: &str) -> Vec<String> {
+    out.lines()
+        .filter_map(|l| l.trim().strip_prefix("path-added "))
+        .map(str::to_string)
+        .collect()
 }
 
 /// `ift` and `iftd` on the host, or why not. Returns the full path of the
@@ -184,7 +209,16 @@ pub fn install(
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
-        let dir = String::from_utf8_lossy(&out.stdout)
+        let said = String::from_utf8_lossy(&out.stdout);
+        let added = path_files_added(&said);
+        if !added.is_empty() {
+            eprintln!(
+                "{}: put ~/.local/bin on the PATH in {}; a new login there (or `exec $SHELL -l`) finds a bare `ift`",
+                host.target,
+                added.join(", ")
+            );
+        }
+        let dir = said
             .lines()
             .rev()
             .find(|l| !l.trim().is_empty())
@@ -296,5 +330,71 @@ mod tests {
         assert!(s.contains("--no-same-owner"));
         assert!(s.contains("tar xzf -"));
         assert!(s.ends_with("echo \"$d\""), "the folder is the last thing it says");
+    }
+
+    // The script itself, run by `sh` as a user other than root against a
+    // HOME of its own, with a package of three empty binaries on stdin.
+    #[cfg(unix)]
+    #[test]
+    fn a_user_install_puts_the_folder_on_the_login_path_once() {
+        if Command::new("id").arg("-u").output().map(|o| o.stdout.starts_with(b"0")).unwrap_or(true) {
+            return; // root installs to /usr/local/bin and touches no profile
+        }
+        let root = std::env::temp_dir().join(format!("ift-install-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (home, pkg) = (root.join("home"), root.join("pkg"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&pkg).unwrap();
+        for b in ["ift", "iftd", "infiniterm-hook"] {
+            std::fs::write(pkg.join(b), "").unwrap();
+        }
+        let tarball = root.join("p.tar.gz");
+        assert!(Command::new("tar")
+            .arg("czf")
+            .arg(&tarball)
+            .arg("-C")
+            .arg(&pkg)
+            .args(["ift", "iftd", "infiniterm-hook"])
+            .status()
+            .unwrap()
+            .success());
+        // A zsh user's ~/.zprofile exists; there is no ~/.bash_profile.
+        std::fs::write(home.join(".zprofile"), "# mine\n").unwrap();
+        let run = || {
+            let out = Command::new("sh")
+                .arg("-c")
+                .arg(install_script())
+                .env("HOME", &home)
+                .stdin(std::fs::File::open(&tarball).unwrap())
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let first = run();
+        let bin = home.join(".local/bin");
+        assert_eq!(first.lines().last(), Some(bin.to_str().unwrap()));
+        assert_eq!(path_files_added(&first).len(), 2, "{first}");
+        assert!(!home.join(".bash_profile").exists(), "a missing bash profile is not made");
+        let profile = std::fs::read_to_string(home.join(".profile")).unwrap();
+        assert!(profile.contains("export PATH=\"$HOME/.local/bin:$PATH\""), "{profile}");
+        assert!(std::fs::read_to_string(home.join(".zprofile")).unwrap().starts_with("# mine\n"));
+        // Again: nothing is added twice, and the folder is still the last line.
+        let second = run();
+        assert!(path_files_added(&second).is_empty(), "{second}");
+        assert_eq!(std::fs::read_to_string(home.join(".profile")).unwrap(), profile);
+        assert_eq!(second.lines().last(), Some(bin.to_str().unwrap()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_profile_that_already_names_the_folder_is_left_alone() {
+        // Ubuntu's stock ~/.profile has the `if [ -d "$HOME/.local/bin" ]` block.
+        let s = install_script();
+        assert!(s.contains("grep -qs '[.]local/bin'"));
+        assert_eq!(
+            path_files_added("path-added /h/.profile\npath-added /h/.zprofile\n/h/.local/bin\n"),
+            vec!["/h/.profile".to_string(), "/h/.zprofile".to_string()]
+        );
     }
 }
