@@ -13,18 +13,30 @@
 //! the view. The press in the title bar strip is taken by AppKit's own title
 //! bar layer, above the view, so the view's answer never mattered. What works:
 //! the main window is not movable (`install`: `setMovable: NO`), so AppKit
-//! does not drag it from the title bar at all, and the one place that should
-//! drag it, the bare bar, starts the drag itself (`begin`, from the title bar
-//! div's mouse-down, which a tab or the "+" stops, `overlays.rs`) through
-//! `performWindowDragWithEvent:`. A double-click on the bar does the system's
-//! title bar action (zoom or minimise) through gpui's `titlebar_double_click`.
+//! does not drag it from the title bar at all, except while the pointer rests
+//! on the bare bar (`hover`, from every mouse move, `overlays.rs`): there the
+//! window is movable and AppKit's own title bar drag moves it. A press always
+//! comes after a move, so a tab or the "+" is pressed on a window that is not
+//! movable. A double-click on the bar does the system's title bar action
+//! (zoom or minimise) through gpui's `titlebar_double_click`.
+//!
+//! Until macOS 27.2 the bare bar started the drag itself through
+//! `performWindowDragWithEvent:` on the press, with the window never movable.
+//! Since 27.2 that call returns at once and moves nothing on a window that is
+//! not movable, and setting the window movable just before it does not help
+//! either (found on screen, 2026-11-17). A drag loop of our own cannot run in
+//! gpui's mouse handler: waiting for the next event there runs gpui's timers,
+//! which borrow the app the handler holds ("RefCell already borrowed").
+//!
 //! The view override stays as belt and braces. Cost: the system's Ctrl+Cmd+drag
 //! (move a window by any point) is off for this window, as it is for any window
 //! that is not movable.
 //!
 //! macOS only. Called once after the first window exists, like the others.
-use objc::runtime::{class_addMethod, Class, Object, Sel, BOOL, NO};
+use gpui::{Bounds, Pixels, Point};
+use objc::runtime::{class_addMethod, Class, Object, Sel, BOOL, NO, YES};
 use objc::{class, msg_send, sel, sel_impl};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 /// `-(BOOL)mouseDownCanMoveWindow`: BOOL's encoding is `B` on Apple Silicon.
 #[cfg(target_arch = "aarch64")]
@@ -59,9 +71,10 @@ fn main_window() -> Option<Id> {
 pub fn install() {
     // AppKit's own title bar layer starts the window drag from a press on a
     // tab (the view's answer below did not stop it, found on screen). A window
-    // that is not movable is not dragged by its title bar; the bare bar drags
-    // it by hand (`begin`).
+    // that is not movable is not dragged by its title bar; the bare bar makes
+    // it movable while the pointer is on it (`hover`).
     if let Some(win) = main_window() {
+        MAIN.store(win, Ordering::Relaxed);
         unsafe {
             let _: () = msg_send![win, setMovable: NO];
         }
@@ -82,27 +95,60 @@ pub fn install() {
     }
 }
 
-/// Starts dragging the window with the mouse-down being handled right now.
-/// Blocks in AppKit's drag loop until the button is released.
-pub fn begin() {
+/// The main window `install` found, for `hover`.
+static MAIN: AtomicPtr<Object> = AtomicPtr::new(std::ptr::null_mut());
+
+/// Whether `at` is on the bare title bar: inside the bar and on none of the
+/// controls in it (the tabs, the "+"), which a press must not drag.
+pub fn on_bare_bar(
+    bar: Bounds<Pixels>,
+    controls: impl IntoIterator<Item = Bounds<Pixels>>,
+    at: Point<Pixels>,
+) -> bool {
+    bar.contains(&at) && !controls.into_iter().any(|c| c.contains(&at))
+}
+
+/// The pointer moved with no button held: the main window is movable only
+/// while it is on the bare bar. Not while covering the screen, which keeps
+/// the window where it is (`fullscreen.rs` makes it not movable then).
+pub fn hover(on_bare_bar: bool) {
+    let win = MAIN.load(Ordering::Relaxed);
+    if win.is_null() {
+        return;
+    }
+    let want = if on_bare_bar && !crate::fullscreen::covering() {
+        YES
+    } else {
+        NO
+    };
     unsafe {
-        let app: Id = msg_send![class!(NSApplication), sharedApplication];
-        let event: Id = msg_send![app, currentEvent];
-        if event.is_null() {
-            return;
+        let now: BOOL = msg_send![win, isMovable];
+        if now != want {
+            let _: () = msg_send![win, setMovable: want];
         }
-        let window: Id = msg_send![event, window];
-        if window.is_null() {
-            return;
-        }
-        let _: () = msg_send![window, performWindowDragWithEvent: event];
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{point, px, size};
     use objc::runtime::{class_getInstanceMethod, method_getImplementation};
+
+    /// The bar is draggable around its tabs and the "+", never on them, and
+    /// nothing below the bar is.
+    #[test]
+    fn only_the_bare_bar_drags_the_window() {
+        let bar = Bounds::new(point(px(0.), px(0.)), size(px(800.), px(38.)));
+        let tab = Bounds::new(point(px(80.), px(6.)), size(px(120.), px(26.)));
+        let plus = Bounds::new(point(px(204.), px(6.)), size(px(24.), px(26.)));
+        let bare = |x: f32, y: f32| on_bare_bar(bar, [tab, plus], point(px(x), px(y)));
+        assert!(bare(500., 20.), "empty bar right of the tabs");
+        assert!(bare(80., 2.), "above a tab, still in the bar");
+        assert!(!bare(100., 20.), "on a tab");
+        assert!(!bare(210., 20.), "on the +");
+        assert!(!bare(500., 60.), "below the bar");
+    }
 
     /// gpui's `GPUIView` is registered in the test process too: after
     /// `install` it answers `mouseDownCanMoveWindow` with our NO, so AppKit
