@@ -75,6 +75,7 @@ pub mod config;
 pub mod config_files;
 pub mod context_menu;
 pub mod devtools;
+pub mod download_status;
 pub mod drop;
 pub mod editor_keys;
 pub mod editor_theme;

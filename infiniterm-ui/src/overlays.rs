@@ -1308,6 +1308,12 @@ impl AppView {
                         pwd.filter(|_| pwd_right)
                             .map(|p| div().min_w_0().truncate().child(p)),
                     )
+                    // Every download in progress, as one readout (#819).
+                    .children(
+                        self.download_readout
+                            .as_ref()
+                            .map(|t| div().text_color(chrome.text).child(t.clone())),
+                    )
                     .children(
                         self.browser_lock_indicator()
                             .map(|label| div().text_color(chrome.warn).child(label)),
